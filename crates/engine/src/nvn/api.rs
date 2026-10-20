@@ -3395,6 +3395,9 @@ fn snapshot_texture(addr: usize, t: NvnTexture) {
         .unwrap()
         .get_or_insert_with(Default::default)
         .insert(addr, (gen, t));
+    if let Some((og, ot)) = old {
+        remember_snapshot(og, ot);
+    }
     bump_tex_table_epoch();
     let mut idx = TEX_BY_STORAGE.lock().unwrap();
     let idx = idx.get_or_insert_with(Default::default);
@@ -3408,6 +3411,68 @@ fn snapshot_texture(addr: usize, t: NvnTexture) {
             .max(crate::nvn::layout::compute_layout(&texture_layout_params(&t)).total);
         MAX_TEXTURE_SPAN.fetch_max(span as usize, std::sync::atomic::Ordering::Relaxed);
     }
+}
+
+/// Snapshots replaced at their address, by generation (bounded): commands recorded while an object described one
+/// texture still name that texture after the game re-initializes or reuses the object (resolve_texture_ref).
+const SNAPSHOT_HISTORY: usize = 1 << 16;
+/// Generations are keyed by their low 32 bits, as commands record them.
+struct SnapshotHistory {
+    by_gen: rustc_hash::FxHashMap<u32, NvnTexture>,
+    order: std::collections::VecDeque<u32>,
+    /// Stable objects standing in for a replaced snapshot, by generation (their addresses are executor texture keys).
+    copies: rustc_hash::FxHashMap<u32, Box<NvnTexture>>,
+}
+static TEX_HISTORY: std::sync::Mutex<Option<SnapshotHistory>> = std::sync::Mutex::new(None);
+
+fn remember_snapshot(gen: u64, t: NvnTexture) {
+    let mut h = TEX_HISTORY.lock().unwrap();
+    let h = h.get_or_insert_with(|| SnapshotHistory {
+        by_gen: Default::default(),
+        order: Default::default(),
+        copies: Default::default(),
+    });
+    h.by_gen.insert(gen as u32, t);
+    h.order.push_back(gen as u32);
+    if h.order.len() > SNAPSHOT_HISTORY {
+        if let Some(g) = h.order.pop_front() {
+            h.by_gen.remove(&g);
+            if let Some(c) = h.copies.remove(&g) {
+                let addr = &*c as *const NvnTexture as usize;
+                if let Some(m) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
+                    m.remove(&addr);
+                }
+            }
+        }
+    }
+}
+
+/// The snapshot generation a command naming `addr` records (0: none).
+pub fn texture_ref_gen(addr: usize) -> u32 {
+    texture_snapshot(addr).map_or(0, |(g, _)| g as u32)
+}
+
+/// The texture object a recorded reference (`addr` as captured with generation `gen`) names now: `addr` while it still
+/// describes that texture, else a stable copy of the recorded description. Super Mario Odyssey records command lists once
+/// and calls them every frame while the NVNtexture structs they named are re-initialized for other textures (its mip
+/// chain and volume passes then targeted levels the new textures do not have).
+pub fn resolve_texture_ref(addr: usize, gen: u32) -> usize {
+    if addr == 0 || gen == 0 || texture_snapshot(addr).map_or(true, |(g, _)| g as u32 == gen) {
+        return addr;
+    }
+    let mut h = TEX_HISTORY.lock().unwrap();
+    let Some(h) = h.as_mut() else { return addr };
+    let Some(&state) = h.by_gen.get(&gen) else { return addr };
+    if let Some(c) = h.copies.get(&gen) {
+        return &**c as *const NvnTexture as usize;
+    }
+    let b = Box::new(state);
+    let copy = &*b as *const NvnTexture as usize;
+    let g = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TEX_SNAPSHOTS.lock().unwrap().get_or_insert_with(Default::default).insert(copy, (g, state));
+    h.copies.insert(gen, b);
+    bump_tex_table_epoch();
+    copy
 }
 
 /// Largest memory size (declared or by layout) of any texture indexed so far.

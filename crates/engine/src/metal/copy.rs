@@ -229,6 +229,7 @@ impl Gfx {
                 row_stride,
                 image_stride,
             } => {
+                let dst = &resolved(dst);
                 let Some(tex) = self.texture(&mut st.tc, dst.texture) else {
                     return;
                 };
@@ -274,6 +275,7 @@ impl Gfx {
                 row_stride,
                 image_stride,
             } => {
+                let src = &resolved(src);
                 let Some(tex) = self.texture(&mut st.tc, src.texture) else {
                     return;
                 };
@@ -314,7 +316,7 @@ impl Gfx {
             }
             Cmd::CopyTextureToTexture(p) => {
                 let (src, src_region, dst, dst_region) =
-                    (&p.src, &p.src_region, &p.dst, &p.dst_region);
+                    (&resolved(&p.src), &p.src_region, &resolved(&p.dst), &p.dst_region);
                 let (Some(stex), Some(dtex)) = (
                     self.texture(&mut st.tc, src.texture),
                     self.texture(&mut st.tc, dst.texture),
@@ -352,7 +354,7 @@ impl Gfx {
                 st.stats.copies += 1;
             }
             Cmd::ClearTexture(p) => {
-                let (dst, region, color, mask) = (&p.dst, &p.region, &p.color, p.mask);
+                let (dst, region, color, mask) = (&resolved(&p.dst), &p.region, &p.color, p.mask);
                 let Some(tex) = self.texture(&mut st.tc, dst.texture) else {
                     return;
                 };
@@ -406,4 +408,9 @@ impl Gfx {
             _ => {}
         }
     }
+}
+
+/// A recorded texture reference with the object it names now (nvn::api::resolve_texture_ref).
+fn resolved(r: &crate::nvn::cmd::TexRef) -> crate::nvn::cmd::TexRef {
+    crate::nvn::cmd::TexRef { texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen), ..*r }
 }
