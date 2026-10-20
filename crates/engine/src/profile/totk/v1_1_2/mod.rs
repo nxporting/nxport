@@ -1,7 +1,10 @@
 // Profile and hooks for The Legend of Zelda: Tears of the Kingdom v1.1.2.
 // NSO Build ID: 9a10ed9435c06733da597d8094d9000ab5d3ee60
 
+// The hooks patch the game's arm64 code in place: native runtime only.
+#[cfg(nx_native)]
 pub mod aspect;
+#[cfg(nx_native)]
 pub mod hud;
 
 use crate::profile::VersionProfile;
@@ -9,14 +12,21 @@ use crate::profile::VersionProfile;
 pub static PROFILE: VersionProfile = VersionProfile {
     version_string: "1.1.2",
     build_id_prefix: "9a10ed9435c06733da597d8094d9000a",
+    #[cfg(nx_native)]
     install_hooks: Some(install_v1_1_2_hooks),
+    #[cfg(not(nx_native))]
+    install_hooks: None,
     heap_instance_offset: Some(0x047137d0),
     allocator_pool_offset: Some(0x0466e500),
+    #[cfg(nx_native)]
     draw_item: Some(draw_item),
+    #[cfg(not(nx_native))]
+    draw_item: None,
 };
 
 /// --log-draw-items: main+0x763718 takes (renderer, item, ...), keeps the item at [x29 - 0x20] and calls the renderer's
 /// draw callback (return address main+0x763798); most of the frame's draws come through it.
+#[cfg(nx_native)]
 unsafe fn draw_item() -> u32 {
     let base = crate::cpu::crash_handler::get_guest_base();
     let mut fp: usize;
@@ -38,10 +48,13 @@ unsafe fn draw_item() -> u32 {
     }
     0
 }
+
+#[cfg(nx_native)]
 extern "C" {
     fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
 }
 
+#[cfg(nx_native)]
 pub unsafe fn install_v1_1_2_hooks(
     base: usize,
     mem_space: &mut crate::guest::loader::GuestMemorySpace,
@@ -191,6 +204,7 @@ pub unsafe fn install_v1_1_2_hooks(
 
 /// Calls hud::calculate(layout) at the entry of each layout calculation: the entry branches to a wrapper (a trampoline
 /// entry's words) that keeps the arguments, makes the call, runs the displaced instruction and returns.
+#[cfg(nx_native)]
 unsafe fn install_hud_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     use hud::{CALC_ENTRY, CALC_SITES};
     let tramp = mem_space.make_hle_trampoline(hud::calculate as *const ()) as usize;

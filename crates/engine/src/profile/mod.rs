@@ -27,12 +27,18 @@ pub struct MemoryPatch {
     pub description: &'static str,
 }
 
+/// A version's code hooks. They patch the guest's arm64 code in place, so only the native runtime has them; the
+/// lifted runtime needs its own form of them (docs/windows-port.md).
+#[cfg(nx_native)]
+pub type InstallHooks = unsafe fn(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace);
+#[cfg(not(nx_native))]
+pub type InstallHooks = unsafe fn(base: usize, mem_space: &mut std::convert::Infallible);
+
 #[derive(Copy, Clone, Debug)]
 pub struct VersionProfile {
     pub version_string: &'static str,
     pub build_id_prefix: &'static str,
-    pub install_hooks:
-        Option<unsafe fn(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace)>,
+    pub install_hooks: Option<InstallHooks>,
     pub heap_instance_offset: Option<usize>,
     pub allocator_pool_offset: Option<usize>,
     /// --log-draw-items: a token for the game object whose draw is being recorded on this thread (0: none found).
@@ -112,7 +118,7 @@ pub fn identify(dump: &std::path::Path) -> Identified {
     let title_id = crate::game::title_id_of(dump);
     let profile = title_id.and_then(for_title);
     let build_id =
-        crate::guest::mod_patches::nso_build_id(&dump.join("ExeFS/main").display().to_string());
+        crate::guest::nso::nso_build_id(&dump.join("ExeFS/main").display().to_string());
     let version = profile
         .zip(build_id)
         .and_then(|(p, id)| p.match_version(&id));
@@ -266,6 +272,7 @@ pub fn app_title() -> &'static str {
 }
 
 /// The aspect the game renders at when a profile patch changed it from the game's own (the screen shape asked for).
+#[cfg(nx_native)]
 pub fn rendered_aspect() -> Option<f64> {
     match active().kind {
         GameKind::TotK => totk::v1_1_2::aspect::rendered_aspect(),
@@ -283,6 +290,7 @@ pub fn renders_screen_shape() -> bool {
 }
 
 /// The screen's shape changed (the window was resized): a game rendering at another shape follows it.
+#[cfg(nx_native)]
 pub fn screen_aspect_changed(aspect: f64) {
     if active().kind == GameKind::TotK {
         totk::v1_1_2::aspect::set_aspect(aspect);
@@ -340,7 +348,7 @@ pub fn active_version() -> Option<&'static VersionProfile> {
         return active().match_version(bid);
     }
     let exefs = crate::game::exefs();
-    if let Some(id) = crate::guest::mod_patches::nso_build_id(&format!("{}/main", exefs.display()))
+    if let Some(id) = crate::guest::nso::nso_build_id(&format!("{}/main", exefs.display()))
     {
         set_main_build_id(&id);
         return active().match_version(&id);

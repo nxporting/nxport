@@ -30,6 +30,22 @@ pub struct Dynamic {
     pub init_arraysz: usize,
 }
 
+/// The build id (32 bytes) of an NSO file, as uppercase hex.
+pub fn nso_build_id(nso_path: &str) -> Option<String> {
+    let mut f = std::fs::File::open(nso_path).ok()?;
+    let mut head = [0u8; 0x60];
+    std::io::Read::read_exact(&mut f, &mut head).ok()?;
+    if &head[..4] != b"NSO0" {
+        return None;
+    }
+    Some(
+        head[0x40..0x60]
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect(),
+    )
+}
+
 fn u32_at(d: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(d[off..off + 4].try_into().unwrap())
 }

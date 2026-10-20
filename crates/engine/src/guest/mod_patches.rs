@@ -11,21 +11,7 @@
 // Patches are applied right after the module is relocated, before the engine's own instruction rewriting, so patched
 // code goes through the same tpidr/svc handling as the game's. --no-exefs-patches skips them.
 
-/// The build id (32 bytes) of an NSO file, as uppercase hex.
-pub fn nso_build_id(nso_path: &str) -> Option<String> {
-    let mut f = std::fs::File::open(nso_path).ok()?;
-    let mut head = [0u8; 0x60];
-    std::io::Read::read_exact(&mut f, &mut head).ok()?;
-    if &head[..4] != b"NSO0" {
-        return None;
-    }
-    Some(
-        head[0x40..0x60]
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect(),
-    )
-}
+pub use super::nso::nso_build_id;
 
 fn id_matches(file_id: &str, build_id: &str) -> bool {
     let file_id = file_id.trim().to_ascii_uppercase();

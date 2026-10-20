@@ -13,6 +13,13 @@ fn main() {
     for p in ["crates/engine/src", "crates/engine/build.rs", "crates/engine/Cargo.toml", "crates/sass2spv/src", "Cargo.lock"] {
         println!("cargo:rerun-if-changed={}", root.join(p).display());
     }
+    // The Apple engines link against Apple SDKs, so only a macOS host builds them; elsewhere the paths are empty and
+    // packaging falls back to engines next to this tool (pack::locate_engine_binary, ipa::ios_artifact).
+    if !cfg!(target_os = "macos") {
+        println!("cargo:rustc-env=NXPORT_ENGINE_MACOS=");
+        println!("cargo:rustc-env=NXPORT_ENGINE_IOS=");
+        return;
+    }
     for (target, var) in [("aarch64-apple-darwin", "NXPORT_ENGINE_MACOS"), ("aarch64-apple-ios", "NXPORT_ENGINE_IOS")] {
         let mut c = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
         c.current_dir(&root)
