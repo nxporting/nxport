@@ -19,10 +19,10 @@ People like to know if you're using AI to write something, which is understandab
 
 
 ## Credits
-Greenlord/S41L0R - Started the project.
-Retro - Is boutta help I hear!
-Peiikai - LASRecomp code I'm going to reference. Also seems nice.
-Nintendo - For being awesome. I hope. Please don't take this down.
+Greenlord/S41L0R - Started the project.  
+Retro - Is boutta help I hear!  
+Peiikai - LASRecomp code I'm going to reference. Also seems nice.  
+Nintendo - For being awesome. I hope. Please don't take this down.  
 
 ## This project has been tested on:
 * Tears of the Kingdom, iOS, MacOS
