@@ -143,7 +143,7 @@ pub unsafe fn apply(
     base: usize,
     size: usize,
     text: (usize, usize),
-    text_prot: i32,
+    text_prot: crate::os::Prot,
 ) -> usize {
     if crate::settings::get().files.no_exefs_patches {
         return 0;
@@ -218,23 +218,16 @@ pub unsafe fn apply(
     applied
 }
 
-unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: i32) {
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
+unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: crate::os::Prot) {
     let in_text = addr < text.0 + text.1 && addr + bytes.len() > text.0;
     let page = addr & !0x3fff;
     let span = ((addr + bytes.len() + 0x3fff) & !0x3fff) - page;
     if in_text {
-        libc::mprotect(
-            page as *mut libc::c_void,
-            span,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
+        let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as *mut u8, bytes.len());
     if in_text {
-        libc::mprotect(page as *mut libc::c_void, span, text_prot);
-        sys_icache_invalidate(addr as *mut libc::c_void, bytes.len());
+        let _ = crate::os::protect(page, span, text_prot);
+        crate::os::flush_icache(addr as usize, bytes.len());
     }
 }

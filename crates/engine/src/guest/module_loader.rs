@@ -319,9 +319,6 @@ pub unsafe fn load(
         );
         next = start + stub_words.len() * 4;
     }
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
     let text_pages = (text_len + 0x3fff) & !0x3fff;
     // Code regions go through cpu/aot.rs: on iOS they come from the signed image (mods included, cpu/aot.rs).
     let short: String = name
@@ -335,8 +332,8 @@ pub unsafe fn load(
     let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(base + text_mo, text_len, false)]);
     crate::cpu::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
     crate::cpu::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
-    sys_icache_invalidate((base + text_mo) as *mut libc::c_void, text_len);
-    sys_icache_invalidate(stubs as *mut libc::c_void, STUB_AREA);
+    crate::os::flush_icache(((base + text_mo)) as usize, text_len);
+    crate::os::flush_icache(stubs as usize, STUB_AREA);
 
     // Horizon reports each segment exactly (NSO segments are 4 KiB aligned): text, rodata, data+bss back to back.
     let _ = ro_len;

@@ -8,6 +8,7 @@ mod cpu;
 pub mod game;
 pub mod hle_abi;
 pub mod lifted;
+pub mod os;
 #[cfg(nx_native)]
 mod gpu;
 #[cfg(nx_native)]
@@ -511,7 +512,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 base,
                 image,
                 (base, mem_space.text_size),
-                libc::PROT_READ | libc::PROT_WRITE,
+                os::Prot::ReadWrite,
             );
         }
         if let (Some(id), Some(sdk_mod)) =
@@ -523,7 +524,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 sdk_mod.base,
                 sdk_mod.total_size,
                 (sdk_mod.text_start, sdk_mod.text_size),
-                libc::PROT_READ | libc::PROT_EXEC,
+                os::Prot::ReadExec,
             );
         }
     }
@@ -595,13 +596,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         if let Some(sdk_mod) = sdk.as_ref() {
             // The SDK's text is already read+execute (sdk_loader): writable while it is rewritten, then registered again.
             let pages = (sdk_mod.text_size + 0x3fff) & !0x3fff;
-            unsafe {
-                libc::mprotect(
-                    sdk_mod.text_start as *mut libc::c_void,
-                    pages,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                )
-            };
+            let _ = unsafe { os::protect(sdk_mod.text_start, pages, os::Prot::ReadWrite) };
             unsafe {
                 cpu::trampoline::rewrite_module("sdk", sdk_mod.text_start, sdk_mod.text_size)
             }

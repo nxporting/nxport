@@ -132,11 +132,7 @@ pub unsafe fn rewrite(
         *s.add(2) = back;
         let page = site & !0x3fff;
         if executable {
-            libc::mprotect(
-                page as *mut libc::c_void,
-                0x4000,
-                libc::PROT_READ | libc::PROT_WRITE,
-            );
+            let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
         }
         *(site as *mut u32) = to_stub;
         if executable {
@@ -145,12 +141,9 @@ pub unsafe fn rewrite(
         written += 1;
     }
     crate::cpu::aot::make_exec("tpidr.island", island, island_len);
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
-    sys_icache_invalidate(island as *mut libc::c_void, island_len);
+    crate::os::flush_icache(island as usize, island_len);
     for &(s, l, _) in ranges {
-        sys_icache_invalidate(s as *mut libc::c_void, l);
+        crate::os::flush_icache(s as usize, l);
     }
     println!("[+] tpidr_el0 rewrite: {} of {} guest read sites now load the TLS pointer from TSD (island at {:#x})", written, sites.len(), island);
     Ok(written)

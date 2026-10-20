@@ -168,7 +168,7 @@ impl GuestMemorySpace {
 
         // The rtld slot below main is reserved with PROT_NONE until the placeholder module is mapped into it.
         unsafe {
-            libc::mprotect(raw, RTLD_SLOT_SIZE, libc::PROT_NONE);
+            let _ = crate::os::protect(raw as usize, RTLD_SLOT_SIZE, crate::os::Prot::None);
         }
         RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
 
@@ -179,20 +179,10 @@ impl GuestMemorySpace {
             // It used to be unmapped for hinted mmaps; when another allocation took the spot first, the game's subsdk0
             // landed a few MB higher and UltraCam's patcher wrote main's patches through a view of the wrong module
             // (intermittent SIGBUS at startup).
-            libc::mprotect(
-                gap as *mut libc::c_void,
-                SDK_GAP - ISLAND_SLOT_SIZE,
-                libc::PROT_NONE,
-            );
+            let _ = crate::os::protect(gap as usize, SDK_GAP - ISLAND_SLOT_SIZE, crate::os::Prot::None);
         }
         let gen = ptr as usize + main_end + SDK_GAP - GEN_SIZE;
-        unsafe {
-            libc::mprotect(
-                (gen - X18_ISLAND_SIZE) as *mut libc::c_void,
-                X18_ISLAND_SIZE + GEN_SIZE,
-                libc::PROT_READ | libc::PROT_WRITE,
-            )
-        };
+        let _ = unsafe { crate::os::protect(gen - X18_ISLAND_SIZE, X18_ISLAND_SIZE + GEN_SIZE, crate::os::Prot::ReadWrite) };
         GEN_AREA.store(gen, std::sync::atomic::Ordering::Relaxed);
         crate::cpu::aot::set_literal_pool(gen + GEN_LITERALS, GEN_LITERALS_SIZE);
         MOD_GAP.store(gap, std::sync::atomic::Ordering::Relaxed);
@@ -633,13 +623,7 @@ impl GuestMemorySpace {
                 self.trampoline_pool as usize,
                 pool_bytes,
             );
-            extern "C" {
-                fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-            }
-            sys_icache_invalidate(
-                self.trampoline_pool as *mut libc::c_void,
-                self.trampoline_next * TRAMPOLINE_WORDS * 4,
-            );
+            crate::os::flush_icache(self.trampoline_pool as usize, self.trampoline_next * TRAMPOLINE_WORDS * 4);
         }
         println!(
             "[+] Trampoline pool: {} entries ready at {:p}",

@@ -396,7 +396,6 @@ extern "C" {
         set_maximum: i32,
         new_protection: i32,
     ) -> i32;
-    fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
 }
 
 /// Writable views of guest code made by MapProcessMemory whose destination does not share the source's offset within
@@ -624,18 +623,10 @@ unsafe fn flush_one(v: &mut Shadow) -> usize {
                 IMAGE_MISMATCH.fetch_add(differ, std::sync::atomic::Ordering::Relaxed);
             } else {
                 let span = ((v.src + off + n + 0x3fff) & !0x3fff) - page;
-                libc::mprotect(
-                    page as *mut libc::c_void,
-                    span,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                );
+                let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
                 std::ptr::copy_nonoverlapping(view.as_ptr(), (v.src + off) as *mut u8, n);
-                libc::mprotect(
-                    page as *mut libc::c_void,
-                    span,
-                    libc::PROT_READ | libc::PROT_EXEC,
-                );
-                sys_icache_invalidate((v.src + off) as *mut libc::c_void, n);
+                let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadExec);
+                crate::os::flush_icache(((v.src + off)) as usize, n);
                 if !touched.contains(&page) {
                     touched.push(page);
                 }
@@ -691,7 +682,7 @@ unsafe fn unmap_process_memory(r: &mut [u64; 8]) -> u64 {
     }
     REGIONS.lock().unwrap().retain(|x| x.start != dst);
     // Code written through the view must be visible to instruction fetch at the original address.
-    sys_icache_invalidate(src as *mut libc::c_void, size);
+    crate::os::flush_icache(src as usize, size);
     RESULT_OK
 }
 

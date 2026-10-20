@@ -44,21 +44,11 @@ extern "C" {
 /// A stack of `size` bytes for guest code that has no buffer from the game (the main thread's, which Horizon's
 /// kernel allocates). It lives as long as the process. Returns (lo, hi).
 pub fn allocate(size: usize) -> (usize, usize) {
-    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    let page = crate::os::page_size();
     let size = size.next_multiple_of(page);
-    let base = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            page + size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert!(base != libc::MAP_FAILED, "guest stack: mmap of {size:#x} bytes failed");
-    let base = base as usize;
-    unsafe { libc::mprotect(base as *mut _, page, libc::PROT_NONE) };
+    let base = unsafe { crate::os::alloc(page + size, crate::os::Prot::ReadWrite) }
+        .unwrap_or_else(|e| panic!("guest stack: allocating {size:#x} bytes failed: {e}")) as usize;
+    let _ = unsafe { crate::os::protect(base, page, crate::os::Prot::None) }; // a guard page below the stack
     (base + page, base + page + size)
 }
 
