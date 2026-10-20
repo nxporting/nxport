@@ -151,6 +151,8 @@ pub(crate) struct State {
     /// Uncompressed stand-ins for block-compressed render targets the game writes through a same-size integer view
     /// (GPU texture compression), keyed by (target texture, level, view format); see `bc_proxy`.
     bc_proxies: HashMap<(usize, usize, u64), Tex>,
+    /// Partial / masked texture clears: pipelines by (pixel format, channel mask) (copy.rs clear_region).
+    clear_pipes: HashMap<(usize, u8), Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     /// Render targets bound through a texture view of another format (e.g. RGBA8 drawn through an RGBA8_SRGB view).
     rt_format_views: HashMap<(usize, u64), Tex>,
     /// Proxies rendered in the current encoder, copied into their compressed targets when it ends: (proxy, target, level).
@@ -548,6 +550,7 @@ impl Default for State {
             enc_depth: None,
             depth_snapshots: Vec::new(),
             bc_proxies: HashMap::default(),
+            clear_pipes: HashMap::default(),
             ts_pending: Vec::new(),
             rt_format_views: HashMap::default(),
             bc_pending: Vec::new(),

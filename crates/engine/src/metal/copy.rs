@@ -375,8 +375,12 @@ impl Gfx {
                     && region.y <= 0;
                 let float_color =
                     !is_depth_stencil(pf) && !matches!(tex.textureType(), MTLTextureType::Type3D);
+                if is_depth_stencil(pf) {
+                    warn_once("cleartex", format!("ClearTexture of a depth/stencil target ({:?}) is not supported", pf));
+                    return;
+                }
                 if !full || !float_color || (mask & 0xF) != 0xF && mask != 0 {
-                    warn_once("cleartex", format!("ClearTexture (partial region, masked, or non-color target; format {:?}) is not supported", pf));
+                    self.clear_region(st, cb, &tex, dst, region, color, mask, level, (lw, lh));
                     return;
                 }
                 let pass = MTLRenderPassDescriptor::renderPassDescriptor();
@@ -413,4 +417,121 @@ impl Gfx {
 /// A recorded texture reference with the object it names now (nvn::api::resolve_texture_ref).
 fn resolved(r: &crate::nvn::cmd::TexRef) -> crate::nvn::cmd::TexRef {
     crate::nvn::cmd::TexRef { texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen), ..*r }
+}
+
+impl super::Gfx {
+    /// ClearTexture of part of a level, some channels, or slices of a 3D texture: a triangle over the level, the region as
+    /// scissor and the channel mask as write mask, per slice.
+    #[allow(clippy::too_many_arguments)]
+    fn clear_region(
+        &self,
+        st: &mut super::State,
+        cb: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        tex: &super::Tex,
+        dst: &crate::nvn::cmd::TexRef,
+        region: &crate::nvn::cmd::Region,
+        color: &[u32; 4],
+        mask: i32,
+        level: usize,
+        (lw, lh): (usize, usize),
+    ) {
+        use objc2_metal::MTLDevice;
+        let pf = tex.pixelFormat();
+        // NVNclearColorMask: R 1, G 2, B 4, A 8 (0 is treated as all channels, as the full-clear path does).
+        let mask = if mask & 0xF == 0 { 0xF } else { (mask & 0xF) as u8 };
+        let kind = super::translated::pf_kind(pf);
+        let key = (pf.0 as usize, mask);
+        if !st.clear_pipes.contains_key(&key) {
+            let ty = ["float4", "uint4", "int4"][kind.clamp(0, 2) as usize];
+            let src = format!(
+                "#include <metal_stdlib>\nusing namespace metal;\n\
+                 vertex float4 clear_vs(uint i [[vertex_id]]) {{ return float4(float((i << 1) & 2) * 2.0 - 1.0, float(i & 2) * 2.0 - 1.0, 0.0, 1.0); }}\n\
+                 fragment {ty} clear_fs(constant uint4& c [[buffer(0)]]) {{ return as_type<{ty}>(c); }}\n"
+            );
+            let Ok(lib) = self.device.newLibraryWithSource_options_error(&NSString::from_str(&src), None) else {
+                return;
+            };
+            let desc = objc2_metal::MTLRenderPipelineDescriptor::new();
+            desc.setVertexFunction(lib.newFunctionWithName(&NSString::from_str("clear_vs")).as_deref());
+            desc.setFragmentFunction(lib.newFunctionWithName(&NSString::from_str("clear_fs")).as_deref());
+            let att = unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) };
+            att.setPixelFormat(pf);
+            let mut wm = objc2_metal::MTLColorWriteMask::empty();
+            for (bit, m) in [
+                (1, objc2_metal::MTLColorWriteMask::Red),
+                (2, objc2_metal::MTLColorWriteMask::Green),
+                (4, objc2_metal::MTLColorWriteMask::Blue),
+                (8, objc2_metal::MTLColorWriteMask::Alpha),
+            ] {
+                if mask & bit != 0 {
+                    wm |= m;
+                }
+            }
+            att.setWriteMask(wm);
+            let Ok(p) = self.device.newRenderPipelineStateWithDescriptor_error(&desc) else {
+                warn_once("cleartex-pipe", format!("ClearTexture: no clear pipeline for {:?}", pf));
+                return;
+            };
+            st.clear_pipes.insert(key, p);
+        }
+        let pipe = st.clear_pipes[&key].clone();
+        // Float formats take the clear color as floats, integer formats as raw values: either way the bits pass through.
+        let bytes: Vec<u8> = color.iter().flat_map(|c| c.to_le_bytes()).collect();
+        let Some(buf) = (unsafe {
+            self.device.newBufferWithBytes_length_options(
+                std::ptr::NonNull::new(bytes.as_ptr() as *mut libc::c_void).unwrap(),
+                bytes.len(),
+                objc2_metal::MTLResourceOptions::StorageModeShared,
+            )
+        }) else {
+            return;
+        };
+        let x0 = region.x.max(0) as usize;
+        let y0 = region.y.max(0) as usize;
+        let x1 = if region.w <= 0 { lw } else { (region.x as i64 + region.w as i64).clamp(0, lw as i64) as usize };
+        let y1 = if region.h <= 0 { lh } else { (region.y as i64 + region.h as i64).clamp(0, lh as i64) as usize };
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let is_3d = tex.textureType() == MTLTextureType::Type3D;
+        let slices: Vec<usize> = if is_3d {
+            let depth = (tex.depth() >> level).max(1);
+            let z0 = region.z.max(0) as usize;
+            let z1 = if region.d <= 0 { depth } else { (z0 + region.d as usize).min(depth) };
+            (z0..z1).collect()
+        } else {
+            vec![dst.layer as usize]
+        };
+        for slice in slices {
+            let pass = MTLRenderPassDescriptor::renderPassDescriptor();
+            let att = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+            att.setTexture(Some(tex));
+            att.setLevel(level);
+            if is_3d {
+                att.setDepthPlane(slice);
+            } else {
+                att.setSlice(slice);
+            }
+            att.setLoadAction(MTLLoadAction::Load);
+            att.setStoreAction(MTLStoreAction::Store);
+            st.issuer.push(super::issuer::Op::Begin { cb: cb.retain(), desc: pass, label: "clear texture region".to_string() });
+            st.issuer.push(super::issuer::Op::Pipeline(pipe.clone()));
+            st.issuer.push(super::issuer::Op::Scissor(objc2_metal::MTLScissorRect {
+                x: x0,
+                y: y0,
+                width: x1 - x0,
+                height: y1 - y0,
+            }));
+            st.issuer.push(super::issuer::Op::FBuf(buf.clone(), 0, 0));
+            st.issuer.push(super::issuer::Op::Draw {
+                prim: objc2_metal::MTLPrimitiveType::Triangle,
+                start: 0,
+                count: 3,
+                instances: 1,
+                base_instance: 0,
+            });
+            st.issuer.push(super::issuer::Op::End);
+            self.note_encoder(st, "clear texture region");
+        }
+    }
 }
