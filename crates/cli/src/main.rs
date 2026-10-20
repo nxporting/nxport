@@ -1,6 +1,9 @@
 // nxport-cli: shader caches, app bundles and frame-dump conversion for nxport.
 
-use nxport_build::{extract_shaders, ipa, macho, msl_specialize, pack, ppm2png, shader_cache_build, tiny_kernels, translation};
+use nxport_build::{extract_shaders, ppm2png, tiny_kernels};
+// App bundles, signed images and Metal shader caches are built on macOS hosts.
+#[cfg(target_os = "macos")]
+use nxport_build::{ipa, macho, msl_specialize, pack, shader_cache_build, translation};
 
 use std::path::PathBuf;
 
@@ -15,11 +18,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[cfg(target_os = "macos")]
     /// Package a macOS .app with a game dump, its mods and its shader cache
     Pack(PackArgs),
     /// Shader stages and caches
     #[command(subcommand)]
     Shaders(Shaders),
+    #[cfg(target_os = "macos")]
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
         /// Game dump (ExeFS/ and RomFS/)
@@ -47,6 +52,7 @@ enum Command {
         #[arg(long)]
         bundle_id: Option<String>,
     },
+    #[cfg(target_os = "macos")]
     /// The signed guest code image an iOS app runs: the game's code patched as the app patches it at startup
     GuestImage {
         /// Game dump (ExeFS/ and RomFS/)
@@ -73,6 +79,24 @@ enum Command {
         #[arg(default_value_t = 1)]
         downscale: usize,
     },
+    /// Lift a module (NSO) to C for hosts without the native runtime
+    Lift {
+        /// The module (e.g. ExeFS/main)
+        nso: PathBuf,
+        /// Output directory for the C files
+        #[arg(long, short)]
+        out: PathBuf,
+        /// Name prefix of the generated files and tables
+        #[arg(long, default_value = "main")]
+        name: String,
+        /// Guest address the module is loaded at (hex)
+        #[arg(long, default_value = "7000100000", value_parser = parse_hex)]
+        base: u64,
+    },
+}
+
+fn parse_hex(s: &str) -> Result<u64, String> {
+    u64::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|e| e.to_string())
 }
 
 #[derive(clap::Args)]
@@ -114,6 +138,7 @@ enum Shaders {
         #[arg(long)]
         ctrl_out: Option<PathBuf>,
     },
+    #[cfg(target_os = "macos")]
     /// Build the Metal shader cache from stage dumps (incremental: stages translated before are reused)
     Build {
         /// Stage dump directories (*.code)
@@ -137,6 +162,7 @@ enum Shaders {
         #[command(flatten)]
         translation: translation::Translation,
     },
+    #[cfg(target_os = "macos")]
     /// Compile a macOS cache's specialized MSL for iOS 16+
     BuildIos {
         /// The macOS cache (its work/ directory holds the MSL)
@@ -150,6 +176,7 @@ enum Shaders {
         #[arg(short, default_value_t = 6)]
         j: usize,
     },
+    #[cfg(target_os = "macos")]
     /// Specialize one translated MSL file for Metal
     Specialize {
         input: PathBuf,
@@ -172,6 +199,7 @@ enum Shaders {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
+        #[cfg(target_os = "macos")]
         Command::Pack(a) => {
             let mods = a.mods.or_else(|| {
                 let dump_mods = a.dump.join("mods");
@@ -191,13 +219,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
             extract_shaders::extract_all(&romfs, &out, &dirs, ctrl_out.as_deref(), None)?;
         }
+        #[cfg(target_os = "macos")]
         Command::Shaders(Shaders::Build { dumps, out, ctrl_dir, msl_out, index_only, j, translation }) => {
             translation::install(translation);
             // A third of the cores by default: the build is thousands of short tool launches.
             let jobs = j.unwrap_or_else(|| (std::thread::available_parallelism().map_or(6, |n| n.get()) / 3).max(2));
             shader_cache_build::build(&shader_cache_build::Options { dump_dirs: dumps, out_dir: out, ctrl_dir, jobs, msl_out, index_only, on_progress: None })?;
         }
+        #[cfg(target_os = "macos")]
         Command::Shaders(Shaders::BuildIos { cache, out, sim, j }) => shader_cache_build::build_ios(&cache, &out, j, sim, None)?,
+        #[cfg(target_os = "macos")]
         Command::Shaders(Shaders::Specialize { input, output, meta, translation }) => {
             translation::install(translation);
             let text = std::fs::read_to_string(&input)?;
@@ -232,6 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("[+] {} stages: {} fragment kernels, {} vertex kernels", stages.len(), f_ok, v_ok);
         }
+        #[cfg(target_os = "macos")]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
             let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
             std::fs::create_dir_all(&out)?;
@@ -250,6 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("[+] Wrote {}", ipa.display());
         }
+        #[cfg(target_os = "macos")]
         Command::GuestImage { dump, mods, settings, out, macos } => {
             let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
             let img = nxport::guest_image(ipa::app_settings(&dump, mods.as_deref(), edits))?;
@@ -261,6 +294,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             macho::write_guest_dylib(&img, &out, platform, name)?;
         }
         Command::Ppm2png { input, output, downscale } => ppm2png::convert_ppm_to_png(&input, &output, downscale)?,
+        Command::Lift { nso, out, name, base } => {
+            let r = nxport_build::lift::lift_nso(&nso, &name, base, &out)?;
+            println!(
+                "[+] {}: {} functions, {} instructions, {} jump tables, {} unresolved computed branches, {} C files",
+                nso.display(),
+                r.functions,
+                r.instructions,
+                r.jump_tables,
+                r.unresolved_computed,
+                r.files.len()
+            );
+            let mut unsupported: Vec<_> = r.unsupported.iter().collect();
+            unsupported.sort_by(|a, b| b.1.cmp(a.1));
+            for (reason, n) in unsupported.iter().take(20) {
+                println!("    {n:>9} not lifted: {reason}");
+            }
+        }
     }
     Ok(())
 }
