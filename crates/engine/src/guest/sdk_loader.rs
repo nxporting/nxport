@@ -219,6 +219,22 @@ unsafe extern "C" fn sdk_unimplemented_stub() -> i64 {
 
 // ── main entry point ────────────────────────────────────────────────────────
 
+static NVN_LIBRARY_VERSION: std::sync::OnceLock<Option<(u32, u32, u32)>> = std::sync::OnceLock::new();
+
+/// The version of the NVN library the game's SDK module was built with, once the SDK is loaded.
+pub fn nvn_library_version() -> Option<(u32, u32, u32)> {
+    NVN_LIBRARY_VERSION.get().copied().flatten()
+}
+
+/// The version in an SDK middleware string such as "SDK MW+Nintendo+NintendoSDK_NVN-7_3_2-Release", by its `lib` prefix.
+fn middleware_version(ro: &[u8], lib: &[u8]) -> Option<(u32, u32, u32)> {
+    let tag = [b"SDK MW+Nintendo+".as_slice(), lib].concat();
+    let at = ro.windows(tag.len()).position(|w| w == tag)? + tag.len();
+    let end = ro[at..].iter().position(|&c| c == b'-' || c == 0)?;
+    let mut parts = std::str::from_utf8(&ro[at..at + end]).ok()?.split('_').map(|p| p.parse::<u32>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
 pub fn load_sdk(
     sdk_path: &str,
     mem_space: &mut GuestMemorySpace,
@@ -251,6 +267,10 @@ pub fn load_sdk(
     let text_raw = decompress_section(&file, text_fo, text_cs, text_ds, flags & 1 != 0, "text")?;
     let ro_raw = decompress_section(&file, ro_fo, ro_cs, ro_ds, flags & 2 != 0, "rodata")?;
     let data_raw = decompress_section(&file, data_fo, data_cs, data_ds, flags & 4 != 0, "data")?;
+    let _ = NVN_LIBRARY_VERSION.set(middleware_version(&ro_raw, b"NintendoSDK_NVN-"));
+    if let Some((x, y, z)) = nvn_library_version() {
+        println!("[+] SDK: NVN library {x}.{y}.{z}");
+    }
 
     // ── Allocate SDK VM region ──────────────────────────────────────────────
     let bss_start = data_mo + data_ds;

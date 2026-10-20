@@ -33,6 +33,8 @@ pub struct VersionProfile {
         Option<unsafe fn(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace)>,
     pub heap_instance_offset: Option<usize>,
     pub allocator_pool_offset: Option<usize>,
+    /// --log-draw-items: a token for the game object whose draw is being recorded on this thread (0: none found).
+    pub draw_item: Option<unsafe fn() -> u32>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -305,6 +307,25 @@ static MAIN_BUILD_ID: OnceLock<String> = OnceLock::new();
 
 pub fn set_main_build_id(id: &str) {
     let _ = MAIN_BUILD_ID.set(id.to_lowercase());
+}
+
+/// Logs the game's version (the dump's control data) and the version profile its main build id matched; warns when the
+/// two disagree.
+pub fn log_version(build_id: &str) {
+    let display = crate::game::control_of(crate::game::dir()).and_then(|c| c.version);
+    let matched = active().match_version(build_id);
+    println!(
+        "[+] Game: {} version {} (main build id {}), profile {}",
+        active().name,
+        display.as_deref().unwrap_or("unknown"),
+        &build_id[..build_id.len().min(32)],
+        matched.map_or("none", |v| v.version_string)
+    );
+    if let (Some(d), Some(v)) = (&display, matched) {
+        if d != v.version_string {
+            eprintln!("[!] Game version {d} matched the profile of version {}", v.version_string);
+        }
+    }
 }
 
 pub fn main_build_id() -> Option<&'static str> {

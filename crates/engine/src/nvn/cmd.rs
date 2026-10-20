@@ -1178,13 +1178,8 @@ unsafe fn note_draw_caller(count: c_int) -> u32 {
 }
 
 unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
-    // Measurement (--log-draw-items, TotK 1.1.2): the draw's item object instead of its caller. main+0x763718 takes
-    // (renderer, item, ...), keeps the item at [x29 - 0x20] and calls the renderer's draw callback (return address
-    // main+0x763798); most of the frame's draws come through it.
     static DRAWABLES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *DRAWABLES.get_or_init(|| {
-        crate::settings::get().totk.diagnostics.log_drawables && crate::game::is_totk()
-    }) {
+    if *DRAWABLES.get_or_init(|| crate::settings::get().totk.diagnostics.log_drawables) {
         let (obj, func, nth) = next_drawable_draw();
         note_drawable_class(func, count);
         // Token: the object and the draw's index range (indexed draws: the sub-mesh range drawn, stable when culling
@@ -1242,29 +1237,14 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
             0
         };
     }
-    static ITEMS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ITEMS.get_or_init(|| {
-        crate::settings::get().totk.diagnostics.log_draw_items && crate::game::is_totk()
+    // Measurement (--log-draw-items): the draw's game object instead of its caller, from the game version's profile.
+    static ITEMS: std::sync::OnceLock<Option<unsafe fn() -> u32>> = std::sync::OnceLock::new();
+    if let Some(item) = *ITEMS.get_or_init(|| {
+        crate::settings::get().totk.diagnostics.log_draw_items
+            .then(|| crate::profile::active_version().and_then(|v| v.draw_item))
+            .flatten()
     }) {
-        let base = crate::cpu::crash_handler::get_guest_base();
-        let mut fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
-        for _ in 0..16 {
-            if fp < 0x1000 || fp & 7 != 0 {
-                break;
-            }
-            let next = *(fp as *const usize);
-            let ret = *((fp + 8) as *const usize);
-            if ret == base + 0x763798 && next > 0x1000 && next & 7 == 0 {
-                let item = *((next - 0x20) as *const usize);
-                return ((item >> 3) as u32) | 1;
-            }
-            if next <= fp {
-                break;
-            }
-            fp = next;
-        }
-        return 0;
+        return item();
     }
     static FROM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     let Some(from) = *FROM.get_or_init(|| crate::settings::get().log.log_draw_callers) else {
