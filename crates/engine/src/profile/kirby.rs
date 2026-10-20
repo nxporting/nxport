@@ -8,6 +8,7 @@ pub static V1_0_0: VersionProfile = VersionProfile {
     install_hooks: None,
     heap_instance_offset: None,
     allocator_pool_offset: None,
+    draw_item: None,
 };
 
 pub static PROFILE: GameProfile = GameProfile {

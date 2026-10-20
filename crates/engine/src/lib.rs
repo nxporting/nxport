@@ -494,6 +494,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         let exefs = exefs_buf.to_str().unwrap();
         if let Some(id) = guest::mod_patches::nso_build_id(&format!("{}/main", exefs)) {
             profile::set_main_build_id(&id);
+            profile::log_version(&id);
             let base = mem_space.base_ptr as usize;
             let image = mem_space.bss_off + mem_space.bss_size;
             guest::mod_patches::apply(

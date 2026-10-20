@@ -12,7 +12,32 @@ pub static PROFILE: VersionProfile = VersionProfile {
     install_hooks: Some(install_v1_1_2_hooks),
     heap_instance_offset: Some(0x047137d0),
     allocator_pool_offset: Some(0x0466e500),
+    draw_item: Some(draw_item),
 };
+
+/// --log-draw-items: main+0x763718 takes (renderer, item, ...), keeps the item at [x29 - 0x20] and calls the renderer's
+/// draw callback (return address main+0x763798); most of the frame's draws come through it.
+unsafe fn draw_item() -> u32 {
+    let base = crate::cpu::crash_handler::get_guest_base();
+    let mut fp: usize;
+    std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+    for _ in 0..16 {
+        if fp < 0x1000 || fp & 7 != 0 {
+            break;
+        }
+        let next = *(fp as *const usize);
+        let ret = *((fp + 8) as *const usize);
+        if ret == base + 0x763798 && next > 0x1000 && next & 7 == 0 {
+            let item = *((next - 0x20) as *const usize);
+            return ((item >> 3) as u32) | 1;
+        }
+        if next <= fp {
+            break;
+        }
+        fp = next;
+    }
+    0
+}
 extern "C" {
     fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
 }
