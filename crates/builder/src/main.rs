@@ -834,7 +834,6 @@ impl Builder {
                         dump_dirs: vec![stages],
                         out_dir: cache,
                         ctrl_dir: None,
-                        sass2spv: sass2spv(),
                         jobs,
                         msl_out: None,
                         index_only: false,
@@ -939,11 +938,6 @@ impl Builder {
     }
 }
 
-/// The decompiler wrapper of the source tree (until it ships as a program of its own).
-fn sass2spv() -> PathBuf {
-    let exe = std::env::current_exe().unwrap_or_default();
-    exe.ancestors().map(|d| d.join("tools/sass2spv.sh")).find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("tools/sass2spv.sh"))
-}
 
 fn run_steps(job: &Arc<Mutex<Job>>, steps: Vec<Step>) -> Result<(), String> {
     for (i, (name, f)) in steps.into_iter().enumerate() {

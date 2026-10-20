@@ -1,16803 +1,5914 @@
-// Generated from Ryujinx.Graphics.Shader/Decoders/InstDecoders.cs - do not edit
-#![allow(non_camel_case_types, non_snake_case, dead_code, clippy::all)]
+#![allow(unused_parens, non_camel_case_types, clippy::all)]
+// Generated from Ryujinx's Decoders/InstDecoders.cs - do not edit.
 
-use super::register::RegisterConsts;
+#![allow(dead_code)]
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum AlSize {
-    #[default]
-    _32 = 0,
-    _64 = 1,
-    _96 = 2,
-    _128 = 3,
-}
+use super::register::REGISTER_ZERO_INDEX;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AlSize(pub u32);
+
+#[rustfmt::skip]
 impl AlSize {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::_32,
-            1 => Self::_64,
-            2 => Self::_96,
-            3 => Self::_128,
-            _ => Self::default(),
-        }
-    }
+    pub const B32: Self = Self(0);
+    pub const B64: Self = Self(1);
+    pub const B96: Self = Self(2);
+    pub const B128: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum AtomSize {
-    #[default]
-    U32 = 0,
-    S32 = 1,
-    U64 = 2,
-    F32FtzRn = 3,
-    F16x2FtzRn = 4,
-    S64 = 5,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AtomSize(pub u32);
 
+#[rustfmt::skip]
 impl AtomSize {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U32,
-            1 => Self::S32,
-            2 => Self::U64,
-            3 => Self::F32FtzRn,
-            4 => Self::F16x2FtzRn,
-            5 => Self::S64,
-            _ => Self::default(),
-        }
-    }
+    pub const U32: Self = Self(0);
+    pub const S32: Self = Self(1);
+    pub const U64: Self = Self(2);
+    pub const F32_FTZ_RN: Self = Self(3);
+    pub const F16X2_FTZ_RN: Self = Self(4);
+    pub const S64: Self = Self(5);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum AtomOp {
-    #[default]
-    Add = 0,
-    Min = 1,
-    Max = 2,
-    Inc = 3,
-    Dec = 4,
-    And = 5,
-    Or = 6,
-    Xor = 7,
-    Exch = 8,
-    Safeadd = 10,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AtomOp(pub u32);
 
+#[rustfmt::skip]
 impl AtomOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Add,
-            1 => Self::Min,
-            2 => Self::Max,
-            3 => Self::Inc,
-            4 => Self::Dec,
-            5 => Self::And,
-            6 => Self::Or,
-            7 => Self::Xor,
-            8 => Self::Exch,
-            10 => Self::Safeadd,
-            _ => Self::default(),
-        }
-    }
+    pub const ADD: Self = Self(0);
+    pub const MIN: Self = Self(1);
+    pub const MAX: Self = Self(2);
+    pub const INC: Self = Self(3);
+    pub const DEC: Self = Self(4);
+    pub const AND: Self = Self(5);
+    pub const OR: Self = Self(6);
+    pub const XOR: Self = Self(7);
+    pub const EXCH: Self = Self(8);
+    pub const SAFEADD: Self = Self(10);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum AtomsSize {
-    #[default]
-    U32 = 0,
-    S32 = 1,
-    U64 = 2,
-    S64 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AtomsSize(pub u32);
 
+#[rustfmt::skip]
 impl AtomsSize {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U32,
-            1 => Self::S32,
-            2 => Self::U64,
-            3 => Self::S64,
-            _ => Self::default(),
-        }
-    }
+    pub const U32: Self = Self(0);
+    pub const S32: Self = Self(1);
+    pub const U64: Self = Self(2);
+    pub const S64: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum BarMode {
-    #[default]
-    Bar = 0,
-    Result = 1,
-    Warp = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BarMode(pub u32);
 
+#[rustfmt::skip]
 impl BarMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Bar,
-            1 => Self::Result,
-            2 => Self::Warp,
-            _ => Self::default(),
-        }
-    }
+    pub const BAR: Self = Self(0);
+    pub const RESULT: Self = Self(1);
+    pub const WARP: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum BarOp {
-    #[default]
-    Sync = 0,
-    Arv = 1,
-    Red = 2,
-    Scan = 3,
-    SyncAll = 4,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BarOp(pub u32);
 
+#[rustfmt::skip]
 impl BarOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Sync,
-            1 => Self::Arv,
-            2 => Self::Red,
-            3 => Self::Scan,
-            4 => Self::SyncAll,
-            _ => Self::default(),
-        }
-    }
+    pub const SYNC: Self = Self(0);
+    pub const ARV: Self = Self(1);
+    pub const RED: Self = Self(2);
+    pub const SCAN: Self = Self(3);
+    pub const SYNC_ALL: Self = Self(4);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum BarRedOp {
-    #[default]
-    Popc = 0,
-    And = 1,
-    Or = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BarRedOp(pub u32);
 
+#[rustfmt::skip]
 impl BarRedOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Popc,
-            1 => Self::And,
-            2 => Self::Or,
-            _ => Self::default(),
-        }
-    }
+    pub const POPC: Self = Self(0);
+    pub const AND: Self = Self(1);
+    pub const OR: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Bpt {
-    #[default]
-    DrainIllegal = 0,
-    Cal = 1,
-    Pause = 2,
-    Trap = 3,
-    Int = 4,
-    Drain = 5,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Bpt(pub u32);
 
+#[rustfmt::skip]
 impl Bpt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::DrainIllegal,
-            1 => Self::Cal,
-            2 => Self::Pause,
-            3 => Self::Trap,
-            4 => Self::Int,
-            5 => Self::Drain,
-            _ => Self::default(),
-        }
-    }
+    pub const DRAIN_ILLEGAL: Self = Self(0);
+    pub const CAL: Self = Self(1);
+    pub const PAUSE: Self = Self(2);
+    pub const TRAP: Self = Self(3);
+    pub const INT: Self = Self(4);
+    pub const DRAIN: Self = Self(5);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Ccc {
-    #[default]
-    F = 0,
-    Lt = 1,
-    Eq = 2,
-    Le = 3,
-    Gt = 4,
-    Ne = 5,
-    Ge = 6,
-    Num = 7,
-    Nan = 8,
-    Ltu = 9,
-    Equ = 10,
-    Leu = 11,
-    Gtu = 12,
-    Neu = 13,
-    Geu = 14,
-    T = 15,
-    Off = 16,
-    Lo = 17,
-    Sff = 18,
-    Ls = 19,
-    Hi = 20,
-    Sft = 21,
-    Hs = 22,
-    Oft = 23,
-    CsmTa = 24,
-    CsmTr = 25,
-    CsmMx = 26,
-    FcsmTa = 27,
-    FcsmTr = 28,
-    FcsmMx = 29,
-    Rle = 30,
-    Rgt = 31,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Ccc(pub u32);
 
+#[rustfmt::skip]
 impl Ccc {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::F,
-            1 => Self::Lt,
-            2 => Self::Eq,
-            3 => Self::Le,
-            4 => Self::Gt,
-            5 => Self::Ne,
-            6 => Self::Ge,
-            7 => Self::Num,
-            8 => Self::Nan,
-            9 => Self::Ltu,
-            10 => Self::Equ,
-            11 => Self::Leu,
-            12 => Self::Gtu,
-            13 => Self::Neu,
-            14 => Self::Geu,
-            15 => Self::T,
-            16 => Self::Off,
-            17 => Self::Lo,
-            18 => Self::Sff,
-            19 => Self::Ls,
-            20 => Self::Hi,
-            21 => Self::Sft,
-            22 => Self::Hs,
-            23 => Self::Oft,
-            24 => Self::CsmTa,
-            25 => Self::CsmTr,
-            26 => Self::CsmMx,
-            27 => Self::FcsmTa,
-            28 => Self::FcsmTr,
-            29 => Self::FcsmMx,
-            30 => Self::Rle,
-            31 => Self::Rgt,
-            _ => Self::default(),
-        }
-    }
+    pub const F: Self = Self(0);
+    pub const LT: Self = Self(1);
+    pub const EQ: Self = Self(2);
+    pub const LE: Self = Self(3);
+    pub const GT: Self = Self(4);
+    pub const NE: Self = Self(5);
+    pub const GE: Self = Self(6);
+    pub const NUM: Self = Self(7);
+    pub const NAN: Self = Self(8);
+    pub const LTU: Self = Self(9);
+    pub const EQU: Self = Self(10);
+    pub const LEU: Self = Self(11);
+    pub const GTU: Self = Self(12);
+    pub const NEU: Self = Self(13);
+    pub const GEU: Self = Self(14);
+    pub const T: Self = Self(15);
+    pub const OFF: Self = Self(16);
+    pub const LO: Self = Self(17);
+    pub const SFF: Self = Self(18);
+    pub const LS: Self = Self(19);
+    pub const HI: Self = Self(20);
+    pub const SFT: Self = Self(21);
+    pub const HS: Self = Self(22);
+    pub const OFT: Self = Self(23);
+    pub const CSM_TA: Self = Self(24);
+    pub const CSM_TR: Self = Self(25);
+    pub const CSM_MX: Self = Self(26);
+    pub const FCSM_TA: Self = Self(27);
+    pub const FCSM_TR: Self = Self(28);
+    pub const FCSM_MX: Self = Self(29);
+    pub const RLE: Self = Self(30);
+    pub const RGT: Self = Self(31);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum CacheType {
-    #[default]
-    U = 1,
-    C = 2,
-    I = 3,
-    Crs = 4,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CacheType(pub u32);
 
+#[rustfmt::skip]
 impl CacheType {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::U,
-            2 => Self::C,
-            3 => Self::I,
-            4 => Self::Crs,
-            _ => Self::default(),
-        }
-    }
+    pub const U: Self = Self(1);
+    pub const C: Self = Self(2);
+    pub const I: Self = Self(3);
+    pub const CRS: Self = Self(4);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum CctlOp {
-    #[default]
-    Pf1 = 1,
-    Pf1_5 = 2,
-    Pf2 = 3,
-    Wb = 4,
-    Iv = 5,
-    Ivall = 6,
-    Rs = 7,
-    Rslb = 9,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CctlOp(pub u32);
 
+#[rustfmt::skip]
 impl CctlOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Pf1,
-            2 => Self::Pf1_5,
-            3 => Self::Pf2,
-            4 => Self::Wb,
-            5 => Self::Iv,
-            6 => Self::Ivall,
-            7 => Self::Rs,
-            9 => Self::Rslb,
-            _ => Self::default(),
-        }
-    }
+    pub const PF1: Self = Self(1);
+    pub const PF1_5: Self = Self(2);
+    pub const PF2: Self = Self(3);
+    pub const WB: Self = Self(4);
+    pub const IV: Self = Self(5);
+    pub const IVALL: Self = Self(6);
+    pub const RS: Self = Self(7);
+    pub const RSLB: Self = Self(9);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum CctltOp {
-    #[default]
-    Ivth = 1,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CctltOp(pub u32);
 
+#[rustfmt::skip]
 impl CctltOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Ivth,
-            _ => Self::default(),
-        }
-    }
+    pub const IVTH: Self = Self(1);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum BoolOp {
-    #[default]
-    And = 0,
-    Or = 1,
-    Xor = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BoolOp(pub u32);
 
+#[rustfmt::skip]
 impl BoolOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::And,
-            1 => Self::Or,
-            2 => Self::Xor,
-            _ => Self::default(),
-        }
-    }
+    pub const AND: Self = Self(0);
+    pub const OR: Self = Self(1);
+    pub const XOR: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum SReg {
-    #[default]
-    LaneId = 0,
-    Clock = 1,
-    VirtCfg = 2,
-    VirtId = 3,
-    Pm0 = 4,
-    Pm1 = 5,
-    Pm2 = 6,
-    Pm3 = 7,
-    Pm4 = 8,
-    Pm5 = 9,
-    Pm6 = 10,
-    Pm7 = 11,
-    OrderingTicket = 15,
-    PrimType = 16,
-    InvocationId = 17,
-    YDirection = 18,
-    ThreadKill = 19,
-    ShaderType = 20,
-    DirectCbeWriteAddressLow = 21,
-    DirectCbeWriteAddressHigh = 22,
-    DirectCbeWriteEnabled = 23,
-    MachineId0 = 24,
-    MachineId1 = 25,
-    MachineId2 = 26,
-    MachineId3 = 27,
-    Affinity = 28,
-    InvocationInfo = 29,
-    WScaleFactorXY = 30,
-    WScaleFactorZ = 31,
-    TId = 32,
-    TIdX = 33,
-    TIdY = 34,
-    TIdZ = 35,
-    CtaParam = 36,
-    CtaIdX = 37,
-    CtaIdY = 38,
-    CtaIdZ = 39,
-    Ntid = 40,
-    CirQueueIncrMinusOne = 41,
-    Nlatc = 42,
-    Swinlo = 48,
-    Swinsz = 49,
-    Smemsz = 50,
-    Smembanks = 51,
-    LWinLo = 52,
-    LWinSz = 53,
-    LMemLoSz = 54,
-    LMemHiOff = 55,
-    EqMask = 56,
-    LtMask = 57,
-    LeMask = 58,
-    GtMask = 59,
-    GeMask = 60,
-    RegAlloc = 61,
-    CtxAddr = 62,
-    GlobalErrorStatus = 64,
-    WarpErrorStatus = 66,
-    WarpErrorStatusClear = 67,
-    PmHi0 = 72,
-    PmHi1 = 73,
-    PmHi2 = 74,
-    PmHi3 = 75,
-    PmHi4 = 76,
-    PmHi5 = 77,
-    PmHi6 = 78,
-    PmHi7 = 79,
-    ClockLo = 80,
-    ClockHi = 81,
-    GlobalTimerLo = 82,
-    GlobalTimerHi = 83,
-    HwTaskId = 96,
-    CircularQueueEntryIndex = 97,
-    CircularQueueEntryAddressLow = 98,
-    CircularQueueEntryAddressHigh = 99,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SReg(pub u32);
 
+#[rustfmt::skip]
 impl SReg {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::LaneId,
-            1 => Self::Clock,
-            2 => Self::VirtCfg,
-            3 => Self::VirtId,
-            4 => Self::Pm0,
-            5 => Self::Pm1,
-            6 => Self::Pm2,
-            7 => Self::Pm3,
-            8 => Self::Pm4,
-            9 => Self::Pm5,
-            10 => Self::Pm6,
-            11 => Self::Pm7,
-            15 => Self::OrderingTicket,
-            16 => Self::PrimType,
-            17 => Self::InvocationId,
-            18 => Self::YDirection,
-            19 => Self::ThreadKill,
-            20 => Self::ShaderType,
-            21 => Self::DirectCbeWriteAddressLow,
-            22 => Self::DirectCbeWriteAddressHigh,
-            23 => Self::DirectCbeWriteEnabled,
-            24 => Self::MachineId0,
-            25 => Self::MachineId1,
-            26 => Self::MachineId2,
-            27 => Self::MachineId3,
-            28 => Self::Affinity,
-            29 => Self::InvocationInfo,
-            30 => Self::WScaleFactorXY,
-            31 => Self::WScaleFactorZ,
-            32 => Self::TId,
-            33 => Self::TIdX,
-            34 => Self::TIdY,
-            35 => Self::TIdZ,
-            36 => Self::CtaParam,
-            37 => Self::CtaIdX,
-            38 => Self::CtaIdY,
-            39 => Self::CtaIdZ,
-            40 => Self::Ntid,
-            41 => Self::CirQueueIncrMinusOne,
-            42 => Self::Nlatc,
-            48 => Self::Swinlo,
-            49 => Self::Swinsz,
-            50 => Self::Smemsz,
-            51 => Self::Smembanks,
-            52 => Self::LWinLo,
-            53 => Self::LWinSz,
-            54 => Self::LMemLoSz,
-            55 => Self::LMemHiOff,
-            56 => Self::EqMask,
-            57 => Self::LtMask,
-            58 => Self::LeMask,
-            59 => Self::GtMask,
-            60 => Self::GeMask,
-            61 => Self::RegAlloc,
-            62 => Self::CtxAddr,
-            64 => Self::GlobalErrorStatus,
-            66 => Self::WarpErrorStatus,
-            67 => Self::WarpErrorStatusClear,
-            72 => Self::PmHi0,
-            73 => Self::PmHi1,
-            74 => Self::PmHi2,
-            75 => Self::PmHi3,
-            76 => Self::PmHi4,
-            77 => Self::PmHi5,
-            78 => Self::PmHi6,
-            79 => Self::PmHi7,
-            80 => Self::ClockLo,
-            81 => Self::ClockHi,
-            82 => Self::GlobalTimerLo,
-            83 => Self::GlobalTimerHi,
-            96 => Self::HwTaskId,
-            97 => Self::CircularQueueEntryIndex,
-            98 => Self::CircularQueueEntryAddressLow,
-            99 => Self::CircularQueueEntryAddressHigh,
-            _ => Self::default(),
-        }
-    }
+    pub const LANE_ID: Self = Self(0);
+    pub const CLOCK: Self = Self(1);
+    pub const VIRT_CFG: Self = Self(2);
+    pub const VIRT_ID: Self = Self(3);
+    pub const PM0: Self = Self(4);
+    pub const PM1: Self = Self(5);
+    pub const PM2: Self = Self(6);
+    pub const PM3: Self = Self(7);
+    pub const PM4: Self = Self(8);
+    pub const PM5: Self = Self(9);
+    pub const PM6: Self = Self(10);
+    pub const PM7: Self = Self(11);
+    pub const ORDERING_TICKET: Self = Self(15);
+    pub const PRIM_TYPE: Self = Self(16);
+    pub const INVOCATION_ID: Self = Self(17);
+    pub const Y_DIRECTION: Self = Self(18);
+    pub const THREAD_KILL: Self = Self(19);
+    pub const SHADER_TYPE: Self = Self(20);
+    pub const DIRECT_CBE_WRITE_ADDRESS_LOW: Self = Self(21);
+    pub const DIRECT_CBE_WRITE_ADDRESS_HIGH: Self = Self(22);
+    pub const DIRECT_CBE_WRITE_ENABLED: Self = Self(23);
+    pub const MACHINE_ID0: Self = Self(24);
+    pub const MACHINE_ID1: Self = Self(25);
+    pub const MACHINE_ID2: Self = Self(26);
+    pub const MACHINE_ID3: Self = Self(27);
+    pub const AFFINITY: Self = Self(28);
+    pub const INVOCATION_INFO: Self = Self(29);
+    pub const W_SCALE_FACTOR_XY: Self = Self(30);
+    pub const W_SCALE_FACTOR_Z: Self = Self(31);
+    pub const T_ID: Self = Self(32);
+    pub const T_ID_X: Self = Self(33);
+    pub const T_ID_Y: Self = Self(34);
+    pub const T_ID_Z: Self = Self(35);
+    pub const CTA_PARAM: Self = Self(36);
+    pub const CTA_ID_X: Self = Self(37);
+    pub const CTA_ID_Y: Self = Self(38);
+    pub const CTA_ID_Z: Self = Self(39);
+    pub const NTID: Self = Self(40);
+    pub const CIR_QUEUE_INCR_MINUS_ONE: Self = Self(41);
+    pub const NLATC: Self = Self(42);
+    pub const SWINLO: Self = Self(48);
+    pub const SWINSZ: Self = Self(49);
+    pub const SMEMSZ: Self = Self(50);
+    pub const SMEMBANKS: Self = Self(51);
+    pub const L_WIN_LO: Self = Self(52);
+    pub const L_WIN_SZ: Self = Self(53);
+    pub const L_MEM_LO_SZ: Self = Self(54);
+    pub const L_MEM_HI_OFF: Self = Self(55);
+    pub const EQ_MASK: Self = Self(56);
+    pub const LT_MASK: Self = Self(57);
+    pub const LE_MASK: Self = Self(58);
+    pub const GT_MASK: Self = Self(59);
+    pub const GE_MASK: Self = Self(60);
+    pub const REG_ALLOC: Self = Self(61);
+    pub const CTX_ADDR: Self = Self(62);
+    pub const GLOBAL_ERROR_STATUS: Self = Self(64);
+    pub const WARP_ERROR_STATUS: Self = Self(66);
+    pub const WARP_ERROR_STATUS_CLEAR: Self = Self(67);
+    pub const PM_HI0: Self = Self(72);
+    pub const PM_HI1: Self = Self(73);
+    pub const PM_HI2: Self = Self(74);
+    pub const PM_HI3: Self = Self(75);
+    pub const PM_HI4: Self = Self(76);
+    pub const PM_HI5: Self = Self(77);
+    pub const PM_HI6: Self = Self(78);
+    pub const PM_HI7: Self = Self(79);
+    pub const CLOCK_LO: Self = Self(80);
+    pub const CLOCK_HI: Self = Self(81);
+    pub const GLOBAL_TIMER_LO: Self = Self(82);
+    pub const GLOBAL_TIMER_HI: Self = Self(83);
+    pub const HW_TASK_ID: Self = Self(96);
+    pub const CIRCULAR_QUEUE_ENTRY_INDEX: Self = Self(97);
+    pub const CIRCULAR_QUEUE_ENTRY_ADDRESS_LOW: Self = Self(98);
+    pub const CIRCULAR_QUEUE_ENTRY_ADDRESS_HIGH: Self = Self(99);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum RoundMode {
-    #[default]
-    Rn = 0,
-    Rm = 1,
-    Rp = 2,
-    Rz = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RoundMode(pub u32);
 
+#[rustfmt::skip]
 impl RoundMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Rn,
-            1 => Self::Rm,
-            2 => Self::Rp,
-            3 => Self::Rz,
-            _ => Self::default(),
-        }
-    }
+    pub const RN: Self = Self(0);
+    pub const RM: Self = Self(1);
+    pub const RP: Self = Self(2);
+    pub const RZ: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum FComp {
-    #[default]
-    F = 0,
-    Lt = 1,
-    Eq = 2,
-    Le = 3,
-    Gt = 4,
-    Ne = 5,
-    Ge = 6,
-    Num = 7,
-    Nan = 8,
-    Ltu = 9,
-    Equ = 10,
-    Leu = 11,
-    Gtu = 12,
-    Neu = 13,
-    Geu = 14,
-    T = 15,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FComp(pub u32);
 
+#[rustfmt::skip]
 impl FComp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::F,
-            1 => Self::Lt,
-            2 => Self::Eq,
-            3 => Self::Le,
-            4 => Self::Gt,
-            5 => Self::Ne,
-            6 => Self::Ge,
-            7 => Self::Num,
-            8 => Self::Nan,
-            9 => Self::Ltu,
-            10 => Self::Equ,
-            11 => Self::Leu,
-            12 => Self::Gtu,
-            13 => Self::Neu,
-            14 => Self::Geu,
-            15 => Self::T,
-            _ => Self::default(),
-        }
-    }
+    pub const F: Self = Self(0);
+    pub const LT: Self = Self(1);
+    pub const EQ: Self = Self(2);
+    pub const LE: Self = Self(3);
+    pub const GT: Self = Self(4);
+    pub const NE: Self = Self(5);
+    pub const GE: Self = Self(6);
+    pub const NUM: Self = Self(7);
+    pub const NAN: Self = Self(8);
+    pub const LTU: Self = Self(9);
+    pub const EQU: Self = Self(10);
+    pub const LEU: Self = Self(11);
+    pub const GTU: Self = Self(12);
+    pub const NEU: Self = Self(13);
+    pub const GEU: Self = Self(14);
+    pub const T: Self = Self(15);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum IntegerRound {
-    #[default]
-    Pass = 1,
-    Round = 4,
-    Floor = 5,
-    Ceil = 6,
-    Trunc = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IntegerRound(pub u32);
 
+#[rustfmt::skip]
 impl IntegerRound {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Pass,
-            4 => Self::Round,
-            5 => Self::Floor,
-            6 => Self::Ceil,
-            7 => Self::Trunc,
-            _ => Self::default(),
-        }
-    }
+    pub const PASS: Self = Self(1);
+    pub const ROUND: Self = Self(4);
+    pub const FLOOR: Self = Self(5);
+    pub const CEIL: Self = Self(6);
+    pub const TRUNC: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum IDstFmt {
-    #[default]
-    U16 = 1,
-    U32 = 2,
-    U64 = 3,
-    S16 = 5,
-    S32 = 6,
-    S64 = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IDstFmt(pub u32);
 
+#[rustfmt::skip]
 impl IDstFmt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::U16,
-            2 => Self::U32,
-            3 => Self::U64,
-            5 => Self::S16,
-            6 => Self::S32,
-            7 => Self::S64,
-            _ => Self::default(),
-        }
-    }
+    pub const U16: Self = Self(1);
+    pub const U32: Self = Self(2);
+    pub const U64: Self = Self(3);
+    pub const S16: Self = Self(5);
+    pub const S32: Self = Self(6);
+    pub const S64: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ISrcFmt {
-    #[default]
-    U8 = 0,
-    U16 = 1,
-    U32 = 2,
-    U64 = 3,
-    S8 = 4,
-    S16 = 5,
-    S32 = 6,
-    S64 = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ISrcFmt(pub u32);
 
+#[rustfmt::skip]
 impl ISrcFmt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U8,
-            1 => Self::U16,
-            2 => Self::U32,
-            3 => Self::U64,
-            4 => Self::S8,
-            5 => Self::S16,
-            6 => Self::S32,
-            7 => Self::S64,
-            _ => Self::default(),
-        }
-    }
+    pub const U8: Self = Self(0);
+    pub const U16: Self = Self(1);
+    pub const U32: Self = Self(2);
+    pub const U64: Self = Self(3);
+    pub const S8: Self = Self(4);
+    pub const S16: Self = Self(5);
+    pub const S32: Self = Self(6);
+    pub const S64: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ISrcDstFmt {
-    #[default]
-    U8 = 0,
-    U16 = 1,
-    U32 = 2,
-    S8 = 4,
-    S16 = 5,
-    S32 = 6,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ISrcDstFmt(pub u32);
 
+#[rustfmt::skip]
 impl ISrcDstFmt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U8,
-            1 => Self::U16,
-            2 => Self::U32,
-            4 => Self::S8,
-            5 => Self::S16,
-            6 => Self::S32,
-            _ => Self::default(),
-        }
-    }
+    pub const U8: Self = Self(0);
+    pub const U16: Self = Self(1);
+    pub const U32: Self = Self(2);
+    pub const S8: Self = Self(4);
+    pub const S16: Self = Self(5);
+    pub const S32: Self = Self(6);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum RoundMode2 {
-    #[default]
-    Round = 0,
-    Floor = 1,
-    Ceil = 2,
-    Trunc = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RoundMode2(pub u32);
 
+#[rustfmt::skip]
 impl RoundMode2 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Round,
-            1 => Self::Floor,
-            2 => Self::Ceil,
-            3 => Self::Trunc,
-            _ => Self::default(),
-        }
-    }
+    pub const ROUND: Self = Self(0);
+    pub const FLOOR: Self = Self(1);
+    pub const CEIL: Self = Self(2);
+    pub const TRUNC: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ChkModeF {
-    #[default]
-    Divide = 0,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ChkModeF(pub u32);
 
+#[rustfmt::skip]
 impl ChkModeF {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Divide,
-            _ => Self::default(),
-        }
-    }
+    pub const DIVIDE: Self = Self(0);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Fmz {
-    #[default]
-    Ftz = 1,
-    Fmz = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Fmz(pub u32);
 
+#[rustfmt::skip]
 impl Fmz {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Ftz,
-            2 => Self::Fmz,
-            _ => Self::default(),
-        }
-    }
+    pub const FTZ: Self = Self(1);
+    pub const FMZ: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum MultiplyScale {
-    #[default]
-    NoScale = 0,
-    D2 = 1,
-    D4 = 2,
-    D8 = 3,
-    M8 = 4,
-    M4 = 5,
-    M2 = 6,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MultiplyScale(pub u32);
 
+#[rustfmt::skip]
 impl MultiplyScale {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::NoScale,
-            1 => Self::D2,
-            2 => Self::D4,
-            3 => Self::D8,
-            4 => Self::M8,
-            5 => Self::M4,
-            6 => Self::M2,
-            _ => Self::default(),
-        }
-    }
+    pub const NO_SCALE: Self = Self(0);
+    pub const D2: Self = Self(1);
+    pub const D4: Self = Self(2);
+    pub const D8: Self = Self(3);
+    pub const M8: Self = Self(4);
+    pub const M4: Self = Self(5);
+    pub const M2: Self = Self(6);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum OFmt {
-    #[default]
-    F16 = 0,
-    F32 = 1,
-    MrgH0 = 2,
-    MrgH1 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OFmt(pub u32);
 
+#[rustfmt::skip]
 impl OFmt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::F16,
-            1 => Self::F32,
-            2 => Self::MrgH0,
-            3 => Self::MrgH1,
-            _ => Self::default(),
-        }
-    }
+    pub const F16: Self = Self(0);
+    pub const F32: Self = Self(1);
+    pub const MRG_H0: Self = Self(2);
+    pub const MRG_H1: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum HalfSwizzle {
-    #[default]
-    F16 = 0,
-    F32 = 1,
-    H0H0 = 2,
-    H1H1 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HalfSwizzle(pub u32);
 
+#[rustfmt::skip]
 impl HalfSwizzle {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::F16,
-            1 => Self::F32,
-            2 => Self::H0H0,
-            3 => Self::H1H1,
-            _ => Self::default(),
-        }
-    }
+    pub const F16: Self = Self(0);
+    pub const F32: Self = Self(1);
+    pub const H0_H0: Self = Self(2);
+    pub const H1_H1: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ByteSel {
-    #[default]
-    B0 = 0,
-    B1 = 1,
-    B2 = 2,
-    B3 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ByteSel(pub u32);
 
+#[rustfmt::skip]
 impl ByteSel {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::B0,
-            1 => Self::B1,
-            2 => Self::B2,
-            3 => Self::B3,
-            _ => Self::default(),
-        }
-    }
+    pub const B0: Self = Self(0);
+    pub const B1: Self = Self(1);
+    pub const B2: Self = Self(2);
+    pub const B3: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum DstFmt {
-    #[default]
-    F16 = 1,
-    F32 = 2,
-    F64 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DstFmt(pub u32);
 
+#[rustfmt::skip]
 impl DstFmt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::F16,
-            2 => Self::F32,
-            3 => Self::F64,
-            _ => Self::default(),
-        }
-    }
+    pub const F16: Self = Self(1);
+    pub const F32: Self = Self(2);
+    pub const F64: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum AvgMode {
-    #[default]
-    NoNeg = 0,
-    NegB = 1,
-    NegA = 2,
-    PlusOne = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AvgMode(pub u32);
 
+#[rustfmt::skip]
 impl AvgMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::NoNeg,
-            1 => Self::NegB,
-            2 => Self::NegA,
-            3 => Self::PlusOne,
-            _ => Self::default(),
-        }
-    }
+    pub const NO_NEG: Self = Self(0);
+    pub const NEG_B: Self = Self(1);
+    pub const NEG_A: Self = Self(2);
+    pub const PLUS_ONE: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Lrs {
-    #[default]
-    None = 0,
-    RightShift = 1,
-    LeftShift = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Lrs(pub u32);
 
+#[rustfmt::skip]
 impl Lrs {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::None,
-            1 => Self::RightShift,
-            2 => Self::LeftShift,
-            _ => Self::default(),
-        }
-    }
+    pub const NONE: Self = Self(0);
+    pub const RIGHT_SHIFT: Self = Self(1);
+    pub const LEFT_SHIFT: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum HalfSelect {
-    #[default]
-    B32 = 0,
-    H0 = 1,
-    H1 = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HalfSelect(pub u32);
 
+#[rustfmt::skip]
 impl HalfSelect {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::B32,
-            1 => Self::H0,
-            2 => Self::H1,
-            _ => Self::default(),
-        }
-    }
+    pub const B32: Self = Self(0);
+    pub const H0: Self = Self(1);
+    pub const H1: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum IComp {
-    #[default]
-    F = 0,
-    Lt = 1,
-    Eq = 2,
-    Le = 3,
-    Gt = 4,
-    Ne = 5,
-    Ge = 6,
-    T = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IComp(pub u32);
 
+#[rustfmt::skip]
 impl IComp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::F,
-            1 => Self::Lt,
-            2 => Self::Eq,
-            3 => Self::Le,
-            4 => Self::Gt,
-            5 => Self::Ne,
-            6 => Self::Ge,
-            7 => Self::T,
-            _ => Self::default(),
-        }
-    }
+    pub const F: Self = Self(0);
+    pub const LT: Self = Self(1);
+    pub const EQ: Self = Self(2);
+    pub const LE: Self = Self(3);
+    pub const GT: Self = Self(4);
+    pub const NE: Self = Self(5);
+    pub const GE: Self = Self(6);
+    pub const T: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum XMode {
-    #[default]
-    Xlo = 1,
-    Xmed = 2,
-    Xhi = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct XMode(pub u32);
 
+#[rustfmt::skip]
 impl XMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Xlo,
-            2 => Self::Xmed,
-            3 => Self::Xhi,
-            _ => Self::default(),
-        }
-    }
+    pub const XLO: Self = Self(1);
+    pub const XMED: Self = Self(2);
+    pub const XHI: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum IpaOp {
-    #[default]
-    Pass = 0,
-    Multiply = 1,
-    Constant = 2,
-    Sc = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IpaOp(pub u32);
 
+#[rustfmt::skip]
 impl IpaOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Pass,
-            1 => Self::Multiply,
-            2 => Self::Constant,
-            3 => Self::Sc,
-            _ => Self::default(),
-        }
-    }
+    pub const PASS: Self = Self(0);
+    pub const MULTIPLY: Self = Self(1);
+    pub const CONSTANT: Self = Self(2);
+    pub const SC: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum IBase {
-    #[default]
-    Patch = 1,
-    Prim = 2,
-    Attr = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IBase(pub u32);
 
+#[rustfmt::skip]
 impl IBase {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Patch,
-            2 => Self::Prim,
-            3 => Self::Attr,
-            _ => Self::default(),
-        }
-    }
+    pub const PATCH: Self = Self(1);
+    pub const PRIM: Self = Self(2);
+    pub const ATTR: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum CacheOpLd {
-    #[default]
-    Ca = 0,
-    Cg = 1,
-    Ci = 2,
-    Cv = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CacheOpLd(pub u32);
 
+#[rustfmt::skip]
 impl CacheOpLd {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Ca,
-            1 => Self::Cg,
-            2 => Self::Ci,
-            3 => Self::Cv,
-            _ => Self::default(),
-        }
-    }
+    pub const CA: Self = Self(0);
+    pub const CG: Self = Self(1);
+    pub const CI: Self = Self(2);
+    pub const CV: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum CacheOpSt {
-    #[default]
-    Wb = 0,
-    Cg = 1,
-    Ci = 2,
-    Wt = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CacheOpSt(pub u32);
 
+#[rustfmt::skip]
 impl CacheOpSt {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Wb,
-            1 => Self::Cg,
-            2 => Self::Ci,
-            3 => Self::Wt,
-            _ => Self::default(),
-        }
-    }
+    pub const WB: Self = Self(0);
+    pub const CG: Self = Self(1);
+    pub const CI: Self = Self(2);
+    pub const WT: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum LsSize {
-    #[default]
-    U8 = 0,
-    S8 = 1,
-    U16 = 2,
-    S16 = 3,
-    B32 = 4,
-    B64 = 5,
-    B128 = 6,
-    UB128 = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LsSize(pub u32);
 
+#[rustfmt::skip]
 impl LsSize {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U8,
-            1 => Self::S8,
-            2 => Self::U16,
-            3 => Self::S16,
-            4 => Self::B32,
-            5 => Self::B64,
-            6 => Self::B128,
-            7 => Self::UB128,
-            _ => Self::default(),
-        }
-    }
+    pub const U8: Self = Self(0);
+    pub const S8: Self = Self(1);
+    pub const U16: Self = Self(2);
+    pub const S16: Self = Self(3);
+    pub const B32: Self = Self(4);
+    pub const B64: Self = Self(5);
+    pub const B128: Self = Self(6);
+    pub const UB128: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum LsSize2 {
-    #[default]
-    U8 = 0,
-    S8 = 1,
-    U16 = 2,
-    S16 = 3,
-    B32 = 4,
-    B64 = 5,
-    B128 = 6,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LsSize2(pub u32);
 
+#[rustfmt::skip]
 impl LsSize2 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U8,
-            1 => Self::S8,
-            2 => Self::U16,
-            3 => Self::S16,
-            4 => Self::B32,
-            5 => Self::B64,
-            6 => Self::B128,
-            _ => Self::default(),
-        }
-    }
+    pub const U8: Self = Self(0);
+    pub const S8: Self = Self(1);
+    pub const U16: Self = Self(2);
+    pub const S16: Self = Self(3);
+    pub const B32: Self = Self(4);
+    pub const B64: Self = Self(5);
+    pub const B128: Self = Self(6);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum AddressMode {
-    #[default]
-    Il = 1,
-    Is = 2,
-    Isl = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AddressMode(pub u32);
 
+#[rustfmt::skip]
 impl AddressMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Il,
-            2 => Self::Is,
-            3 => Self::Isl,
-            _ => Self::default(),
-        }
-    }
+    pub const IL: Self = Self(1);
+    pub const IS: Self = Self(2);
+    pub const ISL: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum CacheOp2 {
-    #[default]
-    Lu = 1,
-    Ci = 2,
-    Cv = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CacheOp2(pub u32);
 
+#[rustfmt::skip]
 impl CacheOp2 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Lu,
-            2 => Self::Ci,
-            3 => Self::Cv,
-            _ => Self::default(),
-        }
-    }
+    pub const LU: Self = Self(1);
+    pub const CI: Self = Self(2);
+    pub const CV: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum PredicateOp {
-    #[default]
-    F = 0,
-    T = 1,
-    Z = 2,
-    Nz = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PredicateOp(pub u32);
 
+#[rustfmt::skip]
 impl PredicateOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::F,
-            1 => Self::T,
-            2 => Self::Z,
-            3 => Self::Nz,
-            _ => Self::default(),
-        }
-    }
+    pub const F: Self = Self(0);
+    pub const T: Self = Self(1);
+    pub const Z: Self = Self(2);
+    pub const NZ: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum LogicOp {
-    #[default]
-    And = 0,
-    Or = 1,
-    Xor = 2,
-    PassB = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LogicOp(pub u32);
 
+#[rustfmt::skip]
 impl LogicOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::And,
-            1 => Self::Or,
-            2 => Self::Xor,
-            3 => Self::PassB,
-            _ => Self::default(),
-        }
-    }
+    pub const AND: Self = Self(0);
+    pub const OR: Self = Self(1);
+    pub const XOR: Self = Self(2);
+    pub const PASS_B: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Membar {
-    #[default]
-    Cta = 0,
-    Gl = 1,
-    Sys = 2,
-    Vc = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Membar(pub u32);
 
+#[rustfmt::skip]
 impl Membar {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Cta,
-            1 => Self::Gl,
-            2 => Self::Sys,
-            3 => Self::Vc,
-            _ => Self::default(),
-        }
-    }
+    pub const CTA: Self = Self(0);
+    pub const GL: Self = Self(1);
+    pub const SYS: Self = Self(2);
+    pub const VC: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Ivall {
-    #[default]
-    Ivalld = 1,
-    Ivallt = 2,
-    Ivalltd = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Ivall(pub u32);
 
+#[rustfmt::skip]
 impl Ivall {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Ivalld,
-            2 => Self::Ivallt,
-            3 => Self::Ivalltd,
-            _ => Self::default(),
-        }
-    }
+    pub const IVALLD: Self = Self(1);
+    pub const IVALLT: Self = Self(2);
+    pub const IVALLTD: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum MufuOp {
-    #[default]
-    Cos = 0,
-    Sin = 1,
-    Ex2 = 2,
-    Lg2 = 3,
-    Rcp = 4,
-    Rsq = 5,
-    Rcp64h = 6,
-    Rsq64h = 7,
-    Sqrt = 8,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MufuOp(pub u32);
 
+#[rustfmt::skip]
 impl MufuOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Cos,
-            1 => Self::Sin,
-            2 => Self::Ex2,
-            3 => Self::Lg2,
-            4 => Self::Rcp,
-            5 => Self::Rsq,
-            6 => Self::Rcp64h,
-            7 => Self::Rsq64h,
-            8 => Self::Sqrt,
-            _ => Self::default(),
-        }
-    }
+    pub const COS: Self = Self(0);
+    pub const SIN: Self = Self(1);
+    pub const EX2: Self = Self(2);
+    pub const LG2: Self = Self(3);
+    pub const RCP: Self = Self(4);
+    pub const RSQ: Self = Self(5);
+    pub const RCP64H: Self = Self(6);
+    pub const RSQ64H: Self = Self(7);
+    pub const SQRT: Self = Self(8);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum OutType {
-    #[default]
-    Emit = 1,
-    Cut = 2,
-    EmitThenCut = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OutType(pub u32);
 
+#[rustfmt::skip]
 impl OutType {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Emit,
-            2 => Self::Cut,
-            3 => Self::EmitThenCut,
-            _ => Self::default(),
-        }
-    }
+    pub const EMIT: Self = Self(1);
+    pub const CUT: Self = Self(2);
+    pub const EMIT_THEN_CUT: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum PixMode {
-    #[default]
-    Covmask = 1,
-    Covered = 2,
-    Offset = 3,
-    CentroidOffset = 4,
-    MyIndex = 5,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PixMode(pub u32);
 
+#[rustfmt::skip]
 impl PixMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Covmask,
-            2 => Self::Covered,
-            3 => Self::Offset,
-            4 => Self::CentroidOffset,
-            5 => Self::MyIndex,
-            _ => Self::default(),
-        }
-    }
+    pub const COVMASK: Self = Self(1);
+    pub const COVERED: Self = Self(2);
+    pub const OFFSET: Self = Self(3);
+    pub const CENTROID_OFFSET: Self = Self(4);
+    pub const MY_INDEX: Self = Self(5);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum PMode {
-    #[default]
-    F4e = 1,
-    B4e = 2,
-    Rc8 = 3,
-    Ecl = 4,
-    Ecr = 5,
-    Rc16 = 6,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PMode(pub u32);
 
+#[rustfmt::skip]
 impl PMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::F4e,
-            2 => Self::B4e,
-            3 => Self::Rc8,
-            4 => Self::Ecl,
-            5 => Self::Ecr,
-            6 => Self::Rc16,
-            _ => Self::default(),
-        }
-    }
+    pub const F4E: Self = Self(1);
+    pub const B4E: Self = Self(2);
+    pub const RC8: Self = Self(3);
+    pub const ECL: Self = Self(4);
+    pub const ECR: Self = Self(5);
+    pub const RC16: Self = Self(6);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum RedOp {
-    #[default]
-    Add = 0,
-    Min = 1,
-    Max = 2,
-    Inc = 3,
-    Dec = 4,
-    And = 5,
-    Or = 6,
-    Xor = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RedOp(pub u32);
 
+#[rustfmt::skip]
 impl RedOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Add,
-            1 => Self::Min,
-            2 => Self::Max,
-            3 => Self::Inc,
-            4 => Self::Dec,
-            5 => Self::And,
-            6 => Self::Or,
-            7 => Self::Xor,
-            _ => Self::default(),
-        }
-    }
+    pub const ADD: Self = Self(0);
+    pub const MIN: Self = Self(1);
+    pub const MAX: Self = Self(2);
+    pub const INC: Self = Self(3);
+    pub const DEC: Self = Self(4);
+    pub const AND: Self = Self(5);
+    pub const OR: Self = Self(6);
+    pub const XOR: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum XModeShf {
-    #[default]
-    Hi = 1,
-    X = 2,
-    Xhi = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct XModeShf(pub u32);
 
+#[rustfmt::skip]
 impl XModeShf {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Hi,
-            2 => Self::X,
-            3 => Self::Xhi,
-            _ => Self::default(),
-        }
-    }
+    pub const HI: Self = Self(1);
+    pub const X: Self = Self(2);
+    pub const XHI: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum MaxShift {
-    #[default]
-    U64 = 2,
-    S64 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MaxShift(pub u32);
 
+#[rustfmt::skip]
 impl MaxShift {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            2 => Self::U64,
-            3 => Self::S64,
-            _ => Self::default(),
-        }
-    }
+    pub const U64: Self = Self(2);
+    pub const S64: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ShflMode {
-    #[default]
-    Idx = 0,
-    Up = 1,
-    Down = 2,
-    Bfly = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ShflMode(pub u32);
 
+#[rustfmt::skip]
 impl ShflMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Idx,
-            1 => Self::Up,
-            2 => Self::Down,
-            3 => Self::Bfly,
-            _ => Self::default(),
-        }
-    }
+    pub const IDX: Self = Self(0);
+    pub const UP: Self = Self(1);
+    pub const DOWN: Self = Self(2);
+    pub const BFLY: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Clamp {
-    #[default]
-    Ign = 0,
-    Trap = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Clamp(pub u32);
 
+#[rustfmt::skip]
 impl Clamp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Ign,
-            2 => Self::Trap,
-            _ => Self::default(),
-        }
-    }
+    pub const IGN: Self = Self(0);
+    pub const TRAP: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum SuatomSize {
-    #[default]
-    U32 = 0,
-    S32 = 1,
-    U64 = 2,
-    F32FtzRn = 3,
-    F16x2FtzRn = 4,
-    S64 = 5,
-    Sd32 = 6,
-    Sd64 = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SuatomSize(pub u32);
 
+#[rustfmt::skip]
 impl SuatomSize {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U32,
-            1 => Self::S32,
-            2 => Self::U64,
-            3 => Self::F32FtzRn,
-            4 => Self::F16x2FtzRn,
-            5 => Self::S64,
-            6 => Self::Sd32,
-            7 => Self::Sd64,
-            _ => Self::default(),
-        }
-    }
+    pub const U32: Self = Self(0);
+    pub const S32: Self = Self(1);
+    pub const U64: Self = Self(2);
+    pub const F32_FTZ_RN: Self = Self(3);
+    pub const F16X2_FTZ_RN: Self = Self(4);
+    pub const S64: Self = Self(5);
+    pub const SD32: Self = Self(6);
+    pub const SD64: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum SuDim {
-    #[default]
-    _1d = 0,
-    _1dBuffer = 1,
-    _1dArray = 2,
-    _2d = 3,
-    _2dArray = 4,
-    _3d = 5,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SuDim(pub u32);
 
+#[rustfmt::skip]
 impl SuDim {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::_1d,
-            1 => Self::_1dBuffer,
-            2 => Self::_1dArray,
-            3 => Self::_2d,
-            4 => Self::_2dArray,
-            5 => Self::_3d,
-            _ => Self::default(),
-        }
-    }
+    pub const D1D: Self = Self(0);
+    pub const D1D_BUFFER: Self = Self(1);
+    pub const D1D_ARRAY: Self = Self(2);
+    pub const D2D: Self = Self(3);
+    pub const D2D_ARRAY: Self = Self(4);
+    pub const D3D: Self = Self(5);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum SuatomOp {
-    #[default]
-    Add = 0,
-    Min = 1,
-    Max = 2,
-    Inc = 3,
-    Dec = 4,
-    And = 5,
-    Or = 6,
-    Xor = 7,
-    Exch = 8,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SuatomOp(pub u32);
 
+#[rustfmt::skip]
 impl SuatomOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Add,
-            1 => Self::Min,
-            2 => Self::Max,
-            3 => Self::Inc,
-            4 => Self::Dec,
-            5 => Self::And,
-            6 => Self::Or,
-            7 => Self::Xor,
-            8 => Self::Exch,
-            _ => Self::default(),
-        }
-    }
+    pub const ADD: Self = Self(0);
+    pub const MIN: Self = Self(1);
+    pub const MAX: Self = Self(2);
+    pub const INC: Self = Self(3);
+    pub const DEC: Self = Self(4);
+    pub const AND: Self = Self(5);
+    pub const OR: Self = Self(6);
+    pub const XOR: Self = Self(7);
+    pub const EXCH: Self = Self(8);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum SuSize {
-    #[default]
-    U8 = 0,
-    S8 = 1,
-    U16 = 2,
-    S16 = 3,
-    B32 = 4,
-    B64 = 5,
-    B128 = 6,
-    UB128 = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SuSize(pub u32);
 
+#[rustfmt::skip]
 impl SuSize {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U8,
-            1 => Self::S8,
-            2 => Self::U16,
-            3 => Self::S16,
-            4 => Self::B32,
-            5 => Self::B64,
-            6 => Self::B128,
-            7 => Self::UB128,
-            _ => Self::default(),
-        }
-    }
+    pub const U8: Self = Self(0);
+    pub const S8: Self = Self(1);
+    pub const U16: Self = Self(2);
+    pub const S16: Self = Self(3);
+    pub const B32: Self = Self(4);
+    pub const B64: Self = Self(5);
+    pub const B128: Self = Self(6);
+    pub const UB128: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum SuRgba {
-    #[default]
-    R = 1,
-    G = 2,
-    Rg = 3,
-    B = 4,
-    Rb = 5,
-    Gb = 6,
-    Rgb = 7,
-    A = 8,
-    Ra = 9,
-    Ga = 10,
-    Rga = 11,
-    Ba = 12,
-    Rba = 13,
-    Gba = 14,
-    Rgba = 15,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SuRgba(pub u32);
 
+#[rustfmt::skip]
 impl SuRgba {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::R,
-            2 => Self::G,
-            3 => Self::Rg,
-            4 => Self::B,
-            5 => Self::Rb,
-            6 => Self::Gb,
-            7 => Self::Rgb,
-            8 => Self::A,
-            9 => Self::Ra,
-            10 => Self::Ga,
-            11 => Self::Rga,
-            12 => Self::Ba,
-            13 => Self::Rba,
-            14 => Self::Gba,
-            15 => Self::Rgba,
-            _ => Self::default(),
-        }
-    }
+    pub const R: Self = Self(1);
+    pub const G: Self = Self(2);
+    pub const RG: Self = Self(3);
+    pub const B: Self = Self(4);
+    pub const RB: Self = Self(5);
+    pub const GB: Self = Self(6);
+    pub const RGB: Self = Self(7);
+    pub const A: Self = Self(8);
+    pub const RA: Self = Self(9);
+    pub const GA: Self = Self(10);
+    pub const RGA: Self = Self(11);
+    pub const BA: Self = Self(12);
+    pub const RBA: Self = Self(13);
+    pub const GBA: Self = Self(14);
+    pub const RGBA: Self = Self(15);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum Lod {
-    #[default]
-    Lz = 1,
-    Lb = 2,
-    Ll = 3,
-    Lba = 6,
-    Lla = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Lod(pub u32);
 
+#[rustfmt::skip]
 impl Lod {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Lz,
-            2 => Self::Lb,
-            3 => Self::Ll,
-            6 => Self::Lba,
-            7 => Self::Lla,
-            _ => Self::default(),
-        }
-    }
+    pub const LZ: Self = Self(1);
+    pub const LB: Self = Self(2);
+    pub const LL: Self = Self(3);
+    pub const LBA: Self = Self(6);
+    pub const LLA: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum TexDim {
-    #[default]
-    _1d = 0,
-    Array1d = 1,
-    _2d = 2,
-    Array2d = 3,
-    _3d = 4,
-    Array3d = 5,
-    Cube = 6,
-    ArrayCube = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexDim(pub u32);
 
+#[rustfmt::skip]
 impl TexDim {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::_1d,
-            1 => Self::Array1d,
-            2 => Self::_2d,
-            3 => Self::Array2d,
-            4 => Self::_3d,
-            5 => Self::Array3d,
-            6 => Self::Cube,
-            7 => Self::ArrayCube,
-            _ => Self::default(),
-        }
-    }
+    pub const D1D: Self = Self(0);
+    pub const ARRAY1D: Self = Self(1);
+    pub const D2D: Self = Self(2);
+    pub const ARRAY2D: Self = Self(3);
+    pub const D3D: Self = Self(4);
+    pub const ARRAY3D: Self = Self(5);
+    pub const CUBE: Self = Self(6);
+    pub const ARRAY_CUBE: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum TexsTarget {
-    #[default]
-    Texture1DLodZero = 0,
-    Texture2D = 1,
-    Texture2DLodZero = 2,
-    Texture2DLodLevel = 3,
-    Texture2DDepthCompare = 4,
-    Texture2DLodLevelDepthCompare = 5,
-    Texture2DLodZeroDepthCompare = 6,
-    Texture2DArray = 7,
-    Texture2DArrayLodZero = 8,
-    Texture2DArrayLodZeroDepthCompare = 9,
-    Texture3D = 10,
-    Texture3DLodZero = 11,
-    TextureCube = 12,
-    TextureCubeLodLevel = 13,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexsTarget(pub u32);
 
+#[rustfmt::skip]
 impl TexsTarget {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Texture1DLodZero,
-            1 => Self::Texture2D,
-            2 => Self::Texture2DLodZero,
-            3 => Self::Texture2DLodLevel,
-            4 => Self::Texture2DDepthCompare,
-            5 => Self::Texture2DLodLevelDepthCompare,
-            6 => Self::Texture2DLodZeroDepthCompare,
-            7 => Self::Texture2DArray,
-            8 => Self::Texture2DArrayLodZero,
-            9 => Self::Texture2DArrayLodZeroDepthCompare,
-            10 => Self::Texture3D,
-            11 => Self::Texture3DLodZero,
-            12 => Self::TextureCube,
-            13 => Self::TextureCubeLodLevel,
-            _ => Self::default(),
-        }
-    }
+    pub const TEXTURE1_D_LOD_ZERO: Self = Self(0);
+    pub const TEXTURE2_D: Self = Self(1);
+    pub const TEXTURE2_D_LOD_ZERO: Self = Self(2);
+    pub const TEXTURE2_D_LOD_LEVEL: Self = Self(3);
+    pub const TEXTURE2_D_DEPTH_COMPARE: Self = Self(4);
+    pub const TEXTURE2_D_LOD_LEVEL_DEPTH_COMPARE: Self = Self(5);
+    pub const TEXTURE2_D_LOD_ZERO_DEPTH_COMPARE: Self = Self(6);
+    pub const TEXTURE2_D_ARRAY: Self = Self(7);
+    pub const TEXTURE2_D_ARRAY_LOD_ZERO: Self = Self(8);
+    pub const TEXTURE2_D_ARRAY_LOD_ZERO_DEPTH_COMPARE: Self = Self(9);
+    pub const TEXTURE3_D: Self = Self(10);
+    pub const TEXTURE3_D_LOD_ZERO: Self = Self(11);
+    pub const TEXTURE_CUBE: Self = Self(12);
+    pub const TEXTURE_CUBE_LOD_LEVEL: Self = Self(13);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum TldsTarget {
-    #[default]
-    Texture1DLodZero = 0x0,
-    Texture1DLodLevel = 0x1,
-    Texture2DLodZero = 0x2,
-    Texture2DLodZeroOffset = 0x4,
-    Texture2DLodLevel = 0x5,
-    Texture2DLodZeroMultisample = 0x6,
-    Texture3DLodZero = 0x7,
-    Texture2DArrayLodZero = 0x8,
-    Texture2DLodLevelOffset = 0xc,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TldsTarget(pub u32);
 
+#[rustfmt::skip]
 impl TldsTarget {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0x0 => Self::Texture1DLodZero,
-            0x1 => Self::Texture1DLodLevel,
-            0x2 => Self::Texture2DLodZero,
-            0x4 => Self::Texture2DLodZeroOffset,
-            0x5 => Self::Texture2DLodLevel,
-            0x6 => Self::Texture2DLodZeroMultisample,
-            0x7 => Self::Texture3DLodZero,
-            0x8 => Self::Texture2DArrayLodZero,
-            0xc => Self::Texture2DLodLevelOffset,
-            _ => Self::default(),
-        }
-    }
+    pub const TEXTURE1_D_LOD_ZERO: Self = Self(0x0);
+    pub const TEXTURE1_D_LOD_LEVEL: Self = Self(0x1);
+    pub const TEXTURE2_D_LOD_ZERO: Self = Self(0x2);
+    pub const TEXTURE2_D_LOD_ZERO_OFFSET: Self = Self(0x4);
+    pub const TEXTURE2_D_LOD_LEVEL: Self = Self(0x5);
+    pub const TEXTURE2_D_LOD_ZERO_MULTISAMPLE: Self = Self(0x6);
+    pub const TEXTURE3_D_LOD_ZERO: Self = Self(0x7);
+    pub const TEXTURE2_D_ARRAY_LOD_ZERO: Self = Self(0x8);
+    pub const TEXTURE2_D_LOD_LEVEL_OFFSET: Self = Self(0xc);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum TexComp {
-    #[default]
-    R = 0,
-    G = 1,
-    B = 2,
-    A = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexComp(pub u32);
 
+#[rustfmt::skip]
 impl TexComp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::R,
-            1 => Self::G,
-            2 => Self::B,
-            3 => Self::A,
-            _ => Self::default(),
-        }
-    }
+    pub const R: Self = Self(0);
+    pub const G: Self = Self(1);
+    pub const B: Self = Self(2);
+    pub const A: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum TexOffset {
-    #[default]
-    None = 0,
-    Aoffi = 1,
-    Ptp = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexOffset(pub u32);
 
+#[rustfmt::skip]
 impl TexOffset {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::None,
-            1 => Self::Aoffi,
-            2 => Self::Ptp,
-            _ => Self::default(),
-        }
-    }
+    pub const NONE: Self = Self(0);
+    pub const AOFFI: Self = Self(1);
+    pub const PTP: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum TexQuery {
-    #[default]
-    TexHeaderDimension = 1,
-    TexHeaderTextureType = 2,
-    TexHeaderSamplerPos = 5,
-    TexSamplerFilter = 16,
-    TexSamplerLod = 18,
-    TexSamplerWrap = 20,
-    TexSamplerBorderColor = 22,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexQuery(pub u32);
 
+#[rustfmt::skip]
 impl TexQuery {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::TexHeaderDimension,
-            2 => Self::TexHeaderTextureType,
-            5 => Self::TexHeaderSamplerPos,
-            16 => Self::TexSamplerFilter,
-            18 => Self::TexSamplerLod,
-            20 => Self::TexSamplerWrap,
-            22 => Self::TexSamplerBorderColor,
-            _ => Self::default(),
-        }
-    }
+    pub const TEX_HEADER_DIMENSION: Self = Self(1);
+    pub const TEX_HEADER_TEXTURE_TYPE: Self = Self(2);
+    pub const TEX_HEADER_SAMPLER_POS: Self = Self(5);
+    pub const TEX_SAMPLER_FILTER: Self = Self(16);
+    pub const TEX_SAMPLER_LOD: Self = Self(18);
+    pub const TEX_SAMPLER_WRAP: Self = Self(20);
+    pub const TEX_SAMPLER_BORDER_COLOR: Self = Self(22);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum VectorSelect {
-    #[default]
-    U8B0 = 0,
-    U8B1 = 1,
-    U8B2 = 2,
-    U8B3 = 3,
-    U16H0 = 4,
-    U16H1 = 5,
-    U32 = 6,
-    S8B0 = 8,
-    S8B1 = 9,
-    S8B2 = 10,
-    S8B3 = 11,
-    S16H0 = 12,
-    S16H1 = 13,
-    S32 = 14,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VectorSelect(pub u32);
 
+#[rustfmt::skip]
 impl VectorSelect {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U8B0,
-            1 => Self::U8B1,
-            2 => Self::U8B2,
-            3 => Self::U8B3,
-            4 => Self::U16H0,
-            5 => Self::U16H1,
-            6 => Self::U32,
-            8 => Self::S8B0,
-            9 => Self::S8B1,
-            10 => Self::S8B2,
-            11 => Self::S8B3,
-            12 => Self::S16H0,
-            13 => Self::S16H1,
-            14 => Self::S32,
-            _ => Self::default(),
-        }
-    }
+    pub const U8_B0: Self = Self(0);
+    pub const U8_B1: Self = Self(1);
+    pub const U8_B2: Self = Self(2);
+    pub const U8_B3: Self = Self(3);
+    pub const U16_H0: Self = Self(4);
+    pub const U16_H1: Self = Self(5);
+    pub const U32: Self = Self(6);
+    pub const S8_B0: Self = Self(8);
+    pub const S8_B1: Self = Self(9);
+    pub const S8_B2: Self = Self(10);
+    pub const S8_B3: Self = Self(11);
+    pub const S16_H0: Self = Self(12);
+    pub const S16_H1: Self = Self(13);
+    pub const S32: Self = Self(14);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum VideoOp {
-    #[default]
-    Mrg16h = 0,
-    Mrg16l = 1,
-    Mrg8b0 = 2,
-    Mrg8b2 = 3,
-    Acc = 4,
-    Min = 5,
-    Max = 6,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VideoOp(pub u32);
 
+#[rustfmt::skip]
 impl VideoOp {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Mrg16h,
-            1 => Self::Mrg16l,
-            2 => Self::Mrg8b0,
-            3 => Self::Mrg8b2,
-            4 => Self::Acc,
-            5 => Self::Min,
-            6 => Self::Max,
-            _ => Self::default(),
-        }
-    }
+    pub const MRG16H: Self = Self(0);
+    pub const MRG16L: Self = Self(1);
+    pub const MRG8B0: Self = Self(2);
+    pub const MRG8B2: Self = Self(3);
+    pub const ACC: Self = Self(4);
+    pub const MIN: Self = Self(5);
+    pub const MAX: Self = Self(6);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum VideoRed {
-    #[default]
-    Acc = 1,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VideoRed(pub u32);
 
+#[rustfmt::skip]
 impl VideoRed {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Acc,
-            _ => Self::default(),
-        }
-    }
+    pub const ACC: Self = Self(1);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum LaneMask4 {
-    #[default]
-    Z = 1,
-    W = 2,
-    Zw = 3,
-    X = 4,
-    Xz = 5,
-    Xw = 6,
-    Xzw = 7,
-    Y = 8,
-    Yz = 9,
-    Yw = 10,
-    Yzw = 11,
-    Xy = 12,
-    Xyz = 13,
-    Xyw = 14,
-    Xyzw = 15,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LaneMask4(pub u32);
 
+#[rustfmt::skip]
 impl LaneMask4 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Z,
-            2 => Self::W,
-            3 => Self::Zw,
-            4 => Self::X,
-            5 => Self::Xz,
-            6 => Self::Xw,
-            7 => Self::Xzw,
-            8 => Self::Y,
-            9 => Self::Yz,
-            10 => Self::Yw,
-            11 => Self::Yzw,
-            12 => Self::Xy,
-            13 => Self::Xyz,
-            14 => Self::Xyw,
-            15 => Self::Xyzw,
-            _ => Self::default(),
-        }
-    }
+    pub const Z: Self = Self(1);
+    pub const W: Self = Self(2);
+    pub const ZW: Self = Self(3);
+    pub const X: Self = Self(4);
+    pub const XZ: Self = Self(5);
+    pub const XW: Self = Self(6);
+    pub const XZW: Self = Self(7);
+    pub const Y: Self = Self(8);
+    pub const YZ: Self = Self(9);
+    pub const YW: Self = Self(10);
+    pub const YZW: Self = Self(11);
+    pub const XY: Self = Self(12);
+    pub const XYZ: Self = Self(13);
+    pub const XYW: Self = Self(14);
+    pub const XYZW: Self = Self(15);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ASelect4 {
-    #[default]
-    _0000 = 0,
-    _1111 = 1,
-    _2222 = 2,
-    _3333 = 3,
-    _3210 = 4,
-    _5432 = 6,
-    _6543 = 7,
-    _3201 = 8,
-    _3012 = 9,
-    _0213 = 10,
-    _3120 = 11,
-    _1230 = 12,
-    _2310 = 13,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ASelect4(pub u32);
 
+#[rustfmt::skip]
 impl ASelect4 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::_0000,
-            1 => Self::_1111,
-            2 => Self::_2222,
-            3 => Self::_3333,
-            4 => Self::_3210,
-            6 => Self::_5432,
-            7 => Self::_6543,
-            8 => Self::_3201,
-            9 => Self::_3012,
-            10 => Self::_0213,
-            11 => Self::_3120,
-            12 => Self::_1230,
-            13 => Self::_2310,
-            _ => Self::default(),
-        }
-    }
+    pub const S0000: Self = Self(0);
+    pub const S1111: Self = Self(1);
+    pub const S2222: Self = Self(2);
+    pub const S3333: Self = Self(3);
+    pub const S3210: Self = Self(4);
+    pub const S5432: Self = Self(6);
+    pub const S6543: Self = Self(7);
+    pub const S3201: Self = Self(8);
+    pub const S3012: Self = Self(9);
+    pub const S0213: Self = Self(10);
+    pub const S3120: Self = Self(11);
+    pub const S1230: Self = Self(12);
+    pub const S2310: Self = Self(13);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum BSelect4 {
-    #[default]
-    _4444 = 0,
-    _5555 = 1,
-    _6666 = 2,
-    _7777 = 3,
-    _7654 = 4,
-    _5432 = 6,
-    _4321 = 7,
-    _4567 = 8,
-    _6745 = 9,
-    _5476 = 10,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BSelect4(pub u32);
 
+#[rustfmt::skip]
 impl BSelect4 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::_4444,
-            1 => Self::_5555,
-            2 => Self::_6666,
-            3 => Self::_7777,
-            4 => Self::_7654,
-            6 => Self::_5432,
-            7 => Self::_4321,
-            8 => Self::_4567,
-            9 => Self::_6745,
-            10 => Self::_5476,
-            _ => Self::default(),
-        }
-    }
+    pub const S4444: Self = Self(0);
+    pub const S5555: Self = Self(1);
+    pub const S6666: Self = Self(2);
+    pub const S7777: Self = Self(3);
+    pub const S7654: Self = Self(4);
+    pub const S5432: Self = Self(6);
+    pub const S4321: Self = Self(7);
+    pub const S4567: Self = Self(8);
+    pub const S6745: Self = Self(9);
+    pub const S5476: Self = Self(10);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum VideoScale {
-    #[default]
-    Shr7 = 1,
-    Shr15 = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VideoScale(pub u32);
 
+#[rustfmt::skip]
 impl VideoScale {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            1 => Self::Shr7,
-            2 => Self::Shr15,
-            _ => Self::default(),
-        }
-    }
+    pub const SHR7: Self = Self(1);
+    pub const SHR15: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum VoteMode {
-    #[default]
-    All = 0,
-    Any = 1,
-    Eq = 2,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VoteMode(pub u32);
 
+#[rustfmt::skip]
 impl VoteMode {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::All,
-            1 => Self::Any,
-            2 => Self::Eq,
-            _ => Self::default(),
-        }
-    }
+    pub const ALL: Self = Self(0);
+    pub const ANY: Self = Self(1);
+    pub const EQ: Self = Self(2);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum XmadCop {
-    #[default]
-    Cfull = 0,
-    Clo = 1,
-    Chi = 2,
-    Csfu = 3,
-    Cbcc = 4,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct XmadCop(pub u32);
 
+#[rustfmt::skip]
 impl XmadCop {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Cfull,
-            1 => Self::Clo,
-            2 => Self::Chi,
-            3 => Self::Csfu,
-            4 => Self::Cbcc,
-            _ => Self::default(),
-        }
-    }
+    pub const CFULL: Self = Self(0);
+    pub const CLO: Self = Self(1);
+    pub const CHI: Self = Self(2);
+    pub const CSFU: Self = Self(3);
+    pub const CBCC: Self = Self(4);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum XmadCop2 {
-    #[default]
-    Cfull = 0,
-    Clo = 1,
-    Chi = 2,
-    Csfu = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct XmadCop2(pub u32);
 
+#[rustfmt::skip]
 impl XmadCop2 {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::Cfull,
-            1 => Self::Clo,
-            2 => Self::Chi,
-            3 => Self::Csfu,
-            _ => Self::default(),
-        }
-    }
+    pub const CFULL: Self = Self(0);
+    pub const CLO: Self = Self(1);
+    pub const CHI: Self = Self(2);
+    pub const CSFU: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ImadspASelect {
-    #[default]
-    U32 = 0,
-    S32 = 1,
-    U24 = 2,
-    S24 = 3,
-    U16h0 = 4,
-    S16h0 = 5,
-    U16h1 = 6,
-    S16h1 = 7,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ImadspASelect(pub u32);
 
+#[rustfmt::skip]
 impl ImadspASelect {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U32,
-            1 => Self::S32,
-            2 => Self::U24,
-            3 => Self::S24,
-            4 => Self::U16h0,
-            5 => Self::S16h0,
-            6 => Self::U16h1,
-            7 => Self::S16h1,
-            _ => Self::default(),
-        }
-    }
+    pub const U32: Self = Self(0);
+    pub const S32: Self = Self(1);
+    pub const U24: Self = Self(2);
+    pub const S24: Self = Self(3);
+    pub const U16H0: Self = Self(4);
+    pub const S16H0: Self = Self(5);
+    pub const U16H1: Self = Self(6);
+    pub const S16H1: Self = Self(7);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(u32)]
-pub enum ImadspBSelect {
-    #[default]
-    U24 = 0,
-    S24 = 1,
-    U16h0 = 2,
-    S16h0 = 3,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ImadspBSelect(pub u32);
 
+#[rustfmt::skip]
 impl ImadspBSelect {
-    pub fn from_u64(val: u64) -> Self {
-        match val as u32 {
-            0 => Self::U24,
-            1 => Self::S24,
-            2 => Self::U16h0,
-            3 => Self::S16h0,
-            _ => Self::default(),
-        }
-    }
+    pub const U24: Self = Self(0);
+    pub const S24: Self = Self(1);
+    pub const U16H0: Self = Self(2);
+    pub const S16H0: Self = Self(3);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstConditional {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstConditional(pub u64);
 
+#[rustfmt::skip]
 impl InstConditional {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAl2p {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAl2p(pub u64);
 
+#[rustfmt::skip]
 impl InstAl2p {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn al_size(&self) -> AlSize {
-        AlSize::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn aio(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn imm11(&self) -> i32 {
-        (((self.opcode >> 20) & 0x7FF)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 44) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn al_size(&self) -> AlSize { AlSize(((self.0 >> 47) & 0x3) as u32) }
+    pub fn aio(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn imm11(&self) -> i32 { (((self.0 >> 20) & 0x7FF) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 44) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAld {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAld(pub u64);
 
+#[rustfmt::skip]
 impl InstAld {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm11(&self) -> i32 {
-        (((self.opcode >> 20) & 0x7FF)) as i32
-    }
-
-    pub fn p(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn o(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn al_size(&self) -> AlSize {
-        AlSize::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn phys(&self) -> bool {
-        !self.p() && self.imm11() == 0 && self.src_a() != RegisterConsts::REGISTER_ZERO_INDEX as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm11(&self) -> i32 { (((self.0 >> 20) & 0x7FF) as i32) }
+    pub fn p(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn o(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn al_size(&self) -> AlSize { AlSize(((self.0 >> 47) & 0x3) as u32) }
+    pub fn phys(&self) -> bool { !self.p() && self.imm11() == 0 && self.src_a() != REGISTER_ZERO_INDEX }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAst {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAst(pub u64);
 
+#[rustfmt::skip]
 impl InstAst {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm11(&self) -> i32 {
-        (((self.opcode >> 20) & 0x7FF)) as i32
-    }
-
-    pub fn p(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn al_size(&self) -> AlSize {
-        AlSize::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn phys(&self) -> bool {
-        !self.p() && self.imm11() == 0 && self.src_a() != RegisterConsts::REGISTER_ZERO_INDEX as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm11(&self) -> i32 { (((self.0 >> 20) & 0x7FF) as i32) }
+    pub fn p(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn al_size(&self) -> AlSize { AlSize(((self.0 >> 47) & 0x3) as u32) }
+    pub fn phys(&self) -> bool { !self.p() && self.imm11() == 0 && self.src_a() != REGISTER_ZERO_INDEX }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAtom {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAtom(pub u64);
 
+#[rustfmt::skip]
 impl InstAtom {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFFFFF)) as i32
-    }
-
-    pub fn size(&self) -> AtomSize {
-        AtomSize::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn op(&self) -> AtomOp {
-        AtomOp::from_u64((((self.opcode >> 52) & 0xF)) as u64)
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 28) & 0xFFFFF) as i32) }
+    pub fn size(&self) -> AtomSize { AtomSize(((self.0 >> 49) & 0x7) as u32) }
+    pub fn op(&self) -> AtomOp { AtomOp(((self.0 >> 52) & 0xF) as u32) }
+    pub fn e(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAtomCas {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAtomCas(pub u64);
 
+#[rustfmt::skip]
 impl InstAtomCas {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn bc_rz(&self) -> i32 {
-        (((self.opcode >> 50) & 0x3)) as i32
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn bc_rz(&self) -> i32 { (((self.0 >> 50) & 0x3) as i32) }
+    pub fn e(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAtoms {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAtoms(pub u64);
 
+#[rustfmt::skip]
 impl InstAtoms {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm22(&self) -> i32 {
-        (((self.opcode >> 30) & 0x3FFFFF)) as i32
-    }
-
-    pub fn atoms_size(&self) -> AtomsSize {
-        AtomsSize::from_u64((((self.opcode >> 28) & 0x3)) as u64)
-    }
-
-    pub fn atom_op(&self) -> AtomOp {
-        AtomOp::from_u64((((self.opcode >> 52) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm22(&self) -> i32 { (((self.0 >> 30) & 0x3FFFFF) as i32) }
+    pub fn atoms_size(&self) -> AtomsSize { AtomsSize(((self.0 >> 28) & 0x3) as u32) }
+    pub fn atom_op(&self) -> AtomOp { AtomOp(((self.0 >> 52) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstAtomsCas {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstAtomsCas(pub u64);
 
+#[rustfmt::skip]
 impl InstAtomsCas {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn atoms_bc_rz(&self) -> i32 {
-        (((self.opcode >> 28) & 0x3)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn atoms_bc_rz(&self) -> i32 { (((self.0 >> 28) & 0x3) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstB2r {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstB2r(pub u64);
 
+#[rustfmt::skip]
 impl InstB2r {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 45) & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn mode(&self) -> BarMode {
-        BarMode::from_u64((((self.opcode >> 32) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 45) & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn mode(&self) -> BarMode { BarMode(((self.0 >> 32) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBar {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBar(pub u64);
 
+#[rustfmt::skip]
 impl InstBar {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm12(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn bar_op(&self) -> BarOp {
-        BarOp::from_u64((((self.opcode >> 32) & 0x7)) as u64)
-    }
-
-    pub fn bar_red_op(&self) -> BarRedOp {
-        BarRedOp::from_u64((((self.opcode >> 35) & 0x3)) as u64)
-    }
-
-    pub fn a_fix_bar(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn b_fix_bar(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm12(&self) -> i32 { (((self.0 >> 20) & 0xFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn bar_op(&self) -> BarOp { BarOp(((self.0 >> 32) & 0x7) as u32) }
+    pub fn bar_red_op(&self) -> BarRedOp { BarRedOp(((self.0 >> 35) & 0x3) as u32) }
+    pub fn a_fix_bar(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn b_fix_bar(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfeR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfeR(pub u64);
 
+#[rustfmt::skip]
 impl InstBfeR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn brev(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn brev(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfeI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfeI(pub u64);
 
+#[rustfmt::skip]
 impl InstBfeI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn brev(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn brev(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfeC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfeC(pub u64);
 
+#[rustfmt::skip]
 impl InstBfeC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn brev(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn brev(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfiR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfiR(pub u64);
 
+#[rustfmt::skip]
 impl InstBfiR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfiI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfiI(pub u64);
 
+#[rustfmt::skip]
 impl InstBfiI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfiC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfiC(pub u64);
 
+#[rustfmt::skip]
 impl InstBfiC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBfiRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBfiRc(pub u64);
 
+#[rustfmt::skip]
 impl InstBfiRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBpt {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBpt(pub u64);
 
+#[rustfmt::skip]
 impl InstBpt {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFF)) as i32
-    }
-
-    pub fn bpt(&self) -> Bpt {
-        Bpt::from_u64((((self.opcode >> 6) & 0x7)) as u64)
-    }
-
+    pub fn imm20(&self) -> i32 { (((self.0 >> 20) & 0xFFFFF) as i32) }
+    pub fn bpt(&self) -> Bpt { Bpt(((self.0 >> 6) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBra {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBra(pub u64);
 
+#[rustfmt::skip]
 impl InstBra {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn lmt(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn u(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn lmt(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn u(&self) -> bool { (self.0 & 0x80) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBrk {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBrk(pub u64);
 
+#[rustfmt::skip]
 impl InstBrk {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstBrx {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstBrx(pub u64);
 
+#[rustfmt::skip]
 impl InstBrx {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn lmt(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn lmt(&self) -> bool { (self.0 & 0x40) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCal {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCal(pub u64);
 
+#[rustfmt::skip]
 impl InstCal {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn inc(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn inc(&self) -> bool { (self.0 & 0x40) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCctl {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCctl(pub u64);
 
+#[rustfmt::skip]
 impl InstCctl {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm30(&self) -> i32 {
-        (((self.opcode >> 22) & 0x3FFFFFFF)) as i32
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn cache(&self) -> CacheType {
-        CacheType::from_u64((((self.opcode >> 4) & 0x7)) as u64)
-    }
-
-    pub fn cctl_op(&self) -> CctlOp {
-        CctlOp::from_u64(((self.opcode & 0xF)) as u64)
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm30(&self) -> i32 { (((self.0 >> 22) & 0x3FFFFFFF) as i32) }
+    pub fn e(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn cache(&self) -> CacheType { CacheType(((self.0 >> 4) & 0x7) as u32) }
+    pub fn cctl_op(&self) -> CctlOp { CctlOp((self.0 & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCctll {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCctll(pub u64);
 
+#[rustfmt::skip]
 impl InstCctll {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm22(&self) -> i32 {
-        (((self.opcode >> 22) & 0x3FFFFF)) as i32
-    }
-
-    pub fn cache(&self) -> i32 {
-        (((self.opcode >> 4) & 0x3)) as i32
-    }
-
-    pub fn cctl_op(&self) -> CctlOp {
-        CctlOp::from_u64(((self.opcode & 0xF)) as u64)
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm22(&self) -> i32 { (((self.0 >> 22) & 0x3FFFFF) as i32) }
+    pub fn cache(&self) -> i32 { (((self.0 >> 4) & 0x3) as i32) }
+    pub fn cctl_op(&self) -> CctlOp { CctlOp((self.0 & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCctlt {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCctlt(pub u64);
 
+#[rustfmt::skip]
 impl InstCctlt {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ts_idx13(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn cctlt_op(&self) -> CctltOp {
-        CctltOp::from_u64(((self.opcode & 0x3)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ts_idx13(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn cctlt_op(&self) -> CctltOp { CctltOp((self.0 & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCctltR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCctltR(pub u64);
 
+#[rustfmt::skip]
 impl InstCctltR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cctlt_op(&self) -> CctltOp {
-        CctltOp::from_u64(((self.opcode & 0x3)) as u64)
-    }
-
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cctlt_op(&self) -> CctltOp { CctltOp((self.0 & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCont {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCont(pub u64);
 
+#[rustfmt::skip]
 impl InstCont {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCset {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCset(pub u64);
 
+#[rustfmt::skip]
 impl InstCset {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64((((self.opcode >> 8) & 0x1F)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc(((self.0 >> 8) & 0x1F) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCsetp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCsetp(pub u64);
 
+#[rustfmt::skip]
 impl InstCsetp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64((((self.opcode >> 8) & 0x1F)) as u64)
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc(((self.0 >> 8) & 0x1F) as u32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstCs2r {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstCs2r(pub u64);
 
+#[rustfmt::skip]
 impl InstCs2r {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn s_reg(&self) -> SReg {
-        SReg::from_u64((((self.opcode >> 20) & 0xFF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn s_reg(&self) -> SReg { SReg(((self.0 >> 20) & 0xFF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDaddR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDaddR(pub u64);
 
+#[rustfmt::skip]
 impl InstDaddR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDaddI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDaddI(pub u64);
 
+#[rustfmt::skip]
 impl InstDaddI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDaddC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDaddC(pub u64);
 
+#[rustfmt::skip]
 impl InstDaddC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDepbar {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDepbar(pub u64);
 
+#[rustfmt::skip]
 impl InstDepbar {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn le(&self) -> bool {
-        (self.opcode & 0x20000000) != 0
-    }
-
-    pub fn sbid(&self) -> i32 {
-        (((self.opcode >> 26) & 0x7)) as i32
-    }
-
-    pub fn pend_cnt(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3F)) as i32
-    }
-
-    pub fn imm6(&self) -> i32 {
-        ((self.opcode & 0x3F)) as i32
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn le(&self) -> bool { (self.0 & 0x20000000) != 0 }
+    pub fn sbid(&self) -> i32 { (((self.0 >> 26) & 0x7) as i32) }
+    pub fn pend_cnt(&self) -> i32 { (((self.0 >> 20) & 0x3F) as i32) }
+    pub fn imm6(&self) -> i32 { ((self.0 & 0x3F) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDfmaR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDfmaR(pub u64);
 
+#[rustfmt::skip]
 impl InstDfmaR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 50) & 0x3)) as u64)
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 50) & 0x3) as u32) }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDfmaI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDfmaI(pub u64);
 
+#[rustfmt::skip]
 impl InstDfmaI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 50) & 0x3)) as u64)
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 50) & 0x3) as u32) }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDfmaC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDfmaC(pub u64);
 
+#[rustfmt::skip]
 impl InstDfmaC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 50) & 0x3)) as u64)
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 50) & 0x3) as u32) }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDfmaRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDfmaRc(pub u64);
 
+#[rustfmt::skip]
 impl InstDfmaRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 50) & 0x3)) as u64)
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 50) & 0x3) as u32) }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDmnmxR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDmnmxR(pub u64);
 
+#[rustfmt::skip]
 impl InstDmnmxR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDmnmxI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDmnmxI(pub u64);
 
+#[rustfmt::skip]
 impl InstDmnmxI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDmnmxC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDmnmxC(pub u64);
 
+#[rustfmt::skip]
 impl InstDmnmxC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDmulR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDmulR(pub u64);
 
+#[rustfmt::skip]
 impl InstDmulR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDmulI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDmulI(pub u64);
 
+#[rustfmt::skip]
 impl InstDmulI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDmulC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDmulC(pub u64);
 
+#[rustfmt::skip]
 impl InstDmulC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDsetR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDsetR(pub u64);
 
+#[rustfmt::skip]
 impl InstDsetR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDsetI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDsetI(pub u64);
 
+#[rustfmt::skip]
 impl InstDsetI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDsetC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDsetC(pub u64);
 
+#[rustfmt::skip]
 impl InstDsetC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDsetpR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDsetpR(pub u64);
 
+#[rustfmt::skip]
 impl InstDsetpR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x80) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDsetpI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDsetpI(pub u64);
 
+#[rustfmt::skip]
 impl InstDsetpI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x80) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstDsetpC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstDsetpC(pub u64);
 
+#[rustfmt::skip]
 impl InstDsetpC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x80) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstExit {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstExit(pub u64);
 
+#[rustfmt::skip]
 impl InstExit {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
-    pub fn keep_ref_cnt(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
+    pub fn keep_ref_cnt(&self) -> bool { (self.0 & 0x20) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstF2fR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstF2fR(pub u64);
 
+#[rustfmt::skip]
 impl InstF2fR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn dst_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
-    pub fn src_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 10) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> IntegerRound {
-        IntegerRound::from_u64(((((self.opcode >> 40) & 0x4) | ((self.opcode >> 39) & 0x3))) as u64)
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn dst_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 8) & 0x3) as u32) }
+    pub fn src_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 10) & 0x3) as u32) }
+    pub fn round_mode(&self) -> IntegerRound { IntegerRound(((((self.0 >> 40) & 0x4) as i32) | (((self.0 >> 39) & 0x3) as i32)) as u32) }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstF2fI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstF2fI(pub u64);
 
+#[rustfmt::skip]
 impl InstF2fI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn dst_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
-    pub fn src_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 10) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> IntegerRound {
-        IntegerRound::from_u64(((((self.opcode >> 40) & 0x4) | ((self.opcode >> 39) & 0x3))) as u64)
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn dst_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 8) & 0x3) as u32) }
+    pub fn src_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 10) & 0x3) as u32) }
+    pub fn round_mode(&self) -> IntegerRound { IntegerRound(((((self.0 >> 40) & 0x4) as i32) | (((self.0 >> 39) & 0x3) as i32)) as u32) }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstF2fC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstF2fC(pub u64);
 
+#[rustfmt::skip]
 impl InstF2fC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn dst_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
-    pub fn src_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 10) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> IntegerRound {
-        IntegerRound::from_u64(((((self.opcode >> 40) & 0x4) | ((self.opcode >> 39) & 0x3))) as u64)
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn dst_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 8) & 0x3) as u32) }
+    pub fn src_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 10) & 0x3) as u32) }
+    pub fn round_mode(&self) -> IntegerRound { IntegerRound(((((self.0 >> 40) & 0x4) as i32) | (((self.0 >> 39) & 0x3) as i32)) as u32) }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstF2iR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstF2iR(pub u64);
 
+#[rustfmt::skip]
 impl InstF2iR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn i_dst_fmt(&self) -> IDstFmt {
-        IDstFmt::from_u64(((((self.opcode >> 10) & 0x4) | ((self.opcode >> 8) & 0x3))) as u64)
-    }
-
-    pub fn src_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 10) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> RoundMode2 {
-        RoundMode2::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn i_dst_fmt(&self) -> IDstFmt { IDstFmt(((((self.0 >> 10) & 0x4) as i32) | (((self.0 >> 8) & 0x3) as i32)) as u32) }
+    pub fn src_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 10) & 0x3) as u32) }
+    pub fn round_mode(&self) -> RoundMode2 { RoundMode2(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstF2iI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstF2iI(pub u64);
 
+#[rustfmt::skip]
 impl InstF2iI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn i_dst_fmt(&self) -> IDstFmt {
-        IDstFmt::from_u64(((((self.opcode >> 10) & 0x4) | ((self.opcode >> 8) & 0x3))) as u64)
-    }
-
-    pub fn src_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 10) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> RoundMode2 {
-        RoundMode2::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn i_dst_fmt(&self) -> IDstFmt { IDstFmt(((((self.0 >> 10) & 0x4) as i32) | (((self.0 >> 8) & 0x3) as i32)) as u32) }
+    pub fn src_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 10) & 0x3) as u32) }
+    pub fn round_mode(&self) -> RoundMode2 { RoundMode2(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstF2iC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstF2iC(pub u64);
 
+#[rustfmt::skip]
 impl InstF2iC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn i_dst_fmt(&self) -> IDstFmt {
-        IDstFmt::from_u64(((((self.opcode >> 10) & 0x4) | ((self.opcode >> 8) & 0x3))) as u64)
-    }
-
-    pub fn src_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 10) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> RoundMode2 {
-        RoundMode2::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn i_dst_fmt(&self) -> IDstFmt { IDstFmt(((((self.0 >> 10) & 0x4) as i32) | (((self.0 >> 8) & 0x3) as i32)) as u32) }
+    pub fn src_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 10) & 0x3) as u32) }
+    pub fn round_mode(&self) -> RoundMode2 { RoundMode2(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFaddR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFaddR(pub u64);
 
+#[rustfmt::skip]
 impl InstFaddR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFaddI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFaddI(pub u64);
 
+#[rustfmt::skip]
 impl InstFaddI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFaddC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFaddC(pub u64);
 
+#[rustfmt::skip]
 impl InstFaddC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFadd32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFadd32i(pub u64);
 
+#[rustfmt::skip]
 impl InstFadd32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x200000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x200000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFchkR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFchkR(pub u64);
 
+#[rustfmt::skip]
 impl InstFchkR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn chk_mode_f(&self) -> ChkModeF {
-        ChkModeF::from_u64((((self.opcode >> 39) & 0x3F)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn chk_mode_f(&self) -> ChkModeF { ChkModeF(((self.0 >> 39) & 0x3F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFchkI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFchkI(pub u64);
 
+#[rustfmt::skip]
 impl InstFchkI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn chk_mode_f(&self) -> ChkModeF {
-        ChkModeF::from_u64((((self.opcode >> 39) & 0x3F)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn chk_mode_f(&self) -> ChkModeF { ChkModeF(((self.0 >> 39) & 0x3F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFchkC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFchkC(pub u64);
 
+#[rustfmt::skip]
 impl InstFchkC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn chk_mode_f(&self) -> ChkModeF {
-        ChkModeF::from_u64((((self.opcode >> 39) & 0x3F)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn chk_mode_f(&self) -> ChkModeF { ChkModeF(((self.0 >> 39) & 0x3F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFcmpR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFcmpR(pub u64);
 
+#[rustfmt::skip]
 impl InstFcmpR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFcmpI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFcmpI(pub u64);
 
+#[rustfmt::skip]
 impl InstFcmpI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFcmpC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFcmpC(pub u64);
 
+#[rustfmt::skip]
 impl InstFcmpC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFcmpRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFcmpRc(pub u64);
 
+#[rustfmt::skip]
 impl InstFcmpRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFfmaR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFfmaR(pub u64);
 
+#[rustfmt::skip]
 impl InstFfmaR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 53) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFfmaI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFfmaI(pub u64);
 
+#[rustfmt::skip]
 impl InstFfmaI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 53) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFfmaC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFfmaC(pub u64);
 
+#[rustfmt::skip]
 impl InstFfmaC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 53) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFfmaRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFfmaRc(pub u64);
 
+#[rustfmt::skip]
 impl InstFfmaRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 53) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFfma32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFfma32i(pub u64);
 
+#[rustfmt::skip]
 impl InstFfma32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x200000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x200000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 53) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFloR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFloR(pub u64);
 
+#[rustfmt::skip]
 impl InstFloR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFloI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFloI(pub u64);
 
+#[rustfmt::skip]
 impl InstFloI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFloC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFloC(pub u64);
 
+#[rustfmt::skip]
 impl InstFloC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sh(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sh(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmnmxR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmnmxR(pub u64);
 
+#[rustfmt::skip]
 impl InstFmnmxR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmnmxI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmnmxI(pub u64);
 
+#[rustfmt::skip]
 impl InstFmnmxI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmnmxC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmnmxC(pub u64);
 
+#[rustfmt::skip]
 impl InstFmnmxC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmulR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmulR(pub u64);
 
+#[rustfmt::skip]
 impl InstFmulR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn scale(&self) -> MultiplyScale {
-        MultiplyScale::from_u64((((self.opcode >> 41) & 0x7)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 44) & 0x3) as u32) }
+    pub fn scale(&self) -> MultiplyScale { MultiplyScale(((self.0 >> 41) & 0x7) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmulI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmulI(pub u64);
 
+#[rustfmt::skip]
 impl InstFmulI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn scale(&self) -> MultiplyScale {
-        MultiplyScale::from_u64((((self.opcode >> 41) & 0x7)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 44) & 0x3) as u32) }
+    pub fn scale(&self) -> MultiplyScale { MultiplyScale(((self.0 >> 41) & 0x7) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmulC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmulC(pub u64);
 
+#[rustfmt::skip]
 impl InstFmulC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn scale(&self) -> MultiplyScale {
-        MultiplyScale::from_u64((((self.opcode >> 41) & 0x7)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 44) & 0x3) as u32) }
+    pub fn scale(&self) -> MultiplyScale { MultiplyScale(((self.0 >> 41) & 0x7) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFmul32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFmul32i(pub u64);
 
+#[rustfmt::skip]
 impl InstFmul32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 53) & 0x3) as u32) }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFsetR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFsetR(pub u64);
 
+#[rustfmt::skip]
 impl InstFsetR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFsetC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFsetC(pub u64);
 
+#[rustfmt::skip]
 impl InstFsetC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFsetI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFsetI(pub u64);
 
+#[rustfmt::skip]
 impl InstFsetI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFsetpR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFsetpR(pub u64);
 
+#[rustfmt::skip]
 impl InstFsetpR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x80) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFsetpI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFsetpI(pub u64);
 
+#[rustfmt::skip]
 impl InstFsetpI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x80) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFsetpC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFsetpC(pub u64);
 
+#[rustfmt::skip]
 impl InstFsetpC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x80) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 48) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstFswzadd {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstFswzadd(pub u64);
 
+#[rustfmt::skip]
 impl InstFswzadd {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn pn_word(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn ndv(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn pn_word(&self) -> i32 { (((self.0 >> 28) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstGetcrsptr {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstGetcrsptr(pub u64);
 
+#[rustfmt::skip]
 impl InstGetcrsptr {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstGetlmembase {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstGetlmembase(pub u64);
 
+#[rustfmt::skip]
 impl InstGetlmembase {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHadd2R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHadd2R(pub u64);
 
+#[rustfmt::skip]
 impl InstHadd2R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn b_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 28) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn b_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 28) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHadd2I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHadd2I(pub u64);
 
+#[rustfmt::skip]
 impl InstHadd2I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn bimm_h0(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FF)) as i32
-    }
-
-    pub fn bimm_h1(&self) -> i32 {
-        (((self.opcode >> 47) & 0x200) | ((self.opcode >> 30) & 0x1FF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn bimm_h0(&self) -> i32 { (((self.0 >> 20) & 0x3FF) as i32) }
+    pub fn bimm_h1(&self) -> i32 { (((self.0 >> 47) & 0x200) as i32) | (((self.0 >> 30) & 0x1FF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHadd2C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHadd2C(pub u64);
 
+#[rustfmt::skip]
 impl InstHadd2C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHadd232i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHadd232i(pub u64);
 
+#[rustfmt::skip]
 impl InstHadd232i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 53) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHfma2R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHfma2R(pub u64);
 
+#[rustfmt::skip]
 impl InstHfma2R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn b_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 28) & 0x3)) as u64)
-    }
-
-    pub fn c_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 35) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x40000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 37) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn b_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 28) & 0x3) as u32) }
+    pub fn c_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 35) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x40000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 37) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHfma2I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHfma2I(pub u64);
 
+#[rustfmt::skip]
 impl InstHfma2I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn bimm_h0(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FF)) as i32
-    }
-
-    pub fn bimm_h1(&self) -> i32 {
-        (((self.opcode >> 47) & 0x200) | ((self.opcode >> 30) & 0x1FF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn c_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 57) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn bimm_h0(&self) -> i32 { (((self.0 >> 20) & 0x3FF) as i32) }
+    pub fn bimm_h1(&self) -> i32 { (((self.0 >> 47) & 0x200) as i32) | (((self.0 >> 30) & 0x1FF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn c_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 53) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 57) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHfma2C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHfma2C(pub u64);
 
+#[rustfmt::skip]
 impl InstHfma2C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn c_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 57) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn c_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 53) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 57) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHfma2Rc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHfma2Rc(pub u64);
 
+#[rustfmt::skip]
 impl InstHfma2Rc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn c_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 57) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn c_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 53) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 57) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHfma232i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHfma232i(pub u64);
 
+#[rustfmt::skip]
 impl InstHfma232i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 57) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 57) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHmul2R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHmul2R(pub u64);
 
+#[rustfmt::skip]
 impl InstHmul2R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn b_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 28) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn b_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 28) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHmul2I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHmul2I(pub u64);
 
+#[rustfmt::skip]
 impl InstHmul2I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn bimm_h0(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FF)) as i32
-    }
-
-    pub fn bimm_h1(&self) -> i32 {
-        (((self.opcode >> 47) & 0x200) | ((self.opcode >> 30) & 0x1FF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn bimm_h0(&self) -> i32 { (((self.0 >> 20) & 0x3FF) as i32) }
+    pub fn bimm_h1(&self) -> i32 { (((self.0 >> 47) & 0x200) as i32) | (((self.0 >> 30) & 0x1FF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHmul2C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHmul2C(pub u64);
 
+#[rustfmt::skip]
 impl InstHmul2C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn o_fmt(&self) -> OFmt {
-        OFmt::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn o_fmt(&self) -> OFmt { OFmt(((self.0 >> 49) & 0x3) as u32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHmul232i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHmul232i(pub u64);
 
+#[rustfmt::skip]
 impl InstHmul232i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn fmz(&self) -> Fmz {
-        Fmz::from_u64((((self.opcode >> 55) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 53) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn fmz(&self) -> Fmz { Fmz(((self.0 >> 55) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHset2R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHset2R(pub u64);
 
+#[rustfmt::skip]
 impl InstHset2R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn b_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 28) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000) != 0
-    }
-
-    pub fn bval(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn cmp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 35) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn b_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 28) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000) != 0 }
+    pub fn bval(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn cmp(&self) -> FComp { FComp(((self.0 >> 35) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHset2I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHset2I(pub u64);
 
+#[rustfmt::skip]
 impl InstHset2I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn bimm_h0(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FF)) as i32
-    }
-
-    pub fn bimm_h1(&self) -> i32 {
-        (((self.opcode >> 47) & 0x200) | ((self.opcode >> 30) & 0x1FF)) as i32
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn bval(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn cmp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 49) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn bimm_h0(&self) -> i32 { (((self.0 >> 20) & 0x3FF) as i32) }
+    pub fn bimm_h1(&self) -> i32 { (((self.0 >> 47) & 0x200) as i32) | (((self.0 >> 30) & 0x1FF) as i32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn bval(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn cmp(&self) -> FComp { FComp(((self.0 >> 49) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHset2C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHset2C(pub u64);
 
+#[rustfmt::skip]
 impl InstHset2C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn bval(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn cmp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 49) & 0xF)) as u64)
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn bval(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn cmp(&self) -> FComp { FComp(((self.0 >> 49) & 0xF) as u32) }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn ftz(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHsetp2R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHsetp2R(pub u64);
 
+#[rustfmt::skip]
 impl InstHsetp2R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000) != 0
-    }
-
-    pub fn f_comp2(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 35) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn h_and(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn b_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 28) & 0x3)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000) != 0 }
+    pub fn f_comp2(&self) -> FComp { FComp(((self.0 >> 35) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn h_and(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
+    pub fn b_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 28) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHsetp2I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHsetp2I(pub u64);
 
+#[rustfmt::skip]
 impl InstHsetp2I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn bimm_h0(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FF)) as i32
-    }
-
-    pub fn bimm_h1(&self) -> i32 {
-        (((self.opcode >> 47) & 0x200) | ((self.opcode >> 30) & 0x1FF)) as i32
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 49) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn h_and(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn bimm_h0(&self) -> i32 { (((self.0 >> 20) & 0x3FF) as i32) }
+    pub fn bimm_h1(&self) -> i32 { (((self.0 >> 47) & 0x200) as i32) | (((self.0 >> 30) & 0x1FF) as i32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 49) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn h_and(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstHsetp2C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstHsetp2C(pub u64);
 
+#[rustfmt::skip]
 impl InstHsetp2C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn f_comp(&self) -> FComp {
-        FComp::from_u64((((self.opcode >> 49) & 0xF)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn ftz(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn h_and(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn a_swizzle(&self) -> HalfSwizzle {
-        HalfSwizzle::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn f_comp(&self) -> FComp { FComp(((self.0 >> 49) & 0xF) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn ftz(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn h_and(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn a_swizzle(&self) -> HalfSwizzle { HalfSwizzle(((self.0 >> 47) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstI2fR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstI2fR(pub u64);
 
+#[rustfmt::skip]
 impl InstI2fR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn i_src_fmt(&self) -> ISrcFmt {
-        ISrcFmt::from_u64(((((self.opcode >> 11) & 0x4) | ((self.opcode >> 10) & 0x3))) as u64)
-    }
-
-    pub fn dst_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn i_src_fmt(&self) -> ISrcFmt { ISrcFmt(((((self.0 >> 11) & 0x4) as i32) | (((self.0 >> 10) & 0x3) as i32)) as u32) }
+    pub fn dst_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 8) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstI2fI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstI2fI(pub u64);
 
+#[rustfmt::skip]
 impl InstI2fI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn i_src_fmt(&self) -> ISrcFmt {
-        ISrcFmt::from_u64(((((self.opcode >> 11) & 0x4) | ((self.opcode >> 10) & 0x3))) as u64)
-    }
-
-    pub fn dst_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn i_src_fmt(&self) -> ISrcFmt { ISrcFmt(((((self.0 >> 11) & 0x4) as i32) | (((self.0 >> 10) & 0x3) as i32)) as u32) }
+    pub fn dst_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 8) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstI2fC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstI2fC(pub u64);
 
+#[rustfmt::skip]
 impl InstI2fC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn round_mode(&self) -> RoundMode {
-        RoundMode::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
-    pub fn i_src_fmt(&self) -> ISrcFmt {
-        ISrcFmt::from_u64(((((self.opcode >> 11) & 0x4) | ((self.opcode >> 10) & 0x3))) as u64)
-    }
-
-    pub fn dst_fmt(&self) -> DstFmt {
-        DstFmt::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn round_mode(&self) -> RoundMode { RoundMode(((self.0 >> 39) & 0x3) as u32) }
+    pub fn i_src_fmt(&self) -> ISrcFmt { ISrcFmt(((((self.0 >> 11) & 0x4) as i32) | (((self.0 >> 10) & 0x3) as i32)) as u32) }
+    pub fn dst_fmt(&self) -> DstFmt { DstFmt(((self.0 >> 8) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstI2iR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstI2iR(pub u64);
 
+#[rustfmt::skip]
 impl InstI2iR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn i_dst_fmt(&self) -> ISrcDstFmt {
-        ISrcDstFmt::from_u64(((((self.opcode >> 10) & 0x4) | ((self.opcode >> 8) & 0x3))) as u64)
-    }
-
-    pub fn i_src_fmt(&self) -> ISrcDstFmt {
-        ISrcDstFmt::from_u64(((((self.opcode >> 11) & 0x4) | ((self.opcode >> 10) & 0x3))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn i_dst_fmt(&self) -> ISrcDstFmt { ISrcDstFmt(((((self.0 >> 10) & 0x4) as i32) | (((self.0 >> 8) & 0x3) as i32)) as u32) }
+    pub fn i_src_fmt(&self) -> ISrcDstFmt { ISrcDstFmt(((((self.0 >> 11) & 0x4) as i32) | (((self.0 >> 10) & 0x3) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstI2iI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstI2iI(pub u64);
 
+#[rustfmt::skip]
 impl InstI2iI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn i_dst_fmt(&self) -> ISrcDstFmt {
-        ISrcDstFmt::from_u64(((((self.opcode >> 10) & 0x4) | ((self.opcode >> 8) & 0x3))) as u64)
-    }
-
-    pub fn i_src_fmt(&self) -> ISrcDstFmt {
-        ISrcDstFmt::from_u64(((((self.opcode >> 11) & 0x4) | ((self.opcode >> 10) & 0x3))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn i_dst_fmt(&self) -> ISrcDstFmt { ISrcDstFmt(((((self.0 >> 10) & 0x4) as i32) | (((self.0 >> 8) & 0x3) as i32)) as u32) }
+    pub fn i_src_fmt(&self) -> ISrcDstFmt { ISrcDstFmt(((((self.0 >> 11) & 0x4) as i32) | (((self.0 >> 10) & 0x3) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstI2iC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstI2iC(pub u64);
 
+#[rustfmt::skip]
 impl InstI2iC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn i_dst_fmt(&self) -> ISrcDstFmt {
-        ISrcDstFmt::from_u64(((((self.opcode >> 10) & 0x4) | ((self.opcode >> 8) & 0x3))) as u64)
-    }
-
-    pub fn i_src_fmt(&self) -> ISrcDstFmt {
-        ISrcDstFmt::from_u64(((((self.opcode >> 11) & 0x4) | ((self.opcode >> 10) & 0x3))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn i_dst_fmt(&self) -> ISrcDstFmt { ISrcDstFmt(((((self.0 >> 10) & 0x4) as i32) | (((self.0 >> 8) & 0x3) as i32)) as u32) }
+    pub fn i_src_fmt(&self) -> ISrcDstFmt { ISrcDstFmt(((((self.0 >> 11) & 0x4) as i32) | (((self.0 >> 10) & 0x3) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIaddR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIaddR(pub u64);
 
+#[rustfmt::skip]
 impl InstIaddR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 48) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIaddI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIaddI(pub u64);
 
+#[rustfmt::skip]
 impl InstIaddI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 48) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIaddC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIaddC(pub u64);
 
+#[rustfmt::skip]
 impl InstIaddC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 48) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIadd32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIadd32i(pub u64);
 
+#[rustfmt::skip]
 impl InstIadd32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 55) & 0x3)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 55) & 0x3) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIadd3R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIadd3R(pub u64);
 
+#[rustfmt::skip]
 impl InstIadd3R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn lrs(&self) -> Lrs {
-        Lrs::from_u64((((self.opcode >> 37) & 0x3)) as u64)
-    }
-
-    pub fn apart(&self) -> HalfSelect {
-        HalfSelect::from_u64((((self.opcode >> 35) & 0x3)) as u64)
-    }
-
-    pub fn bpart(&self) -> HalfSelect {
-        HalfSelect::from_u64((((self.opcode >> 33) & 0x3)) as u64)
-    }
-
-    pub fn cpart(&self) -> HalfSelect {
-        HalfSelect::from_u64((((self.opcode >> 31) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn lrs(&self) -> Lrs { Lrs(((self.0 >> 37) & 0x3) as u32) }
+    pub fn apart(&self) -> HalfSelect { HalfSelect(((self.0 >> 35) & 0x3) as u32) }
+    pub fn bpart(&self) -> HalfSelect { HalfSelect(((self.0 >> 33) & 0x3) as u32) }
+    pub fn cpart(&self) -> HalfSelect { HalfSelect(((self.0 >> 31) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIadd3I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIadd3I(pub u64);
 
+#[rustfmt::skip]
 impl InstIadd3I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIadd3C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIadd3C(pub u64);
 
+#[rustfmt::skip]
 impl InstIadd3C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn neg_c(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn neg_c(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIcmpR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIcmpR(pub u64);
 
+#[rustfmt::skip]
 impl InstIcmpR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIcmpI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIcmpI(pub u64);
 
+#[rustfmt::skip]
 impl InstIcmpI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIcmpC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIcmpC(pub u64);
 
+#[rustfmt::skip]
 impl InstIcmpC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIcmpRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIcmpRc(pub u64);
 
+#[rustfmt::skip]
 impl InstIcmpRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIde {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIde(pub u64);
 
+#[rustfmt::skip]
 impl InstIde {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn di(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn di(&self) -> bool { (self.0 & 0x20) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIdpR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIdpR(pub u64);
 
+#[rustfmt::skip]
 impl InstIdpR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn is_hi(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn src_a_sign(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn is_dp(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn src_b_sign(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn is_hi(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn src_a_sign(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn is_dp(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn src_b_sign(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIdpC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIdpC(pub u64);
 
+#[rustfmt::skip]
 impl InstIdpC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn is_hi(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn src_a_sign(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn is_dp(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn src_b_sign(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn is_hi(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn src_a_sign(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn is_dp(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn src_b_sign(&self) -> bool { (self.0 & 0x800000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadR(pub u64);
 
+#[rustfmt::skip]
 impl InstImadR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadI(pub u64);
 
+#[rustfmt::skip]
 impl InstImadI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadC(pub u64);
 
+#[rustfmt::skip]
 impl InstImadC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadRc(pub u64);
 
+#[rustfmt::skip]
 impl InstImadRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 51) & 0x3) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImad32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImad32i(pub u64);
 
+#[rustfmt::skip]
 impl InstImad32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x200000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 55) & 0x3)) as u64)
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x200000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 55) & 0x3) as u32) }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadspR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadspR(pub u64);
 
+#[rustfmt::skip]
 impl InstImadspR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn a_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn b_select(&self) -> ImadspBSelect {
-        ImadspBSelect::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn c_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64(((((self.opcode >> 50) & 0x6) | ((self.opcode >> 48) & 0x1))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn a_select(&self) -> ImadspASelect { ImadspASelect(((self.0 >> 48) & 0x7) as u32) }
+    pub fn b_select(&self) -> ImadspBSelect { ImadspBSelect(((self.0 >> 53) & 0x3) as u32) }
+    pub fn c_select(&self) -> ImadspASelect { ImadspASelect(((((self.0 >> 50) & 0x6) as i32) | (((self.0 >> 48) & 0x1) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadspI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadspI(pub u64);
 
+#[rustfmt::skip]
 impl InstImadspI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn a_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn b_select(&self) -> ImadspBSelect {
-        ImadspBSelect::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn c_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64(((((self.opcode >> 50) & 0x6) | ((self.opcode >> 48) & 0x1))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn a_select(&self) -> ImadspASelect { ImadspASelect(((self.0 >> 48) & 0x7) as u32) }
+    pub fn b_select(&self) -> ImadspBSelect { ImadspBSelect(((self.0 >> 53) & 0x3) as u32) }
+    pub fn c_select(&self) -> ImadspASelect { ImadspASelect(((((self.0 >> 50) & 0x6) as i32) | (((self.0 >> 48) & 0x1) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadspC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadspC(pub u64);
 
+#[rustfmt::skip]
 impl InstImadspC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn a_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn b_select(&self) -> ImadspBSelect {
-        ImadspBSelect::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn c_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64(((((self.opcode >> 50) & 0x6) | ((self.opcode >> 48) & 0x1))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn a_select(&self) -> ImadspASelect { ImadspASelect(((self.0 >> 48) & 0x7) as u32) }
+    pub fn b_select(&self) -> ImadspBSelect { ImadspBSelect(((self.0 >> 53) & 0x3) as u32) }
+    pub fn c_select(&self) -> ImadspASelect { ImadspASelect(((((self.0 >> 50) & 0x6) as i32) | (((self.0 >> 48) & 0x1) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImadspRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImadspRc(pub u64);
 
+#[rustfmt::skip]
 impl InstImadspRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn a_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn b_select(&self) -> ImadspBSelect {
-        ImadspBSelect::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn c_select(&self) -> ImadspASelect {
-        ImadspASelect::from_u64(((((self.opcode >> 50) & 0x6) | ((self.opcode >> 48) & 0x1))) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn a_select(&self) -> ImadspASelect { ImadspASelect(((self.0 >> 48) & 0x7) as u32) }
+    pub fn b_select(&self) -> ImadspBSelect { ImadspBSelect(((self.0 >> 53) & 0x3) as u32) }
+    pub fn c_select(&self) -> ImadspASelect { ImadspASelect(((((self.0 >> 50) & 0x6) as i32) | (((self.0 >> 48) & 0x1) as i32)) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImnmxR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImnmxR(pub u64);
 
+#[rustfmt::skip]
 impl InstImnmxR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x_mode(&self) -> XMode {
-        XMode::from_u64((((self.opcode >> 43) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x_mode(&self) -> XMode { XMode(((self.0 >> 43) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImnmxI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImnmxI(pub u64);
 
+#[rustfmt::skip]
 impl InstImnmxI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x_mode(&self) -> XMode {
-        XMode::from_u64((((self.opcode >> 43) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x_mode(&self) -> XMode { XMode(((self.0 >> 43) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImnmxC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImnmxC(pub u64);
 
+#[rustfmt::skip]
 impl InstImnmxC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x_mode(&self) -> XMode {
-        XMode::from_u64((((self.opcode >> 43) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x_mode(&self) -> XMode { XMode(((self.0 >> 43) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImulR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImulR(pub u64);
 
+#[rustfmt::skip]
 impl InstImulR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImulI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImulI(pub u64);
 
+#[rustfmt::skip]
 impl InstImulI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImulC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImulC(pub u64);
 
+#[rustfmt::skip]
 impl InstImulC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x20000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x20000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstImul32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstImul32i(pub u64);
 
+#[rustfmt::skip]
 impl InstImul32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn hilo(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn hilo(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIpa {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIpa(pub u64);
 
+#[rustfmt::skip]
 impl InstIpa {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ipa_op(&self) -> IpaOp {
-        IpaOp::from_u64((((self.opcode >> 54) & 0x3)) as u64)
-    }
-
-    pub fn msi(&self) -> i32 {
-        (((self.opcode >> 52) & 0x3)) as i32
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn idx(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn imm10(&self) -> i32 {
-        (((self.opcode >> 28) & 0x3FF)) as i32
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 47) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ipa_op(&self) -> IpaOp { IpaOp(((self.0 >> 54) & 0x3) as u32) }
+    pub fn msi(&self) -> i32 { (((self.0 >> 52) & 0x3) as i32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn idx(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn imm10(&self) -> i32 { (((self.0 >> 28) & 0x3FF) as i32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 47) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsberd {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsberd(pub u64);
 
+#[rustfmt::skip]
 impl InstIsberd {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn al_size(&self) -> AlSize {
-        AlSize::from_u64((((self.opcode >> 47) & 0x3)) as u64)
-    }
-
-    pub fn i_base(&self) -> IBase {
-        IBase::from_u64((((self.opcode >> 33) & 0x3)) as u64)
-    }
-
-    pub fn o(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn p(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn al_size(&self) -> AlSize { AlSize(((self.0 >> 47) & 0x3) as u32) }
+    pub fn i_base(&self) -> IBase { IBase(((self.0 >> 33) & 0x3) as u32) }
+    pub fn o(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn p(&self) -> bool { (self.0 & 0x80000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIscaddR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIscaddR(pub u64);
 
+#[rustfmt::skip]
 impl InstIscaddR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn imm5(&self) -> i32 {
-        (((self.opcode >> 39) & 0x1F)) as i32
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn imm5(&self) -> i32 { (((self.0 >> 39) & 0x1F) as i32) }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 48) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIscaddI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIscaddI(pub u64);
 
+#[rustfmt::skip]
 impl InstIscaddI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn imm5(&self) -> i32 {
-        (((self.opcode >> 39) & 0x1F)) as i32
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn imm5(&self) -> i32 { (((self.0 >> 39) & 0x1F) as i32) }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 48) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIscaddC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIscaddC(pub u64);
 
+#[rustfmt::skip]
 impl InstIscaddC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn imm5(&self) -> i32 {
-        (((self.opcode >> 39) & 0x1F)) as i32
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn imm5(&self) -> i32 { (((self.0 >> 39) & 0x1F) as i32) }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 48) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIscadd32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIscadd32i(pub u64);
 
+#[rustfmt::skip]
 impl InstIscadd32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn imm5(&self) -> i32 {
-        (((self.opcode >> 53) & 0x1F)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn imm5(&self) -> i32 { (((self.0 >> 53) & 0x1F) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsetR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsetR(pub u64);
 
+#[rustfmt::skip]
 impl InstIsetR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsetI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsetI(pub u64);
 
+#[rustfmt::skip]
 impl InstIsetI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsetC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsetC(pub u64);
 
+#[rustfmt::skip]
 impl InstIsetC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn b_val(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsetpR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsetpR(pub u64);
 
+#[rustfmt::skip]
 impl InstIsetpR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsetpI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsetpI(pub u64);
 
+#[rustfmt::skip]
 impl InstIsetpI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstIsetpC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstIsetpC(pub u64);
 
+#[rustfmt::skip]
 impl InstIsetpC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn i_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 49) & 0x7)) as u64)
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn bop(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn i_comp(&self) -> IComp { IComp(((self.0 >> 49) & 0x7) as u32) }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn bop(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstJcal {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstJcal(pub u64);
 
+#[rustfmt::skip]
 impl InstJcal {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn inc(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn inc(&self) -> bool { (self.0 & 0x40) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstJmp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstJmp(pub u64);
 
+#[rustfmt::skip]
 impl InstJmp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn lmt(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
-    pub fn u(&self) -> bool {
-        (self.opcode & 0x80) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn lmt(&self) -> bool { (self.0 & 0x40) != 0 }
+    pub fn u(&self) -> bool { (self.0 & 0x80) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstJmx {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstJmx(pub u64);
 
+#[rustfmt::skip]
 impl InstJmx {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn lmt(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn lmt(&self) -> bool { (self.0 & 0x40) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstKil {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstKil(pub u64);
 
+#[rustfmt::skip]
 impl InstKil {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLd {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLd(pub u64);
 
+#[rustfmt::skip]
 impl InstLd {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 58) & 0x7)) as i32
-    }
-
-    pub fn cache_op(&self) -> CacheOpLd {
-        CacheOpLd::from_u64((((self.opcode >> 56) & 0x3)) as u64)
-    }
-
-    pub fn ls_size(&self) -> LsSize {
-        LsSize::from_u64((((self.opcode >> 53) & 0x7)) as u64)
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 58) & 0x7) as i32) }
+    pub fn cache_op(&self) -> CacheOpLd { CacheOpLd(((self.0 >> 56) & 0x3) as u32) }
+    pub fn ls_size(&self) -> LsSize { LsSize(((self.0 >> 53) & 0x7) as u32) }
+    pub fn e(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLdc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLdc(pub u64);
 
+#[rustfmt::skip]
 impl InstLdc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize2 {
-        LsSize2::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn address_mode(&self) -> AddressMode {
-        AddressMode::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize2 { LsSize2(((self.0 >> 48) & 0x7) as u32) }
+    pub fn address_mode(&self) -> AddressMode { AddressMode(((self.0 >> 44) & 0x3) as u32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 36) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLdg {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLdg(pub u64);
 
+#[rustfmt::skip]
 impl InstLdg {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize {
-        LsSize::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpLd {
-        CacheOpLd::from_u64((((self.opcode >> 46) & 0x3)) as u64)
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize { LsSize(((self.0 >> 48) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpLd { CacheOpLd(((self.0 >> 46) & 0x3) as u32) }
+    pub fn e(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLdl {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLdl(pub u64);
 
+#[rustfmt::skip]
 impl InstLdl {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize2 {
-        LsSize2::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOp2 {
-        CacheOp2::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize2 { LsSize2(((self.0 >> 48) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOp2 { CacheOp2(((self.0 >> 44) & 0x3) as u32) }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLds {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLds(pub u64);
 
+#[rustfmt::skip]
 impl InstLds {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize2 {
-        LsSize2::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn u(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize2 { LsSize2(((self.0 >> 48) & 0x7) as u32) }
+    pub fn u(&self) -> bool { (self.0 & 0x100000000000) != 0 }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLeaR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLeaR(pub u64);
 
+#[rustfmt::skip]
 impl InstLeaR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn imm_u5(&self) -> i32 {
-        (((self.opcode >> 39) & 0x1F)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn imm_u5(&self) -> i32 { (((self.0 >> 39) & 0x1F) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLeaI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLeaI(pub u64);
 
+#[rustfmt::skip]
 impl InstLeaI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn imm_u5(&self) -> i32 {
-        (((self.opcode >> 39) & 0x1F)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn imm_u5(&self) -> i32 { (((self.0 >> 39) & 0x1F) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLeaC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLeaC(pub u64);
 
+#[rustfmt::skip]
 impl InstLeaC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn imm_u5(&self) -> i32 {
-        (((self.opcode >> 39) & 0x1F)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn imm_u5(&self) -> i32 { (((self.0 >> 39) & 0x1F) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLeaHiR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLeaHiR(pub u64);
 
+#[rustfmt::skip]
 impl InstLeaHiR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x2000000000) != 0
-    }
-
-    pub fn imm_u5(&self) -> i32 {
-        (((self.opcode >> 28) & 0x1F)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x2000000000) != 0 }
+    pub fn imm_u5(&self) -> i32 { (((self.0 >> 28) & 0x1F) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLeaHiC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLeaHiC(pub u64);
 
+#[rustfmt::skip]
 impl InstLeaHiC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x200000000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn imm_u5(&self) -> i32 {
-        (((self.opcode >> 51) & 0x1F)) as i32
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x200000000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn imm_u5(&self) -> i32 { (((self.0 >> 51) & 0x1F) as i32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLepc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLepc(pub u64);
 
+#[rustfmt::skip]
 impl InstLepc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLongjmp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLongjmp(pub u64);
 
+#[rustfmt::skip]
 impl InstLongjmp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLopR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLopR(pub u64);
 
+#[rustfmt::skip]
 impl InstLopR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
-    pub fn predicate_op(&self) -> PredicateOp {
-        PredicateOp::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn lop(&self) -> LogicOp {
-        LogicOp::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
+    pub fn predicate_op(&self) -> PredicateOp { PredicateOp(((self.0 >> 44) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn lop(&self) -> LogicOp { LogicOp(((self.0 >> 41) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x8000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLopI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLopI(pub u64);
 
+#[rustfmt::skip]
 impl InstLopI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
-    pub fn predicate_op(&self) -> PredicateOp {
-        PredicateOp::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn logic_op(&self) -> LogicOp {
-        LogicOp::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
+    pub fn predicate_op(&self) -> PredicateOp { PredicateOp(((self.0 >> 44) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn logic_op(&self) -> LogicOp { LogicOp(((self.0 >> 41) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x8000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLopC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLopC(pub u64);
 
+#[rustfmt::skip]
 impl InstLopC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
-    pub fn predicate_op(&self) -> PredicateOp {
-        PredicateOp::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn logic_op(&self) -> LogicOp {
-        LogicOp::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
+    pub fn predicate_op(&self) -> PredicateOp { PredicateOp(((self.0 >> 44) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn logic_op(&self) -> LogicOp { LogicOp(((self.0 >> 41) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x8000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLop3R {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLop3R(pub u64);
 
+#[rustfmt::skip]
 impl InstLop3R {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
-    pub fn predicate_op(&self) -> PredicateOp {
-        PredicateOp::from_u64((((self.opcode >> 36) & 0x3)) as u64)
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn imm(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
+    pub fn predicate_op(&self) -> PredicateOp { PredicateOp(((self.0 >> 36) & 0x3) as u32) }
+    pub fn x(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn imm(&self) -> i32 { (((self.0 >> 28) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLop3I {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLop3I(pub u64);
 
+#[rustfmt::skip]
 impl InstLop3I {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x200000000000000) != 0
-    }
-
-    pub fn imm(&self) -> i32 {
-        (((self.opcode >> 48) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x200000000000000) != 0 }
+    pub fn imm(&self) -> i32 { (((self.0 >> 48) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLop3C {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLop3C(pub u64);
 
+#[rustfmt::skip]
 impl InstLop3C {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn imm(&self) -> i32 {
-        (((self.opcode >> 48) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn imm(&self) -> i32 { (((self.0 >> 48) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstLop32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstLop32i(pub u64);
 
+#[rustfmt::skip]
 impl InstLop32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x200000000000000) != 0
-    }
-
-    pub fn logic_op(&self) -> LogicOp {
-        LogicOp::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn x(&self) -> bool { (self.0 & 0x200000000000000) != 0 }
+    pub fn logic_op(&self) -> LogicOp { LogicOp(((self.0 >> 53) & 0x3) as u32) }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstMembar {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstMembar(pub u64);
 
+#[rustfmt::skip]
 impl InstMembar {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn membar(&self) -> Membar {
-        Membar::from_u64((((self.opcode >> 8) & 0x3)) as u64)
-    }
-
-    pub fn ivall(&self) -> Ivall {
-        Ivall::from_u64(((self.opcode & 0x3)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn membar(&self) -> Membar { Membar(((self.0 >> 8) & 0x3) as u32) }
+    pub fn ivall(&self) -> Ivall { Ivall((self.0 & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstMovR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstMovR(pub u64);
 
+#[rustfmt::skip]
 impl InstMovR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn quad_mask(&self) -> i32 {
-        (((self.opcode >> 39) & 0xF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn quad_mask(&self) -> i32 { (((self.0 >> 39) & 0xF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstMovI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstMovI(pub u64);
 
+#[rustfmt::skip]
 impl InstMovI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn quad_mask(&self) -> i32 {
-        (((self.opcode >> 39) & 0xF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn quad_mask(&self) -> i32 { (((self.0 >> 39) & 0xF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstMovC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstMovC(pub u64);
 
+#[rustfmt::skip]
 impl InstMovC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn quad_mask(&self) -> i32 {
-        (((self.opcode >> 39) & 0xF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn quad_mask(&self) -> i32 { (((self.0 >> 39) & 0xF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstMov32i {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstMov32i(pub u64);
 
+#[rustfmt::skip]
 impl InstMov32i {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn quad_mask(&self) -> i32 {
-        (((self.opcode >> 12) & 0xF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn quad_mask(&self) -> i32 { (((self.0 >> 12) & 0xF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstMufu {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstMufu(pub u64);
 
+#[rustfmt::skip]
 impl InstMufu {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn mufu_op(&self) -> MufuOp {
-        MufuOp::from_u64((((self.opcode >> 20) & 0xF)) as u64)
-    }
-
-    pub fn abs_a(&self) -> bool {
-        (self.opcode & 0x400000000000) != 0
-    }
-
-    pub fn neg_a(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn mufu_op(&self) -> MufuOp { MufuOp(((self.0 >> 20) & 0xF) as u32) }
+    pub fn abs_a(&self) -> bool { (self.0 & 0x400000000000) != 0 }
+    pub fn neg_a(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstNop {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstNop(pub u64);
 
+#[rustfmt::skip]
 impl InstNop {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn trig(&self) -> bool {
-        (self.opcode & 0x2000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64((((self.opcode >> 8) & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn trig(&self) -> bool { (self.0 & 0x2000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc(((self.0 >> 8) & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstOutR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstOutR(pub u64);
 
+#[rustfmt::skip]
 impl InstOutR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn out_type(&self) -> OutType {
-        OutType::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn out_type(&self) -> OutType { OutType(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstOutI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstOutI(pub u64);
 
+#[rustfmt::skip]
 impl InstOutI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn out_type(&self) -> OutType {
-        OutType::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn out_type(&self) -> OutType { OutType(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstOutC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstOutC(pub u64);
 
+#[rustfmt::skip]
 impl InstOutC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn out_type(&self) -> OutType {
-        OutType::from_u64((((self.opcode >> 39) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn out_type(&self) -> OutType { OutType(((self.0 >> 39) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstP2rR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstP2rR(pub u64);
 
+#[rustfmt::skip]
 impl InstP2rR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn ccpr(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn ccpr(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstP2rI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstP2rI(pub u64);
 
+#[rustfmt::skip]
 impl InstP2rI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn ccpr(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn ccpr(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstP2rC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstP2rC(pub u64);
 
+#[rustfmt::skip]
 impl InstP2rC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn ccpr(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn ccpr(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPbk {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPbk(pub u64);
 
+#[rustfmt::skip]
 impl InstPbk {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPcnt {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPcnt(pub u64);
 
+#[rustfmt::skip]
 impl InstPcnt {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPexit {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPexit(pub u64);
 
+#[rustfmt::skip]
 impl InstPexit {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPixld {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPixld(pub u64);
 
+#[rustfmt::skip]
 impl InstPixld {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 45) & 0x7)) as i32
-    }
-
-    pub fn pix_mode(&self) -> PixMode {
-        PixMode::from_u64((((self.opcode >> 31) & 0x7)) as u64)
-    }
-
-    pub fn imm8(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 45) & 0x7) as i32) }
+    pub fn pix_mode(&self) -> PixMode { PixMode(((self.0 >> 31) & 0x7) as u32) }
+    pub fn imm8(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPlongjmp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPlongjmp(pub u64);
 
+#[rustfmt::skip]
 impl InstPlongjmp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPopcR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPopcR(pub u64);
 
+#[rustfmt::skip]
 impl InstPopcR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPopcI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPopcI(pub u64);
 
+#[rustfmt::skip]
 impl InstPopcI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPopcC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPopcC(pub u64);
 
+#[rustfmt::skip]
 impl InstPopcC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPret {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPret(pub u64);
 
+#[rustfmt::skip]
 impl InstPret {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn inc(&self) -> bool {
-        (self.opcode & 0x40) != 0
-    }
-
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn inc(&self) -> bool { (self.0 & 0x40) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPrmtR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPrmtR(pub u64);
 
+#[rustfmt::skip]
 impl InstPrmtR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn p_mode(&self) -> PMode {
-        PMode::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn p_mode(&self) -> PMode { PMode(((self.0 >> 48) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPrmtI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPrmtI(pub u64);
 
+#[rustfmt::skip]
 impl InstPrmtI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn p_mode(&self) -> PMode {
-        PMode::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn p_mode(&self) -> PMode { PMode(((self.0 >> 48) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPrmtC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPrmtC(pub u64);
 
+#[rustfmt::skip]
 impl InstPrmtC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn p_mode(&self) -> PMode {
-        PMode::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn p_mode(&self) -> PMode { PMode(((self.0 >> 48) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPrmtRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPrmtRc(pub u64);
 
+#[rustfmt::skip]
 impl InstPrmtRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn p_mode(&self) -> PMode {
-        PMode::from_u64((((self.opcode >> 48) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn p_mode(&self) -> PMode { PMode(((self.0 >> 48) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPset {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPset(pub u64);
 
+#[rustfmt::skip]
 impl InstPset {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn src2_pred(&self) -> i32 {
-        (((self.opcode >> 12) & 0x7)) as i32
-    }
-
-    pub fn src2_pred_inv(&self) -> bool {
-        (self.opcode & 0x8000) != 0
-    }
-
-    pub fn src1_pred(&self) -> i32 {
-        (((self.opcode >> 29) & 0x7)) as i32
-    }
-
-    pub fn src1_pred_inv(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bool_op_ab(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn bool_op_c(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn b_val(&self) -> bool {
-        (self.opcode & 0x100000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn src2_pred(&self) -> i32 { (((self.0 >> 12) & 0x7) as i32) }
+    pub fn src2_pred_inv(&self) -> bool { (self.0 & 0x8000) != 0 }
+    pub fn src1_pred(&self) -> i32 { (((self.0 >> 29) & 0x7) as i32) }
+    pub fn src1_pred_inv(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bool_op_ab(&self) -> BoolOp { BoolOp(((self.0 >> 24) & 0x3) as u32) }
+    pub fn bool_op_c(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn b_val(&self) -> bool { (self.0 & 0x100000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstPsetp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstPsetp(pub u64);
 
+#[rustfmt::skip]
 impl InstPsetp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn src2_pred(&self) -> i32 {
-        (((self.opcode >> 12) & 0x7)) as i32
-    }
-
-    pub fn src2_pred_inv(&self) -> bool {
-        (self.opcode & 0x8000) != 0
-    }
-
-    pub fn src1_pred(&self) -> i32 {
-        (((self.opcode >> 29) & 0x7)) as i32
-    }
-
-    pub fn src1_pred_inv(&self) -> bool {
-        (self.opcode & 0x100000000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn bool_op_ab(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn bool_op_c(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn src2_pred(&self) -> i32 { (((self.0 >> 12) & 0x7) as i32) }
+    pub fn src2_pred_inv(&self) -> bool { (self.0 & 0x8000) != 0 }
+    pub fn src1_pred(&self) -> i32 { (((self.0 >> 29) & 0x7) as i32) }
+    pub fn src1_pred_inv(&self) -> bool { (self.0 & 0x100000000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn bool_op_ab(&self) -> BoolOp { BoolOp(((self.0 >> 24) & 0x3) as u32) }
+    pub fn bool_op_c(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstR2b {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstR2b(pub u64);
 
+#[rustfmt::skip]
 impl InstR2b {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn mode(&self) -> BarMode {
-        BarMode::from_u64((((self.opcode >> 32) & 0x3)) as u64)
-    }
-
-    pub fn name(&self) -> i32 {
-        (((self.opcode >> 28) & 0xF)) as i32
-    }
-
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn mode(&self) -> BarMode { BarMode(((self.0 >> 32) & 0x3) as u32) }
+    pub fn name(&self) -> i32 { (((self.0 >> 28) & 0xF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstR2pR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstR2pR(pub u64);
 
+#[rustfmt::skip]
 impl InstR2pR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn ccpr(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn ccpr(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstR2pI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstR2pI(pub u64);
 
+#[rustfmt::skip]
 impl InstR2pI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn ccpr(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn ccpr(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstR2pC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstR2pC(pub u64);
 
+#[rustfmt::skip]
 impl InstR2pC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn byte_sel(&self) -> ByteSel {
-        ByteSel::from_u64((((self.opcode >> 41) & 0x3)) as u64)
-    }
-
-    pub fn ccpr(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn byte_sel(&self) -> ByteSel { ByteSel(((self.0 >> 41) & 0x3) as u32) }
+    pub fn ccpr(&self) -> bool { (self.0 & 0x10000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRam {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRam(pub u64);
 
+#[rustfmt::skip]
 impl InstRam {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRed {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRed(pub u64);
 
+#[rustfmt::skip]
 impl InstRed {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFFFFF)) as i32
-    }
-
-    pub fn red_size(&self) -> AtomSize {
-        AtomSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
-    pub fn red_op(&self) -> RedOp {
-        RedOp::from_u64((((self.opcode >> 23) & 0x7)) as u64)
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 28) & 0xFFFFF) as i32) }
+    pub fn red_size(&self) -> AtomSize { AtomSize(((self.0 >> 20) & 0x7) as u32) }
+    pub fn red_op(&self) -> RedOp { RedOp(((self.0 >> 23) & 0x7) as u32) }
+    pub fn e(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRet {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRet(pub u64);
 
+#[rustfmt::skip]
 impl InstRet {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRroR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRroR(pub u64);
 
+#[rustfmt::skip]
 impl InstRroR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn rro_op(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn rro_op(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRroI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRroI(pub u64);
 
+#[rustfmt::skip]
 impl InstRroI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn rro_op(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn rro_op(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRroC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRroC(pub u64);
 
+#[rustfmt::skip]
 impl InstRroC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn abs_b(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn neg_b(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn rro_op(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn abs_b(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn neg_b(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn rro_op(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstRtt {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstRtt(pub u64);
 
+#[rustfmt::skip]
 impl InstRtt {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstS2r {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstS2r(pub u64);
 
+#[rustfmt::skip]
 impl InstS2r {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn s_reg(&self) -> SReg {
-        SReg::from_u64((((self.opcode >> 20) & 0xFF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn s_reg(&self) -> SReg { SReg(((self.0 >> 20) & 0xFF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSam {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSam(pub u64);
 
+#[rustfmt::skip]
 impl InstSam {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSelR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSelR(pub u64);
 
+#[rustfmt::skip]
 impl InstSelR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSelI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSelI(pub u64);
 
+#[rustfmt::skip]
 impl InstSelI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSelC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSelC(pub u64);
 
+#[rustfmt::skip]
 impl InstSelC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSetcrsptr {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSetcrsptr(pub u64);
 
+#[rustfmt::skip]
 impl InstSetcrsptr {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSetlmembase {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSetlmembase(pub u64);
 
+#[rustfmt::skip]
 impl InstSetlmembase {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShfLR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShfLR(pub u64);
 
+#[rustfmt::skip]
 impl InstShfLR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x_mode_shf(&self) -> XModeShf {
-        XModeShf::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn max_shift(&self) -> MaxShift {
-        MaxShift::from_u64((((self.opcode >> 37) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x_mode_shf(&self) -> XModeShf { XModeShf(((self.0 >> 48) & 0x3) as u32) }
+    pub fn max_shift(&self) -> MaxShift { MaxShift(((self.0 >> 37) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShfRR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShfRR(pub u64);
 
+#[rustfmt::skip]
 impl InstShfRR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x_mode_shf(&self) -> XModeShf {
-        XModeShf::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn max_shift(&self) -> MaxShift {
-        MaxShift::from_u64((((self.opcode >> 37) & 0x3)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x_mode_shf(&self) -> XModeShf { XModeShf(((self.0 >> 48) & 0x3) as u32) }
+    pub fn max_shift(&self) -> MaxShift { MaxShift(((self.0 >> 37) & 0x3) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShfLI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShfLI(pub u64);
 
+#[rustfmt::skip]
 impl InstShfLI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x_mode_shf(&self) -> XModeShf {
-        XModeShf::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn max_shift(&self) -> MaxShift {
-        MaxShift::from_u64((((self.opcode >> 37) & 0x3)) as u64)
-    }
-
-    pub fn imm6(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3F)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x_mode_shf(&self) -> XModeShf { XModeShf(((self.0 >> 48) & 0x3) as u32) }
+    pub fn max_shift(&self) -> MaxShift { MaxShift(((self.0 >> 37) & 0x3) as u32) }
+    pub fn imm6(&self) -> i32 { (((self.0 >> 20) & 0x3F) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShfRI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShfRI(pub u64);
 
+#[rustfmt::skip]
 impl InstShfRI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn x_mode_shf(&self) -> XModeShf {
-        XModeShf::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn max_shift(&self) -> MaxShift {
-        MaxShift::from_u64((((self.opcode >> 37) & 0x3)) as u64)
-    }
-
-    pub fn imm6(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3F)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn x_mode_shf(&self) -> XModeShf { XModeShf(((self.0 >> 48) & 0x3) as u32) }
+    pub fn max_shift(&self) -> MaxShift { MaxShift(((self.0 >> 37) & 0x3) as u32) }
+    pub fn imm6(&self) -> i32 { (((self.0 >> 20) & 0x3F) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShfl {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShfl(pub u64);
 
+#[rustfmt::skip]
 impl InstShfl {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn src_b_imm(&self) -> i32 {
-        (((self.opcode >> 20) & 0x1F)) as i32
-    }
-
-    pub fn src_c_imm(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn shfl_mode(&self) -> ShflMode {
-        ShflMode::from_u64((((self.opcode >> 30) & 0x3)) as u64)
-    }
-
-    pub fn c_fix_shfl(&self) -> bool {
-        (self.opcode & 0x20000000) != 0
-    }
-
-    pub fn b_fix_shfl(&self) -> bool {
-        (self.opcode & 0x10000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 48) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn src_b_imm(&self) -> i32 { (((self.0 >> 20) & 0x1F) as i32) }
+    pub fn src_c_imm(&self) -> i32 { (((self.0 >> 34) & 0x1FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn shfl_mode(&self) -> ShflMode { ShflMode(((self.0 >> 30) & 0x3) as u32) }
+    pub fn c_fix_shfl(&self) -> bool { (self.0 & 0x20000000) != 0 }
+    pub fn b_fix_shfl(&self) -> bool { (self.0 & 0x10000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 48) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShlR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShlR(pub u64);
 
+#[rustfmt::skip]
 impl InstShlR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShlI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShlI(pub u64);
 
+#[rustfmt::skip]
 impl InstShlI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShlC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShlC(pub u64);
 
+#[rustfmt::skip]
 impl InstShlC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x80000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x80000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShrR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShrR(pub u64);
 
+#[rustfmt::skip]
 impl InstShrR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x_mode(&self) -> XMode {
-        XMode::from_u64((((self.opcode >> 43) & 0x3)) as u64)
-    }
-
-    pub fn brev(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x_mode(&self) -> XMode { XMode(((self.0 >> 43) & 0x3) as u32) }
+    pub fn brev(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShrI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShrI(pub u64);
 
+#[rustfmt::skip]
 impl InstShrI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn imm20(&self) -> i32 {
-        (((self.opcode >> 37) & 0x80000) | ((self.opcode >> 20) & 0x7FFFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x_mode(&self) -> XMode {
-        XMode::from_u64((((self.opcode >> 43) & 0x3)) as u64)
-    }
-
-    pub fn brev(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn imm20(&self) -> i32 { (((self.0 >> 37) & 0x80000) as i32) | (((self.0 >> 20) & 0x7FFFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x_mode(&self) -> XMode { XMode(((self.0 >> 43) & 0x3) as u32) }
+    pub fn brev(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstShrC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstShrC(pub u64);
 
+#[rustfmt::skip]
 impl InstShrC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x_mode(&self) -> XMode {
-        XMode::from_u64((((self.opcode >> 43) & 0x3)) as u64)
-    }
-
-    pub fn brev(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn m(&self) -> bool {
-        (self.opcode & 0x8000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x_mode(&self) -> XMode { XMode(((self.0 >> 43) & 0x3) as u32) }
+    pub fn brev(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn m(&self) -> bool { (self.0 & 0x8000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSsy {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSsy(pub u64);
 
+#[rustfmt::skip]
 impl InstSsy {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
-    pub fn ca(&self) -> bool {
-        (self.opcode & 0x20) != 0
-    }
-
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
+    pub fn ca(&self) -> bool { (self.0 & 0x20) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSt {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSt(pub u64);
 
+#[rustfmt::skip]
 impl InstSt {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 58) & 0x7)) as i32
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 56) & 0x3)) as u64)
-    }
-
-    pub fn ls_size(&self) -> LsSize {
-        LsSize::from_u64((((self.opcode >> 53) & 0x7)) as u64)
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn imm32(&self) -> i32 {
-        ((self.opcode >> 20)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 58) & 0x7) as i32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 56) & 0x3) as u32) }
+    pub fn ls_size(&self) -> LsSize { LsSize(((self.0 >> 53) & 0x7) as u32) }
+    pub fn e(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn imm32(&self) -> i32 { ((self.0 >> 20) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstStg {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstStg(pub u64);
 
+#[rustfmt::skip]
 impl InstStg {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize2 {
-        LsSize2::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 46) & 0x3)) as u64)
-    }
-
-    pub fn e(&self) -> bool {
-        (self.opcode & 0x200000000000) != 0
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize2 { LsSize2(((self.0 >> 48) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 46) & 0x3) as u32) }
+    pub fn e(&self) -> bool { (self.0 & 0x200000000000) != 0 }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstStl {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstStl(pub u64);
 
+#[rustfmt::skip]
 impl InstStl {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize2 {
-        LsSize2::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 44) & 0x3)) as u64)
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize2 { LsSize2(((self.0 >> 48) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 44) & 0x3) as u32) }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstStp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstStp(pub u64);
 
+#[rustfmt::skip]
 impl InstStp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn wait(&self) -> bool {
-        (self.opcode & 0x80000000) != 0
-    }
-
-    pub fn imm8(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
+    pub fn wait(&self) -> bool { (self.0 & 0x80000000) != 0 }
+    pub fn imm8(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSts {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSts(pub u64);
 
+#[rustfmt::skip]
 impl InstSts {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ls_size(&self) -> LsSize2 {
-        LsSize2::from_u64((((self.opcode >> 48) & 0x7)) as u64)
-    }
-
-    pub fn imm24(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ls_size(&self) -> LsSize2 { LsSize2(((self.0 >> 48) & 0x7) as u32) }
+    pub fn imm24(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuatomB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuatomB(pub u64);
 
+#[rustfmt::skip]
 impl InstSuatomB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 36) & 0x7)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn op(&self) -> SuatomOp {
-        SuatomOp::from_u64((((self.opcode >> 29) & 0xF)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x10000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 36) & 0x7) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn op(&self) -> SuatomOp { SuatomOp(((self.0 >> 29) & 0xF) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x10000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuatom {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuatom(pub u64);
 
+#[rustfmt::skip]
 impl InstSuatom {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn op(&self) -> SuatomOp {
-        SuatomOp::from_u64((((self.opcode >> 29) & 0xF)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x10000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 51) & 0x7) as u32) }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn op(&self) -> SuatomOp { SuatomOp(((self.0 >> 29) & 0xF) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x10000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuatomB2 {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuatomB2(pub u64);
 
+#[rustfmt::skip]
 impl InstSuatomB2 {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 36) & 0x7)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn op(&self) -> SuatomOp {
-        SuatomOp::from_u64((((self.opcode >> 29) & 0xF)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x10000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 36) & 0x7) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn op(&self) -> SuatomOp { SuatomOp(((self.0 >> 29) & 0xF) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x10000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuatomCasB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuatomCasB(pub u64);
 
+#[rustfmt::skip]
 impl InstSuatomCasB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 36) & 0x7)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 30) & 0x7)) as i32
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x10000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 36) & 0x7) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 30) & 0x7) as i32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x10000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuatomCas {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuatomCas(pub u64);
 
+#[rustfmt::skip]
 impl InstSuatomCas {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 30) & 0x7)) as i32
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x10000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 51) & 0x7) as u32) }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 30) & 0x7) as i32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x10000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuldDB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuldDB(pub u64);
 
+#[rustfmt::skip]
 impl InstSuldDB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn dest_pred2(&self) -> i32 {
-        (((self.opcode >> 30) & 0x7)) as i32
-    }
-
-    pub fn cache_op(&self) -> CacheOpLd {
-        CacheOpLd::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x800000) != 0
-    }
-
-    pub fn size(&self) -> SuSize {
-        SuSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn dest_pred2(&self) -> i32 { (((self.0 >> 30) & 0x7) as i32) }
+    pub fn cache_op(&self) -> CacheOpLd { CacheOpLd(((self.0 >> 24) & 0x3) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x800000) != 0 }
+    pub fn size(&self) -> SuSize { SuSize(((self.0 >> 20) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuldD {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuldD(pub u64);
 
+#[rustfmt::skip]
 impl InstSuldD {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn dest_pred2(&self) -> i32 {
-        (((self.opcode >> 30) & 0x7)) as i32
-    }
-
-    pub fn cache_op(&self) -> CacheOpLd {
-        CacheOpLd::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x800000) != 0
-    }
-
-    pub fn size(&self) -> SuSize {
-        SuSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn dest_pred2(&self) -> i32 { (((self.0 >> 30) & 0x7) as i32) }
+    pub fn cache_op(&self) -> CacheOpLd { CacheOpLd(((self.0 >> 24) & 0x3) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x800000) != 0 }
+    pub fn size(&self) -> SuSize { SuSize(((self.0 >> 20) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuldB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuldB(pub u64);
 
+#[rustfmt::skip]
 impl InstSuldB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn dest_pred2(&self) -> i32 {
-        (((self.opcode >> 30) & 0x7)) as i32
-    }
-
-    pub fn cache_op(&self) -> CacheOpLd {
-        CacheOpLd::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn rgba(&self) -> SuRgba {
-        SuRgba::from_u64((((self.opcode >> 20) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn dest_pred2(&self) -> i32 { (((self.0 >> 30) & 0x7) as i32) }
+    pub fn cache_op(&self) -> CacheOpLd { CacheOpLd(((self.0 >> 24) & 0x3) as u32) }
+    pub fn rgba(&self) -> SuRgba { SuRgba(((self.0 >> 20) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuld {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuld(pub u64);
 
+#[rustfmt::skip]
 impl InstSuld {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn dest_pred2(&self) -> i32 {
-        (((self.opcode >> 30) & 0x7)) as i32
-    }
-
-    pub fn cache_op(&self) -> CacheOpLd {
-        CacheOpLd::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn rgba(&self) -> SuRgba {
-        SuRgba::from_u64((((self.opcode >> 20) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn dest_pred2(&self) -> i32 { (((self.0 >> 30) & 0x7) as i32) }
+    pub fn cache_op(&self) -> CacheOpLd { CacheOpLd(((self.0 >> 24) & 0x3) as u32) }
+    pub fn rgba(&self) -> SuRgba { SuRgba(((self.0 >> 20) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSuredB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSuredB(pub u64);
 
+#[rustfmt::skip]
 impl InstSuredB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn op(&self) -> RedOp {
-        RedOp::from_u64((((self.opcode >> 24) & 0x7)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x800000) != 0
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn op(&self) -> RedOp { RedOp(((self.0 >> 24) & 0x7) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x800000) != 0 }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 20) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSured {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSured(pub u64);
 
+#[rustfmt::skip]
 impl InstSured {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn op(&self) -> RedOp {
-        RedOp::from_u64((((self.opcode >> 24) & 0x7)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x800000) != 0
-    }
-
-    pub fn size(&self) -> SuatomSize {
-        SuatomSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn op(&self) -> RedOp { RedOp(((self.0 >> 24) & 0x7) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x800000) != 0 }
+    pub fn size(&self) -> SuatomSize { SuatomSize(((self.0 >> 20) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSustDB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSustDB(pub u64);
 
+#[rustfmt::skip]
 impl InstSustDB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x800000) != 0
-    }
-
-    pub fn size(&self) -> SuSize {
-        SuSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 24) & 0x3) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x800000) != 0 }
+    pub fn size(&self) -> SuSize { SuSize(((self.0 >> 20) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSustD {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSustD(pub u64);
 
+#[rustfmt::skip]
 impl InstSustD {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn ba(&self) -> bool {
-        (self.opcode & 0x800000) != 0
-    }
-
-    pub fn size(&self) -> SuSize {
-        SuSize::from_u64((((self.opcode >> 20) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 24) & 0x3) as u32) }
+    pub fn ba(&self) -> bool { (self.0 & 0x800000) != 0 }
+    pub fn size(&self) -> SuSize { SuSize(((self.0 >> 20) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSustB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSustB(pub u64);
 
+#[rustfmt::skip]
 impl InstSustB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn rgba(&self) -> SuRgba {
-        SuRgba::from_u64((((self.opcode >> 20) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 24) & 0x3) as u32) }
+    pub fn rgba(&self) -> SuRgba { SuRgba(((self.0 >> 20) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSust {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSust(pub u64);
 
+#[rustfmt::skip]
 impl InstSust {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn clamp(&self) -> Clamp {
-        Clamp::from_u64((((self.opcode >> 49) & 0x3)) as u64)
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn dim(&self) -> SuDim {
-        SuDim::from_u64((((self.opcode >> 33) & 0x7)) as u64)
-    }
-
-    pub fn cache_op(&self) -> CacheOpSt {
-        CacheOpSt::from_u64((((self.opcode >> 24) & 0x3)) as u64)
-    }
-
-    pub fn rgba(&self) -> SuRgba {
-        SuRgba::from_u64((((self.opcode >> 20) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn clamp(&self) -> Clamp { Clamp(((self.0 >> 49) & 0x3) as u32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn dim(&self) -> SuDim { SuDim(((self.0 >> 33) & 0x7) as u32) }
+    pub fn cache_op(&self) -> CacheOpSt { CacheOpSt(((self.0 >> 24) & 0x3) as u32) }
+    pub fn rgba(&self) -> SuRgba { SuRgba(((self.0 >> 20) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstSync {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstSync(pub u64);
 
+#[rustfmt::skip]
 impl InstSync {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn ccc(&self) -> Ccc {
-        Ccc::from_u64(((self.opcode & 0x1F)) as u64)
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn ccc(&self) -> Ccc { Ccc((self.0 & 0x1F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTex {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTex(pub u64);
 
+#[rustfmt::skip]
 impl InstTex {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn lc(&self) -> bool {
-        (self.opcode & 0x400000000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn lod(&self) -> Lod {
-        Lod::from_u64((((self.opcode >> 55) & 0x7)) as u64)
-    }
-
-    pub fn aoffi(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn dc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn lc(&self) -> bool { (self.0 & 0x400000000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn lod(&self) -> Lod { Lod(((self.0 >> 55) & 0x7) as u32) }
+    pub fn aoffi(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn dc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTexB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTexB(pub u64);
 
+#[rustfmt::skip]
 impl InstTexB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn lcb(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn lodb(&self) -> Lod {
-        Lod::from_u64((((self.opcode >> 37) & 0x7)) as u64)
-    }
-
-    pub fn aoffib(&self) -> bool {
-        (self.opcode & 0x1000000000) != 0
-    }
-
-    pub fn dc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn lcb(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn lodb(&self) -> Lod { Lod(((self.0 >> 37) & 0x7) as u32) }
+    pub fn aoffib(&self) -> bool { (self.0 & 0x1000000000) != 0 }
+    pub fn dc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTexs {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTexs(pub u64);
 
+#[rustfmt::skip]
 impl InstTexs {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn target(&self) -> TexsTarget {
-        TexsTarget::from_u64((((self.opcode >> 53) & 0xF)) as u64)
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 50) & 0x7)) as i32
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn dest2(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn target(&self) -> TexsTarget { TexsTarget(((self.0 >> 53) & 0xF) as u32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 50) & 0x7) as i32) }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn dest2(&self) -> i32 { (((self.0 >> 28) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTld {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTld(pub u64);
 
+#[rustfmt::skip]
 impl InstTld {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn lod(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn toff(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn ms(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn cl(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn lod(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn toff(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn ms(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn cl(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTldB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTldB(pub u64);
 
+#[rustfmt::skip]
 impl InstTldB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn lod(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn toff(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn ms(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn cl(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn lod(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn toff(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn ms(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn cl(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTlds {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTlds(pub u64);
 
+#[rustfmt::skip]
 impl InstTlds {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn target(&self) -> TldsTarget {
-        TldsTarget::from_u64((((self.opcode >> 53) & 0xF)) as u64)
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 50) & 0x7)) as i32
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn dest2(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn target(&self) -> TldsTarget { TldsTarget(((self.0 >> 53) & 0xF) as u32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 50) & 0x7) as i32) }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn dest2(&self) -> i32 { (((self.0 >> 28) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTld4 {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTld4(pub u64);
 
+#[rustfmt::skip]
 impl InstTld4 {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn lc(&self) -> bool {
-        (self.opcode & 0x400000000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn tex_comp(&self) -> TexComp {
-        TexComp::from_u64((((self.opcode >> 56) & 0x3)) as u64)
-    }
-
-    pub fn toff(&self) -> TexOffset {
-        TexOffset::from_u64((((self.opcode >> 54) & 0x3)) as u64)
-    }
-
-    pub fn dc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn lc(&self) -> bool { (self.0 & 0x400000000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn tex_comp(&self) -> TexComp { TexComp(((self.0 >> 56) & 0x3) as u32) }
+    pub fn toff(&self) -> TexOffset { TexOffset(((self.0 >> 54) & 0x3) as u32) }
+    pub fn dc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTld4B {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTld4B(pub u64);
 
+#[rustfmt::skip]
 impl InstTld4B {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn lc(&self) -> bool {
-        (self.opcode & 0x10000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn tex_comp(&self) -> TexComp {
-        TexComp::from_u64((((self.opcode >> 38) & 0x3)) as u64)
-    }
-
-    pub fn toff(&self) -> TexOffset {
-        TexOffset::from_u64((((self.opcode >> 36) & 0x3)) as u64)
-    }
-
-    pub fn dc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn lc(&self) -> bool { (self.0 & 0x10000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn tex_comp(&self) -> TexComp { TexComp(((self.0 >> 38) & 0x3) as u32) }
+    pub fn toff(&self) -> TexOffset { TexOffset(((self.0 >> 36) & 0x3) as u32) }
+    pub fn dc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTld4s {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTld4s(pub u64);
 
+#[rustfmt::skip]
 impl InstTld4s {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn tex_comp(&self) -> TexComp {
-        TexComp::from_u64((((self.opcode >> 52) & 0x3)) as u64)
-    }
-
-    pub fn aoffi(&self) -> bool {
-        (self.opcode & 0x8000000000000) != 0
-    }
-
-    pub fn dc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn dest2(&self) -> i32 {
-        (((self.opcode >> 28) & 0xFF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn tex_comp(&self) -> TexComp { TexComp(((self.0 >> 52) & 0x3) as u32) }
+    pub fn aoffi(&self) -> bool { (self.0 & 0x8000000000000) != 0 }
+    pub fn dc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn dest2(&self) -> i32 { (((self.0 >> 28) & 0xFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTmml {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTmml(pub u64);
 
+#[rustfmt::skip]
 impl InstTmml {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTmmlB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTmmlB(pub u64);
 
+#[rustfmt::skip]
 impl InstTmmlB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTxa {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTxa(pub u64);
 
+#[rustfmt::skip]
 impl InstTxa {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn ndv(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn ndv(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTxd {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTxd(pub u64);
 
+#[rustfmt::skip]
 impl InstTxd {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn lc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn toff(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn lc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn toff(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTxdB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTxdB(pub u64);
 
+#[rustfmt::skip]
 impl InstTxdB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 51) & 0x7)) as i32
-    }
-
-    pub fn lc(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn toff(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn dim(&self) -> TexDim {
-        TexDim::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 51) & 0x7) as i32) }
+    pub fn lc(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn toff(&self) -> bool { (self.0 & 0x800000000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn dim(&self) -> TexDim { TexDim(((self.0 >> 28) & 0x7) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTxq {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTxq(pub u64);
 
+#[rustfmt::skip]
 impl InstTxq {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn tid_b(&self) -> i32 {
-        (((self.opcode >> 36) & 0x1FFF)) as i32
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn tex_query(&self) -> TexQuery {
-        TexQuery::from_u64((((self.opcode >> 22) & 0x3F)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn tid_b(&self) -> i32 { (((self.0 >> 36) & 0x1FFF) as i32) }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn tex_query(&self) -> TexQuery { TexQuery(((self.0 >> 22) & 0x3F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstTxqB {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstTxqB(pub u64);
 
+#[rustfmt::skip]
 impl InstTxqB {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn nodep(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn w_mask(&self) -> i32 {
-        (((self.opcode >> 31) & 0xF)) as i32
-    }
-
-    pub fn tex_query(&self) -> TexQuery {
-        TexQuery::from_u64((((self.opcode >> 22) & 0x3F)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn nodep(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn w_mask(&self) -> i32 { (((self.0 >> 31) & 0xF) as i32) }
+    pub fn tex_query(&self) -> TexQuery { TexQuery(((self.0 >> 22) & 0x3F) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVabsdiff {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVabsdiff(pub u64);
 
+#[rustfmt::skip]
 impl InstVabsdiff {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn d_format(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 46) & 0x8) | ((self.opcode >> 28) & 0x7))) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn video_op(&self) -> VideoOp {
-        VideoOp::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn d_format(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 46) & 0x8) as i32) | (((self.0 >> 28) & 0x7) as i32)) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn video_op(&self) -> VideoOp { VideoOp(((self.0 >> 51) & 0x7) as u32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVabsdiff4 {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVabsdiff4(pub u64);
 
+#[rustfmt::skip]
 impl InstVabsdiff4 {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn v_red(&self) -> VideoRed {
-        VideoRed::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn lane_mask4(&self) -> LaneMask4 {
-        LaneMask4::from_u64(((((self.opcode >> 49) & 0xC) | ((self.opcode >> 36) & 0x3))) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
-    pub fn src_b_fmt(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn src_a_fmt(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn d_format(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn asel4(&self) -> ASelect4 {
-        ASelect4::from_u64((((self.opcode >> 32) & 0xF)) as u64)
-    }
-
-    pub fn bsel4(&self) -> BSelect4 {
-        BSelect4::from_u64((((self.opcode >> 28) & 0xF)) as u64)
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn v_red(&self) -> VideoRed { VideoRed(((self.0 >> 53) & 0x3) as u32) }
+    pub fn lane_mask4(&self) -> LaneMask4 { LaneMask4(((((self.0 >> 49) & 0xC) as i32) | (((self.0 >> 36) & 0x3) as i32)) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
+    pub fn src_b_fmt(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn src_a_fmt(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn d_format(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn asel4(&self) -> ASelect4 { ASelect4(((self.0 >> 32) & 0xF) as u32) }
+    pub fn bsel4(&self) -> BSelect4 { BSelect4(((self.0 >> 28) & 0xF) as u32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVadd {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVadd(pub u64);
 
+#[rustfmt::skip]
 impl InstVadd {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 56) & 0x3)) as u64)
-    }
-
-    pub fn d_format(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 46) & 0x8) | ((self.opcode >> 28) & 0x7))) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn video_op(&self) -> VideoOp {
-        VideoOp::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 56) & 0x3) as u32) }
+    pub fn d_format(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 46) & 0x8) as i32) | (((self.0 >> 28) & 0x7) as i32)) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn video_op(&self) -> VideoOp { VideoOp(((self.0 >> 51) & 0x7) as u32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVmad {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVmad(pub u64);
 
+#[rustfmt::skip]
 impl InstVmad {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 46) & 0x8) | ((self.opcode >> 28) & 0x7))) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn avg_mode(&self) -> AvgMode {
-        AvgMode::from_u64((((self.opcode >> 53) & 0x3)) as u64)
-    }
-
-    pub fn video_scale(&self) -> VideoScale {
-        VideoScale::from_u64((((self.opcode >> 51) & 0x3)) as u64)
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 46) & 0x8) as i32) | (((self.0 >> 28) & 0x7) as i32)) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn avg_mode(&self) -> AvgMode { AvgMode(((self.0 >> 53) & 0x3) as u32) }
+    pub fn video_scale(&self) -> VideoScale { VideoScale(((self.0 >> 51) & 0x3) as u32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVmnmx {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVmnmx(pub u64);
 
+#[rustfmt::skip]
 impl InstVmnmx {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn d_format(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 46) & 0x8) | ((self.opcode >> 28) & 0x7))) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn video_op(&self) -> VideoOp {
-        VideoOp::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn mn(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn d_format(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 46) & 0x8) as i32) | (((self.0 >> 28) & 0x7) as i32)) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn video_op(&self) -> VideoOp { VideoOp(((self.0 >> 51) & 0x7) as u32) }
+    pub fn mn(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVote {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVote(pub u64);
 
+#[rustfmt::skip]
 impl InstVote {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn vote_mode(&self) -> VoteMode {
-        VoteMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn vp_dest(&self) -> i32 {
-        (((self.opcode >> 45) & 0x7)) as i32
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn vote_mode(&self) -> VoteMode { VoteMode(((self.0 >> 48) & 0x3) as u32) }
+    pub fn vp_dest(&self) -> i32 { (((self.0 >> 45) & 0x7) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVotevtg {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVotevtg(pub u64);
 
+#[rustfmt::skip]
 impl InstVotevtg {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn vote_mode(&self) -> VoteMode {
-        VoteMode::from_u64((((self.opcode >> 48) & 0x3)) as u64)
-    }
-
-    pub fn imm28(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFFFFF)) as i32
-    }
-
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn vote_mode(&self) -> VoteMode { VoteMode(((self.0 >> 48) & 0x3) as u32) }
+    pub fn imm28(&self) -> i32 { (((self.0 >> 20) & 0xFFFFFFF) as i32) }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVset {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVset(pub u64);
 
+#[rustfmt::skip]
 impl InstVset {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn v_comp(&self) -> IComp {
-        IComp::from_u64((((self.opcode >> 54) & 0x7)) as u64)
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 46) & 0x8) | ((self.opcode >> 28) & 0x7))) as u64)
-    }
-
-    pub fn video_op(&self) -> VideoOp {
-        VideoOp::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn v_comp(&self) -> IComp { IComp(((self.0 >> 54) & 0x7) as u32) }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 46) & 0x8) as i32) | (((self.0 >> 28) & 0x7) as i32)) as u32) }
+    pub fn video_op(&self) -> VideoOp { VideoOp(((self.0 >> 51) & 0x7) as u32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVsetp {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVsetp(pub u64);
 
+#[rustfmt::skip]
 impl InstVsetp {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 46) & 0x8) | ((self.opcode >> 28) & 0x7))) as u64)
-    }
-
-    pub fn v_comp(&self) -> IComp {
-        IComp::from_u64(((((self.opcode >> 45) & 0x4) | ((self.opcode >> 43) & 0x3))) as u64)
-    }
-
-    pub fn bool_op(&self) -> BoolOp {
-        BoolOp::from_u64((((self.opcode >> 45) & 0x3)) as u64)
-    }
-
-    pub fn src_pred(&self) -> i32 {
-        (((self.opcode >> 39) & 0x7)) as i32
-    }
-
-    pub fn src_pred_inv(&self) -> bool {
-        (self.opcode & 0x40000000000) != 0
-    }
-
-    pub fn dest_pred(&self) -> i32 {
-        (((self.opcode >> 3) & 0x7)) as i32
-    }
-
-    pub fn dest_pred_inv(&self) -> i32 {
-        ((self.opcode & 0x7)) as i32
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 46) & 0x8) as i32) | (((self.0 >> 28) & 0x7) as i32)) as u32) }
+    pub fn v_comp(&self) -> IComp { IComp(((((self.0 >> 45) & 0x4) as i32) | (((self.0 >> 43) & 0x3) as i32)) as u32) }
+    pub fn bool_op(&self) -> BoolOp { BoolOp(((self.0 >> 45) & 0x3) as u32) }
+    pub fn src_pred(&self) -> i32 { (((self.0 >> 39) & 0x7) as i32) }
+    pub fn src_pred_inv(&self) -> bool { (self.0 & 0x40000000000) != 0 }
+    pub fn dest_pred(&self) -> i32 { (((self.0 >> 3) & 0x7) as i32) }
+    pub fn dest_pred_inv(&self) -> i32 { ((self.0 & 0x7) as i32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVshl {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVshl(pub u64);
 
+#[rustfmt::skip]
 impl InstVshl {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn mv(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn d_format(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn video_op(&self) -> VideoOp {
-        VideoOp::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn mv(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn d_format(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((self.0 >> 28) & 0x7) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn video_op(&self) -> VideoOp { VideoOp(((self.0 >> 51) & 0x7) as u32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstVshr {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstVshr(pub u64);
 
+#[rustfmt::skip]
 impl InstVshr {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn mv(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn d_format(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn a_select(&self) -> VectorSelect {
-        VectorSelect::from_u64(((((self.opcode >> 45) & 0x8) | ((self.opcode >> 36) & 0x7))) as u64)
-    }
-
-    pub fn b_select(&self) -> VectorSelect {
-        VectorSelect::from_u64((((self.opcode >> 28) & 0x7)) as u64)
-    }
-
-    pub fn sat(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn video_op(&self) -> VideoOp {
-        VideoOp::from_u64((((self.opcode >> 51) & 0x7)) as u64)
-    }
-
-    pub fn b_video(&self) -> bool {
-        (self.opcode & 0x4000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn mv(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn d_format(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn a_select(&self) -> VectorSelect { VectorSelect(((((self.0 >> 45) & 0x8) as i32) | (((self.0 >> 36) & 0x7) as i32)) as u32) }
+    pub fn b_select(&self) -> VectorSelect { VectorSelect(((self.0 >> 28) & 0x7) as u32) }
+    pub fn sat(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn video_op(&self) -> VideoOp { VideoOp(((self.0 >> 51) & 0x7) as u32) }
+    pub fn b_video(&self) -> bool { (self.0 & 0x4000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstXmadR {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstXmadR(pub u64);
 
+#[rustfmt::skip]
 impl InstXmadR {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_b(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn hilo_a(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn xmad_cop(&self) -> XmadCop {
-        XmadCop::from_u64((((self.opcode >> 50) & 0x7)) as u64)
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn mrg(&self) -> bool {
-        (self.opcode & 0x2000000000) != 0
-    }
-
-    pub fn psl(&self) -> bool {
-        (self.opcode & 0x1000000000) != 0
-    }
-
-    pub fn hilo_b(&self) -> bool {
-        (self.opcode & 0x800000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_b(&self) -> i32 { (((self.0 >> 20) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn hilo_a(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn xmad_cop(&self) -> XmadCop { XmadCop(((self.0 >> 50) & 0x7) as u32) }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn mrg(&self) -> bool { (self.0 & 0x2000000000) != 0 }
+    pub fn psl(&self) -> bool { (self.0 & 0x1000000000) != 0 }
+    pub fn hilo_b(&self) -> bool { (self.0 & 0x800000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstXmadI {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstXmadI(pub u64);
 
+#[rustfmt::skip]
 impl InstXmadI {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn imm16(&self) -> i32 {
-        (((self.opcode >> 20) & 0xFFFF)) as i32
-    }
-
-    pub fn hilo_a(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn xmad_cop(&self) -> XmadCop {
-        XmadCop::from_u64((((self.opcode >> 50) & 0x7)) as u64)
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x4000000000) != 0
-    }
-
-    pub fn mrg(&self) -> bool {
-        (self.opcode & 0x2000000000) != 0
-    }
-
-    pub fn psl(&self) -> bool {
-        (self.opcode & 0x1000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn imm16(&self) -> i32 { (((self.0 >> 20) & 0xFFFF) as i32) }
+    pub fn hilo_a(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn xmad_cop(&self) -> XmadCop { XmadCop(((self.0 >> 50) & 0x7) as u32) }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x4000000000) != 0 }
+    pub fn mrg(&self) -> bool { (self.0 & 0x2000000000) != 0 }
+    pub fn psl(&self) -> bool { (self.0 & 0x1000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstXmadC {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstXmadC(pub u64);
 
+#[rustfmt::skip]
 impl InstXmadC {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn mrg(&self) -> bool {
-        (self.opcode & 0x100000000000000) != 0
-    }
-
-    pub fn psl(&self) -> bool {
-        (self.opcode & 0x80000000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn hilo_a(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn hilo_b(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn xmad_cop(&self) -> XmadCop2 {
-        XmadCop2::from_u64((((self.opcode >> 50) & 0x3)) as u64)
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn mrg(&self) -> bool { (self.0 & 0x100000000000000) != 0 }
+    pub fn psl(&self) -> bool { (self.0 & 0x80000000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn hilo_a(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn hilo_b(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn xmad_cop(&self) -> XmadCop2 { XmadCop2(((self.0 >> 50) & 0x3) as u32) }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InstXmadRc {
-    pub opcode: u64,
-}
+#[derive(Clone, Copy, Debug)]
+pub struct InstXmadRc(pub u64);
 
+#[rustfmt::skip]
 impl InstXmadRc {
-    pub const fn new(opcode: u64) -> Self {
-        Self { opcode }
-    }
-
-    pub fn dest(&self) -> i32 {
-        ((self.opcode & 0xFF)) as i32
-    }
-
-    pub fn src_a(&self) -> i32 {
-        (((self.opcode >> 8) & 0xFF)) as i32
-    }
-
-    pub fn src_c(&self) -> i32 {
-        (((self.opcode >> 39) & 0xFF)) as i32
-    }
-
-    pub fn cbuf_slot(&self) -> i32 {
-        (((self.opcode >> 34) & 0x1F)) as i32
-    }
-
-    pub fn cbuf_offset(&self) -> i32 {
-        (((self.opcode >> 20) & 0x3FFF)) as i32
-    }
-
-    pub fn pred(&self) -> i32 {
-        (((self.opcode >> 16) & 0x7)) as i32
-    }
-
-    pub fn pred_inv(&self) -> bool {
-        (self.opcode & 0x80000) != 0
-    }
-
-    pub fn write_cc(&self) -> bool {
-        (self.opcode & 0x800000000000) != 0
-    }
-
-    pub fn x(&self) -> bool {
-        (self.opcode & 0x40000000000000) != 0
-    }
-
-    pub fn hilo_a(&self) -> bool {
-        (self.opcode & 0x20000000000000) != 0
-    }
-
-    pub fn hilo_b(&self) -> bool {
-        (self.opcode & 0x10000000000000) != 0
-    }
-
-    pub fn xmad_cop(&self) -> XmadCop2 {
-        XmadCop2::from_u64((((self.opcode >> 50) & 0x3)) as u64)
-    }
-
-    pub fn b_signed(&self) -> bool {
-        (self.opcode & 0x2000000000000) != 0
-    }
-
-    pub fn a_signed(&self) -> bool {
-        (self.opcode & 0x1000000000000) != 0
-    }
-
+    pub fn dest(&self) -> i32 { ((self.0 & 0xFF) as i32) }
+    pub fn src_a(&self) -> i32 { (((self.0 >> 8) & 0xFF) as i32) }
+    pub fn src_c(&self) -> i32 { (((self.0 >> 39) & 0xFF) as i32) }
+    pub fn cbuf_slot(&self) -> i32 { (((self.0 >> 34) & 0x1F) as i32) }
+    pub fn cbuf_offset(&self) -> i32 { (((self.0 >> 20) & 0x3FFF) as i32) }
+    pub fn pred(&self) -> i32 { (((self.0 >> 16) & 0x7) as i32) }
+    pub fn pred_inv(&self) -> bool { (self.0 & 0x80000) != 0 }
+    pub fn write_cc(&self) -> bool { (self.0 & 0x800000000000) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x40000000000000) != 0 }
+    pub fn hilo_a(&self) -> bool { (self.0 & 0x20000000000000) != 0 }
+    pub fn hilo_b(&self) -> bool { (self.0 & 0x10000000000000) != 0 }
+    pub fn xmad_cop(&self) -> XmadCop2 { XmadCop2(((self.0 >> 50) & 0x3) as u32) }
+    pub fn b_signed(&self) -> bool { (self.0 & 0x2000000000000) != 0 }
+    pub fn a_signed(&self) -> bool { (self.0 & 0x1000000000000) != 0 }
 }
 

@@ -51,23 +51,8 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     perms.set_mode(0o755);
     fs::set_permissions(&dest_bin, perms)?;
 
-    // Copy native sass2spv dylib for dynamic runtime shader translation
     let frameworks = contents.join("Frameworks");
     let _ = fs::create_dir_all(&frameworks);
-    for candidate in &[
-        engine_bin.with_file_name("sass2spv.dylib"),
-        engine_bin.with_file_name("libsass2spv.dylib"),
-        PathBuf::from("target/native_sass2spv/sass2spv.dylib"),
-        PathBuf::from("target/native_sass2spv/libsass2spv.dylib"),
-    ] {
-        if candidate.is_file() {
-            let _ = fs::copy(candidate, macos.join("sass2spv.dylib"));
-            let _ = fs::copy(candidate, macos.join("libsass2spv.dylib"));
-            let _ = fs::copy(candidate, frameworks.join("sass2spv.dylib"));
-            let _ = fs::copy(candidate, frameworks.join("libsass2spv.dylib"));
-            break;
-        }
-    }
 
     // Copy movie_shim dylib for in-game video playback
     for candidate in &[

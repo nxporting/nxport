@@ -1,9 +1,9 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-#[repr(u8)]
+// Generated from Ryujinx's Decoders/InstName.cs - do not edit.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum InstName {
     #[default]
-    Invalid = 0,
-
+    Invalid,
     Al2p,
     Ald,
     Ast,
@@ -125,9 +125,9 @@ pub enum InstName {
     Setcrsptr,
     Setlmembase,
     Shf,
-    Shf2,
-    Shf3,
-    Shf4,
+    Shf_2,
+    Shf_3,
+    Shf_4,
     Shfl,
     Shl,
     Shr,

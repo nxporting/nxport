@@ -45,6 +45,9 @@ pub struct Translation {
     /// Log why the kernel generators decline stages (does not change the output)
     #[arg(long)]
     pub debug_kernels: bool,
+    /// SPIR-V through spirv-cross (on the PATH) instead of the translator's own MSL backend
+    #[arg(long)]
+    pub spirv_cross: bool,
 }
 
 impl Default for Translation {
@@ -60,6 +63,7 @@ impl Default for Translation {
             no_tiny_kernels: false,
             no_batch_kernels: false,
             debug_kernels: false,
+            spirv_cross: false,
         }
     }
 }
@@ -92,8 +96,8 @@ pub fn get() -> Translation {
 pub fn fingerprint() -> String {
     let t = get();
     format!(
-        "contract={:?} optnone={} guards={} invariant={} cbuf_limits={} discard_depth={} early_tests={} tiny={} batch={}",
+        "contract={:?} optnone={} guards={} invariant={} cbuf_limits={} discard_depth={} early_tests={} tiny={} batch={}{}",
         t.contract_fast, t.keep_optnone, t.fuse_guards, !t.no_invariant, !t.no_cbuf_limits, !t.no_discard_depth,
-        t.early_tests, !t.no_tiny_kernels, !t.no_batch_kernels
+        t.early_tests, !t.no_tiny_kernels, !t.no_batch_kernels, if t.spirv_cross { "" } else { " backend=msl" }
     )
 }

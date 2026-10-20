@@ -32,7 +32,6 @@ use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 pub(crate) mod backend;
 mod batch;
 mod copy;
-pub mod csharp_sass2spv;
 mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
@@ -40,7 +39,6 @@ mod pass_prof;
 mod programs;
 mod report_guard;
 pub mod shader_cache;
-pub mod spirv_cross;
 mod tex_backing;
 mod translated;
 
