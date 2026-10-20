@@ -94,7 +94,7 @@ pub fn operation(c: &mut Ctx, node: AstId) -> Res {
         I::ATOMIC_OR => atomic(c, &op, "atomic_fetch_or_explicit"),
         I::ATOMIC_SWAP => atomic(c, &op, "atomic_exchange_explicit"),
         I::ATOMIC_XOR => atomic(c, &op, "atomic_fetch_xor_explicit"),
-        I::ATOMIC_COMPARE_AND_SWAP => unsupported!("atomic compare-and-swap"),
+        I::ATOMIC_COMPARE_AND_SWAP => atomic_compare_and_swap(c, &op),
         I::BALLOT => {
             let cond = c.expr(A::BOOL, s(0)?)?;
             if c.single_lane_subgroups() {
@@ -763,6 +763,29 @@ fn atomic(c: &mut Ctx, op: &Op, f: &str) -> Res {
     let e = format!("{f}(({space} {at}*)&{lv}, {v}, memory_order_relaxed)");
     let e = if expected != t { format!("as_type<{}>({e})", type_name(t)?) } else { e };
     val(t, e)
+}
+
+/// Compare-and-swap with the old value as result, as SPIRV-Cross writes OpAtomicCompareExchange: a weak exchange
+/// retried while it fails spuriously (the loaded value still equals the comparator).
+fn atomic_compare_and_swap(c: &mut Ctx, op: &Op) -> Res {
+    let (lv, t, space, _) = place(c, op, 2)?;
+    let space = space.ok_or("msl: atomic on I/O")?;
+    if !matches!(t, A::U32 | A::S32) {
+        unsupported!("atomic of type {}", t.0);
+    }
+    let at = if t == A::U32 { "atomic_uint" } else { "atomic_int" };
+    let n = op.sources.len();
+    let cmp = c.expr(t, op.src(n - 2)?)?;
+    let v = c.expr(t, op.src(n - 1)?)?;
+    let space = if space == "constant" { "device" } else { space };
+    let r = c.temp();
+    c.pre.push(format!("{} {r};", type_name(t)?));
+    c.pre.push(format!(
+        "do {{ {r} = {cmp}; }} while (!atomic_compare_exchange_weak_explicit(({space} {at}*)&{lv}, &{r}, {v}, \
+         memory_order_relaxed, memory_order_relaxed) && {r} == {cmp});"
+    ));
+    c.deps.insert(r.clone(), 0);
+    val(t, r)
 }
 
 /// The ballot of lanes below this one, as SPIRV-Cross computes gl_SubgroupLtMask at the start of the entry point.
