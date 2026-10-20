@@ -170,7 +170,7 @@ pub unsafe fn readable_len(addr: usize, max: usize) -> usize {
 
 /// The VM region containing `addr`, or else the next one above it: (start, end, protection). mach_vm_region is
 /// signal-safe enough (a kernel trap, no allocation).
-unsafe fn vm_region(addr: usize) -> Option<(usize, usize, i32)> {
+pub(crate) unsafe fn vm_region(addr: usize) -> Option<(usize, usize, i32)> {
     extern "C" {
         static mach_task_self_: u32;
         fn mach_vm_region(
@@ -891,4 +891,9 @@ unsafe extern "C" fn handle_signal(
 
     eprintln!("========================================================\n");
     std::process::exit(128 + sig);
+}
+
+/// Whether `[addr, addr + len)` lies in one readable VM region (diagnostics reading memory a guest object points at).
+pub(crate) fn readable(addr: usize, len: usize) -> bool {
+    unsafe { vm_region(addr) }.is_some_and(|(start, end, prot)| start <= addr && addr + len <= end && prot & 1 != 0)
 }

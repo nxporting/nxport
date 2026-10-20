@@ -6391,19 +6391,21 @@ impl Gfx {
                         .map_or("not drawn this frame".to_string(), |i| {
                             format!("=rt{:02}", i)
                         });
-                    let nvn = p.handle(nvn_stage, k as i32).and_then(|h| crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32)).map(|(a, v)| {
-                    let t = &*(a as *const crate::nvn::api::NvnTexture);
+                    let nvn = p.handle(nvn_stage, k as i32).and_then(|h| crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32)).and_then(|(a, v)| {
+                    // The recorded state: the object itself may have been freed and reused by the game.
+                    let (_, t) = super::tex_info(a)?;
+                    let t = &t;
                     let verify = if super::verify_tex_enabled() {
                         let upl = super::upload_record(super::storage_id(&tex));
                         let cur = super::current_guest_hash(a);
-                        let nz = if t.storage > 0x10000 { std::slice::from_raw_parts(t.storage as *const u8, 0x4000).iter().filter(|&&x| x != 0).count() } else { 0 };
+                        let nz = if t.storage > 0x10000 && crate::cpu::crash_handler::readable(t.storage as usize, 0x4000) { std::slice::from_raw_parts(t.storage as *const u8, 0x4000).iter().filter(|&&x| x != 0).count() } else { 0 };
                         format!(" verify: guest_nonzero16k={} snap_storage={:x?} upload={:x?} {}", nz, cur.map(|c| c.0), upl,
                             match (cur, upl) { (Some(c), Some(u)) if c.0 == u.0 && c.1 == u.1 => "OK", (Some(c), Some(u)) if c.0 != u.0 => "FOREIGN", (Some(_), Some(_)) => "STALE", _ => "?" })
                     } else { String::new() };
-                    format!("nvn tex {:#x} {}x{} fmt={} storage={:#x} view={:?} mtl_swizzle={:?}{}", a, t.width, t.height, t.format, t.storage, v, {
+                    Some(format!("nvn tex {:#x} {}x{} fmt={} storage={:#x} view={:?} mtl_swizzle={:?}{}", a, t.width, t.height, t.format, t.storage, v, {
                         let sw = tex.swizzle();
                         (sw.red.0, sw.green.0, sw.blue.0, sw.alpha.0)
-                    }, verify)
+                    }, verify))
                 });
                     notes.push(format!(
                     "s{} tex b{} want={} got={:?} {}x{} {:?} lvls={} handle={:x?} sampler={:?} src {} [{}]",
