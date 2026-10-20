@@ -7,6 +7,7 @@ pub mod config;
 mod cpu;
 pub mod game;
 pub mod hle_abi;
+pub mod lifted;
 #[cfg(nx_native)]
 mod gpu;
 #[cfg(nx_native)]

@@ -16,9 +16,11 @@ pub use module::{lift_module, Module, Options, Output};
 /// The C header generated code includes (write it as `cpu.h` next to the generated files).
 pub const CPU_H: &str = include_str!("../runtime/cpu.h");
 
-/// The runtime headers generated code needs next to it: (file name, contents). cpu.h includes the others.
-pub const RUNTIME_HEADERS: [(&str, &str); 3] = [
+/// The runtime files generated code is built with: (file name, contents). cpu.h includes the other headers; rt.c (the
+/// dispatcher and the calls into the host) is compiled into the guest library with the generated files.
+pub const RUNTIME_FILES: [(&str, &str); 4] = [
     ("cpu.h", CPU_H),
     ("simd.h", include_str!("../runtime/simd.h")),
     ("simd_fp.h", include_str!("../runtime/simd_fp.h")),
+    ("rt.c", include_str!("../runtime/rt.c")),
 ];

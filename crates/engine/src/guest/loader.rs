@@ -674,6 +674,10 @@ impl GuestMemorySpace {
         if crate::hle_abi::adapter(rust_fn).is_none() {
             eprintln!("[!] HLE: {rust_fn:p} has no adapter (take its address through hle_abi::hle)");
         }
+        crate::hle_abi::bind_entry(
+            unsafe { self.trampoline_pool.add(self.trampoline_next * TRAMPOLINE_WORDS) } as u64,
+            rust_fn,
+        );
         assert!(
             self.trampoline_next < self.trampoline_capacity,
             "trampoline pool exhausted ({} entries)",
