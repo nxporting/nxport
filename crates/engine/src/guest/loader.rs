@@ -444,92 +444,92 @@ impl GuestMemorySpace {
             "__rel_plt_end" => plt_end,
             "__rel_dyn_start" => dyn_start,
             "__rel_dyn_end" => dyn_end,
-            "__cxa_pure_virtual" => hle::hle_cxa_pure_virtual as *const () as usize,
-            "__cxa_deleted_virtual" => hle::hle_cxa_deleted_virtual as *const () as usize,
+            "__cxa_pure_virtual" => crate::hle!(hle::hle_cxa_pure_virtual()) as usize,
+            "__cxa_deleted_virtual" => crate::hle!(hle::hle_cxa_deleted_virtual()) as usize,
             "_ZTVN10__cxxabiv117__class_type_infoE" => hle::rtti_class_type_info_vtable_addr(),
             "_ZTVN10__cxxabiv120__si_class_type_infoE" => hle::rtti_si_class_type_info_vtable_addr(),
             "_ZSt7nothrow" => &hle::STD_NOTHROW as *const _ as usize,
             "nvnPrivate0" => hle::NVN_PRIVATE0.as_ptr() as usize,
             "_ZN2nn2os20GetCurrentCoreNumberEv" => {
-                crate::horizon::hle::hle_nn_os_GetCurrentCoreNumber as *const () as usize
+                crate::hle!(crate::horizon::hle::hle_nn_os_GetCurrentCoreNumber()) as usize
             }
             // nn::codec hardware Opus decoder: IPC to hwopus, so HLE.
             "_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEiii" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize as *const () as usize
+                crate::hle!(hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize(_, _, _)) as usize
             }
             "_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEii" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize2 as *const () as usize
+                crate::hle!(hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize2(_, _)) as usize
             }
             "_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEiiPvmi" => {
-                hle::hle_nn_codec_InitializeHardwareOpusDecoder as *const () as usize
+                crate::hle!(hle::hle_nn_codec_InitializeHardwareOpusDecoder(_, _, _, _, _, _)) as usize
             }
             "_ZN2nn5codec27FinalizeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_FinalizeHardwareOpusDecoder as *const () as usize
+                crate::hle!(hle::hle_nn_codec_FinalizeHardwareOpusDecoder(_)) as usize
             }
             "_ZN2nn5codec32GetHardwareOpusDecoderSampleRateEPKNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderSampleRate as *const () as usize
+                crate::hle!(hle::hle_nn_codec_GetHardwareOpusDecoderSampleRate(_)) as usize
             }
             "_ZN2nn5codec34GetHardwareOpusDecoderChannelCountEPKNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderChannelCount as *const () as usize
+                crate::hle!(hle::hle_nn_codec_GetHardwareOpusDecoderChannelCount(_)) as usize
             }
             "_ZN2nn5codec24ResetHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_ResetHardwareOpusDecoder as *const () as usize
+                crate::hle!(hle::hle_nn_codec_ResetHardwareOpusDecoder(_)) as usize
             }
             "_ZN2nn5codec33DecodeOpusInterleavedWithHardwareEPNS0_23HardwareOpusDecoderTypeEPmPiPsmPKvm" => {
-                hle::hle_nn_codec_DecodeOpusInterleavedWithHardware as *const () as usize
+                crate::hle!(hle::hle_nn_codec_DecodeOpusInterleavedWithHardware(_, _, _, _, _, _, _)) as usize
             }
             "_ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE" => {
-                hle::hle_nn_os_TryWaitSystemEvent as *const () as usize
+                crate::hle!(hle::hle_nn_os_TryWaitSystemEvent(_)) as usize
             }
             "_ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE" => {
-                hle::hle_nn_os_WaitSystemEvent as *const () as usize
+                crate::hle!(hle::hle_nn_os_WaitSystemEvent(_)) as usize
             }
             "_ZN2nn2os20TimedWaitSystemEventEPNS0_15SystemEventTypeENS_8TimeSpanE" => {
-                hle::hle_nn_os_TimedWaitSystemEvent as *const () as usize
+                crate::hle!(hle::hle_nn_os_TimedWaitSystemEvent(_, _)) as usize
             }
             "_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE" => {
-                hle::hle_nn_os_DestroySystemEvent as *const () as usize
+                crate::hle!(hle::hle_nn_os_DestroySystemEvent(_)) as usize
             }
             // nn::audio renderer / output-device entry points: IPC to audren, so HLE.
             "_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererParameterE" => {
-                hle::hle_nn_audio_GetAudioRendererWorkBufferSize as *const () as usize
+                crate::hle!(hle::hle_nn_audio_GetAudioRendererWorkBufferSize(_)) as usize
             }
             "_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm" => {
-                hle::hle_nn_audio_OpenAudioRenderer as *const () as usize
+                crate::hle!(hle::hle_nn_audio_OpenAudioRenderer(_, _, _, _, _)) as usize
             }
             "_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE" => {
-                hle::hle_nn_audio_StartAudioRenderer as *const () as usize
+                crate::hle!(hle::hle_nn_audio_StartAudioRenderer(_)) as usize
             }
             "_ZN2nn5audio17StopAudioRendererENS0_19AudioRendererHandleE" => {
-                hle::hle_nn_audio_StopAudioRenderer as *const () as usize
+                crate::hle!(hle::hle_nn_audio_StopAudioRenderer(_)) as usize
             }
             "_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE" => {
-                hle::hle_nn_audio_CloseAudioRenderer as *const () as usize
+                crate::hle!(hle::hle_nn_audio_CloseAudioRenderer(_)) as usize
             }
             // RequestUpdateAudioRenderer runs natively: it serializes the config and calls the IAudioRenderer
             // service object that OpenAudioRenderer hands out (horizon/audio/renderer.rs), then parses the statuses back.
             "_ZN2nn5audio30GetActiveAudioOutputDeviceNameEPNS0_15AudioDeviceNameE"
             | "_ZN2nn5audio24GetActiveAudioDeviceNameEPNS0_15AudioDeviceNameE" => {
-                hle::hle_nn_audio_GetActiveAudioOutputDeviceName as *const () as usize
+                crate::hle!(hle::hle_nn_audio_GetActiveAudioOutputDeviceName(_)) as usize
             }
             "_ZN2nn5audio25ListAudioOutputDeviceNameEPNS0_15AudioDeviceNameEi"
             | "_ZN2nn5audio19ListAudioDeviceNameEPNS0_15AudioDeviceNameEi" => {
-                hle::hle_nn_audio_ListAudioOutputDeviceName as *const () as usize
+                crate::hle!(hle::hle_nn_audio_ListAudioOutputDeviceName(_, _)) as usize
             }
             "_ZN2nn5audio41GetActiveAudioDeviceChannelCountForOutputEv"
             | "_ZN2nn5audio21GetActiveChannelCountEv" => {
-                hle::hle_nn_audio_GetActiveAudioDeviceChannelCountForOutput as *const () as usize
+                crate::hle!(hle::hle_nn_audio_GetActiveAudioDeviceChannelCountForOutput()) as usize
             }
             "_ZN2nn5audio26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEf" => {
-                hle::hle_nn_audio_SetAudioDeviceOutputVolume as *const () as usize
+                crate::hle!(hle::hle_nn_audio_SetAudioDeviceOutputVolume(_, _)) as usize
             }
             "_ZN2nn5audio39AcquireAudioDeviceNotificationForOutputEPNS_2os11SystemEventE"
             | "_ZN2nn5audio36AcquireAudioDeviceSwitchNotificationEPNS_2os11SystemEventE" => {
-                hle::hle_nn_audio_AcquireAudioDeviceNotificationForOutput as *const () as usize
+                crate::hle!(hle::hle_nn_audio_AcquireAudioDeviceNotificationForOutput(_)) as usize
             }
             "_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE"
             | "_ZN2nn3apm27GetPerformanceConfigurationENS0_15PerformanceModeE" => {
-                hle::hle_nn_oe_GetPerformanceConfiguration as *const () as usize
+                crate::hle!(hle::hle_nn_oe_GetPerformanceConfiguration(_)) as usize
             }
             // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and
             // nn::gfx's GlslcDll::Initialize() fails exactly as on hardware. Binding HLE stubs here
@@ -552,7 +552,7 @@ impl GuestMemorySpace {
                 return Some(if self.default_stub_ptr != 0 {
                     (self.default_stub_ptr, false)
                 } else {
-                    (hle::hle_default_stub as *const () as usize, true)
+                    (crate::hle!(hle::hle_default_stub()) as usize, true)
                 });
             }
         };
@@ -669,6 +669,11 @@ impl GuestMemorySpace {
     ///   ldr  x16, <rust_fn>
     ///   b    <entry stub>             ; write_hle_entry_stub
     pub fn make_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
+        // A runtime without arm64 trampolines calls the function through its adapter (hle_abi): every function bound
+        // here needs one.
+        if crate::hle_abi::adapter(rust_fn).is_none() {
+            eprintln!("[!] HLE: {rust_fn:p} has no adapter (take its address through hle_abi::hle)");
+        }
         assert!(
             self.trampoline_next < self.trampoline_capacity,
             "trampoline pool exhausted ({} entries)",

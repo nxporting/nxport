@@ -77,7 +77,7 @@ pub unsafe fn install_v1_1_2_hooks(
         const STP_X29_X30_M40: u32 = 0xa9bc7bfd; // stp x29, x30, [sp, #-0x40]!
         let site = (base + SITE) as *mut u32;
         let tramp =
-            mem_space.make_hle_trampoline(crate::metal::journal_occl_read as *const ()) as usize;
+            mem_space.make_hle_trampoline(crate::hle!(crate::metal::journal_occl_read(_))) as usize;
         let wrap = tramp + 40; // words 10..14 of the 16-word entry (make_hle_trampoline uses 0..9)
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
@@ -111,11 +111,11 @@ pub unsafe fn install_v1_1_2_hooks(
         const BLR_X8: u32 = 0xd63f0100;
         let site = (base + SITE) as *mut u32;
         let tramp =
-            mem_space.make_hle_trampoline(crate::nvn::cmd::note_drawable as *const ()) as usize;
+            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize;
         let wrap =
-            mem_space.make_hle_trampoline(crate::nvn::cmd::note_drawable as *const ()) as usize; // its words: the wrapper
+            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize; // its words: the wrapper
         let post =
-            mem_space.make_hle_trampoline(crate::nvn::cmd::note_drawable as *const ()) as usize; // after the call
+            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize; // after the call
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
             (d.abs() < 1 << 27).then(
@@ -177,7 +177,7 @@ pub unsafe fn install_v1_1_2_hooks(
 #[cfg(nx_native)]
 unsafe fn install_hud_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     use hud::{CALC_ENTRY, CALC_SITES};
-    let tramp = mem_space.make_hle_trampoline(hud::calculate as *const ()) as usize;
+    let tramp = mem_space.make_hle_trampoline(crate::hle!(hud::calculate(_))) as usize;
     let b = |from: usize, to: usize, link: bool| -> Option<u32> {
         let d = to as i64 - from as i64;
         (d.abs() < 1 << 27)
@@ -185,7 +185,7 @@ unsafe fn install_hud_hooks(base: usize, mem_space: &mut crate::guest::loader::G
     };
     for s in CALC_SITES {
         let site = base + s;
-        let wrap = mem_space.make_hle_trampoline(hud::calculate as *const ()) as usize;
+        let wrap = mem_space.make_hle_trampoline(crate::hle!(hud::calculate(_))) as usize;
         match (
             std::ptr::read(site as *const u32),
             b(site, wrap, false),

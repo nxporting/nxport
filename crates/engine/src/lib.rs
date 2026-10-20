@@ -6,6 +6,7 @@ pub mod config;
 #[cfg(nx_native)]
 mod cpu;
 pub mod game;
+pub mod hle_abi;
 #[cfg(nx_native)]
 mod gpu;
 #[cfg(nx_native)]
@@ -474,7 +475,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 2c. Initialize Global Offset Table (GOT) PLT entries with x9-restoring default HLE stub before relocations
     println!("[+] Initializing Global Offset Table (GOT) shims...");
-    let default_stub = mem_space.make_hle_trampoline(horizon::hle::hle_default_stub as *const ());
+    let default_stub = mem_space.make_hle_trampoline(crate::hle!(horizon::hle::hle_default_stub()));
     mem_space.init_plt_got(default_stub);
 
     // 2d. Load SDK — must happen before apply_relocations so that undefined
@@ -1711,13 +1712,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         // and its short methods, thunks onto the C API or field reads, run natively), plus the class Finalize, which
         // releases the service object through its vtable.
         let opus: [(&str, usize); 7] = [
-            ("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEiiPvmi", horizon::hle::hle_nn_codec_InitializeHardwareOpusDecoder as *const () as usize),
-            ("_ZN2nn5codec27FinalizeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE", horizon::hle::hle_nn_codec_FinalizeHardwareOpusDecoder as *const () as usize),
-            ("_ZN2nn5codec24ResetHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE", horizon::hle::hle_nn_codec_ResetHardwareOpusDecoder as *const () as usize),
-            ("_ZN2nn5codec33DecodeOpusInterleavedWithHardwareEPNS0_23HardwareOpusDecoderTypeEPmPiPsmPKvm", horizon::hle::hle_nn_codec_DecodeOpusInterleavedWithHardware as *const () as usize),
-            ("_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEii", horizon::hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize2 as *const () as usize),
-            ("_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEiii", horizon::hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize as *const () as usize),
-            ("_ZN2nn5codec19HardwareOpusDecoder8FinalizeEv", horizon::hle::hle_nn_codec_HardwareOpusDecoder_Finalize as *const () as usize),
+            ("_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEiiPvmi", crate::hle!(horizon::hle::hle_nn_codec_InitializeHardwareOpusDecoder(_, _, _, _, _, _)) as usize),
+            ("_ZN2nn5codec27FinalizeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE", crate::hle!(horizon::hle::hle_nn_codec_FinalizeHardwareOpusDecoder(_)) as usize),
+            ("_ZN2nn5codec24ResetHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE", crate::hle!(horizon::hle::hle_nn_codec_ResetHardwareOpusDecoder(_)) as usize),
+            ("_ZN2nn5codec33DecodeOpusInterleavedWithHardwareEPNS0_23HardwareOpusDecoderTypeEPmPiPsmPKvm", crate::hle!(horizon::hle::hle_nn_codec_DecodeOpusInterleavedWithHardware(_, _, _, _, _, _, _)) as usize),
+            ("_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEii", crate::hle!(horizon::hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize2(_, _)) as usize),
+            ("_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEiii", crate::hle!(horizon::hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize(_, _, _)) as usize),
+            ("_ZN2nn5codec19HardwareOpusDecoder8FinalizeEv", crate::hle!(horizon::hle::hle_nn_codec_HardwareOpusDecoder_Finalize(_)) as usize),
         ];
         for (name, f) in opus {
             if sdk_mod.interpose(name, f) {
@@ -1727,13 +1728,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         // nn::ssl::Initialize: called from inside the SDK (its own shim), so the game's import binding alone misses it.
         if sdk_mod.interpose(
             "_ZN2nn3ssl10InitializeEv",
-            horizon::nn::ssl_ok as *const () as usize,
+            crate::hle!(horizon::nn::ssl_ok()) as usize,
         ) {
             interposed += 1;
         }
         // nn::settings::detail::MakeLanguageCode: the SDK would IPC to the settings service (see hle_nn).
         let tramp = mem_space
-            .make_hle_trampoline(horizon::nn::settings_make_language_code as *const ())
+            .make_hle_trampoline(crate::hle!(horizon::nn::settings_make_language_code(_, _)))
             as usize;
         if sdk_mod.interpose(
             "_ZN2nn8settings6detail16MakeLanguageCodeEPNS0_12LanguageCodeENS0_8LanguageE",
@@ -1745,25 +1746,25 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             (
                 "_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE",
                 mem_space.make_hle_trampoline(
-                    horizon::hle::hle_nn_oe_GetPerformanceConfiguration as *const (),
+                    crate::hle!(horizon::hle::hle_nn_oe_GetPerformanceConfiguration(_)),
                 ) as usize,
             ),
             (
                 "_ZN2nn3apm27GetPerformanceConfigurationENS0_15PerformanceModeE",
                 mem_space.make_hle_trampoline(
-                    horizon::hle::hle_nn_oe_GetPerformanceConfiguration as *const (),
+                    crate::hle!(horizon::hle::hle_nn_oe_GetPerformanceConfiguration(_)),
                 ) as usize,
             ),
             (
                 "_ZN2nn2oe18GetPerformanceModeEv",
                 mem_space.make_hle_trampoline(
-                    horizon::hle::hle_nn_oe_GetPerformanceMode as *const (),
+                    crate::hle!(horizon::hle::hle_nn_oe_GetPerformanceMode()),
                 ) as usize,
             ),
             (
                 "_ZN2nn3apm18GetPerformanceModeEv",
                 mem_space.make_hle_trampoline(
-                    horizon::hle::hle_nn_oe_GetPerformanceMode as *const (),
+                    crate::hle!(horizon::hle::hle_nn_oe_GetPerformanceMode()),
                 ) as usize,
             ),
         ];
@@ -1948,15 +1949,15 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             guest::module_loader::SEAD_VEC3_ZERO.as_ptr() as usize,
         );
         let svc_entry =
-            mem_space.make_hle_trampoline(horizon::svc::svc_dispatch as *const ()) as usize;
+            mem_space.make_hle_trampoline(crate::hle!(horizon::svc::svc_dispatch(_, _))) as usize;
         let unresolved = mem_space
-            .make_hle_trampoline(guest::module_loader::unresolved_import as *const ())
+            .make_hle_trampoline(crate::hle!(guest::module_loader::unresolved_import()))
             as usize;
         guest::module_loader::set_placeholders(
             (0..16)
                 .map(|_| {
                     mem_space
-                        .make_hle_trampoline(guest::module_loader::unresolved_import as *const ())
+                        .make_hle_trampoline(crate::hle!(guest::module_loader::unresolved_import()))
                         as usize
                 })
                 .collect(),

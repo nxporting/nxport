@@ -455,6 +455,16 @@ macro_rules! f {
         unsafe { std::mem::transmute::<*const (), AnyFn>($x as *const ()) }
     };
 }
+/// A vtable of engine functions handed to the guest, and the function that records their HLE adapters (hle_abi; a
+/// static's initialiser cannot). Entries are the functions with their parameters as placeholders: `x_seek(_, _)`.
+macro_rules! guest_vtable {
+    ($table:ident, $register:ident, [$($f:ident($($a:tt),*)),* $(,)?]) => {
+        static $table: [AnyFn; [$(stringify!($f)),*].len()] = [$(f!($f as unsafe extern "C" fn($($a),*) -> _)),*];
+        fn $register() {
+            $(crate::hle!($f($($a),*));)*
+        }
+    };
+}
 /// The implementation, or None after the destructor ran (methods then return Status_NullExtractor).
 unsafe fn ext<'a>(this: *mut usize) -> Option<&'a mut Extractor> {
     (*this.add(1) as *mut Extractor).as_mut()
@@ -730,30 +740,32 @@ unsafe extern "C" fn x_buffered_range(this: *mut usize, start: *mut i64, end: *m
     *end = d;
     OK
 }
-static EXTRACTOR_VTABLE: [AnyFn; 16] = [
-    f!(x_dtor),
-    f!(x_dtor), // ~Extractor (complete / deleting: the object's storage is the caller's)
-    f!(x_set_source_uri),
-    f!(x_set_source_buffer),
-    f!(x_track_count),
-    f!(x_track_config),
-    f!(x_select),
-    f!(x_unselect),
-    f!(x_seek),
-    f!(x_track_for_data),
-    f!(x_read),
-    f!(x_advance),
-    f!(x_sample_time),
-    f!(x_sample_meta),
-    f!(x_buffered_range),
-    f!(x_set_source_reader), // Extractor's own SetDataSource(ClientStreamReader*, const char*)
-];
+guest_vtable!(EXTRACTOR_VTABLE, register_extractor_hle, [
+    x_dtor(_),
+    x_dtor(_), // ~Extractor (complete / deleting: the object's storage is the caller's)
+    x_set_source_uri(_, _),
+    x_set_source_buffer(_, _, _),
+    x_track_count(_, _),
+    x_track_config(_, _, _),
+    x_select(_, _),
+    x_unselect(_, _),
+    x_seek(_, _),
+    x_track_for_data(_, _),
+    x_read(_, _),
+    x_advance(_),
+    x_sample_time(_, _),
+    x_sample_meta(_, _),
+    x_buffered_range(_, _, _),
+    x_set_source_reader(_, _, _), // Extractor's own SetDataSource(ClientStreamReader*, const char*)
+]);
 /// The vtables as the guest calls them: entries are HLE trampolines once `set_trampolines` ran.
 static GUEST_VTABLES: std::sync::OnceLock<(Vec<usize>, Vec<usize>)> = std::sync::OnceLock::new();
 
 /// Routes the extractor's and decoder's vtables through HLE trampolines (`make` wraps a function), like every other
 /// guest-to-engine call.
 pub fn set_trampolines(make: &mut dyn FnMut(*const ()) -> usize) {
+    register_extractor_hle();
+    register_decoder_hle();
     let mut wrap = |t: &[AnyFn]| t.iter().map(|&f| make(f as *const ())).collect::<Vec<_>>();
     let tables = (wrap(&EXTRACTOR_VTABLE), wrap(&DECODER_VTABLE));
     let _ = GUEST_VTABLES.set(tables);
@@ -1287,27 +1299,27 @@ unsafe extern "C" fn d_release_output(this: *mut usize, idx: i32) -> u32 {
 unsafe extern "C" fn d_last_error(_this: *mut usize) -> u32 {
     OK
 }
-static DECODER_VTABLE: [AnyFn; 19] = [
-    f!(d_dtor),
-    f!(d_dtor),
-    f!(d_configure),
-    f!(d_register_events),
-    f!(d_output_format),
-    f!(d_start),
-    f!(d_stop),
-    f!(d_flush),
-    f!(d_flush),
-    f!(d_acquire_input),
-    f!(d_get_input),
-    f!(d_send_input),
-    f!(d_acquire_output),
-    f!(d_get_output),
-    f!(d_output_size),
-    f!(d_release_output),
-    f!(d_last_error),
-    f!(d_get_output_with_format),
-    f!(d_output_buffer_format),
-];
+guest_vtable!(DECODER_VTABLE, register_decoder_hle, [
+    d_dtor(_),
+    d_dtor(_),
+    d_configure(_, _),
+    d_register_events(_, _),
+    d_output_format(_, _),
+    d_start(_),
+    d_stop(_),
+    d_flush(_),
+    d_flush(_),
+    d_acquire_input(_, _, _),
+    d_get_input(_, _, _),
+    d_send_input(_, _, _, _, _, _),
+    d_acquire_output(_, _, _, _, _),
+    d_get_output(_, _, _),
+    d_output_size(_, _, _),
+    d_release_output(_, _),
+    d_last_error(_),
+    d_get_output_with_format(_, _, _, _),
+    d_output_buffer_format(_, _, _),
+]);
 pub unsafe extern "C" fn decoder_ctor(this: *mut usize, ty: i32, format: i32, mode: i32, _n: i32) {
     println!(
         "[movie] Decoder(type={}, output format={}, mode={})",

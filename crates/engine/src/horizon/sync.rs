@@ -198,13 +198,13 @@ unsafe extern "C" fn cv_timed_wait(cv: usize, cs: usize, helper: *const u64) -> 
 /// (mangled symbol, replacement) pairs, patched over the module's own definitions at startup.
 pub fn interpositions() -> Vec<(&'static str, usize)> {
     vec![
-        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon5EnterEv", cs_enter as *const () as usize),
-        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon8TryEnterEv", cs_try_enter as *const () as usize),
-        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon5LeaveEv", cs_leave as *const () as usize),
-        ("_ZNK2nn2os6detail36InternalCriticalSectionImplByHorizon23IsLockedByCurrentThreadEv", cs_is_locked_by_current_thread as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon6SignalEv", cv_signal as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon9BroadcastEv", cv_broadcast as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon4WaitEPNS1_23InternalCriticalSectionE", cv_wait as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon9TimedWaitEPNS1_23InternalCriticalSectionERKNS1_13TimeoutHelperE", cv_timed_wait as *const () as usize),
+        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon5EnterEv", crate::hle!(cs_enter(_)) as usize),
+        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon8TryEnterEv", crate::hle!(cs_try_enter(_)) as usize),
+        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon5LeaveEv", crate::hle!(cs_leave(_)) as usize),
+        ("_ZNK2nn2os6detail36InternalCriticalSectionImplByHorizon23IsLockedByCurrentThreadEv", crate::hle!(cs_is_locked_by_current_thread(_)) as usize),
+        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon6SignalEv", crate::hle!(cv_signal(_)) as usize),
+        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon9BroadcastEv", crate::hle!(cv_broadcast(_)) as usize),
+        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon4WaitEPNS1_23InternalCriticalSectionE", crate::hle!(cv_wait(_, _)) as usize),
+        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon9TimedWaitEPNS1_23InternalCriticalSectionERKNS1_13TimeoutHelperE", crate::hle!(cv_timed_wait(_, _, _)) as usize),
     ]
 }
