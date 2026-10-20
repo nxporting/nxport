@@ -140,7 +140,7 @@ fn queue(entries: Vec<Entry>) {
                 }
             }
             println!(
-                "[+] Pipelines: {queued} of {} listed queued for compilation ({skipped} with missing shaders or other \
+                "[+] Pipelines: {queued} of {} listed queued for compilation ({skipped} the same pipeline as another entry, or with missing shaders or other \
                  state)",
                 entries.len()
             );

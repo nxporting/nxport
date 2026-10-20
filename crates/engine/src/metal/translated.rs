@@ -1441,17 +1441,33 @@ pub(super) fn pipeline_key(
     streams_used: &[bool; MAX_STREAMS],
     streams_eff: &[u64],
 ) -> smallvec::SmallVec<[u64; 64]> {
+    // Only the state build_translated_pipeline reads: targets without a format take none, blend factors and equations
+    // (bits 4..35) count where blending is enabled, write masks for the outputs the fragment shader writes. Draws that
+    // differ only in state the pipeline ignores share it.
+    let (mut cs, mut cm, mut bl) = (0u64, 0u64, [0u64; 8]);
+    for (i, pf) in color_pfs.iter().enumerate().take(8) {
+        if *pf == MTLPixelFormat::Invalid {
+            continue;
+        }
+        if pf_kind(*pf) == 0 && (color_state >> i) & 1 != 0 {
+            cs |= 1 << i;
+            bl[i] = blends[i] & 0xF_FFFF_FFF0;
+        }
+        if fs.is_some_and(|f| f.colors.contains(&(i as u32))) {
+            cm |= (((channel_mask >> (i * 4)) & 0xF) as u64) << (i * 4);
+        }
+    }
     let mut key: smallvec::SmallVec<[u64; 64]> = smallvec::smallvec![
         point_size.to_bits() as u64,
         vs as *const CachedStage as u64,
         fs.map_or(0, |f| f as *const CachedStage as u64),
         depth_gl as u64,
-        color_state as u64,
-        channel_mask as u64,
+        cs,
+        cm,
         depth_pf.0 as u64,
     ];
     key.extend(color_pfs.iter().map(|p| p.0 as u64));
-    key.extend(blends.iter().copied());
+    key.extend(bl);
     for (loc, fmt, buf, off, _) in attr_descs {
         key.extend([*loc as u64, fmt.0 as u64, *buf as u64, *off as u64]);
     }
