@@ -20,6 +20,7 @@ rustc-hash = "2"
 smallvec = "1"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+block2 = "0.6"
 nxport-pipelines = { path = "../pipelines" }
 objc2-metal = "0.3"
 objc2-quartz-core = "0.3"

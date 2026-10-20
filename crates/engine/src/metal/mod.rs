@@ -672,6 +672,7 @@ fn nvn_blend_factor(code: u32) -> MTLBlendFactor {
 
 /// Called once by host/display.rs after the window and layer exist.
 pub fn init(device: Device, layer: Option<Retained<CAMetalLayer>>) {
+    pipeline_list::fetch();
     let queue = device.newCommandQueue().expect("newCommandQueue");
     let lib = device
         .newLibraryWithSource_options_error(&NSString::from_str(BLIT_MSL), None)

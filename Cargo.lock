@@ -359,6 +359,7 @@ dependencies = [
 name = "nxport"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "capstone",
  "clap",
  "dear-imgui-rs",
