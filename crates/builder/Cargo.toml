@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 nxport = { path = "../engine" }
 nxport-build = { path = "../build" }
+nxport-pipelines = { path = "../pipelines" }
 clap = { version = "4.6.7", features = ["derive"] }
 struct-patch = "0.14.4"
 libc = "0.2"

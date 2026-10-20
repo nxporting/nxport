@@ -364,6 +364,7 @@ dependencies = [
  "dear-imgui-rs",
  "libc",
  "lz4_flex",
+ "nxport-pipelines",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -405,6 +406,7 @@ dependencies = [
  "libc",
  "nxport",
  "nxport-build",
+ "nxport-pipelines",
  "serde",
  "struct-patch",
  "toml",
@@ -419,6 +421,10 @@ dependencies = [
  "nxport-build",
  "serde_json",
 ]
+
+[[package]]
+name = "nxport-pipelines"
+version = "0.1.0"
 
 [[package]]
 name = "objc2"

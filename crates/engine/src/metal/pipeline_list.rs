@@ -1,123 +1,15 @@
-// Render pipelines by the draw state that selects them, kept per game (<data dir>/pipelines.txt, --pipeline-list) and
-// compiled on the pipeline threads once the game starts drawing: a pipeline seen in an earlier session, or listed by
-// someone else, costs no compile when it is first drawn.
-//
-// An entry names its shaders by cache entry and holds the draw's NVN vertex attribute, stream and blend bits and its
-// target formats; the engine derives the Metal pipeline from them as it does for a draw (translated::derive_layout,
-// pipeline_key), so lists stay valid across engine builds. One entry per line:
-//   p1 <vs> <fs|-> <point size bits> <depth_gl> <y_negate> <color state> <channel mask> <depth format>
-//      <8 color formats> <8 blend states> <attribute bits> <stream bits>
-// Lists are comma separated ('-' an unset attribute, '.' an empty list); formats are MTLPixelFormat values.
+// Render pipelines by the draw state that selects them (the format: crates/pipelines), kept per game (<data
+// dir>/pipelines.txt, --pipeline-list) and compiled on the pipeline threads once the game starts drawing: a pipeline
+// seen in an earlier session, or listed by someone else, costs no compile when it is first drawn. The engine derives
+// each entry's Metal pipeline as it does for a draw (translated::derive_layout, pipeline_key).
 
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Entry {
-    pub vs: String,
-    pub fs: Option<String>,
-    pub point_size: u32,
-    pub depth_gl: bool,
-    pub y_negate: bool,
-    pub color_state: u32,
-    pub channel_mask: u32,
-    pub depth_pf: u64,
-    pub color_pfs: [u64; 8],
-    pub blends: [u64; 8],
-    pub attr_bits: Vec<Option<u32>>,
-    pub streams: Vec<u64>,
-}
-
-fn list<T>(v: &[T], f: impl Fn(&T) -> String) -> String {
-    if v.is_empty() {
-        ".".into()
-    } else {
-        v.iter().map(f).collect::<Vec<_>>().join(",")
-    }
-}
-
-fn parse_list<T>(s: &str, f: impl Fn(&str) -> Option<T>) -> Option<Vec<T>> {
-    if s == "." {
-        return Some(Vec::new());
-    }
-    s.split(',').map(f).collect()
-}
-
-fn hex(s: &str) -> Option<u64> {
-    u64::from_str_radix(s, 16).ok()
-}
-
-impl Entry {
-    pub fn line(&self) -> String {
-        format!(
-            "p1 {} {} {:x} {} {} {:x} {:x} {} {} {} {} {}",
-            self.vs,
-            self.fs.as_deref().unwrap_or("-"),
-            self.point_size,
-            self.depth_gl as u8,
-            self.y_negate as u8,
-            self.color_state,
-            self.channel_mask,
-            self.depth_pf,
-            list(&self.color_pfs, |p| p.to_string()),
-            list(&self.blends, |b| format!("{b:x}")),
-            list(&self.attr_bits, |a| a.map_or("-".into(), |a| format!("{a:x}"))),
-            list(&self.streams, |s| format!("{s:x}")),
-        )
-    }
-
-    pub fn parse(line: &str) -> Option<Entry> {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        let ["p1", vs, fs, ps, dg, yn, cs, cm, dpf, cpfs, blends, attrs, streams] = f.as_slice() else {
-            return None;
-        };
-        let entry = |s: &str| (s.starts_with("s_") && s.len() == 18).then(|| s.to_string());
-        Some(Entry {
-            vs: entry(vs)?,
-            fs: if *fs == "-" { None } else { Some(entry(fs)?) },
-            point_size: hex(ps)? as u32,
-            depth_gl: *dg == "1",
-            y_negate: *yn == "1",
-            color_state: hex(cs)? as u32,
-            channel_mask: hex(cm)? as u32,
-            depth_pf: dpf.parse().ok()?,
-            color_pfs: parse_list(cpfs, |p| p.parse().ok())?.try_into().ok()?,
-            blends: parse_list(blends, hex)?.try_into().ok()?,
-            attr_bits: parse_list(attrs, |a| {
-                if a == "-" {
-                    Some(None)
-                } else {
-                    hex(a).map(|a| Some(a as u32))
-                }
-            })?,
-            streams: parse_list(streams, hex)?,
-        })
-    }
-
-    /// Whether the entry's values are in range: shader kinds (from `kind`, the cache index's stage kind by entry),
-    /// formats, blend fields, list lengths.
-    pub fn valid(&self, kind: impl Fn(&str) -> Option<super::shader_cache::StageKind>) -> bool {
-        use super::shader_cache::StageKind;
-        let pf_ok = |f: u64| f < 1024;
-        // NVNblendState's fields end at bit 47 (nvn/state.rs).
-        let blend_ok = |b: u64| b >> 47 == 0;
-        kind(&self.vs) == Some(StageKind::Vertex)
-            && self.fs.as_deref().map_or(true, |f| kind(f) == Some(StageKind::Fragment))
-            && f32::from_bits(self.point_size).is_finite()
-            && pf_ok(self.depth_pf)
-            && self.color_pfs.iter().all(|&f| pf_ok(f))
-            && self.blends.iter().all(|&b| blend_ok(b))
-            && self.attr_bits.len() <= 32
-            && self.streams.len() <= 32
-    }
-}
-
-/// The header line lists start with.
-pub fn header(title_id: u64, build: &str) -> String {
-    format!("# nxport pipelines title {title_id:016x} build {build}")
-}
+pub use nxport_pipelines::Entry;
+use nxport_pipelines::header;
 
 fn path() -> Option<PathBuf> {
     let s = crate::settings::get();
@@ -134,7 +26,10 @@ fn list_state() -> &'static Mutex<List> {
     static L: OnceLock<Mutex<List>> = OnceLock::new();
     L.get_or_init(|| {
         let mut l = List { seen: HashSet::new(), entries: Vec::new(), file: None };
-        if let Some(text) = path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        // The list the app ships with its shader cache (the shared one at build time), then this player's own.
+        let shipped = super::shader_cache::cache_dir().join("pipelines.txt");
+        for p in [Some(shipped), path()].into_iter().flatten() {
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
             for e in text.lines().filter_map(Entry::parse) {
                 if l.seen.insert(e.clone()) {
                     l.entries.push(e);
@@ -194,6 +89,12 @@ pub(super) fn precompile() {
         if !crate::settings::get().graphics.precompile_pipelines {
             return;
         }
+        if crate::settings::get().graphics.share_pipelines {
+            std::thread::Builder::new()
+                .name("pipe-share".into())
+                .spawn(share)
+                .expect("spawn pipeline share thread");
+        }
         let entries = list_state().lock().unwrap().entries.clone();
         if entries.is_empty() {
             return;
@@ -219,27 +120,66 @@ pub(super) fn precompile() {
     });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Entry;
+/// The shared list's submission endpoint.
+const SHARE_URL: Option<&str> = None;
+/// Entries per submission (the endpoint refuses more).
+const SHARE_MAX: usize = 4000;
 
-    #[test]
-    fn line_round_trip() {
-        let e = Entry {
-            vs: "s_7db879f41611c1ae".into(),
-            fs: None,
-            point_size: 1.0f32.to_bits(),
-            depth_gl: true,
-            y_negate: false,
-            color_state: 1,
-            channel_mask: 0xffff_ffff,
-            depth_pf: 252,
-            color_pfs: [71, 0, 0, 0, 0, 0, 0, 0],
-            blends: [0x6401_1185_1850, 1, 2, 3, 4, 5, 6, 7],
-            attr_bits: vec![Some(0x520), None],
-            streams: vec![],
-        };
-        assert!(Entry::parse(&e.line()) == Some(e.clone()));
-        assert!(Entry::parse("p1 s_x - 0").is_none());
+/// Sends the entries of this player's list not sent before (<list>.sent counts them) to the shared list.
+fn share() {
+    let s = crate::settings::get();
+    let Some(url) = s.graphics.share_pipelines_url.as_deref().or(SHARE_URL) else {
+        return;
+    };
+    let Some(list) = path() else { return };
+    let sent_path = list.with_extension("sent");
+    let Ok(text) = std::fs::read_to_string(&list) else { return };
+    let mut sent: usize = std::fs::read_to_string(&sent_path).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
+    let lines: Vec<&str> = text.lines().filter(|l| Entry::parse(l).is_some()).collect();
+    let head = header(crate::game::title_id().unwrap_or(0), crate::profile::main_build_id().unwrap_or("-"));
+    while sent < lines.len() {
+        let n = (lines.len() - sent).min(SHARE_MAX);
+        let body = format!("{head}\n{}\n", lines[sent..sent + n].join("\n"));
+        match post(url, body.as_bytes()) {
+            Ok(()) => {
+                sent += n;
+                let _ = std::fs::write(&sent_path, sent.to_string());
+                println!("[+] Pipelines: shared {n}");
+            }
+            Err(e) => {
+                println!("[!] Pipelines: sharing failed: {e}");
+                return;
+            }
+        }
+    }
+}
+
+/// An HTTPS POST of `body` (text/plain); Ok on a 2xx response.
+fn post(url: &str, body: &[u8]) -> Result<(), String> {
+    use objc2_foundation::{
+        NSData, NSHTTPURLResponse, NSMutableURLRequest, NSString, NSURLSession, NSURLSessionTaskState, NSURL,
+    };
+    let u = NSURL::URLWithString(&NSString::from_str(url)).ok_or("bad URL")?;
+    let req = NSMutableURLRequest::requestWithURL(&u);
+    req.setHTTPMethod(&NSString::from_str("POST"));
+    req.setValue_forHTTPHeaderField(Some(&NSString::from_str("text/plain")), &NSString::from_str("Content-Type"));
+    req.setHTTPBody(Some(&NSData::with_bytes(body)));
+    req.setTimeoutInterval(30.0);
+    let task = NSURLSession::sharedSession().dataTaskWithRequest(&req);
+    task.resume();
+    while task.state() != NSURLSessionTaskState::Completed {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if let Some(e) = task.error() {
+        return Err(e.localizedDescription().to_string());
+    }
+    let status = task
+        .response()
+        .and_then(|r| r.downcast::<NSHTTPURLResponse>().ok())
+        .map_or(0, |r| r.statusCode());
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        Err(format!("HTTP {status}"))
     }
 }

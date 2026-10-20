@@ -2,7 +2,7 @@
 
 use nxport_build::{extract_shaders, ipa, macho, msl_specialize, pack, ppm2png, shader_cache_build, tiny_kernels, translation};
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -20,9 +20,6 @@ enum Command {
     /// Shader stages and caches
     #[command(subcommand)]
     Shaders(Shaders),
-    /// Render pipeline lists (the engine's --pipeline-list)
-    #[command(subcommand)]
-    Pipelines(Pipelines),
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
         /// Game dump (ExeFS/ and RomFS/)
@@ -98,22 +95,6 @@ struct PackArgs {
     /// Link the game files instead of copying them
     #[arg(long)]
     symlink: bool,
-}
-
-#[derive(Subcommand)]
-enum Pipelines {
-    /// Merge pipeline lists into one, without duplicates or entries the shader cache cannot build
-    Merge {
-        /// The game's shader cache (its index.txt names the stages entries may use)
-        #[arg(long)]
-        cache: PathBuf,
-        /// Output list (may be one of the inputs)
-        #[arg(long, short)]
-        out: PathBuf,
-        /// Lists to merge
-        #[arg(required = true)]
-        lists: Vec<PathBuf>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -205,7 +186,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 symlink_assets: a.symlink,
             })?;
         }
-        Command::Pipelines(Pipelines::Merge { cache, out, lists }) => merge_pipelines(&cache, &out, &lists)?,
         Command::Shaders(Shaders::Extract { romfs, out, dirs, ctrl_out }) => {
             let dirs = if dirs.is_empty() { extract_shaders::default_dirs(&romfs) } else { dirs };
             let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
@@ -285,43 +265,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn merge_pipelines(cache: &Path, out: &Path, lists: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
-    use nxport::metal::pipeline_list::{header, Entry};
-    let kinds = nxport::metal::shader_cache::stage_kinds(&std::fs::read_to_string(cache.join("index.txt"))?);
-    let mut entries = std::collections::BTreeSet::new();
-    let (mut titles, mut builds) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
-    let (mut read, mut rejected) = (0usize, 0usize);
-    for list in lists {
-        for line in std::fs::read_to_string(list)?.lines() {
-            if let Some(h) = line.strip_prefix("# nxport pipelines title ") {
-                let mut f = h.split_whitespace();
-                titles.extend(f.next().map(str::to_string));
-                builds.extend(f.nth(1).map(str::to_string));
-                continue;
-            }
-            if line.trim().is_empty() || line.starts_with('#') {
-                continue;
-            }
-            read += 1;
-            match Entry::parse(line).filter(|e| e.valid(|s| kinds.get(s).copied())) {
-                Some(e) => {
-                    entries.insert(e);
-                }
-                None => rejected += 1,
-            }
-        }
-    }
-    if titles.len() > 1 {
-        return Err(format!("lists of different games: {titles:?}").into());
-    }
-    let title = titles.iter().next().and_then(|t| u64::from_str_radix(t, 16).ok()).unwrap_or(0);
-    let build = if builds.len() == 1 { builds.iter().next().unwrap().as_str() } else { "-" };
-    let mut text = header(title, build) + "\n";
-    for e in &entries {
-        text += &e.line();
-        text.push('\n');
-    }
-    std::fs::write(out, text)?;
-    println!("{} entries ({read} read, {rejected} rejected) -> {}", entries.len(), out.display());
-    Ok(())
-}
