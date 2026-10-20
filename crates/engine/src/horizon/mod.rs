@@ -3,6 +3,8 @@
 pub mod audio;
 pub mod fs;
 pub mod hle;
+pub mod mii;
+pub mod sdk;
 pub mod movie;
 pub mod nn;
 pub mod svc;

@@ -748,33 +748,11 @@ fn resolve_unimplemented_nvn(name: &str) -> *const () {
     }
 }
 
-/// The NVN API version the game was built for, by the NVN library version in its sdk module (games require that major
-/// version and at least that minor version). Library versions between entries take the closest older entry.
-fn api_version() -> (i32, i32) {
-    const VERSIONS: &[((u32, u32, u32), (i32, i32))] = &[
-        ((4, 4, 0), (53, 105)),
-        ((7, 3, 0), (53, 311)),
-        ((15, 3, 0), (55, 15)),
-    ];
-    static V: std::sync::OnceLock<(i32, i32)> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        let lib = crate::guest::sdk_loader::nvn_library_version();
-        let v = lib
-            .and_then(|lib| VERSIONS.iter().rev().find(|(from, _)| *from <= lib))
-            .unwrap_or(&VERSIONS[VERSIONS.len() - 1])
-            .1;
-        if !lib.is_some_and(|lib| VERSIONS.iter().any(|(from, _)| (from.0, from.1) == (lib.0, lib.1))) {
-            eprintln!("[!] NVN library version {lib:?} has no known API version; reporting {}.{}", v.0, v.1);
-        }
-        v
-    })
-}
-
 /// nvnDeviceGetInteger values of the Tegra X1 driver.
 fn known_device_info(pname: i32) -> Option<i32> {
     Some(match pname {
-        0 => api_version().0, // NVN_API_MAJOR_VERSION
-        1 => api_version().1, // NVN_API_MINOR_VERSION
+        0 => crate::horizon::sdk::nvn_api_version().0, // NVN_API_MAJOR_VERSION
+        1 => crate::horizon::sdk::nvn_api_version().1, // NVN_API_MINOR_VERSION
         2 => 14,      // UNIFORM_BUFFER_BINDINGS_PER_STAGE
         3 => 0x10000, // MAX_UNIFORM_BUFFER_SIZE
         5 => 8,       // COLOR_BUFFER_BINDINGS

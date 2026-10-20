@@ -115,11 +115,11 @@ fn leave_locked(t: &mut Tables, cs: usize) {
     }
 }
 
-unsafe extern "C" fn cs_enter(cs: usize) {
+pub(crate) unsafe extern "C" fn cs_enter(cs: usize) {
     drop(enter_locked(tables(), cs));
 }
 
-unsafe extern "C" fn cs_try_enter(cs: usize) -> bool {
+pub(crate) unsafe extern "C" fn cs_try_enter(cs: usize) -> bool {
     let tid = me();
     let mut g = tables();
     let t = g.as_mut().unwrap();
@@ -129,21 +129,21 @@ unsafe extern "C" fn cs_try_enter(cs: usize) -> bool {
     try_take(t, cs, tid)
 }
 
-unsafe extern "C" fn cs_leave(cs: usize) {
+pub(crate) unsafe extern "C" fn cs_leave(cs: usize) {
     leave_locked(tables().as_mut().unwrap(), cs);
 }
 
-unsafe extern "C" fn cs_is_locked_by_current_thread(cs: usize) -> bool {
+pub(crate) unsafe extern "C" fn cs_is_locked_by_current_thread(cs: usize) -> bool {
     tables().as_ref().unwrap().owners.get(&cs) == Some(&me())
 }
 
-unsafe extern "C" fn cv_signal(cv: usize) {
+pub(crate) unsafe extern "C" fn cv_signal(cv: usize) {
     let mut g = tables();
     *g.as_mut().unwrap().generations.entry(cv).or_insert(0) += 1;
     WAKE.notify_all();
 }
 
-unsafe extern "C" fn cv_broadcast(cv: usize) {
+pub(crate) unsafe extern "C" fn cv_broadcast(cv: usize) {
     cv_signal(cv);
 }
 
@@ -175,12 +175,12 @@ unsafe fn cv_wait_until(cv: usize, cs: usize, deadline: Option<std::time::Instan
     signaled
 }
 
-unsafe extern "C" fn cv_wait(cv: usize, cs: usize) {
+pub(crate) unsafe extern "C" fn cv_wait(cv: usize, cs: usize) {
     cv_wait_until(cv, cs, None);
 }
 
 /// `helper` is a nn::os::detail::TimeoutHelper: the absolute deadline in CNTPCT ticks.
-unsafe extern "C" fn cv_timed_wait(cv: usize, cs: usize, helper: *const u64) -> u32 {
+pub(crate) unsafe extern "C" fn cv_timed_wait(cv: usize, cs: usize, helper: *const u64) -> u32 {
     let target = if helper.is_null() { 0 } else { *helper };
     let now_tick: u64;
     std::arch::asm!("mrs {}, cntpct_el0", out(reg) now_tick); // system timer ticks for deadline
@@ -195,16 +195,3 @@ unsafe extern "C" fn cv_timed_wait(cv: usize, cs: usize, helper: *const u64) -> 
     cv_wait_until(cv, cs, deadline) as u32
 }
 
-/// (mangled symbol, replacement) pairs, patched over the module's own definitions at startup.
-pub fn interpositions() -> Vec<(&'static str, usize)> {
-    vec![
-        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon5EnterEv", cs_enter as *const () as usize),
-        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon8TryEnterEv", cs_try_enter as *const () as usize),
-        ("_ZN2nn2os6detail36InternalCriticalSectionImplByHorizon5LeaveEv", cs_leave as *const () as usize),
-        ("_ZNK2nn2os6detail36InternalCriticalSectionImplByHorizon23IsLockedByCurrentThreadEv", cs_is_locked_by_current_thread as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon6SignalEv", cv_signal as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon9BroadcastEv", cv_broadcast as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon4WaitEPNS1_23InternalCriticalSectionE", cv_wait as *const () as usize),
-        ("_ZN2nn2os6detail38InternalConditionVariableImplByHorizon9TimedWaitEPNS1_23InternalCriticalSectionERKNS1_13TimeoutHelperE", cv_timed_wait as *const () as usize),
-    ]
-}
