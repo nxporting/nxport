@@ -12,10 +12,32 @@ People like to know if you're using AI to write something, which is understandab
 3. If you're building for MacOS, you should now have an app you can play! If you're building for iOS, you'll have a .ipa that you can sideload with something like [Impactor](https://github.com/claration/Impactor).
 
 ## Screenshots
-<img width="2970" height="1498" alt="image" src="https://github.com/user-attachments/assets/9b2aa313-67e1-4b47-ae5f-6edb2d910fdc" />
-<img width="800" height="369" alt="gif3" src="https://github.com/user-attachments/assets/47e421e7-0981-4c9b-afc8-f28d41b041ad" />
-<img width="2024" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebba11ae-d5bc-4bd3-91c2-a2abd9065ec9" />
-<img width="2532" height="1170" alt="image" src="https://github.com/user-attachments/assets/8536adf0-fa40-4723-b570-cf982cf0d0f0" />
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img alt="image" src="https://github.com/user-attachments/assets/9b2aa313-67e1-4b47-ae5f-6edb2d910fdc" width="100%" />
+    </td>
+    <td align="center" width="50%">
+      <img alt="gif3" src="https://github.com/user-attachments/assets/47e421e7-0981-4c9b-afc8-f28d41b041ad" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img alt="image" src="https://github.com/user-attachments/assets/ebba11ae-d5bc-4bd3-91c2-a2abd9065ec9" width="100%" />
+    </td>
+    <td align="center" width="50%">
+      <img alt="image" src="https://github.com/user-attachments/assets/8536adf0-fa40-4723-b570-cf982cf0d0f0" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img alt="Screenshot 2026-10-20 at 12 28 50 PM" src="https://github.com/user-attachments/assets/7ec66b0c-be40-43ad-9aa8-eb93d4e878f8" width="100%" />
+    </td>
+    <td align="center" width="50%">
+      <img width="2784" height="1720" alt="image" src="https://github.com/user-attachments/assets/ece0badf-867f-4c1e-a239-aa20f571fb03" width="100%" />
+    </td>
+  </tr>
+</table>
 
 
 ## Credits
