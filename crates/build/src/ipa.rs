@@ -138,17 +138,6 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
         copy(&shim, &app.join("Frameworks/movie_shim.dylib"))?;
         macho::sign(&app.join("Frameworks/movie_shim.dylib"), None)?;
     }
-    // The shader translator, for stages the cache lacks (all of them without a cache).
-    match ios_artifact("sass2spv.dylib") {
-        Some(t) => {
-            copy(&t, &app.join("Frameworks/sass2spv.dylib"))?;
-            macho::sign(&app.join("Frameworks/sass2spv.dylib"), None)?;
-        }
-        None if o.cache.is_none() => {
-            return Err("the shader translator for iOS is missing (ios/sass2spv.dylib next to this program; tools/build_native_sass2spv.sh ios)".into())
-        }
-        None => println!("  [!] No shader translator for iOS: stages the cache lacks will not draw"),
-    }
     let mut packaged_any_mods = false;
     if let Some(m) = o.mods {
         if m.is_dir() {

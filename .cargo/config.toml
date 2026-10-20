@@ -1,0 +1,5 @@
+# Linked as built against the macOS 12 SDK: the kernel then preserves x18 across context switches for this process,
+# so guest code that uses x18 as an ordinary register runs unchanged. Without it (iOS, or a build without this flag),
+# trampoline.rs rewrites guest uses of x18.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-platform_version,macos,11.0,12.0"]

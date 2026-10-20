@@ -337,8 +337,8 @@ fn index() -> Option<&'static Index> {
 /// Stages translated at run time are kept for later starts in <app support>/translated_shaders/<program>/<build>/:
 /// index.txt (records in the cache index format) and <entry>.metal (the specialized source, compiled again when the game
 /// first uses the stage). <program> is the executable's path (an installed app and development builds keep their own),
-/// <build> its and the translator's size and time: a rebuilt engine or translator starts over, and removes the folders
-/// of its earlier builds.
+/// <build> the engine's size and time and the translator's source hash: a rebuilt engine or translator starts over, and
+/// removes the folders of its earlier builds.
 fn runtime_dir() -> Option<&'static std::path::Path> {
     static D: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
     D.get_or_init(|| {
@@ -350,12 +350,11 @@ fn runtime_dir() -> Option<&'static std::path::Path> {
             .join("translated_shaders")
             .join(format!("{:016x}", fnv1a64(exe.as_os_str().as_encoded_bytes())));
         let mut id = Vec::new();
-        for p in [Some(exe), super::csharp_sass2spv::library_path()].into_iter().flatten() {
-            let m = std::fs::metadata(&p).ok()?;
-            let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-            id.extend(m.len().to_le_bytes());
-            id.extend(t.to_le_bytes());
-        }
+        let m = std::fs::metadata(&exe).ok()?;
+        let t = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+        id.extend(m.len().to_le_bytes());
+        id.extend(t.to_le_bytes());
+        id.extend(sass2spv::SOURCE_HASH.as_bytes());
         let name = format!("{:016x}", fnv1a64(&id));
         for e in std::fs::read_dir(&base).into_iter().flatten().flatten() {
             if e.file_name() != name.as_str() && e.path().is_dir() {
@@ -579,35 +578,19 @@ pub unsafe fn lookup_or_translate_dynamic(
 
     // Stages near the end of a mapping: a fixed 64 KiB window would read past it.
     let code_slice = std::slice::from_raw_parts(data as *const u8, crate::cpu::crash_handler::readable_len(data as usize, 0x10000));
-    let (spv_bytes, info, size) = match super::csharp_sass2spv::translate_stage_native(
-        code_slice, stage_hint, cb1, compute_fields,
-    ) {
-        Ok(res) => {
-            let info: sass2spv::ShaderManifest = match serde_json::from_str(&res.manifest_json) {
-                Ok(i) => i,
-                Err(e) => {
-                    eprintln!("[dynamic-shader] manifest parse error: {}", e);
-                    return None;
-                }
-            };
-            (res.spirv, info, res.size)
+    let target = sass2spv::Target::Msl(sass2spv::MSL_ENTRY_PLACEHOLDER.into());
+    let (msl, info, size) = match sass2spv::translate_stage_to(code_slice, stage_hint, cb1, compute_fields, &target) {
+        Ok(p) if !p.msl.is_empty() => {
+            let info = p.manifest();
+            (p.msl, info, p.size as usize)
         }
-        Err(native_err) => {
-            eprintln!("[dynamic-shader] native C# sass2spv failed at 0x{:x} ({native_err}), trying Rust fallback", data);
-            match sass2spv::translate_stage(code_slice, stage, sass2spv::TargetApi::Metal) {
-                Ok((spv, prog_info)) => {
-                    let size = prog_info.code_end;
-                    let info: sass2spv::ShaderManifest = prog_info.into();
-                    (spv, info, size)
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[dynamic-shader] sass2spv fallback error at 0x{:x}: {}",
-                        data, e
-                    );
-                    return None;
-                }
-            }
+        Ok(_) => {
+            eprintln!("[dynamic-shader] sass2spv produced no MSL at 0x{data:x}");
+            return None;
+        }
+        Err(e) => {
+            eprintln!("[dynamic-shader] sass2spv error at 0x{data:x}: {e}");
+            return None;
         }
     };
 
@@ -632,109 +615,8 @@ pub unsafe fn lookup_or_translate_dynamic(
     }
 
     let entry = format!("s_{full:016x}");
-    let msl_raw = match super::spirv_cross::compile_spirv_to_msl(&spv_bytes, &entry, stage) {
-        Ok(msl) => msl,
-        Err(e) => {
-            let stage_arg = match stage {
-                sass2spv::ShaderStage::Vertex => "vert",
-                sass2spv::ShaderStage::Fragment => "frag",
-                sass2spv::ShaderStage::Compute => "comp",
-                _ => "vert",
-            };
-
-            let spawn_spirv_cross = |binary: &str| {
-                let mut cmd = std::process::Command::new(binary);
-                cmd.args([
-                    "-",
-                    "--msl",
-                    "--msl-version",
-                    "30000",
-                    "--msl-decoration-binding",
-                    "--rename-entry-point",
-                    "main",
-                    &entry,
-                    stage_arg,
-                ]);
-                cmd.stdin(std::process::Stdio::piped());
-                cmd.stdout(std::process::Stdio::piped());
-                cmd.stderr(std::process::Stdio::piped());
-                cmd.spawn()
-            };
-
-            let mut child = match spawn_spirv_cross("spirv-cross") {
-                Ok(c) => c,
-                Err(_) => match spawn_spirv_cross("/opt/homebrew/bin/spirv-cross") {
-                    Ok(c) => c,
-                    Err(err) => {
-                        eprintln!("[dynamic-shader] In-process spirv-cross failed ({e}) and CLI spawn failed: {err}");
-                        return None;
-                    }
-                },
-            };
-
-            let stdout = child.stdout.take();
-            let stderr = child.stderr.take();
-
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                let _ = stdin.write_all(&spv_bytes);
-                drop(stdin);
-            }
-
-            let start = std::time::Instant::now();
-            let status = loop {
-                match child.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) => {
-                        if start.elapsed() > std::time::Duration::from_secs(5) {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            eprintln!("[dynamic-shader] spirv-cross timed out after 5s and was killed");
-                            break None;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                    Err(err) => {
-                        eprintln!("[dynamic-shader] spirv-cross try_wait error: {err}");
-                        break None;
-                    }
-                }
-            };
-
-            let Some(status) = status else {
-                return None;
-            };
-
-            let mut out_bytes = Vec::new();
-            let mut err_bytes = Vec::new();
-            use std::io::Read;
-            if let Some(mut r) = stdout {
-                let _ = r.read_to_end(&mut out_bytes);
-            }
-            if let Some(mut r) = stderr {
-                let _ = r.read_to_end(&mut err_bytes);
-            }
-
-            if !status.success() {
-                eprintln!(
-                    "[dynamic-shader] spirv-cross failed: {}",
-                    String::from_utf8_lossy(&err_bytes)
-                );
-                return None;
-            }
-
-            match String::from_utf8(out_bytes) {
-                Ok(s) => s,
-                Err(err) => {
-                    eprintln!("[dynamic-shader] MSL utf8 error: {err}");
-                    return None;
-                }
-            }
-        }
-    };
-
+    let msl_raw = msl.replace(sass2spv::MSL_ENTRY_PLACEHOLDER, &entry);
     let (specialized, attrs, colors, varyings) = super::msl_specialize::specialize(&msl_raw);
-
 
     let lib = compile_msl(&specialized, &entry)?;
     super::translated::register_dynamic_library(&entry, lib);

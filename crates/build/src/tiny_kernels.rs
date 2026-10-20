@@ -360,7 +360,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
         }
         // Results and plain copies of them (`uint _68 = _176;`) must not be read anywhere else.
         let mut tainted: Vec<String> = regex::Regex::new(r"(\w+) = atomic_fetch_").unwrap().captures_iter(body).map(|c| c[1].to_string()).collect();
-        let copy = regex::Regex::new(r"\w+ (\w+) = (\w+);").unwrap();
+        let copy = regex::Regex::new(r"\b(\w+) = (\w+);").unwrap();
         loop {
             let more: Vec<String> = copy.captures_iter(body).filter(|c| tainted.contains(&c[2].to_string()) && !tainted.contains(&c[1].to_string()))
                 .map(|c| c[1].to_string()).collect();
@@ -370,7 +370,9 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
             tainted.extend(more);
         }
         for t in &tainted {
-            let uses = regex::Regex::new(&format!(r"\b{}\b", regex::escape(t))).unwrap().find_iter(body).count();
+            // A declaration without a value (`uint _68;`) is not a read.
+            let decls = regex::Regex::new(&format!(r"(?m)^\s*\w+ {};$", regex::escape(t))).unwrap().find_iter(body).count();
+            let uses = regex::Regex::new(&format!(r"\b{}\b", regex::escape(t))).unwrap().find_iter(body).count() - decls;
             let copies_from = copy.captures_iter(body).filter(|c| &c[2] == t.as_str()).count();
             if uses > 1 + copies_from {
                 return tk_none(line!());

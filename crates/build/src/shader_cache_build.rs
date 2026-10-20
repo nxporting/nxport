@@ -10,8 +10,8 @@
 //         <out>/failures.txt            stages not translated, with the phase and message
 //         <out>/work/                   per-stage MSL and AIR, state.json (what the next build can reuse)
 //
-// Pipeline per stage: SASS -(tools/sass2spv)-> SPIR-V -(spirv-cross)-> MSL -(msl_specialize)-> MSL with
-// function-constant typed inputs/outputs -(xcrun metal)-> AIR, then the AIRs are linked into metallibs in chunks.
+// Pipeline per stage: SASS -(sass2spv)-> MSL (or SPIR-V -(spirv-cross)-> MSL with --spirv-cross) -(msl_specialize)-> MSL
+// with function-constant typed inputs/outputs -(xcrun metal)-> AIR, then the AIRs are linked into metallibs in chunks.
 //
 // Stage identity. The dump window is 64 KB, but the real stage is shorter and its tail is whatever followed it in
 // memory, so the hash covers only [0, PREAMBLE + decoded size). The engine does not know the size, so the index is
@@ -41,12 +41,12 @@ fn xcross_stage(stage: ShaderStage) -> &'static str {
     stage.xcross_arg()
 }
 
-fn shard_prefix(key: &str) -> &str {
+/// One of the 256 work subdirectories: the first two hex digits of the name, else (names such as r3_<hex>_s0) a hash of it.
+fn shard_prefix(key: &str) -> String {
     let clean = key.strip_prefix("s_").unwrap_or(key);
-    if clean.len() >= 2 {
-        &clean[..2]
-    } else {
-        "00"
+    match clean.get(..2) {
+        Some(p) if p.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) => p.to_string(),
+        _ => format!("{:02x}", fnv1a64(key.as_bytes()) as u8),
     }
 }
 
@@ -190,7 +190,6 @@ pub struct Options {
     pub out_dir: PathBuf,
     /// Shared control sections by weak hash (engine: --dump-ctrl); stages with their own <stem>.ctrl do not need it.
     pub ctrl_dir: Option<PathBuf>,
-    pub sass2spv: PathBuf,
     pub jobs: usize,
     /// Only write each stage's specialized MSL here (named by entry point) and stop; no Metal compile.
     pub msl_out: Option<PathBuf>,
@@ -341,34 +340,38 @@ enum Translated {
     Failed(String, String),
 }
 
-/// Runs the decompiler once over `paths`: {stem: result}.
+/// Translates `paths` to MSL (<stem>.msl) or, with --spirv-cross, SPIR-V (<stem>.spv), plus <stem>.spv.json, into
+/// `spv_dir`; {stem: result}.
 fn translate_batch(paths: &[PathBuf], spv_dir: &Path, o: &Options) -> HashMap<String, Translated> {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let listing = spv_dir.join(format!("batch_{}_{}.txt", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    let text: Vec<String> = paths.iter().map(|p| format!("{}\t{}", p.display(), ctrl_fields(p, o.ctrl_dir.as_deref()))).collect();
+    let msl = !crate::translation::get().spirv_cross;
+    let target = if msl { sass2spv::Target::Msl(sass2spv::MSL_ENTRY_PLACEHOLDER.into()) } else { sass2spv::Target::Spirv };
     let mut out = HashMap::new();
-    if std::fs::write(&listing, text.join("\n")).is_err() {
-        return out;
-    }
-    let mut cmd = Command::new(&o.sass2spv);
-    cmd.arg("--batch").arg(&listing).arg(spv_dir);
-    let r = run_timeout(cmd, 4096, 300);
-    let _ = std::fs::remove_file(&listing);
-    let Ok(r) = r else { return out };
-    for line in r.stdout.lines() {
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() >= 4 && f[0] == "RESULT" {
-            // Size is counted from the code start: 0x30 (graphics, after the preamble) or 0x100 (compute).
-            let res = if f[2] == "OK" {
-                let base: usize = f[4].parse().unwrap_or(0);
-                let extra = f.get(5).and_then(|s| s.parse::<usize>().ok()).map_or(0, |c| c - PREAMBLE);
-                let stage = ShaderStage::from_str_name(f[3]).unwrap_or(ShaderStage::Vertex);
-                Translated::Ok { stage, size: base + extra }
-            } else {
-                Translated::Failed("sass2spv".into(), f[3].chars().take(120).collect())
-            };
-            out.insert(f[1].to_string(), res);
-        }
+    for p in paths {
+        let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
+        let fields: Vec<i32> = ctrl_fields(p, o.ctrl_dir.as_deref()).split('\t').map(|f| f.parse().unwrap_or(-1)).collect();
+        let compute = (fields.len() > 1).then(|| [fields[1], fields[2], fields[3], fields[4]]);
+        let res = std::fs::read(p).map_err(|e| e.to_string()).and_then(|code| {
+            std::panic::catch_unwind(|| sass2spv::translate_stage_to(&code, if compute.is_some() { 3 } else { 0 }, fields[0], compute, &target))
+                .unwrap_or_else(|_| Err("translator panicked".into()))
+        });
+        let res = match res {
+            Ok(prog) if !prog.binary_code.is_empty() || !prog.msl.is_empty() => {
+                let (file, bytes) = if msl { (format!("{stem}.msl"), prog.msl.as_bytes()) } else { (format!("{stem}.spv"), &prog.binary_code[..]) };
+                match std::fs::write(spv_dir.join(file), bytes)
+                    .and_then(|_| std::fs::write(spv_dir.join(format!("{stem}.spv.json")), sass2spv::manifest_json(&prog)))
+                {
+                    // Size is counted from the code start: 0x30 (graphics, after the preamble) or 0x100 (compute).
+                    Ok(()) => {
+                        let extra = if prog.info.stage == ShaderStage::Compute { 0x100 } else { 0x30 } - PREAMBLE;
+                        Translated::Ok { stage: prog.info.stage, size: prog.size as usize + extra }
+                    }
+                    Err(e) => Translated::Failed("write".into(), e.to_string()),
+                }
+            }
+            Ok(_) => Translated::Failed("sass2spv".into(), "empty binary".into()),
+            Err(e) => Translated::Failed("sass2spv".into(), e.lines().next().unwrap_or("").chars().take(120).collect()),
+        };
+        out.insert(stem, res);
     }
     out
 }
@@ -437,7 +440,7 @@ pub fn readonly_sbuffers(msl: &str) -> Vec<u32> {
     v
 }
 
-/// spirv-cross + MSL specialization for a stage the decompiler translated: (record, tag) or (phase, message).
+/// The translator's MSL (or spirv-cross's, with --spirv-cross) + MSL specialization for a stage the decompiler translated: (record, tag) or (phase, message).
 fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, size: usize, o: &Options) -> Result<(StageRecord, String), (String, String)> {
     let data = std::fs::read(code).map_err(|e| ("read".to_string(), e.to_string()))?;
     let tag = code.file_stem().unwrap().to_string_lossy().into_owned();
@@ -448,28 +451,36 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
     let weak = fnv1a64(&data[..WEAK_LEN.min(data.len())]);
     let entry = format!("s_{full:016x}");
     let msl_path = shard_dir(work, &tag).join(format!("{tag}.metal"));
-    let mut cmd = Command::new("spirv-cross");
-    cmd.args(["--msl", "--msl-version", "30000", "--msl-decoration-binding", "--rename-entry-point", "main", &entry])
-        .arg(xcross_stage(stage))
-        .arg(&spv)
-        .arg("--output")
-        .arg(&msl_path);
-    let r = run_timeout(cmd, MAX_RSS_MB, 15).map_err(|e| {
-        let _ = std::fs::remove_file(&spv);
-        let _ = std::fs::remove_file(&manifest_path);
-        ("spirv-cross".to_string(), e)
-    })?;
-    if r.status != Some(0) {
-        let _ = std::fs::remove_file(&spv);
-        let _ = std::fs::remove_file(&manifest_path);
-        let msg = if r.stderr.is_empty() { r.stdout } else { r.stderr };
-        return Err(("spirv-cross".into(), msg.chars().take(120).collect::<String>().trim().to_string()));
-    }
-    let raw = std::fs::read_to_string(&msl_path).map_err(|e| {
-        let _ = std::fs::remove_file(&spv);
-        let _ = std::fs::remove_file(&manifest_path);
-        ("spirv-cross".to_string(), e.to_string())
-    })?;
+    let raw = if !crate::translation::get().spirv_cross {
+        let src = spv_dir.join(format!("{tag}.msl"));
+        let raw = std::fs::read_to_string(&src).map_err(|e| ("msl".to_string(), e.to_string()))?;
+        let _ = std::fs::remove_file(&src);
+        raw.replace(sass2spv::MSL_ENTRY_PLACEHOLDER, &entry)
+    } else {
+        let mut cmd = Command::new("spirv-cross");
+        cmd.args(["--msl", "--msl-version", "30000", "--msl-decoration-binding", "--rename-entry-point", "main", &entry])
+            .arg(xcross_stage(stage))
+            .arg(&spv)
+            .arg("--output")
+            .arg(&msl_path);
+        let r = run_timeout(cmd, MAX_RSS_MB, 15).map_err(|e| {
+            let _ = std::fs::remove_file(&spv);
+            let _ = std::fs::remove_file(&manifest_path);
+            ("spirv-cross".to_string(), e)
+        })?;
+        if r.status != Some(0) {
+            let _ = std::fs::remove_file(&spv);
+            let _ = std::fs::remove_file(&manifest_path);
+            let msg = if r.stderr.is_empty() { r.stdout } else { r.stderr };
+            return Err(("spirv-cross".into(), msg.chars().take(120).collect::<String>().trim().to_string()));
+        }
+        let raw = std::fs::read_to_string(&msl_path).map_err(|e| {
+            let _ = std::fs::remove_file(&spv);
+            let _ = std::fs::remove_file(&manifest_path);
+            ("spirv-cross".to_string(), e.to_string())
+        })?;
+        raw
+    };
     let (mut text, attrs, colors, varyings) = specialize(&raw);
     // --early-tests: honour the early-fragment-tests flag. Off by default: with it TotK's tile classification
     // (fragment shaders marking tiles in a storage buffer) loses marks and most of the screen goes unlit
@@ -622,11 +633,9 @@ fn compile_batch(items: &[(String, String)], work: &Path) -> HashMap<String, Opt
 }
 
 /// Hash of everything that changes what a stage translates to: the decompiler, the MSL passes, the tool flags.
-fn fingerprint(o: &Options) -> String {
+fn fingerprint() -> String {
     let mut bytes = Vec::new();
-    if let Ok(d) = std::fs::read(&o.sass2spv) {
-        bytes.extend(d);
-    }
+    bytes.extend(sass2spv::SOURCE_HASH.as_bytes());
     bytes.extend(include_str!("../../engine/src/metal/msl_specialize.rs").as_bytes());
     bytes.extend(include_str!("tiny_kernels.rs").as_bytes());
     bytes.extend(include_str!("batch_kernels.rs").as_bytes());
@@ -837,9 +846,6 @@ pub fn build(o: &Options) -> Result<(), String> {
         println!("[+] wrote {} ({} stages)", out_dir.join("index.txt").display(), records.len());
         return Ok(());
     }
-    if !o.sass2spv.exists() {
-        return Err(format!("{} not found (build it with cargo build --release -p sass2spv)", o.sass2spv.display()));
-    }
 
     // Tools run with cwd=work, so every path handed to them must be absolute.
     let mut codes: Vec<PathBuf> = Vec::new();
@@ -862,7 +868,7 @@ pub fn build(o: &Options) -> Result<(), String> {
     println!("[+] {} stages", codes.len());
 
     let t0 = std::time::Instant::now();
-    let fp = fingerprint(o);
+    let fp = fingerprint();
     let (known, known_fail) = load_state(&state_path, &fp);
     let mut records: BTreeMap<u64, StageRecord> = BTreeMap::new();
     let mut failures: Vec<(String, String, String)> = Vec::new();
@@ -898,7 +904,7 @@ pub fn build(o: &Options) -> Result<(), String> {
     }
     println!("[+] {reused} stages reused from the previous build, {} to translate", todo.len());
 
-    // Phase 1: decompile in batches (one .NET process per batch).
+    // Phase 1: decompile in batches.
     let spv_dir = work.join("spv");
     std::fs::create_dir_all(&spv_dir).map_err(|e| e.to_string())?;
     let batches: Vec<Vec<PathBuf>> = todo.chunks(BATCH).map(|b| b.iter().map(|(c, _)| c.clone()).collect()).collect();
@@ -920,7 +926,7 @@ pub fn build(o: &Options) -> Result<(), String> {
     let ok = translated.values().filter(|t| matches!(t, Translated::Ok { .. })).count();
     println!("[+] decompiler done: {ok} of {} stages translated ({:.0}s)", todo.len(), t0.elapsed().as_secs_f64());
 
-    // Phase 2a: spirv-cross + MSL specialization per stage.
+    // Phase 2a: MSL specialization per stage (after spirv-cross with --spirv-cross).
     let name_of = |c: &Path| c.file_name().unwrap().to_string_lossy().into_owned();
     let mut jobs: Vec<(PathBuf, u64, ShaderStage, usize)> = Vec::new();
     for (code, weak) in &todo {
@@ -964,7 +970,7 @@ pub fn build(o: &Options) -> Result<(), String> {
         println!("[+] wrote {} MSL files to {}", prepared.len(), msl_out.display());
         return Ok(());
     }
-    println!("[+] spirv-cross done for {} stages ({:.0}s), compiling Metal in batches of {COMPILE_BATCH}", prepared.len(), t0.elapsed().as_secs_f64());
+    println!("[+] MSL prepared for {} stages ({:.0}s), compiling Metal in batches of {COMPILE_BATCH}", prepared.len(), t0.elapsed().as_secs_f64());
 
     // Phase 2b: Metal compile, many files per launch.
     let groups: Vec<Vec<(String, String)>> = prepared

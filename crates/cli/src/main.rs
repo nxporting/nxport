@@ -131,9 +131,6 @@ enum Shaders {
         /// Only rewrite the index from the last build's state (constant-buffer extents recomputed from the kept MSL)
         #[arg(long)]
         index_only: bool,
-        /// The decompiler wrapper
-        #[arg(long, default_value = "tools/sass2spv.sh")]
-        sass2spv: PathBuf,
         /// Parallel jobs (default: a third of the cores)
         #[arg(short)]
         j: Option<usize>,
@@ -194,11 +191,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
             extract_shaders::extract_all(&romfs, &out, &dirs, ctrl_out.as_deref(), None)?;
         }
-        Command::Shaders(Shaders::Build { dumps, out, ctrl_dir, msl_out, index_only, sass2spv, j, translation }) => {
+        Command::Shaders(Shaders::Build { dumps, out, ctrl_dir, msl_out, index_only, j, translation }) => {
             translation::install(translation);
             // A third of the cores by default: the build is thousands of short tool launches.
             let jobs = j.unwrap_or_else(|| (std::thread::available_parallelism().map_or(6, |n| n.get()) / 3).max(2));
-            shader_cache_build::build(&shader_cache_build::Options { dump_dirs: dumps, out_dir: out, ctrl_dir, sass2spv, jobs, msl_out, index_only, on_progress: None })?;
+            shader_cache_build::build(&shader_cache_build::Options { dump_dirs: dumps, out_dir: out, ctrl_dir, jobs, msl_out, index_only, on_progress: None })?;
         }
         Command::Shaders(Shaders::BuildIos { cache, out, sim, j }) => shader_cache_build::build_ios(&cache, &out, j, sim, None)?,
         Command::Shaders(Shaders::Specialize { input, output, meta, translation }) => {
