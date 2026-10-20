@@ -732,8 +732,7 @@ unsafe fn start_thread(r: &mut [u64; 8]) -> u64 {
             crate::cpu::tls::install_guest_tls();
             crate::cpu::trampoline::init_worker_thread_x18();
             CURRENT_SVC_THREAD_DONE.with(|c| *c.borrow_mut() = Some(done.clone()));
-            let f: unsafe extern "C" fn(usize) = std::mem::transmute(entry);
-            f(arg);
+            crate::guest::call(entry, &[arg as u64]);
             mark_done(&done);
         })
         .map_or(RESULT_NOT_IMPLEMENTED, |_| RESULT_OK)
