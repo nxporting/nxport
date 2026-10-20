@@ -36,6 +36,7 @@ mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
 mod pass_prof;
+pub mod pipeline_list;
 mod programs;
 mod report_guard;
 pub mod shader_cache;

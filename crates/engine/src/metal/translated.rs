@@ -108,7 +108,10 @@ pub(super) enum AsyncPipe {
 }
 
 enum SlotState {
+    /// Queued.
     Pending,
+    /// Being built (on a pipeline thread or a draw's thread).
+    Running,
     Ready(Retained<ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>>),
     Failed,
 }
@@ -119,6 +122,19 @@ unsafe impl Sync for Slot {}
 struct SendJob(PipeJob, std::sync::Arc<Slot>);
 unsafe impl Send for SendJob {}
 
+impl Slot {
+    fn new() -> std::sync::Arc<Slot> {
+        std::sync::Arc::new(Slot(Mutex::new(SlotState::Pending), std::sync::Condvar::new()))
+    }
+    fn finish(&self, built: Option<Retained<ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>>>) {
+        *self.0.lock().unwrap() = match built {
+            Some(p) => SlotState::Ready(p),
+            None => SlotState::Failed,
+        };
+        self.1.notify_all();
+    }
+}
+
 /// Async-compiled pipelines by key (pending and finished), and pipelines skipped this frame (counted for --log-hitch).
 static ASYNC_SLOTS: OnceLock<Mutex<HashMap<Vec<u64>, std::sync::Arc<Slot>>>> = OnceLock::new();
 pub(super) static ASYNC_SKIPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -128,70 +144,211 @@ pub(super) static ASYNC_STARTED: std::sync::atomic::AtomicU64 =
 pub(super) static ASYNC_WAITED_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-fn pipe_queue() -> &'static (
-    Mutex<std::collections::VecDeque<SendJob>>,
-    std::sync::Condvar,
-) {
-    static Q: OnceLock<(
-        Mutex<std::collections::VecDeque<SendJob>>,
-        std::sync::Condvar,
-    )> = OnceLock::new();
+/// Pipeline thread work: pipelines draws wait for, then the pipeline list's (pipeline_list::precompile).
+#[derive(Default)]
+struct PipeQueue {
+    draws: std::collections::VecDeque<SendJob>,
+    listed: std::collections::VecDeque<SendJob>,
+    /// Listed pipelines queued and built, failures, compile time (for the summary when the list is done).
+    listed_n: usize,
+    listed_done: usize,
+    listed_failed: usize,
+    listed_ns: u64,
+}
+
+fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
+    static Q: OnceLock<(Mutex<PipeQueue>, std::sync::Condvar)> = OnceLock::new();
     Q.get_or_init(|| {
         let n: usize = crate::settings::get().graphics.pipeline_threads;
         for i in 0..n.max(1) {
             std::thread::Builder::new()
                 .name(format!("pipe-compile-{}", i))
                 .spawn(|| loop {
-                    let job = {
+                    let (job, listed) = {
                         let (q, cv) = pipe_queue();
                         let mut g = q.lock().unwrap();
                         loop {
-                            if let Some(j) = g.pop_front() {
-                                break j;
+                            if let Some(j) = g.draws.pop_front() {
+                                break (j, false);
+                            }
+                            if let Some(j) = g.listed.pop_front() {
+                                break (j, true);
                             }
                             g = cv.wait(g).unwrap();
                         }
                     };
                     let SendJob(j, slot) = job;
-                    let t0 = std::time::Instant::now();
-                    let built = super::GFX.get().and_then(|g| {
-                        let lib = g.shader_lib.as_ref()?;
-                        g.build_translated_pipeline(
-                            lib,
-                            &j.vs,
-                            j.fs.as_ref(),
-                            &j.attrs,
-                            &j.streams_used,
-                            &j.streams,
-                            &j.color_pfs,
-                            j.depth_pf,
-                            j.depth_gl,
-                            j.point_size,
-                            &j.blends,
-                            j.color_state,
-                            j.channel_mask,
-                            j.blend_color,
-                            j.batched,
-                        )
-                    });
-                    super::HITCH_PIPE_NS.fetch_add(
-                        t0.elapsed().as_nanos() as u64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                    super::HITCH_PIPE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    *slot.0.lock().unwrap() = match built {
-                        Some(p) => SlotState::Ready(p),
-                        None => SlotState::Failed,
+                    // A draw may have taken the job over (build_now) or a listed job may have been moved ahead.
+                    let take = {
+                        let mut st = slot.0.lock().unwrap();
+                        let take = matches!(*st, SlotState::Pending);
+                        if take {
+                            *st = SlotState::Running;
+                        }
+                        take
                     };
-                    slot.1.notify_all();
+                    let (mut ok, mut ns) = (true, 0);
+                    if take {
+                        let t0 = std::time::Instant::now();
+                        let built = build_job(&j);
+                        ns = t0.elapsed().as_nanos() as u64;
+                        ok = built.is_some();
+                        slot.finish(built);
+                    }
+                    if !listed {
+                        super::HITCH_PIPE_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
+                        super::HITCH_PIPE_N.fetch_add(take as u64, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
+                    let mut g = pipe_queue().0.lock().unwrap();
+                    g.listed_done += 1;
+                    g.listed_failed += !ok as usize;
+                    g.listed_ns += ns;
+                    if g.listed.is_empty() && g.listed_done == g.listed_n {
+                        println!(
+                            "[+] Pipelines: {} listed compiled ({} failed), {:.1} s of compile time",
+                            g.listed_done,
+                            g.listed_failed,
+                            g.listed_ns as f64 / 1e9
+                        );
+                    }
                 })
                 .expect("spawn pipeline compile thread");
         }
-        (
-            Mutex::new(std::collections::VecDeque::new()),
-            std::sync::Condvar::new(),
-        )
+        (Mutex::new(PipeQueue::default()), std::sync::Condvar::new())
     })
+}
+
+fn build_job(j: &PipeJob) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>>> {
+    let g = super::GFX.get()?;
+    let lib = g.shader_lib.as_ref()?;
+    g.build_translated_pipeline(
+        lib,
+        &j.vs,
+        j.fs.as_ref(),
+        &j.attrs,
+        &j.streams_used,
+        &j.streams,
+        &j.color_pfs,
+        j.depth_pf,
+        j.depth_gl,
+        j.point_size,
+        &j.blends,
+        j.color_state,
+        j.channel_mask,
+        j.blend_color,
+        j.batched,
+    )
+}
+
+fn push_job(job: SendJob, listed: bool) {
+    let (q, cv) = pipe_queue();
+    let mut g = q.lock().unwrap();
+    if listed {
+        g.listed.push_back(job);
+        g.listed_n += 1;
+    } else {
+        g.draws.push_back(job);
+    }
+    drop(g);
+    cv.notify_one();
+}
+
+/// Moves a listed pipeline's job ahead of the rest of the list (a draw waits for it).
+fn promote(slot: &std::sync::Arc<Slot>) {
+    let mut g = pipe_queue().0.lock().unwrap();
+    if let Some(i) = g.listed.iter().position(|j| std::sync::Arc::ptr_eq(&j.1, slot)) {
+        let j = g.listed.remove(i).unwrap();
+        g.draws.push_front(j);
+        g.listed_n -= 1;
+    }
+}
+
+/// Queues a pipeline-list entry for compilation: false when its shaders are not in the cache, it was recorded under
+/// another window origin or depth mode, or its pipeline is already known.
+pub(super) fn queue_precompile(e: &super::pipeline_list::Entry) -> bool {
+    use super::shader_cache::by_entry;
+    if e.y_negate != y_negate() || e.depth_gl != (crate::nvn::api::depth_mode() == 0) {
+        return false;
+    }
+    let Some(vs) = by_entry(&e.vs) else { return false };
+    let fs = match &e.fs {
+        Some(f) => match by_entry(f) {
+            Some(f) => Some(f),
+            None => return false,
+        },
+        None => None,
+    };
+    let color_pfs = e.color_pfs.map(|f| MTLPixelFormat(f as _));
+    let depth_pf = MTLPixelFormat(e.depth_pf as _);
+    let point_size = f32::from_bits(e.point_size);
+    let l = derive_layout(vs, &e.attr_bits, &e.streams);
+    let key = pipeline_key(
+        point_size,
+        vs,
+        fs,
+        e.depth_gl,
+        e.color_state,
+        e.channel_mask,
+        depth_pf,
+        &color_pfs,
+        &e.blends,
+        &l.attr_descs,
+        &l.streams_used,
+        &l.streams_eff,
+    );
+    let slot = {
+        let mut m = ASYNC_SLOTS.get_or_init(Default::default).lock().unwrap();
+        if m.contains_key(key.as_slice()) {
+            return false;
+        }
+        let s = Slot::new();
+        m.insert(key.to_vec(), s.clone());
+        s
+    };
+    let job = PipeJob {
+        vs: vs.clone(),
+        fs: fs.cloned(),
+        attrs: l.attr_descs.to_vec(),
+        streams_used: l.streams_used,
+        streams: l.streams_eff.to_vec(),
+        color_pfs: color_pfs.to_vec(),
+        depth_pf,
+        depth_gl: e.depth_gl,
+        point_size,
+        blends: e.blends,
+        color_state: e.color_state,
+        channel_mask: e.channel_mask,
+        blend_color: [0.0; 4],
+        batched: false,
+    };
+    push_job(SendJob(job, slot), true);
+    true
+}
+
+/// The pipeline for `key` built on this thread, unless a pipeline thread has it (listed): then its result, waiting for
+/// it if it is being built.
+fn build_now(
+    key: &[u64],
+    build: impl FnOnce() -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>>>,
+) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>>> {
+    let slot = ASYNC_SLOTS.get().and_then(|m| m.lock().unwrap().get(key).cloned());
+    let Some(slot) = slot else { return build() };
+    let mut g = slot.0.lock().unwrap();
+    loop {
+        match &*g {
+            SlotState::Ready(p) => return Some(p.clone()),
+            SlotState::Failed => return None,
+            SlotState::Running => g = slot.1.wait(g).unwrap(),
+            SlotState::Pending => {
+                *g = SlotState::Running;
+                drop(g);
+                let built = build();
+                slot.finish(built.clone());
+                return built;
+            }
+        }
+    }
 }
 
 /// async_pipeline without waiting (the issuer thread's batched pipelines, metal/batch.rs): `job` is needed on the first
@@ -206,14 +363,10 @@ pub(super) fn async_pipeline_nowait(key: &[u64], job: Option<PipeJob>) -> AsyncP
                 let Some(job) = job else {
                     return AsyncPipe::Failed;
                 };
-                let s = std::sync::Arc::new(Slot(
-                    Mutex::new(SlotState::Pending),
-                    std::sync::Condvar::new(),
-                ));
+                let s = Slot::new();
                 m.insert(key.to_vec(), s.clone());
-                let (q, cv) = pipe_queue();
-                q.lock().unwrap().push_back(SendJob(job, s.clone()));
-                cv.notify_one();
+                drop(m);
+                push_job(SendJob(job, s.clone()), false);
                 s
             }
         }
@@ -222,7 +375,7 @@ pub(super) fn async_pipeline_nowait(key: &[u64], job: Option<PipeJob>) -> AsyncP
     match &*g {
         SlotState::Ready(p) => AsyncPipe::Ready(p.clone()),
         SlotState::Failed => AsyncPipe::Failed,
-        SlotState::Pending => AsyncPipe::Pending,
+        SlotState::Pending | SlotState::Running => AsyncPipe::Pending,
     }
 }
 
@@ -234,10 +387,7 @@ pub(super) fn async_pipeline(key: &[u64], job: PipeJob) -> AsyncPipe {
         match m.get(key) {
             Some(s) => (s.clone(), false),
             None => {
-                let s = std::sync::Arc::new(Slot(
-                    Mutex::new(SlotState::Pending),
-                    std::sync::Condvar::new(),
-                ));
+                let s = Slot::new();
                 m.insert(key.to_vec(), s.clone());
                 (s, true)
             }
@@ -245,9 +395,9 @@ pub(super) fn async_pipeline(key: &[u64], job: PipeJob) -> AsyncPipe {
     };
     if new {
         ASYNC_STARTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (q, cv) = pipe_queue();
-        q.lock().unwrap().push_back(SendJob(job, slot.clone()));
-        cv.notify_one();
+        push_job(SendJob(job, slot.clone()), false);
+    } else if matches!(*slot.0.lock().unwrap(), SlotState::Pending) {
+        promote(&slot);
     }
     // The wait is a per-frame budget (a scene change brings dozens of new pipelines at once).
     static WAIT: OnceLock<u64> = OnceLock::new();
@@ -260,7 +410,7 @@ pub(super) fn async_pipeline(key: &[u64], job: PipeJob) -> AsyncPipe {
         .wait_timeout_while(
             g,
             std::time::Duration::from_micros(if new { left } else { 0 }),
-            |s| matches!(s, SlotState::Pending),
+            |s| matches!(s, SlotState::Pending | SlotState::Running),
         )
         .unwrap();
     ASYNC_WAITED_US.fetch_add(
@@ -270,7 +420,7 @@ pub(super) fn async_pipeline(key: &[u64], job: PipeJob) -> AsyncPipe {
     let r = match &*g {
         SlotState::Ready(p) => AsyncPipe::Ready(p.clone()),
         SlotState::Failed => AsyncPipe::Failed,
-        SlotState::Pending => AsyncPipe::Pending,
+        SlotState::Pending | SlotState::Running => AsyncPipe::Pending,
     };
     drop(g);
     // Finished slots stay: the encode worker and the Presentation Thread keep separate pipeline caches (WorkerCtx), and
@@ -1183,6 +1333,135 @@ pub(crate) struct LayoutMemo {
     streams_eff: smallvec::SmallVec<[u64; 16]>,
     repack: Vec<(usize, u64, Vec<(usize, usize, usize)>)>,
     pipe: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+}
+
+/// Adds a draw's pipeline to the pipeline list.
+fn record_pipeline(
+    vs: &CachedStage,
+    fs: Option<&CachedStage>,
+    p: &DrawPacket,
+    point_size: f32,
+    depth_gl: bool,
+    blends: &[u64; 8],
+) {
+    super::pipeline_list::record(super::pipeline_list::Entry {
+        vs: vs.entry.clone(),
+        fs: fs.map(|f| f.entry.clone()),
+        point_size: point_size.to_bits(),
+        depth_gl,
+        y_negate: y_negate(),
+        color_state: p.color_state,
+        channel_mask: p.channel_mask,
+        depth_pf: p.depth_pf.0 as u64,
+        color_pfs: p.color_pfs.map(|f| f.0 as u64),
+        blends: *blends,
+        attr_bits: p.attr_bits.to_vec(),
+        streams: p.vertex_streams.to_vec(),
+    });
+}
+
+/// A draw's vertex attribute descriptors and stream layout (the vertex half of LayoutMemo).
+pub(super) struct Layout {
+    pub(super) attr_descs: smallvec::SmallVec<[(u32, MTLVertexFormat, usize, usize, i32); 16]>,
+    pub(super) streams_used: [bool; MAX_STREAMS],
+    pub(super) needs_default_attr: bool,
+    pub(super) streams_eff: smallvec::SmallVec<[u64; 16]>,
+    pub(super) repack: Vec<(usize, u64, Vec<(usize, usize, usize)>)>,
+}
+
+/// The vertex layout for `vs` with NVN vertex attribute bits (per entry of vs.attrs) and stream bits.
+pub(super) fn derive_layout(vs: &CachedStage, attr_bits: &[Option<u32>], vertex_streams: &[u64]) -> Layout {
+    let mut attr_descs: smallvec::SmallVec<[(u32, MTLVertexFormat, usize, usize, i32); 16]> =
+        smallvec::SmallVec::new(); // loc, fmt, bufIdx, offset, kind
+    let mut streams_used = [false; MAX_STREAMS];
+    let mut needs_default_attr = false;
+    for (attr_i, &loc) in vs.attrs.iter().enumerate() {
+        let bits = attr_bits.get(attr_i).copied().flatten();
+        let va = bits.map(decode_attr);
+        match va.as_ref().and_then(|a| vertex_format(a.format).map(|f| (a, f))) {
+            Some((a, (fmt, kind))) if a.stream < MAX_STREAMS => {
+                streams_used[a.stream] = true;
+                attr_descs.push((loc, fmt, VB_BASE - a.stream, a.offset as usize, kind));
+            }
+            _ => {
+                needs_default_attr = true;
+                attr_descs.push((loc, MTLVertexFormat::Float4, DEFAULT_ATTR_BUFFER, 0, 0));
+            }
+        }
+    }
+
+    // Metal needs 4-byte aligned vertex strides and attribute offsets; NVN does not (TotK's skinned shadow meshes use
+    // a 14-byte stride with attributes at offsets 6 and 10). Metal misfetched them: garbage bone indices, skinning
+    // matrices read out of bounds, vertices flung across the screen. Such per-vertex streams are repacked on the CPU
+    // into an aligned layout (each attribute copied to its own aligned slot) for the vertices the draw fetches.
+    let mut streams_eff: smallvec::SmallVec<[u64; 16]> = vertex_streams.iter().copied().collect();
+    let mut repack: Vec<(usize, u64, Vec<(usize, usize, usize)>)> = Vec::new(); // (stream, new stride, [(src off, dst off, len)])
+    for s in 0..MAX_STREAMS {
+        if !streams_used[s] {
+            continue;
+        }
+        let sbits = vertex_streams.get(s).copied().unwrap_or(0);
+        let (sstride, sdiv) = (sbits & 0xFFFF_FFFF, sbits >> 32);
+        let buf_idx = VB_BASE - s;
+        let misaligned = sstride % 4 != 0 || attr_descs.iter().any(|a| a.2 == buf_idx && a.3 % 4 != 0);
+        if sstride == 0 || sdiv != 0 || !misaligned {
+            continue;
+        }
+        let mut cursor = 0usize;
+        let mut copies = Vec::new();
+        for a in attr_descs.iter_mut().filter(|a| a.2 == buf_idx) {
+            let len = vertex_format_size(a.1);
+            let dst = (cursor + 3) & !3;
+            copies.push((a.3, dst, len));
+            a.3 = dst;
+            cursor = dst + len;
+        }
+        let new_stride = ((cursor + 3) & !3).max(4) as u64;
+        if let Some(e) = streams_eff.get_mut(s) {
+            *e = new_stride;
+        }
+        repack.push((s, new_stride, copies));
+    }
+    Layout { attr_descs, streams_used, needs_default_attr, streams_eff, repack }
+}
+
+/// The key of the render pipeline build_translated_pipeline makes from these inputs.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn pipeline_key(
+    point_size: f32,
+    vs: &CachedStage,
+    fs: Option<&CachedStage>,
+    depth_gl: bool,
+    color_state: u32,
+    channel_mask: u32,
+    depth_pf: MTLPixelFormat,
+    color_pfs: &[MTLPixelFormat],
+    blends: &[u64; 8],
+    attr_descs: &[(u32, MTLVertexFormat, usize, usize, i32)],
+    streams_used: &[bool; MAX_STREAMS],
+    streams_eff: &[u64],
+) -> smallvec::SmallVec<[u64; 64]> {
+    let mut key: smallvec::SmallVec<[u64; 64]> = smallvec::smallvec![
+        point_size.to_bits() as u64,
+        vs as *const CachedStage as u64,
+        fs.map_or(0, |f| f as *const CachedStage as u64),
+        depth_gl as u64,
+        color_state as u64,
+        channel_mask as u64,
+        depth_pf.0 as u64,
+    ];
+    key.extend(color_pfs.iter().map(|p| p.0 as u64));
+    key.extend(blends.iter().copied());
+    for (loc, fmt, buf, off, _) in attr_descs {
+        key.extend([*loc as u64, fmt.0 as u64, *buf as u64, *off as u64]);
+    }
+    for s in 0..MAX_STREAMS {
+        if streams_used[s] {
+            key.push(0xFFFF_0000 | s as u64);
+            key.push(streams_eff.get(s).copied().unwrap_or(0));
+        }
+    }
+    key
 }
 
 pub(super) struct DrawPacket {
@@ -4963,77 +5242,14 @@ impl Gfx {
                 e
             }
             None => {
-                // ---- vertex attributes ----
-                let mut attr_descs: smallvec::SmallVec<
-                    [(u32, MTLVertexFormat, usize, usize, i32); 16],
-                > = smallvec::SmallVec::new(); // loc, fmt, bufIdx, offset, kind
-                let mut streams_used = [false; MAX_STREAMS];
-                let mut needs_default_attr = false;
-                for (attr_i, &loc) in vs.attrs.iter().enumerate() {
-                    let bits = p.attr_bits.get(attr_i).copied().flatten();
-                    let va = bits.map(decode_attr);
-                    match va
-                        .as_ref()
-                        .and_then(|a| vertex_format(a.format).map(|f| (a, f)))
-                    {
-                        Some((a, (fmt, kind))) if a.stream < MAX_STREAMS => {
-                            streams_used[a.stream] = true;
-                            attr_descs.push((
-                                loc,
-                                fmt,
-                                VB_BASE - a.stream,
-                                a.offset as usize,
-                                kind,
-                            ));
-                        }
-                        _ => {
-                            needs_default_attr = true;
-                            attr_descs.push((
-                                loc,
-                                MTLVertexFormat::Float4,
-                                DEFAULT_ATTR_BUFFER,
-                                0,
-                                0,
-                            ));
-                        }
-                    }
-                }
-
-                // Metal needs 4-byte aligned vertex strides and attribute offsets; NVN does not (TotK's skinned shadow meshes use
-                // a 14-byte stride with attributes at offsets 6 and 10). Metal misfetched them: garbage bone indices, skinning
-                // matrices read out of bounds, vertices flung across the screen. Such per-vertex streams are repacked on the CPU
-                // into an aligned layout (each attribute copied to its own aligned slot) for the vertices the draw fetches.
-                let mut streams_eff: smallvec::SmallVec<[u64; 16]> = p.vertex_streams.clone();
-                let mut repack: Vec<(usize, u64, Vec<(usize, usize, usize)>)> = Vec::new(); // (stream, new stride, [(src off, dst off, len)])
-                {
-                    for s in 0..MAX_STREAMS {
-                        if !streams_used[s] {
-                            continue;
-                        }
-                        let sbits = p.vertex_streams.get(s).copied().unwrap_or(0);
-                        let (sstride, sdiv) = (sbits & 0xFFFF_FFFF, sbits >> 32);
-                        let buf_idx = VB_BASE - s;
-                        let misaligned = sstride % 4 != 0
-                            || attr_descs.iter().any(|a| a.2 == buf_idx && a.3 % 4 != 0);
-                        if sstride == 0 || sdiv != 0 || !misaligned {
-                            continue;
-                        }
-                        let mut cursor = 0usize;
-                        let mut copies = Vec::new();
-                        for a in attr_descs.iter_mut().filter(|a| a.2 == buf_idx) {
-                            let len = vertex_format_size(a.1);
-                            let dst = (cursor + 3) & !3;
-                            copies.push((a.3, dst, len));
-                            a.3 = dst;
-                            cursor = dst + len;
-                        }
-                        let new_stride = ((cursor + 3) & !3).max(4) as u64;
-                        if let Some(e) = streams_eff.get_mut(s) {
-                            *e = new_stride;
-                        }
-                        repack.push((s, new_stride, copies));
-                    }
-                }
+                super::pipeline_list::precompile();
+                let Layout {
+                    attr_descs,
+                    streams_used,
+                    needs_default_attr,
+                    streams_eff,
+                    repack,
+                } = derive_layout(vs, &p.attr_bits, &p.vertex_streams);
 
                 // Debug: --log-shader-draws=s_a,s_b prints the vertex layout of the first draws using those vertex shaders.
                 {
@@ -5092,26 +5308,20 @@ impl Gfx {
                         }
                     }
                 }
-                let mut key: smallvec::SmallVec<[u64; 64]> = smallvec::smallvec![
-                    point_size.to_bits() as u64,
-                    vs as *const CachedStage as u64,
-                    fs.map_or(0, |f| f as *const CachedStage as u64),
-                    depth_gl as u64,
-                    p.color_state as u64,
-                    p.channel_mask as u64,
-                    depth_pf.0 as u64,
-                ];
-                key.extend(color_pfs.iter().map(|p| p.0 as u64));
-                key.extend(blends);
-                for (loc, fmt, buf, off, _) in &attr_descs {
-                    key.extend([*loc as u64, fmt.0 as u64, *buf as u64, *off as u64]);
-                }
-                for s in 0..MAX_STREAMS {
-                    if streams_used[s] {
-                        key.push(0xFFFF_0000 | s as u64);
-                        key.push(streams_eff.get(s).copied().unwrap_or(0));
-                    }
-                }
+                let key = pipeline_key(
+                    point_size,
+                    vs,
+                    fs,
+                    depth_gl,
+                    p.color_state,
+                    p.channel_mask,
+                    depth_pf,
+                    &color_pfs,
+                    &blends,
+                    &attr_descs,
+                    &streams_used,
+                    &streams_eff,
+                );
 
                 let pipe = if let Some(p) = env.sh.translated_pipelines.get(key.as_slice()) {
                     p.clone()
@@ -5147,6 +5357,7 @@ impl Gfx {
                             env.sh
                                 .translated_pipelines
                                 .insert(key.to_vec(), pipe.clone());
+                            record_pipeline(vs, fs, p, point_size, depth_gl, &blends);
                             register_batchable(
                                 &pipe,
                                 &key,
@@ -5184,29 +5395,32 @@ impl Gfx {
                         }
                     }
                 } else {
-                    let t0 = std::time::Instant::now();
-                    let built = self.build_translated_pipeline(
-                        lib,
-                        vs,
-                        fs,
-                        &attr_descs,
-                        &streams_used,
-                        &streams_eff,
-                        &color_pfs,
-                        depth_pf,
-                        depth_gl,
-                        point_size,
-                        &blends,
-                        p.color_state,
-                        p.channel_mask,
-                        p.blend_color,
-                        false,
-                    );
-                    super::HITCH_PIPE_NS.fetch_add(
-                        t0.elapsed().as_nanos() as u64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                    super::HITCH_PIPE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let built = build_now(key.as_slice(), || {
+                        let t0 = std::time::Instant::now();
+                        let built = self.build_translated_pipeline(
+                            lib,
+                            vs,
+                            fs,
+                            &attr_descs,
+                            &streams_used,
+                            &streams_eff,
+                            &color_pfs,
+                            depth_pf,
+                            depth_gl,
+                            point_size,
+                            &blends,
+                            p.color_state,
+                            p.channel_mask,
+                            p.blend_color,
+                            false,
+                        );
+                        super::HITCH_PIPE_NS.fetch_add(
+                            t0.elapsed().as_nanos() as u64,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        super::HITCH_PIPE_N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        built
+                    });
                     let Some(pl) = built else {
                         env.sh.translated_pipelines_failed += 1;
                         env.sh.translated_pipelines_bad.insert(key.to_vec());
@@ -5218,6 +5432,7 @@ impl Gfx {
                         };
                     };
                     env.sh.translated_pipelines.insert(key.to_vec(), pl.clone());
+                    record_pipeline(vs, fs, p, point_size, depth_gl, &blends);
                     register_batchable(
                         &pl,
                         &key,
