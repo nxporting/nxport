@@ -151,10 +151,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
                 "[+] Invoking native DT_INIT entrypoint at main+{:#x}...",
                 mem_space.dynamic.init
             );
-            type DtInitFn = unsafe extern "C" fn();
-            let dt_init: DtInitFn =
-                unsafe { std::mem::transmute(mem_space.base_ptr.add(mem_space.dynamic.init)) };
-            unsafe { dt_init() };
+            unsafe { guest::call(mem_space.base_ptr as usize + mem_space.dynamic.init, &[]) };
             println!("[+] SUCCESS: Native DT_INIT executed and returned cleanly!");
         }
 
@@ -193,9 +190,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         }
         for (label, init) in &mod_inits {
             println!("[+] Mods: running {} init at {:#x}", label, init);
-            type InitFn = unsafe extern "C" fn(usize, usize);
-            let f: InitFn = unsafe { std::mem::transmute(*init) };
-            unsafe { f(0, 0) };
+            unsafe { guest::call(*init, &[0, 0]) };
             let pages = unsafe { horizon::svc::flush_code_views() };
             println!("[+] Mods: {} init returned ({} code pages written through its views)", label, pages);
         }
@@ -222,9 +217,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
             "[+] Invoking native nninitStartup entrypoint at {:#x}...",
             init_startup_addr
         );
-        type StartupFn = unsafe extern "C" fn();
-        let nn_init_startup: StartupFn = unsafe { std::mem::transmute(init_startup_addr) };
-        unsafe { nn_init_startup() };
+        unsafe { guest::call(init_startup_addr, &[]) };
         println!("[+] SUCCESS: Native nninitStartup executed and returned cleanly!");
 
         // Diagnostic memory state for known game versions after nninitStartup
@@ -281,9 +274,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
             }
             let ctor_addr = unsafe { *init_array_ptr.add(i) };
             if ctor_addr != 0 {
-                type CtorFn = unsafe extern "C" fn();
-                let ctor: CtorFn = unsafe { std::mem::transmute(ctor_addr) };
-                unsafe { ctor() };
+                unsafe { guest::call(ctor_addr, &[]) };
                 executed_ctors += 1;
             }
         }
@@ -296,16 +287,12 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         for (label, init, (arr, n)) in &game_subsdk_inits {
             if let Some(init) = init {
                 println!("[+] {}: running DT_INIT at {:#x}", label, init);
-                type InitFn = unsafe extern "C" fn();
-                let f: InitFn = unsafe { std::mem::transmute(*init) };
-                unsafe { f() };
+                unsafe { guest::call(*init, &[]) };
             }
             for i in 0..*n {
                 let ctor = unsafe { *((arr + i * 8) as *const usize) };
                 if ctor != 0 {
-                    type CtorFn = unsafe extern "C" fn();
-                    let f: CtorFn = unsafe { std::mem::transmute(ctor) };
-                    unsafe { f() };
+                    unsafe { guest::call(ctor, &[]) };
                 }
             }
             println!("[+] {}: {} static constructors run", label, n);
