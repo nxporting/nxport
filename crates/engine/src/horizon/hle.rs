@@ -1673,6 +1673,17 @@ unsafe fn npad_states(
     n as i32
 }
 
+
+/// GetTouchScreenStates<16>(states, count): the latest state only.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_GetTouchScreenStates(out: *mut u8, count: i32) -> i32 {
+    if count < 1 {
+        return 0;
+    }
+    write_touch_screen_state(out, 16);
+    1
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetNpadJoyDualStates(
     states: *mut NpadFullKeyState,
@@ -3647,6 +3658,7 @@ pub unsafe extern "C" fn hle_nn_os_AcquireSemaphore(sem: *mut ()) {
     semaphore_acquire(sem, fp);
 }
 
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_ReleaseSemaphore(sem: *mut (), count: i32) {
     semaphore_release(sem, count);
@@ -3727,10 +3739,9 @@ pub fn rtti_si_class_type_info_vtable_addr() -> usize {
 }
 
 pub static STD_NOTHROW: u8 = 0;
-pub static NVN_PRIVATE0: [u8; 64] = [0; 64];
+pub static mut NVN_PRIVATE0: [u64; 64] = [0; 64];
 // Placeholder FILE* for the "stdout" data symbol; guest code using it just
 // needs a stable, non-null, distinct address, not real stdio interop.
-pub static FAKE_STDOUT: u8 = 0;
 
 // ── nn::audio renderer (IPC to audren:u) ────────────────────────────────────
 // The renderer lifecycle, work-buffer sizing and output-device queries all end

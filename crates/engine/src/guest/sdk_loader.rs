@@ -50,6 +50,9 @@ impl SdkModule {
         let Some(&addr) = self.symbols.get(name) else {
             return false;
         };
+        if crate::settings::get().log.list_hle_imports {
+            println!("[interpose] {name}");
+        }
         // The long patch is 16 bytes: a shorter function (a thunk, a field setter) would have its neighbour's first
         // instructions overwritten. Kirby crashed with SIGILL in HardwareOpusDecoder::GetWorkBufferSize after the
         // 12-byte ResetHardwareOpusDecoder before it was patched. Short functions get a single `b` to a 16-byte stub in
@@ -268,6 +271,8 @@ pub fn load_sdk(
     let ro_raw = decompress_section(&file, ro_fo, ro_cs, ro_ds, flags & 2 != 0, "rodata")?;
     let data_raw = decompress_section(&file, data_fo, data_cs, data_ds, flags & 4 != 0, "data")?;
     let _ = NVN_LIBRARY_VERSION.set(middleware_version(&ro_raw, b"NintendoSDK_NVN-"));
+    let sdk_version = middleware_version(&ro_raw, b"NintendoSdk_nnSdk-");
+    crate::horizon::sdk::set_version(sdk_version.map(|(a, b, c)| crate::horizon::sdk::SdkVersion(a, b, c)));
     if let Some((x, y, z)) = nvn_library_version() {
         println!("[+] SDK: NVN library {x}.{y}.{z}");
     }
@@ -346,99 +351,6 @@ pub fn load_sdk(
                 );
             }
         }
-    }
-    symbols.insert(
-        "_ZN2nn2sm10InitializeEv".into(),
-        mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_sm_Initialize as *const ())
-            as usize,
-    );
-    symbols.insert(
-        "_ZN2nn2sm8FinalizeEv".into(),
-        mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_sm_Finalize as *const ())
-            as usize,
-    );
-    symbols.insert(
-        "_ZN2nn2sm16GetServiceHandleEPNS_3svc6HandleEPKcm".into(),
-        mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_sm_GetServiceHandle as *const ())
-            as usize,
-    );
-    symbols.insert(
-        "_ZN2nn4diag6detail5AbortEPKNS_6ResultE".into(),
-        mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_diag_detail_Abort as *const ())
-            as usize,
-    );
-
-    let hid_symbols: &[(&str, *const ())] = &[
-        ("_ZN2nn3hid15InitializeMouseEv", crate::horizon::hle::hle_nn_hid_InitializeMouse as *const ()),
-        ("_ZN2nn3hid6detail15InitializeMouseEv", crate::horizon::hle::hle_nn_hid_InitializeMouse as *const ()),
-        ("_ZN2nn3hid18InitializeKeyboardEv", crate::horizon::hle::hle_nn_hid_InitializeKeyboard as *const ()),
-        ("_ZN2nn3hid6detail18InitializeKeyboardEv", crate::horizon::hle::hle_nn_hid_InitializeKeyboard as *const ()),
-        ("_ZN2nn3hid21InitializeTouchScreenEv", crate::horizon::hle::hle_nn_hid_InitializeTouchScreen as *const ()),
-        ("_ZN2nn3hid6detail21InitializeTouchScreenEv", crate::horizon::hle::hle_nn_hid_InitializeTouchScreen as *const ()),
-        ("_ZN2nn3hid13GetMouseStateEPNS0_10MouseStateE", crate::horizon::hle::hle_nn_hid_GetMouseState as *const ()),
-        ("_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEi", crate::horizon::hle::hle_nn_hid_GetMouseStates as *const ()),
-        ("_ZN2nn3hid6detail13GetMouseStateEPNS0_10MouseStateE", crate::horizon::hle::hle_nn_hid_GetMouseState as *const ()),
-        ("_ZN2nn3hid6detail14GetMouseStatesEPiPNS0_10MouseStateEi", crate::horizon::hle::hle_nn_hid_GetMouseStates as *const ()),
-        ("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", crate::horizon::hle::hle_nn_hid_GetKeyboardState as *const ()),
-        ("_ZN2nn3hid17GetKeyboardStatesEPNS0_13KeyboardStateEi", crate::horizon::hle::hle_nn_hid_GetKeyboardStates as *const ()),
-        ("_ZN2nn3hid6detail16GetKeyboardStateEPNS0_13KeyboardStateE", crate::horizon::hle::hle_nn_hid_GetKeyboardState as *const ()),
-        ("_ZN2nn3hid6detail17GetKeyboardStatesEPiPNS0_13KeyboardStateEi", crate::horizon::hle::hle_nn_hid_GetKeyboardStates as *const ()),
-
-        ("_ZN2nn2os20InitializeTimerEventEPNS0_14TimerEventTypeENS0_14EventClearModeE", crate::horizon::hle::hle_nn_os_InitializeTimerEvent as *const ()),
-        ("nnosInitializeTimerEvent", crate::horizon::hle::hle_nn_os_InitializeTimerEvent as *const ()),
-        ("_ZN2nn2os18FinalizeTimerEventEPNS0_14TimerEventTypeE", crate::horizon::hle::hle_nn_os_FinalizeTimerEvent as *const ()),
-        ("nnosFinalizeTimerEvent", crate::horizon::hle::hle_nn_os_FinalizeTimerEvent as *const ()),
-        ("_ZN2nn2os22StartOneShotTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanE", crate::horizon::hle::hle_nn_os_StartOneShotTimerEvent as *const ()),
-        ("nnosStartOneShotTimerEvent", crate::horizon::hle::hle_nn_os_StartOneShotTimerEvent as *const ()),
-        ("_ZN2nn2os23StartPeriodicTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanES3_", crate::horizon::hle::hle_nn_os_StartPeriodicTimerEvent as *const ()),
-        ("nnosStartPeriodicTimerEvent", crate::horizon::hle::hle_nn_os_StartPeriodicTimerEvent as *const ()),
-        ("_ZN2nn2os14StopTimerEventEPNS0_14TimerEventTypeE", crate::horizon::hle::hle_nn_os_StopTimerEvent as *const ()),
-        ("nnosStopTimerEvent", crate::horizon::hle::hle_nn_os_StopTimerEvent as *const ()),
-        ("_ZN2nn2os14WaitTimerEventEPNS0_14TimerEventTypeE", crate::horizon::hle::hle_nn_os_WaitTimerEvent as *const ()),
-        ("nnosWaitTimerEvent", crate::horizon::hle::hle_nn_os_WaitTimerEvent as *const ()),
-        ("_ZN2nn2os17TryWaitTimerEventEPNS0_14TimerEventTypeE", crate::horizon::hle::hle_nn_os_TryWaitTimerEvent as *const ()),
-        ("nnosTryWaitTimerEvent", crate::horizon::hle::hle_nn_os_TryWaitTimerEvent as *const ()),
-        ("_ZN2nn2os16SignalTimerEventEPNS0_14TimerEventTypeE", crate::horizon::hle::hle_nn_os_SignalTimerEvent as *const ()),
-        ("nnosSignalTimerEvent", crate::horizon::hle::hle_nn_os_SignalTimerEvent as *const ()),
-        ("_ZN2nn2os15ClearTimerEventEPNS0_14TimerEventTypeE", crate::horizon::hle::hle_nn_os_ClearTimerEvent as *const ()),
-        ("nnosClearTimerEvent", crate::horizon::hle::hle_nn_os_ClearTimerEvent as *const ()),
-
-        ("nnosGetCurrentThread", crate::horizon::hle::hle_nn_os_GetCurrentThread as *const ()),
-        ("nnosGetThreadPriority", crate::horizon::hle::hle_nn_os_GetThreadPriority as *const ()),
-        ("nnosCreateThread", crate::horizon::hle::hle_nn_os_CreateThread as *const ()),
-        ("nnosDestroyThread", crate::horizon::hle::hle_nn_os_DestroyThread as *const ()),
-        ("nnosGetThreadCoreMask", crate::horizon::hle::hle_nn_os_GetThreadCoreMask as *const ()),
-        ("nnosSetThreadCoreMask", crate::horizon::hle::hle_nn_os_SetThreadCoreMask as *const ()),
-        ("nnosSetThreadNamePointer", crate::horizon::hle::hle_nn_os_SetThreadNamePointer as *const ()),
-        ("nnosInitializeMutex", crate::horizon::hle::hle_nn_os_InitializeMutex as *const ()),
-        ("nnosFinalizeMutex", crate::horizon::hle::hle_nn_os_FinalizeMutex as *const ()),
-        ("nnosLockMutex", crate::horizon::hle::hle_nn_os_LockMutex as *const ()),
-        ("nnosUnlockMutex", crate::horizon::hle::hle_nn_os_UnlockMutex as *const ()),
-        ("nnosStartThread", crate::horizon::hle::hle_nn_os_StartThread as *const ()),
-        ("nnosWaitThread", crate::horizon::hle::hle_nn_os_WaitThread as *const ()),
-        ("nnosSleepThread", crate::horizon::hle::hle_nn_os_SleepThread as *const ()),
-        ("nnosGetSystemTick", crate::horizon::hle::hle_nn_os_GetSystemTick as *const ()),
-        ("nnosGetSystemTickFrequency", crate::horizon::hle::hle_nn_os_GetSystemTickFrequency as *const ()),
-        ("nnosConvertTickToNanoSeconds", crate::horizon::hle::hle_nn_os_ConvertToTimeSpan as *const ()),
-        ("nnosInitializeEvent", crate::horizon::nn::os_initialize_event as *const ()),
-        ("nnosFinalizeEvent", crate::horizon::nn::os_finalize_event as *const ()),
-        ("nnosSignalEvent", crate::horizon::nn::os_signal_event as *const ()),
-        ("nnosWaitEvent", crate::horizon::nn::os_wait_event as *const ()),
-
-        ("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", crate::horizon::hle::hle_nn_hid_InitializeVibrationDevice as *const ()),
-        ("_ZN2nn3hid6detail25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE", crate::horizon::hle::hle_nn_hid_InitializeVibrationDevice as *const ()),
-        ("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", crate::horizon::hle::hle_nn_hid_SendVibrationValue as *const ()),
-        ("_ZN2nn3hid6detail18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", crate::horizon::hle::hle_nn_hid_SendVibrationValue as *const ()),
-        ("_ZN2nn3hid19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi", crate::horizon::hle::hle_nn_hid_SendVibrationValues as *const ()),
-        ("_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi", crate::horizon::hle::hle_nn_hid_SendVibrationValues as *const ()),
-        ("_ZN2nn3hid20IsVibrationPermittedEPb", crate::horizon::hle::hle_nn_hid_IsVibrationPermitted as *const ()),
-        ("_ZN2nn3hid6detail20IsVibrationPermittedEPb", crate::horizon::hle::hle_nn_hid_IsVibrationPermitted as *const ()),
-        ("_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE", crate::horizon::hle::hle_nn_hid_GetVibrationDeviceHandles as *const ()),
-        ("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", crate::horizon::hle::hle_nn_hid_GetVibrationDeviceInfo as *const ()),
-        ("_ZN2nn3hid6detail22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", crate::horizon::hle::hle_nn_hid_GetVibrationDeviceInfo as *const ()),
-    ];
-    for &(sname, func) in hid_symbols {
-        symbols.insert(sname.into(), mem_space.make_hle_trampoline(func) as usize);
     }
     println!("[+] SDK: {} exported symbols indexed", symbols.len());
 
@@ -624,128 +536,18 @@ fn apply_relocations_from_mod0(
                     let name_ptr = (dynstr_host + st_name) as *const std::os::raw::c_char;
                     let name = unsafe { std::ffi::CStr::from_ptr(name_ptr) }.to_string_lossy();
 
-                    let hle_override: Option<usize> = match name.as_ref() {
-                        "_ZN2nn2sm10InitializeEv" => Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_sm_Initialize as *const ()) as usize),
-                        "_ZN2nn2sm8FinalizeEv" => Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_sm_Finalize as *const ()) as usize),
-                        "_ZN2nn2sm16GetServiceHandleEPNS_3svc6HandleEPKcm" => Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_sm_GetServiceHandle as *const ()) as usize),
-                        "_ZN2nn4diag6detail5AbortEPKNS_6ResultE" => Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_diag_detail_Abort as *const ()) as usize),
-                        "_ZN2nn3hid15InitializeMouseEv" | "_ZN2nn3hid6detail15InitializeMouseEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_InitializeMouse as *const ()) as usize),
-                        "_ZN2nn3hid18InitializeKeyboardEv" | "_ZN2nn3hid6detail18InitializeKeyboardEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_InitializeKeyboard as *const ()) as usize),
-                        "_ZN2nn3hid21InitializeTouchScreenEv" | "_ZN2nn3hid6detail21InitializeTouchScreenEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_InitializeTouchScreen as *const ()) as usize),
-                        "_ZN2nn3hid13GetMouseStateEPNS0_10MouseStateE" | "_ZN2nn3hid6detail13GetMouseStateEPNS0_10MouseStateE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetMouseState as *const ()) as usize),
-                        "_ZN2nn3hid14GetMouseStatesEPNS0_10MouseStateEi" | "_ZN2nn3hid6detail14GetMouseStatesEPiPNS0_10MouseStateEi" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetMouseStates as *const ()) as usize),
-                        "_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE" | "_ZN2nn3hid6detail16GetKeyboardStateEPNS0_13KeyboardStateE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetKeyboardState as *const ()) as usize),
-                        "_ZN2nn3hid17GetKeyboardStatesEPNS0_13KeyboardStateEi" | "_ZN2nn3hid6detail17GetKeyboardStatesEPiPNS0_13KeyboardStateEi" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetKeyboardStates as *const ()) as usize),
-                        "_ZN2nn3hid18InitializeDebugPadEv" | "_ZN2nn3hid6detail18InitializeDebugPadEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_InitializeDebugPad as *const ()) as usize),
-                        "_ZN2nn3hid16GetDebugPadStateEPNS0_13DebugPadStateE" | "_ZN2nn3hid6detail16GetDebugPadStateEPNS0_13DebugPadStateE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetDebugPadState as *const ()) as usize),
-                        "_ZN2nn4diag18IsDebuggerAttachedEv" | "_ZN2nn4diag6detail18IsDebuggerAttachedEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_diag_IsDebuggerAttached as *const ()) as usize),
-
-                        "_ZN2nn2os20InitializeTimerEventEPNS0_14TimerEventTypeENS0_14EventClearModeE" | "nnosInitializeTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_InitializeTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os18FinalizeTimerEventEPNS0_14TimerEventTypeE" | "nnosFinalizeTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_FinalizeTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os22StartOneShotTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanE" | "nnosStartOneShotTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_StartOneShotTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os23StartPeriodicTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanES3_" | "nnosStartPeriodicTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_StartPeriodicTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os14StopTimerEventEPNS0_14TimerEventTypeE" | "nnosStopTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_StopTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os14WaitTimerEventEPNS0_14TimerEventTypeE" | "nnosWaitTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_WaitTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os17TryWaitTimerEventEPNS0_14TimerEventTypeE" | "nnosTryWaitTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_TryWaitTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os16SignalTimerEventEPNS0_14TimerEventTypeE" | "nnosSignalTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_SignalTimerEvent as *const ()) as usize),
-                        "_ZN2nn2os15ClearTimerEventEPNS0_14TimerEventTypeE" | "nnosClearTimerEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_ClearTimerEvent as *const ()) as usize),
-
-                        "_ZN2nn2os17GetThreadCoreMaskEPiPmPKNS0_10ThreadTypeE" | "nnosGetThreadCoreMask" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_GetThreadCoreMask as *const ()) as usize),
-                        "_ZN2nn2os17SetThreadCoreMaskEPNS0_10ThreadTypeEim" | "nnosSetThreadCoreMask" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_SetThreadCoreMask as *const ()) as usize),
-                        "_ZN2nn2os16GetCurrentThreadEv" | "nnosGetCurrentThread" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_GetCurrentThread as *const ()) as usize),
-                        "_ZN2nn2os17GetThreadPriorityEPKNS0_10ThreadTypeE" | "nnosGetThreadPriority" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_GetThreadPriority as *const ()) as usize),
-                        "_ZN2nn2os12CreateThreadEPNS0_10ThreadTypeEPFvPvES2_S2_mi" | "nnosCreateThread" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_CreateThread as *const ()) as usize),
-                        "_ZN2nn2os13DestroyThreadEPNS0_10ThreadTypeE" | "nnosDestroyThread" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_DestroyThread as *const ()) as usize),
-                        "_ZN2nn2os20SetThreadNamePointerEPNS0_10ThreadTypeEPKc" | "nnosSetThreadNamePointer" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_SetThreadNamePointer as *const ()) as usize),
-                        "_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi" | "nnosInitializeMutex" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_InitializeMutex as *const ()) as usize),
-                        "_ZN2nn2os13FinalizeMutexEPNS0_9MutexTypeE" | "nnosFinalizeMutex" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_FinalizeMutex as *const ()) as usize),
-                        "_ZN2nn2os9LockMutexEPNS0_9MutexTypeE" | "nnosLockMutex" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_LockMutex as *const ()) as usize),
-                        "_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE" | "nnosUnlockMutex" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_UnlockMutex as *const ()) as usize),
-                        "_ZN2nn2os11StartThreadEPNS0_10ThreadTypeE" | "nnosStartThread" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_StartThread as *const ()) as usize),
-                        "_ZN2nn2os10WaitThreadEPNS0_10ThreadTypeE" | "nnosWaitThread" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_WaitThread as *const ()) as usize),
-                        "_ZN2nn2os11SleepThreadENS_8TimeSpanE" | "nnosSleepThread" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_SleepThread as *const ()) as usize),
-                        "_ZN2nn2os13GetSystemTickEv" | "nnosGetSystemTick" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_GetSystemTick as *const ()) as usize),
-                        "_ZN2nn2os22GetSystemTickFrequencyEv" | "nnosGetSystemTickFrequency" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_GetSystemTickFrequency as *const ()) as usize),
-                        "_ZN2nn2os17ConvertToTimeSpanENS0_4TickE" | "nnosConvertTickToNanoSeconds" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_os_ConvertToTimeSpan as *const ()) as usize),
-                        "_ZN2nn2os15InitializeEventEPNS0_9EventTypeEbNS0_14EventClearModeE" | "nnosInitializeEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::nn::os_initialize_event as *const ()) as usize),
-                        "_ZN2nn2os13FinalizeEventEPNS0_9EventTypeE" | "nnosFinalizeEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::nn::os_finalize_event as *const ()) as usize),
-                        "_ZN2nn2os11SignalEventEPNS0_9EventTypeE" | "nnosSignalEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::nn::os_signal_event as *const ()) as usize),
-                        "_ZN2nn2os9WaitEventEPNS0_9EventTypeE" | "nnosWaitEvent" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::nn::os_wait_event as *const ()) as usize),
-
-                        "_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE" | "_ZN2nn3hid6detail25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_InitializeVibrationDevice as *const ()) as usize),
-                        "_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE" | "_ZN2nn3hid6detail18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_SendVibrationValue as *const ()) as usize),
-                        "_ZN2nn3hid19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi" | "_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_SendVibrationValues as *const ()) as usize),
-                        "_ZN2nn3hid20IsVibrationPermittedEPb" | "_ZN2nn3hid6detail20IsVibrationPermittedEPb" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_IsVibrationPermitted as *const ()) as usize),
-                        "_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetVibrationDeviceHandles as *const ()) as usize),
-                        "_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE" | "_ZN2nn3hid6detail22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetVibrationDeviceInfo as *const ()) as usize),
-                        "_ZN2nn3hid28InitializeSevenSixAxisSensorEPvm" | "_ZN2nn3hid6detail28InitializeSevenSixAxisSensorEPvm" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_InitializeSevenSixAxisSensor as *const ()) as usize),
-                        "_ZN2nn3hid26FinalizeSevenSixAxisSensorEv" | "_ZN2nn3hid6detail26FinalizeSevenSixAxisSensorEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_FinalizeSevenSixAxisSensor as *const ()) as usize),
-                        "_ZN2nn3hid23StartSevenSixAxisSensorEv" | "_ZN2nn3hid6detail23StartSevenSixAxisSensorEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_StartSevenSixAxisSensor as *const ()) as usize),
-                        "_ZN2nn3hid22StopSevenSixAxisSensorEv" | "_ZN2nn3hid6detail22StopSevenSixAxisSensorEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_StopSevenSixAxisSensor as *const ()) as usize),
-                        "_ZN2nn3hid26IsSevenSixAxisSensorAtRestEv" | "_ZN2nn3hid6detail26IsSevenSixAxisSensorAtRestEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_IsSevenSixAxisSensorAtRest as *const ()) as usize),
-                        "_ZN2nn3hid27GetSevenSixAxisSensorStatesEPNS0_23SevenSixAxisSensorStateEi" | "_ZN2nn3hid6detail27GetSevenSixAxisSensorStatesEPNS0_23SevenSixAxisSensorStateEi" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_GetSevenSixAxisSensorStates as *const ()) as usize),
-                        "_ZN2nn3hid32ResetSevenSixAxisSensorTimestampEv" | "_ZN2nn3hid6detail32ResetSevenSixAxisSensorTimestampEv" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_ResetSevenSixAxisSensorTimestamp as *const ()) as usize),
-                        "_ZN2nn3hid28SetNpadJoyAssignmentModeDualERKj" | "_ZN2nn3hid6detail28SetNpadJoyAssignmentModeDualERKj" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_assignment_noop as *const ()) as usize),
-                        "_ZN2nn3hid23MergeSingleJoyAsDualJoyERKjS2_" | "_ZN2nn3hid6detail23MergeSingleJoyAsDualJoyERKjS2_" =>
-                            Some(mem_space.make_hle_trampoline(crate::horizon::hle::hle_nn_hid_assignment_noop as *const ()) as usize),
-                        _ => None,
+                    let hle_override: Option<usize> = match crate::horizon::sdk::lookup(&name) {
+                        Some(crate::horizon::sdk::Target::Func(f)) => {
+                            Some(mem_space.shared_hle_trampoline(f as *const ()) as usize)
+                        }
+                        // Data symbols are for the game's imports; the sdk module keeps its own (its stdout, ...).
+                        Some(crate::horizon::sdk::Target::Data(_)) | None => None,
                     };
 
                     if let Some(addr) = hle_override {
+                        if crate::settings::get().log.list_hle_imports {
+                            println!("[sdk-ref] HLE {name}");
+                        }
                         let final_val = (addr as i64 + r_addend_bits) as usize;
                         unsafe {
                             ptr::write((base + r_offset) as *mut usize, final_val);

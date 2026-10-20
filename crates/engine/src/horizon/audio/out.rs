@@ -230,7 +230,7 @@ unsafe extern "C" fn get_volume(_o: *const AudioOutHead) -> f32 {
     1.0
 }
 
-/// Mangled name -> HLE function (used by horizon::nn::lookup).
+/// Mangled name -> HLE function (chained by horizon::sdk::lookup).
 pub fn lookup(name: &str) -> Option<usize> {
     macro_rules! a {
         ($x:expr) => {

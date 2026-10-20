@@ -1344,7 +1344,7 @@ unsafe extern "C" fn thread_priority() -> i32 {
 } // nn::os default priority
 unsafe extern "C" fn noop() {}
 
-/// Mangled name -> HLE function for the horizon::movie:: symbols (used by horizon::nn::lookup).
+/// Mangled name -> HLE function for the horizon::movie:: symbols (chained by horizon::sdk::lookup).
 pub fn lookup(name: &str) -> Option<usize> {
     macro_rules! a {
         ($x:expr) => {
@@ -1354,9 +1354,7 @@ pub fn lookup(name: &str) -> Option<usize> {
     match name {
         "_ZN5movie9ExtractorC1ENS_13ContainerTypeE"
         | "_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE" => a!(extractor_ctor),
-        "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi" => {
-            a!(decoder_ctor)
-        }
+        "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi" => a!(decoder_ctor),
         "_ZN5movie9MediaDataC1Ev" => a!(md_ctor),
         "_ZN5movie9MediaDataD1Ev" => a!(md_dtor),
         "_ZN5movie9MediaDataC1ERKS0_" => a!(md_copy_ctor),

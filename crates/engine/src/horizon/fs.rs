@@ -34,6 +34,7 @@ fn save_root() -> &'static str {
 // nn::fs Results (module 2): raw = module | (description << 9).
 const RESULT_PATH_NOT_FOUND: i32 = 0x202; // 2002-0001
 const RESULT_PATH_ALREADY_EXISTS: i32 = 0x402; // 2002-0002
+const RESULT_TARGET_NOT_FOUND: i32 = 2 | (1002 << 9); // 2002-1002
 
 /// Mount names the guest registered through the writable mount calls (MountSaveData & co). "save"/"data" are
 /// always writable; any other name the game mounts (e.g. "prsv") gets its own subdirectory of the save root.
@@ -85,6 +86,21 @@ pub(crate) unsafe fn register_writable_mount(kind: &str, name: *const c_char) {
             mounts.push(name);
         }
     }
+}
+
+/// Read-only mounts of host directories (system data): mount name -> directory.
+static READ_ONLY_MOUNTS: Mutex<Vec<(String, PathBuf)>> = Mutex::new(Vec::new());
+
+/// Splits "<mount>:/rest" into (directory, rest) for a read-only mount.
+fn read_only_mount_of(guest_path: &str) -> Option<(PathBuf, String)> {
+    let p = guest_path.trim_start_matches('/');
+    let (name, rest) = p.split_once(':')?;
+    READ_ONLY_MOUNTS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(m, _)| m == name)
+        .map(|(_, dir)| (dir.clone(), rest.to_string()))
 }
 
 /// Splits "<extra mount>:/rest" into (mount name, rest) when the mount was registered as writable.
@@ -228,6 +244,7 @@ fn romfs_rel(guest_path: &str) -> Option<&str> {
         || clean_path.starts_with("save:")
         || clean_path.starts_with("sd:")
         || extra_mount_of(clean_path).is_some()
+        || read_only_mount_of(clean_path).is_some()
     {
         return None;
     }
@@ -253,6 +270,8 @@ pub(crate) fn resolve_path(guest_path: &str) -> Option<PathBuf> {
                 .join("mount_sd")
                 .join(rel.trim_start_matches('/')),
         )
+    } else if let Some((dir, rel)) = read_only_mount_of(clean_path) {
+        Some(dir.join(rel.trim_start_matches('/')))
     } else if let Some((mount, rel)) = extra_mount_of(clean_path) {
         Some(
             Path::new(save_root())
@@ -676,6 +695,45 @@ pub unsafe extern "C" fn hle_nn_fs_MountSaveDataReadOnly(
     _uid: *const (),
 ) -> i32 {
     register_writable_mount("MountSaveDataReadOnly", name);
+    0
+}
+
+/// System data archives (ncm::SystemDataId) come with the console's firmware: <system data dir>/<id as 16 hex
+/// digits>/ holds an archive's files (--system-data-dir, default: the data directory's system_data/).
+fn system_data_dir(id: u64) -> Option<PathBuf> {
+    let root = crate::settings::get()
+        .files
+        .system_data_dir
+        .clone()
+        .or_else(|| {
+            // nxport/games/<title id> -> nxport/system_data
+            Some(crate::profile::data_dir()?.parent()?.parent()?.join("system_data"))
+        })?;
+    Some(root.join(format!("{id:016x}"))).filter(|d| d.is_dir())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_QueryMountSystemDataCacheSize(out_size: *mut u64, _id: u64) -> i32 {
+    if !out_size.is_null() {
+        *out_size = 0;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_MountSystemData(name: *const c_char, id: u64, _cache: *mut u8, _size: usize) -> i32 {
+    if name.is_null() {
+        return RESULT_TARGET_NOT_FOUND;
+    }
+    let name = std::ffi::CStr::from_ptr(name).to_string_lossy().into_owned();
+    let Some(dir) = system_data_dir(id) else {
+        println!("[!] HLE: nn::fs::MountSystemData('{name}', {id:016x}): no system data {id:016x} (--system-data-dir)");
+        return RESULT_TARGET_NOT_FOUND;
+    };
+    println!("[+] HLE: nn::fs::MountSystemData('{name}', {id:016x}) -> {}", dir.display());
+    let mut m = READ_ONLY_MOUNTS.lock().unwrap();
+    m.retain(|(n, _)| *n != name);
+    m.push((name, dir));
     0
 }
 

@@ -96,6 +96,8 @@ pub struct GuestMemorySpace {
     // Each entry is 16 words (64 bytes). See make_hle_trampoline().
     trampoline_pool: *mut u32,
     trampoline_next: usize,
+    /// shared_hle_trampoline's trampolines by function.
+    trampolines: std::collections::HashMap<usize, usize>,
     trampoline_capacity: usize,
     pub guest_x9_value: usize,
     pub default_stub_ptr: usize,
@@ -214,6 +216,7 @@ impl GuestMemorySpace {
             got_map: Default::default(),
             trampoline_pool: ptr::null_mut(),
             trampoline_next: 0,
+            trampolines: std::collections::HashMap::new(),
             trampoline_capacity: 0,
             guest_x9_value: 0,
             default_stub_ptr: 0,
@@ -302,7 +305,7 @@ impl GuestMemorySpace {
                         match entries.get(&s) {
                             Some(&t) => t,
                             None => {
-                                let t = self.make_hle_trampoline(s as *const ()) as usize;
+                                let t = self.shared_hle_trampoline(s as *const ()) as usize;
                                 entries.insert(s, t);
                                 t
                             }
@@ -439,136 +442,40 @@ impl GuestMemorySpace {
         }
         // Undefined: resolve by name.
 
-        let resolved = match name.as_str() {
-            "__rel_plt_start" => plt_start,
-            "__rel_plt_end" => plt_end,
-            "__rel_dyn_start" => dyn_start,
-            "__rel_dyn_end" => dyn_end,
-            "__cxa_pure_virtual" => hle::hle_cxa_pure_virtual as *const () as usize,
-            "__cxa_deleted_virtual" => hle::hle_cxa_deleted_virtual as *const () as usize,
-            "_ZTVN10__cxxabiv117__class_type_infoE" => hle::rtti_class_type_info_vtable_addr(),
-            "_ZTVN10__cxxabiv120__si_class_type_infoE" => hle::rtti_si_class_type_info_vtable_addr(),
-            "_ZSt7nothrow" => &hle::STD_NOTHROW as *const _ as usize,
-            "nvnPrivate0" => hle::NVN_PRIVATE0.as_ptr() as usize,
-            "_ZN2nn2os20GetCurrentCoreNumberEv" => {
-                crate::horizon::hle::hle_nn_os_GetCurrentCoreNumber as *const () as usize
-            }
-            // nn::codec hardware Opus decoder: IPC to hwopus, so HLE.
-            "_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEiii" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize as *const () as usize
-            }
-            "_ZN2nn5codec36GetHardwareOpusDecoderWorkBufferSizeEii" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize2 as *const () as usize
-            }
-            "_ZN2nn5codec29InitializeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeEiiPvmi" => {
-                hle::hle_nn_codec_InitializeHardwareOpusDecoder as *const () as usize
-            }
-            "_ZN2nn5codec27FinalizeHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_FinalizeHardwareOpusDecoder as *const () as usize
-            }
-            "_ZN2nn5codec32GetHardwareOpusDecoderSampleRateEPKNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderSampleRate as *const () as usize
-            }
-            "_ZN2nn5codec34GetHardwareOpusDecoderChannelCountEPKNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_GetHardwareOpusDecoderChannelCount as *const () as usize
-            }
-            "_ZN2nn5codec24ResetHardwareOpusDecoderEPNS0_23HardwareOpusDecoderTypeE" => {
-                hle::hle_nn_codec_ResetHardwareOpusDecoder as *const () as usize
-            }
-            "_ZN2nn5codec33DecodeOpusInterleavedWithHardwareEPNS0_23HardwareOpusDecoderTypeEPmPiPsmPKvm" => {
-                hle::hle_nn_codec_DecodeOpusInterleavedWithHardware as *const () as usize
-            }
-            "_ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE" => {
-                hle::hle_nn_os_TryWaitSystemEvent as *const () as usize
-            }
-            "_ZN2nn2os15WaitSystemEventEPNS0_15SystemEventTypeE" => {
-                hle::hle_nn_os_WaitSystemEvent as *const () as usize
-            }
-            "_ZN2nn2os20TimedWaitSystemEventEPNS0_15SystemEventTypeENS_8TimeSpanE" => {
-                hle::hle_nn_os_TimedWaitSystemEvent as *const () as usize
-            }
-            "_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE" => {
-                hle::hle_nn_os_DestroySystemEvent as *const () as usize
-            }
-            // nn::audio renderer / output-device entry points: IPC to audren, so HLE.
-            "_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererParameterE" => {
-                hle::hle_nn_audio_GetAudioRendererWorkBufferSize as *const () as usize
-            }
-            "_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm" => {
-                hle::hle_nn_audio_OpenAudioRenderer as *const () as usize
-            }
-            "_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE" => {
-                hle::hle_nn_audio_StartAudioRenderer as *const () as usize
-            }
-            "_ZN2nn5audio17StopAudioRendererENS0_19AudioRendererHandleE" => {
-                hle::hle_nn_audio_StopAudioRenderer as *const () as usize
-            }
-            "_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE" => {
-                hle::hle_nn_audio_CloseAudioRenderer as *const () as usize
-            }
-            // RequestUpdateAudioRenderer runs natively: it serializes the config and calls the IAudioRenderer
-            // service object that OpenAudioRenderer hands out (horizon/audio/renderer.rs), then parses the statuses back.
-            "_ZN2nn5audio30GetActiveAudioOutputDeviceNameEPNS0_15AudioDeviceNameE"
-            | "_ZN2nn5audio24GetActiveAudioDeviceNameEPNS0_15AudioDeviceNameE" => {
-                hle::hle_nn_audio_GetActiveAudioOutputDeviceName as *const () as usize
-            }
-            "_ZN2nn5audio25ListAudioOutputDeviceNameEPNS0_15AudioDeviceNameEi"
-            | "_ZN2nn5audio19ListAudioDeviceNameEPNS0_15AudioDeviceNameEi" => {
-                hle::hle_nn_audio_ListAudioOutputDeviceName as *const () as usize
-            }
-            "_ZN2nn5audio41GetActiveAudioDeviceChannelCountForOutputEv"
-            | "_ZN2nn5audio21GetActiveChannelCountEv" => {
-                hle::hle_nn_audio_GetActiveAudioDeviceChannelCountForOutput as *const () as usize
-            }
-            "_ZN2nn5audio26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEf" => {
-                hle::hle_nn_audio_SetAudioDeviceOutputVolume as *const () as usize
-            }
-            "_ZN2nn5audio39AcquireAudioDeviceNotificationForOutputEPNS_2os11SystemEventE"
-            | "_ZN2nn5audio36AcquireAudioDeviceSwitchNotificationEPNS_2os11SystemEventE" => {
-                hle::hle_nn_audio_AcquireAudioDeviceNotificationForOutput as *const () as usize
-            }
-            "_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE"
-            | "_ZN2nn3apm27GetPerformanceConfigurationENS0_15PerformanceModeE" => {
-                hle::hle_nn_oe_GetPerformanceConfiguration as *const () as usize
-            }
-            // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and
-            // nn::gfx's GlslcDll::Initialize() fails exactly as on hardware. Binding HLE stubs here
-            // made the game believe the shader compiler existed.
-            "stdout" => &hle::FAKE_STDOUT as *const _ as usize,
-            other if crate::horizon::nn::lookup(other).is_some() => crate::horizon::nn::lookup(other).unwrap(),
-            other => {
-                // Fall back to SDK symbol table before giving up.
-                if let Some(sdk_mod) = sdk {
-                    if let Some(&addr) = sdk_mod.symbols.get::<str>(other.as_ref()) {
-                        return Some((addr, false));
-                    }
-                }
-                if (st_info >> 4) == 2 {
-                    // STB_WEAK undefined: null, per the ELF rules the game was linked under.
-                    println!("[+] Weak undefined symbol '{}' -> null", other);
-                    return Some((0, false));
-                }
-                println!("[!] Unresolved external relocation symbol '{}' -> binding to default HLE stub", other);
-                return Some(if self.default_stub_ptr != 0 {
-                    (self.default_stub_ptr, false)
-                } else {
-                    (hle::hle_default_stub as *const () as usize, true)
-                });
-            }
+        // The module's own relocation table bounds.
+        let marker = match name.as_str() {
+            "__rel_plt_start" => Some(plt_start),
+            "__rel_plt_end" => Some(plt_end),
+            "__rel_dyn_start" => Some(dyn_start),
+            "__rel_dyn_end" => Some(dyn_end),
+            _ => None,
         };
-        let data = matches!(
-            name.as_str(),
-            "__rel_plt_start"
-                | "__rel_plt_end"
-                | "__rel_dyn_start"
-                | "__rel_dyn_end"
-                | "_ZTVN10__cxxabiv117__class_type_infoE"
-                | "_ZTVN10__cxxabiv120__si_class_type_infoE"
-                | "_ZSt7nothrow"
-                | "nvnPrivate0"
-                | "stdout"
-        );
-        Some((resolved, !data))
+        if let Some(a) = marker {
+            return Some((a, false));
+        }
+        match crate::horizon::sdk::lookup(&name) {
+            Some(crate::horizon::sdk::Target::Func(f)) => return Some((f, true)),
+            Some(crate::horizon::sdk::Target::Data(a)) => return Some((a, false)),
+            None => {}
+        }
+        // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and nn::gfx's
+        // GlslcDll::Initialize() fails exactly as on hardware.
+        if let Some(sdk_mod) = sdk {
+            if let Some(&addr) = sdk_mod.symbols.get::<str>(name.as_ref()) {
+                return Some((addr, false));
+            }
+        }
+        if (st_info >> 4) == 2 {
+            // STB_WEAK undefined: null, per the ELF rules the game was linked under.
+            println!("[+] Weak undefined symbol '{}' -> null", name);
+            return Some((0, false));
+        }
+        println!("[!] Unresolved external relocation symbol '{}' -> binding to default HLE stub", name);
+        Some(if self.default_stub_ptr != 0 {
+            (self.default_stub_ptr, false)
+        } else {
+            (hle::hle_default_stub as *const () as usize, true)
+        })
     }
 
     /// Set up the pool of HLE trampolines (in the generated-code area) and record the value that x18 should have on
@@ -668,6 +575,18 @@ impl GuestMemorySpace {
     ///   stp  x29, x30, [sp, #-16]!
     ///   ldr  x16, <rust_fn>
     ///   b    <entry stub>             ; write_hle_entry_stub
+    /// The trampoline the registry's bindings of `rust_fn` share (horizon::sdk: imports, sdk references,
+    /// interposition, mods); created once.
+    pub fn shared_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
+        if let Some(&t) = self.trampolines.get(&(rust_fn as usize)) {
+            return t as *const ();
+        }
+        let t = self.make_hle_trampoline(rust_fn);
+        self.trampolines.insert(rust_fn as usize, t as usize);
+        t
+    }
+
+    /// A new trampoline of its own (callers may use its spare words for code of their own).
     pub fn make_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
         assert!(
             self.trampoline_next < self.trampoline_capacity,
