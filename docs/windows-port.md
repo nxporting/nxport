@@ -194,6 +194,13 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    reads in HLE code are left for the lifted runtime, above).
 4. OS layer; the load pipeline runs on any host and produces the patched image for the lifted target.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.
+   Core: **done**. The lifter's runtime/rt.c, compiled into the guest library, has the dispatcher (a per-thread cache
+   in front of the module tables) and forwards svc / brk / udf / counters and branches to non-lifted addresses to
+   the host, whose callbacks it gets at load (a DLL cannot import from the program loading it). `lifted.rs` loads
+   the library, registers the module tables and runs guest code; a branch to an HLE trampoline (or an HLE function's
+   own address) runs the function's adapter. Checked end to end on Windows with a small program: integer and float
+   HLE calls through trampoline addresses and a supervisor call. Left: per-thread `Cpu`s for guest threads, the
+   load pipeline producing the image to lift (step 4), and the `--cpu=lifted` switch.
 6. Windows x86-64: lifted runtime headless (a null GPU backend that signals fences, for booting), then Vulkan,
    then SDL3 host I/O, then the builder's Windows target.
 7. Plugin mods: two-pass lifting, then the interpreter fallback.
