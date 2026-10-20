@@ -424,7 +424,9 @@ pub fn build(out: &Path, script: bool) -> Result<(), String> {
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             };
-                            for (fd, flib) in &functions {
+                            // (Not for the script: the function would join the archive under its name next to the
+                            // pipeline's own specialisation, which then gets another name.)
+                            for (fd, flib) in functions.iter().filter(|_| !script) {
                                 if let Err(e) = archive.addFunctionWithDescriptor_library_error(fd, flib) {
                                     println!("[!] Pipelines: function: {}", e.localizedDescription());
                                 }

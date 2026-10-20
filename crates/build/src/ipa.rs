@@ -171,7 +171,12 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     }
     for e in o.cache.map(fs::read_dir).transpose().map_err(|e| format!("shader cache: {e}"))?.into_iter().flatten().flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
-        if n == "index.txt" || n == "failures.txt" || n == "pipelines.txt" || (n.starts_with("shaders_") && n.ends_with(".metallib")) {
+        if n == "index.txt"
+            || n == "failures.txt"
+            || n == "pipelines.txt"
+            || (n.starts_with("shaders_") && n.ends_with(".metallib"))
+            || (n.starts_with("pipelines") && n.ends_with(".metalar"))
+        {
             copy(&e.path(), &app.join("shader_cache").join(&n))?;
         }
     }

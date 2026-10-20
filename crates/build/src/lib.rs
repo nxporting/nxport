@@ -8,6 +8,7 @@ pub mod ipa;
 pub mod macho;
 pub use nxport::metal::msl_specialize;
 pub mod pack;
+pub mod pipeline_archive;
 pub mod ppm2png;
 mod sarc;
 pub mod shader_cache_build;

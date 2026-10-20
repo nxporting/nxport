@@ -47,6 +47,9 @@ struct TargetMemory {
     mods: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bundle_id: Option<String>,
+    /// iOS: the GPU the pipeline list is precompiled for (nxport_build::pipeline_archive::IOS_GPUS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gpu: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     settings: Option<SettingsPatch>,
 }
@@ -226,6 +229,8 @@ struct Builder {
     /// The dump's RomFS size in bytes, measured in the background.
     romfs_size: Arc<Mutex<Option<u64>>>,
     entitlements: bool,
+    /// iOS: the GPU architecture to precompile the pipeline list for (empty: none).
+    ios_gpu: String,
     /// Translate the game's shaders into the app ahead of time (the app translates only what the cache lacks); off, it
     /// translates every shader as the game loads it.
     prebuild_shaders: bool,
@@ -300,6 +305,7 @@ impl Builder {
             bundle_game: false,
             romfs_size: Arc::new(Mutex::new(None)),
             entitlements: true,
+            ios_gpu: String::new(),
             prebuild_shaders: true,
             bundle_id: String::new(),
         };
@@ -343,6 +349,7 @@ impl Builder {
         let own = Path::new(&self.dump).join("mods");
         self.mods = mem.mods.or_else(|| (!self.dump.is_empty() && own.is_dir()).then(|| own.display().to_string())).unwrap_or_default();
         self.bundle_id = mem.bundle_id.unwrap_or_default();
+        self.ios_gpu = mem.gpu.unwrap_or_default();
         let edits = mem.settings.unwrap_or_default();
         self.base = settings::resolve(self.base_layers());
         self.settings = settings::resolve(self.base_layers().into_iter().chain([edits]));
@@ -359,6 +366,7 @@ impl Builder {
         *mem.target(self.target) = Some(TargetMemory {
             mods: some(&self.mods),
             bundle_id: if self.target == Target::Ipa { some(&self.bundle_id) } else { None },
+            gpu: if self.target == Target::Ipa { some(&self.ios_gpu) } else { None },
             settings: (edits != SettingsPatch::default()).then_some(edits),
         });
         mem.save(g.title_id)
@@ -468,6 +476,23 @@ impl Builder {
             ui.checkbox("Request entitlements", &mut self.entitlements);
             if ui.is_item_hovered() {
                 ui.tooltip_text("Increased memory limit and extended virtual addressing; off for signing setups that refuse them.");
+            }
+            if self.prebuild_shaders {
+                let gpus = nxport_build::pipeline_archive::IOS_GPUS;
+                let current = gpus.iter().find(|g| g.1 == self.ios_gpu).map_or("None", |g| g.0);
+                if let Some(_c) = ui.begin_combo("Precompile pipelines for", current) {
+                    if ui.selectable_config("None").selected(self.ios_gpu.is_empty()).build() {
+                        self.ios_gpu.clear();
+                    }
+                    for g in gpus {
+                        if ui.selectable_config(g.0).selected(self.ios_gpu == g.1).build() {
+                            self.ios_gpu = g.1.to_string();
+                        }
+                    }
+                }
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("Compiles the game's known render pipelines for this device's GPU (needs Xcode), so the app does not compile them when the game first draws them. The app then works only as well as before on other devices.");
+                }
             }
             let default_id = self.game.as_ref().map_or_else(String::new, |g| nxport::profile::bundle_id(g.title_id, g.profile));
             ui.input_text("Bundle ID##bundle_id", &mut self.bundle_id).hint(default_id).build();
@@ -843,8 +868,12 @@ impl Builder {
             }
         }
         if prebuild {
-            let (tid, cache) = (game.title_id, cache.clone());
-            steps.push(("Getting the shared pipeline list".into(), Box::new(move || pipeline_list(tid, &cache))));
+            let (tid, list_cache) = (game.title_id, cache.clone());
+            steps.push(("Getting the shared pipeline list".into(), Box::new(move || pipeline_list(tid, &list_cache))));
+            if self.target == Target::MacApp {
+                let archive_cache = cache.clone();
+                steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_build::pipeline_archive::build_mac(&archive_cache))));
+            }
         }
         let result = match self.target {
             Target::MacApp => {
@@ -872,9 +901,10 @@ impl Builder {
             Target::Ipa => {
                 let ios_cache = work.join("shader_cache_ios");
                 if prebuild {
-                    let (cache, ios_cache) = (cache.clone(), ios_cache.clone());
+                    let (cache, ios_cache_dir) = (cache.clone(), ios_cache.clone());
                     let job = job.clone();
                     steps.push(("Building the iOS shader cache".into(), Box::new(move || {
+                        let ios_cache = ios_cache_dir;
                         let job_cb = job.clone();
                         let cb = move |sub: nxport_build::shader_cache_build::IosShaderBuildPhase, done: usize, total: usize| {
                             let mut j = job_cb.lock().unwrap();
@@ -900,6 +930,12 @@ impl Builder {
                         }
                         Ok(())
                     })));
+                    if !self.ios_gpu.is_empty() {
+                        let (ios_cache, scratch, gpu) = (ios_cache.clone(), work.join("pipeline_script"), self.ios_gpu.clone());
+                        steps.push(("Precompiling pipelines".into(), Box::new(move || {
+                            nxport_build::pipeline_archive::build_ios(&ios_cache, &scratch, &gpu)
+                        })));
+                    }
                 }
                 let out = Arc::new(Mutex::new(None));
                 let (dump, out2) = (dump.clone(), out.clone());
