@@ -131,6 +131,10 @@ fn queue(entries: Vec<Entry>) {
     std::thread::Builder::new()
         .name("pipe-precompile".into())
         .spawn(move || {
+            // The archives first: compiling without them would do what they hold.
+            if let Some(g) = super::GFX.get() {
+                super::pipeline_archive::load(&g.device);
+            }
             let (mut queued, mut skipped) = (0, 0);
             for e in &entries {
                 if super::translated::queue_precompile(e) {

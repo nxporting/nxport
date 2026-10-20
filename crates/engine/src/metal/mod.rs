@@ -36,6 +36,7 @@ mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
 mod pass_prof;
+pub(crate) mod pipeline_archive;
 pub mod pipeline_list;
 mod programs;
 mod report_guard;
@@ -673,6 +674,7 @@ fn nvn_blend_factor(code: u32) -> MTLBlendFactor {
 /// Called once by host/display.rs after the window and layer exist.
 pub fn init(device: Device, layer: Option<Retained<CAMetalLayer>>) {
     pipeline_list::fetch();
+    pipeline_archive::preload(&device);
     let queue = device.newCommandQueue().expect("newCommandQueue");
     let lib = device
         .newLibraryWithSource_options_error(&NSString::from_str(BLIT_MSL), None)
