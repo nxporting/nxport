@@ -117,6 +117,9 @@ group! {
         miss_dump_dir: Option<PathBuf> = None,
         /// Write no missing shader stages
         no_miss_dump: bool = false,
+        /// Render pipelines to compile when the game starts drawing, and where new ones are added (default: the game's
+        /// data directory's pipelines.txt)
+        pipeline_list: Option<PathBuf> = None,
         /// Library that plays the game's movies (ffmpeg shim)
         movie_shim: Option<PathBuf> = None,
         /// libopus, for the hardware Opus decoder
@@ -206,6 +209,10 @@ group! {
         async_wait_us: u64 = 2000,
         /// Pipeline compile threads
         pipeline_threads: usize = 4,
+        /// Compile the pipeline list's pipelines when the game starts drawing
+        precompile_pipelines: bool = true,
+        /// Add new pipelines to the pipeline list
+        record_pipelines: bool = true,
         /// Overlap a frame's GPU work with the next frame's CPU work
         early_fence: bool = true,
         /// Write-protect memory running GPU work reads, under the early fence

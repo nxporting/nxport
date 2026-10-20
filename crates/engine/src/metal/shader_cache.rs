@@ -500,6 +500,32 @@ pub unsafe fn lookup(data: u64) -> Option<&'static CachedStage> {
     Some(st)
 }
 
+/// Every stage of a cache index (index.txt text) by entry name, with its kind.
+pub fn stage_kinds(index_text: &str) -> HashMap<String, StageKind> {
+    index_text
+        .lines()
+        .filter_map(|l| match l.split_whitespace().collect::<Vec<_>>().as_slice() {
+            ["S", _, _, full, stage, _] => Some((format!("s_{full}"), parse_kind(stage))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A stage of the cache index by its entry name (`s_<hash>`).
+pub fn by_entry(entry: &str) -> Option<&'static CachedStage> {
+    static M: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    let idx = index()?;
+    // The first of duplicate entries, as lookup finds it (pipeline keys hold the stage's address).
+    let m = M.get_or_init(|| {
+        let mut m = HashMap::new();
+        for (i, s) in idx.stages.iter().enumerate() {
+            m.entry(s.entry.as_str()).or_insert(i);
+        }
+        m
+    });
+    m.get(entry).map(|&i| &idx.stages[i])
+}
+
 fn stage_kind_str(k: StageKind) -> &'static str {
     match k {
         StageKind::Vertex => "Vertex",
