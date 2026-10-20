@@ -50,10 +50,17 @@ code; the plan is to name each as an interface that both CPU paths implement.
    coverage. Guest function pointers passed as arguments (callbacks) are handed over as addresses; a lifted runtime
    calls them through `guest::call` (below).
 
-2. **Host calls guest.** Thread entries (`svc.rs:735`, `hle.rs:2078/2370`), callbacks and mod initialisers are
-   called through transmuted function pointers and inline asm (22 `asm!` blocks in hle.rs, more in nvn/, sync.rs,
-   thread_stack.rs). Plan: one primitive, `guest::call(addr, &[u64]) -> u64` (plus a float-returning variant). Native:
-   what the asm does now. Lifted: set x0-x7 and lr in the thread's `Cpu`, dispatch, return x0.
+2. **Host calls guest.** The engine enters guest code in two places: `guest::call(addr, &[u64]) -> u64` (module
+   DT_INIT and constructors, mod initialisers, nninitStartup, svc threads; on the calling thread's stack) and
+   `horizon::thread_stack::run` (nnMain and nn::os threads, on the stack buffer the game gave the thread). Native:
+   a call through a function pointer, and the stack switch thread_stack.rs does now. Lifted: set x0-x7, sp and x30 =
+   RETURN_TO_HOST in the thread's `Cpu`, dispatch, return x0. One guest entry does not go through either yet: the
+   destructor a mod passes to `__syscall_tls_create` is handed to pthread_key_create, so the host calls it at thread
+   exit; a lifted runtime needs host-side destructors that call it through `guest::call`.
+
+   The `asm!` blocks in HLE code (hle.rs, nvn/, sync.rs, svc.rs and others) do not call guest code: they read the
+   guest's registers at HLE entry (x29 / x30 for logs and backtraces, x16 / x17 from the trampoline, TPIDR_EL0 /
+   TPIDRRO_EL0). A lifted runtime reads those from the thread's `Cpu`, which needs a small accessor in place of each.
 
 3. **Supervisor calls.** module_loader rewrites `svc #n` in mods into stubs that call `horizon::svc` with x0-x7.
    Lifted: `svc #n` becomes `rt_svc(cpu, n)` calling the same handler with the same register array.
@@ -180,7 +187,8 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    jump-table shapes.
 3. HLE adapters (`HleFn`) and `guest::call`, on the native path first (no behaviour change, testable on the Mac).
    Adapters: **done** (`hle_abi`; every binding takes its address through `crate::hle!(f(_, _))`, and native
-   trampolines warn about a function without one). `guest::call`: next.
+   trampolines warn about a function without one). `guest::call`: **done** (the TLS destructors and the register
+   reads in HLE code are left for the lifted runtime, above).
 4. OS layer; the load pipeline runs on any host and produces the patched image for the lifted target.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.
 6. Windows x86-64: lifted runtime headless (a null GPU backend that signals fences, for booting), then Vulkan,
