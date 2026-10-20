@@ -2776,6 +2776,12 @@ impl Gfx {
                     }
                 }
                 Cmd::SetRenderTargets { colors, depth } => {
+                    let resolve = |r: &crate::nvn::cmd::RtRef| crate::nvn::cmd::RtRef {
+                        texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen),
+                        ..*r
+                    };
+                    let colors: Vec<crate::nvn::cmd::RtRef> = colors.iter().map(resolve).collect();
+                    let depth = depth.as_ref().map(resolve);
                     if let Some(w) = watch_storage() {
                         for (i, c) in colors.iter().enumerate() {
                             if tex_info(c.texture).is_some_and(|(_, t)| t.storage == w) {
@@ -2837,8 +2843,8 @@ impl Gfx {
                             }
                         }
                     }
-                    st.colors = colors.clone();
-                    st.depth = *depth;
+                    st.colors = colors;
+                    st.depth = depth;
                     st.rts_dirty = true;
                     st.cached_rts = None;
                 }

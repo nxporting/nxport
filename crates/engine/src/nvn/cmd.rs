@@ -18,6 +18,8 @@ use crate::nvn::api::record_typed;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RtRef {
     pub texture: usize,
+    /// The object's snapshot generation when the command was recorded, low 32 bits (nvn::api::resolve_texture_ref).
+    pub gen: u32,
     pub level: u16,
     pub layer: u16,
     /// The view's format (0 = the texture's own) and target (NVNtextureTarget; 0 = the texture's).
@@ -29,6 +31,8 @@ pub struct RtRef {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TexRef {
     pub texture: usize,
+    /// The object's snapshot generation when the command was recorded, low 32 bits (nvn::api::resolve_texture_ref).
+    pub gen: u32,
     pub level: u16,
     pub layer: u16,
 }
@@ -320,6 +324,7 @@ unsafe fn rt_list(tex: *const usize, views: *const usize, n: usize) -> Vec<RtRef
             let (view_format, view_target) = view_format_target(v as *const u8);
             RtRef {
                 texture: t,
+                gen: crate::nvn::api::texture_ref_gen(t),
                 level,
                 layer,
                 view_format,
@@ -446,6 +451,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
                 let (view_format, view_target) = view_format_target(depth_view);
                 Some(RtRef {
                     texture: depth,
+                    gen: crate::nvn::api::texture_ref_gen(depth),
                     level: dl,
                     layer: dy,
                     view_format,
@@ -1601,6 +1607,7 @@ unsafe fn tex_ref(tex: usize, view: *const u8) -> TexRef {
     }
     TexRef {
         texture: tex,
+        gen: crate::nvn::api::texture_ref_gen(tex),
         level,
         layer,
     }
