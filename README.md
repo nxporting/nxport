@@ -13,9 +13,9 @@ People like to know if you're using AI to write something, which is understandab
 
 ## Screenshots
 <img width="2970" height="1498" alt="image" src="https://github.com/user-attachments/assets/9b2aa313-67e1-4b47-ae5f-6edb2d910fdc" />
+<img width="800" height="369" alt="gif3" src="https://github.com/user-attachments/assets/47e421e7-0981-4c9b-afc8-f28d41b041ad" />
 <img width="2024" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebba11ae-d5bc-4bd3-91c2-a2abd9065ec9" />
 <img width="2532" height="1170" alt="image" src="https://github.com/user-attachments/assets/8536adf0-fa40-4723-b570-cf982cf0d0f0" />
-<img width="800" height="369" alt="gif3" src="https://github.com/user-attachments/assets/47e421e7-0981-4c9b-afc8-f28d41b041ad" />
 
 
 ## Credits
