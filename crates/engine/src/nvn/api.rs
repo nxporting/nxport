@@ -1378,6 +1378,7 @@ pub fn resolve_proc(func_name: &str) -> *const () {
         "nvnQueueGetTotalComputeMemoryUsed" => hle_nvnQueueGetTotalComputeMemoryUsed as *const (),
         "nvnQueueResetMemoryUsageCounts" => hle_nvnQueueResetMemoryUsageCounts as *const (),
         "nvnQueuePresentTexture" => hle_nvnQueuePresentTexture as *const (),
+        "nvnQueueAcquireTexture" => hle_nvnQueueAcquireTexture as *const (),
         "nvnQueueWaitSync" => hle_nvnQueueWaitSync as *const (),
         "nvnQueueFenceSync" => hle_nvnQueueFenceSync as *const (),
 
@@ -6106,6 +6107,17 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         *out_index = idx as i32;
     }
     0 // NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS
+}
+/// The older form of nvnWindowAcquireTexture: acquire, then make the queue wait for the texture's release sync.
+/// Textures are available as soon as they are acquired here, so there is nothing for the queue to wait for.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnQueueAcquireTexture(
+    _queue: *mut (),
+    w: *mut NvnWindow,
+    out_index: *mut i32,
+) -> i32 {
+    record_hle_call("hle_nvnQueueAcquireTexture");
+    hle_nvnWindowAcquireTexture(w, 0, out_index)
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowSetCrop(
