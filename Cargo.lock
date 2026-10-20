@@ -426,8 +426,10 @@ name = "nxport-build"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "flate2",
  "libc",
  "nxport",
+ "nxport-lifter",
  "regex",
  "sass2spv",
  "serde",
@@ -458,6 +460,10 @@ dependencies = [
  "nxport-build",
  "serde_json",
 ]
+
+[[package]]
+name = "nxport-lifter"
+version = "0.1.0"
 
 [[package]]
 name = "objc2"

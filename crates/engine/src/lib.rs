@@ -1,22 +1,47 @@
+// The native runtime (guest code running on the host CPU) is cfg(nx_native), see build.rs; on other hosts this crate
+// provides the platform-independent parts the builder and the command line use (docs/windows-port.md).
+#[cfg(nx_native)]
 mod clock;
 pub mod config;
+#[cfg(nx_native)]
 mod cpu;
 pub mod game;
+#[cfg(nx_native)]
 mod gpu;
+#[cfg(nx_native)]
 mod guest;
+#[cfg(not(nx_native))]
+mod guest {
+    pub mod nso;
+}
+/// NSO parsing, for tools that read a game's modules (the lifter in nxport-build).
+pub use guest::nso;
+#[cfg(nx_native)]
 mod horizon;
+#[cfg(nx_native)]
 mod host;
 #[cfg(target_os = "macos")]
 pub use host::ui;
+#[cfg(nx_native)]
 pub mod metal;
+/// The Metal backend's shader tooling that does not need Metal itself (the builder specializes MSL on any host).
+#[cfg(not(nx_native))]
+pub mod metal {
+    pub mod msl_specialize;
+    pub mod spirv_cross;
+}
+#[cfg(nx_native)]
 mod nvn;
 pub mod profile;
 pub mod settings;
 
+#[cfg(nx_native)]
 use std::thread;
 
+#[cfg(nx_native)]
 use guest::loader::GuestMemorySpace;
 
+#[cfg(nx_native)]
 /// Runs a game. `layers` are the caller's settings (a front end's choices, or settings::from_args for a command line),
 /// in increasing priority; they go above the platform's and the game's profiles. Must be called on the main thread;
 /// returns only on failure.
@@ -34,6 +59,7 @@ pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
     cpu::aot::take_image().ok_or_else(|| "no image was built".to_string())
 }
 
+#[cfg(nx_native)]
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Does not return while the game runs.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
@@ -340,6 +366,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     host::display::run_main_thread()
 }
 
+#[cfg(nx_native)]
 /// The settings a run with `layers` uses: the platform's profile, where the program is installed, the game's profile
 /// (found from the dump the other layers name), then above it the settings the app was built with or the iOS Settings
 /// app's choices, then `layers`.
@@ -381,6 +408,7 @@ fn resolve_settings(layers: Vec<settings::SettingsPatch>) -> settings::Settings 
     )
 }
 
+#[cfg(nx_native)]
 struct Loaded {
     mem_space: GuestMemorySpace,
     /// The sdk module: it must outlive the guest (dropping it unmaps the module's memory).
@@ -391,6 +419,7 @@ struct Loaded {
     game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
 }
 
+#[cfg(nx_native)]
 /// Loads the game's modules and the mods' into guest memory and patches them for this host: relocations, HLE bindings,
 /// SDK interposition, x18 / tpidr rewrites, game hooks, then makes the code executable. Nothing of the guest has run yet.
 fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
@@ -2093,4 +2122,11 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         mod_inits,
         game_subsdk_inits,
     })
+}
+
+/// Runs a game. This host has no runtime yet: guest code runs natively only on Apple Silicon, and the lifted runtime
+/// for other hosts is not written yet (docs/windows-port.md).
+#[cfg(not(nx_native))]
+pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
+    Err("nxport cannot run games on this host yet (see docs/windows-port.md)".into())
 }

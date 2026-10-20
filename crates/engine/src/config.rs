@@ -44,6 +44,7 @@ pub fn app_bundle_settings() -> Option<crate::settings::SettingsPatch> {
 
 /// The aspect (width / height) to present the game's picture at: the screen shape asked for (--aspect) when the game's
 /// profile made the game render at it, else None (the game's own output aspect, letterboxed to the screen).
+#[cfg(nx_native)]
 pub fn display_aspect() -> Option<f64> {
     crate::profile::rendered_aspect()
 }

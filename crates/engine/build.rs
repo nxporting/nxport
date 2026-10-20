@@ -1,4 +1,12 @@
 fn main() {
+    // nx_native: hosts that run guest code natively (cpu/, horizon/, host/, the Metal backend). Apple Silicon only so
+    // far; Windows on arm64 is meant to join (docs/windows-port.md). Other hosts build the platform-independent parts.
+    println!("cargo::rustc-check-cfg=cfg(nx_native)");
+    let vendor = std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if vendor == "apple" && arch == "aarch64" {
+        println!("cargo::rustc-cfg=nx_native");
+    }
     // NativeAOT shader translator for macOS runtime translation (built if not already present; dlopened at runtime).
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
