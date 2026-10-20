@@ -206,10 +206,12 @@ fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
                     g.listed_ns += ns;
                     if g.listed.is_empty() && g.listed_done == g.listed_n {
                         println!(
-                            "[+] Pipelines: {} listed compiled ({} failed), {:.1} s of compile time",
+                            "[+] Pipelines: {} listed compiled ({} failed), {:.1} s of compile time{}",
                             g.listed_done,
                             g.listed_failed,
-                            g.listed_ns as f64 / 1e9
+                            g.listed_ns as f64 / 1e9,
+                            super::pipeline_archive::stats()
+                                .map_or(String::new(), |(h, m)| format!("; {h} from binary archives, {m} not in them"))
                         );
                     }
                 })
@@ -543,18 +545,15 @@ impl ShaderLibs {
         constants: &MTLFunctionConstantValues,
     ) -> Result<Retained<ProtocolObject<dyn MTLFunction>>, String> {
         if let Some(&i) = self.by_entry.get(base) {
-            return self.libs[i]
-                .newFunctionWithName_constantValues_error(&NSString::from_str(name), constants)
+            return super::pipeline_archive::function(&self.libs[i], name, constants)
                 .map_err(|e| e.localizedDescription().to_string());
         }
         if let Some(lib) = self.dynamic_libs.lock().unwrap().get(base) {
-            return lib
-                .newFunctionWithName_constantValues_error(&NSString::from_str(name), constants)
+            return super::pipeline_archive::function(&lib, name, constants)
                 .map_err(|e| e.localizedDescription().to_string());
         }
         if let Some(lib) = dynamic_libs().lock().unwrap().get(base) {
-            return lib
-                .newFunctionWithName_constantValues_error(&NSString::from_str(name), constants)
+            return super::pipeline_archive::function(&lib, name, constants)
                 .map_err(|e| e.localizedDescription().to_string());
         }
         Err(format!("{} is not in any shader library", base))
@@ -566,18 +565,15 @@ impl ShaderLibs {
         constants: &MTLFunctionConstantValues,
     ) -> Result<Retained<ProtocolObject<dyn MTLFunction>>, String> {
         if let Some(&i) = self.by_entry.get(entry) {
-            return self.libs[i]
-                .newFunctionWithName_constantValues_error(&NSString::from_str(entry), constants)
+            return super::pipeline_archive::function(&self.libs[i], entry, constants)
                 .map_err(|e| e.localizedDescription().to_string());
         }
         if let Some(lib) = self.dynamic_libs.lock().unwrap().get(entry) {
-            return lib
-                .newFunctionWithName_constantValues_error(&NSString::from_str(entry), constants)
+            return super::pipeline_archive::function(&lib, entry, constants)
                 .map_err(|e| e.localizedDescription().to_string());
         }
         if let Some(lib) = dynamic_libs().lock().unwrap().get(entry) {
-            return lib
-                .newFunctionWithName_constantValues_error(&NSString::from_str(entry), constants)
+            return super::pipeline_archive::function(&lib, entry, constants)
                 .map_err(|e| e.localizedDescription().to_string());
         }
         Err(format!("{} is not in any shader library", entry))
@@ -7047,289 +7043,314 @@ impl Gfx {
         _blend_color: [f32; 4],
         batched: bool,
     ) -> Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-        let set_int = |cv: &MTLFunctionConstantValues, id: usize, v: i32| unsafe {
+        let desc = pipeline_descriptor(
+            &self.device,
+            lib,
+            vs,
+            fs,
+            attrs,
+            streams_used,
+            vertex_streams,
+            color_pfs,
+            depth_pf,
+            depth_gl,
+            y_negate(),
+            point_size,
+            blends,
+            color_state,
+            channel_mask,
+            batched,
+        )?;
+        super::pipeline_archive::create(&self.device, &desc, &vs.entry, fs.map_or("-", |f| f.entry.as_str()))
+    }
+}
+
+/// The render pipeline descriptor of a translated draw (shaders, function constants, vertex layout, targets, blending);
+/// `y_negate`: the window origin the game uses (NVN's lower-left origin flips y).
+pub(super) fn pipeline_descriptor(
+    device: &super::Device,
+    lib: &ShaderLibs,
+    vs: &CachedStage,
+    fs: Option<&CachedStage>,
+    attrs: &[(u32, MTLVertexFormat, usize, usize, i32)],
+    streams_used: &[bool; MAX_STREAMS],
+    vertex_streams: &[u64],
+    color_pfs: &[MTLPixelFormat],
+    depth_pf: MTLPixelFormat,
+    depth_gl: bool,
+    y_negate: bool,
+    point_size: f32,
+    blends: &[u64; 8],
+    color_state: u32,
+    channel_mask: u32,
+    batched: bool,
+) -> Option<Retained<MTLRenderPipelineDescriptor>> {
+
+    let set_int = |cv: &MTLFunctionConstantValues, id: usize, v: i32| unsafe {
+        cv.setConstantValue_type_atIndex(
+            std::ptr::NonNull::new(&v as *const i32 as *mut libc::c_void).unwrap(),
+            MTLDataType::Int,
+            id,
+        );
+    };
+
+    let vcv = MTLFunctionConstantValues::new();
+    for (loc, _, _, _, kind) in attrs {
+        set_int(&vcv, *loc as usize, *kind);
+    }
+    unsafe {
+        let b = depth_gl;
+        vcv.setConstantValue_type_atIndex(
+            std::ptr::NonNull::new(&b as *const bool as *mut libc::c_void).unwrap(),
+            MTLDataType::Bool,
+            40,
+        );
+        let yn = y_negate;
+        vcv.setConstantValue_type_atIndex(
+            std::ptr::NonNull::new(&yn as *const bool as *mut libc::c_void).unwrap(),
+            MTLDataType::Bool,
+            41,
+        );
+        vcv.setConstantValue_type_atIndex(
+            std::ptr::NonNull::new(&point_size as *const f32 as *mut libc::c_void).unwrap(),
+            MTLDataType::Float,
+            42,
+        );
+    }
+    // Batched pipelines (metal/batch.rs) use the stages' tb_<entry> variants; a fragment stage without one reads no
+    // constant buffer and stays as it is.
+    let vres = if batched {
+        lib.kernel(&vs.entry, &format!("tb_{}", vs.entry), &vcv)
+    } else {
+        lib.function(&vs.entry, &vcv)
+    };
+    let mut vfn = match vres {
+        Ok(f) => f,
+        Err(e) => {
+            println!("[!] Gfx: vertex function {}: {}", vs.entry, e);
+            return None;
+        }
+    };
+    // Debug: --debug-vs-file=<path.metal> replaces the vertex function whose entry name the file defines (an
+    // edited copy of a translated shader), compiled at runtime with the same function constants.
+    // A comma-separated list of files replaces each vertex function one of them defines.
+    if let Some(src) = crate::settings::get()
+        .debug
+        .debug_vs_file
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .find(|src| src.contains(&format!("vertex {}_out {}(", vs.entry, vs.entry)))
+    {
+        match device
+            .newLibraryWithSource_options_error(&NSString::from_str(&src), None)
+        {
+            Ok(l) => match l
+                .newFunctionWithName_constantValues_error(&NSString::from_str(&vs.entry), &vcv)
+            {
+                Ok(f) => {
+                    println!(
+                        "[!] Gfx: --debug-vs-file: {} replaced by the debug source",
+                        vs.entry
+                    );
+                    vfn = f;
+                }
+                Err(e) => println!("[!] Gfx: debug VS function: {}", e),
+            },
+            Err(e) => println!("[!] Gfx: debug VS source: {}", e),
+        }
+    }
+
+    let desc = MTLRenderPipelineDescriptor::new();
+    desc.setVertexFunction(Some(&vfn));
+
+    if let Some(fs) = fs {
+        let fcv = MTLFunctionConstantValues::new();
+        for &loc in &fs.colors {
+            let pf = color_pfs
+                .get(loc as usize)
+                .copied()
+                .unwrap_or(MTLPixelFormat::Invalid);
+            set_int(&fcv, 32 + loc as usize, pf_kind(pf));
+        }
+        let set_bool = |cv: &MTLFunctionConstantValues, id: usize, v: bool| unsafe {
             cv.setConstantValue_type_atIndex(
-                std::ptr::NonNull::new(&v as *const i32 as *mut libc::c_void).unwrap(),
-                MTLDataType::Int,
+                std::ptr::NonNull::new(&v as *const bool as *mut libc::c_void).unwrap(),
+                MTLDataType::Bool,
                 id,
             );
         };
-
-        let vcv = MTLFunctionConstantValues::new();
-        for (loc, _, _, _, kind) in attrs {
-            set_int(&vcv, *loc as usize, *kind);
+        // A depth write with no depth target is dropped (as on the GPU); Metal rejects the pipeline otherwise.
+        set_bool(&fcv, 43, depth_pf != MTLPixelFormat::Invalid);
+        // Varyings the vertex stage does not write read as zero (Metal rejects an unmatched fragment input).
+        for &loc in &fs.varyings {
+            set_bool(&fcv, 48 + loc as usize, vs.varyings.contains(&loc));
         }
-        unsafe {
-            let b = depth_gl;
-            vcv.setConstantValue_type_atIndex(
-                std::ptr::NonNull::new(&b as *const bool as *mut libc::c_void).unwrap(),
-                MTLDataType::Bool,
-                40,
-            );
-            let yn = y_negate();
-            vcv.setConstantValue_type_atIndex(
-                std::ptr::NonNull::new(&yn as *const bool as *mut libc::c_void).unwrap(),
-                MTLDataType::Bool,
-                41,
-            );
-            vcv.setConstantValue_type_atIndex(
-                std::ptr::NonNull::new(&point_size as *const f32 as *mut libc::c_void).unwrap(),
-                MTLDataType::Float,
-                42,
-            );
-        }
-        // Batched pipelines (metal/batch.rs) use the stages' tb_<entry> variants; a fragment stage without one reads no
-        // constant buffer and stays as it is.
-        let vres = if batched {
-            lib.kernel(&vs.entry, &format!("tb_{}", vs.entry), &vcv)
+        let fres = if batched && fs.batch_cbufs.is_some() {
+            lib.kernel(&fs.entry, &format!("tb_{}", fs.entry), &fcv)
         } else {
-            lib.function(&vs.entry, &vcv)
+            lib.function(&fs.entry, &fcv)
         };
-        let mut vfn = match vres {
+        let ffn = match fres {
             Ok(f) => f,
             Err(e) => {
-                println!("[!] Gfx: vertex function {}: {}", vs.entry, e);
+                println!("[!] Gfx: fragment function {}: {}", fs.entry, e);
                 return None;
             }
         };
-        // Debug: --debug-vs-file=<path.metal> replaces the vertex function whose entry name the file defines (an
-        // edited copy of a translated shader), compiled at runtime with the same function constants.
-        // A comma-separated list of files replaces each vertex function one of them defines.
-        if let Some(src) = crate::settings::get()
+        // Debug: --debug-red-fs=<fragment entry> draws solid red instead (separates geometry from shading).
+        let red =
+            crate::settings::get().debug.debug_red_fs.as_deref() == Some(fs.entry.as_str());
+        // Debug: --debug-fs-file=<path.metal> replaces the fragment function whose entry name the file defines
+        // (an edited copy of a translated shader), compiled at runtime with the same function constants.
+        let debug_src = crate::settings::get()
             .debug
-            .debug_vs_file
+            .debug_fs_file
             .iter()
             .filter_map(|p| std::fs::read_to_string(p).ok())
-            .find(|src| src.contains(&format!("vertex {}_out {}(", vs.entry, vs.entry)))
-        {
-            match self
-                .device
+            .find(|src| src.contains(&format!("fragment {}_out {}(", fs.entry, fs.entry)));
+        if let Some(src) = debug_src {
+            match device
                 .newLibraryWithSource_options_error(&NSString::from_str(&src), None)
             {
-                Ok(l) => match l
-                    .newFunctionWithName_constantValues_error(&NSString::from_str(&vs.entry), &vcv)
-                {
+                Ok(l) => match l.newFunctionWithName_constantValues_error(
+                    &NSString::from_str(&fs.entry),
+                    &fcv,
+                ) {
                     Ok(f) => {
                         println!(
-                            "[!] Gfx: --debug-vs-file: {} replaced by the debug source",
-                            vs.entry
+                            "[!] Gfx: --debug-fs-file: {} replaced by the debug source",
+                            fs.entry
                         );
-                        vfn = f;
+                        desc.setFragmentFunction(Some(&f));
                     }
-                    Err(e) => println!("[!] Gfx: debug VS function: {}", e),
+                    Err(e) => println!("[!] Gfx: debug FS function: {}", e),
                 },
-                Err(e) => println!("[!] Gfx: debug VS source: {}", e),
+                Err(e) => println!("[!] Gfx: debug FS source: {}", e),
             }
-        }
-
-        let desc = MTLRenderPipelineDescriptor::new();
-        desc.setVertexFunction(Some(&vfn));
-
-        if let Some(fs) = fs {
-            let fcv = MTLFunctionConstantValues::new();
-            for &loc in &fs.colors {
-                let pf = color_pfs
-                    .get(loc as usize)
-                    .copied()
-                    .unwrap_or(MTLPixelFormat::Invalid);
-                set_int(&fcv, 32 + loc as usize, pf_kind(pf));
-            }
-            let set_bool = |cv: &MTLFunctionConstantValues, id: usize, v: bool| unsafe {
-                cv.setConstantValue_type_atIndex(
-                    std::ptr::NonNull::new(&v as *const bool as *mut libc::c_void).unwrap(),
-                    MTLDataType::Bool,
-                    id,
-                );
-            };
-            // A depth write with no depth target is dropped (as on the GPU); Metal rejects the pipeline otherwise.
-            set_bool(&fcv, 43, depth_pf != MTLPixelFormat::Invalid);
-            // Varyings the vertex stage does not write read as zero (Metal rejects an unmatched fragment input).
-            for &loc in &fs.varyings {
-                set_bool(&fcv, 48 + loc as usize, vs.varyings.contains(&loc));
-            }
-            let fres = if batched && fs.batch_cbufs.is_some() {
-                lib.kernel(&fs.entry, &format!("tb_{}", fs.entry), &fcv)
-            } else {
-                lib.function(&fs.entry, &fcv)
-            };
-            let ffn = match fres {
-                Ok(f) => f,
-                Err(e) => {
-                    println!("[!] Gfx: fragment function {}: {}", fs.entry, e);
-                    return None;
-                }
-            };
-            // Debug: --debug-red-fs=<fragment entry> draws solid red instead (separates geometry from shading).
-            let red =
-                crate::settings::get().debug.debug_red_fs.as_deref() == Some(fs.entry.as_str());
-            // Debug: --debug-fs-file=<path.metal> replaces the fragment function whose entry name the file defines
-            // (an edited copy of a translated shader), compiled at runtime with the same function constants.
-            let debug_src = crate::settings::get()
-                .debug
-                .debug_fs_file
-                .iter()
-                .filter_map(|p| std::fs::read_to_string(p).ok())
-                .find(|src| src.contains(&format!("fragment {}_out {}(", fs.entry, fs.entry)));
-            if let Some(src) = debug_src {
-                match self
-                    .device
-                    .newLibraryWithSource_options_error(&NSString::from_str(&src), None)
-                {
-                    Ok(l) => match l.newFunctionWithName_constantValues_error(
-                        &NSString::from_str(&fs.entry),
-                        &fcv,
-                    ) {
-                        Ok(f) => {
-                            println!(
-                                "[!] Gfx: --debug-fs-file: {} replaced by the debug source",
-                                fs.entry
-                            );
-                            desc.setFragmentFunction(Some(&f));
-                        }
-                        Err(e) => println!("[!] Gfx: debug FS function: {}", e),
-                    },
-                    Err(e) => println!("[!] Gfx: debug FS source: {}", e),
-                }
-            } else if red {
-                let src = "#include <metal_stdlib>\nusing namespace metal;\nfragment float4 dbg_red() { return float4(1.0, 0.0, 0.0, 1.0); }\n";
-                match self
-                    .device
-                    .newLibraryWithSource_options_error(&NSString::from_str(src), None)
-                {
-                    Ok(l) => {
-                        if let Some(f) = l.newFunctionWithName(&NSString::from_str("dbg_red")) {
-                            println!(
-                                "[!] Gfx: --debug-red-fs: {} replaced with solid red",
-                                fs.entry
-                            );
-                            desc.setFragmentFunction(Some(&f));
-                        }
+        } else if red {
+            let src = "#include <metal_stdlib>\nusing namespace metal;\nfragment float4 dbg_red() { return float4(1.0, 0.0, 0.0, 1.0); }\n";
+            match device
+                .newLibraryWithSource_options_error(&NSString::from_str(src), None)
+            {
+                Ok(l) => {
+                    if let Some(f) = l.newFunctionWithName(&NSString::from_str("dbg_red")) {
+                        println!(
+                            "[!] Gfx: --debug-red-fs: {} replaced with solid red",
+                            fs.entry
+                        );
+                        desc.setFragmentFunction(Some(&f));
                     }
-                    Err(e) => println!("[!] Gfx: debug red shader: {}", e),
                 }
-            } else {
-                desc.setFragmentFunction(Some(&ffn));
+                Err(e) => println!("[!] Gfx: debug red shader: {}", e),
             }
+        } else {
+            desc.setFragmentFunction(Some(&ffn));
         }
+    }
 
-        // Vertex descriptor.
-        let vd = MTLVertexDescriptor::new();
-        unsafe {
-            for (loc, fmt, buf, off, _) in attrs {
-                let a = vd.attributes().objectAtIndexedSubscript(*loc as usize);
-                a.setFormat(*fmt);
-                a.setOffset(*off);
-                a.setBufferIndex(*buf);
+    // Vertex descriptor.
+    let vd = MTLVertexDescriptor::new();
+    unsafe {
+        for (loc, fmt, buf, off, _) in attrs {
+            let a = vd.attributes().objectAtIndexedSubscript(*loc as usize);
+            a.setFormat(*fmt);
+            a.setOffset(*off);
+            a.setBufferIndex(*buf);
+        }
+        for s in 0..MAX_STREAMS {
+            if !streams_used[s] {
+                continue;
             }
-            for s in 0..MAX_STREAMS {
-                if !streams_used[s] {
-                    continue;
-                }
-                let bits = vertex_streams.get(s).copied().unwrap_or(0);
-                let (stride, divisor) = ((bits & 0xFFFF_FFFF) as usize, (bits >> 32) as usize);
-                let l = vd.layouts().objectAtIndexedSubscript(VB_BASE - s);
-                if stride == 0 {
-                    l.setStepFunction(MTLVertexStepFunction::Constant);
-                    l.setStepRate(0);
-                    l.setStride(16);
-                } else if divisor == 0 {
-                    l.setStepFunction(MTLVertexStepFunction::PerVertex);
-                    l.setStepRate(1);
-                    l.setStride(stride);
-                } else {
-                    l.setStepFunction(MTLVertexStepFunction::PerInstance);
-                    l.setStepRate(divisor);
-                    l.setStride(stride);
-                }
-            }
-            if attrs.iter().any(|a| a.2 == DEFAULT_ATTR_BUFFER) {
-                let l = vd.layouts().objectAtIndexedSubscript(DEFAULT_ATTR_BUFFER);
+            let bits = vertex_streams.get(s).copied().unwrap_or(0);
+            let (stride, divisor) = ((bits & 0xFFFF_FFFF) as usize, (bits >> 32) as usize);
+            let l = vd.layouts().objectAtIndexedSubscript(VB_BASE - s);
+            if stride == 0 {
                 l.setStepFunction(MTLVertexStepFunction::Constant);
                 l.setStepRate(0);
                 l.setStride(16);
+            } else if divisor == 0 {
+                l.setStepFunction(MTLVertexStepFunction::PerVertex);
+                l.setStepRate(1);
+                l.setStride(stride);
+            } else {
+                l.setStepFunction(MTLVertexStepFunction::PerInstance);
+                l.setStepRate(divisor);
+                l.setStride(stride);
             }
         }
-        if !attrs.is_empty() {
-            desc.setVertexDescriptor(Some(&vd));
-        }
-
-        // Blend state: factors/equations from NVNblendState, per-target enable from NVNcolorState, write masks from
-        // NVNchannelMaskState (4 bits per target: r, g, b, a).
-        unsafe {
-            for (i, pf) in color_pfs.iter().enumerate() {
-                if *pf == MTLPixelFormat::Invalid {
-                    continue;
-                }
-                let blend = blends[i];
-                let src_rgb = nvn_blend_factor(((blend >> 4) & 0x3F) as u32);
-                let dst_rgb = nvn_blend_factor(((blend >> 10) & 0x3F) as u32);
-                let src_a = nvn_blend_factor(((blend >> 16) & 0x3F) as u32);
-                let dst_a = nvn_blend_factor(((blend >> 22) & 0x3F) as u32);
-                let rgb_op = nvn_blend_op(((blend >> 28) & 0xF) as u32);
-                let a_op = nvn_blend_op(((blend >> 32) & 0xF) as u32);
-                let ca = desc.colorAttachments().objectAtIndexedSubscript(i);
-                ca.setPixelFormat(*pf);
-                let blendable = pf_kind(*pf) == 0;
-                ca.setBlendingEnabled(blendable && (color_state >> i) & 1 != 0);
-                ca.setRgbBlendOperation(rgb_op);
-                ca.setAlphaBlendOperation(a_op);
-                ca.setSourceRGBBlendFactor(src_rgb);
-                ca.setDestinationRGBBlendFactor(dst_rgb);
-                ca.setSourceAlphaBlendFactor(src_a);
-                ca.setDestinationAlphaBlendFactor(dst_a);
-                // Outputs the fragment shader never writes must leave the target untouched (Maxwell keeps it; Apple GPUs
-                // store undefined data, in practice zeros, which wiped G-buffer targets in passes with fewer outputs).
-                let written = fs.map_or(false, |f| f.colors.contains(&(i as u32)));
-                let m = if written {
-                    (channel_mask >> (i * 4)) & 0xF
-                } else {
-                    0
-                };
-                let mut mask = MTLColorWriteMask::empty();
-                if m & 1 != 0 {
-                    mask |= MTLColorWriteMask::Red;
-                }
-                if m & 2 != 0 {
-                    mask |= MTLColorWriteMask::Green;
-                }
-                if m & 4 != 0 {
-                    mask |= MTLColorWriteMask::Blue;
-                }
-                if m & 8 != 0 {
-                    mask |= MTLColorWriteMask::Alpha;
-                }
-                ca.setWriteMask(mask);
-            }
-        }
-        if depth_pf != MTLPixelFormat::Invalid {
-            desc.setDepthAttachmentPixelFormat(depth_pf);
-            if matches!(
-                depth_pf,
-                MTLPixelFormat::Depth32Float_Stencil8 | MTLPixelFormat::Stencil8
-            ) {
-                desc.setStencilAttachmentPixelFormat(depth_pf);
-            }
-        }
-        if fs.is_none() {
-            desc.setRasterizationEnabled(false);
-        }
-
-        match self
-            .device
-            .newRenderPipelineStateWithDescriptor_error(&desc)
-        {
-            Ok(p) => Some(p),
-            Err(e) => {
-                println!(
-                    "[!] Gfx: translated pipeline {} / {}: {}",
-                    vs.entry,
-                    fs.map_or("-", |f| &f.entry),
-                    e.localizedDescription()
-                );
-                None
-            }
+        if attrs.iter().any(|a| a.2 == DEFAULT_ATTR_BUFFER) {
+            let l = vd.layouts().objectAtIndexedSubscript(DEFAULT_ATTR_BUFFER);
+            l.setStepFunction(MTLVertexStepFunction::Constant);
+            l.setStepRate(0);
+            l.setStride(16);
         }
     }
+    if !attrs.is_empty() {
+        desc.setVertexDescriptor(Some(&vd));
+    }
+
+    // Blend state: factors/equations from NVNblendState, per-target enable from NVNcolorState, write masks from
+    // NVNchannelMaskState (4 bits per target: r, g, b, a).
+    unsafe {
+        for (i, pf) in color_pfs.iter().enumerate() {
+            if *pf == MTLPixelFormat::Invalid {
+                continue;
+            }
+            let blend = blends[i];
+            let src_rgb = nvn_blend_factor(((blend >> 4) & 0x3F) as u32);
+            let dst_rgb = nvn_blend_factor(((blend >> 10) & 0x3F) as u32);
+            let src_a = nvn_blend_factor(((blend >> 16) & 0x3F) as u32);
+            let dst_a = nvn_blend_factor(((blend >> 22) & 0x3F) as u32);
+            let rgb_op = nvn_blend_op(((blend >> 28) & 0xF) as u32);
+            let a_op = nvn_blend_op(((blend >> 32) & 0xF) as u32);
+            let ca = desc.colorAttachments().objectAtIndexedSubscript(i);
+            ca.setPixelFormat(*pf);
+            let blendable = pf_kind(*pf) == 0;
+            ca.setBlendingEnabled(blendable && (color_state >> i) & 1 != 0);
+            ca.setRgbBlendOperation(rgb_op);
+            ca.setAlphaBlendOperation(a_op);
+            ca.setSourceRGBBlendFactor(src_rgb);
+            ca.setDestinationRGBBlendFactor(dst_rgb);
+            ca.setSourceAlphaBlendFactor(src_a);
+            ca.setDestinationAlphaBlendFactor(dst_a);
+            // Outputs the fragment shader never writes must leave the target untouched (Maxwell keeps it; Apple GPUs
+            // store undefined data, in practice zeros, which wiped G-buffer targets in passes with fewer outputs).
+            let written = fs.map_or(false, |f| f.colors.contains(&(i as u32)));
+            let m = if written {
+                (channel_mask >> (i * 4)) & 0xF
+            } else {
+                0
+            };
+            let mut mask = MTLColorWriteMask::empty();
+            if m & 1 != 0 {
+                mask |= MTLColorWriteMask::Red;
+            }
+            if m & 2 != 0 {
+                mask |= MTLColorWriteMask::Green;
+            }
+            if m & 4 != 0 {
+                mask |= MTLColorWriteMask::Blue;
+            }
+            if m & 8 != 0 {
+                mask |= MTLColorWriteMask::Alpha;
+            }
+            ca.setWriteMask(mask);
+        }
+    }
+    if depth_pf != MTLPixelFormat::Invalid {
+        desc.setDepthAttachmentPixelFormat(depth_pf);
+        if matches!(
+            depth_pf,
+            MTLPixelFormat::Depth32Float_Stencil8 | MTLPixelFormat::Stencil8
+        ) {
+            desc.setStencilAttachmentPixelFormat(depth_pf);
+        }
+    }
+    if fs.is_none() {
+        desc.setRasterizationEnabled(false);
+    }
+
+    Some(desc)
 }
 
 /// NVNblendState defaults (nvnBlendStateSetDefaults): ONE/ZERO factors, ADD equations.

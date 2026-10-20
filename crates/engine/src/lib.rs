@@ -56,6 +56,9 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
             libc::setrlimit(libc::RLIMIT_NOFILE, &r);
         }
     }
+    if let Some(out) = &s.graphics.build_pipeline_archive {
+        return metal::pipeline_archive::build(out, s.graphics.pipeline_archive_script).map_err(Into::into);
+    }
     let Loaded {
         mem_space,
         sdk: _sdk,

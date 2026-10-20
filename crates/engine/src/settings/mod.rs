@@ -216,6 +216,13 @@ group! {
         /// Keep the shared pipeline list up to date: download it when the game starts (when it changed) and prepare
         /// the pipelines other players' games used, to avoid stutter the first time something is drawn.
         fetch_pipelines: bool = true,
+        /// Create pipelines from the shader cache's binary archives (precompiled GPU code) when they have them
+        pipeline_archive: bool = true,
+        /// Compile the shader cache's pipeline list into binary archives in this directory, then exit
+        build_pipeline_archive: Option<PathBuf> = None,
+        /// With --build-pipeline-archive: archives that keep their function names plus a pipeline script
+        /// (pipelines.mtlp-json) for compiling them for another GPU with metal-tt
+        pipeline_archive_script: bool = false,
         /// Where the shared pipeline lists are downloaded from
         fetch_pipelines_url: Option<String> = None,
         /// Help other players avoid stutter: send the render pipelines this game used that the shared list lacks.
