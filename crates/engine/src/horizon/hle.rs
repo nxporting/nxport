@@ -2615,13 +2615,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryPages(address: usize, size: usi
     let page_len = page_end - page_start;
     // These pages are made writable and zeroed below without faulting: tell write tracking.
     crate::guest::dirty_track::before_host_write(page_start, page_len);
-    let res = libc::mprotect(
-        page_start as *mut libc::c_void,
-        page_len,
-        libc::PROT_READ | libc::PROT_WRITE,
-    );
-    if res != 0 {
-        let err = std::io::Error::last_os_error();
+    if let Err(err) = crate::os::protect(page_start, page_len, crate::os::Prot::ReadWrite) {
         println!(
             "[!] HLE: nn::os::AllocateMemoryPages(addr=0x{:x}, size={}) FAILED: {}",
             address, size, err

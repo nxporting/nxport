@@ -14,9 +14,6 @@ const ACQUIRE: u32 = 1 << 15;
 
 /// Rewrites every load-exclusive in the given text ranges (start, len, already executable). Returns the count.
 pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
     let mut n = 0;
     for &(start, len, executable) in ranges {
         let mut open_page = usize::MAX;
@@ -31,7 +28,7 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
                 if open_page != usize::MAX {
                     crate::cpu::aot::protect_rx(open_page, 0x4000);
                 }
-                libc::mprotect(page as *mut libc::c_void, 0x4000, libc::PROT_READ | libc::PROT_WRITE);
+                let _ = crate::os::protect(page, 0x4000, crate::os::Prot::ReadWrite);
                 open_page = page;
             }
             *p = w | ACQUIRE;
@@ -40,7 +37,7 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
         if open_page != usize::MAX {
             crate::cpu::aot::protect_rx(open_page, 0x4000);
         }
-        sys_icache_invalidate(start as *mut libc::c_void, len);
+        crate::os::flush_icache(start, len);
     }
     n
 }

@@ -164,11 +164,7 @@ pub unsafe fn make_exec(name: &str, start: usize, len: usize) -> i32 {
         }
         return 0;
     }
-    libc::mprotect(
-        s as *mut libc::c_void,
-        e - s,
-        libc::PROT_READ | libc::PROT_EXEC,
-    )
+    crate::os::protect(s, e - s, crate::os::Prot::ReadExec).map_or(-1, |()| 0)
 }
 
 /// mprotect read+execute for code that is patched again later (flipped RW / RX around each write): a no-op when
@@ -177,11 +173,7 @@ pub unsafe fn protect_rx(start: usize, len: usize) -> i32 {
     if loading() {
         return 0;
     }
-    libc::mprotect(
-        start as *mut libc::c_void,
-        len,
-        libc::PROT_READ | libc::PROT_EXEC,
-    )
+    crate::os::protect(start, len, crate::os::Prot::ReadExec).map_or(-1, |()| 0)
 }
 
 /// Literal pool for per-run values (host function addresses, data pointers) that patched code loads with

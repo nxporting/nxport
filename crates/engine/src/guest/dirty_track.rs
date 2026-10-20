@@ -169,9 +169,9 @@ pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
             ANY.fetch_add(1, Ordering::Relaxed);
         }
     }
-    let r = libc::mprotect(page0 as *mut libc::c_void, end - page0, libc::PROT_READ);
+    let r = crate::os::protect(page0, end - page0, crate::os::Prot::Read);
     crate::gpu::backend().pages_reprotected(page0, end - page0);
-    if r != 0 {
+    if r.is_err() {
         for p in first..=last {
             f[p].fetch_and(!PROTECTED, Ordering::AcqRel);
         }
@@ -206,11 +206,7 @@ pub unsafe fn handle_fault(addr: usize) -> bool {
     // Clear the flag, unprotect, then bump (see the comment on `Domain`). The flag goes first: a check that still saw
     // it set while the page was already writable could skip a texture the write is about to change.
     f[p].fetch_and(!PROTECTED, Ordering::AcqRel);
-    libc::mprotect(
-        (addr & !(PAGE - 1)) as *mut libc::c_void,
-        PAGE,
-        libc::PROT_READ | libc::PROT_WRITE,
-    );
+    let _ = crate::os::protect(((addr & !(PAGE - 1))) as usize, PAGE, crate::os::Prot::ReadWrite);
     crate::gpu::backend().pages_reprotected(addr & !(PAGE - 1), PAGE);
     g[p].fetch_add(1, Ordering::AcqRel);
     FAULTS.fetch_add(1, Ordering::Relaxed);
@@ -242,11 +238,7 @@ unsafe fn unprotect_pages(
             f[q].fetch_and(!PROTECTED, Ordering::AcqRel);
             f[q].fetch_or(extra, Ordering::AcqRel);
         }
-        libc::mprotect(
-            (base + run * PAGE) as *mut libc::c_void,
-            (p - run) * PAGE,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
+        let _ = crate::os::protect(((base + run * PAGE)) as usize, (p - run) * PAGE, crate::os::Prot::ReadWrite);
         crate::gpu::backend().pages_reprotected(base + run * PAGE, (p - run) * PAGE);
         for q in run..p {
             g[q].fetch_add(1, Ordering::AcqRel);

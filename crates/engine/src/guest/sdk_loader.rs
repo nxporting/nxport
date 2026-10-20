@@ -68,11 +68,7 @@ impl SdkModule {
         unsafe {
             let page = addr & !0x3fff;
             let span = ((addr + 16 + 0x3fff) & !0x3fff) - page;
-            libc::mprotect(
-                page as *mut libc::c_void,
-                span,
-                libc::PROT_READ | libc::PROT_WRITE,
-            );
+            let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
             let p = addr as *mut u32;
             // The target comes from a literal (data), not the code: patched code must be the same on every launch
             // (AOT images, cpu/aot.rs).
@@ -82,10 +78,7 @@ impl SdkModule {
             ptr::write(p.add(2), 0xD61F_0200); // br x16
             ptr::write(p.add(3), 0xD503_201F); // nop
             crate::cpu::aot::protect_rx(page, span);
-            extern "C" {
-                fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-            }
-            sys_icache_invalidate(addr as *mut libc::c_void, 16);
+            crate::os::flush_icache(addr as usize, 16);
         }
         true
     }
@@ -130,11 +123,7 @@ impl SdkModule {
         };
         // Stub: adrp x16; ldr x16, <literal: target>; br x16; nop
         let page = stub & !0x3fff;
-        libc::mprotect(
-            page as *mut libc::c_void,
-            0x4000,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
+        let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
         let p = stub as *mut u32;
         let [adrp, ldr] = crate::cpu::aot::adrp_ldr(stub, crate::cpu::aot::literal(target), 16);
         ptr::write(p, adrp);
@@ -142,19 +131,12 @@ impl SdkModule {
         ptr::write(p.add(2), 0xD61F_0200);
         ptr::write(p.add(3), 0xD503_201F);
         crate::cpu::aot::make_exec("sdk.short_island", page, 0x4000);
-        extern "C" {
-            fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-        }
-        sys_icache_invalidate(stub as *mut libc::c_void, 16);
+        crate::os::flush_icache(stub as usize, 16);
         let fpage = addr & !0x3fff;
-        libc::mprotect(
-            fpage as *mut libc::c_void,
-            0x4000,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
+        let _ = crate::os::protect(fpage as usize, 0x4000, crate::os::Prot::ReadWrite);
         ptr::write(addr as *mut u32, b);
         crate::cpu::aot::protect_rx(fpage, 0x4000);
-        sys_icache_invalidate(addr as *mut libc::c_void, 4);
+        crate::os::flush_icache(addr as usize, 4);
         true
     }
 }
