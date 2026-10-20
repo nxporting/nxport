@@ -538,10 +538,11 @@ fn apply_relocations_from_mod0(
     dynstr_host: usize,
     mem_space: &mut GuestMemorySpace,
 ) {
-    // Self-relative dynamic_offset at MOD0[4]: target = &mod0[4] + *(i32*)&mod0[4]
-    let dyn_field_va = text_mo + mod0_off + 4;
+    // MOD0's fields are offsets from the MOD0 header itself (magic at +0, .dynamic offset at +4); .dynamic holds
+    // standard Elf64_Dyn entries {i64 d_tag, u64 d_val}.
+    let mod0_va = text_mo + mod0_off;
     let dyn_rel = r_i32(text_raw, mod0_off + 4);
-    let dyn_va = (dyn_field_va as i64 + dyn_rel as i64) as usize;
+    let dyn_va = (mod0_va as i64 + dyn_rel as i64) as usize;
     let dyn_addr = base + dyn_va;
 
     println!(
@@ -549,79 +550,44 @@ fn apply_relocations_from_mod0(
         mod0_off, dyn_addr, dyn_va
     );
 
-    // Scan DT_DYNAMIC for RELA / RELASZ.
-    //
-    // The SDK's DT_DYNAMIC uses a non-standard layout where fields are swapped
-    // compared to ELF64 spec ({i64 d_tag, u64 d_val} → {u64 d_val, i64 d_tag}),
-    // and each 64-bit field stores its actual 32-bit integer at bytes [4..8]
-    // (the high u32 in little-endian), with bytes [0..4] zero:
-    //
-    //   bytes  0..4 : zero pad
-    //   bytes  4..8 : actual d_val (32-bit LE)
-    //   bytes  8..12: zero pad
-    //   bytes 12..16: actual d_tag (32-bit LE)
-    let mut rela_va: Option<usize> = None;
-    let mut rela_sz: usize = 0;
-    // DT_INIT_ARRAY (tag=25) val = start of .init_array = end of RELA table.
-    // Correct rela_sz = DT_INIT_ARRAY_val - rela_va.
-    let mut init_array_va: Option<usize> = None;
+    let (mut rela, mut relasz, mut jmprel, mut pltrelsz) = (None, 0usize, None, 0usize);
     let mut i = 0usize;
-    loop {
+    while i < 4096 && dyn_va + (i + 1) * 16 <= total_size {
         let entry = dyn_addr + i * 16;
-        if entry + 16 > base + (1 << 24) {
-            break;
-        }
-        let val = unsafe { ptr::read((entry + 4) as *const u32) } as usize;
-        let tag = unsafe { ptr::read((entry + 12) as *const u32) } as i64;
+        let tag = unsafe { ptr::read_unaligned(entry as *const i64) };
+        let val = unsafe { ptr::read_unaligned((entry + 8) as *const u64) } as usize;
         match tag {
             0 => break,
-            // The sdk module's DT_DYNAMIC swaps ELF tag 7 and 8:
-            // tag 8 = DT_RELA (VA), tag 7 = DT_RELASZ (size, but actually wrong —
-            // we use DT_INIT_ARRAY to bound the table instead)
-            8 => {
-                rela_va = Some(val);
-            }
-            7 => {
-                rela_sz = val;
-            }
-            25 => {
-                init_array_va = Some(val);
-            }
+            2 => pltrelsz = val,
+            7 => rela = Some(val),
+            8 => relasz = val,
+            23 => jmprel = Some(val),
             _ => {}
         }
         i += 1;
-        if i > 4096 {
-            break;
-        }
-    }
-
-    // DT_INIT_ARRAY immediately follows the RELA table in rodata; use it to
-    // compute the exact RELA table size, overriding the raw DT_RELASZ value.
-    if let (Some(rela_start), Some(ia)) = (rela_va, init_array_va) {
-        if ia > rela_start {
-            rela_sz = ia - rela_start;
-        }
     }
     println!(
-        "[+] SDK DT_DYNAMIC: {} entries, rela_va={:x?} rela_sz=0x{:x}",
-        i, rela_va, rela_sz
+        "[+] SDK DT_DYNAMIC: {} entries, rela={:x?}+0x{:x} jmprel={:x?}+0x{:x}",
+        i, rela, relasz, jmprel, pltrelsz
     );
-
-    let Some(rela_off) = rela_va else {
-        eprintln!("[!] SDK: no DT_RELA found in DT_DYNAMIC");
+    if rela.is_none() && jmprel.is_none() {
+        eprintln!("[!] SDK: no DT_RELA / DT_JMPREL in DT_DYNAMIC");
         return;
-    };
+    }
 
-    let entry_count = rela_sz / 24;
-    println!(
-        "[+] SDK: applying {} RELA entries (rela @ sdk+0x{:x})",
-        entry_count, rela_off
-    );
-
-    // Copy the RELA table before iterating: some entries target .rodata (vtables),
-    // which would corrupt entries we haven't read yet if we iterate in-place.
-    let rela_bytes: Vec<u8> =
-        unsafe { std::slice::from_raw_parts((base + rela_off) as *const u8, rela_sz).to_vec() };
+    // Copy the tables before applying them: some entries target .rodata (vtables), which would corrupt entries not
+    // read yet if applied in place.
+    let mut rela_bytes: Vec<u8> = Vec::new();
+    for (off, size) in [(rela, relasz), (jmprel, pltrelsz)] {
+        let Some(off) = off else { continue };
+        if off.saturating_add(size) > total_size {
+            eprintln!("[!] SDK: relocation table sdk+0x{off:x}+0x{size:x} outside the module");
+            continue;
+        }
+        rela_bytes.extend_from_slice(unsafe { std::slice::from_raw_parts((base + off) as *const u8, size) });
+    }
+    let entry_count = rela_bytes.len() / 24;
+    println!("[+] SDK: applying {} RELA entries", entry_count);
 
     let mut rel_count = 0usize;
     for j in 0..entry_count {
@@ -829,10 +795,10 @@ fn apply_relocations_from_mod0(
                                     .make_hle_trampoline(sdk_default_exception_stack as *const ())
                                     as usize,
                             ),
-                            "__rel_plt_start" => rela_va.map(|v| base + v),
-                            "__rel_plt_end" => rela_va.map(|v| base + v + rela_sz),
-                            "__rel_dyn_start" => rela_va.map(|v| base + v),
-                            "__rel_dyn_end" => rela_va.map(|v| base + v + rela_sz),
+                            "__rel_plt_start" => jmprel.map(|v| base + v),
+                            "__rel_plt_end" => jmprel.map(|v| base + v + pltrelsz),
+                            "__rel_dyn_start" => rela.map(|v| base + v),
+                            "__rel_dyn_end" => rela.map(|v| base + v + relasz),
                             other => {
                                 eprintln!("[!] SDK: Unresolved external symbol '{}' at offset 0x{:x} - binding to fallback stub", other, r_offset);
                                 Some(
