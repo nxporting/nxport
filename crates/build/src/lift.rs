@@ -13,7 +13,7 @@ use nxport_lifter::{ehframe, lift_module, Module, Options, Output};
 const R_AARCH64_RELATIVE: u64 = 1027;
 const STT_FUNC: u8 = 2;
 
-/// Lifts the NSO at `path`, loaded at guest address `base`, into `out_dir` (C files and the runtime headers).
+/// Lifts the NSO at `path`, loaded at guest address `base`, into `out_dir` (C files and the runtime files).
 pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Output, Box<dyn std::error::Error>> {
     let n = nxport::nso::Nso::read(path)?;
     let mut img = vec![0u8; n.image_size()];
@@ -52,7 +52,7 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
     let m = Module { name: name.to_string(), base, image: &img, text, seeds };
     let out = lift_module(&m, &Options::default());
     std::fs::create_dir_all(out_dir)?;
-    for (name, text) in nxport_lifter::RUNTIME_HEADERS {
+    for (name, text) in nxport_lifter::RUNTIME_FILES {
         std::fs::write(out_dir.join(name), text)?;
     }
     for (file, body) in &out.files {

@@ -296,6 +296,23 @@ pub fn adapter(addr: *const ()) -> Option<Hle> {
     registry().lock().unwrap().get(&(addr as usize)).copied()
 }
 
+fn entries() -> &'static Mutex<HashMap<u64, usize>> {
+    static E: OnceLock<Mutex<HashMap<u64, usize>>> = OnceLock::new();
+    E.get_or_init(Default::default)
+}
+
+/// Records that guest address `entry` (an HLE trampoline) enters HLE function `f`.
+pub fn bind_entry(entry: u64, f: *const ()) {
+    entries().lock().unwrap().insert(entry, f as usize);
+}
+
+/// The HLE function guest code reaches by branching to `addr`: through a trampoline (`bind_entry`), or the function's
+/// own address.
+pub fn entry(addr: u64) -> Option<Hle> {
+    let f = entries().lock().unwrap().get(&addr).copied().unwrap_or(addr as usize);
+    adapter(f as *const ())
+}
+
 /// `hle!(f(_, _))`: the address of HLE function `f` (two parameters), its adapter recorded; the same as
 /// `hle(f as unsafe extern "C" fn(_, _) -> _)`.
 #[macro_export]
@@ -412,5 +429,14 @@ mod tests {
         c.x[2] = 3;
         unsafe { adapter(p).expect("registered").call(&mut c) };
         assert_eq!(c.x[0], 6);
+    }
+
+    #[test]
+    fn entries_lead_to_their_functions() {
+        let trampoline = 0x7000_0123_4560;
+        bind_entry(trampoline, hle(add3 as unsafe extern "C" fn(_, _, _) -> _));
+        assert_eq!(entry(trampoline).map(Hle::addr), Some(add3 as *const ()));
+        assert_eq!(entry(add3 as *const () as u64).map(Hle::addr), Some(add3 as *const ())); // its own address too
+        assert!(entry(0x7000_0123_4570).is_none());
     }
 }
