@@ -227,7 +227,7 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     Ok(())
 }
 
-fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // The engine build.rs built from this tool's own source, else one next to this tool (a release).
     let candidates = [
         PathBuf::from(env!("NXPORT_ENGINE_MACOS")),
