@@ -2204,7 +2204,7 @@ fn vertex_format(nvn: u32) -> Option<(MTLVertexFormat, i32)> {
     })
 }
 
-fn pf_kind(pf: MTLPixelFormat) -> i32 {
+pub(super) fn pf_kind(pf: MTLPixelFormat) -> i32 {
     use MTLPixelFormat as P;
     match pf {
         P::R8Uint
