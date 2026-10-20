@@ -121,7 +121,7 @@ pub(super) fn precompile() {
 }
 
 /// The shared list's submission endpoint.
-const SHARE_URL: Option<&str> = None;
+const SHARE_URL: Option<&str> = Some("https://nxport-pipelines.greenlord.workers.dev/submit");
 /// Entries per submission (the endpoint refuses more).
 const SHARE_MAX: usize = 4000;
 
