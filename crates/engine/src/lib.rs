@@ -1424,6 +1424,16 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         horizon::fs::hle_nn_fs_MountSaveDataReadOnly
     );
     bind_import!(
+        "_ZN2nn2fs19MountDeviceSaveDataEPKc",
+        guest::loader::JUMP_SLOT,
+        horizon::fs::hle_nn_fs_MountDeviceSaveData
+    );
+    bind_import!(
+        "_ZN2nn2fs19MountDeviceSaveDataEPKcNS_3ncm13ApplicationIdE",
+        guest::loader::JUMP_SLOT,
+        horizon::fs::hle_nn_fs_MountDeviceSaveData
+    );
+    bind_import!(
         "_ZN2nn2fs21MountTemporaryStorageEPKc",
         guest::loader::JUMP_SLOT,
         horizon::fs::hle_nn_fs_MountTemporaryStorage
@@ -1534,6 +1544,11 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         "_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE",
         guest::loader::JUMP_SLOT,
         horizon::hle::hle_nn_vi_CreateLayer
+    );
+    bind_import!(
+        "_ZN2nn2vi19SetLayerScalingModeEPNS0_5LayerENS0_11ScalingModeE",
+        guest::loader::JUMP_SLOT,
+        horizon::hle::hle_nn_vi_SetLayerScalingMode
     );
     bind_import!(
         "_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE",
