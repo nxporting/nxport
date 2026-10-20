@@ -12,6 +12,11 @@ People like to know if you're using AI to write something, which is understandab
 3. If you're building for MacOS, you should now have an app you can play! If you're building for iOS, you'll have a .ipa that you can sideload with something like [Impactor](https://github.com/claration/Impactor).
 
 ## Screenshots
+<img width="2970" height="1498" alt="image" src="https://github.com/user-attachments/assets/9b2aa313-67e1-4b47-ae5f-6edb2d910fdc" />
+
+<img width="2024" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebba11ae-d5bc-4bd3-91c2-a2abd9065ec9" />
+
+
 
 ## Credits
 Greenlord/S41L0R - Started the project.
