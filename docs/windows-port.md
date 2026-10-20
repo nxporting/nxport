@@ -76,8 +76,11 @@ crate (`crates/lifter`) so the builder runs it without Python. Design follows LA
 - One C function per guest function, `void f_<addr>(Cpu *c)`. Direct branches inside a function are gotos. Direct
   calls are C calls. Indirect branches and returns to unknown targets go through `rt_dispatch`, which tail-calls
   (`musttail`) so jump chains do not grow the host stack.
-- Integer, memory and branch instructions become C. FP/SIMD becomes portable C (`--simd=c`, the x86 path; the
-  correct rounding and NaN behaviour is in the helpers) or, on arm64 hosts, inline asm (bit-exact).
+- Integer, memory and branch instructions become C. FP/SIMD, crypto and CRC32 become portable C over clang vector
+  types (`simd.rs`, runtime/simd.h and simd_fp.h from LAS Recomp): ARM NaN propagation, FPCR.DN / FZ / RMode,
+  saturating conversions, fused multiply-add, the ARM estimate tables. FPSR cumulative bits, QC and FP16
+  arithmetic (ARMv8.2) are not modelled. The generated C must be built with hardware FMA (x86-64-v3): MinGW's
+  software `fma` rounds denormal products wrongly, which the differential test caught.
 - Exclusives (ldxr/stxr) are emulated with compare-and-swap; acquire/release become atomics.
 - Function boundaries come from symbols, `.eh_frame`, call targets and HLE bindings. Jump tables are resolved by
   pattern plus emulation. A branch the lifter could not resolve falls back to an interpreter at runtime, not a fatal
@@ -109,16 +112,14 @@ more functions than a PE export table can hold (64K).
 
 **Measured on Super Mario Odyssey 1.3.0** (`nxport-cli lift`, the NSO as stored, not yet the patched image):
 
-| | main | sdk |
-|---|---|---|
-| functions / instructions | 54,215 / 2.67 M | 34,472 / 1.36 M |
-| not lifted: FP/SIMD | 284 k (10.7%) | 32 k (2.4%) |
-| not lifted: other | 0 | 18 (crc32) |
-| jump tables resolved / unresolved | 265 / 50 | 430 / 99 |
-| C | 175 MB, 68 files | 91 MB, 35 files |
+| | main | sdk | subsdk0 |
+|---|---|---|---|
+| functions / instructions | 54,215 / 2.67 M | 34,472 / 1.36 M | 13,636 / 0.90 M |
+| not lifted | 0 | 0 | 1 (data after a `ret`) |
+| jump tables resolved / unresolved | 265 / 51 | 430 / 99 | 320 / 24 |
+| C | 171 MB, 68 files | 91 MB, 35 files | 59 MB, 24 files |
 
-Both modules compile with zig cc -O1 (x86-64-v3) in 4 minutes on 16 threads and link into one 51 MB DLL. Every
-integer, memory, branch and system instruction in them lifts; FP/SIMD is the remaining gap.
+All three compile with zig cc -O1 -march=x86-64-v3 in 5 minutes on 16 threads and link into one 102 MB DLL.
 
 ## OS layer
 
@@ -172,7 +173,9 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
 1. Workspace compiles on non-Apple hosts. **Done.**
 2. Lifter crate: integer, memory, branch and system instructions, function discovery, jump tables, C emission,
    `nxport-cli lift`. **Done**, checked against Unicorn (18,000 random instruction cases, no differences) and on
-   SMO. Next: FP/SIMD (portable C, following LAS Recomp's simd_c.py / simd.h), the remaining jump-table shapes.
+   SMO. FP / AdvSIMD / crypto / CRC32: **done**, checked against Unicorn (32,000 FP/SIMD cases over 406
+   mnemonics, random FPCR modes and NaN / denormal / infinity operands, no differences). Left: the remaining
+   jump-table shapes.
 3. HLE adapters (`HleFn`) and `guest::call`, on the native path first (no behaviour change, testable on the Mac).
 4. OS layer; the load pipeline runs on any host and produces the patched image for the lifted target.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.

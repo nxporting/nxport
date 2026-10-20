@@ -216,3 +216,6 @@ static inline uint32_t sdiv32(uint32_t a, uint32_t b) {
     if ((int32_t)a == INT32_MIN && (int32_t)b == -1) return a;
     return (uint32_t)((int32_t)a / (int32_t)b);
 }
+
+// FP / AdvSIMD / crypto / CRC32 helpers (simd.rs emits calls to them)
+#include "simd.h"

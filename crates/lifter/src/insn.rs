@@ -1,5 +1,5 @@
-// One A64 instruction -> C (runtime/cpu.h). Integer, memory, branch and system instructions; FP/SIMD is not lifted
-// yet (it traps: docs/windows-port.md). Semantics follow LAS Recomp's tools/lifter.py (see LICENSE-LASRecomp), with
+// One A64 instruction -> C (runtime/cpu.h). Integer, memory, branch and system instructions here; FP/SIMD, crypto and
+// CRC32 in simd.rs. Semantics follow LAS Recomp's tools/lifter.py (see LICENSE-LASRecomp), with
 // returns that keep x30's value (Ret), exclusive pairs, and stricter rejection of reserved encodings.
 
 use crate::bits::{bits, decode_bit_masks, hx, ones, sext};
@@ -55,7 +55,7 @@ pub fn cond_expr(cond: u32) -> String {
 
 // ---- register operands: 31 is the zero register or sp depending on the encoding
 
-fn x(r: u32) -> String {
+pub(crate) fn x(r: u32) -> String {
     if r == 31 {
         "0ull".into()
     } else {
@@ -63,7 +63,7 @@ fn x(r: u32) -> String {
     }
 }
 
-fn xs(r: u32) -> String {
+pub(crate) fn xs(r: u32) -> String {
     if r == 31 {
         "c->sp".into()
     } else {
@@ -71,7 +71,7 @@ fn xs(r: u32) -> String {
     }
 }
 
-fn w(r: u32) -> String {
+pub(crate) fn w(r: u32) -> String {
     if r == 31 {
         "0u".into()
     } else {
@@ -98,7 +98,7 @@ fn reg(sf: bool, r: u32, sp: bool) -> String {
 }
 
 /// A statement writing `expr` to Rd; 32-bit results are zero-extended. Register 31 discards the value unless `sp`.
-fn set_reg(sf: bool, r: u32, expr: &str, sp: bool) -> String {
+pub(crate) fn set_reg(sf: bool, r: u32, expr: &str, sp: bool) -> String {
     if r == 31 && !sp {
         return format!("(void)({expr});");
     }
@@ -136,7 +136,7 @@ fn shift_expr(sf: bool, val: &str, typ: u32, amt: u32) -> String {
 }
 
 /// An extended register operand (UXTB .. SXTX) shifted left by `shift`, as 64 bits.
-fn extend_expr(r: u32, option: u32, shift: u32) -> String {
+pub(crate) fn extend_expr(r: u32, option: u32, shift: u32) -> String {
     let base = x(r);
     let e = match option {
         0 => format!("(uint64_t)(uint8_t){base}"),
@@ -166,7 +166,7 @@ pub fn lift(word: u32, pc: u64) -> R {
     } else if op0 & 0b0111 == 0b0101 {
         dp_reg(word)
     } else if op0 & 0b0111 == 0b0111 {
-        unsupported("fp/simd data processing")
+        crate::simd::dp(word).map(Insn::Op)
     } else {
         // udf, padding and data in the text segment: trap if ever executed.
         Ok(Insn::Trap(format!("rt_udf(c, {});", hx(pc))))
@@ -407,7 +407,7 @@ fn system(wd: u32) -> R {
 
 fn ldst(wd: u32, pc: u64) -> R {
     if bits(wd, 26, 1) == 1 {
-        return unsupported("fp/simd load/store");
+        return crate::simd::ldst(wd, pc).map(Insn::Op);
     }
     if bits(wd, 24, 6) == 0b001000 {
         return ldst_excl(wd);
@@ -751,7 +751,7 @@ fn dp_reg(wd: u32) -> R {
             }
             // data processing (2 source)
             if (16..=23).contains(&opcode) {
-                return unsupported("crc32");
+                return crate::simd::crc(wd).map(Insn::Op);
             }
             let b = reg(sf, rm, false);
             let e = match opcode {
