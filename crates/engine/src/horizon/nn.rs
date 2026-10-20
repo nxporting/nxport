@@ -964,6 +964,24 @@ unsafe extern "C" fn hid_get_states_zero(_out: *mut u8, _count: i32, _id: *const
     );
     0 // no controller input source yet: report zero new states
 }
+unsafe extern "C" fn aoc_list(_out_indices: *mut i32, _offset: i32, _count: i32) -> i32 {
+    0
+}
+/// nn::os::SystemEvent holds its SystemEventType first; the list never changes, so it is never signaled.
+unsafe extern "C" fn aoc_list_changed_event(event: *mut u8) {
+    crate::horizon::hle::hle_system_event_register_addr(event as usize);
+}
+
+/// Which handheld Joy-Cons count as an active controller (both / either / none); the engine's controller is the
+/// keyboard / gamepad, so the mode is only kept for the game to read back.
+static HANDHELD_ACTIVATION_MODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+unsafe extern "C" fn hid_set_handheld_activation_mode(mode: i64) {
+    HANDHELD_ACTIVATION_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
+}
+unsafe extern "C" fn hid_get_handheld_activation_mode() -> i64 {
+    HANDHELD_ACTIVATION_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 unsafe extern "C" fn hid_disconnect_npad(_id: *const u8) {}
 unsafe extern "C" fn noop_void() {}
 unsafe extern "C" fn noop_obj(_this: *mut u8) {}
@@ -1151,6 +1169,9 @@ unsafe extern "C" fn account_nsa_unavailable_1(_a: *mut u8) -> u32 {
 unsafe extern "C" fn account_nsa_unavailable_2(_a: *mut u8, _b: *const u8) -> u32 {
     ACCOUNT_NSA_UNAVAILABLE
 }
+unsafe extern "C" fn account_nsa_unavailable_4(_a: *mut u8, _b: *const u8, _c: *mut u8, _d: usize) -> u32 {
+    ACCOUNT_NSA_UNAVAILABLE
+}
 unsafe extern "C" fn account_load_nsa_id_token_cache(
     out_size: *mut usize,
     _buf: *mut u8,
@@ -1330,6 +1351,7 @@ pub fn lookup(name: &str) -> Option<usize> {
         // nn::account network service account
         "_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE" => f!(account_nsa_unavailable_1),
         "_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE" => f!(account_nsa_unavailable_2),
+        "_ZN2nn7account29LoadCachedNintendoAccountInfoEPNS0_25CachedNintendoAccountInfoERKNS0_10UserHandleEPvm" => f!(account_nsa_unavailable_4),
         "_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE" => f!(account_nsa_unavailable_2),
         "_ZN2nn7account37LoadNetworkServiceAccountIdTokenCacheEPmPcmRKNS0_10UserHandleE" => f!(account_load_nsa_id_token_cache),
         "_ZN2nn7account12AsyncContext7HasDoneEPb" => f!(account_async_has_done),
@@ -1398,6 +1420,8 @@ pub fn lookup(name: &str) -> Option<usize> {
         "_ZN2nn2oe17GetPseudoDeviceIdEPNS_4util4UuidE" => f!(oe_get_pseudo_device_id),
         "_ZN2nn7account18ListQualifiedUsersEPiPNS0_3UidEi" => f!(account_list_users),
         "_ZN2nn7account12ListAllUsersEPiPNS0_3UidEi" => f!(account_list_users),
+        // The one user, opened at startup (OpenPreselectedUser).
+        "_ZN2nn7account13ListOpenUsersEPiPNS0_3UidEi" => f!(account_list_users),
         "_ZN2nn7account12GetUserCountEPi" => f!(account_get_user_count),
         "_ZN2nn7account8OpenUserEPNS0_10UserHandleERKNS0_3UidE" => f!(account_open_user),
         "_ZN2nn7account16ShowUserSelectorEPNS0_3UidERKNS0_21UserSelectionSettingsE" => f!(account_show_user_selector),
@@ -1461,6 +1485,11 @@ pub fn lookup(name: &str) -> Option<usize> {
         "_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj" => f!(hid_get_states_zero),
         "_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE" => f!(hid_get_states_zero),
         "_ZN2nn3hid14DisconnectNpadERKj" => f!(hid_disconnect_npad),
+        // Add-on content: none is installed.
+        "_ZN2nn3aoc16ListAddOnContentEPiii" => f!(aoc_list),
+        "_ZN2nn3aoc31GetAddOnContentListChangedEventEPNS_2os11SystemEventE" => f!(aoc_list_changed_event),
+        "_ZN2nn3hid29SetNpadHandheldActivationModeENS0_26NpadHandheldActivationModeE" => f!(hid_set_handheld_activation_mode),
+        "_ZN2nn3hid29GetNpadHandheldActivationModeEv" => f!(hid_get_handheld_activation_mode),
         // nn::prepo (play reports go nowhere)
         "_ZN2nn5prepo10PlayReportC1Ev" => f!(noop_obj),
         "_ZN2nn5prepo10PlayReport5ClearEv" => f!(noop_obj),

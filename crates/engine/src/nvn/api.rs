@@ -752,6 +752,7 @@ fn resolve_unimplemented_nvn(name: &str) -> *const () {
 /// version and at least that minor version). Library versions between entries take the closest older entry.
 fn api_version() -> (i32, i32) {
     const VERSIONS: &[((u32, u32, u32), (i32, i32))] = &[
+        ((4, 4, 0), (53, 105)),
         ((7, 3, 0), (53, 311)),
         ((15, 3, 0), (55, 15)),
     ];

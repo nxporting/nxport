@@ -679,6 +679,15 @@ pub unsafe extern "C" fn hle_nn_fs_MountSaveDataReadOnly(
     0
 }
 
+/// Device save data (shared by the console's users); MountDeviceSaveData(name, ApplicationId) mounts another
+/// application's, which here is this one's.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_MountDeviceSaveData(name: *const c_char, _app_id: u64) -> i32 {
+    register_writable_mount("MountDeviceSaveData", name);
+    let _ = std::fs::create_dir_all(save_root());
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_IsSaveDataExisting(_app_id: u64, _uid: *const ()) -> bool {
     true

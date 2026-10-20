@@ -605,6 +605,13 @@ pub unsafe extern "C" fn hle_nn_vi_CreateLayer(
     0
 }
 
+/// The layers are the engine's (CreateLayer): the presenter scales the game's image to the window whatever the mode.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_vi_SetLayerScalingMode(_layer: *mut usize, mode: i32) -> i32 {
+    println!("[+] HLE: nn::vi::SetLayerScalingMode({mode})");
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_vi_GetDisplayVsyncEvent(
     out_event: *mut u8,
