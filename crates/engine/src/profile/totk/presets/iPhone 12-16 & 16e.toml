@@ -1,0 +1,10 @@
+[build]
+target = "ios"
+entitlements = true
+
+[system]
+fps = 30
+handheld = true
+
+[display]
+launch-aspect = "19.5:9"

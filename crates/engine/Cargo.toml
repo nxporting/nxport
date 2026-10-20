@@ -1,0 +1,41 @@
+[package]
+name = "nxport"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nxport"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nxport"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+capstone = "0.12"
+zstd = "0.13"
+lz4_flex = "0.11"
+rustc-hash = "2"
+smallvec = "1"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-metal = "0.3"
+objc2-quartz-core = "0.3"
+clap = { version = "4.6.7", features = ["derive"] }
+struct-patch = { version = "0.14.4", features = ["nesting"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0"
+toml = "1.1.8"
+regex = "1"
+sass2spv = { path = "../sass2spv" }
+spirv-cross-sys = { version = "0.7.4", features = ["msl"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = "0.3"
+dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = "0.3"
+objc2-core-foundation = "0.3"
+

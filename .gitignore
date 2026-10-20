@@ -1,0 +1,18 @@
+/target
+/work/
+.DS_Store
+*.log
+__pycache__/
+
+# What the engine creates in the working directory by default
+/mods/
+/save/
+/shader_dump_missing/
+
+# The Ryujinx shader translator the C# sass2spv builds against, and its build output
+/tools/ryujinx_extracted/
+/tools/ryujinx_patched/
+/tools/sass2spv/bin/
+/tools/sass2spv/obj/
+*.dll
+*.pdb

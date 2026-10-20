@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "crates/engine",
+    "crates/build",
+    "crates/cli",
+    "crates/builder",
+    "crates/sass2spv",
+]
+# `cargo run` / `cargo build` in the root: the builder (cargo build --workspace for the engine and the command line too).
+default-members = ["crates/builder"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Release code with symbols, for sampling/profiling (cargo build --profile profiling).
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = "line-tables-only"

@@ -1,0 +1,26 @@
+diff --git a/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs b/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
+index 3f2e499..7592bcf 100644
+--- a/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
++++ b/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
+@@ -24,7 +24,20 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
+                     {
+                         bool isWorthPropagating = propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source);
+ 
+-                        if (propVar.Defs.Count == 1 && isWorthPropagating)
++                        // SPIR-V function call arguments must stay local variables (CodeGen.Spirv GenerateCall casts them
++                        // to AstOperand), so a temp that feeds a call is never replaced by its expression.
++                        bool feedsCall = false;
++
++                        foreach (IAstNode use in propVar.Uses)
++                        {
++                            if (use is AstOperation useOp && (useOp.Inst & Instruction.Mask) == Instruction.Call)
++                            {
++                                feedsCall = true;
++                                break;
++                            }
++                        }
++
++                        if (propVar.Defs.Count == 1 && isWorthPropagating && !feedsCall)
+                         {
+                             PropagateExpression(propVar, assignment.Source);
+                         }

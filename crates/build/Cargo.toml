@@ -1,0 +1,19 @@
+[package]
+name = "nxport-build"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nxport_build"
+path = "src/lib.rs"
+
+[dependencies]
+nxport = { path = "../engine" }
+zstd = "0.13"
+regex = "1"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+libc = "0.2"
+sass2spv = { path = "../sass2spv" }

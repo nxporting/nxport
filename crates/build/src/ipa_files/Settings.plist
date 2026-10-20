@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>StringsTable</key>
+    <string>Root</string>
+    <key>PreferenceSpecifiers</key>
+    <array>
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Display</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSMultiValueSpecifier</string>
+            <key>Title</key>
+            <string>Default Mode</string>
+            <key>Key</key>
+            <string>display_mode</string>
+            <key>DefaultValue</key>
+            <string>handheld</string>
+            <key>Titles</key>
+            <array>
+                <string>Handheld (720p)</string>
+                <string>Docked (1080p)</string>
+            </array>
+            <key>Values</key>
+            <array>
+                <string>handheld</string>
+                <string>docked</string>
+            </array>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSMultiValueSpecifier</string>
+            <key>Title</key>
+            <string>Display Aspect</string>
+            <key>Key</key>
+            <string>display_aspect</string>
+            <key>DefaultValue</key>
+            <string>off</string>
+            <key>Titles</key>
+            <array>
+                <string>Game (16:9)</string>
+                <string>19.5:9 (aspect ratio mod)</string>
+                <string>20:9 (aspect ratio mod)</string>
+                <string>21:9 (aspect ratio mod)</string>
+            </array>
+            <key>Values</key>
+            <array>
+                <string>off</string>
+                <string>19.5:9</string>
+                <string>20:9</string>
+                <string>21:9</string>
+            </array>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Performance Overlay</string>
+            <key>Key</key>
+            <string>perf_overlay</string>
+            <key>DefaultValue</key>
+            <false/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>VSync</string>
+            <key>Key</key>
+            <string>vsync</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Asynchronous Shaders</string>
+            <key>Key</key>
+            <string>async_shaders</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Controls</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>On-Screen Controls</string>
+            <key>Key</key>
+            <string>onscreen_controls</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Physical Controller</string>
+            <key>FooterText</key>
+            <string>Off: buttons act by their labels (A is the Switch's A). On: that pair acts by position, as on a Switch controller. The on-screen controls always follow their labels.</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Swap A and B</string>
+            <key>Key</key>
+            <string>swap_ab</string>
+            <key>DefaultValue</key>
+            <false/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Swap X and Y</string>
+            <key>Key</key>
+            <string>swap_xy</string>
+            <key>DefaultValue</key>
+            <false/>
+        </dict>
+    </array>
+</dict>
+</plist>

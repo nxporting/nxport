@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType Condition="'$(NativeLib)' == ''">Exe</OutputType>
+    <OutputType Condition="'$(NativeLib)' != ''">Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <CustomLinkerArg Include="-L/opt/homebrew/opt/openssl@3/lib" />
+    <CustomLinkerArg Include="-L/opt/homebrew/lib" />
+  </ItemGroup>
+
+  <!-- Prefer the patched translator built by tools/build_ryujinx_shader.sh; fall back to the prebuilt release DLLs. -->
+  <Choose>
+    <When Condition="Exists('../ryujinx_patched/Ryujinx.Graphics.Shader.dll')">
+      <ItemGroup>
+        <Reference Include="Ryujinx.Graphics.Shader">
+          <HintPath>../ryujinx_patched/Ryujinx.Graphics.Shader.dll</HintPath>
+        </Reference>
+        <Reference Include="Ryujinx.Common">
+          <HintPath>../ryujinx_patched/Ryujinx.Common.dll</HintPath>
+        </Reference>
+        <Reference Include="Spv.Generator">
+          <HintPath>../ryujinx_patched/Spv.Generator.dll</HintPath>
+        </Reference>
+        <!-- The translator's other runtime dependencies sit next to it. -->
+        <None Include="../ryujinx_patched/*.dll" Exclude="../ryujinx_patched/Ryujinx.Graphics.Shader.dll;../ryujinx_patched/Ryujinx.Common.dll;../ryujinx_patched/Spv.Generator.dll;../ryujinx_patched/sass2spv.dll">
+          <Link>%(Filename)%(Extension)</Link>
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+      </ItemGroup>
+    </When>
+    <Otherwise>
+      <ItemGroup>
+        <Reference Include="Ryujinx.Graphics.Shader">
+          <HintPath>../ryujinx_extracted/Ryujinx.Graphics.Shader.dll</HintPath>
+        </Reference>
+        <Reference Include="Ryujinx.Common">
+          <HintPath>../ryujinx_extracted/Ryujinx.Common.dll</HintPath>
+        </Reference>
+      </ItemGroup>
+    </Otherwise>
+  </Choose>
+
+</Project>
