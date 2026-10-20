@@ -500,17 +500,6 @@ pub unsafe fn lookup(data: u64) -> Option<&'static CachedStage> {
     Some(st)
 }
 
-/// Every stage of a cache index (index.txt text) by entry name, with its kind.
-pub fn stage_kinds(index_text: &str) -> HashMap<String, StageKind> {
-    index_text
-        .lines()
-        .filter_map(|l| match l.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["S", _, _, full, stage, _] => Some((format!("s_{full}"), parse_kind(stage))),
-            _ => None,
-        })
-        .collect()
-}
-
 /// A stage of the cache index by its entry name (`s_<hash>`).
 pub fn by_entry(entry: &str) -> Option<&'static CachedStage> {
     static M: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();

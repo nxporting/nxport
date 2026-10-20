@@ -842,6 +842,10 @@ impl Builder {
                 })));
             }
         }
+        if prebuild {
+            let (tid, cache) = (game.title_id, cache.clone());
+            steps.push(("Getting the shared pipeline list".into(), Box::new(move || pipeline_list(tid, &cache))));
+        }
         let result = match self.target {
             Target::MacApp => {
                 let app = out_dir.join(format!("{}.app", game.name.replace([':', '/'], " -")));
@@ -889,7 +893,12 @@ impl Builder {
                         };
                         let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
                         let jobs = cpus.saturating_sub(2).max(2);
-                        nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, jobs, false, Some(&cb))
+                        nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, jobs, false, Some(&cb))?;
+                        let list = cache.join("pipelines.txt");
+                        if list.exists() {
+                            std::fs::copy(&list, ios_cache.join("pipelines.txt")).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
                     })));
                 }
                 let out = Arc::new(Mutex::new(None));
@@ -938,6 +947,46 @@ impl Builder {
     }
 }
 
+
+/// Where the shared list of a game's render pipelines is published.
+const SHARED_PIPELINES_URL: &str = "https://github.com/nxporting/pipelines/releases/latest/download";
+
+/// Writes the app's pipeline list into its shader cache: the shared list (downloaded; the last download when that
+/// fails) and the player's own (what the game recorded on this Mac), less entries the cache cannot build.
+fn pipeline_list(title_id: u64, cache: &Path) -> Result<(), String> {
+    let game = data_dir().join("games").join(format!("{title_id:016x}"));
+    let shared = game.join("pipelines_shared.txt");
+    let _ = std::fs::create_dir_all(&game);
+    let tmp = shared.with_extension("download");
+    let url = format!("{SHARED_PIPELINES_URL}/{title_id:016x}.txt");
+    let ok = std::process::Command::new("/usr/bin/curl")
+        .args(["-fsSL", "--max-time", "60", "-o"])
+        .arg(&tmp)
+        .arg(&url)
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok {
+        std::fs::rename(&tmp, &shared).map_err(|e| e.to_string())?;
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+        println!("  No shared pipeline list from {url}{}", if shared.exists() { "; using the last one" } else { "" });
+    }
+    let index = std::fs::read_to_string(cache.join("index.txt")).map_err(|e| format!("shader cache index: {e}"))?;
+    let kinds = nxport_pipelines::stage_kinds(&index);
+    let lists: Vec<String> =
+        [shared, game.join("pipelines.txt")].iter().filter_map(|p| std::fs::read_to_string(p).ok()).collect();
+    let lists: Vec<&str> = lists.iter().map(String::as_str).collect();
+    let m = nxport_pipelines::merge(&lists, &[], &nxport_pipelines::MergeOptions { kinds: Some(&kinds), ..Default::default() });
+    let out = cache.join("pipelines.txt");
+    if m.entries.is_empty() {
+        let _ = std::fs::remove_file(&out);
+        println!("  No pipelines listed for this game yet");
+        return Ok(());
+    }
+    std::fs::write(&out, m.text()).map_err(|e| e.to_string())?;
+    println!("  {} pipelines listed ({} the shader cache cannot build left out)", m.entries.len(), m.rejected);
+    Ok(())
+}
 
 fn run_steps(job: &Arc<Mutex<Job>>, steps: Vec<Step>) -> Result<(), String> {
     for (i, (name, f)) in steps.into_iter().enumerate() {

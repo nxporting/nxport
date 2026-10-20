@@ -5,6 +5,7 @@ members = [
     "crates/cli",
     "crates/builder",
     "crates/sass2spv",
+    "crates/pipelines",
 ]
 # `cargo run` / `cargo build` in the root: the builder (cargo build --workspace for the engine and the command line too).
 default-members = ["crates/builder"]

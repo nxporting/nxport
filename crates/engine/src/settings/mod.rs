@@ -196,7 +196,7 @@ group! {
 
 group! {
     /// GPU execution.
-    Graphics "Graphics" [async_pipelines] {
+    Graphics "Graphics" [async_pipelines, share_pipelines] {
         /// Draw with the translated shader cache
         translated_shaders: bool = false,
         /// Attempt runtime in-process compilation of missing shaders
@@ -213,6 +213,11 @@ group! {
         precompile_pipelines: bool = true,
         /// Add new pipelines to the pipeline list
         record_pipelines: bool = true,
+        /// Help other players avoid stutter: send the render pipelines this game used that the shared list lacks.
+        /// Only shader names (hashes) and draw settings are sent, nothing about you or your files.
+        share_pipelines: bool = false,
+        /// Where shared pipelines are sent
+        share_pipelines_url: Option<String> = None,
         /// Overlap a frame's GPU work with the next frame's CPU work
         early_fence: bool = true,
         /// Write-protect memory running GPU work reads, under the early fence
