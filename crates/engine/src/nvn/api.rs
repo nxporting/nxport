@@ -5563,6 +5563,9 @@ pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
 
 /// Records a RegisterTexture / RegisterImage.
 unsafe fn register_pool_slot(id: i32, texture: *const NvnTexture, view: Option<NvnTextureView>) {
+    // NVN copies the descriptor into the pool here; objects the game copied (never initialized through us) are captured
+    // like the ones commands name.
+    capture_texture(texture as usize);
     let (gen, state) = if texture.is_null() {
         (0, std::mem::zeroed())
     } else {
