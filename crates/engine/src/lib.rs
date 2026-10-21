@@ -39,6 +39,8 @@ pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
     gpu::install(&metal::backend::METAL);
     let s = settings::install(resolve_settings(layers));
+    #[cfg(target_os = "macos")]
+    config::app_log();
     if s.debug.validate {
         // Metal's own switches, read when the device is created.
         std::env::set_var("MTL_SHADER_VALIDATION", "1");
