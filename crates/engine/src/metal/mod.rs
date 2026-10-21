@@ -2184,6 +2184,16 @@ impl Gfx {
             };
         // The same view of the same root is asked for every frame (TotK re-initializes its transient texture objects):
         // reuse it. The cache holds the root, so its pointer cannot be reused for another texture while cached.
+        // A root without room for the view (its level / slice offsets plus this texture's levels and layers) does not
+        // contain this texture: no alias.
+        let root_slices = match root_tex.textureType() {
+            MTLTextureType::Type3D => 1,
+            MTLTextureType::TypeCube | MTLTextureType::TypeCubeArray => 6 * root_tex.arrayLength().max(1),
+            _ => root_tex.arrayLength().max(1),
+        };
+        if level + levels > root_tex.mipmapLevelCount() || (tt != MTLTextureType::Type3D && slice + slices > root_slices) {
+            return None;
+        }
         let vkey = (
             Retained::as_ptr(&root_tex) as *const () as usize,
             pf.0 as usize,
