@@ -46,6 +46,12 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", func!(crate::horizon::hle::hle_nn_hid_GetSixAxisSensorState)),
     Entry("_ZN2nn3hid21InitializeTouchScreenEv", func!(crate::horizon::hle::hle_nn_hid_InitializeTouchScreen)),
     Entry("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", func!(crate::horizon::hle::hle_nn_hid_IsSixAxisSensorAtRest)),
+    // The overload without a result: the same applet session, its result dropped.
+    Entry("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", adapt!(fn(arg: *const u8) -> i32 {
+        crate::horizon::hle::hle_nn_hid_ShowControllerSupport(std::ptr::null_mut(), arg)
+    })),
+    // Motion sensor drift compensation: nothing to configure (six-axis states are synthesized).
+    Entry("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE", func!(crate::horizon::nn::noop_void)),
     Entry("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", func!(crate::horizon::hle::hle_nn_hid_ShowControllerSupport)),
     Entry("_ZN2nn3hid21StartLrAssignmentModeEv", func!(crate::horizon::hle::hle_nn_hid_assignment_noop)),
     Entry("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", func!(crate::horizon::nn::hid_get_states_zero)),

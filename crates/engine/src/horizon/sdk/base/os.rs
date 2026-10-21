@@ -104,6 +104,12 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2os22FinalizeLightSemaphoreEPNS0_18LightSemaphoreTypeE", func!(crate::horizon::hle::hle_nn_os_FinalizeLightSemaphore)),
     Entry("_ZN2nn2os22GetSystemTickFrequencyEv", func!(crate::horizon::hle::hle_nn_os_GetSystemTickFrequency)),
     // nn::os MessageQueue
+    Entry("_ZN2nn2os16PeekMessageQueueEPmPKNS0_16MessageQueueTypeE", func!(crate::horizon::nn::os_peek_message_queue)),
+    Entry("_ZN2nn2os19TryPeekMessageQueueEPmPKNS0_16MessageQueueTypeE", func!(crate::horizon::nn::os_try_peek_message_queue)),
+    Entry("_ZN2nn2os21TimedPeekMessageQueueEPmPKNS0_16MessageQueueTypeENS_8TimeSpanE", func!(crate::horizon::nn::os_timed_peek_message_queue)),
+    Entry("_ZN2nn2os18TryJamMessageQueueEPNS0_16MessageQueueTypeEm", func!(crate::horizon::nn::os_try_jam_message_queue)),
+    Entry("_ZN2nn2os20TimedJamMessageQueueEPNS0_16MessageQueueTypeEmNS_8TimeSpanE", func!(crate::horizon::nn::os_timed_jam_message_queue)),
+    Entry("_ZN2nn2os21TimedSendMessageQueueEPNS0_16MessageQueueTypeEmNS_8TimeSpanE", func!(crate::horizon::nn::os_timed_send_message_queue)),
     Entry("_ZN2nn2os22InitializeMessageQueueEPNS0_16MessageQueueTypeEPmm", func!(crate::horizon::nn::os_initialize_message_queue)),
     Entry("_ZN2nn2os22StartOneShotTimerEventEPNS0_14TimerEventTypeENS_8TimeSpanE", func!(crate::horizon::hle::hle_nn_os_StartOneShotTimerEvent)),
     Entry("_ZN2nn2os22TryReceiveMessageQueueEPmPNS0_16MessageQueueTypeE", func!(crate::horizon::nn::os_try_receive_message_queue)),

@@ -19,6 +19,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2oe24GetExpectedVolumeBalanceEPfS1_", func!(crate::horizon::nn::oe_get_expected_volume_balance)),
     Entry("_ZN2nn2oe24SetExpectedVolumeBalanceEff", func!(crate::horizon::nn::oe_set_expected_volume_balance)),
     Entry("_ZN2nn2oe25GetProgramTotalActiveTimeEv", func!(crate::horizon::nn::oe_get_program_total_active_time)),
+    Entry("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", func!(crate::horizon::nn::oe_try_pop_launch_parameter)),
     Entry("_ZN2nn2oe25TryPopNotificationMessageEPj", func!(crate::horizon::nn::oe_try_pop_notification_message)),
     Entry("_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE", func!(crate::horizon::hle::hle_nn_oe_GetPerformanceConfiguration)),
     Entry("_ZN2nn2oe27SetPerformanceConfigurationENS0_15PerformanceModeEi", func!(crate::horizon::hle::hle_nn_oe_SetPerformanceConfiguration)),
