@@ -4770,10 +4770,20 @@ impl Gfx {
             let depth_clear = depth_tex
                 .as_ref()
                 .and_then(|(t, d)| take_clear(t, d.level as usize, d.layer as usize, false));
+            // Clears still pending on memory this pass renders into run first: the pass's attachment may be another
+            // view of the cleared texture (is_target compares the exact object), and a clear flushed after the pass
+            // erased what it drew (Mario Kart 8 Deluxe's shadow mask, cleared through one object and drawn through
+            // another: the track sampled zeros and rendered black).
+            let attached: smallvec::SmallVec<[u64; 9]> = color_texs
+                .iter()
+                .map(|(_, t, _)| root_id(t))
+                .chain(depth_tex.iter().map(|(t, _)| root_id(t)))
+                .collect();
             self.flush_clears_matching(st, |c| {
-                resolved
-                    .iter()
-                    .any(|(_, _, _, _, r)| *r == Some(c.root as u64))
+                attached.contains(&c.root)
+                    || resolved
+                        .iter()
+                        .any(|(_, _, _, _, r)| *r == Some(c.root as u64))
             });
             let pass = MTLRenderPassDescriptor::renderPassDescriptor();
             pass.setVisibilityResultBuffer(st.occl.buffer(&self.device).as_deref());
