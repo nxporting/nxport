@@ -1,6 +1,7 @@
 // Multi-game and multi-version registry. Identifies the running game title via ExeFS/main.npdm
 // and matches the version via the main NSO module Build ID.
 
+pub mod botw;
 pub mod kirby;
 pub mod smo;
 pub mod totk;
@@ -15,6 +16,7 @@ pub enum GameKind {
     Kirby,
     MarioWonder,
     SuperMarioOdyssey,
+    BotW,
     Unknown(u64),
 }
 
@@ -95,8 +97,9 @@ pub const TOTK_TITLE_ID: u64 = 0x0100_F2C0_115B_6000;
 pub const KIRBY_TITLE_ID: u64 = 0x0100_4D30_0C5A_E000;
 pub const WONDER_TITLE_ID: u64 = 0x0100_1510_0B51_4000;
 pub const SMO_TITLE_ID: u64 = 0x0100_0000_0001_0000;
+pub const BOTW_TITLE_ID: u64 = 0x0100_7EF0_0011_E000;
 
-pub static PROFILES: &[GameProfile] = &[totk::PROFILE, kirby::PROFILE, wonder::PROFILE, smo::PROFILE];
+pub static PROFILES: &[GameProfile] = &[totk::PROFILE, kirby::PROFILE, wonder::PROFILE, smo::PROFILE, botw::PROFILE];
 
 /// What a game dump is: its program id, profile and version (by the main module's build id), if known.
 pub struct Identified {

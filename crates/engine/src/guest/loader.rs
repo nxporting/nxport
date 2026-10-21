@@ -530,16 +530,18 @@ impl GuestMemorySpace {
         let slot = |off: usize| ((off / 8) as u32) << 10;
         let hle = slot(crate::cpu::tls::hle_stack_offset());
         let tls = slot(crate::cpu::tls::guest_tls_offset());
-        let code: [u32; 22] = [
+        ptr::write((lit + 16) as *mut usize, crate::horizon::cores::entry() as usize);
+        let code: [u32; 23] = [
             0x9100_03E9,             // mov x9, sp
             0xD53B_D06A,             // mrs x10, tpidrro_el0
             0xF940_014B | hle,       // ldr x11, [x10, #hle]
-            0xB400_016B,             // cbz x11, +44
+            0xB400_018B,             // cbz x11, +48
             0xF900_015F | hle,       // str xzr, [x10, #hle]
             0xD100_416C,             // sub x12, x11, #16
             0xA900_2D89,             // stp x9, x11, [x12]
             0x9100_019F,             // mov sp, x12
-            0xD63F_0200,             // blr x16
+            0,                       // ldr x17, <entry glue>  (cores::entry: x16 is the function)
+            0xD63F_0220,             // blr x17
             0xA940_2FE9,             // ldp x9, x11, [sp]
             0x9100_013F,             // mov sp, x9
             0xD53B_D06A,             // mrs x10, tpidrro_el0
@@ -558,7 +560,8 @@ impl GuestMemorySpace {
         for (k, w) in code.iter().enumerate() {
             ptr::write(base.add(k), *w);
         }
-        ptr::write(base.add(19), crate::cpu::aot::ldr_literal(base.add(19) as usize, lit + 8, 18));
+        ptr::write(base.add(8), crate::cpu::aot::ldr_literal(base.add(8) as usize, lit + 16, 17));
+        ptr::write(base.add(20), crate::cpu::aot::ldr_literal(base.add(20) as usize, lit + 8, 18));
         for k in code.len()..HLE_STUB_ENTRIES * TRAMPOLINE_WORDS {
             ptr::write(base.add(k), 0xD420_0000u32); // brk #0
         }
