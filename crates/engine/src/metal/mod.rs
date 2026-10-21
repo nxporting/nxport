@@ -798,6 +798,13 @@ fn metal_format(fmt: i32) -> (MTLPixelFormat, Option<MTLPixelFormat>) {
         50 => (MTLPixelFormat::Depth16Unorm, None),
         51 | 52 => (MTLPixelFormat::Depth32Float, None),
         53 | 54 => (MTLPixelFormat::Depth32Float_Stencil8, None), // Apple GPUs have no D24S8
+        // 16-bit packed formats. They fell through to RGBA8: uploads of their 2-byte texels were rejected and the
+        // textures stayed empty (Mario Kart 8 Deluxe's cup emblems and countdown, RGB565, drew black). NVN names them
+        // from the low bits (red lowest); Metal has no such layouts, so sampling reorders the channels
+        // (translated::packed_channels).
+        57 => (MTLPixelFormat::ABGR4Unorm, None),       // RGBA4
+        58 | 59 => (MTLPixelFormat::BGR5A1Unorm, None), // RGB5, RGB5A1
+        60 => (MTLPixelFormat::B5G6R5Unorm, None),      // RGB565
         61 => (MTLPixelFormat::RGB10A2Unorm, None),
         63 => (MTLPixelFormat::RG11B10Float, None),
         65 | 66 => (MTLPixelFormat::BC1_RGBA, None),

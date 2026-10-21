@@ -683,6 +683,16 @@ unsafe fn control_const_bank(control: u64) -> Option<(usize, usize)> {
 
 /// Metal texture type a shader binding declares (manifest type strings from tools/sass2spv).
 
+/// Where a 16-bit packed format's channels sit in the Metal format it is stored as, as swizzle codes for R, G, B, A
+/// (2..5 = Metal's red..alpha): NVN orders them from the low bits, Metal's layouts put blue there (metal_format).
+fn packed_channels(pf: MTLPixelFormat) -> Option<[u8; 4]> {
+    match pf {
+        MTLPixelFormat::B5G6R5Unorm | MTLPixelFormat::BGR5A1Unorm => Some([4, 3, 2, 5]),
+        MTLPixelFormat::ABGR4Unorm => Some([5, 4, 3, 2]),
+        _ => None,
+    }
+}
+
 /// The texture a shader binding should see: `t` restricted by the NVN texture view (format, swizzle, mip range,
 /// layer range) and re-typed to `want` when Metal allows that view; None when the types cannot be reconciled.
 unsafe fn texture_for_binding(
@@ -731,6 +741,9 @@ unsafe fn texture_for_binding(
         if v.swizzle != [0; 4] {
             eff = v.swizzle;
         }
+    }
+    if let Some(m) = packed_channels(t.pixelFormat()) {
+        eff = eff.map(|c| if (2..=5).contains(&c) { m[(c - 2) as usize] } else { c });
     }
     let swz = {
         let sw = |x: u8| match x {
