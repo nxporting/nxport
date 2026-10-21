@@ -22,6 +22,31 @@ pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
     p
 }
 
+/// Inside a macOS .app started from Finder (no terminal): the log goes to the game's data directory (log.txt, the previous
+/// session's kept as log.prev.txt), so a frame captured in play keeps its trace.
+#[cfg(target_os = "macos")]
+pub fn app_log() {
+    let in_bundle = std::env::current_exe()
+        .ok()
+        .and_then(|e| Some(e.parent()?.file_name()? == "MacOS"))
+        .unwrap_or(false);
+    if !in_bundle || unsafe { libc::isatty(1) } != 0 {
+        return;
+    }
+    let Some(dir) = crate::profile::data_dir() else { return };
+    let _ = std::fs::create_dir_all(dir);
+    let log = dir.join("log.txt");
+    let _ = std::fs::rename(&log, dir.join("log.prev.txt"));
+    if let Ok(f) = std::fs::File::create(&log) {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::dup2(f.as_raw_fd(), 1);
+            libc::dup2(f.as_raw_fd(), 2);
+        }
+        std::mem::forget(f);
+    }
+}
+
 /// Inside a macOS .app: the settings it was built with (Resources/settings.toml), a layer above the game's profile.
 pub fn app_bundle_settings() -> Option<crate::settings::SettingsPatch> {
     let exe = std::env::current_exe().ok()?;
