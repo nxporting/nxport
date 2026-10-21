@@ -364,8 +364,9 @@ fn load() -> Bindings {
         return b;
     };
     for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        // Comments run to the end of the line (the Controls window writes each key's label as one).
+        let line = line.split_once('#').map_or(line, |(l, _)| l).trim();
+        if line.is_empty() {
             continue;
         }
         let mut parts = line.split_whitespace();
