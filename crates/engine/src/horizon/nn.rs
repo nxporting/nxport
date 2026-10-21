@@ -300,12 +300,14 @@ fn mq_send(mq: usize, data: u64, front: bool, deadline: Option<std::time::Instan
         };
     }
 }
-fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::Instant>) -> bool {
+/// `peek`: read the head without removing it.
+fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::Instant>, peek: bool) -> bool {
     let mut g = lock();
     loop {
         match g.as_mut().unwrap().msgqs.get_mut(&mq) {
             Some(q) => {
-                if let Some(v) = q.q.pop_front() {
+                let v = if peek { q.q.front().copied() } else { q.q.pop_front() };
+                if let Some(v) = v {
                     if !out.is_null() {
                         unsafe { *out = v };
                     }
@@ -335,7 +337,7 @@ pub(crate) unsafe extern "C" fn os_jam_message_queue(mq: *mut u8, data: u64) {
     mq_send(mq as usize, data, true, None);
 }
 pub(crate) unsafe extern "C" fn os_try_receive_message_queue(out: *mut u64, mq: *mut u8) -> bool {
-    mq_receive(out, mq as usize, Some(std::time::Instant::now()))
+    mq_receive(out, mq as usize, Some(std::time::Instant::now()), false)
 }
 pub(crate) unsafe extern "C" fn os_timed_receive_message_queue(
     out: *mut u64,
@@ -346,7 +348,29 @@ pub(crate) unsafe extern "C" fn os_timed_receive_message_queue(
         out,
         mq as usize,
         Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64)),
+        false,
     )
+}
+fn deadline_ns(timeout_ns: i64) -> Option<std::time::Instant> {
+    Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64))
+}
+pub(crate) unsafe extern "C" fn os_peek_message_queue(out: *mut u64, mq: *const u8) {
+    mq_receive(out, mq as usize, None, true);
+}
+pub(crate) unsafe extern "C" fn os_try_peek_message_queue(out: *mut u64, mq: *const u8) -> bool {
+    mq_receive(out, mq as usize, Some(std::time::Instant::now()), true)
+}
+pub(crate) unsafe extern "C" fn os_timed_peek_message_queue(out: *mut u64, mq: *const u8, timeout_ns: i64) -> bool {
+    mq_receive(out, mq as usize, deadline_ns(timeout_ns), true)
+}
+pub(crate) unsafe extern "C" fn os_try_jam_message_queue(mq: *mut u8, data: u64) -> bool {
+    mq_send(mq as usize, data, true, Some(std::time::Instant::now()))
+}
+pub(crate) unsafe extern "C" fn os_timed_send_message_queue(mq: *mut u8, data: u64, timeout_ns: i64) -> bool {
+    mq_send(mq as usize, data, false, deadline_ns(timeout_ns))
+}
+pub(crate) unsafe extern "C" fn os_timed_jam_message_queue(mq: *mut u8, data: u64, timeout_ns: i64) -> bool {
+    mq_send(mq as usize, data, true, deadline_ns(timeout_ns))
 }
 
 // ── nn::os::ReaderWriterLock (real exclusion) ────────────────────────────────────────────────
@@ -634,6 +658,14 @@ fn oe_pop() -> Option<u32> {
         .unwrap()
         .get_or_insert_with(|| VecDeque::from([15u32]))
         .pop_front()
+}
+/// The launch parameter channel: a game started normally has none (the native call reached the applet manager's
+/// storage objects, which do not exist here, and read through null).
+pub(crate) unsafe extern "C" fn oe_try_pop_launch_parameter(out_size: *mut usize, _buf: *mut u8, _cap: usize) -> bool {
+    if !out_size.is_null() {
+        *out_size = 0;
+    }
+    false
 }
 pub(crate) unsafe extern "C" fn oe_try_pop_notification_message(out: *mut u32) -> bool {
     match oe_pop() {
