@@ -7210,7 +7210,8 @@ fn dump_any(tex: &Tex, path: &str) -> String {
     let f = tex.pixelFormat();
     let bpp = match f {
         MTLPixelFormat::RGBA16Float | MTLPixelFormat::RGBA16Unorm => 8,
-        MTLPixelFormat::RGBA32Float => 16,
+        MTLPixelFormat::RGBA32Float | MTLPixelFormat::RGBA32Uint | MTLPixelFormat::RGBA32Sint => 16,
+        MTLPixelFormat::RG32Float | MTLPixelFormat::RG32Uint | MTLPixelFormat::RG32Sint => 8,
         MTLPixelFormat::R8Unorm => 1,
         MTLPixelFormat::RG8Unorm | MTLPixelFormat::R16Float => 2,
         MTLPixelFormat::RG16Float | MTLPixelFormat::R32Float => 4,
@@ -7257,6 +7258,7 @@ fn dump_any(tex: &Tex, path: &str) -> String {
             ],
             MTLPixelFormat::RGBA32Float => [f32le(&px[0..]), f32le(&px[4..]), f32le(&px[8..])],
             MTLPixelFormat::RG16Float => [half(&px[0..]), half(&px[2..]), 0.0],
+            MTLPixelFormat::RG32Float => [f32le(&px[0..]), f32le(&px[4..]), 0.0],
             MTLPixelFormat::R16Float => {
                 let v = half(px);
                 [v, v, v]
