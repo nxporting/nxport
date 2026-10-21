@@ -719,8 +719,9 @@ unsafe fn texture_for_binding(
             }
         }
     }
-    // The texture's own swizzle (nvnTextureBuilderSetSwizzle, e.g. ONE, ONE, ONE, R for an R8 mask), with the view's
-    // composed on top: a view channel that selects R/G/B/A picks the texture's already-swizzled channel.
+    // The texture's own swizzle (nvnTextureBuilderSetSwizzle, e.g. ONE, ONE, ONE, R for an R8 mask); a view's swizzle
+    // replaces it (NVN: view swizzles override the builder's). Composing them read Mario Kart 8 Deluxe's shadow mask
+    // (texture and view both G, B, A, R) as B, A, R, G: its race track came out black.
     let mut eff = if tex_swizzle == [0; 4] {
         [2, 3, 4, 5]
     } else {
@@ -728,13 +729,7 @@ unsafe fn texture_for_binding(
     };
     if let Some(v) = view {
         if v.swizzle != [0; 4] {
-            eff = v.swizzle.map(|c| {
-                if (2..=5).contains(&c) {
-                    eff[(c - 2) as usize]
-                } else {
-                    c
-                }
-            });
+            eff = v.swizzle;
         }
     }
     let swz = {
