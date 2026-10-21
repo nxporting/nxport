@@ -109,6 +109,10 @@ fn shim() -> Option<&'static Shim> {
 }
 
 // ── horizon::movie::Buffer (private members) ─────────────────────────────────────────────────────────────────────
+// The NVN device and sync members came with a later library version: 4.4.0's Buffer is 0x30 bytes (its constructor
+// zeroes 0x0..0x30), 7.3.2's, 11.4.0's and 15.3.1's are 0x40. Writing the newer layout into an older game's Buffer
+// overwrote the 16 bytes after it on the caller's stack (Mario Kart 8 Deluxe: a saved register holding a multi-wait
+// holder, so its movie player never recognised "output available").
 #[repr(C)]
 struct Buffer {
     range_offset: i32,
@@ -123,22 +127,43 @@ struct Buffer {
     nvn_sync: usize,
 }
 
+/// The game's movie library version (its subsdk module's middleware string).
+fn library_version() -> Option<(u32, u32, u32)> {
+    static V: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
+    *V.get_or_init(|| {
+        let dir = crate::settings::get().files.game_dir.clone()?;
+        let exefs = ["ExeFS", "exefs"].iter().map(|d| dir.join(d)).find(|d| d.is_dir())?;
+        let v = (0..10).find_map(|i| {
+            let nso = crate::guest::nso::Nso::read(&exefs.join(format!("subsdk{i}"))).ok()?;
+            crate::guest::nso::middleware_version(&nso.ro.data, b"NintendoSDK_movie-")
+        });
+        if let Some((a, b, c)) = v {
+            println!("[+] movie: library {a}.{b}.{c}");
+        }
+        v
+    })
+}
+
+/// Whether the game's Buffer has the NVN device and sync members (an unknown version: the newest layout).
+fn buffer_has_nvn() -> bool {
+    library_version().map_or(true, |v| v >= (7, 3, 0))
+}
+
 unsafe fn buf_init(b: *mut Buffer, data: *mut u8, capacity: usize, owns: bool) {
-    std::ptr::write(
-        b,
-        Buffer {
-            range_offset: 0,
-            range_length: 0,
-            int32_data: 0,
-            uint32_data: 0,
-            owns_data: owns,
-            capacity,
-            int64_data: 0,
-            data,
-            nvn_device: 0,
-            nvn_sync: 0,
-        },
-    );
+    let n = if buffer_has_nvn() { std::mem::size_of::<Buffer>() } else { std::mem::offset_of!(Buffer, nvn_device) };
+    let v = Buffer {
+        range_offset: 0,
+        range_length: 0,
+        int32_data: 0,
+        uint32_data: 0,
+        owns_data: owns,
+        capacity,
+        int64_data: 0,
+        data,
+        nvn_device: 0,
+        nvn_sync: 0,
+    };
+    std::ptr::copy_nonoverlapping(&v as *const Buffer as *const u8, b as *mut u8, n);
 }
 unsafe fn alloc_bytes(n: usize) -> *mut u8 {
     if n == 0 {
@@ -185,8 +210,10 @@ unsafe extern "C" fn buffer_assign(b: *mut Buffer, o: *const Buffer) -> *mut Buf
     b_.int32_data = o_.int32_data;
     b_.uint32_data = o_.uint32_data;
     b_.int64_data = o_.int64_data;
-    b_.nvn_device = o_.nvn_device;
-    b_.nvn_sync = o_.nvn_sync;
+    if buffer_has_nvn() {
+        b_.nvn_device = o_.nvn_device;
+        b_.nvn_sync = o_.nvn_sync;
+    }
     b
 }
 unsafe extern "C" fn buffer_dtor(b: *mut Buffer) {

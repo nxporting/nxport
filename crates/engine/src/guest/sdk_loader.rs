@@ -229,14 +229,7 @@ pub fn nvn_library_version() -> Option<(u32, u32, u32)> {
     NVN_LIBRARY_VERSION.get().copied().flatten()
 }
 
-/// The version in an SDK middleware string such as "SDK MW+Nintendo+NintendoSDK_NVN-7_3_2-Release", by its `lib` prefix.
-fn middleware_version(ro: &[u8], lib: &[u8]) -> Option<(u32, u32, u32)> {
-    let tag = [b"SDK MW+Nintendo+".as_slice(), lib].concat();
-    let at = ro.windows(tag.len()).position(|w| w == tag)? + tag.len();
-    let end = ro[at..].iter().position(|&c| c == b'-' || c == 0)?;
-    let mut parts = std::str::from_utf8(&ro[at..at + end]).ok()?.split('_').map(|p| p.parse::<u32>().ok());
-    Some((parts.next()??, parts.next()??, parts.next()??))
-}
+use super::nso::middleware_version;
 
 pub fn load_sdk(
     sdk_path: &str,
