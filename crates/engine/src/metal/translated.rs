@@ -6957,10 +6957,17 @@ impl Gfx {
         }
         let level = rt.level as usize;
         let (w, h) = ((t.width() >> level).max(1), (t.height() >> level).max(1));
+        // One proxy slice per render-target layer: cube faces count (a cube has arrayLength 1 and six faces; a cube
+        // array, six per cube). resolve_bc_proxies copies slice s to the target's slice s, which for cubes is the face.
+        let slices = match t.textureType() {
+            MTLTextureType::TypeCube => 6,
+            MTLTextureType::TypeCubeArray => 6 * t.arrayLength(),
+            _ => t.arrayLength().max(1),
+        };
         let desc = MTLTextureDescriptor::new();
         desc.setTextureType(if t.textureType() == MTLTextureType::Type3D {
             MTLTextureType::Type3D
-        } else if t.arrayLength() > 1 {
+        } else if slices > 1 {
             MTLTextureType::Type2DArray
         } else {
             MTLTextureType::Type2D
@@ -6971,8 +6978,8 @@ impl Gfx {
             desc.setHeight(h.div_ceil(info.block_h as usize));
             if t.textureType() == MTLTextureType::Type3D {
                 desc.setDepth((t.depth() >> level).max(1));
-            } else if t.arrayLength() > 1 {
-                desc.setArrayLength(t.arrayLength());
+            } else if slices > 1 {
+                desc.setArrayLength(slices);
             }
         }
         desc.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
