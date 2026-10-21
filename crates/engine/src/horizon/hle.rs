@@ -3102,6 +3102,9 @@ struct LightEventState {
     signaled: StdMutex<bool>,
     auto_clear: std::sync::atomic::AtomicBool,
     cv: Condvar,
+    /// Signals so far, counted under `signaled`'s lock: a manual-clear event signaled and cleared again before a
+    /// waiter woke still releases that waiter (it was waiting when the signal came), as on the console.
+    signals: std::sync::atomic::AtomicU64,
 }
 
 static LIGHT_EVENT_TABLE: OnceLock<StdMutex<rustc_hash::FxHashMap<usize, Arc<LightEventState>>>> =
@@ -3116,6 +3119,7 @@ fn light_event_new(initially_signaled: bool, clear_mode: i32) -> Arc<LightEventS
         signaled: StdMutex::new(initially_signaled),
         auto_clear: std::sync::atomic::AtomicBool::new(clear_mode == 1),
         cv: Condvar::new(),
+        signals: std::sync::atomic::AtomicU64::new(0),
     })
 }
 
@@ -3134,10 +3138,26 @@ pub unsafe extern "C" fn hle_nn_os_InitializeLightEvent(
     initially_signaled: bool,
     clear_mode: i32,
 ) {
-    light_event_table()
-        .lock()
-        .unwrap()
-        .insert(ev as usize, light_event_new(initially_signaled, clear_mode));
+    // In place when the object already has state: a thread may already be waiting on it (a wait before the
+    // initialization creates the state lazily), and a replaced state would never see the signals meant for it.
+    let mut table = light_event_table().lock().unwrap();
+    match table.get(&(ev as usize)) {
+        Some(st) => {
+            let st = st.clone();
+            drop(table);
+            st.auto_clear
+                .store(clear_mode == 1, std::sync::atomic::Ordering::Relaxed);
+            let mut g = st.signaled.lock().unwrap();
+            *g = initially_signaled;
+            if initially_signaled {
+                st.signals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                st.cv.notify_all();
+            }
+        }
+        None => {
+            table.insert(ev as usize, light_event_new(initially_signaled, clear_mode));
+        }
+    }
 }
 
 #[no_mangle]
@@ -3145,10 +3165,15 @@ pub unsafe extern "C" fn hle_nn_os_FinalizeLightEvent(ev: *mut ()) {
     light_event_table().lock().unwrap().remove(&(ev as usize));
 }
 
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_SignalLightEvent(ev: *mut ()) {
     let state = light_event_get(ev);
-    *state.signaled.lock().unwrap() = true;
+    {
+        let mut g = state.signaled.lock().unwrap();
+        *g = true;
+        state.signals.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     if state.auto_clear.load(std::sync::atomic::Ordering::Relaxed) {
         state.cv.notify_one();
     } else {
@@ -3233,13 +3258,16 @@ pub unsafe extern "C" fn hle_nn_os_WaitLightEvent(ev: *mut ()) {
     };
     let started = std::time::Instant::now();
     let mut reported = false;
-    while !*guard {
+    // Manual clear: a signal while waiting releases the waiter even if the event was cleared again since.
+    let manual = !state.auto_clear.load(std::sync::atomic::Ordering::Relaxed);
+    let signals0 = state.signals.load(std::sync::atomic::Ordering::Relaxed);
+    while !*guard && !(manual && state.signals.load(std::sync::atomic::Ordering::Relaxed) != signals0) {
         let (g, t) = state
             .cv
             .wait_timeout(guard, std::time::Duration::from_secs(5))
             .unwrap();
         guard = g;
-        if t.timed_out() && !*guard && !reported {
+        if t.timed_out() && !*guard && !reported && !(manual && state.signals.load(std::sync::atomic::Ordering::Relaxed) != signals0) {
             reported = true;
             report_long_wait("WaitLightEvent", ev as usize, fp, started.elapsed());
         }
@@ -3253,12 +3281,16 @@ pub unsafe extern "C" fn hle_nn_os_WaitLightEvent(ev: *mut ()) {
 pub unsafe extern "C" fn hle_nn_os_TimedWaitLightEvent(ev: *mut (), timeout_ns: i64) -> bool {
     let state = light_event_get(ev);
     let guard = state.signaled.lock().unwrap();
+    let manual = !state.auto_clear.load(std::sync::atomic::Ordering::Relaxed);
+    let signals0 = state.signals.load(std::sync::atomic::Ordering::Relaxed);
     let (mut guard, timeout_result) = state
         .cv
         .wait_timeout_while(
             guard,
             std::time::Duration::from_nanos(timeout_ns.max(0) as u64),
-            |signaled| !*signaled,
+            |signaled| {
+                !*signaled && !(manual && state.signals.load(std::sync::atomic::Ordering::Relaxed) != signals0)
+            },
         )
         .unwrap();
     let was_signaled = !timeout_result.timed_out();
