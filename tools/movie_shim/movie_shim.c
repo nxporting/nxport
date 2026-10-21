@@ -138,6 +138,9 @@ void *md_open(void *file, int track, int out_format) {
     d->ctx = avcodec_alloc_context3(c);
     avcodec_parameters_to_context(d->ctx, p);
     d->ctx->thread_count = 0;  // automatic
+    // Slice threading only: frame threading delays output by a frame per thread, and players feed only a few inputs
+    // (as many as a hardware decoder needs: its reorder depth) before waiting for the first output.
+    d->ctx->thread_type = FF_THREAD_SLICE;
     d->ctx->pkt_timebase = f->fmt->streams[track]->time_base;
     if (avcodec_open2(d->ctx, c, NULL) < 0) { avcodec_free_context(&d->ctx); free(d); return NULL; }
     d->frame = av_frame_alloc();
