@@ -540,7 +540,13 @@ pub unsafe fn lookup_or_translate_dynamic(
     }
 
     let magic = *(data as *const u32);
-    let stage = if magic == 0x12345679 {
+    // Compute stages: TotK's carry a 0x12345679 preamble; older GLSLC output has none and is told apart by its control
+    // section's workgroup size, as in the cache build.
+    let workgroup = control >= 0x1_0000_0000
+        && *(control as *const u32) == 0x9876_1234
+        && *((control + 0x20) as *const u32) >= 0x74c
+        && *((control + 0x748) as *const u32) > 0;
+    let stage = if magic == 0x12345679 || (magic != 0x12345678 && workgroup) {
         sass2spv::ShaderStage::Compute
     } else if magic == 0x12345678 {
         let sph_word0 = *((data + 0x30) as *const u32);
