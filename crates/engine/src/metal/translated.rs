@@ -7209,9 +7209,12 @@ pub(super) fn pipeline_descriptor(
                 return None;
             }
         };
-        // Debug: --debug-red-fs=<fragment entry> draws solid red instead (separates geometry from shading).
-        let red =
-            crate::settings::get().debug.debug_red_fs.as_deref() == Some(fs.entry.as_str());
+        // Debug: --debug-red-fs=<fragment entry>[,..] draws solid red instead (separates geometry from shading).
+        let red = crate::settings::get()
+            .debug
+            .debug_red_fs
+            .as_deref()
+            .is_some_and(|l| l.split(',').any(|e| e == fs.entry));
         // Debug: --debug-fs-file=<path.metal> replaces the fragment function whose entry name the file defines
         // (an edited copy of a translated shader), compiled at runtime with the same function constants.
         let debug_src = crate::settings::get()
