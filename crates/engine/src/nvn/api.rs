@@ -3047,7 +3047,7 @@ pub struct NvnTexture {
     pub pool_offset: i64,
     pub storage: usize,
     pub size: usize,
-    /// The builder's swizzle; views compose theirs on top (see metal::translated::texture_for_binding).
+    /// The builder's swizzle; a view's replaces it (see metal::translated::texture_for_binding).
     pub swizzle: [u8; 4],
     pub _reserved: [u8; 44],
 }
