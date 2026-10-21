@@ -192,6 +192,8 @@ group! {
         x18_trampolines: Option<bool> = None,
         /// Load the guest at the fixed base address
         fixed_guest_base: bool = false,
+        /// Run one guest thread per core at a time, as the console does (game code only; engine calls release the core)
+        guest_cores: bool = false,
         /// Bind main's imports to the game's own subsdk libraries and run their initialisers (experiment)
         run_game_subsdk: bool = false,
     }
