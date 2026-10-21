@@ -284,6 +284,8 @@ pub(super) struct TexCache {
         HashMap<(usize, usize, usize, usize, usize, usize, usize), (Tex, Tex, u64)>,
     /// alias_views' key by view object (the views are held there, so these pointers stay valid while listed).
     pub(super) alias_view_keys: HashMap<usize, (usize, usize, usize, usize, usize, usize, usize)>,
+    /// Set by alias_view when the root it found was re-initialized before it could be resolved (search again).
+    pub(super) alias_raced: bool,
 }
 
 impl Default for TexCache {
@@ -297,6 +299,7 @@ impl Default for TexCache {
             tex_memo: HashMap::default(),
             alias_views: HashMap::default(),
             alias_view_keys: HashMap::default(),
+            alias_raced: false,
             alias_of: HashMap::default(),
             tex_by_desc: HashMap::default(),
             desc_used: HashMap::default(),
@@ -1506,7 +1509,15 @@ impl Gfx {
         }
         let watched = watch_storage() == Some(snap.storage);
         let _slow = SlowTimer::start();
-        if let Some(v) = self.alias_view(tc, nvn_tex, &snap) {
+        let mut alias = None;
+        for _ in 0..4 {
+            tc.alias_raced = false;
+            alias = self.alias_view(tc, nvn_tex, &snap);
+            if alias.is_some() || !tc.alias_raced {
+                break;
+            }
+        }
+        if let Some(v) = alias {
             if watched {
                 println!("[watch] f{} texture 0x{:x} ({}x{} fmt {} flags {:x}) -> alias view, storage id {:x}", presented_frames() + 1, nvn_tex, snap.width, snap.height, snap.format, snap.flags, storage_id(&v));
             }
@@ -2134,6 +2145,15 @@ impl Gfx {
         }
         let (root_addr, root_gen, _root, level, slice, _) = best?;
         let root_tex = self.texture(tc, root_addr)?;
+        // Game threads re-initialize transient texture objects while the executor resolves them: the root may describe
+        // another texture by now (generations only grow, so an unchanged one means root_tex is the root the search
+        // found). A view of the new texture, cached under this texture's description, made every later lookup of the
+        // memory return a texture of the wrong size (Mario Kart 8 Deluxe: its 1920x1080 scene color as the 960x540
+        // texture that replaced the root, so the race rendered black or in blocks in some runs). Search again.
+        if tex_info(root_addr).map(|(g, _)| g) != Some(root_gen) {
+            tc.alias_raced = true;
+            return None;
+        }
         let tt = match snap.target {
             crate::nvn::layout::NVN_TARGET_2D_ARRAY => MTLTextureType::Type2DArray,
             crate::nvn::layout::NVN_TARGET_CUBEMAP => MTLTextureType::TypeCube,
