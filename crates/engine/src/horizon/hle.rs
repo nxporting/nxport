@@ -1793,7 +1793,29 @@ pub unsafe extern "C" fn hle_nn_hid_SendVibrationValue(
 ) -> i32 {
     // nn::hid::VibrationValue: amplitudeLow, frequencyLow, amplitudeHigh, frequencyHigh (host/rumble.rs plays it).
     if !handle.is_null() && !val.is_null() {
-        crate::host::rumble::set(*handle, std::ptr::read_unaligned(val));
+        send_vibration(*handle, std::ptr::read_unaligned(val));
+    }
+    0
+}
+
+/// The last vibration value sent to each motor handle.
+static VIBRATION_SENT: StdMutex<Option<rustc_hash::FxHashMap<u32, [f32; 4]>>> = StdMutex::new(None);
+
+fn send_vibration(handle: u32, v: [f32; 4]) {
+    VIBRATION_SENT.lock().unwrap().get_or_insert_with(Default::default).insert(handle, v);
+    crate::host::rumble::set(handle, v);
+}
+
+/// The value a motor is vibrating with: the last one sent to it, or the neutral value (no amplitude at the 160 / 320 Hz
+/// resonance frequencies) before any.
+pub(crate) unsafe extern "C" fn hid_current_vibration(out: *mut [f32; 4], handle: *const u32) -> i32 {
+    if !out.is_null() {
+        let sent = if handle.is_null() {
+            None
+        } else {
+            VIBRATION_SENT.lock().unwrap().as_ref().and_then(|m| m.get(&*handle).copied())
+        };
+        std::ptr::write_unaligned(out, sent.unwrap_or([0.0, 160.0, 0.0, 320.0]));
     }
     0
 }
@@ -1806,7 +1828,7 @@ pub unsafe extern "C" fn hle_nn_hid_SendVibrationValues(
 ) -> i32 {
     if !handles.is_null() && !vals.is_null() {
         for i in 0..count.max(0) as usize {
-            crate::host::rumble::set(*handles.add(i), std::ptr::read_unaligned(vals.add(i)));
+            send_vibration(*handles.add(i), std::ptr::read_unaligned(vals.add(i)));
         }
     }
     0
