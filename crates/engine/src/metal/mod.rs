@@ -78,6 +78,9 @@ pub(super) struct CachedPassRts {
 
 pub(crate) struct State {
     colors: Vec<RtRef>,
+    /// Per color slot: the earlier slot whose surface it repeats (the slot itself is left unattached), see
+    /// SetRenderTargets.
+    color_dups: Vec<Option<usize>>,
     depth: Option<RtRef>,
     program: Option<usize>,
     /// Bound compute program (NVN binds graphics and compute programs independently).
@@ -509,6 +512,7 @@ impl Default for State {
             cx: EncodeCtx::default(),
             tc: TexCache::default(),
             colors: Vec::new(),
+            color_dups: Vec::new(),
             depth: None,
             program: None,
             compute_program: None,
@@ -2849,6 +2853,28 @@ impl Gfx {
                             }
                         }
                     }
+                    // Two slots naming one surface (same storage, level and layer): on the GPU both write the same
+                    // memory and a slot a shader does not write leaves it alone. Two Metal attachments of one texture
+                    // each store their own tile at the end of the pass, so an unwritten slot stored its stale tile over
+                    // the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
+                    // only 3: the G-buffer came out empty). The later slot stays unattached; its clears go to the earlier
+                    // one.
+                    let mut colors = colors;
+                    let surface = |c: &crate::nvn::cmd::RtRef| {
+                        tex_info(c.texture).map(|(_, t)| (t.storage, c.level, c.layer))
+                    };
+                    let surfaces: Vec<_> = colors.iter().map(surface).collect();
+                    st.color_dups = (0..colors.len())
+                        .map(|j| match surfaces[j] {
+                            Some(s) if s.0 != 0 => (0..j).find(|&i| surfaces[i] == Some(s)),
+                            _ => None,
+                        })
+                        .collect();
+                    for (j, d) in st.color_dups.iter().enumerate() {
+                        if d.is_some() {
+                            colors[j] = crate::nvn::cmd::RtRef::default();
+                        }
+                    }
                     st.colors = colors;
                     st.depth = depth;
                     st.rts_dirty = true;
@@ -2856,7 +2882,11 @@ impl Gfx {
                 }
                 Cmd::ClearColor { index, rgba, mask } => {
                     st.stats.clears += 1;
-                    self.clear(st, cb, *index, *rgba, *mask);
+                    let index = match st.color_dups.get(*index as usize) {
+                        Some(Some(i)) => *i as i32,
+                        _ => *index,
+                    };
+                    self.clear(st, cb, index, *rgba, *mask);
                 }
                 Cmd::ClearDepthStencil {
                     depth,
