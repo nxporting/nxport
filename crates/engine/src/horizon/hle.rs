@@ -2273,6 +2273,8 @@ pub unsafe extern "C" fn hle_nn_os_GetThreadAvailableCoreMask() -> u64 {
 // every thread, which left per-core task queues stranded (worker threads waited forever).
 static THREAD_CORES: OnceLock<StdMutex<rustc_hash::FxHashMap<usize, i32>>> = OnceLock::new();
 const DEFAULT_CORE: i32 = 1;
+/// Bumped whenever a thread's core changes (cores.rs caches each thread's core against it).
+pub static CORES_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn thread_cores() -> &'static StdMutex<rustc_hash::FxHashMap<usize, i32>> {
     THREAD_CORES.get_or_init(|| StdMutex::new(rustc_hash::FxHashMap::default()))
@@ -2307,6 +2309,7 @@ pub unsafe extern "C" fn hle_nn_os_CreateThreadWithCore(
             .lock()
             .unwrap()
             .insert(thread as usize, ideal_core);
+        CORES_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     r
 }
@@ -2331,6 +2334,7 @@ pub unsafe extern "C" fn hle_nn_os_SetThreadCoreMask(
         thread as usize
     };
     thread_cores().lock().unwrap().insert(t, core);
+    CORES_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     println!(
         "[+] HLE: nn::os::SetThreadCoreMask(thread={:#x}, ideal={}, affinity={:#x}) -> core {}",
         t, ideal_core, affinity, core
