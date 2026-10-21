@@ -1,3 +1,5 @@
+[![Discord](https://shields.io)](https://discord.gg/RRP5SRUmyj)
+
 ## About
 This is a general-purpose Nintendo Switch recomp tool. It provides a generic layer for NVN translation and the like, as well as game-specific optimization and feature code. Every optimization and feature is toggleable either in the builder, via a runtime overlay, or both.
 
