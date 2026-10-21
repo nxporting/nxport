@@ -2854,7 +2854,7 @@ pub unsafe extern "C" fn hle_nn_os_SendLightMessageQueue(mq: *mut (), data: u64)
         inner = state.not_full.wait(inner).unwrap();
     }
     inner.queue.push_back(data);
-    state.not_empty.notify_one();
+    state.not_empty.notify_all();
 }
 
 #[no_mangle]
@@ -2865,7 +2865,7 @@ pub unsafe extern "C" fn hle_nn_os_TrySendLightMessageQueue(mq: *mut (), data: u
         return false;
     }
     inner.queue.push_back(data);
-    state.not_empty.notify_one();
+    state.not_empty.notify_all();
     true
 }
 
@@ -2877,7 +2877,7 @@ pub unsafe extern "C" fn hle_nn_os_JamLightMessageQueue(mq: *mut (), data: u64) 
         inner = state.not_full.wait(inner).unwrap();
     }
     inner.queue.push_front(data);
-    state.not_empty.notify_one();
+    state.not_empty.notify_all();
 }
 
 #[no_mangle]
@@ -2888,7 +2888,7 @@ pub unsafe extern "C" fn hle_nn_os_TryJamLightMessageQueue(mq: *mut (), data: u6
         return false;
     }
     inner.queue.push_front(data);
-    state.not_empty.notify_one();
+    state.not_empty.notify_all();
     true
 }
 
@@ -2935,6 +2935,70 @@ pub unsafe extern "C" fn hle_nn_os_TryPeekLightMessageQueue(out: *mut u64, mq: *
     let inner = state.inner.lock().unwrap();
     match inner.queue.front() {
         Some(&v) => {
+            if !out.is_null() {
+                *out = v;
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_PeekLightMessageQueue(out: *mut u64, mq: *const ()) {
+    let state = light_mq_get(mq as *mut ());
+    let mut inner = state.inner.lock().unwrap();
+    while inner.queue.is_empty() {
+        inner = state.not_empty.wait(inner).unwrap();
+    }
+    if !out.is_null() {
+        *out = inner.queue[0];
+    }
+}
+
+/// Send (or jam at the head) with a timeout; false if the queue stayed full.
+unsafe fn light_mq_timed_put(mq: *mut (), data: u64, front: bool, timeout_ns: i64) -> bool {
+    let state = light_mq_get(mq);
+    let inner = state.inner.lock().unwrap();
+    let (mut inner, _) = state
+        .not_full
+        .wait_timeout_while(inner, std::time::Duration::from_nanos(timeout_ns.max(0) as u64), |i| {
+            i.queue.len() >= i.capacity
+        })
+        .unwrap();
+    if inner.queue.len() >= inner.capacity {
+        return false;
+    }
+    if front {
+        inner.queue.push_front(data);
+    } else {
+        inner.queue.push_back(data);
+    }
+    state.not_empty.notify_all();
+    true
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_TimedSendLightMessageQueue(mq: *mut (), data: u64, timeout_ns: i64) -> bool {
+    light_mq_timed_put(mq, data, false, timeout_ns)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_TimedJamLightMessageQueue(mq: *mut (), data: u64, timeout_ns: i64) -> bool {
+    light_mq_timed_put(mq, data, true, timeout_ns)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_TimedReceiveLightMessageQueue(out: *mut u64, mq: *mut (), timeout_ns: i64) -> bool {
+    let state = light_mq_get(mq);
+    let inner = state.inner.lock().unwrap();
+    let (mut inner, _) = state
+        .not_empty
+        .wait_timeout_while(inner, std::time::Duration::from_nanos(timeout_ns.max(0) as u64), |i| i.queue.is_empty())
+        .unwrap();
+    match inner.queue.pop_front() {
+        Some(v) => {
+            state.not_full.notify_one();
             if !out.is_null() {
                 *out = v;
             }
@@ -3275,6 +3339,17 @@ pub unsafe extern "C" fn hle_nn_os_WaitLightEvent(ev: *mut ()) {
     if state.auto_clear.load(std::sync::atomic::Ordering::Relaxed) {
         *guard = false;
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_TryWaitLightEvent(ev: *mut ()) -> bool {
+    let state = light_event_get(ev);
+    let mut guard = state.signaled.lock().unwrap();
+    let was = *guard;
+    if was && state.auto_clear.load(std::sync::atomic::Ordering::Relaxed) {
+        *guard = false;
+    }
+    was
 }
 
 #[no_mangle]
@@ -3684,6 +3759,39 @@ unsafe fn semaphore_acquire(sem: *mut (), fp: usize) {
     };
     count = state.cv.wait_while(count, |c| *c <= 0).unwrap();
     *count -= 1;
+}
+
+unsafe fn semaphore_try_acquire(sem: *mut (), timeout_ns: i64) -> bool {
+    let state = semaphore_get(sem);
+    let count = state.count.lock().unwrap();
+    let (mut count, _) = state
+        .cv
+        .wait_timeout_while(count, std::time::Duration::from_nanos(timeout_ns.max(0) as u64), |c| *c <= 0)
+        .unwrap();
+    if *count <= 0 {
+        return false;
+    }
+    *count -= 1;
+    true
+}
+
+unsafe fn semaphore_count(sem: *const ()) -> i32 {
+    *semaphore_get(sem as *mut ()).count.lock().unwrap()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_TryAcquireSemaphore(sem: *mut ()) -> bool {
+    semaphore_try_acquire(sem, 0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_TimedAcquireSemaphore(sem: *mut (), timeout_ns: i64) -> bool {
+    semaphore_try_acquire(sem, timeout_ns)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_os_GetCurrentSemaphoreCount(sem: *const ()) -> i32 {
+    semaphore_count(sem)
 }
 
 unsafe fn semaphore_release(sem: *mut (), release_count: i32) {
