@@ -12,10 +12,7 @@ pub static V1_5_0: VersionProfile = VersionProfile {
 };
 
 fn options() -> crate::settings::SettingsPatch {
-    let mut s = crate::settings::SettingsPatch::default();
-    // Its model renderer keeps one work buffer per core and appends to it without locks from every thread on that core.
-    s.guest.guest_cores = Some(true);
-    s
+    crate::settings::SettingsPatch::default()
 }
 
 pub static PROFILE: GameProfile = GameProfile {
