@@ -40,6 +40,7 @@ pub(crate) mod pipeline_archive;
 pub mod pipeline_list;
 mod programs;
 mod report_guard;
+pub(crate) mod rt_guard;
 pub mod shader_cache;
 mod tex_backing;
 mod translated;
@@ -1273,6 +1274,7 @@ impl Gfx {
                 .or_insert(0) += 1;
         }
         if let Some(e) = st.enc.take() {
+            rt_guard::pass_end();
             st.rts_dirty = true;
             st.cached_rts = None;
             journal(|| format!("  end {} draws {}", st.enc_name, st.enc_draws));
@@ -1946,6 +1948,11 @@ impl Gfx {
                 }
             }
             tc.tex_checked.insert(key, frame);
+            return;
+        }
+        // GPU output not written back yet: the CPU has not written it since (that would have ended the hold).
+        if rt_guard::overlaps_held(snap.storage as usize, len) {
+            why("held render target");
             return;
         }
         if tc.tex_check_budget_used + len > BUDGET {
@@ -2859,6 +2866,18 @@ impl Gfx {
                                 if let Some((_, t)) = tex_info(c.texture) {
                                     println!("[rt-log] f{} c{} storage {:#x} {}x{}x{} fmt {} levels {} level {} layer {} view_format {}", f, i, t.storage, t.width, t.height, t.depth, t.format, t.levels, c.level, c.layer, c.view_format);
                                 }
+                            }
+                        }
+                    }
+                    // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
+                    if rt_guard::enabled() {
+                        for c in colors.iter() {
+                            let Some((_, t)) = tex_info(c.texture) else { continue };
+                            if !crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+                                continue;
+                            }
+                            if let Some(tex) = self.texture(&mut st.tc, c.texture) {
+                                rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
                             }
                         }
                     }
@@ -4190,6 +4209,7 @@ fn split_encoders() -> usize {
 /// encoded into it.
 fn push_inflight(st: &mut State, cb: Retained<ProtocolObject<dyn MTLCommandBuffer>>) -> u64 {
     let serial = SUBMITTED_SERIAL.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    rt_guard::committed(serial, &cb);
     // Occlusion reports are written as soon as the command buffer completes (on the fence watcher thread) instead of
     // when the executor later retires it: with --early-fence the game reads them before its next submit, and a
     // report still unwritten then read as stale memory (an object that just came into range or switched LOD was culled
@@ -5304,6 +5324,8 @@ fn submit_inner(handles: &[u64]) {
         let mut st = g.state.lock().unwrap();
         let Some(cb) = st.cur_cb.take() else { return };
         tail_log_label(&st, &cb);
+        // Targets written only by tiny-pass kernels end no render pass: everything of the submit is in this one.
+        rt_guard::pass_end();
         let serial = push_inflight(&mut st, cb.clone());
         st.issuer.commit_serial(cb, Some(serial)); // after the queued encoder ops, on the issuer thread (metal/issuer.rs)
     });
@@ -6024,6 +6046,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
         }
         glitch_scan(g, pn, &src);
         report_guard::frame_end(pn);
+        rt_guard::frame_end(pn);
         tex_mem_report(g, pn);
         tex_backing_frame(g, pn);
         frame_history(g, pn, &src);
@@ -6814,7 +6837,7 @@ fn watch_size() -> Option<(u32, u32)> {
 /// --no-rt-writeback disables.
 fn rt_writeback_enabled() -> bool {
     static E: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *E.get_or_init(|| !crate::settings::get().graphics.no_rt_writeback)
+    *E.get_or_init(|| !crate::settings::get().graphics.no_rt_writeback && !rt_guard::enabled())
 }
 
 /// Writes last frame's write-back candidates into guest memory (their GPU work has completed: TotK waits for each

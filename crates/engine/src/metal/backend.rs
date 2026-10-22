@@ -56,6 +56,7 @@ impl Backend for Metal {
     fn access_fault(&self, f: &Fault) -> bool {
         unsafe {
             super::report_guard::fault(f.addr, f.pc, f.lr, f.write)
+                || super::rt_guard::fault(f.addr, f.pc, f.lr, super::report_guard::may_wait(f.pc))
                 || super::tex_backing::fault(f.addr, f.pc, f.lr, f.write)
                 // dirty_track would claim pages it once tracked and unprotect them without waiting: this goes first.
                 || super::fence_guard::fault(f.addr)
@@ -75,6 +76,7 @@ impl Backend for Metal {
         unsafe {
             super::report_guard::reprotect_held(addr, len);
             super::tex_backing::disc_reprotect(addr, len);
+            super::rt_guard::reprotect_held(addr, len);
         }
     }
 

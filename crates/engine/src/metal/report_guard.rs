@@ -61,7 +61,7 @@ pub(super) fn set_guest_code_range(start: usize, end: usize) {
 
 /// Only guest code waits: a game thread inside our HLE code may hold a lock the submit producing the reports needs (the
 /// gfx state lock), which deadlocked until the timeout at gameplay start (2026-10-15).
-fn may_wait(pc: usize) -> bool {
+pub(super) fn may_wait(pc: usize) -> bool {
     crate::cpu::tls::is_guest_thread()
         && !IN_ENGINE.with(|e| e.get())
         && pc >= CODE_START.load(Ordering::Acquire)
@@ -323,7 +323,7 @@ pub(super) fn describe(addr: usize) -> String {
 /// Where the engine accesses host address `a`: through the alias while its page is guarded, else `a` itself.
 pub(super) fn engine_ptr(a: usize) -> usize {
     if HIGH.load(Ordering::Acquire) == 0 {
-        return a;
+        return super::rt_guard::engine_ptr(a).unwrap_or(a);
     }
     match find(a & !(PAGE - 1)) {
         Some(i) => match ALIAS[i].load(Ordering::Acquire) {
@@ -336,7 +336,7 @@ pub(super) fn engine_ptr(a: usize) -> usize {
 
 /// Copies guest memory at `src` into `dst` (engine side: guarded pages are read through their aliases).
 pub(super) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
-    if HIGH.load(Ordering::Acquire) == 0 {
+    if HIGH.load(Ordering::Acquire) == 0 && !super::rt_guard::any_held() {
         std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), dst.len());
         return;
     }

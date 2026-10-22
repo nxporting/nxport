@@ -1801,7 +1801,8 @@ unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) 
     }
     let (m, all_restart) = match index_type {
         0 => {
-            let v = std::slice::from_raw_parts(addr as *const u8, n);
+            let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u8, n));
             let r = restart.filter(|&r| r <= 0xFF).map(|r| r as u8);
             let m = lanes::<u8, 32>(v, r);
             (
@@ -1810,7 +1811,8 @@ unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) 
             )
         }
         1 => {
-            let v = std::slice::from_raw_parts(addr as *const u16, n);
+            let held = super::rt_guard::guest_copy::<u16>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u16, n));
             let r = restart.filter(|&r| r <= 0xFFFF).map(|r| r as u16);
             let m = lanes::<u16, 16>(v, r);
             (
@@ -1819,7 +1821,8 @@ unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) 
             )
         }
         _ => {
-            let v = std::slice::from_raw_parts(addr as *const u32, n);
+            let held = super::rt_guard::guest_copy::<u32>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u32, n));
             let m = lanes::<u32, 8>(v, restart);
             (
                 m as u64,
@@ -2009,21 +2012,24 @@ unsafe fn restart_rewrite(
     // Checked before anything is allocated: most indexed draws contain no restart index.
     let values: Vec<u32> = match index_type {
         0 => {
-            let v = std::slice::from_raw_parts(addr as *const u8, n);
+            let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u8, n));
             if restart > 0xFF || !v.contains(&(restart as u8)) {
                 return None;
             }
             v.iter().map(|&x| x as u32).collect()
         }
         1 => {
-            let v = std::slice::from_raw_parts(addr as *const u16, n);
+            let held = super::rt_guard::guest_copy::<u16>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u16, n));
             if restart > 0xFFFF || !contains_u16(v, restart as u16) {
                 return None;
             }
             v.iter().map(|&x| x as u32).collect()
         }
         2 => {
-            let v = std::slice::from_raw_parts(addr as *const u32, n);
+            let held = super::rt_guard::guest_copy::<u32>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u32, n));
             if !v.contains(&restart) {
                 return None;
             }
@@ -2396,15 +2402,15 @@ impl Gfx {
         // Metal refuses a no-copy buffer over inaccessible pages; buffers made before a page is protected keep working.
         // --tex-backing holds pages under copied textures, which share pools with buffers: open them first.
         unsafe { super::tex_backing::open_overlapping(wrap_base, wrap_end - wrap_base) };
-        let Some(buf) = self
-            .device
-            .newBufferWithBytesNoCopy_length_options_deallocator(
+        // Held render targets (metal/rt_guard.rs) likewise, for the moment of the wrap.
+        let Some(buf) = super::rt_guard::with_open(wrap_base, wrap_end - wrap_base, || {
+            self.device.newBufferWithBytesNoCopy_length_options_deallocator(
                 std::ptr::NonNull::new(wrap_base as *mut libc::c_void)?,
                 wrap_end - wrap_base,
                 MTLResourceOptions::empty(),
                 None,
             )
-        else {
+        }) else {
             static WARNED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
             let mut w = WARNED.lock().unwrap_or_else(|e| e.into_inner());
             if !w.contains(&wrap_base) {
@@ -5155,8 +5161,10 @@ impl Gfx {
                                     let key = (addr, n | pad << 32);
                                     let hit = st.plan_ubo.get(&key).cloned();
                                     let copy = hit.or_else(|| {
-                                        let bytes =
-                                            std::slice::from_raw_parts(addr as *const u8, n);
+                                        let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+                                        let bytes = held.as_deref().unwrap_or_else(|| {
+                                            std::slice::from_raw_parts(addr as *const u8, n)
+                                        });
                                         let f = st.plan_arena.alloc_with(
                                             &self.device,
                                             n + pad,
@@ -6825,8 +6833,10 @@ impl Gfx {
                     let ib = if let Some((b, o, _)) = memo_hit(env, 1) {
                         Some((b, o))
                     } else if index_type == 0 {
-                        let u8s =
-                            std::slice::from_raw_parts(index_addr as *const u8, count as usize);
+                        let held = super::rt_guard::guest_copy::<u8>(index_addr as usize, count as usize);
+                        let u8s = held.as_deref().unwrap_or_else(|| {
+                            std::slice::from_raw_parts(index_addr as *const u8, count as usize)
+                        });
                         let wide: Vec<u8> =
                             u8s.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect();
                         let x = env.cx.arena.alloc(&self.device, &wide);
