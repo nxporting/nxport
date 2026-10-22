@@ -372,6 +372,16 @@ pub fn block_linear_offset(x_bytes: usize, y: usize, pitch: usize, block_h_gobs:
 ///
 /// # Safety
 /// `storage` must be valid for writes across the level's size.
+/// Linear textures (NVN_TEXTURE_FLAGS_LINEAR / LINEAR_RENDER_TARGET): one level of rows `pitch` bytes apart, the pitch
+/// compute_layout uses. None for block-linear textures.
+fn linear_pitch(p: &TextureParams, info: &FormatInfo) -> Option<usize> {
+    if p.flags & (NVN_TEXTURE_FLAGS_LINEAR_BIT | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT) == 0 {
+        return None;
+    }
+    let wb = (p.width.max(1) as u64 + info.block_w as u64 - 1) / info.block_w as u64;
+    Some(if p.stride > 0 { p.stride as usize } else { align(wb * info.bytes as u64, 32) as usize })
+}
+
 pub unsafe fn write_texels_2d(
     storage: *mut u8,
     slice: usize,
@@ -404,9 +414,18 @@ pub unsafe fn write_texels_2d(
     let cols = ((w.max(0) as u32 + info.block_w - 1) / info.block_w) as usize;
     let rows = ((h.max(0) as u32 + info.block_h - 1) / info.block_h) as usize;
     let bpb = info.bytes as usize;
-    // Aligned 16-byte runs within a GOB row are contiguous: copy runs (see read_texels_2d).
     let row_bytes = cols * bpb;
     let x0 = bx * bpb;
+    if let Some(pitch) = linear_pitch(p, &info) {
+        if level != 0 {
+            return false;
+        }
+        for r in 0..rows {
+            std::ptr::copy_nonoverlapping(data.add(r * row_bytes), base.add((by + r) * pitch + x0), row_bytes);
+        }
+        return true;
+    }
+    // Aligned 16-byte runs within a GOB row are contiguous: copy runs (see read_texels_2d).
     for r in 0..rows {
         let src_row = data.add(r * row_bytes);
         let mut x = 0usize;
@@ -541,10 +560,19 @@ pub unsafe fn read_texels_2d(
     let cols = ((w.max(0) as u32 + info.block_w - 1) / info.block_w) as usize;
     let rows = ((h.max(0) as u32 + info.block_h - 1) / info.block_h) as usize;
     let bpb = info.bytes as usize;
-    // Within a GOB row, every aligned 16-byte run is contiguous: copy runs, not bytes (one address computation per
-    // 16 bytes; the per-byte loop made streamed-texture uploads a visible share of the encoding thread).
     let row_bytes = cols * bpb;
     let x0 = bx * bpb;
+    if let Some(pitch) = linear_pitch(p, &info) {
+        if level != 0 {
+            return false;
+        }
+        for r in 0..rows {
+            std::ptr::copy_nonoverlapping(base.add((by + r) * pitch + x0), out_data.add(r * row_bytes), row_bytes);
+        }
+        return true;
+    }
+    // Within a GOB row, every aligned 16-byte run is contiguous: copy runs, not bytes (one address computation per
+    // 16 bytes; the per-byte loop made streamed-texture uploads a visible share of the encoding thread).
     for r in 0..rows {
         let dst_row = out_data.add(r * row_bytes);
         let mut x = 0usize;
@@ -922,6 +950,33 @@ mod tests {
                 assert!(o < pitch * rows && !seen[o], "collision at ({x},{y})");
                 seen[o] = true;
             }
+        }
+    }
+
+    #[test]
+    fn linear_render_target_texels_are_rows() {
+        // R16 (format 6) linear render target with an explicit stride: rows `stride` bytes apart, no swizzle.
+        let p = TextureParams {
+            target: NVN_TARGET_2D,
+            width: 256,
+            height: 256,
+            depth: 1,
+            levels: 1,
+            format: 6,
+            flags: NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT,
+            samples: 1,
+            stride: 512,
+        };
+        let mut mem = vec![0u8; storage_size(&p)];
+        let data: Vec<u8> = (0..16 * 4 * 2).map(|i| i as u8).collect();
+        let mut back = vec![0u8; data.len()];
+        unsafe {
+            assert!(write_texels_2d(mem.as_mut_ptr(), 0, &p, 0, 8, 3, 16, 4, data.as_ptr()));
+            assert!(read_texels_2d(mem.as_ptr(), 0, &p, 0, 8, 3, 16, 4, back.as_mut_ptr()));
+        }
+        assert_eq!(back, data);
+        for r in 0..4 {
+            assert_eq!(&mem[(3 + r) * 512 + 16..(3 + r) * 512 + 48], &data[r * 32..r * 32 + 32]);
         }
     }
 
