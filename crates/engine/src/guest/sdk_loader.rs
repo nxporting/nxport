@@ -35,6 +35,9 @@ pub struct SdkModule {
     pub ro_off: usize,
     pub data_off: usize,
     pub image_size: usize,
+    /// The reservation the module was given when it did not fit the slot reserved with main (that one belongs to the
+    /// GuestMemorySpace).
+    own: Option<(usize, usize)>,
 }
 
 impl SdkModule {
@@ -143,8 +146,8 @@ impl SdkModule {
 
 impl Drop for SdkModule {
     fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.base as *mut libc::c_void, self.total_size);
+        if let Some((base, size)) = self.own {
+            unsafe { crate::os::release(base, size) };
         }
     }
 }
@@ -260,27 +263,20 @@ pub fn load_sdk(
     // Above main with a gap for subsdk modules: rtld's order is main, subsdk*, sdk, and mods (exlaunch) address the
     // SDK as the last module. Close enough to main for one tpidr rewrite island to reach both.
     // Its slot was reserved together with main (guest::loader::SDK_SLOT_SIZE); a hint alone could land anywhere.
-    let base_ptr = if total_aligned <= crate::guest::loader::SDK_SLOT_SIZE {
-        mem_space.sdk_slot as *mut libc::c_void
+    let (base, own) = if total_aligned <= crate::guest::loader::SDK_SLOT_SIZE {
+        (mem_space.sdk_slot, None)
     } else {
         let hint =
             (mem_space.base_ptr as usize + mem_space.total_size + crate::guest::loader::SDK_GAP)
                 & !0x3fff;
-        unsafe {
-            libc::mmap(
-                hint as *mut libc::c_void,
-                total_aligned,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
+        let base = unsafe {
+            crate::os::reserve(crate::os::At::Near(hint), total_aligned).and_then(|b| {
+                crate::os::commit(b, total_aligned, crate::os::Prot::ReadWrite).map(|()| b)
+            })
         }
+        .map_err(|e| format!("SDK memory: {e}"))?;
+        (base, Some((base, total_aligned)))
     };
-    if base_ptr == libc::MAP_FAILED {
-        return Err("mmap for SDK memory failed".into());
-    }
-    let base = base_ptr as usize;
 
     // ── Copy sections ───────────────────────────────────────────────────────
     unsafe {
@@ -410,6 +406,7 @@ pub fn load_sdk(
         ro_off: ro_mo,
         data_off: data_mo,
         image_size: total_vm,
+        own,
     })
 }
 

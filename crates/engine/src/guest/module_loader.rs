@@ -79,28 +79,22 @@ pub unsafe fn load(
     let image_aligned = (image_size + 0x3fff) & !0x3fff;
     let total = image_aligned + STUB_AREA;
 
-    // Inside the reserved gap after main the spot is ours: map over the reservation (MAP_FIXED), so the layout is the
-    // same in every run. Elsewhere only a hint is possible.
+    // Inside the reserved gap after main the spot is ours: commit it, so the layout is the same in every run. Elsewhere
+    // only a hint is possible.
     let (gap, gap_end) = crate::guest::loader::mod_gap();
     let fixed = gap != 0 && hint >= gap && hint + total <= gap_end;
-    let p = libc::mmap(
-        hint as *mut libc::c_void,
-        total,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | if fixed { libc::MAP_FIXED } else { 0 },
-        -1,
-        0,
-    );
-    if p == libc::MAP_FAILED {
-        return Err("mmap failed".into());
-    }
+    let base = if fixed {
+        hint
+    } else {
+        crate::os::reserve(crate::os::At::Near(hint), total).map_err(|e| format!("reserve: {e}"))?
+    };
+    crate::os::commit(base, total, crate::os::Prot::ReadWrite).map_err(|e| format!("commit: {e}"))?;
     if !fixed {
         println!(
-            "[!] Mods: {} does not fit the reserved module gap; mapped at {:p} (hint {:#x})",
-            name, p, hint
+            "[!] Mods: {} does not fit the reserved module gap; mapped at {:#x} (hint {:#x})",
+            name, base, hint
         );
     }
-    let base = p as usize;
     for (mo, data) in &segs {
         ptr::copy_nonoverlapping(data.as_ptr(), (base + mo) as *mut u8, data.len());
     }
