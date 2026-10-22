@@ -50,7 +50,7 @@ unsafe fn guest_handle() -> u32 {
     if tp >= 0x10000 {
         let thread = *((tp + 0x1f8) as *const usize);
         if thread >= 0x10000 {
-            let h = *((thread + 0x1b0) as *const u32);
+            let h = *super::hle::ThreadTail::of(thread as *const super::hle::NnThreadType).handle();
             if h != 0 {
                 return h;
             }

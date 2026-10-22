@@ -220,15 +220,30 @@ pub struct NnThreadType {
     pub thread_function: Option<unsafe extern "C" fn(*mut ())>, // 0x68 _threadFunction
     pub current_fiber: *mut (),           // 0x70 _currentFiber
     pub initial_fiber: *mut (),           // 0x78 _initialFiber
-    pub tls_value_array: [u64; 32],       // 0x80 _tlsValueArray (256 bytes)
-    pub thread_name_buffer: [u8; 32],     // 0x180 _threadNameBuffer
-    pub name_pointer: *const c_char,      // 0x1A0 _namePointer
-    pub cs_thread: [u8; 4],               // 0x1A8 _csThread (InternalCriticalSectionStorage)
-    pub cv_thread: [u8; 4],               // 0x1AC _cvThread (InternalConditionVariableStorage)
-    pub handle: u32,                      // 0x1B0 _handle
+    /// 0x80 in the newest layout: TLS values (0x100), name buffer (0x20), name pointer, lock, condition variable,
+    /// handle; older SDKs place them sdk::thread_tail_shift() bytes later (`ThreadTail`). Room for the longest layout.
+    pub _tail: [u8; 0x140],
 }
 
-const _: () = assert!(std::mem::size_of::<NnThreadType>() == 0x1B8);
+const _: () = assert!(std::mem::size_of::<NnThreadType>() == 0x1C0);
+
+/// The thread object's fields after its fiber pointers, at the game's SDK's offsets.
+pub(crate) struct ThreadTail(usize);
+
+impl ThreadTail {
+    pub(crate) fn of(t: *const NnThreadType) -> Self {
+        ThreadTail(t as usize + 0x80 + super::sdk::thread_tail_shift())
+    }
+    pub(crate) fn name_buffer(&self) -> *mut u8 {
+        (self.0 + 0x100) as *mut u8
+    }
+    pub(crate) fn name_pointer(&self) -> *mut *const c_char {
+        (self.0 + 0x120) as *mut *const c_char
+    }
+    pub(crate) fn handle(&self) -> *mut u32 {
+        (self.0 + 0x130) as *mut u32
+    }
+}
 
 pub static NEXT_THREAD_HANDLE: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0x100);
@@ -251,12 +266,7 @@ thread_local! {
         thread_function: None,
         current_fiber: std::ptr::null_mut(),
         initial_fiber: std::ptr::null_mut(),
-        tls_value_array: [0; 32],
-        thread_name_buffer: [0; 32],
-        name_pointer: std::ptr::null(),
-        cs_thread: [0; 4],
-        cv_thread: [0; 4],
-        handle: 1,
+        _tail: [0; 0x140],
     });
     static THREAD_TLS_VALUES: RefCell<[u64; 64]> = const { RefCell::new([0; 64]) };
 }
@@ -353,8 +363,9 @@ pub unsafe extern "C" fn hle_nn_os_GetCurrentThread() -> *mut NnThreadType {
         if ptr.is_null() {
             ptr = THREAD_SELF_STRUCT.with(|s| s.as_ptr());
             let self_pthread = libc::pthread_self();
-            if (*ptr).handle == 0 {
-                (*ptr).handle = 1;
+            let handle = ThreadTail::of(ptr).handle();
+            if *handle == 0 {
+                *handle = 1;
             }
             // Populate the REAL host stack bounds at the REAL field offsets
             // (_stack/_stackSize), not a placeholder. See struct doc comment.
@@ -2016,7 +2027,7 @@ pub unsafe extern "C" fn hle_nn_os_CreateThread(
         libc::memset(stack as *mut libc::c_void, 0, stack_size);
     }
     if !thread.is_null() {
-        (*thread).handle = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *ThreadTail::of(thread).handle() = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         (*thread).state = THREAD_STATE_INITIALIZED;
         (*thread).base_priority = priority;
         (*thread).original_stack = stack;
@@ -2041,13 +2052,10 @@ pub unsafe extern "C" fn hle_nn_os_SetThreadName(thread: *mut NnThreadType, name
         );
         let bytes = name_str.as_bytes();
         let len = bytes.len().min(31);
-        libc::memcpy(
-            (*thread).thread_name_buffer.as_mut_ptr() as *mut libc::c_void,
-            bytes.as_ptr() as *const libc::c_void,
-            len,
-        );
-        (*thread).thread_name_buffer[len] = 0;
-        (*thread).name_pointer = (*thread).thread_name_buffer.as_ptr() as *const c_char;
+        let tail = ThreadTail::of(thread);
+        libc::memcpy(tail.name_buffer() as *mut libc::c_void, bytes.as_ptr() as *const libc::c_void, len);
+        *tail.name_buffer().add(len) = 0;
+        *tail.name_pointer() = tail.name_buffer() as *const c_char;
     }
 }
 
@@ -2063,7 +2071,7 @@ pub unsafe extern "C" fn hle_nn_os_SetThreadNamePointer(
         thread
     };
     if !t.is_null() {
-        (*t).name_pointer = name;
+        *ThreadTail::of(t).name_pointer() = name;
     }
 }
 #[no_mangle]
@@ -2078,7 +2086,7 @@ pub unsafe extern "C" fn hle_nn_os_GetThreadNamePointer(
     if t.is_null() {
         std::ptr::null()
     } else {
-        (*t).name_pointer
+        *ThreadTail::of(t).name_pointer()
     }
 }
 
@@ -2087,7 +2095,7 @@ pub unsafe extern "C" fn hle_nn_os_StartThread(thread: *mut NnThreadType) {
     if thread.is_null() {
         return;
     }
-    let name_bytes = &(*thread).thread_name_buffer;
+    let name_bytes = std::slice::from_raw_parts(ThreadTail::of(thread).name_buffer(), 32);
     let name_end = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
     let name_str = String::from_utf8_lossy(&name_bytes[..name_end]).to_string();
     println!(
@@ -2155,9 +2163,9 @@ pub unsafe extern "C" fn hle_nn_os_StartThread(thread: *mut NnThreadType) {
             } else {
                 super::thread_stack::allocate(1 << 20)
             };
-            if (*thread_ptr).handle == 0 {
-                (*thread_ptr).handle =
-                    NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let handle = ThreadTail::of(thread_ptr).handle();
+            if *handle == 0 {
+                *handle = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             setup_horizon_tpidrro(thread_ptr);
             super::thread_stack::run(stack_lo, stack_hi, entry_usize, arg_usize);
@@ -2241,7 +2249,7 @@ pub unsafe extern "C" fn hle_nn_fs_SetPriorityOnCurrentThread(_prio: i32) {}
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_GetThreadId(thread: *const NnThreadType) -> u64 {
     if !thread.is_null() {
-        (*thread).handle as u64
+        *ThreadTail::of(thread).handle() as u64
     } else {
         1
     }

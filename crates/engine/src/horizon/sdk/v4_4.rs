@@ -8,6 +8,9 @@ pub(super) static LAYER: Layer = Layer {
     tables: &[TABLE],
     // MK8D main+0xa7f4d0 and BotW main+0xaf8760 require major 53, minor >= 105.
     nvn_api: Some((53, 105)),
+    // The thread object has a lock history word after its fiber pointers (BotW sdk+0x96efc, the internal lock
+    // takes the owner handle from +0x1b8; newer SDKs read it at +0x1b0).
+    thread_tail_shift: Some(8),
 };
 
 static TABLE: &[Entry] = &[

@@ -77,6 +77,9 @@ pub struct Layer {
     pub tables: &'static [&'static [Entry]],
     /// NVN_API_MAJOR / MINOR_VERSION of this SDK's NVN headers (games require that major and at least that minor).
     pub nvn_api: Option<(i32, i32)>,
+    /// Bytes by which the thread object's fields after its fiber pointers (TLS values, name, lock, handle) lie further
+    /// than in the newest layout, and the object is longer.
+    pub thread_tail_shift: Option<usize>,
 }
 
 /// Version layers, oldest first.
@@ -87,6 +90,7 @@ static BASE: Layer = Layer {
     from: SdkVersion(0, 0, 0),
     tables: base::TABLES,
     nvn_api: None,
+    thread_tail_shift: None,
 };
 
 static VERSION: OnceLock<Option<SdkVersion>> = OnceLock::new();
@@ -172,6 +176,12 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     v.sort_unstable();
     v.dedup();
     v.into_iter()
+}
+
+/// thread_tail_shift of this game's SDK (the newest layer that knows it; 0 for an unknown version).
+pub fn thread_tail_shift() -> usize {
+    static S: OnceLock<usize> = OnceLock::new();
+    *S.get_or_init(|| chain().layers.iter().find_map(|l| l.thread_tail_shift).unwrap_or(0))
 }
 
 /// The NVN API version this game's SDK reports (the newest layer that knows it).
