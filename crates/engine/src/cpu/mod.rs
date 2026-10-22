@@ -3,6 +3,7 @@
 
 pub mod aot;
 pub mod crash_handler;
+pub mod exclusive_rewrite;
 pub mod tls;
 pub mod tpidr_rewrite;
 pub mod trampoline;

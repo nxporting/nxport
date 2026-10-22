@@ -931,6 +931,16 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
+    // Plain load-exclusives become acquire loads (cpu/exclusive_rewrite.rs).
+    {
+        let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
+        if let Some(sdk_mod) = sdk.as_ref() {
+            ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
+        }
+        let n = unsafe { cpu::exclusive_rewrite::rewrite(&ranges) };
+        println!("[+] load-exclusive rewrite: {n} sites now acquire");
+    }
+
     // 4b. Install inline HLE trampolines & version hooks via profile.
     if let Some(version) = profile::active_version() {
         if let Some(installer) = version.install_hooks {

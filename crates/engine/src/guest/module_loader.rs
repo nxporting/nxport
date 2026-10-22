@@ -332,6 +332,7 @@ pub unsafe fn load(
         .into_iter()
         .rev()
         .collect();
+    let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(base + text_mo, text_len, false)]);
     crate::cpu::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
     crate::cpu::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
     sys_icache_invalidate((base + text_mo) as *mut libc::c_void, text_len);
@@ -358,8 +359,8 @@ pub unsafe fn load(
         perm: svc::PERM_RW,
     });
     println!(
-        "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} svc, {} tpidr_el0, {} tpidrro_el0 sites rewritten",
-        name, base, image_size, n_svc, n_tp, n_tpro
+        "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} svc, {} tpidr_el0, {} tpidrro_el0, {} load-exclusive sites rewritten",
+        name, base, image_size, n_svc, n_tp, n_tpro, n_ldx
     );
     Ok(LoadedModule {
         base,
