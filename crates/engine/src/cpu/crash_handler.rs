@@ -313,6 +313,33 @@ pub static WRITER_RING: [(
     )
 }; 65536];
 
+/// A store-exclusive (stxr / stlxr / stxp / stlxp) that faulted on a page a handler just made writable is not retried:
+/// it reports failure (status register 1) and is stepped over, and the guest's loop starts again at its load-exclusive.
+/// The faulting thread slept in the handler, maybe on another core, between its load-exclusive and this store; a replayed
+/// store could succeed although another thread took the location meanwhile (two threads then held a game spinlock:
+/// Breath of the Wild ran the same jobs twice). A store-exclusive may always fail spuriously.
+unsafe fn fail_store_exclusive(ucontext: *mut libc::c_void) {
+    if ucontext.is_null() {
+        return;
+    }
+    let mc = (*(ucontext as *mut libc::ucontext_t)).uc_mcontext;
+    if mc.is_null() {
+        return;
+    }
+    let pc = (*mc).__ss.__pc as usize;
+    let insn = *(pc as *const u32);
+    // Load/store exclusive class with o2 = 0 and L = 0: the store-exclusives; Rs (bits 20:16) receives the status.
+    if insn & 0x3fc0_0000 == 0x0800_0000 {
+        match ((insn >> 16) & 31) as usize {
+            rs @ 0..=28 => (*mc).__ss.__x[rs] = 1,
+            29 => (*mc).__ss.__fp = 1,
+            30 => (*mc).__ss.__lr = 1,
+            _ => {}
+        }
+        (*mc).__ss.__pc += 4;
+    }
+}
+
 unsafe extern "C" fn handle_signal(
     sig: i32,
     info: *mut libc::siginfo_t,
@@ -337,6 +364,7 @@ unsafe extern "C" fn handle_signal(
     };
     if let Some(f) = &access {
         if crate::gpu::backend().access_fault(f) {
+            fail_store_exclusive(ucontext);
             return;
         }
     }
@@ -382,11 +410,13 @@ unsafe extern "C" fn handle_signal(
     if (sig == libc::SIGSEGV || sig == libc::SIGBUS)
         && crate::guest::dirty_track::handle_fault(fault_addr)
     {
+        fail_store_exclusive(ucontext);
         return;
     }
     // The backend's diagnostic traps (--early-fence-trap).
     if let Some(f) = &access {
         if crate::gpu::backend().late_access_fault(f) {
+            fail_store_exclusive(ucontext);
             return;
         }
     }
