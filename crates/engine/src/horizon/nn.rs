@@ -22,6 +22,8 @@ const RESULT_SUCCESS: u32 = 0;
 struct EventSt {
     signaled: bool,
     auto_clear: bool,
+    /// Signals so far: a manual-clear waiter returns once one arrived after it began, even if cleared again since.
+    signals: u64,
 }
 
 #[derive(Default)]
@@ -70,6 +72,7 @@ pub unsafe extern "C" fn os_initialize_event(ev: *mut u8, initially_signaled: bo
         EventSt {
             signaled: initially_signaled,
             auto_clear: clear_mode == 1,
+            signals: 0,
         },
     );
 }
@@ -84,6 +87,7 @@ pub unsafe extern "C" fn os_signal_event(ev: *mut u8) {
     let mut g = lock();
     if let Some(e) = g.as_mut().unwrap().events.get_mut(&(ev as usize)) {
         e.signaled = true;
+        e.signals += 1;
     }
     drop(g);
     SYNC_CV.notify_all();
@@ -98,12 +102,16 @@ pub unsafe extern "C" fn os_clear_event(ev: *mut u8) {
 /// signaled. An event nothing initialised (no side-table entry) never signals.
 fn event_wait(ev: usize, deadline: Option<std::time::Instant>) -> bool {
     let mut g = lock();
+    let signals0 = g.as_ref().unwrap().events.get(&ev).map(|e| e.signals);
     loop {
         if let Some(e) = g.as_mut().unwrap().events.get_mut(&ev) {
             if e.signaled {
                 if e.auto_clear {
                     e.signaled = false;
                 }
+                return true;
+            }
+            if !e.auto_clear && signals0.is_some_and(|n| n != e.signals) {
                 return true;
             }
         }
