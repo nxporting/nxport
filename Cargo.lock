@@ -365,6 +365,7 @@ dependencies = [
  "dear-imgui-rs",
  "libc",
  "lz4_flex",
+ "nxport-lifter",
  "nxport-pipelines",
  "objc2",
  "objc2-app-kit",

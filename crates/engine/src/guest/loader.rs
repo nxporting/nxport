@@ -474,7 +474,7 @@ impl GuestMemorySpace {
         Some(if self.default_stub_ptr != 0 {
             (self.default_stub_ptr, false)
         } else {
-            (hle::hle_default_stub as *const () as usize, true)
+            (crate::hle!(hle::hle_default_stub()) as usize, true)
         })
     }
 
@@ -591,6 +591,11 @@ impl GuestMemorySpace {
 
     /// A new trampoline of its own (callers may use its spare words for code of their own).
     pub fn make_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
+        // A runtime without arm64 trampolines calls the function through its adapter (hle_abi): every function bound
+        // here needs one.
+        if crate::hle_abi::adapter(rust_fn).is_none() {
+            eprintln!("[!] HLE: {rust_fn:p} has no adapter (take its address through hle_abi::hle)");
+        }
         assert!(
             self.trampoline_next < self.trampoline_capacity,
             "trampoline pool exhausted ({} entries)",

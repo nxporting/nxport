@@ -564,11 +564,11 @@ fn apply_relocations_from_mod0(
                                     Some(a)
                                 } else {
                                     match n {
-                                        "malloc" => Some(mem_space.make_hle_trampoline(libc::malloc as *const ()) as usize),
-                                        "free" => Some(mem_space.make_hle_trampoline(libc::free as *const ()) as usize),
-                                        "calloc" => Some(mem_space.make_hle_trampoline(libc::calloc as *const ()) as usize),
-                                        "realloc" => Some(mem_space.make_hle_trampoline(libc::realloc as *const ()) as usize),
-                                        "aligned_alloc" => Some(mem_space.make_hle_trampoline(sdk_aligned_alloc as *const ()) as usize),
+                                        "malloc" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::malloc(_))) as usize),
+                                        "free" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::free(_))) as usize),
+                                        "calloc" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::calloc(_, _))) as usize),
+                                        "realloc" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::realloc(_, _))) as usize),
+                                        "aligned_alloc" => Some(mem_space.make_hle_trampoline(crate::hle!(sdk_aligned_alloc(_, _))) as usize),
                                         _ => unreachable!(),
                                     }
                                 }
@@ -587,7 +587,7 @@ fn apply_relocations_from_mod0(
                             }
                             "nnosGetDefaultUserExceptionStackForApplication" => Some(
                                 mem_space
-                                    .make_hle_trampoline(sdk_default_exception_stack as *const ())
+                                    .make_hle_trampoline(crate::hle!(sdk_default_exception_stack()))
                                     as usize,
                             ),
                             "__rel_plt_start" => jmprel.map(|v| base + v),
@@ -598,7 +598,7 @@ fn apply_relocations_from_mod0(
                                 eprintln!("[!] SDK: Unresolved external symbol '{}' at offset 0x{:x} - binding to fallback stub", other, r_offset);
                                 Some(
                                     mem_space
-                                        .make_hle_trampoline(sdk_unimplemented_stub as *const ())
+                                        .make_hle_trampoline(crate::hle!(sdk_unimplemented_stub()))
                                         as usize,
                                 )
                             }
