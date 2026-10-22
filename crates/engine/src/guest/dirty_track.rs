@@ -54,20 +54,10 @@ fn log() -> bool {
 pub fn register_domain(base: usize, len: usize) {
     let base = base & !(PAGE - 1);
     let pages = (len + PAGE - 1) / PAGE;
-    let map = |bytes: usize| unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            bytes,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        )
-    };
-    let (g, f) = (map(pages * 4), map(pages));
-    if g == libc::MAP_FAILED || f == libc::MAP_FAILED {
+    let map = |bytes: usize| unsafe { crate::os::alloc(bytes, crate::os::Prot::ReadWrite) };
+    let (Ok(g), Ok(f)) = (map(pages * 4), map(pages)) else {
         return;
-    }
+    };
     for d in DOMAIN_TABLE.iter() {
         if d.pages.load(Ordering::Acquire) == 0 {
             d.gens.store(g as *mut AtomicU32, Ordering::Release);

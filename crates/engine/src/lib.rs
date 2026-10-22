@@ -678,44 +678,25 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         unsafe {
             // A placeholder rtld module below main (exlaunch counts modules from rtld = 0, main = 1).
             // Its slot was reserved directly below main in GuestMemorySpace::allocate.
-            let slot = guest::loader::rtld_slot();
-            let p = if slot != 0 {
-                libc::mmap(
-                    slot as *mut libc::c_void,
-                    0x4000,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            } else {
-                libc::mmap(
-                    (main_base - 0x10_0000) as *mut libc::c_void,
-                    0x4000,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            };
-            if p != libc::MAP_FAILED && (p as usize) < main_base {
+            let p = guest::loader::rtld_slot();
+            if p != 0 && crate::os::commit(p, 0x4000, crate::os::Prot::ReadWrite).is_ok() {
                 *(p as *mut u32) = 0xD65F03C0; // ret
-                cpu::aot::make_exec("rtld.placeholder", p as usize, 0x4000);
+                cpu::aot::make_exec("rtld.placeholder", p, 0x4000);
                 // text, rodata and data like a real module (exlaunch reads the two regions after each text).
                 add_region(Region {
-                    start: p as usize,
+                    start: p,
                     size: 0x1000,
                     mem_type: MEM_CODE_STATIC,
                     perm: PERM_RX,
                 });
                 add_region(Region {
-                    start: p as usize + 0x1000,
+                    start: p + 0x1000,
                     size: 0x1000,
                     mem_type: MEM_CODE_STATIC,
                     perm: PERM_R,
                 });
                 add_region(Region {
-                    start: p as usize + 0x2000,
+                    start: p + 0x2000,
                     size: 0x2000,
                     mem_type: MEM_CODE_MUTABLE,
                     perm: PERM_RW,

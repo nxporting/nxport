@@ -76,6 +76,8 @@ pub struct GuestMemorySpace {
     /// the SDK image (SDK_SLOT_SIZE). Hinted mmaps used to land elsewhere when the spot was taken.
     pub island_slot: usize,
     pub sdk_slot: usize,
+    /// (start, size) of the address space reserved for all of the above (crate::os::reserve).
+    reservation: (usize, usize),
     pub total_size: usize,
     pub text_size: usize,
     pub rodata_size: usize,
@@ -131,67 +133,52 @@ impl GuestMemorySpace {
             }))
             || crate::settings::get().guest.fixed_guest_base;
 
-        let hint = if fixed {
-            (FIXED_GUEST_BASE - RTLD_SLOT_SIZE) as *mut libc::c_void
-        } else {
-            ptr::null_mut()
+        let expected_base = FIXED_GUEST_BASE - RTLD_SLOT_SIZE;
+        let at = if fixed { crate::os::At::Exactly(expected_base) } else { crate::os::At::Anywhere };
+        let slot = match unsafe { crate::os::reserve(at, total_reserve) } {
+            Ok(p) => p,
+            Err(e) if fixed => {
+                eprintln!("[-] the guest needs {:#x} (AOT image with mods): {}", expected_base, e);
+                return Err("guest address space: fixed base unavailable".into());
+            }
+            Err(e) => {
+                eprintln!("[-] reserving the guest address space failed: {}", e);
+                return Err("Failed to allocate guest virtual memory space".into());
+            }
         };
-
-        let raw = unsafe {
-            libc::mmap(
-                hint,
-                total_reserve,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
+        let ptr = slot + RTLD_SLOT_SIZE;
+        // The whole range stays reserved; what is usable now is committed (fresh pages read as zero):
+        //   rtld slot   reserved until the placeholder module is mapped into it (lib.rs)
+        //   main        main's image, then the island slot
+        //   gap         reserved until module_loader maps the subsdk modules into it. It used to be unmapped for hinted
+        //               mmaps; when another allocation took the spot first, the game's subsdk0 landed a few MB higher
+        //               and UltraCam's patcher wrote main's patches through a view of the wrong module (intermittent
+        //               SIGBUS at startup).
+        //   x18 island, generated code, the SDK slot
+        RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
+        let gap = ptr + main_end + ISLAND_SLOT_SIZE;
+        let gen = ptr + main_end + SDK_GAP - GEN_SIZE;
+        let after_gap = gen - X18_ISLAND_SIZE;
+        let committed = unsafe {
+            crate::os::commit(ptr, gap - ptr, crate::os::Prot::ReadWrite).and_then(|()| {
+                crate::os::commit(after_gap, slot + total_reserve - after_gap, crate::os::Prot::ReadWrite)
+            })
         };
-
-        if raw == libc::MAP_FAILED {
-            let err = std::io::Error::last_os_error();
-            eprintln!("[-] mmap failed with os error: {}", err);
+        if let Err(e) = committed {
+            unsafe { crate::os::release(slot, total_reserve) };
+            eprintln!("[-] committing guest memory failed: {}", e);
             return Err("Failed to allocate guest virtual memory space".into());
         }
-
-        let expected_base = FIXED_GUEST_BASE - RTLD_SLOT_SIZE;
-        if fixed && raw as usize != expected_base {
-            eprintln!(
-                "[-] the guest needs {:#x} (AOT image with mods) but the kernel placed it at {:p}",
-                expected_base, raw
-            );
-            return Err("guest address space: fixed base unavailable".into());
-        }
-
-        let slot = raw as usize;
-        let ptr = unsafe { (raw as *mut u8).add(RTLD_SLOT_SIZE) as *mut libc::c_void };
-
-        // The rtld slot below main is reserved with PROT_NONE until the placeholder module is mapped into it.
-        unsafe {
-            let _ = crate::os::protect(raw as usize, RTLD_SLOT_SIZE, crate::os::Prot::None);
-        }
-        RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
-
-        let gap = ptr as usize + main_end + ISLAND_SLOT_SIZE;
-        unsafe {
-            libc::memset(ptr, 0, total_size);
-            // The gap stays reserved (inaccessible) until module_loader maps the subsdk modules into it with MAP_FIXED.
-            // It used to be unmapped for hinted mmaps; when another allocation took the spot first, the game's subsdk0
-            // landed a few MB higher and UltraCam's patcher wrote main's patches through a view of the wrong module
-            // (intermittent SIGBUS at startup).
-            let _ = crate::os::protect(gap as usize, SDK_GAP - ISLAND_SLOT_SIZE, crate::os::Prot::None);
-        }
-        let gen = ptr as usize + main_end + SDK_GAP - GEN_SIZE;
-        let _ = unsafe { crate::os::protect(gen - X18_ISLAND_SIZE, X18_ISLAND_SIZE + GEN_SIZE, crate::os::Prot::ReadWrite) };
         GEN_AREA.store(gen, std::sync::atomic::Ordering::Relaxed);
         crate::cpu::aot::set_literal_pool(gen + GEN_LITERALS, GEN_LITERALS_SIZE);
         MOD_GAP.store(gap, std::sync::atomic::Ordering::Relaxed);
-        MOD_GAP_END.store(gen - X18_ISLAND_SIZE, std::sync::atomic::Ordering::Relaxed);
+        MOD_GAP_END.store(after_gap, std::sync::atomic::Ordering::Relaxed);
 
         Ok(Self {
             base_ptr: ptr as *mut u8,
-            island_slot: ptr as usize + main_end,
-            sdk_slot: ptr as usize + main_end + SDK_GAP,
+            island_slot: ptr + main_end,
+            sdk_slot: ptr + main_end + SDK_GAP,
+            reservation: (slot, total_reserve),
             total_size,
             text_size: nso.text.data.len(),
             rodata_size: nso.ro.data.len(),
@@ -676,8 +663,6 @@ impl GuestMemorySpace {
 
 impl Drop for GuestMemorySpace {
     fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.base_ptr as *mut libc::c_void, self.total_size);
-        }
+        unsafe { crate::os::release(self.reservation.0, self.reservation.1) };
     }
 }

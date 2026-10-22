@@ -193,6 +193,11 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    trampolines warn about a function without one). `guest::call`: **done** (the TLS destructors and the register
    reads in HLE code are left for the lifted runtime, above).
 4. OS layer; the load pipeline runs on any host and produces the patched image for the lifted target.
+   Memory: protection, icache flushes, plain allocations and address-space reservations (`os::reserve` / `commit` /
+   `release`, with `At::Exactly` for the fixed guest base) are **done**; the load pipeline (loader, module_loader,
+   sdk_loader, the rtld placeholder, dirty tracking's arrays) maps through them. Left: the runtime's own mappings
+   (heap and memory blocks in horizon/hle.rs, svc.rs's code aliases, which on Windows need placeholders and section
+   views), and building guest/ without nx_native, skipping the native-only rewrites.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.
    Core: **done**. The lifter's runtime/rt.c, compiled into the guest library, has the dispatcher (a per-thread cache
    in front of the module tables) and forwards svc / brk / udf / counters and branches to non-lifted addresses to
