@@ -1,27 +1,35 @@
-// The native runtime (guest code running on the host CPU) is cfg(nx_native), see build.rs; on other hosts this crate
-// provides the platform-independent parts the builder and the command line use (docs/windows-port.md).
-#[cfg(nx_native)]
+// Until lifted hosts run games (docs/windows-port.md, steps 5 and 6), much of the runtime has no caller there: what
+// only the game loop and the GPU backend reach.
+#![cfg_attr(all(nx_runtime, not(nx_native)), allow(dead_code))]
+
+// Two layers, see build.rs and docs/windows-port.md: cfg(nx_runtime) hosts load and run games (guest/, horizon/, nvn/,
+// gpu/), and of those cfg(nx_native) ones run guest code on the host CPU (the code rewriting in cpu/, host/, the Metal
+// backend). Other hosts get the platform-independent parts the builder and the command line use.
+#[cfg(nx_runtime)]
 mod clock;
 pub mod config;
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 mod cpu;
 pub mod game;
 pub mod hle_abi;
 pub mod lifted;
 pub mod os;
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 mod gpu;
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 mod guest;
-#[cfg(not(nx_native))]
+#[cfg(not(nx_runtime))]
 mod guest {
     pub mod nso;
 }
 /// NSO parsing, for tools that read a game's modules (the lifter in nxport-build).
 pub use guest::nso;
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 mod horizon;
 #[cfg(nx_native)]
+mod host;
+#[cfg(all(nx_runtime, not(nx_native)))]
+#[path = "host/headless.rs"]
 mod host;
 #[cfg(target_os = "macos")]
 pub use host::ui;
@@ -32,7 +40,7 @@ pub mod metal;
 pub mod metal {
     pub mod msl_specialize;
 }
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 mod nvn;
 pub mod profile;
 pub mod settings;
@@ -40,16 +48,14 @@ pub mod settings;
 #[cfg(nx_native)]
 use std::thread;
 
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 use guest::loader::GuestMemorySpace;
 
-#[cfg(nx_native)]
-/// Runs a game. `layers` are the caller's settings (a front end's choices, or settings::from_args for a command line),
-/// in increasing priority; they go above the platform's and the game's profiles. Must be called on the main thread;
-/// returns only on failure.
-/// Builds the signed-code image an iOS app needs (cpu/aot.rs): the game's code loaded and patched with `settings`, as
-/// the app will patch it at startup, without running any of it. Plugin mods (exefs/subsdkN modules) patch code from
-/// their initialisers, so an image with them needs those to run: not done here. Once per process.
+#[cfg(nx_runtime)]
+/// Builds the guest code image (cpu/aot.rs): the game's code loaded and patched with `settings`, as the app will patch
+/// it at startup, without running any of it. iOS apps get it signed; where guest code is lifted it is what the lifter
+/// lifts. Plugin mods (exefs/subsdkN modules) patch code from their initialisers, so an image with them needs those to
+/// run: not done here. Once per process.
 pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
     cpu::aot::capture_image()?;
     settings::try_install(s)?;
@@ -63,7 +69,7 @@ pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
 
 #[cfg(nx_native)]
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
-/// loads and patches its code, then runs it. Does not return while the game runs.
+/// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
     gpu::install(&metal::backend::METAL);
     let s = settings::install(resolve_settings(layers));
@@ -402,7 +408,7 @@ fn resolve_settings(layers: Vec<settings::SettingsPatch>) -> settings::Settings 
     )
 }
 
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 struct Loaded {
     mem_space: GuestMemorySpace,
     /// The sdk module: it must outlive the guest (dropping it unmaps the module's memory).
@@ -413,29 +419,33 @@ struct Loaded {
     game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
 }
 
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 /// Loads the game's modules and the mods' into guest memory and patches them for this host: relocations, HLE bindings,
 /// SDK interposition, x18 / tpidr rewrites, game hooks, then makes the code executable. Nothing of the guest has run yet.
 fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     // The TSD keys whose offsets patched code embeds (fixed numbers, cpu/tls.rs), before anything else creates keys.
-    let _ = (
-        cpu::tls::guest_tls_offset(),
-        cpu::tls::errno_save_offset(),
-        cpu::tls::x18_slot_offset(),
-        cpu::tls::hle_stack_offset(),
-    );
-    unsafe {
-        horizon::hle::capture_darwin_tsd_shadow();
+    #[cfg(nx_native)]
+    {
+        let _ = (
+            cpu::tls::guest_tls_offset(),
+            cpu::tls::errno_save_offset(),
+            cpu::tls::x18_slot_offset(),
+            cpu::tls::hle_stack_offset(),
+        );
+        unsafe {
+            horizon::hle::capture_darwin_tsd_shadow();
+        }
     }
 
     // 1. Allocate & populate guest memory space
     let mut mem_space = GuestMemorySpace::allocate()?;
 
     // 2. Install native Darwin crash & trap handler
-    cpu::crash_handler::set_guest_base(mem_space.base_ptr as usize);
+    #[cfg(nx_native)]
     unsafe { cpu::crash_handler::install_signal_handlers() };
 
     mem_space.load_sections()?;
+    #[cfg(nx_native)]
     cpu::crash_handler::set_main_size(mem_space.bss_off + mem_space.bss_size);
 
     // 2a. Guest x18 starts at 0: guest code uses it as an ordinary register (cpu::trampoline), macOS preserves
@@ -489,6 +499,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         mem_space.bss_off + mem_space.bss_size + sdk.as_ref().map_or(0, |m| m.total_size),
     );
     // Guest code: main, the mod modules mapped after it, the SDK (--report-guard waits only for faults from there).
+    #[cfg(nx_native)]
     metal::set_guest_code_range(
         mem_space.base_ptr as usize,
         sdk.as_ref()
@@ -577,6 +588,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //    where the kernel does not (iOS, the simulator, a macOS build without that link flag) every x18 use of main
     //    and the SDK is rewritten into an island of stubs that keep the value in a TSD slot. Before the SDK
     //    interposition and the tpidr rewrite, so `mrs x18, tpidr_el0` sites are handled by the x18 stubs.
+    #[cfg(nx_native)]
     if cpu::trampoline::x18_trampolines() {
         let island = cpu::trampoline::TrampolineIsland::new(
             guest::loader::x18_island_area(),
@@ -904,6 +916,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         guest::module_loader::set_symbols(syms);
     }
 
+    #[cfg(nx_native)]
     // 4a'. Guest reads of tpidr_el0 get XNU's per-CPU value after a reschedule; point them at the stable
     //      copy of the guest TLS pointer (cpu/tpidr_rewrite.rs). Main text is still writable here; the SDK's is R-X.
     {
@@ -924,6 +937,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
+    #[cfg(nx_native)]
     // Plain load-exclusives become acquire loads (cpu/exclusive_rewrite.rs).
     {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
@@ -948,6 +962,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
+    #[cfg(nx_native)]
     // Debug tracer: --trace=0x2b2120,0xcb228c logs registers each time those guest instructions execute (see
     // cpu::crash_handler::install_trace_point; settings::TracePoint for dumping memory at a register).
     {
@@ -967,6 +982,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 4c. Finalize trampolines (W^X + icache flush) before marking .text exec.
     mem_space.finalize_trampoline_pool();
+    #[cfg(nx_native)]
     if let Some(island) = cpu::trampoline::ISLAND.lock().unwrap().as_ref() {
         island.finalize().map_err(|e| format!("x18 island: {e}"))?;
     }

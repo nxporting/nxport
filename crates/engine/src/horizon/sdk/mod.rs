@@ -60,10 +60,31 @@ macro_rules! adapt {
     }};
 }
 
-// The host C library's stdout, which the game's `stdout` import names (its printf / fflush are the host's too).
+// The host C library's errno and stdout, which the game's `__errno_location` and `stdout` imports name (its printf /
+// fflush are the host's too).
 extern "C" {
-    static mut __stdoutp: *mut libc::FILE;
     fn clock() -> libc::clock_t;
+    #[cfg_attr(target_vendor = "apple", link_name = "__error")]
+    #[cfg_attr(windows, link_name = "_errno")]
+    fn errno_location() -> *mut libc::c_int;
+    #[cfg(target_vendor = "apple")]
+    static mut __stdoutp: *mut libc::FILE;
+    #[cfg(windows)]
+    fn __acrt_iob_func(index: u32) -> *mut libc::FILE;
+}
+
+/// The address of a variable holding the host's stdout.
+fn stdout_variable() -> usize {
+    #[cfg(target_vendor = "apple")]
+    {
+        std::ptr::addr_of_mut!(__stdoutp) as usize
+    }
+    // The CRT has no stdout variable, only a function: keep its result in one of ours.
+    #[cfg(windows)]
+    {
+        static STDOUT: OnceLock<usize> = OnceLock::new();
+        STDOUT.get_or_init(|| unsafe { __acrt_iob_func(1) } as usize) as *const usize as usize
+    }
 }
 
 mod base;

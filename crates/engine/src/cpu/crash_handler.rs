@@ -2,8 +2,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-static GUEST_BASE: AtomicUsize = AtomicUsize::new(0);
-
 // Watchpoint: mprotect a page PROT_READ, catch writes, log PC, re-allow and remove.
 // Up to 4 simultaneous watched pages.
 const MAX_WATCHPOINTS: usize = 4;
@@ -195,10 +193,6 @@ unsafe fn page_accessible(addr: usize, write: bool) -> bool {
     }
 }
 
-pub fn set_guest_base(base: usize) {
-    GUEST_BASE.store(base, Ordering::SeqCst);
-}
-
 static MAIN_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// The size of main's image (text through bss) once it is loaded, for crash reports.
@@ -208,12 +202,12 @@ pub fn set_main_size(size: usize) {
 
 /// Whether `addr` lies in main's image.
 fn in_main(addr: usize) -> bool {
-    let base = GUEST_BASE.load(Ordering::Relaxed);
+    let base = crate::guest::loader::main_base();
     base != 0 && addr >= base && addr - base < MAIN_SIZE.load(Ordering::Relaxed)
 }
 
 pub fn get_guest_base() -> usize {
-    GUEST_BASE.load(Ordering::SeqCst)
+    crate::guest::loader::main_base()
 }
 
 pub unsafe fn install_signal_handlers() {
@@ -332,7 +326,7 @@ unsafe extern "C" fn handle_signal(
     ucontext: *mut libc::c_void,
 ) {
     let fault_addr = (*info).si_addr as usize;
-    let base = GUEST_BASE.load(Ordering::SeqCst);
+    let base = crate::guest::loader::main_base();
 
     // Pages the GPU backend protects to keep guest memory coherent with GPU work (before write tracking, which would
     // claim and unprotect pages it once tracked).

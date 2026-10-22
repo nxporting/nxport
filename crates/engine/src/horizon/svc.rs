@@ -72,18 +72,8 @@ fn alias_region() -> (usize, usize) {
     let mut a = ALIAS.lock().unwrap();
     if a.1 == 0 {
         const SIZE: usize = 0x1_0000_0000;
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                SIZE,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if p != libc::MAP_FAILED {
-            *a = (p as usize, SIZE);
+        if let Ok(p) = unsafe { crate::os::reserve(crate::os::At::Anywhere, SIZE) } {
+            *a = (p, SIZE);
         }
     }
     *a
@@ -95,21 +85,7 @@ fn small_alias_region() -> (usize, usize) {
     static R: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
     *R.get_or_init(|| {
         const SIZE: usize = 0x400_0000;
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                SIZE,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            (0, 0)
-        } else {
-            (p as usize, SIZE)
-        }
+        unsafe { crate::os::reserve(crate::os::At::Anywhere, SIZE) }.map_or((0, 0), |p| (p, SIZE))
     })
 }
 
@@ -170,7 +146,7 @@ fn session_of(handle: u32, server: bool) -> Option<Arc<Session>> {
 
 /// The calling thread's IPC message buffer (its fake Horizon thread-local region).
 unsafe fn ipc_buffer() -> Option<&'static mut [u8]> {
-    let tlr = crate::cpu::tls::current_fake_tlr();
+    let tlr = crate::guest::tls::current_fake_tlr();
     (tlr != 0).then(|| std::slice::from_raw_parts_mut(tlr as *mut u8, 0x100))
 }
 
@@ -374,6 +350,7 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
     RESULT_OK
 }
 
+#[cfg(nx_native)]
 extern "C" {
     static mach_task_self_: u32;
     fn mach_vm_remap(
@@ -396,6 +373,53 @@ extern "C" {
         set_maximum: i32,
         new_protection: i32,
     ) -> i32;
+}
+
+
+/// The alias half of map_process_memory: [dst, dst + size) maps the same pages as src (mach_vm_remap).
+#[cfg(nx_native)]
+unsafe fn alias_view(dst: usize, src: usize, size: usize) -> Result<(), u64> {
+    const PAGE: usize = 0x4000;
+    let mut target = (dst & !(PAGE - 1)) as u64;
+    let (mut cur, mut max) = (0i32, 0i32);
+    let len = ((dst + size + PAGE - 1) & !(PAGE - 1)) as u64 - target;
+    let kr = mach_vm_remap(
+        mach_task_self_,
+        &mut target,
+        len,
+        0,
+        0x4000, /* FIXED | OVERWRITE */
+        mach_task_self_,
+        (src & !(PAGE - 1)) as u64,
+        0,
+        &mut cur,
+        &mut max,
+        2,
+    );
+    if kr != 0 || target != (dst & !(PAGE - 1)) as u64 {
+        println!(
+            "[!] svcMapProcessMemory: mach_vm_remap failed ({}) for {:#x} -> {:#x}",
+            kr, src, dst
+        );
+        return Err(RESULT_INVALID_ADDRESS);
+    }
+    let kr = mach_vm_protect(
+        mach_task_self_,
+        target,
+        len,
+        0,
+        libc::PROT_READ | libc::PROT_WRITE,
+    );
+    if kr != 0 {
+        println!("[!] svcMapProcessMemory: cannot make the alias writable ({}); max protection {:#x}", kr, max);
+    }
+    if log_enabled() {
+        println!(
+            "[+] svcMapProcessMemory: {:#x}+{:#x} aliases {:#x}",
+            dst, size, src
+        );
+    }
+    Ok(())
 }
 
 /// Writable views of guest code made by MapProcessMemory whose destination does not share the source's offset within
@@ -451,28 +475,13 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
                     a = st + n;
                 }
                 None => {
-                    let mut info: libc::Dl_info = std::mem::zeroed();
-                    let what = if libc::dladdr(a as *const libc::c_void, &mut info) != 0
-                        && !info.dli_fname.is_null()
-                    {
-                        format!(
-                            "{} {}",
-                            std::ffi::CStr::from_ptr(info.dli_fname).to_string_lossy(),
-                            if info.dli_sname.is_null() {
-                                String::new()
-                            } else {
-                                std::ffi::CStr::from_ptr(info.dli_sname)
-                                    .to_string_lossy()
-                                    .into_owned()
-                            }
-                        )
-                    } else {
-                        "unknown mapping".to_string()
+                    let what = match crate::os::address_owner(a) {
+                        (Some(lib), sym) => format!("{} {}", lib, sym.unwrap_or_default()),
+                        (None, _) => "unknown mapping".to_string(),
                     };
                     println!("[!] svcMapProcessMemory: source {:#x}+{:#x} is not guest memory (first unknown byte {:#x}: {})", src, size, a, what);
                     // Who asked: return addresses up the frame-pointer chain (guest frames sit above the trampoline's).
-                    let mut fp: usize;
-                    std::arch::asm!("mov {}, x29", out(reg) fp);
+                    let mut fp = crate::guest_reg!(x29);
                     let mut chain = Vec::new();
                     for _ in 0..16 {
                         if fp < 0x1_0000_0000 || fp & 7 != 0 {
@@ -492,45 +501,11 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
     // page's new content and a loading run maps the matching signed version.
     let in_image = crate::cpu::aot::active() && crate::cpu::aot::in_region(src, size);
     let image = in_image && crate::cpu::aot::loading();
-    if dst % PAGE == src % PAGE && !in_image {
-        let mut target = (dst & !(PAGE - 1)) as u64;
-        let (mut cur, mut max) = (0i32, 0i32);
-        let len = ((dst + size + PAGE - 1) & !(PAGE - 1)) as u64 - target;
-        let kr = mach_vm_remap(
-            mach_task_self_,
-            &mut target,
-            len,
-            0,
-            0x4000, /* FIXED | OVERWRITE */
-            mach_task_self_,
-            (src & !(PAGE - 1)) as u64,
-            0,
-            &mut cur,
-            &mut max,
-            2,
-        );
-        if kr != 0 || target != (dst & !(PAGE - 1)) as u64 {
-            println!(
-                "[!] svcMapProcessMemory: mach_vm_remap failed ({}) for {:#x} -> {:#x}",
-                kr, src, dst
-            );
-            return RESULT_INVALID_ADDRESS;
-        }
-        let kr = mach_vm_protect(
-            mach_task_self_,
-            target,
-            len,
-            0,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
-        if kr != 0 {
-            println!("[!] svcMapProcessMemory: cannot make the alias writable ({}); max protection {:#x}", kr, max);
-        }
-        if log_enabled() {
-            println!(
-                "[+] svcMapProcessMemory: {:#x}+{:#x} aliases {:#x}",
-                dst, size, src
-            );
+    // A real alias where the page offsets agree and the host can make one; a copy otherwise.
+    if cfg!(nx_native) && dst % PAGE == src % PAGE && !in_image {
+        #[cfg(nx_native)]
+        if let Err(e) = alias_view(dst, src, size) {
+            return e;
         }
     } else {
         let lo = dst & !(PAGE - 1);
@@ -551,15 +526,7 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
         let mut page = lo;
         while page < hi {
             if !covered.iter().any(|&(a, b)| page >= a && page < b) {
-                let p = libc::mmap(
-                    page as *mut libc::c_void,
-                    PAGE,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                );
-                if p == libc::MAP_FAILED {
+                if crate::os::commit(page, PAGE, crate::os::Prot::ReadWrite).is_err() {
                     return RESULT_INVALID_ADDRESS;
                 }
             }
@@ -669,14 +636,7 @@ unsafe fn unmap_process_memory(r: &mut [u64; 8]) -> u64 {
     let mut page = dst & !0x3fff;
     while page < (dst + size + 0x3fff) & !0x3fff {
         if !others.iter().any(|&(a, b)| page >= a && page < b) {
-            libc::mmap(
-                page as *mut libc::c_void,
-                0x4000,
-                libc::PROT_NONE,
-                libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            );
+            crate::os::decommit(page, 0x4000);
         }
         page += 0x4000;
     }
@@ -719,9 +679,12 @@ unsafe fn start_thread(r: &mut [u64; 8]) -> u64 {
         .name(format!("svc-thread-{:x}", r[0]))
         .stack_size(1 << 20)
         .spawn(move || {
-            crate::cpu::tls::mark_guest_thread();
-            crate::cpu::tls::install_guest_tls();
-            crate::cpu::trampoline::init_worker_thread_x18();
+            crate::guest::tls::mark_guest_thread();
+            #[cfg(nx_native)]
+            {
+                crate::cpu::tls::install_guest_tls();
+                crate::cpu::trampoline::init_worker_thread_x18();
+            }
             CURRENT_SVC_THREAD_DONE.with(|c| *c.borrow_mut() = Some(done.clone()));
             crate::guest::call(entry, &[arg as u64]);
             mark_done(&done);
@@ -736,7 +699,11 @@ unsafe fn exit_current_thread() {
             mark_done(d);
         }
     });
+    #[cfg(nx_native)]
     libc::pthread_exit(std::ptr::null_mut());
+    // A lifted runtime leaves the thread's guest code instead (docs/windows-port.md, step 5).
+    #[cfg(not(nx_native))]
+    unimplemented!("svcExitThread: the lifted runtime has no per-thread state yet");
 }
 
 /// svcWaitSynchronization(s32* index, const Handle* handles, s32 count, s64 timeout) -> w1 index. Threads signal when

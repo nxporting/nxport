@@ -121,7 +121,7 @@ impl SdkModule {
             g.1 += 16;
             s
         };
-        let Some(b) = crate::cpu::tpidr_rewrite::encode_b(addr, stub) else {
+        let Some(b) = crate::cpu::aot::encode_b(addr, stub) else {
             return false;
         };
         // Stub: adrp x16; ldr x16, <literal: target>; br x16; nop
@@ -178,15 +178,112 @@ fn decompress_section(
     lz4_flex::decompress(src, dec_sz).map_err(|e| format!("LZ4 decompress .{}: {}", name, e).into())
 }
 
-unsafe extern "C" fn sdk_aligned_alloc(alignment: usize, size: usize) -> *mut libc::c_void {
-    let align = alignment
-        .max(std::mem::size_of::<*mut ()>())
-        .next_power_of_two();
-    let mut ptr: *mut libc::c_void = std::ptr::null_mut();
-    if libc::posix_memalign(&mut ptr, align, size) == 0 {
-        ptr
-    } else {
-        std::ptr::null_mut()
+/// The C heap the SDK's malloc family uses when main does not define its own. One family allocates and frees every
+/// block, aligned_alloc's included.
+#[cfg(unix)]
+mod c_heap {
+    pub use libc::{calloc, free, malloc, realloc};
+
+    pub unsafe extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut libc::c_void {
+        let align = alignment.max(std::mem::size_of::<*mut ()>()).next_power_of_two();
+        let mut ptr: *mut libc::c_void = std::ptr::null_mut();
+        if libc::posix_memalign(&mut ptr, align, size) == 0 {
+            ptr
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// The C heap on Windows, whose CRT free cannot take an aligned block: every block carries its layout in a header
+/// right below it, so free and realloc work on any of them.
+#[cfg(windows)]
+mod c_heap {
+    use libc::c_void;
+    use std::alloc::{alloc, dealloc, Layout};
+
+    /// malloc's alignment on 64-bit hosts, and the header's size: (block size, alignment).
+    const MIN_ALIGN: usize = 16;
+
+    unsafe fn allocate(size: usize, align: usize) -> *mut c_void {
+        let align = align.max(MIN_ALIGN).next_power_of_two();
+        // The header sits in the last 16 bytes of the `align` bytes in front of the block.
+        let Some(Ok(layout)) = size.checked_add(align).map(|t| Layout::from_size_align(t, align)) else {
+            return std::ptr::null_mut();
+        };
+        let raw = alloc(layout);
+        if raw.is_null() {
+            return std::ptr::null_mut();
+        }
+        let p = raw.add(align);
+        *(p.sub(16) as *mut [usize; 2]) = [size, align];
+        p as *mut c_void
+    }
+
+    unsafe fn layout_of(p: *mut c_void) -> (usize, usize) {
+        let [size, align] = *((p as *mut u8).sub(16) as *const [usize; 2]);
+        (size, align)
+    }
+
+    pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
+        allocate(size, MIN_ALIGN)
+    }
+
+    pub unsafe extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void {
+        allocate(size, alignment)
+    }
+
+    pub unsafe extern "C" fn calloc(n: usize, size: usize) -> *mut c_void {
+        let Some(total) = n.checked_mul(size) else {
+            return std::ptr::null_mut();
+        };
+        let p = malloc(total);
+        if !p.is_null() {
+            std::ptr::write_bytes(p as *mut u8, 0, total);
+        }
+        p
+    }
+
+    pub unsafe extern "C" fn free(p: *mut c_void) {
+        if p.is_null() {
+            return;
+        }
+        let (size, align) = layout_of(p);
+        dealloc((p as *mut u8).sub(align), Layout::from_size_align_unchecked(size + align, align));
+    }
+
+    pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
+        if p.is_null() {
+            return malloc(size);
+        }
+        let q = malloc(size);
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, layout_of(p).0.min(size));
+            free(p);
+        }
+        q
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn blocks_of_any_alignment_free_and_grow() {
+            unsafe {
+                let a = aligned_alloc(4096, 100);
+                assert_eq!(a as usize % 4096, 0);
+                *(a as *mut u8).add(99) = 9;
+                let b = realloc(a, 10_000);
+                assert_eq!(b as usize % MIN_ALIGN, 0);
+                assert_eq!(*(b as *mut u8).add(99), 9);
+                free(b);
+                let c = calloc(3, 5) as *mut u8;
+                assert!((0..15).all(|i| *c.add(i) == 0));
+                free(c as *mut c_void);
+                free(std::ptr::null_mut());
+            }
+        }
     }
 }
 
@@ -196,8 +293,7 @@ unsafe extern "C" fn sdk_default_exception_stack() -> *mut libc::c_void {
 }
 
 unsafe extern "C" fn sdk_unimplemented_stub() -> i64 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
+    let lr = crate::guest_reg!(x30);
     eprintln!(
         "[!] CRITICAL: SDK called UNRESOLVED EXTERNAL STUB! Return address LR = 0x{:x}",
         lr
@@ -543,11 +639,11 @@ fn apply_relocations_from_mod0(
                                     Some(a)
                                 } else {
                                     match n {
-                                        "malloc" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::malloc(_))) as usize),
-                                        "free" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::free(_))) as usize),
-                                        "calloc" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::calloc(_, _))) as usize),
-                                        "realloc" => Some(mem_space.make_hle_trampoline(crate::hle!(libc::realloc(_, _))) as usize),
-                                        "aligned_alloc" => Some(mem_space.make_hle_trampoline(crate::hle!(sdk_aligned_alloc(_, _))) as usize),
+                                        "malloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::malloc(_))) as usize),
+                                        "free" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::free(_))) as usize),
+                                        "calloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::calloc(_, _))) as usize),
+                                        "realloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::realloc(_, _))) as usize),
+                                        "aligned_alloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::aligned_alloc(_, _))) as usize),
                                         _ => unreachable!(),
                                     }
                                 }

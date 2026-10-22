@@ -586,30 +586,14 @@ unsafe fn fill_calendar(
     }
 }
 pub(crate) unsafe extern "C" fn time_to_calendar_time(cal: *mut u8, info: *mut u8, posix: *const i64) -> u32 {
-    let t: libc::time_t = if posix.is_null() {
-        0
-    } else {
-        *posix as libc::time_t
-    };
-    let mut tm: libc::tm = std::mem::zeroed();
-    libc::localtime_r(&t, &mut tm);
-    let name = if tm.tm_zone.is_null() {
-        b"UTC".to_vec()
-    } else {
-        std::ffi::CStr::from_ptr(tm.tm_zone).to_bytes().to_vec()
-    };
-    fill_calendar(&tm, cal, info, &name, tm.tm_isdst > 0, tm.tm_gmtoff as i32);
+    let t = if posix.is_null() { 0 } else { *posix };
+    let (tm, name, dst, off) = crate::os::local_time(t);
+    fill_calendar(&tm, cal, info, name.as_bytes(), dst, off);
     RESULT_SUCCESS
 }
 /// nn::time::ToCalendarTimeInUtc(const PosixTime&) -> CalendarTime (8-byte struct, returned in x0).
 pub(crate) unsafe extern "C" fn time_to_calendar_time_in_utc(posix: *const i64) -> u64 {
-    let t: libc::time_t = if posix.is_null() {
-        0
-    } else {
-        *posix as libc::time_t
-    };
-    let mut tm: libc::tm = std::mem::zeroed();
-    libc::gmtime_r(&t, &mut tm);
+    let tm = crate::os::utc_time(if posix.is_null() { 0 } else { *posix });
     let mut cal = [0u8; 8];
     fill_calendar(
         &tm,
@@ -633,7 +617,7 @@ pub(crate) unsafe extern "C" fn time_to_posix_time_from_utc(cal: *const u8) -> i
     tm.tm_hour = *cal.add(4) as i32;
     tm.tm_min = *cal.add(5) as i32;
     tm.tm_sec = *cal.add(6) as i32;
-    libc::timegm(&mut tm) as i64
+    crate::os::from_utc_time(&mut tm)
 }
 
 // ── nn::oe / nn::pl / nn::account / nn::err ──────────────────────────────────────────────────
@@ -930,9 +914,8 @@ pub(crate) unsafe extern "C" fn diag_put_impl(_meta: *const u8, msg: *const u8, 
 }
 pub(crate) unsafe extern "C" fn diag_abort_impl_noargs() {
     // The HLE trampoline leaves the guest's return address in x17; x29 still holds the guest frame chain.
-    let (lr, fp): (usize, usize);
-    std::arch::asm!("mov {}, x17", "mov {}, x29", out(reg) lr, out(reg) fp);
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let (lr, fp) = (crate::guest_reg!(x17), crate::guest_reg!(x29));
+    let base = crate::guest::loader::main_base();
     let rel = |a: usize| {
         if a >= base && a < base + (256 << 20) {
             format!("main+{:#x}", a - base)

@@ -25,6 +25,11 @@ pub const GEN_SIZE: usize = 0x0010_0000;
 pub const FIXED_GUEST_BASE: usize = 0x70_0010_0000;
 /// The slot right below main for the placeholder rtld module mods expect (main.rs), reserved with a fixed guest base.
 pub const RTLD_SLOT_SIZE: usize = 0x10_0000;
+static MAIN_BASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Where main's image starts (guest addresses in logs are main-relative), or 0 before it is allocated.
+pub fn main_base() -> usize {
+    MAIN_BASE.load(std::sync::atomic::Ordering::Relaxed)
+}
 static RTLD_SLOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// The reserved rtld placeholder slot (PROT_NONE until main.rs maps it), or 0.
 pub fn rtld_slot() -> usize {
@@ -156,6 +161,7 @@ impl GuestMemorySpace {
         //               SIGBUS at startup).
         //   x18 island, generated code, the SDK slot
         RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
+        MAIN_BASE.store(ptr, std::sync::atomic::Ordering::Relaxed);
         let gap = ptr + main_end + ISLAND_SLOT_SIZE;
         let gen = ptr + main_end + SDK_GAP - GEN_SIZE;
         let after_gap = gen - X18_ISLAND_SIZE;
@@ -466,7 +472,12 @@ impl GuestMemorySpace {
         self.trampoline_pool = (gen + GEN_TRAMPOLINES) as *mut u32;
         self.trampoline_capacity = capacity;
         self.guest_x9_value = x18_value;
-        unsafe { self.write_hle_entry_stub() };
+        // The arm64 entry code the trampolines branch to. A lifted runtime never runs trampolines: it recognises their
+        // addresses and calls the function's adapter (hle_abi).
+        #[cfg(nx_native)]
+        unsafe {
+            self.write_hle_entry_stub()
+        };
         self.trampoline_next = HLE_STUB_ENTRIES;
         Ok(())
     }
@@ -501,6 +512,7 @@ impl GuestMemorySpace {
     ///   ldr  x18, <x18 value>         ; literal of entry 0
     ///   ldp  x29, x30, [sp], #16
     ///   ret                           ; x0..x7 / v0..v7 return values intact
+    #[cfg(nx_native)]
     unsafe fn write_hle_entry_stub(&mut self) {
         let lit = gen_area() + GEN_TRAMPOLINE_LITERALS;
         ptr::write((lit + 8) as *mut usize, self.guest_x9_value);

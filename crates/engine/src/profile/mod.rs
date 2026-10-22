@@ -27,11 +27,10 @@ pub struct MemoryPatch {
     pub description: &'static str,
 }
 
-/// A version's code hooks. They patch the guest's arm64 code in place, so only the native runtime has them; the
-/// lifted runtime needs its own form of them (docs/windows-port.md).
-#[cfg(nx_native)]
+/// A version's code hooks: they patch the guest's arm64 code in place, before it is made executable (or lifted).
+#[cfg(nx_runtime)]
 pub type InstallHooks = unsafe fn(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace);
-#[cfg(not(nx_native))]
+#[cfg(not(nx_runtime))]
 pub type InstallHooks = unsafe fn(base: usize, mem_space: &mut std::convert::Infallible);
 
 #[derive(Copy, Clone, Debug)]

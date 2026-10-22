@@ -63,11 +63,107 @@ pub unsafe fn commit(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
     imp::commit(addr, size, prot)
 }
 
+/// Returns committed pages [addr, addr + size) of a reservation to the reserved state: inaccessible, their memory given
+/// back, committable again.
+/// # Safety
+/// Nothing uses the pages any more.
+pub unsafe fn decommit(addr: usize, size: usize) {
+    imp::decommit(addr, size)
+}
+
+/// Lets the host drop the contents of pages [addr, addr + size) when it needs the memory; they stay accessible and read
+/// as either their old contents or zero.
+/// # Safety
+/// Nothing relies on the pages' contents.
+pub unsafe fn discard(addr: usize, size: usize) {
+    imp::discard(addr, size)
+}
+
 /// Releases a reservation: `addr` and `size` as `reserve` returned and was asked for.
 /// # Safety
 /// Nothing uses the range any more.
 pub unsafe fn release(addr: usize, size: usize) {
     imp::release(addr, size)
+}
+
+/// A host thread-local slot (a pthread key; fiber-local storage on Windows, which also has destructors).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TlsKey(usize);
+
+/// A thread exit destructor: called with a thread's value when that is not null.
+pub type TlsDtor = unsafe extern "C" fn(*mut std::ffi::c_void);
+
+/// A new slot, null on every thread.
+pub fn tls_create(dtor: Option<TlsDtor>) -> io::Result<TlsKey> {
+    unsafe { imp::tls_create(dtor) }
+}
+
+/// # Safety
+/// Nothing uses the slot any more.
+pub unsafe fn tls_delete(key: TlsKey) {
+    imp::tls_delete(key)
+}
+
+pub fn tls_get(key: TlsKey) -> *mut std::ffi::c_void {
+    unsafe { imp::tls_get(key) }
+}
+
+pub fn tls_set(key: TlsKey, value: *mut std::ffi::c_void) -> io::Result<()> {
+    unsafe { imp::tls_set(key, value) }
+}
+
+/// A dynamic library, loaded for the rest of the process (the lifted guest library, the movie shim).
+#[derive(Clone, Copy, Debug)]
+pub struct Library(*mut std::ffi::c_void);
+
+// A module handle, usable from any thread.
+unsafe impl Send for Library {}
+unsafe impl Sync for Library {}
+
+impl Library {
+    pub fn open(path: &std::path::Path) -> Result<Library, String> {
+        imp::library_open(path).map(Library)
+    }
+
+    /// The address of symbol `name`, or null.
+    pub fn symbol(&self, name: &str) -> *mut std::ffi::c_void {
+        let Ok(c) = std::ffi::CString::new(name) else {
+            return std::ptr::null_mut();
+        };
+        unsafe { imp::library_symbol(self.0, c.as_ptr()) }
+    }
+}
+
+/// The calling thread's stack (lo, hi).
+pub fn current_thread_stack() -> (usize, usize) {
+    imp::current_thread_stack()
+}
+
+/// An identifier of the calling thread, unique among live threads.
+pub fn current_thread_id() -> u64 {
+    imp::current_thread_id()
+}
+
+/// The host library containing `addr` and the nearest symbol before it, as far as the host's loader knows (logs).
+/// Windows names only the library.
+pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
+    imp::address_owner(addr)
+}
+
+/// Local time on the host: `t` (seconds since 1970) broken down, the time zone's abbreviation, whether daylight saving
+/// time is in effect, and the UTC offset in seconds.
+pub fn local_time(t: i64) -> (libc::tm, String, bool, i32) {
+    imp::local_time(t)
+}
+
+/// `t` (seconds since 1970) broken down in UTC.
+pub fn utc_time(t: i64) -> libc::tm {
+    imp::utc_time(t)
+}
+
+/// The seconds since 1970 of a UTC time (timegm).
+pub fn from_utc_time(tm: &mut libc::tm) -> i64 {
+    imp::from_utc_time(tm)
 }
 
 /// Changes the protection of whole pages [addr, addr + size).
@@ -154,8 +250,127 @@ mod imp {
         }
     }
 
+    pub unsafe fn decommit(addr: usize, size: usize) {
+        // A fresh inaccessible mapping over the pages: drops them, keeps the range reserved.
+        libc::mmap(
+            addr as *mut libc::c_void,
+            size,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE | libc::MAP_FIXED,
+            -1,
+            0,
+        );
+    }
+
+    pub unsafe fn discard(addr: usize, size: usize) {
+        #[cfg(target_vendor = "apple")]
+        libc::madvise(addr as *mut libc::c_void, size, libc::MADV_FREE_REUSABLE);
+        #[cfg(not(target_vendor = "apple"))]
+        libc::madvise(addr as *mut libc::c_void, size, libc::MADV_DONTNEED);
+    }
+
     pub unsafe fn release(addr: usize, size: usize) {
         libc::munmap(addr as *mut libc::c_void, size);
+    }
+
+    #[cfg(target_vendor = "apple")]
+    pub fn current_thread_stack() -> (usize, usize) {
+        unsafe {
+            let me = libc::pthread_self();
+            let hi = libc::pthread_get_stackaddr_np(me) as usize;
+            (hi - libc::pthread_get_stacksize_np(me), hi)
+        }
+    }
+
+    #[cfg(not(target_vendor = "apple"))]
+    pub fn current_thread_stack() -> (usize, usize) {
+        unsafe {
+            let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+            let (mut lo, mut size) = (std::ptr::null_mut(), 0usize);
+            if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) == 0 {
+                libc::pthread_attr_getstack(&attr, &mut lo, &mut size);
+                libc::pthread_attr_destroy(&mut attr);
+            }
+            (lo as usize, lo as usize + size)
+        }
+    }
+
+    pub fn current_thread_id() -> u64 {
+        unsafe { libc::pthread_self() as u64 }
+    }
+
+    pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        if unsafe { libc::dladdr(addr as *const libc::c_void, &mut info) } == 0 {
+            return (None, None);
+        }
+        let s = |p: *const libc::c_char| {
+            (!p.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+        };
+        (s(info.dli_fname), s(info.dli_sname))
+    }
+
+    pub fn local_time(t: i64) -> (libc::tm, String, bool, i32) {
+        let t = t as libc::time_t;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_r(&t, &mut tm) };
+        let name = if tm.tm_zone.is_null() {
+            "UTC".into()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) }.to_string_lossy().into_owned()
+        };
+        (tm, name, tm.tm_isdst > 0, tm.tm_gmtoff as i32)
+    }
+
+    pub fn utc_time(t: i64) -> libc::tm {
+        let t = t as libc::time_t;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::gmtime_r(&t, &mut tm) };
+        tm
+    }
+
+    pub fn from_utc_time(tm: &mut libc::tm) -> i64 {
+        unsafe { libc::timegm(tm) as i64 }
+    }
+
+    pub fn library_open(path: &std::path::Path) -> Result<*mut libc::c_void, String> {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        if h.is_null() {
+            Err(format!("{}: {}", path.display(), unsafe {
+                std::ffi::CStr::from_ptr(libc::dlerror()).to_string_lossy()
+            }))
+        } else {
+            Ok(h)
+        }
+    }
+
+    pub unsafe fn library_symbol(lib: *mut libc::c_void, name: *const libc::c_char) -> *mut libc::c_void {
+        libc::dlsym(lib, name)
+    }
+
+    pub unsafe fn tls_create(dtor: Option<TlsDtor>) -> io::Result<TlsKey> {
+        let mut k: libc::pthread_key_t = 0;
+        match libc::pthread_key_create(&mut k, dtor) {
+            0 => Ok(TlsKey(k as usize)),
+            e => Err(io::Error::from_raw_os_error(e)),
+        }
+    }
+
+    pub unsafe fn tls_delete(key: TlsKey) {
+        libc::pthread_key_delete(key.0 as libc::pthread_key_t);
+    }
+
+    pub unsafe fn tls_get(key: TlsKey) -> *mut libc::c_void {
+        libc::pthread_getspecific(key.0 as libc::pthread_key_t)
+    }
+
+    pub unsafe fn tls_set(key: TlsKey, value: *mut libc::c_void) -> io::Result<()> {
+        match libc::pthread_setspecific(key.0 as libc::pthread_key_t, value) {
+            0 => Ok(()),
+            e => Err(io::Error::from_raw_os_error(e)),
+        }
     }
 
     pub unsafe fn protect(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
@@ -279,8 +494,140 @@ mod imp {
         }
     }
 
+    pub unsafe fn decommit(addr: usize, size: usize) {
+        const MEM_DECOMMIT: u32 = 0x4000;
+        VirtualFree(addr as *mut c_void, size, MEM_DECOMMIT);
+    }
+
+    pub unsafe fn discard(addr: usize, size: usize) {
+        const MEM_RESET: u32 = 0x80000;
+        VirtualAlloc(addr as *mut c_void, size, MEM_RESET, flags(Prot::ReadWrite));
+    }
+
     pub unsafe fn release(addr: usize, _size: usize) {
         VirtualFree(addr as *mut c_void, 0, MEM_RELEASE);
+    }
+
+    pub fn current_thread_stack() -> (usize, usize) {
+        extern "system" {
+            fn GetCurrentThreadStackLimits(low: *mut usize, high: *mut usize);
+        }
+        let (mut lo, mut hi) = (0, 0);
+        unsafe { GetCurrentThreadStackLimits(&mut lo, &mut hi) };
+        (lo, hi)
+    }
+
+    pub fn current_thread_id() -> u64 {
+        extern "system" {
+            fn GetCurrentThreadId() -> u32;
+        }
+        unsafe { GetCurrentThreadId() as u64 }
+    }
+
+    pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
+        const FROM_ADDRESS: u32 = 0x4; // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+        const UNCHANGED_REFCOUNT: u32 = 0x2;
+        extern "system" {
+            fn GetModuleHandleExW(flags: u32, name: *const c_void, module: *mut *mut c_void) -> i32;
+            fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
+        }
+        let mut m = std::ptr::null_mut();
+        if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, addr as *const c_void, &mut m) } == 0 {
+            return (None, None);
+        }
+        let mut name = [0u16; 512];
+        let n = unsafe { GetModuleFileNameW(m, name.as_mut_ptr(), name.len() as u32) } as usize;
+        ((n > 0).then(|| String::from_utf16_lossy(&name[..n])), None)
+    }
+
+    extern "C" {
+        fn _localtime64_s(tm: *mut libc::tm, t: *const i64) -> i32;
+        fn _gmtime64_s(tm: *mut libc::tm, t: *const i64) -> i32;
+        fn _mkgmtime64(tm: *mut libc::tm) -> i64;
+        fn _get_tzname(len: *mut usize, buf: *mut std::ffi::c_char, size: usize, index: i32) -> i32;
+    }
+
+    pub fn local_time(t: i64) -> (libc::tm, String, bool, i32) {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { _localtime64_s(&mut tm, &t) };
+        let dst = tm.tm_isdst > 0;
+        // The local fields read as UTC are ahead of `t` by the offset.
+        let mut copy = tm;
+        let off = (unsafe { _mkgmtime64(&mut copy) } - t) as i32;
+        // Windows names zones in full ("Pacific Standard Time"), not by abbreviation.
+        let mut buf = [0 as std::ffi::c_char; 64];
+        let mut len = 0usize;
+        let name = if unsafe { _get_tzname(&mut len, buf.as_mut_ptr(), buf.len(), dst as i32) } == 0 && len > 1 {
+            unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_string_lossy().into_owned()
+        } else {
+            "UTC".into()
+        };
+        (tm, name, dst, off)
+    }
+
+    pub fn utc_time(t: i64) -> libc::tm {
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { _gmtime64_s(&mut tm, &t) };
+        tm
+    }
+
+    pub fn from_utc_time(tm: &mut libc::tm) -> i64 {
+        unsafe { _mkgmtime64(tm) }
+    }
+
+    pub fn library_open(path: &std::path::Path) -> Result<*mut c_void, String> {
+        use std::os::windows::ffi::OsStrExt;
+        extern "system" {
+            fn LoadLibraryW(name: *const u16) -> *mut c_void;
+        }
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let h = unsafe { LoadLibraryW(wide.as_ptr()) };
+        if h.is_null() {
+            Err(format!("{}: {}", path.display(), io::Error::last_os_error()))
+        } else {
+            Ok(h)
+        }
+    }
+
+    pub unsafe fn library_symbol(lib: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void {
+        extern "system" {
+            fn GetProcAddress(module: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+        }
+        GetProcAddress(lib, name)
+    }
+
+    const FLS_OUT_OF_INDEXES: u32 = u32::MAX;
+
+    extern "system" {
+        fn FlsAlloc(callback: Option<TlsDtor>) -> u32;
+        fn FlsFree(index: u32) -> i32;
+        fn FlsGetValue(index: u32) -> *mut c_void;
+        fn FlsSetValue(index: u32, value: *mut c_void) -> i32;
+    }
+
+    // Fiber-local storage rather than TlsAlloc: only it runs a destructor at thread exit. Its callback is
+    // extern "system", the same convention as extern "C" on 64-bit Windows.
+    pub unsafe fn tls_create(dtor: Option<TlsDtor>) -> io::Result<TlsKey> {
+        match FlsAlloc(dtor) {
+            FLS_OUT_OF_INDEXES => Err(io::Error::last_os_error()),
+            i => Ok(TlsKey(i as usize)),
+        }
+    }
+
+    pub unsafe fn tls_delete(key: TlsKey) {
+        FlsFree(key.0 as u32);
+    }
+
+    pub unsafe fn tls_get(key: TlsKey) -> *mut c_void {
+        FlsGetValue(key.0 as u32)
+    }
+
+    pub unsafe fn tls_set(key: TlsKey, value: *mut c_void) -> io::Result<()> {
+        if FlsSetValue(key.0 as u32, value) != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 
     pub unsafe fn protect(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
@@ -319,6 +666,30 @@ mod tests {
     }
 
     #[test]
+    fn tls_keys_and_destructors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static FREED: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn dtor(v: *mut std::ffi::c_void) {
+            FREED.fetch_add(v as usize, Ordering::SeqCst);
+        }
+        let k = tls_create(Some(dtor)).unwrap();
+        assert!(tls_get(k).is_null());
+        tls_set(k, 7 as *mut _).unwrap();
+        assert_eq!(tls_get(k) as usize, 7);
+        // Another thread has its own value, and its destructor runs when it exits.
+        std::thread::spawn(move || {
+            assert!(tls_get(k).is_null());
+            tls_set(k, 5 as *mut _).unwrap();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(FREED.load(Ordering::SeqCst), 5);
+        assert_eq!(tls_get(k) as usize, 7);
+        tls_set(k, std::ptr::null_mut()).unwrap();
+        unsafe { tls_delete(k) };
+    }
+
+    #[test]
     fn reserve_commit_release() {
         // 64 KiB: Windows' allocation granularity, so the range can be reserved again at the same address.
         let size = 16 * 0x10000;
@@ -330,6 +701,12 @@ mod tests {
             let p = (r + 0x10000) as *mut u8;
             assert!(std::slice::from_raw_parts(p, 0x10000).iter().all(|&b| b == 0));
             *p.add(0x8000) = 5;
+            // Discarded pages stay usable; decommitted ones come back fresh when committed again.
+            discard(r + 0x10000, 0x10000);
+            *p.add(0x8000) = 6;
+            decommit(r + 0x10000, 0x10000);
+            commit(r + 0x10000, 0x10000, Prot::ReadWrite).unwrap();
+            assert_eq!(*p.add(0x8000), 0);
             // An occupied address cannot be had exactly; nearby lands elsewhere.
             assert!(reserve(At::Exactly(r), size).is_err());
             let other = reserve(At::Near(r), size).unwrap();

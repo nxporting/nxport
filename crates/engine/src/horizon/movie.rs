@@ -81,14 +81,12 @@ fn shim() -> Option<&'static Shim> {
             }
         }
         for c in candidates.iter().filter(|c| !c.is_empty()) {
-            let path = CString::new(c.as_str()).ok()?;
-            let h = libc::dlopen(path.as_ptr(), libc::RTLD_NOW);
-            if h.is_null() {
+            let Ok(lib) = crate::os::Library::open(std::path::Path::new(c)) else {
                 continue;
-            }
+            };
             macro_rules! sym {
                 ($n:literal) => {{
-                    let p = libc::dlsym(h, concat!($n, "\0").as_ptr() as *const c_char);
+                    let p = lib.symbol($n);
                     if p.is_null() {
                         println!("[!] movie: {} lacks {}", c, $n);
                         return None;

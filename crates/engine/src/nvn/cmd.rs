@@ -349,8 +349,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
     depth: usize,
     depth_view: *const u8,
 ) {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr, options(nomem, nostack));
+    let lr = crate::guest_reg!(x30);
     // --log-rt-callers: each distinct (caller, target count, which targets are null, depth null) once, with the
     // caller as a main-module offset (UltraCam diagnosis: it replaces the game's render targets).
     // --log-rt-caller-size=WxH: the guest call chain of the first 12 binds whose color target 0 has that size.
@@ -365,9 +364,8 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
             if size.is(t.width, t.height)
                 && N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 12
             {
-                let base = crate::cpu::crash_handler::get_guest_base();
-                let mut fp: usize;
-                std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+                let base = crate::guest::loader::main_base();
+                let mut fp = crate::guest_reg!(x29);
                 let mut chain = vec![format!("{:#x}", lr.wrapping_sub(base))];
                 for _ in 0..16 {
                     if fp < 0x1000 || fp & 7 != 0 {
@@ -411,7 +409,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
         let key = (lr, num, nulls, depth == 0);
         let mut g = SEEN.lock().unwrap();
         if g.get_or_insert_with(Default::default).insert(key) {
-            let base = crate::cpu::crash_handler::get_guest_base();
+            let base = crate::guest::loader::main_base();
             println!(
                 "[rt-caller] lr {:#x} (base+{:#x}) num {} colors@{:#x} {:x?} depth {:#x}",
                 lr,
@@ -422,8 +420,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
                 depth
             );
             // Guest call chain from the frame-pointer records (ours first, then the guest's).
-            let mut fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+            let mut fp = crate::guest_reg!(x29);
             let mut chain = Vec::new();
             for _ in 0..14 {
                 if fp < 0x1000 || fp & 7 != 0 {
@@ -1109,7 +1106,7 @@ pub fn drawable_cmd_stats(func: usize, cmd: Option<&'static str>) {
         cmds: Default::default(),
         last: 0,
     });
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let k = func.wrapping_sub(base);
     match cmd {
         None => *s.calls.entry(k).or_default() += 1,
@@ -1211,7 +1208,7 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
                 set.clear();
                 *f = frame;
             }
-            let base = crate::cpu::crash_handler::get_guest_base();
+            let base = crate::guest::loader::main_base();
             let k = func.wrapping_sub(base);
             let e = per.entry(k).or_default();
             e.0 += 1;
@@ -1310,9 +1307,8 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
         }
         return 0;
     }
-    let base = crate::cpu::crash_handler::get_guest_base();
-    let mut fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+    let base = crate::guest::loader::main_base();
+    let mut fp = crate::guest_reg!(x29);
     let mut key = [0u32; 8];
     let mut n = 0;
     for _ in 0..32 {
@@ -1346,7 +1342,7 @@ fn note_drawable_class(func: usize, count: c_int) {
         std::sync::Mutex::new(None);
     let mut g = M.lock().unwrap();
     let (m, last) = g.get_or_insert_with(|| (Default::default(), 0));
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let k = if func >= base && func < base + (256 << 20) {
         func - base
     } else {

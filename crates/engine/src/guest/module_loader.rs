@@ -11,6 +11,8 @@
 // Stubs live in the module's own mapping (after its image), so every site is within branch range. The caller runs
 // the module's DT_INIT (exlaunch's module entry) before the game's nnMain.
 
+#[cfg(nx_native)]
+use crate::cpu::aot::encode_b;
 use crate::horizon::svc::{self, Region};
 use std::ptr;
 
@@ -25,18 +27,128 @@ pub struct LoadedModule {
 }
 
 const STUB_AREA: usize = 0x2_0000;
+// System register reads native_rewrites redirects.
+#[cfg(nx_native)]
 const MRS_TPIDR: u32 = 0xD53B_D040;
+#[cfg(nx_native)]
 const MRS_TPIDRRO: u32 = 0xD53B_D060;
+#[cfg(nx_native)]
 const MRS_CTR: u32 = 0xD53B_0020;
 
 fn r_u32(d: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(d[off..off + 4].try_into().unwrap())
 }
 
-fn encode_b(from: usize, to: usize) -> Option<u32> {
-    let delta = to as isize - from as isize;
-    (delta % 4 == 0 && delta.abs() < (128 << 20))
-        .then(|| 0x1400_0000 | (((delta >> 2) as u32) & 0x03FF_FFFF))
+
+/// The rewrites guest code needs to run natively (docs/windows-port.md): x18 uses (cpu::trampoline), svc into
+/// calls of horizon::svc, reads of TPIDR_EL0 / TPIDRRO_EL0 / CTR_EL0 into stubs (in `stubs`, STUB_AREA bytes), and
+/// load-exclusives into acquire forms. Returns what was rewritten, for the log.
+#[cfg(nx_native)]
+unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
+    if crate::cpu::trampoline::x18_trampolines() {
+        crate::cpu::trampoline::rewrite_module(name, text, text_len).map_err(|e| e.to_string())?;
+    }
+    let mut next = stubs;
+    let (mut n_svc, mut n_tp, mut n_tpro) = (0, 0, 0);
+    for off in (0..text_len & !3).step_by(4) {
+        let site = text + off;
+        let w = ptr::read(site as *const u32);
+        let stub_words: Vec<u32>;
+        if w & 0xFFE0_001F == 0xD400_0001 {
+            let n = (w >> 5) & 0xFFFF;
+            // Save x0-x7 and lr, call svc_dispatch(regs, n) through the HLE trampoline, reload, continue.
+            let mut v = vec![
+                0xD10143FF,            // sub sp, sp, #0x50
+                0xA90007E0,            // stp x0, x1, [sp]
+                0xA9010FE2,            // stp x2, x3, [sp, #16]
+                0xA90217E4,            // stp x4, x5, [sp, #32]
+                0xA9031FE6,            // stp x6, x7, [sp, #48]
+                0xF90023FE,            // str x30, [sp, #64]
+                0x910003E0,            // mov x0, sp
+                0xD2800001 | (n << 5), // movz x1, #n
+                0x58000150,            // ldr x16, <literal at +40>
+                0xD63F0200,            // blr x16
+                0xA94007E0,            // ldp x0, x1, [sp]
+                0xA9410FE2,            // ldp x2, x3, [sp, #16]
+                0xA94217E4,            // ldp x4, x5, [sp, #32]
+                0xA9431FE6,            // ldp x6, x7, [sp, #48]
+                0xF94023FE,            // ldr x30, [sp, #64]
+                0x910143FF,            // add sp, sp, #0x50
+            ];
+            let back = encode_b(next + v.len() * 4, site + 4).ok_or("stub out of branch range")?;
+            v.push(back);
+            v.push(0xD503201F); // nop (literal alignment)
+            v.push(svc_entry as u32);
+            v.push((svc_entry >> 32) as u32);
+            stub_words = v;
+            n_svc += 1;
+        } else if w & 0xFFFF_FFE0 == MRS_CTR {
+            // CTR_EL0 traps on macOS; report the Switch CPU's (Cortex-A57: 64-byte lines) for __clear_cache loops.
+            let rt = w & 0x1f;
+            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
+            stub_words = vec![
+                0xD298_0080 | rt, /* movz xt, #0xc004 */
+                0xF2B0_8880 | rt, /* movk xt, #0x8444, lsl #16 */
+                back,
+            ];
+        } else if w & 0xFFFF_FFE0 == MRS_TPIDR && w & 0x1f != 31 {
+            let rt = w & 0x1f;
+            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
+            stub_words = vec![
+                MRS_TPIDRRO | rt,
+                0xF940_0000
+                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (rt << 5)
+                    | rt,
+                back,
+            ];
+            n_tp += 1;
+        } else if w & 0xFFFF_FFE0 == MRS_TPIDRRO && w & 0x1f != 31 {
+            let rt = w & 0x1f;
+            let slot = crate::cpu::tls::FAKE_TLR_SLOT as u32;
+            let back = encode_b(next + 12, site + 4).ok_or("stub out of branch range")?;
+            stub_words = vec![
+                MRS_TPIDRRO | rt,
+                0xF940_0000
+                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (rt << 5)
+                    | rt, // guest TLS block
+                0xF940_0000 | ((slot / 8) << 10) | (rt << 5) | rt, // its fake thread-local region
+                back,
+            ];
+            n_tpro += 1;
+        } else {
+            continue;
+        }
+        if next + stub_words.len() * 4 + 8 > stubs + STUB_AREA {
+            return Err("stub area full".into());
+        }
+        // Literal pools need 8-byte alignment: svc stubs start aligned.
+        if next % 8 != 0 {
+            ptr::write(next as *mut u32, 0xD503201F);
+            next += 4;
+        }
+        let start = next;
+        for (i, word) in stub_words.iter().enumerate() {
+            ptr::write((start + i * 4) as *mut u32, *word);
+        }
+        // Re-encode the branch back now that the stub's final position is known.
+        let back_idx = stub_words
+            .iter()
+            .position(|&x| x & 0xFC00_0000 == 0x1400_0000)
+            .unwrap();
+        ptr::write(
+            (start + back_idx * 4) as *mut u32,
+            encode_b(start + back_idx * 4, site + 4).ok_or("stub out of branch range")?,
+        );
+        ptr::write(
+            site as *mut u32,
+            encode_b(site, start).ok_or("stub out of branch range")?,
+        );
+        next = start + stub_words.len() * 4;
+    }
+    let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(text, text_len, false)]);
+    Ok(format!("{n_svc} svc, {n_tp} tpidr_el0, {n_tpro} tpidrro_el0, {n_ldx} load-exclusive sites"))
 }
 
 /// Loads `path`, placing it at or above `hint` when possible. `svc_entry` is an HLE trampoline to
@@ -209,110 +321,15 @@ pub unsafe fn load(
     }
 
     // ── make the code runnable here ──
-    if crate::cpu::trampoline::x18_trampolines() {
-        crate::cpu::trampoline::rewrite_module(name, base + text_mo, text_len)
-            .map_err(|e| e.to_string())?;
-    }
     let stubs = base + image_aligned;
-    let mut next = stubs;
-    let (mut n_svc, mut n_tp, mut n_tpro) = (0, 0, 0);
-    for off in (0..text_len & !3).step_by(4) {
-        let site = base + text_mo + off;
-        let w = ptr::read(site as *const u32);
-        let stub_words: Vec<u32>;
-        if w & 0xFFE0_001F == 0xD400_0001 {
-            let n = (w >> 5) & 0xFFFF;
-            // Save x0-x7 and lr, call svc_dispatch(regs, n) through the HLE trampoline, reload, continue.
-            let mut v = vec![
-                0xD10143FF,            // sub sp, sp, #0x50
-                0xA90007E0,            // stp x0, x1, [sp]
-                0xA9010FE2,            // stp x2, x3, [sp, #16]
-                0xA90217E4,            // stp x4, x5, [sp, #32]
-                0xA9031FE6,            // stp x6, x7, [sp, #48]
-                0xF90023FE,            // str x30, [sp, #64]
-                0x910003E0,            // mov x0, sp
-                0xD2800001 | (n << 5), // movz x1, #n
-                0x58000150,            // ldr x16, <literal at +40>
-                0xD63F0200,            // blr x16
-                0xA94007E0,            // ldp x0, x1, [sp]
-                0xA9410FE2,            // ldp x2, x3, [sp, #16]
-                0xA94217E4,            // ldp x4, x5, [sp, #32]
-                0xA9431FE6,            // ldp x6, x7, [sp, #48]
-                0xF94023FE,            // ldr x30, [sp, #64]
-                0x910143FF,            // add sp, sp, #0x50
-            ];
-            let back = encode_b(next + v.len() * 4, site + 4).ok_or("stub out of branch range")?;
-            v.push(back);
-            v.push(0xD503201F); // nop (literal alignment)
-            v.push(svc_entry as u32);
-            v.push((svc_entry >> 32) as u32);
-            stub_words = v;
-            n_svc += 1;
-        } else if w & 0xFFFF_FFE0 == MRS_CTR {
-            // CTR_EL0 traps on macOS; report the Switch CPU's (Cortex-A57: 64-byte lines) for __clear_cache loops.
-            let rt = w & 0x1f;
-            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
-            stub_words = vec![
-                0xD298_0080 | rt, /* movz xt, #0xc004 */
-                0xF2B0_8880 | rt, /* movk xt, #0x8444, lsl #16 */
-                back,
-            ];
-        } else if w & 0xFFFF_FFE0 == MRS_TPIDR && w & 0x1f != 31 {
-            let rt = w & 0x1f;
-            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
-            stub_words = vec![
-                MRS_TPIDRRO | rt,
-                0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
-                    | (rt << 5)
-                    | rt,
-                back,
-            ];
-            n_tp += 1;
-        } else if w & 0xFFFF_FFE0 == MRS_TPIDRRO && w & 0x1f != 31 {
-            let rt = w & 0x1f;
-            let slot = crate::cpu::tls::FAKE_TLR_SLOT as u32;
-            let back = encode_b(next + 12, site + 4).ok_or("stub out of branch range")?;
-            stub_words = vec![
-                MRS_TPIDRRO | rt,
-                0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
-                    | (rt << 5)
-                    | rt, // guest TLS block
-                0xF940_0000 | ((slot / 8) << 10) | (rt << 5) | rt, // its fake thread-local region
-                back,
-            ];
-            n_tpro += 1;
-        } else {
-            continue;
-        }
-        if next + stub_words.len() * 4 + 8 > stubs + STUB_AREA {
-            return Err("stub area full".into());
-        }
-        // Literal pools need 8-byte alignment: svc stubs start aligned.
-        if next % 8 != 0 {
-            ptr::write(next as *mut u32, 0xD503201F);
-            next += 4;
-        }
-        let start = next;
-        for (i, word) in stub_words.iter().enumerate() {
-            ptr::write((start + i * 4) as *mut u32, *word);
-        }
-        // Re-encode the branch back now that the stub's final position is known.
-        let back_idx = stub_words
-            .iter()
-            .position(|&x| x & 0xFC00_0000 == 0x1400_0000)
-            .unwrap();
-        ptr::write(
-            (start + back_idx * 4) as *mut u32,
-            encode_b(start + back_idx * 4, site + 4).ok_or("stub out of branch range")?,
-        );
-        ptr::write(
-            site as *mut u32,
-            encode_b(site, start).ok_or("stub out of branch range")?,
-        );
-        next = start + stub_words.len() * 4;
-    }
+    #[cfg(nx_native)]
+    let rewritten = native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?;
+    // Lifted code handles svc, the system registers and exclusives itself.
+    #[cfg(not(nx_native))]
+    let rewritten = {
+        let _ = svc_entry;
+        "no sites"
+    };
     let text_pages = (text_len + 0x3fff) & !0x3fff;
     // Code regions go through cpu/aot.rs: on iOS they come from the signed image (mods included, cpu/aot.rs).
     let short: String = name
@@ -323,7 +340,6 @@ pub unsafe fn load(
         .into_iter()
         .rev()
         .collect();
-    let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(base + text_mo, text_len, false)]);
     crate::cpu::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
     crate::cpu::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
     crate::os::flush_icache(((base + text_mo)) as usize, text_len);
@@ -350,8 +366,8 @@ pub unsafe fn load(
         perm: svc::PERM_RW,
     });
     println!(
-        "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} svc, {} tpidr_el0, {} tpidrro_el0, {} load-exclusive sites rewritten",
-        name, base, image_size, n_svc, n_tp, n_tpro, n_ldx
+        "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} rewritten",
+        name, base, image_size, rewritten
     );
     Ok(LoadedModule {
         base,
@@ -733,10 +749,10 @@ pub unsafe extern "C" fn sys_exit(code: i32) {
     std::process::exit(code);
 }
 
-/// The mods' thread-local keys: small indices onto pthread keys.
-static TLS_KEYS: std::sync::Mutex<Vec<libc::pthread_key_t>> = std::sync::Mutex::new(Vec::new());
+/// The mods' thread-local keys: small indices onto host keys.
+static TLS_KEYS: std::sync::Mutex<Vec<crate::os::TlsKey>> = std::sync::Mutex::new(Vec::new());
 
-fn tls_key(key: i32) -> Option<libc::pthread_key_t> {
+fn tls_key(key: i32) -> Option<crate::os::TlsKey> {
     usize::try_from(key)
         .ok()
         .and_then(|i| TLS_KEYS.lock().unwrap().get(i).copied())
@@ -746,12 +762,18 @@ pub unsafe extern "C" fn sys_tls_create(
     key_out: *mut i32,
     dtor: Option<unsafe extern "C" fn(*mut libc::c_void)>,
 ) -> i32 {
-    let mut pk: libc::pthread_key_t = 0;
-    if libc::pthread_key_create(&mut pk, dtor) != 0 {
+    // The destructor is guest code: the host calls it directly only where guest code runs natively. A lifted runtime
+    // needs a host destructor that calls it through guest::call (docs/windows-port.md, "Host calls guest").
+    #[cfg(not(nx_native))]
+    let dtor = {
+        let _ = dtor;
+        None
+    };
+    let Ok(k) = crate::os::tls_create(dtor) else {
         return -1;
-    }
+    };
     let mut keys = TLS_KEYS.lock().unwrap();
-    keys.push(pk);
+    keys.push(k);
     if !key_out.is_null() {
         *key_out = (keys.len() - 1) as i32;
     }
@@ -759,17 +781,17 @@ pub unsafe extern "C" fn sys_tls_create(
 }
 
 pub unsafe extern "C" fn sys_tls_delete(key: i32) {
-    if let Some(pk) = tls_key(key) {
-        libc::pthread_key_delete(pk);
+    if let Some(k) = tls_key(key) {
+        crate::os::tls_delete(k);
     }
 }
 
 pub unsafe extern "C" fn sys_tls_get(key: i32) -> *mut libc::c_void {
-    tls_key(key).map_or(std::ptr::null_mut(), |pk| libc::pthread_getspecific(pk))
+    tls_key(key).map_or(std::ptr::null_mut(), crate::os::tls_get)
 }
 
 pub unsafe extern "C" fn sys_tls_set(key: i32, val: *mut libc::c_void) -> i32 {
-    tls_key(key).map_or(-1, |pk| libc::pthread_setspecific(pk, val))
+    tls_key(key).map_or(-1, |k| crate::os::tls_set(k, val).map_or(-1, |()| 0))
 }
 
 pub static SEAD_QUAT_UNIT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];

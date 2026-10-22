@@ -68,8 +68,7 @@ unsafe fn nvn_labeled_stub_called(idx: usize, a0: u64, a1: u64) -> u64 {
         counts[idx] += 1;
         counts[idx]
     };
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
+    let lr = crate::guest_reg!(x30);
     let name = nvn_stub_name_for_index(idx);
     // Throttled: the same few unimplemented functions can be called hundreds of thousands of times.
     if n <= 3 || n % 5000 == 0 {
@@ -1741,10 +1740,8 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolInitialize(
     pool: *mut NvnMemoryPool,
     builder: *const NvnMemoryPoolBuilder,
 ) -> u8 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr, options(nomem, nostack));
-    let mut fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+    let lr = crate::guest_reg!(x30);
+    let mut fp = crate::guest_reg!(x29);
     record_hle_call("hle_nvnMemoryPoolInitialize");
     if pool.is_null() || builder.is_null() {
         return 0; // NVN_FALSE
@@ -1759,12 +1756,10 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolInitialize(
         // VIRTUAL pools (and any caller that didn't supply backing storage)
         // get real host memory of their own -- matches real NVN semantics
         // for a pool with no caller-supplied storage.
-        let align = 0x10000usize; // NVN_DEVICE_INFO_MEMORY_POOL_PAGE_SIZE
-        let mut out: *mut libc::c_void = std::ptr::null_mut();
-        if libc::posix_memalign(&mut out, align, size) != 0 || out.is_null() {
+        let out = std::alloc::alloc_zeroed(owned_pool_layout(size));
+        if out.is_null() {
             return 0;
         }
-        libc::memset(out, 0, size);
         memory = out as usize;
         owns_memory = 1;
     }
@@ -1804,7 +1799,7 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolInitialize(
     );
     if size >= 64 << 20 {
         // Big pools (render targets, streaming): who sizes them (mods such as UltraCam enlarge some).
-        let base = crate::cpu::crash_handler::get_guest_base();
+        let base = crate::guest::loader::main_base();
         let mut chain = vec![format!("{:#x}", lr.wrapping_sub(base))];
         for _ in 0..10 {
             if fp < 0x1000 || fp & 7 != 0 {
@@ -1841,9 +1836,14 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolFinalize(pool: *mut NvnMemoryPool) {
     MEMORY_POOLS.lock().unwrap().remove(&base);
     bump_pools_gen();
     if (*pool).owns_memory != 0 && (*pool).memory != 0 {
-        libc::free((*pool).memory as *mut libc::c_void);
+        std::alloc::dealloc((*pool).memory as *mut u8, owned_pool_layout((*pool).size));
     }
     std::ptr::write_bytes(pool, 0, 1);
+}
+
+/// The memory of a pool given none by the game, aligned to NVN's pool page (NVN_DEVICE_INFO_MEMORY_POOL_PAGE_SIZE).
+fn owned_pool_layout(size: usize) -> std::alloc::Layout {
+    std::alloc::Layout::from_size_align(size, 0x10000).expect("pool size")
 }
 
 #[no_mangle]
@@ -3244,8 +3244,7 @@ pub unsafe extern "C" fn hle_nvnTextureBuilderSetSwizzle(
     {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
-            let fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp);
+            let fp = crate::guest_reg!(x29);
             println!("[swizzle] out-of-range SetSwizzle({}, {}, {}, {}) raw args {:#x} {:#x} {:#x} {:#x} callers {}", r, g, bl, a, r as u32, g as u32, bl as u32, a as u32, guest_chain(fp));
         }
     }
@@ -3299,9 +3298,8 @@ pub unsafe extern "C" fn hle_nvnTextureInitialize(
     tex: *mut NvnTexture,
     builder: *const NvnTextureBuilder,
 ) -> u8 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let lr = crate::guest_reg!(x30);
+    let base = crate::guest::loader::main_base();
     let rel_lr = if lr >= base && base != 0 {
         lr - base
     } else {
@@ -4802,9 +4800,8 @@ pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interva
     if *LOG_PACING.get_or_init(|| crate::settings::get().log.log_pacing) {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp);
-        let base = crate::cpu::crash_handler::get_guest_base();
+        let fp = crate::guest_reg!(x29);
+        let base = crate::guest::loader::main_base();
         let caller_fp = *(fp as *const usize);
         if n % 10 == 0
             && base != 0
@@ -4863,8 +4860,7 @@ pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interva
         interval
     };
     if PRESENT_INTERVAL.swap(interval, std::sync::atomic::Ordering::Relaxed) != interval {
-        let fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp);
+        let fp = crate::guest_reg!(x29);
         println!(
             "[+] NVN: present interval = {} (guest callers: {})",
             interval,
@@ -5887,8 +5883,7 @@ pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) 
     if *LOG.get_or_init(|| crate::settings::get().log.log_sync) {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 20 == 0 {
-            let fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp);
+            let fp = crate::guest_reg!(x29);
             println!("[sync] wait for submit {} (latest {}) took {:.1} ms timeout {} thread {:?} callers {}", serial, gpu.submitted_serial(),
                 t0.elapsed().as_secs_f64() * 1e3, timeout_ns, std::thread::current().name(), guest_chain(fp));
         }

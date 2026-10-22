@@ -209,6 +209,12 @@ pub fn adrp_ldr(pc: usize, target: usize, rd: u32) -> [u32; 2] {
     [adrp, ldr]
 }
 
+/// `b target` placed at `from`, if `to` is within its +-128 MiB.
+pub fn encode_b(from: usize, to: usize) -> Option<u32> {
+    let delta = to as isize - from as isize;
+    (delta % 4 == 0 && delta.abs() < (128 << 20)).then(|| 0x1400_0000 | (((delta >> 2) as u32) & 0x03FF_FFFF))
+}
+
 /// `ldr xt, <target>` (PC-relative literal load, +-1 MiB) placed at `pc`.
 pub fn ldr_literal(pc: usize, target: usize, rt: u32) -> u32 {
     let d = target as i64 - pc as i64;
@@ -252,9 +258,14 @@ pub unsafe fn finalize() -> Result<(), String> {
     let r = match mode() {
         Mode::Off => Ok(()),
         Mode::Dump(to) => dump(to, &regions),
+        #[cfg(nx_native)]
         Mode::Load(path) => load(path, &regions),
+        // The image is native code: a lifted runtime runs the lifted guest library instead.
+        #[cfg(not(nx_native))]
+        Mode::Load(_) => Err("an AOT image runs only where guest code runs natively".into()),
     };
     FINALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(nx_native)]
     if r.is_ok() && (loading() || crate::settings::get().guest.aot_audit) {
         audit_exec("after startup");
         // Again in play: code generated later (it would not run on iOS) shows up here.
@@ -269,6 +280,7 @@ pub unsafe fn finalize() -> Result<(), String> {
 /// Lists executable memory that is not backed by a file. iOS refuses to run such pages without JIT; macOS does not
 /// enforce it for ad-hoc signed binaries, so this audit is how an AOT run on the Mac shows it would be acceptable there.
 /// Returns the number of anonymous executable bytes.
+#[cfg(nx_native)]
 pub fn audit_exec(when: &str) -> usize {
     // vm_region_submap_info_64 is declared under #pragma pack(4) (mach/vm_region.h).
     #[repr(C, packed(4))]
@@ -450,6 +462,7 @@ fn dump(to: &DumpTo, regions: &[Region]) -> Result<(), String> {
 }
 
 /// File offset of section `sect` in a Mach-O file.
+#[cfg(nx_native)]
 fn section_offset(file: &[u8], sect: &str) -> Option<usize> {
     let u32_at = |o: usize| u32::from_le_bytes(file[o..o + 4].try_into().unwrap());
     if u32_at(0) != 0xfeed_facf {
@@ -476,6 +489,7 @@ fn section_offset(file: &[u8], sect: &str) -> Option<usize> {
     None
 }
 
+#[cfg(nx_native)]
 unsafe fn load(path: &str, regions: &[Region]) -> Result<(), String> {
     // dlopen first: that is what registers the dylib's code signature with the kernel, so its pages may be mapped
     // executable (iOS); the copy dyld maps is not used.
