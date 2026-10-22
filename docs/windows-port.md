@@ -21,12 +21,16 @@ against, with nothing else changed (see Testing).
 
 ## Build configuration
 
-`crates/engine/build.rs` sets `cfg(nx_native)` on hosts that run guest code natively (Apple + aarch64 so far).
-Without it the engine builds only its platform-independent parts: settings, profiles, game identification, NSO
-parsing (`nxport::nso`) and the MSL tooling the builder uses. `nxport::run` returns an error there until the lifted
-runtime exists. Apple packaging (`ipa`, `pack`, `shader_cache_build` in nxport-build, the matching nxport-cli
-commands, the builder window) is `cfg(target_os = "macos")`. `cargo check --workspace --all-targets` passes on
-x86_64-pc-windows-msvc.
+`crates/engine/build.rs` sets two cfgs. `nx_runtime` marks hosts that load and run games: the guest image and its
+loading (guest/), the OS the guest sees (horizon/), NVN (nvn/) and the GPU interface (gpu/), on Apple + aarch64 and
+Windows so far. `nx_native` marks the hosts among them that run guest code natively: the code rewriting and trap
+handling in cpu/ (all but cpu/aot.rs's image building, which the lifted target needs too), host/ and the Metal
+backend. Lifted hosts get host/headless.rs instead of host/ (no window, input or audio until SDL3). Without either the
+engine builds only its platform-independent parts: settings, profiles, game identification, NSO parsing
+(`nxport::nso`) and the MSL tooling the builder uses. `nxport::run` returns an error on lifted hosts until the lifted
+runtime exists. Apple packaging (`ipa`, `pack`, `shader_cache_build`, `pipeline_archive` in nxport-build, the
+matching nxport-cli commands, the builder window) is `cfg(target_os = "macos")`. On x86_64-pc-windows-msvc the
+workspace builds and the engine's tests pass.
 
 ## The guest boundary
 
@@ -195,9 +199,21 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
 4. OS layer; the load pipeline runs on any host and produces the patched image for the lifted target.
    Memory: protection, icache flushes, plain allocations and address-space reservations (`os::reserve` / `commit` /
    `release`, with `At::Exactly` for the fixed guest base) are **done**; the load pipeline (loader, module_loader,
-   sdk_loader, the rtld placeholder, dirty tracking's arrays) maps through them. Left: the runtime's own mappings
-   (heap and memory blocks in horizon/hle.rs, svc.rs's code aliases, which on Windows need placeholders and section
-   views), and building guest/ without nx_native, skipping the native-only rewrites.
+   sdk_loader, the rtld placeholder, dirty tracking's arrays) maps through them, and so do the runtime's own mappings
+   (memory blocks, the address region arena, svc.rs's alias regions; `decommit` and `discard` for freed pages).
+   Also in `os`: thread-local keys with destructors (fiber-local storage on Windows), dynamic libraries, local and UTC
+   time, the current thread's stack and id, the library holding an address; crate::clock reads the performance
+   counter and sleeps on a high-resolution timer there.
+   guest/, horizon/ and nvn/ build without nx_native (**done**, cfg(nx_runtime)), and `nxport::guest_image` makes the
+   patched image on Windows: the loads skip the native-only rewrites (x18, svc / system-register stubs, tpidr,
+   load-exclusives), whose instructions lifted code handles itself. HLE code reads guest registers through
+   guest::regs (`guest_reg!(x29)` and the like: the registers in place natively, the calling thread's Cpu lifted,
+   which lifted::host_call records). Guest TLS blocks are guest::tls on both paths. Copy-mode code views stand in for
+   svc.rs's mach_vm_remap aliases where there is none. Checked on Windows with TotK 1.0.0 (no mods): guest_image
+   loads and patches main and the SDK and returns the image, and every HLE function the game binds has an adapter
+   except printf (`Bind::Raw`).
+   Left for the lifted runtime (step 5): per-thread Cpus, so guest::call, guest threads (horizon::thread_stack::run)
+   and svcExitThread work (they stop with a message now), and host destructors for mods' TLS keys.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.
    Core: **done**. The lifter's runtime/rt.c, compiled into the guest library, has the dispatcher (a per-thread cache
    in front of the module tables) and forwards svc / brk / udf / counters and branches to non-lifted addresses to

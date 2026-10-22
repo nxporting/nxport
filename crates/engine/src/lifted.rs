@@ -6,7 +6,7 @@
 // trampolines or their own addresses, hle_abi) run through their adapters; anything else goes to the handler the
 // embedder gave, as do supervisor calls and traps.
 
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use nxport_lifter::abi::Cpu;
@@ -37,12 +37,24 @@ fn handlers() -> &'static Handlers {
     HANDLERS.get().expect("lifted: no handlers installed")
 }
 
+thread_local! {
+    /// The CPU state of the guest code this thread called into the host from (host_call), for guest::regs.
+    static CURRENT: std::cell::Cell<*mut Cpu> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// The guest CPU state of the host call this thread is in, or null outside one.
+pub fn current() -> *mut Cpu {
+    CURRENT.with(|c| c.get())
+}
+
 unsafe extern "C" fn host_call(c: *mut Cpu) {
+    let prev = CURRENT.with(|cur| cur.replace(c));
     let c = &mut *c;
     match crate::hle_abi::entry(c.pc) {
         Some(h) => h.call(c),
         None => (handlers().unknown)(c),
     }
+    CURRENT.with(|cur| cur.set(prev));
 }
 
 unsafe extern "C" fn host_svc(c: *mut Cpu, imm: u32, pc: u64) {
@@ -71,10 +83,9 @@ impl GuestLibrary {
         if HANDLERS.set(handlers).is_err() {
             return Err("lifted: a guest library is already loaded".into());
         }
-        let lib = dl::open(path)?;
+        let lib = crate::os::Library::open(path)?;
         let sym = |name: &str| -> Result<*mut c_void, String> {
-            let c = CString::new(name).unwrap();
-            let p = unsafe { dl::sym(lib, c.as_ptr()) };
+            let p = lib.symbol(name);
             if p.is_null() {
                 Err(format!("{}: no symbol {name}", path.display()))
             } else {
@@ -119,52 +130,5 @@ impl GuestLibrary {
         self.enter(cpu);
         cpu.x[30] = saved_lr;
         cpu.x[0]
-    }
-}
-
-// Dynamic libraries, through the host's loader.
-mod dl {
-    use super::*;
-
-    #[cfg(windows)]
-    pub fn open(path: &std::path::Path) -> Result<*mut c_void, String> {
-        use std::os::windows::ffi::OsStrExt;
-        extern "system" {
-            fn LoadLibraryW(name: *const u16) -> *mut c_void;
-        }
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let h = unsafe { LoadLibraryW(wide.as_ptr()) };
-        if h.is_null() {
-            Err(format!("{}: {}", path.display(), std::io::Error::last_os_error()))
-        } else {
-            Ok(h)
-        }
-    }
-
-    #[cfg(windows)]
-    pub unsafe fn sym(lib: *mut c_void, name: *const c_char) -> *mut c_void {
-        extern "system" {
-            fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
-        }
-        GetProcAddress(lib, name)
-    }
-
-    #[cfg(unix)]
-    pub fn open(path: &std::path::Path) -> Result<*mut c_void, String> {
-        use std::os::unix::ffi::OsStrExt;
-        let c = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-        let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
-        if h.is_null() {
-            Err(format!("{}: {}", path.display(), unsafe {
-                std::ffi::CStr::from_ptr(libc::dlerror()).to_string_lossy()
-            }))
-        } else {
-            Ok(h)
-        }
-    }
-
-    #[cfg(unix)]
-    pub unsafe fn sym(lib: *mut c_void, name: *const c_char) -> *mut c_void {
-        libc::dlsym(lib, name)
     }
 }

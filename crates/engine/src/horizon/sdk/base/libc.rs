@@ -3,7 +3,7 @@
 use super::super::{Bind, Entry};
 
 pub(super) static TABLE: &[Entry] = &[
-    Entry("__errno_location", func!(libc::__error())),
+    Entry("__errno_location", func!(super::super::errno_location())),
     Entry("__nnmusl_init_dso", func!(crate::horizon::hle::hle_nnmusl_init_dso(_, _, _, _, _, _, _, _))),
     Entry("__syscall_cond_broadcast", func!(crate::guest::module_loader::sys_cond_broadcast(_))),
     Entry("__syscall_cond_signal", func!(crate::guest::module_loader::sys_cond_signal(_))),
@@ -30,7 +30,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("printf", Bind::Raw(super::super::Fp(libc::printf as *const ()))),
     // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and nn::gfx's GlslcDll::Initialize()
     // fails exactly as on hardware. Binding HLE stubs here made the game believe the shader compiler existed.
-    Entry("stdout", Bind::Data(|| std::ptr::addr_of_mut!(super::super::__stdoutp) as usize)),
+    Entry("stdout", Bind::Data(super::super::stdout_variable)),
     Entry("strcmp", func!(crate::horizon::hle::hle_strcmp(_, _))),
     Entry("strlen", func!(libc::strlen(_))),
     Entry("time", func!(libc::time(_))),

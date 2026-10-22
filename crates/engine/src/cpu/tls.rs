@@ -12,25 +12,8 @@
 // We re-prime `tpidr_el0` on HLE entries/returns, and the signal handler transparently
 // recovers any fault caused by a kernel thread ID in a base register.
 
-use std::cell::Cell;
-
-const TLS_BLOCK_SIZE: usize = 0x4000; // empirically observed max offset 0x1000, generous margin
-/// Offset in the guest TLS block of the pointer to the thread's fake Horizon thread-local region.
-pub const FAKE_TLR_SLOT: usize = 0x3ff8;
-
-/// The current thread's fake Horizon thread-local region (IPC buffer), or 0 before install_guest_tls.
-pub fn current_fake_tlr() -> usize {
-    let block = CURRENT_GUEST_TLS_BLOCK.with(|c| c.get());
-    if block == 0 {
-        0
-    } else {
-        unsafe { *((block + FAKE_TLR_SLOT) as *const usize) }
-    }
-}
-
-thread_local! {
-    pub static CURRENT_GUEST_TLS_BLOCK: Cell<usize> = const { Cell::new(0) };
-}
+// The guest TLS blocks themselves are guest::tls (they exist on every CPU path).
+pub use crate::guest::tls::{is_guest_thread, mark_guest_thread, CURRENT_GUEST_TLS_BLOCK, FAKE_TLR_SLOT};
 
 /// Byte offset from tpidrro_el0 (Darwin's TSD array) of the slot holding this thread's guest TLS block, read by every
 /// rewritten `mrs Xt, tpidr_el0`. It is a pthread key created for the purpose: the fixed slot 60 used before is
@@ -101,27 +84,6 @@ fn tsd_key_offset(what: &str, want: libc::pthread_key_t) -> usize {
     off
 }
 
-/// The main module's TLS initialization image (.tdata) and its offset from the thread pointer (AArch64 variant I: the
-/// 16-byte TCB, rounded up to the segment's alignment), set by __nnmusl_init_dso (horizon/hle.rs).
-static TLS_TEMPLATE: std::sync::Mutex<(Vec<u8>, usize)> = std::sync::Mutex::new((Vec::new(), 16));
-
-pub fn set_module_tls_template(image: Vec<u8>, align: usize) {
-    let off = (16 + align.max(1) - 1) / align.max(1) * align.max(1);
-    let mut t = TLS_TEMPLATE.lock().unwrap();
-    *t = (image, off);
-    // Blocks made before the module registered (the loader thread's) get it too.
-    let block = CURRENT_GUEST_TLS_BLOCK.with(|c| c.get());
-    if block != 0 {
-        unsafe { apply_template(block, &t) };
-    }
-}
-
-unsafe fn apply_template(block: usize, t: &(Vec<u8>, usize)) {
-    if !t.0.is_empty() && t.1 + t.0.len() <= 0x1f0 {
-        std::ptr::copy_nonoverlapping(t.0.as_ptr(), (block + t.1) as *mut u8, t.0.len());
-    }
-}
-
 pub fn get_current_guest_tls_block() -> usize {
     let mut block = CURRENT_GUEST_TLS_BLOCK.with(|c| c.get());
     if block == 0 {
@@ -142,26 +104,10 @@ pub fn get_current_guest_tls_block() -> usize {
     block
 }
 
-/// Allocate a zeroed thread-local block for the calling OS thread and install
-/// it as that thread's tpidr_el0. Must be called on each thread (main thread
-/// included) before any guest code runs on it. Leaked intentionally: lifetime
-/// matches the OS thread's own lifetime, which for this engine is the process.
+/// Installs the calling OS thread's guest TLS block (guest::tls::thread_block) as its tpidr_el0 and in its TSD slot.
+/// Must be called on each thread (main thread included) before any guest code runs on it.
 pub unsafe fn install_guest_tls() -> usize {
-    let mut block = CURRENT_GUEST_TLS_BLOCK.with(|c| c.get());
-    if block == 0 {
-        let layout = std::alloc::Layout::from_size_align(TLS_BLOCK_SIZE, 0x1000).unwrap();
-        let ptr = std::alloc::alloc_zeroed(layout);
-        *(ptr.add(0x1f0) as *mut usize) = ptr as usize;
-        // A Horizon thread-local region (0x200 bytes, IPC message buffer at +0) for modules that read tpidrro_el0
-        // themselves (exlaunch mods; see guest/module_loader.rs): on macOS tpidrro_el0 is Darwin's TSD, which must not be
-        // written. Those reads are rewritten to load this pointer.
-        let tlr =
-            std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(0x200, 0x200).unwrap());
-        *(ptr.add(FAKE_TLR_SLOT) as *mut usize) = tlr as usize;
-        apply_template(ptr as usize, &TLS_TEMPLATE.lock().unwrap());
-        block = ptr as usize;
-        CURRENT_GUEST_TLS_BLOCK.with(|c| c.set(block));
-    }
+    let block = crate::guest::tls::thread_block();
 
     #[cfg(target_arch = "aarch64")]
     {
@@ -175,16 +121,3 @@ pub unsafe fn install_guest_tls() -> usize {
     block
 }
 
-thread_local! {
-    static GUEST_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Called first on every thread that runs guest code (guest-main and the threads the guest creates).
-pub fn mark_guest_thread() {
-    GUEST_THREAD.with(|g| g.set(true));
-}
-
-/// Whether this thread runs guest code. Signal-safe.
-pub fn is_guest_thread() -> bool {
-    GUEST_THREAD.with(|g| g.get())
-}

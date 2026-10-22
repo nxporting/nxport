@@ -45,8 +45,7 @@ fn tables() -> std::sync::MutexGuard<'static, Option<Tables>> {
 
 /// The value the native code stores in a held lock word: the owner's nn::os thread handle.
 unsafe fn guest_handle() -> u32 {
-    let tp: usize;
-    std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tp);
+    let tp = crate::guest::regs::tpidrro();
     if tp >= 0x10000 {
         let thread = *((tp + 0x1f8) as *const usize);
         if thread >= 0x10000 {
@@ -182,10 +181,7 @@ pub(crate) unsafe extern "C" fn cv_wait(cv: usize, cs: usize) {
 /// `helper` is a nn::os::detail::TimeoutHelper: the absolute deadline in CNTPCT ticks.
 pub(crate) unsafe extern "C" fn cv_timed_wait(cv: usize, cs: usize, helper: *const u64) -> u32 {
     let target = if helper.is_null() { 0 } else { *helper };
-    let now_tick: u64;
-    std::arch::asm!("mrs {}, cntpct_el0", out(reg) now_tick); // system timer ticks for deadline
-    let freq: u64;
-    std::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq);
+    let (now_tick, freq) = crate::guest::regs::counter();
     let left = target.saturating_sub(now_tick);
     if left == 0 {
         return 0;

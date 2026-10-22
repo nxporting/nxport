@@ -20,6 +20,7 @@ pub fn current_bounds() -> Option<(usize, usize)> {
 
 // call_on_stack(arg, entry, sp, hle_slot): entry(arg) with sp as its stack. The caller's stack below this frame becomes
 // the stack HLE calls use (*hle_slot) until entry returns.
+#[cfg(nx_native)]
 std::arch::global_asm!(
     ".p2align 2",
     ".globl _nxport_call_on_stack",
@@ -37,6 +38,7 @@ std::arch::global_asm!(
     "ret",
 );
 
+#[cfg(nx_native)]
 extern "C" {
     fn nxport_call_on_stack(arg: usize, entry: usize, sp: usize, hle_slot: *mut usize);
 }
@@ -53,6 +55,7 @@ pub fn allocate(size: usize) -> (usize, usize) {
 }
 
 /// Runs guest code `entry(arg)` on the stack [lo, hi).
+#[cfg(nx_native)]
 pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     BOUNDS.with(|b| b.set((lo, hi)));
     let tsd: *mut u8;
@@ -61,4 +64,11 @@ pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
         nxport_call_on_stack(arg, entry, hi & !15, tsd.add(crate::cpu::tls::hle_stack_offset()) as *mut usize)
     });
     BOUNDS.with(|b| b.set((0, 0)));
+}
+
+/// Runs guest code `entry(arg)` on the stack [lo, hi): on a lifted host, the thread's lifted CPU state, which does not
+/// exist yet (docs/windows-port.md, step 5).
+#[cfg(not(nx_native))]
+pub unsafe fn run(_lo: usize, _hi: usize, entry: usize, _arg: usize) {
+    unimplemented!("guest thread entry {entry:#x}: the lifted runtime has no per-thread state yet");
 }

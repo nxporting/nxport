@@ -1,13 +1,13 @@
 // Real Opus decoding for the HLE'd hardware Opus decoder (horizon/hle.rs, nn::codec::DecodeOpusInterleavedWithHardware): TotK
 // streams its music and ambience as Opus and mixes them on the CPU, so a decoder that only accounted for samples made
-// every stream silent. libopus is loaded at run time (--libopus, else Homebrew's or the system's libopus.dylib), so
+// every stream silent. libopus is loaded at run time (--libopus, else Homebrew's or the system's libopus.dylib; opus.dll on Windows), so
 // the engine builds and runs without it; when it is missing, decoding falls back to silence with correct accounting.
 //
 // One libopus decoder per guest HardwareOpusDecoderType (keyed by its address), created on first use with the guest's
 // sample rate and channel count, reset by ResetHardwareOpusDecoder and destroyed by FinalizeHardwareOpusDecoder.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, c_int, c_void, CString};
+use std::ffi::{c_int, c_void};
 use std::sync::{Mutex, OnceLock};
 
 const OPUS_RESET_STATE: c_int = 4028;
@@ -19,11 +19,6 @@ struct Lib {
     destroy: unsafe extern "C" fn(*mut c_void),
 }
 
-extern "C" {
-    fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-
 fn lib() -> Option<&'static Lib> {
     static LIB: OnceLock<Option<Lib>> = OnceLock::new();
     LIB.get_or_init(|| unsafe {
@@ -33,22 +28,24 @@ fn lib() -> Option<&'static Lib> {
             .iter()
             .map(|p| p.display().to_string())
             .chain(
-                [
-                    "/opt/homebrew/lib/libopus.0.dylib",
-                    "/opt/homebrew/opt/opus/lib/libopus.0.dylib",
-                    "/usr/local/lib/libopus.0.dylib",
-                    "libopus.0.dylib",
-                ]
+                if cfg!(windows) {
+                    &["opus.dll", "libopus-0.dll"][..]
+                } else {
+                    &[
+                        "/opt/homebrew/lib/libopus.0.dylib",
+                        "/opt/homebrew/opt/opus/lib/libopus.0.dylib",
+                        "/usr/local/lib/libopus.0.dylib",
+                        "libopus.0.dylib",
+                    ][..]
+                }
                 .iter()
                 .map(|s| s.to_string()),
             );
         for path in candidates {
-            let c = CString::new(path.clone()).ok()?;
-            let h = dlopen(c.as_ptr(), 2); // RTLD_NOW
-            if h.is_null() {
+            let Ok(lib) = crate::os::Library::open(std::path::Path::new(&path)) else {
                 continue;
-            }
-            let sym = |name: &str| dlsym(h, CString::new(name).unwrap().as_ptr());
+            };
+            let sym = |name: &str| lib.symbol(name);
             let (create, decode, ctl, destroy) = (
                 sym("opus_decoder_create"),
                 sym("opus_decode"),

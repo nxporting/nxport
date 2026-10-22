@@ -253,8 +253,7 @@ pub fn set_trampolines(request_update: usize, unexpected: usize) {
 }
 
 unsafe extern "C" fn unexpected_service_call() -> u32 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
+    let lr = crate::guest_reg!(x30);
     eprintln!(
         "[!] audren: unexpected IAudioRenderer call (return address {:#x})",
         lr
