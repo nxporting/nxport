@@ -39,14 +39,19 @@ code; the plan is to name each as an interface that both CPU paths implement.
    the guest and host sharing AAPCS64. On x86-64 a function pointer alone is not enough: the caller has to know
    the signature to move x0-x7 / v0-v7 into Win64 or SysV argument registers.
 
-   Plan: make `make_hle_trampoline` generic over the function type. A trait `HleFn`, implemented for
-   `unsafe extern "C" fn(A0, .., An) -> R` with n <= 8 (A: integers, pointers from x[i]; f32/f64 from v[i]; R the
-   same into x0 / v0), gives each function an adapter `fn(&mut Cpu)`. Call sites change from
-   `make_hle_trampoline(f as *const ())` to `make_hle_trampoline(f as unsafe extern "C" fn(..) -> _)` (or a macro);
-   the 945 functions do not change. The trampoline keeps its guest address in both paths, since the guest stores
-   these addresses in vtables and function pointers. The native path emits the stub as now. The lifted path
-   registers the adapter for that address in the dispatch table. Signatures to audit: 9 functions take or return
-   floats; anything with more than 8 arguments or struct arguments needs a hand-written adapter.
+   Done (`hle_abi`): a trait `HleFn`, implemented for `unsafe extern "C" fn(A0, .., An) -> R` with n <= 10
+   (integers and pointers from x0-x7, floats from v0-v7, the rest from the guest stack; R into x0 / v0; `-> !`
+   too), gives each function an adapter that works on a `Cpu`. Code that hands out an HLE function's address takes
+   it through `crate::hle!(f(_, _))`, which returns the address as before and records the adapter under it; the
+   functions themselves do not change (about 840 bindings, including the NVN lookup tables and the movie vtables).
+   The SDK registry's static tables (horizon/sdk) write `func!(f(_, _))`: the entry holds the adapter, built at
+   compile time, and a lookup records it. Variadic host functions (`printf`) cannot have one and are bound as
+   `Bind::Raw`.
+   Trampolines keep their guest addresses in both paths, since the guest stores them in vtables and function
+   pointers: the native path emits the arm64 stub as before, and a lifted runtime looks the adapter up by the
+   function's address. Native trampolines report a function bound without an adapter, so a native run checks the
+   coverage. Guest function pointers passed as arguments (callbacks) are handed over as addresses; a lifted runtime
+   calls them through `guest::call` (below).
 
 2. **Host calls guest.** Thread entries (`svc.rs:735`, `hle.rs:2078/2370`), callbacks and mod initialisers are
    called through transmuted function pointers and inline asm (22 `asm!` blocks in hle.rs, more in nvn/, sync.rs,
@@ -177,6 +182,8 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    mnemonics, random FPCR modes and NaN / denormal / infinity operands, no differences). Left: the remaining
    jump-table shapes.
 3. HLE adapters (`HleFn`) and `guest::call`, on the native path first (no behaviour change, testable on the Mac).
+   Adapters: **done** (`hle_abi`; every binding takes its address through `crate::hle!(f(_, _))`, and native
+   trampolines warn about a function without one). `guest::call`: next.
 4. OS layer; the load pipeline runs on any host and produces the patched image for the lifted target.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.
 6. Windows x86-64: lifted runtime headless (a null GPU backend that signals fences, for booting), then Vulkan,

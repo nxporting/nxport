@@ -233,39 +233,39 @@ unsafe extern "C" fn get_volume(_o: *const AudioOutHead) -> f32 {
 /// Mangled name -> HLE function (chained by horizon::sdk::lookup).
 pub fn lookup(name: &str) -> Option<usize> {
     macro_rules! a {
-        ($x:expr) => {
-            Some($x as *const () as usize)
+        ($f:ident($($a:tt),*)) => {
+            Some(crate::hle!($f($($a),*)) as usize)
         };
     }
     match name {
         "_ZN2nn5audio27InitializeAudioOutParameterEPNS0_17AudioOutParameterE" => {
-            a!(initialize_parameter)
+            a!(initialize_parameter(_))
         }
         "_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutERKNS0_17AudioOutParameterE" => {
-            a!(open_default)
+            a!(open_default(_, _))
         }
-        "_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE" => a!(close),
-        "_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE" => a!(start),
-        "_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE" => a!(stop),
-        "_ZN2nn5audio21GetAudioOutSampleRateEPKNS0_8AudioOutE" => a!(sample_rate),
-        "_ZN2nn5audio23GetAudioOutChannelCountEPKNS0_8AudioOutE" => a!(channel_count),
-        "_ZN2nn5audio23GetAudioOutSampleFormatEPKNS0_8AudioOutE" => a!(sample_format),
-        "_ZN2nn5audio16GetAudioOutStateEPKNS0_8AudioOutE" => a!(state),
-        "_ZN2nn5audio21SetAudioOutBufferInfoEPNS0_14AudioOutBufferEPvmm" => a!(set_buffer_info),
-        "_ZN2nn5audio28GetAudioOutBufferDataPointerEPKNS0_14AudioOutBufferE" => a!(buffer_data),
+        "_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE" => a!(close(_)),
+        "_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE" => a!(start(_)),
+        "_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE" => a!(stop(_)),
+        "_ZN2nn5audio21GetAudioOutSampleRateEPKNS0_8AudioOutE" => a!(sample_rate(_)),
+        "_ZN2nn5audio23GetAudioOutChannelCountEPKNS0_8AudioOutE" => a!(channel_count(_)),
+        "_ZN2nn5audio23GetAudioOutSampleFormatEPKNS0_8AudioOutE" => a!(sample_format(_)),
+        "_ZN2nn5audio16GetAudioOutStateEPKNS0_8AudioOutE" => a!(state(_)),
+        "_ZN2nn5audio21SetAudioOutBufferInfoEPNS0_14AudioOutBufferEPvmm" => a!(set_buffer_info(_, _, _, _)),
+        "_ZN2nn5audio28GetAudioOutBufferDataPointerEPKNS0_14AudioOutBufferE" => a!(buffer_data(_)),
         "_ZN2nn5audio27GetAudioOutBufferBufferSizeEPKNS0_14AudioOutBufferE" => {
-            a!(buffer_buffer_size)
+            a!(buffer_buffer_size(_))
         }
-        "_ZN2nn5audio25GetAudioOutBufferDataSizeEPKNS0_14AudioOutBufferE" => a!(buffer_data_size),
-        "_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBufferE" => a!(append),
-        "_ZN2nn5audio25GetReleasedAudioOutBufferEPNS0_8AudioOutE" => a!(get_released),
+        "_ZN2nn5audio25GetAudioOutBufferDataSizeEPKNS0_14AudioOutBufferE" => a!(buffer_data_size(_)),
+        "_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBufferE" => a!(append(_, _)),
+        "_ZN2nn5audio25GetReleasedAudioOutBufferEPNS0_8AudioOutE" => a!(get_released(_)),
         "_ZN2nn5audio22ContainsAudioOutBufferEPKNS0_8AudioOutEPKNS0_14AudioOutBufferE" => {
-            a!(contains)
+            a!(contains(_, _))
         }
-        "_ZN2nn5audio22GetAudioOutBufferCountEPKNS0_8AudioOutE" => a!(buffer_count),
-        "_ZN2nn5audio21FlushAudioOutBuffersEPNS0_8AudioOutE" => a!(flush),
-        "_ZN2nn5audio17SetAudioOutVolumeEPNS0_8AudioOutEf" => a!(set_volume),
-        "_ZN2nn5audio17GetAudioOutVolumeEPKNS0_8AudioOutE" => a!(get_volume),
+        "_ZN2nn5audio22GetAudioOutBufferCountEPKNS0_8AudioOutE" => a!(buffer_count(_)),
+        "_ZN2nn5audio21FlushAudioOutBuffersEPNS0_8AudioOutE" => a!(flush(_)),
+        "_ZN2nn5audio17SetAudioOutVolumeEPNS0_8AudioOutEf" => a!(set_volume(_, _)),
+        "_ZN2nn5audio17GetAudioOutVolumeEPKNS0_8AudioOutE" => a!(get_volume(_)),
         _ => None,
     }
 }

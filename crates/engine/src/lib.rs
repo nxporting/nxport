@@ -6,6 +6,7 @@ pub mod config;
 #[cfg(nx_native)]
 mod cpu;
 pub mod game;
+pub mod hle_abi;
 #[cfg(nx_native)]
 mod gpu;
 #[cfg(nx_native)]
@@ -464,7 +465,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 2c. Initialize Global Offset Table (GOT) PLT entries with x9-restoring default HLE stub before relocations
     println!("[+] Initializing Global Offset Table (GOT) shims...");
-    let default_stub = mem_space.make_hle_trampoline(horizon::hle::hle_default_stub as *const ());
+    let default_stub = mem_space.make_hle_trampoline(crate::hle!(horizon::hle::hle_default_stub()));
     mem_space.init_plt_got(default_stub);
 
     // 2d. Load SDK — must happen before apply_relocations so that undefined
@@ -830,15 +831,15 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             guest::module_loader::SEAD_VEC3_ZERO.as_ptr() as usize,
         );
         let svc_entry =
-            mem_space.make_hle_trampoline(horizon::svc::svc_dispatch as *const ()) as usize;
+            mem_space.make_hle_trampoline(crate::hle!(horizon::svc::svc_dispatch(_, _))) as usize;
         let unresolved = mem_space
-            .make_hle_trampoline(guest::module_loader::unresolved_import as *const ())
+            .make_hle_trampoline(crate::hle!(guest::module_loader::unresolved_import()))
             as usize;
         guest::module_loader::set_placeholders(
             (0..16)
                 .map(|_| {
                     mem_space
-                        .make_hle_trampoline(guest::module_loader::unresolved_import as *const ())
+                        .make_hle_trampoline(crate::hle!(guest::module_loader::unresolved_import()))
                         as usize
                 })
                 .collect(),

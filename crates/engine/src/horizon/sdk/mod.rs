@@ -19,8 +19,11 @@ unsafe impl Sync for Fp {}
 unsafe impl Send for Fp {}
 
 pub enum Bind {
-    /// An extern "C" function, called through an HLE trampoline.
-    Func(Fp),
+    /// An extern "C" function, called through an HLE trampoline (or its adapter: crate::hle_abi).
+    Func(crate::hle_abi::Hle),
+    /// A host function bound as it is, with no adapter (a variadic one: its arguments cannot be typed); native
+    /// trampolines warn about it, and a lifted runtime cannot call it.
+    Raw(Fp),
     /// The address of a data symbol.
     Data(fn() -> usize),
 }
@@ -35,9 +38,13 @@ pub enum Target {
     Data(usize),
 }
 
+/// `func!(path(_, _))`: function `path` (two parameters), as `crate::hle!` takes it.
 macro_rules! func {
-    ($f:expr) => {
-        $crate::horizon::sdk::Bind::Func($crate::horizon::sdk::Fp($f as *const ()))
+    ($($f:ident)::+ ($($a:tt),*)) => {
+        $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
+            $($f)::+ as unsafe extern "C" fn($($a),*) -> _,
+            $($f)::+ as *const (),
+        ))
     };
 }
 
@@ -46,7 +53,10 @@ macro_rules! func {
 macro_rules! adapt {
     (fn($($a:ident: $t:ty),*) $(-> $r:ty)? $b:block) => {{
         unsafe extern "C" fn adapter($($a: $t),*) $(-> $r)? $b
-        func!(adapter)
+        $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
+            adapter as unsafe extern "C" fn($($t),*) $(-> $r)?,
+            adapter as *const (),
+        ))
     }};
 }
 
@@ -148,7 +158,8 @@ fn chain() -> &'static Chain {
 
 fn target(b: &Bind) -> Target {
     match b {
-        Bind::Func(f) => Target::Func(f.0 as usize),
+        Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize),
+        Bind::Raw(f) => Target::Func(f.0 as usize),
         Bind::Data(d) => Target::Data(d()),
     }
 }

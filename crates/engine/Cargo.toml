@@ -26,6 +26,7 @@ serde_json = "1.0"
 toml = "1.1.8"
 regex = "1"
 sass2spv = { path = "../sass2spv" }
+nxport-lifter = { path = "../lifter" }
 
 # Apple frameworks: the native guest runtime (cpu/, host/, metal/) is Apple-only for now; other hosts build the
 # platform-independent parts (settings, profiles, shader tooling) and the lifted runtime (docs/windows-port.md).

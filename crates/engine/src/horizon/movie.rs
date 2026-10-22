@@ -482,6 +482,16 @@ macro_rules! f {
         unsafe { std::mem::transmute::<*const (), AnyFn>($x as *const ()) }
     };
 }
+/// A vtable of engine functions handed to the guest, and the function that records their HLE adapters (hle_abi; a
+/// static's initialiser cannot). Entries are the functions with their parameters as placeholders: `x_seek(_, _)`.
+macro_rules! guest_vtable {
+    ($table:ident, $register:ident, [$($f:ident($($a:tt),*)),* $(,)?]) => {
+        static $table: [AnyFn; [$(stringify!($f)),*].len()] = [$(f!($f as unsafe extern "C" fn($($a),*) -> _)),*];
+        fn $register() {
+            $(crate::hle!($f($($a),*));)*
+        }
+    };
+}
 /// The implementation, or None after the destructor ran (methods then return Status_NullExtractor).
 unsafe fn ext<'a>(this: *mut usize) -> Option<&'a mut Extractor> {
     (*this.add(1) as *mut Extractor).as_mut()
@@ -757,30 +767,32 @@ unsafe extern "C" fn x_buffered_range(this: *mut usize, start: *mut i64, end: *m
     *end = d;
     OK
 }
-static EXTRACTOR_VTABLE: [AnyFn; 16] = [
-    f!(x_dtor),
-    f!(x_dtor), // ~Extractor (complete / deleting: the object's storage is the caller's)
-    f!(x_set_source_uri),
-    f!(x_set_source_buffer),
-    f!(x_track_count),
-    f!(x_track_config),
-    f!(x_select),
-    f!(x_unselect),
-    f!(x_seek),
-    f!(x_track_for_data),
-    f!(x_read),
-    f!(x_advance),
-    f!(x_sample_time),
-    f!(x_sample_meta),
-    f!(x_buffered_range),
-    f!(x_set_source_reader), // Extractor's own SetDataSource(ClientStreamReader*, const char*)
-];
+guest_vtable!(EXTRACTOR_VTABLE, register_extractor_hle, [
+    x_dtor(_),
+    x_dtor(_), // ~Extractor (complete / deleting: the object's storage is the caller's)
+    x_set_source_uri(_, _),
+    x_set_source_buffer(_, _, _),
+    x_track_count(_, _),
+    x_track_config(_, _, _),
+    x_select(_, _),
+    x_unselect(_, _),
+    x_seek(_, _),
+    x_track_for_data(_, _),
+    x_read(_, _),
+    x_advance(_),
+    x_sample_time(_, _),
+    x_sample_meta(_, _),
+    x_buffered_range(_, _, _),
+    x_set_source_reader(_, _, _), // Extractor's own SetDataSource(ClientStreamReader*, const char*)
+]);
 /// The vtables as the guest calls them: entries are HLE trampolines once `set_trampolines` ran.
 static GUEST_VTABLES: std::sync::OnceLock<(Vec<usize>, Vec<usize>)> = std::sync::OnceLock::new();
 
 /// Routes the extractor's and decoder's vtables through HLE trampolines (`make` wraps a function), like every other
 /// guest-to-engine call.
 pub fn set_trampolines(make: &mut dyn FnMut(*const ()) -> usize) {
+    register_extractor_hle();
+    register_decoder_hle();
     let mut wrap = |t: &[AnyFn]| t.iter().map(|&f| make(f as *const ())).collect::<Vec<_>>();
     let tables = (wrap(&EXTRACTOR_VTABLE), wrap(&DECODER_VTABLE));
     let _ = GUEST_VTABLES.set(tables);
@@ -1314,27 +1326,27 @@ unsafe extern "C" fn d_release_output(this: *mut usize, idx: i32) -> u32 {
 unsafe extern "C" fn d_last_error(_this: *mut usize) -> u32 {
     OK
 }
-static DECODER_VTABLE: [AnyFn; 19] = [
-    f!(d_dtor),
-    f!(d_dtor),
-    f!(d_configure),
-    f!(d_register_events),
-    f!(d_output_format),
-    f!(d_start),
-    f!(d_stop),
-    f!(d_flush),
-    f!(d_flush),
-    f!(d_acquire_input),
-    f!(d_get_input),
-    f!(d_send_input),
-    f!(d_acquire_output),
-    f!(d_get_output),
-    f!(d_output_size),
-    f!(d_release_output),
-    f!(d_last_error),
-    f!(d_get_output_with_format),
-    f!(d_output_buffer_format),
-];
+guest_vtable!(DECODER_VTABLE, register_decoder_hle, [
+    d_dtor(_),
+    d_dtor(_),
+    d_configure(_, _),
+    d_register_events(_, _),
+    d_output_format(_, _),
+    d_start(_),
+    d_stop(_),
+    d_flush(_),
+    d_flush(_),
+    d_acquire_input(_, _, _),
+    d_get_input(_, _, _),
+    d_send_input(_, _, _, _, _, _),
+    d_acquire_output(_, _, _, _, _),
+    d_get_output(_, _, _),
+    d_output_size(_, _, _),
+    d_release_output(_, _),
+    d_last_error(_),
+    d_get_output_with_format(_, _, _, _),
+    d_output_buffer_format(_, _, _),
+]);
 pub unsafe extern "C" fn decoder_ctor(this: *mut usize, ty: i32, format: i32, mode: i32, _n: i32) {
     println!(
         "[movie] Decoder(type={}, output format={}, mode={})",
@@ -1374,52 +1386,52 @@ unsafe extern "C" fn noop() {}
 /// Mangled name -> HLE function for the horizon::movie:: symbols (chained by horizon::sdk::lookup).
 pub fn lookup(name: &str) -> Option<usize> {
     macro_rules! a {
-        ($x:expr) => {
-            Some($x as *const () as usize)
+        ($f:ident($($a:tt),*)) => {
+            Some(crate::hle!($f($($a),*)) as usize)
         };
     }
     match name {
         "_ZN5movie9ExtractorC1ENS_13ContainerTypeE"
-        | "_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE" => a!(extractor_ctor),
-        "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi" => a!(decoder_ctor),
-        "_ZN5movie9MediaDataC1Ev" => a!(md_ctor),
-        "_ZN5movie9MediaDataD1Ev" => a!(md_dtor),
-        "_ZN5movie9MediaDataC1ERKS0_" => a!(md_copy_ctor),
-        "_ZN5movie9MediaDataaSERKS0_" => a!(md_assign),
-        "_ZN5movie9MediaData5ClearEv" => a!(md_clear),
-        "_ZN5movie9MediaData8SetInt32EPKci" => a!(md_set_i32),
-        "_ZN5movie9MediaData8SetInt64EPKcl" => a!(md_set_i64),
-        "_ZN5movie9MediaData9SetStringEPKcS2_" => a!(md_set_string),
-        "_ZNK5movie9MediaData8ContainsEPKc" => a!(md_contains),
-        "_ZN5movie9MediaData7SetRectEPKciiii" => a!(md_set_rect),
-        "_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_" => a!(md_find_rect),
-        "_ZNK5movie9MediaData9FindInt32EPKcPi" => a!(md_find_i32),
-        "_ZNK5movie9MediaData9FindInt64EPKcPl" => a!(md_find_i64),
-        "_ZNK5movie9MediaData10FindStringEPKcPS2_" => a!(md_find_string),
-        "_ZNK5movie9MediaData12CountEntriesEv" => a!(md_count),
-        "_ZN5movie6BufferC1Ev" => a!(buffer_ctor),
-        "_ZN5movie6BufferC1Em" => a!(buffer_ctor_capacity),
-        "_ZN5movie6BufferC1EPvm" => a!(buffer_ctor_data),
-        "_ZN5movie6BufferC1ERKS0_" => a!(buffer_ctor_copy),
-        "_ZN5movie6BufferaSERKS0_" => a!(buffer_assign),
-        "_ZN5movie6BufferD1Ev" => a!(buffer_dtor),
-        "_ZNK5movie6Buffer4DataEv" => a!(buffer_data),
-        "_ZNK5movie6Buffer4BaseEv" => a!(buffer_base),
-        "_ZNK5movie6Buffer8CapacityEv" => a!(buffer_capacity),
-        "_ZNK5movie6Buffer6OffsetEv" => a!(buffer_offset),
-        "_ZNK5movie6Buffer4SizeEv" => a!(buffer_size),
-        "_ZN5movie6Buffer18SetDataAndCapacityEPvm" => a!(buffer_set_data_and_capacity),
-        "_ZN5movie6Buffer11SetCapacityEm" => a!(buffer_set_capacity),
-        "_ZN5movie6Buffer8SetRangeEii" => a!(buffer_set_range),
-        "_ZN5movie6Buffer12SetInt32DataEi" => a!(buffer_set_i32),
-        "_ZNK5movie6Buffer12GetInt32DataEv" => a!(buffer_get_i32),
-        "_ZN5movie6Buffer12SetInt64DataEl" => a!(buffer_set_i64),
-        "_ZNK5movie6Buffer12GetInt64DataEv" => a!(buffer_get_i64),
-        "_ZN5movie6Buffer13SetUint32DataEj" => a!(buffer_set_u32),
-        "_ZNK5movie6Buffer13GetUint32DataEv" => a!(buffer_get_u32),
-        "_ZN5movie17GetThreadPriorityEv" => a!(thread_priority),
+        | "_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE" => a!(extractor_ctor(_)),
+        "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi" => a!(decoder_ctor(_, _, _, _, _)),
+        "_ZN5movie9MediaDataC1Ev" => a!(md_ctor(_)),
+        "_ZN5movie9MediaDataD1Ev" => a!(md_dtor(_)),
+        "_ZN5movie9MediaDataC1ERKS0_" => a!(md_copy_ctor(_, _)),
+        "_ZN5movie9MediaDataaSERKS0_" => a!(md_assign(_, _)),
+        "_ZN5movie9MediaData5ClearEv" => a!(md_clear(_)),
+        "_ZN5movie9MediaData8SetInt32EPKci" => a!(md_set_i32(_, _, _)),
+        "_ZN5movie9MediaData8SetInt64EPKcl" => a!(md_set_i64(_, _, _)),
+        "_ZN5movie9MediaData9SetStringEPKcS2_" => a!(md_set_string(_, _, _)),
+        "_ZNK5movie9MediaData8ContainsEPKc" => a!(md_contains(_, _)),
+        "_ZN5movie9MediaData7SetRectEPKciiii" => a!(md_set_rect(_, _, _, _, _, _)),
+        "_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_" => a!(md_find_rect(_, _, _, _, _, _)),
+        "_ZNK5movie9MediaData9FindInt32EPKcPi" => a!(md_find_i32(_, _, _)),
+        "_ZNK5movie9MediaData9FindInt64EPKcPl" => a!(md_find_i64(_, _, _)),
+        "_ZNK5movie9MediaData10FindStringEPKcPS2_" => a!(md_find_string(_, _, _)),
+        "_ZNK5movie9MediaData12CountEntriesEv" => a!(md_count(_)),
+        "_ZN5movie6BufferC1Ev" => a!(buffer_ctor(_)),
+        "_ZN5movie6BufferC1Em" => a!(buffer_ctor_capacity(_, _)),
+        "_ZN5movie6BufferC1EPvm" => a!(buffer_ctor_data(_, _, _)),
+        "_ZN5movie6BufferC1ERKS0_" => a!(buffer_ctor_copy(_, _)),
+        "_ZN5movie6BufferaSERKS0_" => a!(buffer_assign(_, _)),
+        "_ZN5movie6BufferD1Ev" => a!(buffer_dtor(_)),
+        "_ZNK5movie6Buffer4DataEv" => a!(buffer_data(_)),
+        "_ZNK5movie6Buffer4BaseEv" => a!(buffer_base(_)),
+        "_ZNK5movie6Buffer8CapacityEv" => a!(buffer_capacity(_)),
+        "_ZNK5movie6Buffer6OffsetEv" => a!(buffer_offset(_)),
+        "_ZNK5movie6Buffer4SizeEv" => a!(buffer_size(_)),
+        "_ZN5movie6Buffer18SetDataAndCapacityEPvm" => a!(buffer_set_data_and_capacity(_, _, _)),
+        "_ZN5movie6Buffer11SetCapacityEm" => a!(buffer_set_capacity(_, _)),
+        "_ZN5movie6Buffer8SetRangeEii" => a!(buffer_set_range(_, _, _)),
+        "_ZN5movie6Buffer12SetInt32DataEi" => a!(buffer_set_i32(_, _)),
+        "_ZNK5movie6Buffer12GetInt32DataEv" => a!(buffer_get_i32(_)),
+        "_ZN5movie6Buffer12SetInt64DataEl" => a!(buffer_set_i64(_, _)),
+        "_ZNK5movie6Buffer12GetInt64DataEv" => a!(buffer_get_i64(_)),
+        "_ZN5movie6Buffer13SetUint32DataEj" => a!(buffer_set_u32(_, _)),
+        "_ZNK5movie6Buffer13GetUint32DataEv" => a!(buffer_get_u32(_)),
+        "_ZN5movie17GetThreadPriorityEv" => a!(thread_priority()),
         "_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_"
-        | "_ZN5movie11SetCoreMaskEm" => a!(noop),
+        | "_ZN5movie11SetCoreMaskEm" => a!(noop()),
         _ => None,
     }
 }
