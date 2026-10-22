@@ -278,6 +278,9 @@ group! {
         /// Do not copy rarely drawn render targets back into guest memory (a workaround: the CPU reads of
         /// GPU-written memory are not trapped)
         no_rt_writeback: bool = false,
+        /// Render targets in CPU-visible memory pools are copied into guest memory when the CPU touches them (off: the
+        /// older copy of rarely drawn targets one frame later)
+        rt_guard: bool = true,
     }
 }
 

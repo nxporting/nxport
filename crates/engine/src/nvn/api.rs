@@ -1579,6 +1579,7 @@ pub(crate) static PENDING_UNMAPS: StdMutex<Vec<(usize, usize, u64)>> = StdMutex:
 
 pub(crate) fn guest_memory_released(addr: usize, size: usize) {
     unsafe { crate::guest::dirty_track::release(addr, size) };
+    crate::metal::rt_guard::released(addr, size);
     RELEASED_RANGES.lock().unwrap().push((addr, size));
     TEX_RELEASED.lock().unwrap().push((addr, size));
     bump_pools_gen();

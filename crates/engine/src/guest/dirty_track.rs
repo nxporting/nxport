@@ -132,6 +132,15 @@ fn for_each_overlap(
     }
 }
 
+/// Whether the page holding `addr` is write-protected for tracking now (signal-safe). Another module opening such a page
+/// must leave it read-only, or later writes to it go unnoticed.
+pub fn tracking(addr: usize) -> bool {
+    if ANY.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    locate(addr, 1).is_some_and(|(_, f, p, _)| f[p].load(Ordering::Acquire) & PROTECTED != 0)
+}
+
 /// Whether [start, start+len) can be tracked.
 pub fn trackable(start: usize, len: usize) -> bool {
     len >= PAGE / 2 && locate(start, len).is_some()
