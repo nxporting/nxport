@@ -2376,8 +2376,12 @@ impl Gfx {
             .0;
         let (mut base, mut size) = crate::nvn::api::find_memory_pool(addr)?;
         if addr + len > base + size {
-            // A pool nested inside a larger one covers the start only.
-            (base, size) = crate::nvn::api::containing_pool(addr, len)?;
+            // A pool nested inside a larger one covers the start only. Without one, the binding's size runs past its pool
+            // (games bind a size covering more than the shader reaches): wrap the pool it starts in, as the GPU would only
+            // reach that pool's memory. Copying instead lost every GPU write to the buffer.
+            if let Some(p) = crate::nvn::api::containing_pool(addr, len) {
+                (base, size) = p;
+            }
         }
         let wrap_base = base & !(VM_PAGE - 1);
         let wrap_end = (base + size + VM_PAGE - 1) & !(VM_PAGE - 1);
