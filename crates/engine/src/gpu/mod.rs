@@ -3,8 +3,7 @@
 // also keeps guest memory coherent with the GPU's view of it, through page guards consulted by the fault handler and
 // by write tracking.
 
-// Lifted hosts until they have a GPU backend.
-#[cfg(not(nx_native))]
+// Lifted hosts until they have a GPU backend, and frame capture scenarios (which record commands without running them).
 pub mod null;
 
 use std::sync::OnceLock;

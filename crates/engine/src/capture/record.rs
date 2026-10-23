@@ -69,7 +69,7 @@ pub(crate) fn on_present(texture: usize, crop: [i32; 4]) {
         .or_else(|| crate::profile::data_subdir("captures").map(|d| d.join(format!("frame_{n}"))))
         .unwrap_or_else(|| PathBuf::from(format!("capture_frame_{n}")));
     let t0 = std::time::Instant::now();
-    match write(&dir, n, &submits, texture, crop) {
+    match write_capture(&dir, n, &submits, texture, crop, &[]) {
         Ok(summary) => println!(
             "[capture] frame {} written to {} in {:.1} s: {}",
             n,
@@ -115,7 +115,16 @@ fn cmd_ranges(c: &Cmd, out: &mut Vec<(u64, u64)>) {
     }
 }
 
-fn write(dir: &Path, n: u64, submits: &[Vec<u64>], present: usize, crop: [i32; 4]) -> Result<String, String> {
+/// Writes a capture of the submits `submits` (presenting `present`) to `dir`: the frontend state, the lists, the memory
+/// of every pool and whatever the commands name outside them, `extra` ranges too, and the backend's GPU-only textures.
+pub(crate) fn write_capture(
+    dir: &Path,
+    n: u64,
+    submits: &[Vec<u64>],
+    present: usize,
+    crop: [i32; 4],
+    extra: &[(u64, u64)],
+) -> Result<String, String> {
     let gpu = crate::gpu::backend();
     gpu.wait_serial(gpu.submitted_serial(), u64::MAX);
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -125,6 +134,7 @@ fn write(dir: &Path, n: u64, submits: &[Vec<u64>], present: usize, crop: [i32; 4
 
     // Memory: every pool, program control sections, and whatever commands name outside them.
     let mut ranges: Vec<(u64, u64)> = frontend.pools.iter().map(|&(b, s, _)| (b, b + s)).collect();
+    ranges.extend_from_slice(extra);
     for (_, stages) in &frontend.programs {
         for &(_, control) in stages {
             if control > 0x10000 {
