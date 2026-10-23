@@ -30,6 +30,10 @@ pub struct Vulkan {
     interval: Mutex<Option<std::time::Instant>>,
 }
 
+/// Time spent recording submits and waiting for them, since the last fps line.
+static RECORD_NS: AtomicU64 = AtomicU64::new(0);
+static WAIT_NS: AtomicU64 = AtomicU64::new(0);
+
 pub static VULKAN: Vulkan = Vulkan {
     ctx: Mutex::new(None),
     serial: AtomicU64::new(0),
@@ -67,7 +71,13 @@ impl Backend for Vulkan {
             let now = std::time::Instant::now();
             let mut start = self.interval.lock().unwrap();
             if let Some(s) = *start {
-                println!("[+] Gfx: present #{n} {:.1} fps", 50.0 / now.duration_since(s).as_secs_f64());
+                let per_frame = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 50.0 / 1e6;
+                println!(
+                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame",
+                    50.0 / now.duration_since(s).as_secs_f64(),
+                    per_frame(&RECORD_NS),
+                    per_frame(&WAIT_NS)
+                );
             }
             *start = Some(now);
         }

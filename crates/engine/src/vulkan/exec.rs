@@ -219,12 +219,18 @@ impl Ctx {
         self.cb = cbs[0];
         self.tex.serial += 1;
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
+        let t0 = std::time::Instant::now();
         for &h in lists {
             self.run_list(h, 0);
         }
         self.end_pass();
         let _ = self.dev.device.end_command_buffer(self.cb);
-        if let Err(e) = self.dev.submit_wait(self.cb) {
+        let t1 = std::time::Instant::now();
+        let waited = self.dev.submit_wait(self.cb);
+        let t2 = std::time::Instant::now();
+        super::RECORD_NS.fetch_add((t1 - t0).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        super::WAIT_NS.fetch_add((t2 - t1).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        if let Err(e) = waited {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
             println!("[vulkan] submit of {} lists at presented frame {frame} failed: {e}; no more GPU work", lists.len());
             self.lost = true;
