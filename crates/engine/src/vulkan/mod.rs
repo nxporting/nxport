@@ -175,6 +175,8 @@ pub(crate) struct Imports {
     by_start: BTreeMap<usize, (usize, vk::Buffer, vk::DeviceMemory)>,
     failed: std::collections::HashSet<(usize, usize)>,
     gen: u64,
+    /// Imports dropped while a submit was being recorded: its command buffer may still use them.
+    retired: Vec<(vk::Buffer, vk::DeviceMemory)>,
 }
 
 impl Imports {
@@ -183,10 +185,7 @@ impl Imports {
         let gen = crate::nvn::api::pools_gen();
         if gen != self.gen {
             // Pools changed (registered, finalized, released): imports over released memory must go.
-            for (_, (_, b, m)) in std::mem::take(&mut self.by_start) {
-                dev.device.destroy_buffer(b, None);
-                dev.device.free_memory(m, None);
-            }
+            self.retired.extend(std::mem::take(&mut self.by_start).into_values().map(|(_, b, m)| (b, m)));
             self.failed.clear();
             self.gen = gen;
         }
@@ -211,6 +210,14 @@ impl Imports {
                 self.failed.insert((start, end));
                 None
             }
+        }
+    }
+
+    /// Frees the imports dropped during the submit that just completed.
+    unsafe fn release_retired(&mut self, dev: &device::Dev) {
+        for (b, m) in self.retired.drain(..) {
+            dev.device.destroy_buffer(b, None);
+            dev.device.free_memory(m, None);
         }
     }
 }

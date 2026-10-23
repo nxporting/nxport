@@ -245,3 +245,12 @@ pub fn vertex(fmt: u32) -> Option<(vk::Format, sass2spv::types::AttributeType)> 
         _ => return None,
     })
 }
+
+/// Whether an image of NVN format `image` can be viewed as NVN format `view`: same texel block (size and dimensions), as
+/// Vulkan's format compatibility classes require. A compressed texture's one-block-per-texel views are not.
+pub fn view_compatible(image: i32, view: i32) -> bool {
+    match (crate::nvn::layout::format_info(image), crate::nvn::layout::format_info(view)) {
+        (Some(a), Some(b)) => a.bytes == b.bytes && a.block_w == b.block_w && a.block_h == b.block_h,
+        _ => false,
+    }
+}
