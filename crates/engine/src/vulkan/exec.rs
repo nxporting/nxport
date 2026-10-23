@@ -88,16 +88,16 @@ pub struct Ctx {
     writebacks: Vec<(usize, *const u8, usize)>,
     /// Guest memory GPU work of this submit writes (copy and clear destinations, storage buffers): [start, end). A uniform
     /// buffer there is bound in place, so it sees those writes in GPU order (a copy taken while recording would not).
-    gpu_dirty: Vec<(usize, usize)>,
+    gpu_dirty: Ranges,
     /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it taken at the first such
     /// draw after the last barrier that invalidates textures (NVN: it sees the writes from before the barrier; sampling
     /// an attachment inside a Vulkan render pass is undefined). Copies by texture description, with their epoch.
-    fb_snaps: HashMap<texture::Desc, (u64, texture::Image)>,
+    fb_snaps: rustc_hash::FxHashMap<texture::Desc, (u64, texture::Image)>,
     fb_epoch: u64,
     /// GPU texture compression: the game renders compressed blocks through an integer view of a block-compressed texture
     /// (one texel per block). Those passes render into an uncompressed proxy, copied into the texture's level when the
     /// pass ends. Proxies by (texture, level, view format); the ones the current pass renders.
-    bc_proxies: HashMap<(texture::Desc, u32, vk::Format), texture::Image>,
+    bc_proxies: rustc_hash::FxHashMap<(texture::Desc, u32, vk::Format), texture::Image>,
     bc_pending: Vec<(texture::Desc, u32, vk::Format)>,
     /// Render-target write-back: TotK moves textures with CPU copies (heap compaction) and reads some on the CPU, so
     /// GPU-rendered contents must reach guest memory, as on the Switch where the GPU renders into memory the CPU shares.
@@ -124,6 +124,40 @@ unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
     }
     std::ptr::write_unaligned(a as *mut u64, value);
     std::ptr::write_unaligned((a + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
+}
+
+/// Disjoint address ranges [start, end), merged as they are added.
+#[derive(Default)]
+pub(super) struct Ranges(std::collections::BTreeMap<usize, usize>);
+
+impl Ranges {
+    pub(super) fn add(&mut self, a: usize, b: usize) {
+        if a >= b {
+            return;
+        }
+        let (mut lo, mut hi) = (a, b);
+        if let Some((&s, &e)) = self.0.range(..=lo).next_back() {
+            if e >= lo {
+                if e >= hi {
+                    return;
+                }
+                lo = s;
+            }
+        }
+        while let Some((&s, &e)) = self.0.range(lo..=hi).next() {
+            self.0.remove(&s);
+            hi = hi.max(e);
+        }
+        self.0.insert(lo, hi);
+    }
+
+    pub(super) fn overlaps(&self, a: usize, b: usize) -> bool {
+        self.0.range(..b).next_back().is_some_and(|(_, &e)| e > a)
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 fn hash<T: Hash>(v: &T) -> u64 {
@@ -187,9 +221,9 @@ impl Ctx {
             pass: None,
             lost: false,
             writebacks: Vec::new(),
-            gpu_dirty: Vec::new(),
-            fb_snaps: HashMap::new(),
-            bc_proxies: HashMap::new(),
+            gpu_dirty: Ranges::default(),
+            fb_snaps: Default::default(),
+            bc_proxies: Default::default(),
             bc_pending: Vec::new(),
             rt_history: HashMap::new(),
             writeback_rts: Vec::new(),

@@ -2,7 +2,7 @@
 // it is made, kept in the GENERAL layout. Views per binding, samplers per pool sampler, readback in the guest's texel
 // encoding.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use ash::vk;
 
@@ -48,7 +48,7 @@ pub struct Image {
     pub samples: vk::SampleCountFlags,
     /// GPU work rendered or wrote into it: guest memory no longer has its contents.
     pub gpu_written: bool,
-    views: HashMap<ViewKey, vk::ImageView>,
+    views: FxHashMap<ViewKey, vk::ImageView>,
     /// The submit it was last checked against guest memory in, the hash of the guest bytes uploaded then (for a
     /// GPU-written image: of the guest bytes when the GPU work completed), and the write-tracking token of those bytes
     /// (guest/dirty_track.rs; None: untracked, hash at every check).
@@ -73,13 +73,13 @@ struct ViewKey {
 
 #[derive(Default)]
 pub struct Textures {
-    pub images: HashMap<Desc, Image>,
+    pub images: FxHashMap<Desc, Image>,
     samplers: Vec<(SamplerDesc, vk::Sampler)>,
     pub warned: std::collections::HashSet<String>,
     /// Counts submits: textures are checked for CPU writes once per submit.
     pub serial: u64,
     /// Alias roots found in this frame (see `locate`; textures are re-initialized between frames).
-    roots: HashMap<Desc, (Desc, u32, u32)>,
+    roots: FxHashMap<Desc, (Desc, u32, u32)>,
     roots_frame: u64,
 }
 
@@ -179,11 +179,7 @@ impl Textures {
             matches!(target, NVN_TARGET_2D | NVN_TARGET_2D_ARRAY | NVN_TARGET_CUBEMAP | NVN_TARGET_CUBEMAP_ARRAY | NVN_TARGET_RECTANGLE)
         };
         let mut best: Option<(u64, Desc, u32, u32)> = None;
-        for (_, _, c) in crate::nvn::api::textures_near_storage(d.storage, crate::nvn::api::max_texture_span()) {
-            // Most candidates end below this texture: their declared size says so without a layout.
-            if c.size > 0 && c.storage + c.size <= d.storage {
-                continue;
-            }
+        for (_, _, c) in crate::nvn::api::textures_reaching(d.storage, crate::nvn::api::max_texture_span()) {
             let cd = Desc::of(&c);
             if cd == *d || c.samples > 1 || c.width <= 0 || c.height <= 0 || c.target == layout::NVN_TARGET_BUFFER {
                 continue;
@@ -418,7 +414,7 @@ impl Textures {
             layers,
             samples: samples(p.samples),
             gpu_written: false,
-            views: HashMap::new(),
+            views: FxHashMap::default(),
             checked: 0,
             hash: 0,
             token: None,

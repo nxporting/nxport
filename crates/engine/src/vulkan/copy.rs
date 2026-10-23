@@ -69,7 +69,7 @@ impl Ctx {
             return None;
         }
         if write {
-            self.gpu_dirty.push((a, a + len));
+            self.gpu_dirty.add(a, a + len);
             crate::guest::dirty_track::release_for_gpu(a, len);
         }
         if let Some(x) = self.imports.find(&self.dev, a, len) {
