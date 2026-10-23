@@ -18,9 +18,10 @@ struct Geometry {
     aspect: vk::ImageAspectFlags,
 }
 
-fn geometry(t: &NvnTexture, img: &texture::Image, r: &TexRef, region: &Region, row_stride: isize, image_stride: isize) -> Option<Geometry> {
+/// `at`: the level / layer texture `t` starts at in `img` (an alias of a larger texture).
+fn geometry(t: &NvnTexture, img: &texture::Image, at: (u32, u32), r: &TexRef, region: &Region, row_stride: isize, image_stride: isize) -> Option<Geometry> {
     let info = crate::nvn::layout::format_info(t.format)?;
-    let level = (r.level as u32).min(img.levels - 1);
+    let level = (r.level as u32 + at.0).min(img.levels - 1);
     let (lw, lh) = ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1));
     // A zero-sized region means the whole level.
     let w = if region.w > 0 { region.w as u32 } else { lw };
@@ -38,7 +39,7 @@ fn geometry(t: &NvnTexture, img: &texture::Image, r: &TexRef, region: &Region, r
     let image_rows = (bytes_per_image / row) as u32 * info.block_h;
     Some(Geometry {
         level,
-        base_layer: if is3d { 0 } else { r.layer as u32 + region.z.max(0) as u32 },
+        base_layer: if is3d { 0 } else { at.1 + r.layer as u32 + region.z.max(0) as u32 },
         layers: if is3d { 1 } else { d },
         offset: vk::Offset3D { x: region.x.max(0), y: region.y.max(0), z: if is3d { region.z.max(0) } else { 0 } },
         extent: vk::Extent3D { width: w, height: h, depth: if is3d { d } else { 1 } },
@@ -50,12 +51,14 @@ fn geometry(t: &NvnTexture, img: &texture::Image, r: &TexRef, region: &Region, r
 }
 
 impl Ctx {
-    /// The image a recorded texture reference names, with its texture description.
-    unsafe fn tex_ref(&mut self, r: &TexRef) -> Option<(NvnTexture, vk::Image)> {
+    /// The image a recorded texture reference names: the texture, its image's description, image and where the
+    /// texture starts in it.
+    unsafe fn tex_ref(&mut self, r: &TexRef) -> Option<(NvnTexture, texture::Desc, vk::Image, (u32, u32))> {
         let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
         let (_, t) = crate::nvn::api::texture_snapshot(addr)?;
-        let img = self.tex.get(&self.dev, &t)?;
-        Some((t, img.image))
+        let (d, level, layer) = self.tex.locate(&t);
+        let img = self.tex.get_desc(&self.dev, &d)?;
+        Some((t, d, img.image, (level, layer)))
     }
 
     /// Guest memory [addr, addr + len) as a buffer range: in place when its pool is imported, else a copy (written back
@@ -98,10 +101,10 @@ impl Ctx {
                 self.dev.device.cmd_fill_buffer(self.cb, db, off, *size as u64, *value);
             }
             Cmd::CopyBufferToTexture { src, dst, region, row_stride, image_stride } => {
-                let Some((t, image)) = self.tex_ref(dst) else { return };
-                let img = self.tex.images.get_mut(&texture::Desc::of(&t)).unwrap();
+                let Some((t, d, image, at)) = self.tex_ref(dst) else { return };
+                let img = self.tex.images.get_mut(&d).unwrap();
                 img.gpu_written = true;
-                let Some(g) = geometry(&t, img, dst, region, *row_stride, *image_stride) else {
+                let Some(g) = geometry(&t, img, at, dst, region, *row_stride, *image_stride) else {
                     self.warn("CopyBufferToTexture with a row stride that is not whole texels");
                     return;
                 };
@@ -117,9 +120,9 @@ impl Ctx {
                 self.dev.device.cmd_copy_buffer_to_image(self.cb, sb, image, vk::ImageLayout::GENERAL, &[region]);
             }
             Cmd::CopyTextureToBuffer { src, region, dst, row_stride, image_stride } => {
-                let Some((t, image)) = self.tex_ref(src) else { return };
-                let img = &self.tex.images[&texture::Desc::of(&t)];
-                let Some(g) = geometry(&t, img, src, region, *row_stride, *image_stride) else { return };
+                let Some((t, d, image, at)) = self.tex_ref(src) else { return };
+                let img = &self.tex.images[&d];
+                let Some(g) = geometry(&t, img, at, src, region, *row_stride, *image_stride) else { return };
                 let total = g.bytes_per_image * g.layers.max(g.extent.depth) as usize;
                 let Some((db, d_off)) = self.guest_range(*dst, total, true) else { return };
                 let region = vk::BufferImageCopy::default()
@@ -132,14 +135,14 @@ impl Ctx {
                 self.dev.device.cmd_copy_image_to_buffer(self.cb, image, vk::ImageLayout::GENERAL, db, &[region]);
             }
             Cmd::CopyTextureToTexture(p) => {
-                let (Some((st_, si)), Some((dt, di))) = (self.tex_ref(&p.src), self.tex_ref(&p.dst)) else { return };
-                let simg = &self.tex.images[&texture::Desc::of(&st_)];
+                let (Some((st_, sd, si, sat)), Some((dt, dd, di, dat))) = (self.tex_ref(&p.src), self.tex_ref(&p.dst)) else { return };
+                let simg = &self.tex.images[&sd];
                 let (sfmt, saspect) = (simg.format, format::aspects(simg.format));
-                let Some(sg) = geometry(&st_, simg, &p.src, &p.src_region, 0, 0) else { return };
-                let dimg = self.tex.images.get_mut(&texture::Desc::of(&dt)).unwrap();
+                let Some(sg) = geometry(&st_, simg, sat, &p.src, &p.src_region, 0, 0) else { return };
+                let dimg = self.tex.images.get_mut(&dd).unwrap();
                 dimg.gpu_written = true;
                 let dfmt = dimg.format;
-                let Some(dg) = geometry(&dt, dimg, &p.dst, &p.dst_region, 0, 0) else { return };
+                let Some(dg) = geometry(&dt, dimg, dat, &p.dst, &p.dst_region, 0, 0) else { return };
                 let sub = |g: &Geometry, aspect| {
                     vk::ImageSubresourceLayers::default().aspect_mask(aspect).mip_level(g.level).base_array_layer(g.base_layer).layer_count(g.layers.min(sg.layers))
                 };
@@ -166,11 +169,11 @@ impl Ctx {
                 }
             }
             Cmd::ClearTexture(p) => {
-                let Some((t, image)) = self.tex_ref(&p.dst) else { return };
-                let img = self.tex.images.get_mut(&texture::Desc::of(&t)).unwrap();
+                let Some((t, d, image, at)) = self.tex_ref(&p.dst) else { return };
+                let img = self.tex.images.get_mut(&d).unwrap();
                 img.gpu_written = true;
                 let (fmt, levels, layers, extent) = (img.format, img.levels, img.layers, img.extent);
-                let Some(g) = geometry(&t, img, &p.dst, &p.region, 0, 0) else { return };
+                let Some(g) = geometry(&t, img, at, &p.dst, &p.region, 0, 0) else { return };
                 let level_extent = ((extent.width >> g.level).max(1), (extent.height >> g.level).max(1));
                 let whole = g.offset.x == 0 && g.offset.y == 0 && (g.extent.width, g.extent.height) == level_extent;
                 if !whole || p.mask & 0xF != 0xF {

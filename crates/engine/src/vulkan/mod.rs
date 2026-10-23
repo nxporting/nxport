@@ -26,12 +26,15 @@ pub struct Vulkan {
     ctx: Mutex<Option<exec::Ctx>>,
     serial: AtomicU64,
     frames: AtomicU64,
+    /// Start of the current 50-frame interval of the fps line.
+    interval: Mutex<Option<std::time::Instant>>,
 }
 
 pub static VULKAN: Vulkan = Vulkan {
     ctx: Mutex::new(None),
     serial: AtomicU64::new(0),
     frames: AtomicU64::new(0),
+    interval: Mutex::new(None),
 };
 
 /// Creates the device. Before the guest submits anything.
@@ -44,7 +47,7 @@ pub fn init(validation: bool) -> Result<(), String> {
 impl Backend for Vulkan {
     fn set_program(&self, program: usize, stages: &[ShaderStage]) {
         if let Some(c) = self.ctx.lock().unwrap().as_mut() {
-            c.programs.insert(program, stages.iter().map(|s| (s.data, s.control)).collect());
+            c.programs.insert(program, stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect());
         }
     }
 
@@ -56,7 +59,18 @@ impl Backend for Vulkan {
     }
 
     fn present(&self, texture: usize, _crop: [i32; 4]) {
+        if let Some(c) = self.ctx.lock().unwrap().as_mut() {
+            unsafe { c.write_back_rts() };
+        }
         let n = self.frames.fetch_add(1, Ordering::AcqRel) + 1;
+        if n % 50 == 0 {
+            let now = std::time::Instant::now();
+            let mut start = self.interval.lock().unwrap();
+            if let Some(s) = *start {
+                println!("[+] Gfx: present #{n} {:.1} fps", 50.0 / now.duration_since(s).as_secs_f64());
+            }
+            *start = Some(now);
+        }
         // --dump-frame=N,..: the presented image as /tmp/nxport_frame_N.ppm (as the Metal backend writes it).
         let dump = &crate::settings::get().dump;
         if dump.dump_frame.contains(&n) {
@@ -103,6 +117,20 @@ impl Backend for Vulkan {
         let Some(c) = g.as_mut() else { return 0 };
         unsafe { c.gpu_only_textures(f) }
     }
+}
+
+/// A content hash of a guest shader stage (its header and first code, and its control section): translations are cached
+/// by address and this, as the game loads other shaders into memory it used before.
+unsafe fn stage_hash(data: u64, control: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if data >= 0x10000 {
+        std::slice::from_raw_parts(data as *const u8, 0x130).hash(&mut h);
+    }
+    if control >= 0x1_0000_0000 && *(control as *const u32) == 0x9876_1234 {
+        std::slice::from_raw_parts(control as *const u8, 0x780).hash(&mut h);
+    }
+    h.finish()
 }
 
 /// A presented image as a binary PPM, rows as the screen shows them (bottom-up in memory for NVN's lower-left origin).
