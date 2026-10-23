@@ -377,6 +377,8 @@ impl Textures {
         let memory = dev.alloc(req, vk::MemoryPropertyFlags::DEVICE_LOCAL).ok()?;
         dev.device.bind_image_memory(image, memory, 0).ok()?;
         let aspect = format::aspects(fmt);
+        // Block-compressed images cannot be cleared (their uploads fill them).
+        let compressed = layout::format_info(p.format).is_some_and(|i| i.block_w > 1);
         let _ = dev.one_shot(|cb| {
             let b = [vk::ImageMemoryBarrier::default()
                 .image(image)
@@ -401,7 +403,7 @@ impl Textures {
             if format::is_depth(fmt) {
                 let v = vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 };
                 dev.device.cmd_clear_depth_stencil_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]);
-            } else {
+            } else if !compressed {
                 let v = vk::ClearColorValue { uint32: [0; 4] };
                 dev.device.cmd_clear_color_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]);
             }
