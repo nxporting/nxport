@@ -421,10 +421,12 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
                                 let path = out.join(format!("pass{pi:04}_c{slot}.png"));
                                 image::write_png(&path, w, h, &rgba)?;
                                 Some(format!(
-                                    "{} pixels of {} differ (max {:.4}, box {:?}); {}",
+                                    "{} pixels of {} differ (max {:.4}, per channel {:.3?}, by size {:?}, box {:?}); {}",
                                     d.differing,
                                     d.pixels,
                                     d.max,
+                                    d.channel_max,
+                                    d.histogram,
                                     d.bbox,
                                     path.display()
                                 ))
