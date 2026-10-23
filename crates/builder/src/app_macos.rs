@@ -328,9 +328,7 @@ impl Builder {
         let id = nxport::profile::identify(path);
         let control = nxport::game::control_of(path);
         self.game = id.title_id.map(|tid| Game {
-            name: id.profile.map(|p| p.name.to_string())
-                .or_else(|| control.as_ref().and_then(|c| c.title.clone()))
-                .unwrap_or_else(|| format!("Switch title {tid:016X}")),
+            name: id.name.clone(),
             version: id.version.map(|v| v.version_string.to_string())
                 .or_else(|| control.as_ref().and_then(|c| c.version.clone())),
             title_id: tid,
