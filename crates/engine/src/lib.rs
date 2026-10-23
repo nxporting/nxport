@@ -67,6 +67,64 @@ pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
     cpu::aot::take_image().ok_or_else(|| "no image was built".to_string())
 }
 
+/// Guest code as the lifter takes it (nxport-build's lift): a module's memory from `base`, with its executable range.
+#[cfg(nx_runtime)]
+pub struct GuestModule {
+    /// A C identifier: the lifter prefixes the module's tables with it.
+    pub name: String,
+    pub base: u64,
+    /// The whole image for main and the sdk module (their rodata holds jump tables), the code alone for other regions.
+    pub image: Vec<u8>,
+    pub text: std::ops::Range<u64>,
+    /// Whether `image` holds a module's dynamic tables (symbols, relocations, .eh_frame_hdr), which name functions.
+    pub dynamic: bool,
+}
+
+/// The game's code loaded and patched with `settings` (as guest_image), as modules to lift: main, the sdk module, then
+/// every other code region the load made (islands, stubs), except the HLE trampolines, which lifted code reaches
+/// through the host (lifted::host_call). The guest sits at its fixed base, so the addresses hold in the run that uses
+/// the lifted code. Once per process.
+#[cfg(nx_runtime)]
+pub fn guest_modules(s: settings::Settings) -> Result<Vec<GuestModule>, String> {
+    settings::try_install(s)?;
+    let l = load().map_err(|e| e.to_string())?;
+    if let Some((label, _)) = l.mod_inits.first() {
+        return Err(format!("{label} is a plugin mod: its initialiser patches the game's code, so lifting needs it run"));
+    }
+    let copy = |start: usize, len: usize| unsafe { std::slice::from_raw_parts(start as *const u8, len) }.to_vec();
+    let main = l.mem_space.base_ptr as usize;
+    let mut modules = vec![GuestModule {
+        name: "main".into(),
+        base: main as u64,
+        image: copy(main, l.mem_space.total_size),
+        text: main as u64..(main + l.mem_space.text_size) as u64,
+        dynamic: true,
+    }];
+    if let Some(sdk) = &l.sdk {
+        modules.push(GuestModule {
+            name: "sdk".into(),
+            base: sdk.base as u64,
+            image: copy(sdk.base, sdk.total_size),
+            text: sdk.text_start as u64..(sdk.text_start + sdk.text_size) as u64,
+            dynamic: true,
+        });
+    }
+    let covered = |a: usize| modules.iter().any(|m| m.text.contains(&(a as u64)));
+    let extra: Vec<GuestModule> = cpu::aot::regions()
+        .into_iter()
+        .filter(|(name, start, _)| name != "hle.trampolines" && !covered(*start))
+        .map(|(name, start, len)| GuestModule {
+            name: name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect(),
+            base: start as u64,
+            image: copy(start, len),
+            text: start as u64..(start + len) as u64,
+            dynamic: false,
+        })
+        .collect();
+    modules.extend(extra);
+    Ok(modules)
+}
+
 #[cfg(nx_native)]
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
@@ -126,13 +184,6 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     // and the Cocoa event loop.
     // The engine has no main-thread special cases: stack bounds come from the current pthread,
     // guest TLS is per-thread, and the nn::os thread object is thread-local.
-    struct AssertSend<F>(F);
-    unsafe impl<F> Send for AssertSend<F> {}
-    impl<F: FnOnce() -> Result<(), Box<dyn std::error::Error>>> AssertSend<F> {
-        fn run(self) -> Result<(), Box<dyn std::error::Error>> {
-            (self.0)()
-        }
-    }
     // iOS: the executor runs from the guest's first submit; the window's layer is attached once UIKit has created it
     // (host/display_ios.rs). macOS creates its window before the guest submits anything.
     #[cfg(target_os = "ios")]
@@ -142,189 +193,8 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
             None,
         );
     }
-    let guest_chain = AssertSend(move || -> Result<(), Box<dyn std::error::Error>> {
-        // 5a. Install TPIDR_EL0 (thread-local storage pointer) for this thread.
-        unsafe {
-            cpu::tls::install_guest_tls();
-            cpu::trampoline::init_worker_thread_x18();
-            horizon::hle::hle_nn_os_GetCurrentThread();
-            horizon::hle::register_main_sample_target();
-        };
-
-        // Helper: restore x18 = thread-ctx-block before every guest entry point.
-
-        // 5. Execute DT_INIT (main's first initialization function)
-        if mem_space.dynamic.init != 0 {
-            println!(
-                "[+] Invoking native DT_INIT entrypoint at main+{:#x}...",
-                mem_space.dynamic.init
-            );
-            unsafe { guest::call(mem_space.base_ptr as usize + mem_space.dynamic.init, &[]) };
-            println!("[+] SUCCESS: Native DT_INIT executed and returned cleanly!");
-        }
-
-        // Block all maskable async signals before entering guest code.
-        // macOS zeroes X18 (the platform register) on every signal delivery, which
-        // corrupts the guest's use of X18 as a scratch register between adjacent
-        // instructions.  The synchronous fault signals (SIGSEGV, SIGBUS, SIGILL,
-        // SIGTRAP) cannot be masked, so our crash handler still fires on actual faults.
-        let mut guest_sigmask: libc::sigset_t = unsafe { std::mem::zeroed() };
-        unsafe {
-            libc::sigfillset(&mut guest_sigmask);
-            // Keep synchronous CPU-fault signals unmasked so the crash handler fires.
-            libc::sigdelset(&mut guest_sigmask, libc::SIGSEGV);
-            libc::sigdelset(&mut guest_sigmask, libc::SIGBUS);
-            libc::sigdelset(&mut guest_sigmask, libc::SIGILL);
-            libc::sigdelset(&mut guest_sigmask, libc::SIGTRAP);
-            // Keep SIGINT/SIGTERM so the user can still kill the process.
-            libc::sigdelset(&mut guest_sigmask, libc::SIGINT);
-            libc::sigdelset(&mut guest_sigmask, libc::SIGTERM);
-            let mut old_mask: libc::sigset_t = std::mem::zeroed();
-            libc::pthread_sigmask(libc::SIG_BLOCK, &guest_sigmask, &mut old_mask);
-            println!(
-                "[+] Masked async signals before guest entry (protects X18 from macOS zeroing)"
-            );
-        }
-
-        // Mod modules' initialisers. rtld initialises the modules main depends on before main's own initialisers, and
-        // exlaunch installs its hooks here: with an AOT image (cpu/aot.rs) the hooks are in the code from the start, so the
-        // mods must have set up the state their hooks use before any game code can reach them (main's static
-        // constructors ran into an UltraCam trampoline whose target was still null). A dump run snapshots the code
-        // first and writes the image once they patched it.
-        macro_rules! run_mod_inits {
-            () => {
-        if dump_after_mods {
-            cpu::aot::snapshot_premod();
-        }
-        for (label, init) in &mod_inits {
-            println!("[+] Mods: running {} init at {:#x}", label, init);
-            unsafe { guest::call(*init, &[0, 0]) };
-            let pages = unsafe { horizon::svc::flush_code_views() };
-            println!("[+] Mods: {} init returned ({} code pages written through its views)", label, pages);
-        }
-        if dump_after_mods {
-            println!("[+] AOT: mods initialised; the image is written at frame {} (gfx present)", cpu::aot::deferred_dump_frame().unwrap_or(0));
-        }
-        if cpu::aot::loading() && !mod_inits.is_empty() {
-            // Expected: the bytes of patches mods remove again (the dump run's "kept" count).
-            let n = horizon::svc::IMAGE_MISMATCH.load(std::sync::atomic::Ordering::Relaxed);
-            println!("[+] Mods: initialised; {} bytes of their code writes differ from the AOT image so far (dropped)", n);
-        }
-
-            };
-        }
-        run_mod_inits!();
-
-        // 6. Execute nninitStartup (initializes heap & runtime allocators; exported by main). It runs before the
-        // static constructors, which may allocate.
-        let init_startup_addr = mem_space
-            .export("nninitStartup")
-            .expect("main exports no nninitStartup");
-        let nn_main_addr = mem_space.export("nnMain").expect("main exports no nnMain");
-        println!(
-            "[+] Invoking native nninitStartup entrypoint at {:#x}...",
-            init_startup_addr
-        );
-        unsafe { guest::call(init_startup_addr, &[]) };
-        println!("[+] SUCCESS: Native nninitStartup executed and returned cleanly!");
-
-        // Diagnostic memory state for known game versions after nninitStartup
-        if let Some(v) = profile::active_version() {
-            if let (Some(heap_off), Some(pool_off)) =
-                (v.heap_instance_offset, v.allocator_pool_offset)
-            {
-                unsafe {
-                    let p_heap = *(mem_space.base_ptr.add(heap_off) as *const usize);
-                    let p_pool = *(mem_space.base_ptr.add(pool_off) as *const usize);
-                    let p_pool_sz = *(mem_space.base_ptr.add(pool_off + 8) as *const usize);
-                    println!("[+] Diagnostic memory state after nninitStartup:");
-                    println!(
-                        "    [base + 0x{:08x}] = 0x{:016x} (HeapMgr::sInstance)",
-                        heap_off, p_heap
-                    );
-                    println!(
-                        "    [base + 0x{:08x}] = 0x{:016x} (StandardAllocator pool)",
-                        pool_off, p_pool
-                    );
-                    println!(
-                        "    [base + 0x{:08x}] = 0x{:016x} (StandardAllocator size)",
-                        pool_off + 8,
-                        p_pool_sz
-                    );
-                    if p_heap != 0 {
-                        println!("    HeapMgr sInstance @ 0x{:016x} dump (32 words):", p_heap);
-                        let mgr = p_heap as *const usize;
-                        for i in 0..32 {
-                            println!("      +0x{:03x}: 0x{:016x}", i * 8, *mgr.add(i));
-                        }
-                    }
-                }
-            }
-        }
-
-        // 7. Execute DT_INIT_ARRAY (Static C++ Constructors)
-        println!("[+] Running static C++ constructors from DT_INIT_ARRAY...");
-        let init_array_ptr =
-            unsafe { mem_space.base_ptr.add(mem_space.dynamic.init_array) as *const usize };
-        let ctor_count = mem_space.dynamic.init_arraysz / 8;
-        println!(
-            "[+] DT_INIT_ARRAY at main+{:#x}: {} entries",
-            mem_space.dynamic.init_array, ctor_count
-        );
-        let mut executed_ctors = 0;
-
-        for i in 0..ctor_count {
-            if i % 500 == 0 {
-                println!(
-                    "  [+] Progress: executed {} / {} constructors...",
-                    i, ctor_count
-                );
-            }
-            let ctor_addr = unsafe { *init_array_ptr.add(i) };
-            if ctor_addr != 0 {
-                unsafe { guest::call(ctor_addr, &[]) };
-                executed_ctors += 1;
-            }
-        }
-        println!(
-            "[+] SUCCESS: Executed {} native static C++ constructors!",
-            executed_ctors
-        );
-
-        // 7a. The game's own subsdk libraries (other games; TotK's are not run): DT_INIT, then the static constructors.
-        for (label, init, (arr, n)) in &game_subsdk_inits {
-            if let Some(init) = init {
-                println!("[+] {}: running DT_INIT at {:#x}", label, init);
-                unsafe { guest::call(*init, &[]) };
-            }
-            for i in 0..*n {
-                let ctor = unsafe { *((arr + i * 8) as *const usize) };
-                if ctor != 0 {
-                    unsafe { guest::call(ctor, &[]) };
-                }
-            }
-            println!("[+] {}: {} static constructors run", label, n);
-        }
-
-        // 8. Execute nnMain (the game's entry point, exported by main)
-        println!(
-            "[+] Invoking native nnMain entrypoint at {:#x}...",
-            nn_main_addr
-        );
-        // On its own stack, like the game's other threads (horizon/thread_stack.rs).
-        let (stack_lo, stack_hi) = horizon::thread_stack::allocate(8 << 20);
-        unsafe {
-            let t = horizon::hle::hle_nn_os_GetCurrentThread();
-            (*t).stack = stack_lo as *mut ();
-            (*t).original_stack = (*t).stack;
-            (*t).stack_size = stack_hi - stack_lo;
-            horizon::thread_stack::run(stack_lo, stack_hi, nn_main_addr, 0);
-        }
-        println!("[+] SUCCESS: Native nnMain returned cleanly!");
-
-        // nnMain returning means the game exited; the caller shuts the process down.
-        Ok(())
-    });
+    let guest_chain =
+        AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, dump_after_mods));
 
     let handle = thread::Builder::new()
         .name("guest-main".into())
@@ -366,7 +236,213 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     host::display::run_main_thread()
 }
 
-#[cfg(nx_native)]
+/// Moves the loaded guest (raw pointers into its memory) to the thread that runs it.
+#[cfg(nx_runtime)]
+struct AssertSend<F>(F);
+#[cfg(nx_runtime)]
+unsafe impl<F> Send for AssertSend<F> {}
+#[cfg(nx_runtime)]
+impl<F: FnOnce() -> Result<(), Box<dyn std::error::Error>>> AssertSend<F> {
+    fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        (self.0)()
+    }
+}
+
+/// The guest entry chain on the calling thread (guest-main): its TLS, DT_INIT, the mods' initialisers, nninitStartup,
+/// the static constructors, then nnMain on its own stack. Returns when nnMain does.
+#[cfg(nx_runtime)]
+fn guest_chain(
+    mem_space: GuestMemorySpace,
+    mod_inits: Vec<(String, usize)>,
+    game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
+    dump_after_mods: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 5a. Install TPIDR_EL0 (thread-local storage pointer) for this thread (lifted: its Cpu has it, lifted::thread_cpu).
+    #[cfg(nx_native)]
+    unsafe {
+        cpu::tls::install_guest_tls();
+        cpu::trampoline::init_worker_thread_x18();
+        horizon::hle::register_main_sample_target();
+    }
+    unsafe { horizon::hle::hle_nn_os_GetCurrentThread() };
+
+    // 5. Execute DT_INIT (main's first initialization function)
+    if mem_space.dynamic.init != 0 {
+        println!(
+            "[+] Invoking native DT_INIT entrypoint at main+{:#x}...",
+            mem_space.dynamic.init
+        );
+        unsafe { guest::call(mem_space.base_ptr as usize + mem_space.dynamic.init, &[]) };
+        println!("[+] SUCCESS: Native DT_INIT executed and returned cleanly!");
+    }
+
+    // Block all maskable async signals before entering guest code.
+    // macOS zeroes X18 (the platform register) on every signal delivery, which
+    // corrupts the guest's use of X18 as a scratch register between adjacent
+    // instructions.  The synchronous fault signals (SIGSEGV, SIGBUS, SIGILL,
+    // SIGTRAP) cannot be masked, so our crash handler still fires on actual faults.
+    #[cfg(nx_native)]
+    {
+        let mut guest_sigmask: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigfillset(&mut guest_sigmask);
+            // Keep synchronous CPU-fault signals unmasked so the crash handler fires.
+            libc::sigdelset(&mut guest_sigmask, libc::SIGSEGV);
+            libc::sigdelset(&mut guest_sigmask, libc::SIGBUS);
+            libc::sigdelset(&mut guest_sigmask, libc::SIGILL);
+            libc::sigdelset(&mut guest_sigmask, libc::SIGTRAP);
+            // Keep SIGINT/SIGTERM so the user can still kill the process.
+            libc::sigdelset(&mut guest_sigmask, libc::SIGINT);
+            libc::sigdelset(&mut guest_sigmask, libc::SIGTERM);
+            let mut old_mask: libc::sigset_t = std::mem::zeroed();
+            libc::pthread_sigmask(libc::SIG_BLOCK, &guest_sigmask, &mut old_mask);
+            println!(
+                "[+] Masked async signals before guest entry (protects X18 from macOS zeroing)"
+            );
+        }
+    }
+
+    // Mod modules' initialisers. rtld initialises the modules main depends on before main's own initialisers, and
+    // exlaunch installs its hooks here: with an AOT image (cpu/aot.rs) the hooks are in the code from the start, so the
+    // mods must have set up the state their hooks use before any game code can reach them (main's static
+    // constructors ran into an UltraCam trampoline whose target was still null). A dump run snapshots the code
+    // first and writes the image once they patched it.
+    macro_rules! run_mod_inits {
+        () => {
+    if dump_after_mods {
+        cpu::aot::snapshot_premod();
+    }
+    for (label, init) in &mod_inits {
+        println!("[+] Mods: running {} init at {:#x}", label, init);
+        unsafe { guest::call(*init, &[0, 0]) };
+        let pages = unsafe { horizon::svc::flush_code_views() };
+        println!("[+] Mods: {} init returned ({} code pages written through its views)", label, pages);
+    }
+    if dump_after_mods {
+        println!("[+] AOT: mods initialised; the image is written at frame {} (gfx present)", cpu::aot::deferred_dump_frame().unwrap_or(0));
+    }
+    if cpu::aot::loading() && !mod_inits.is_empty() {
+        // Expected: the bytes of patches mods remove again (the dump run's "kept" count).
+        let n = horizon::svc::IMAGE_MISMATCH.load(std::sync::atomic::Ordering::Relaxed);
+        println!("[+] Mods: initialised; {} bytes of their code writes differ from the AOT image so far (dropped)", n);
+    }
+
+        };
+    }
+    run_mod_inits!();
+
+    // 6. Execute nninitStartup (initializes heap & runtime allocators; exported by main). It runs before the
+    // static constructors, which may allocate.
+    let init_startup_addr = mem_space
+        .export("nninitStartup")
+        .expect("main exports no nninitStartup");
+    let nn_main_addr = mem_space.export("nnMain").expect("main exports no nnMain");
+    println!(
+        "[+] Invoking native nninitStartup entrypoint at {:#x}...",
+        init_startup_addr
+    );
+    unsafe { guest::call(init_startup_addr, &[]) };
+    println!("[+] SUCCESS: Native nninitStartup executed and returned cleanly!");
+
+    // Diagnostic memory state for known game versions after nninitStartup
+    if let Some(v) = profile::active_version() {
+        if let (Some(heap_off), Some(pool_off)) =
+            (v.heap_instance_offset, v.allocator_pool_offset)
+        {
+            unsafe {
+                let p_heap = *(mem_space.base_ptr.add(heap_off) as *const usize);
+                let p_pool = *(mem_space.base_ptr.add(pool_off) as *const usize);
+                let p_pool_sz = *(mem_space.base_ptr.add(pool_off + 8) as *const usize);
+                println!("[+] Diagnostic memory state after nninitStartup:");
+                println!(
+                    "    [base + 0x{:08x}] = 0x{:016x} (HeapMgr::sInstance)",
+                    heap_off, p_heap
+                );
+                println!(
+                    "    [base + 0x{:08x}] = 0x{:016x} (StandardAllocator pool)",
+                    pool_off, p_pool
+                );
+                println!(
+                    "    [base + 0x{:08x}] = 0x{:016x} (StandardAllocator size)",
+                    pool_off + 8,
+                    p_pool_sz
+                );
+                if p_heap != 0 {
+                    println!("    HeapMgr sInstance @ 0x{:016x} dump (32 words):", p_heap);
+                    let mgr = p_heap as *const usize;
+                    for i in 0..32 {
+                        println!("      +0x{:03x}: 0x{:016x}", i * 8, *mgr.add(i));
+                    }
+                }
+            }
+        }
+    }
+
+    // 7. Execute DT_INIT_ARRAY (Static C++ Constructors)
+    println!("[+] Running static C++ constructors from DT_INIT_ARRAY...");
+    let init_array_ptr =
+        unsafe { mem_space.base_ptr.add(mem_space.dynamic.init_array) as *const usize };
+    let ctor_count = mem_space.dynamic.init_arraysz / 8;
+    println!(
+        "[+] DT_INIT_ARRAY at main+{:#x}: {} entries",
+        mem_space.dynamic.init_array, ctor_count
+    );
+    let mut executed_ctors = 0;
+
+    for i in 0..ctor_count {
+        if i % 500 == 0 {
+            println!(
+                "  [+] Progress: executed {} / {} constructors...",
+                i, ctor_count
+            );
+        }
+        let ctor_addr = unsafe { *init_array_ptr.add(i) };
+        if ctor_addr != 0 {
+            unsafe { guest::call(ctor_addr, &[]) };
+            executed_ctors += 1;
+        }
+    }
+    println!(
+        "[+] SUCCESS: Executed {} native static C++ constructors!",
+        executed_ctors
+    );
+
+    // 7a. The game's own subsdk libraries (other games; TotK's are not run): DT_INIT, then the static constructors.
+    for (label, init, (arr, n)) in &game_subsdk_inits {
+        if let Some(init) = init {
+            println!("[+] {}: running DT_INIT at {:#x}", label, init);
+            unsafe { guest::call(*init, &[]) };
+        }
+        for i in 0..*n {
+            let ctor = unsafe { *((arr + i * 8) as *const usize) };
+            if ctor != 0 {
+                unsafe { guest::call(ctor, &[]) };
+            }
+        }
+        println!("[+] {}: {} static constructors run", label, n);
+    }
+
+    // 8. Execute nnMain (the game's entry point, exported by main)
+    println!(
+        "[+] Invoking native nnMain entrypoint at {:#x}...",
+        nn_main_addr
+    );
+    // On its own stack, like the game's other threads (horizon/thread_stack.rs).
+    let (stack_lo, stack_hi) = horizon::thread_stack::allocate(8 << 20);
+    unsafe {
+        let t = horizon::hle::hle_nn_os_GetCurrentThread();
+        (*t).stack = stack_lo as *mut ();
+        (*t).original_stack = (*t).stack;
+        (*t).stack_size = stack_hi - stack_lo;
+        horizon::thread_stack::run(stack_lo, stack_hi, nn_main_addr, 0);
+    }
+    println!("[+] SUCCESS: Native nnMain returned cleanly!");
+
+    // nnMain returning means the game exited; the caller shuts the process down.
+    Ok(())
+}
+
+#[cfg(nx_runtime)]
 /// The settings a run with `layers` uses: the platform's profile, where the program is installed, the game's profile
 /// (found from the dump the other layers name), then above it the settings the app was built with or the iOS Settings
 /// app's choices, then `layers`.
@@ -997,9 +1073,72 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     })
 }
 
-/// Runs a game. This host has no runtime yet: guest code runs natively only on Apple Silicon, and the lifted runtime
-/// for other hosts is not written yet (docs/windows-port.md).
-#[cfg(not(nx_native))]
+/// Runs a game. This host has no runtime (docs/windows-port.md).
+#[cfg(not(nx_runtime))]
 pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
     Err("nxport cannot run games on this host yet (see docs/windows-port.md)".into())
+}
+
+/// Runs a game whose code is lifted (docs/windows-port.md): resolves the settings as the native run does, loads and
+/// patches the game, then runs its entry chain in the guest library `files.guest_library` (nxport-cli lift-game and
+/// compile-guest, with the same settings: the code was lifted as these patch it). Headless, on the null GPU backend,
+/// until there is a window and a GPU backend. Returns when nnMain does.
+#[cfg(all(nx_runtime, not(nx_native)))]
+pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
+    gpu::install(&gpu::null::NULL);
+    let s = settings::install(resolve_settings(layers));
+    let lib = s.files.guest_library.clone().ok_or("no guest library: --guest-library=<the library compile-guest made>")?;
+    let list = lib.with_file_name("modules.txt");
+    let names = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;
+    let Loaded {
+        mem_space,
+        sdk: _sdk,
+        mod_inits,
+        game_subsdk_inits,
+    } = load()?;
+    let modules: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+    lifted::install(&lib, &modules, lifted_handlers())?;
+    println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
+    let guest_main = std::thread::Builder::new()
+        .name("guest-main".into())
+        .stack_size(256 << 20)
+        .spawn({
+            let chain = AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, false));
+            move || {
+                guest::tls::mark_guest_thread();
+                chain.run().map_err(|e| e.to_string())
+            }
+        })?;
+    match guest_main.join() {
+        Ok(r) => r.map_err(Into::into),
+        Err(_) => Err("guest-main thread panicked".into()),
+    }
+}
+
+/// What lifted code hands the host: supervisor calls (exlaunch mods' runtimes) go to horizon::svc as natively, the
+/// counter is lifted_ticks, and traps and branches to code nothing lifted stop the process with the guest's state.
+#[cfg(all(nx_runtime, not(nx_native)))]
+fn lifted_handlers() -> lifted::Handlers {
+    fn svc(cpu: &mut nxport_lifter::abi::Cpu, imm: u32, _pc: u64) {
+        let mut regs: [u64; 8] = cpu.x[..8].try_into().unwrap();
+        unsafe { horizon::svc::svc_dispatch(&mut regs, imm as u64) };
+        cpu.x[..8].copy_from_slice(&regs);
+    }
+    fn stop(cpu: &nxport_lifter::abi::Cpu, what: &str) -> ! {
+        let main = guest::loader::main_base() as u64;
+        let rel = |a: u64| if a >= main { format!("{a:#x} (main+{:#x})", a - main) } else { format!("{a:#x}") };
+        eprintln!("[-] Lifted: {what}; pc {}, lr {}, sp {:#x}", rel(cpu.pc), rel(cpu.x[30]), cpu.sp);
+        for (i, r) in cpu.x.chunks(4).enumerate() {
+            eprintln!("    x{:<2} {:#018x} {:#018x} {:#018x} {:#018x}", i * 4, r[0], r[1], r[2], r[3]);
+        }
+        std::process::exit(1);
+    }
+    fn trap(cpu: &mut nxport_lifter::abi::Cpu, kind: u32, imm: u32, pc: u64) -> ! {
+        cpu.pc = pc;
+        stop(cpu, &if kind == 0 { format!("brk #{imm:#x}") } else { "an instruction that was not lifted".to_string() })
+    }
+    fn unknown(cpu: &mut nxport_lifter::abi::Cpu) {
+        stop(cpu, "a branch to code that was not lifted")
+    }
+    lifted::Handlers { svc, trap, unknown, ticks: guest::regs::lifted_ticks }
 }

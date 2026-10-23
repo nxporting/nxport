@@ -48,7 +48,8 @@ pub fn lifted_x(n: usize) -> usize {
 }
 
 /// The counter guest code reads (CNTPCT_EL0) and its frequency (CNTFRQ_EL0): the hardware's natively; lifted, the host
-/// clock (crate::clock), which lifted code's counter reads must return too (lifted::Handlers::ticks).
+/// clock at the Switch's 19.2 MHz, which lifted code reads as its frequency (nxport-lifter) and its counter (lifted
+/// code's counter reads return `lifted_ticks`).
 pub fn counter() -> (u64, u64) {
     #[cfg(nx_native)]
     {
@@ -61,8 +62,18 @@ pub fn counter() -> (u64, u64) {
     }
     #[cfg(not(nx_native))]
     {
-        (crate::clock::ticks(), crate::clock::frequency())
+        (lifted_ticks(), LIFTED_FREQUENCY)
     }
+}
+
+/// CNTFRQ_EL0 in lifted code: the Switch's.
+#[cfg(not(nx_native))]
+pub const LIFTED_FREQUENCY: u64 = 19_200_000;
+
+/// CNTPCT_EL0 / CNTVCT_EL0 in lifted code: the host clock in LIFTED_FREQUENCY ticks.
+#[cfg(not(nx_native))]
+pub fn lifted_ticks() -> u64 {
+    (crate::clock::now_ns() as u128 * LIFTED_FREQUENCY as u128 / 1_000_000_000) as u64
 }
 
 /// TPIDRRO_EL0: the guest thread's Horizon thread-local region (IPC buffer, the thread pointer at +0x1f8). Natively

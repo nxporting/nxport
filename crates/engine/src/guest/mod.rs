@@ -43,9 +43,13 @@ pub unsafe fn call(addr: usize, args: &[u64]) -> u64 {
     }
 }
 
-/// `call` on a lifted host: through the calling thread's lifted CPU state, which does not exist yet
-/// (docs/windows-port.md, step 5).
+/// `call` on a lifted host: through the calling thread's lifted CPU state, on the guest stack it is using (inside an
+/// HLE call: the caller's), or on one of the thread's own the first time.
 #[cfg(not(nx_native))]
-pub unsafe fn call(addr: usize, _args: &[u64]) -> u64 {
-    unimplemented!("guest call {addr:#x}: the lifted runtime has no per-thread state yet");
+pub unsafe fn call(addr: usize, args: &[u64]) -> u64 {
+    let cpu = crate::lifted::thread_cpu();
+    if cpu.sp == 0 {
+        cpu.sp = (crate::horizon::thread_stack::allocate(8 << 20).1 & !15) as u64;
+    }
+    crate::lifted::library().call(cpu, addr as u64, args)
 }

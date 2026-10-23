@@ -1,14 +1,15 @@
-// A game module -> C through nxport-lifter, for hosts without the native runtime (docs/windows-port.md).
+// Guest code -> C through nxport-lifter, for hosts without the native runtime (docs/windows-port.md).
 //
-// This lifts a module as its NSO file holds it. What the runtime will run is the patched image (relocations, ExeFS
-// patches, SDK interposition, game hooks: nxport::guest_image's pipeline); lifting that comes once the load pipeline
-// runs off Apple hosts. Function starts are seeded from .eh_frame_hdr, the dynamic symbol table's functions and the
-// code pointers R_AARCH64_RELATIVE relocations store in data; the lifter adds call and branch targets.
+// lift_game lifts what the runtime will run: the patched image (relocations, ExeFS patches, SDK interposition, game
+// hooks; nxport::guest_modules). lift_nso lifts a module as its NSO file holds it. Function starts are seeded from
+// .eh_frame_hdr, the dynamic symbol table's functions and the code pointers R_AARCH64_RELATIVE relocations store in
+// data; the lifter adds call and branch targets.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use nxport_lifter::{ehframe, lift_module, Module, Options, Output};
+use nxport_lifter::{ehframe, lift_module, Module, Options};
+pub use nxport_lifter::Output;
 
 const R_AARCH64_RELATIVE: u64 = 1027;
 const STT_FUNC: u8 = 2;
@@ -21,11 +22,164 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
         img[s.mem_off..s.mem_off + s.data.len()].copy_from_slice(&s.data);
     }
     let text = base + n.text.mem_off as u64..base + (n.text.mem_off + n.text.data.len()) as u64;
-    let mut seeds = BTreeSet::from([text.start]);
-    if let Some(hdr) = ehframe::mod0_eh_frame_hdr(&img) {
-        seeds.extend(ehframe::hdr_functions(&img, base, hdr));
+    let out = lift_image(name, base, &img, text, n.dynamic().ok());
+    write_files(out_dir, &[&out])?;
+    Ok(out)
+}
+
+/// Lifts the game in `s.files.game_dir`, loaded and patched as the runtime loads it, into `out_dir`: the C files of each
+/// module and the runtime files. Returns each module's name and what was lifted, in the order the runtime registers
+/// them (lifted::GuestLibrary::load).
+#[cfg(any(target_vendor = "apple", windows))]
+pub fn lift_game(s: nxport::settings::Settings, out_dir: &Path) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
+    let mut lifted = Vec::new();
+    for m in nxport::guest_modules(s)? {
+        let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
+        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic);
+        lifted.push((m.name, out));
     }
-    if let Ok(d) = n.dynamic() {
+    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
+    let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
+    std::fs::write(out_dir.join(MODULES_FILE), names)?;
+    Ok(lifted)
+}
+
+/// The modules lift_game lifted, one name per line, in the directory of the C files and next to the library compiled
+/// from them (the runtime registers their tables by these names).
+pub const MODULES_FILE: &str = "modules.txt";
+
+/// Compiles the C files in `c_dir` (lift_game's or lift_nso's) into the guest library `out` (a DLL / shared library),
+/// running `cc` (a C compiler command line: clang, or `zig cc`) on `jobs` files at once. The objects stay in
+/// `c_dir/obj` and are reused while newer than their source.
+pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
+    // The x86-64-v3 features, spelled out (zig cc 0.13 misreads -march=x86-64-v3): above all hardware FMA, which the
+    // lifted floating-point code needs to round like the guest's.
+    let flags = [
+        "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c",
+        "-mpopcnt", "-msse4.2", "-mcx16",
+    ];
+    let obj_dir = c_dir.join("obj");
+    std::fs::create_dir_all(&obj_dir)?;
+    let mut sources: Vec<_> = std::fs::read_dir(c_dir)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "c"))
+        .collect();
+    // Largest first, so the long compiles do not all start last.
+    sources.sort_by_key(|p| std::cmp::Reverse(p.metadata().map_or(0, |m| m.len())));
+    let objects: Vec<_> = sources.iter().map(|s| obj_dir.join(s.file_name().unwrap()).with_extension("o")).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failed = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.max(1) {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let (Some(src), Some(obj)) = (sources.get(i), objects.get(i)) else { break };
+                let newer = |a: &Path, b: &Path| -> bool {
+                    match (a.metadata().and_then(|m| m.modified()), b.metadata().and_then(|m| m.modified())) {
+                        (Ok(a), Ok(b)) => a > b,
+                        _ => true,
+                    }
+                };
+                if obj.is_file() && !newer(src, obj) {
+                    continue;
+                }
+                let r = std::process::Command::new(prog)
+                    .args(pre)
+                    .args(flags)
+                    .arg("-c")
+                    .arg(src)
+                    .arg("-o")
+                    .arg(obj)
+                    .output();
+                match r {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => failed.lock().unwrap().push(format!("{}: {}", src.display(), String::from_utf8_lossy(&o.stderr))),
+                    Err(e) => failed.lock().unwrap().push(format!("{}: {e}", src.display())),
+                }
+            });
+        }
+    });
+    let failed = failed.into_inner().unwrap();
+    if let Some(f) = failed.first() {
+        return Err(format!("{} of {} C files failed to compile; the first: {f}", failed.len(), sources.len()).into());
+    }
+    if let Some(dir) = out.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // A response file: hundreds of object paths overflow a Windows command line.
+    let rsp = obj_dir.join("link.rsp");
+    let quoted: String = objects.iter().map(|o| format!("\"{}\"\n", o.display().to_string().replace('\\', "/"))).collect();
+    std::fs::write(&rsp, quoted)?;
+    let o = std::process::Command::new(prog)
+        .args(pre)
+        .arg("-shared")
+        .arg("-o")
+        .arg(out)
+        .arg(format!("@{}", rsp.display()))
+        .output()?;
+    if !o.status.success() {
+        return Err(format!("linking {}: {}", out.display(), String::from_utf8_lossy(&o.stderr)).into());
+    }
+    let modules = c_dir.join(MODULES_FILE);
+    if modules.is_file() {
+        std::fs::copy(&modules, out.with_file_name(MODULES_FILE))?;
+    }
+    Ok(())
+}
+
+/// The settings a game in `dump` is lifted with (and must later run with: patches and hooks depend on them): the
+/// platform's and the game's profiles, then `edits`, without mods.
+pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch) -> nxport::settings::Settings {
+    use nxport::settings::{profiles, SettingsPatch};
+    let mut layers = vec![profiles::platform(profiles::PLATFORM)];
+    if let Some(p) = nxport::profile::identify(dump).profile {
+        layers.extend(nxport::profile::layers(p, profiles::PLATFORM));
+    }
+    layers.push(edits);
+    let mut env = SettingsPatch::default();
+    env.files.game_dir = Some(dump.to_path_buf());
+    env.files.no_mods = Some(true);
+    env.display.headless = Some(true);
+    layers.push(env);
+    nxport::settings::resolve(layers)
+}
+
+/// Writes the C files, leaving those whose contents did not change untouched: compile reuses their objects.
+fn write_files(out_dir: &Path, outputs: &[&Output]) -> std::io::Result<()> {
+    std::fs::create_dir_all(out_dir)?;
+    let write = |file: &str, body: &str| -> std::io::Result<()> {
+        let path = out_dir.join(file);
+        if std::fs::read(&path).is_ok_and(|old| old == body.as_bytes()) {
+            return Ok(());
+        }
+        std::fs::write(path, body)
+    };
+    for (file, body) in nxport_lifter::RUNTIME_FILES {
+        write(file, body)?;
+    }
+    for (file, body) in outputs.iter().flat_map(|o| &o.files) {
+        write(file, body)?;
+    }
+    Ok(())
+}
+
+/// Lifts module `name`: `img` is its memory from guest address `base`, `text` its code; `dynamic` its dynamic tables,
+/// when it has them, which name its functions.
+fn lift_image(
+    name: &str,
+    base: u64,
+    img: &[u8],
+    text: std::ops::Range<u64>,
+    dynamic: Option<nxport::nso::Dynamic>,
+) -> Output {
+    let mut seeds = BTreeSet::from([text.start]);
+    // Both found through MOD0, which a bare code region has none of.
+    if let Some(d) = dynamic {
+        if let Some(hdr) = ehframe::mod0_eh_frame_hdr(img) {
+            seeds.extend(ehframe::hdr_functions(img, base, hdr));
+        }
         let u64_at = |o: usize| img.get(o..o + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
         // Elf64_Sym (24 bytes): name u32, info u8, other u8, shndx u16, value u64, size u64. The string table follows
         // the symbol table in Switch modules, which bounds it.
@@ -49,16 +203,8 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
             }
         }
     }
-    let m = Module { name: name.to_string(), base, image: &img, text, seeds };
-    let out = lift_module(&m, &Options::default());
-    std::fs::create_dir_all(out_dir)?;
-    for (name, text) in nxport_lifter::RUNTIME_FILES {
-        std::fs::write(out_dir.join(name), text)?;
-    }
-    for (file, body) in &out.files {
-        std::fs::write(out_dir.join(file), body)?;
-    }
-    Ok(out)
+    let m = Module { name: name.to_string(), base, image: img, text, seeds };
+    lift_module(&m, &Options::default())
 }
 
 #[cfg(test)]

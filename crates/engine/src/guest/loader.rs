@@ -132,10 +132,12 @@ impl GuestMemorySpace {
         // AOT images with mods (cpu/aot.rs): exlaunch plugins write absolute addresses (trampoline pointers) into their
         // code, so the guest must sit at the same address in the run that dumps the image (macOS) and the runs that load
         // it (iOS). A fixed spot both address spaces leave free; any other run lets the kernel choose.
-        let fixed = (crate::cpu::aot::active()
-            && crate::horizon::fs::mods().iter().any(|(_, d)| {
-                (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file())
-            }))
+        // Lifted code (docs/windows-port.md) has the guest addresses it was lifted at built in: always fixed there.
+        let fixed = !cfg!(nx_native)
+            || (crate::cpu::aot::active()
+                && crate::horizon::fs::mods().iter().any(|(_, d)| {
+                    (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file())
+                }))
             || crate::settings::get().guest.fixed_guest_base;
 
         let expected_base = FIXED_GUEST_BASE - RTLD_SLOT_SIZE;
