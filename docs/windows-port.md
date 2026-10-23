@@ -183,6 +183,22 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
   addresses are fixed, so a native run and a lifted run of the same game produce comparable traces, on the same Mac
   or across machines; the first difference points to the lifted function that is wrong.
 - Smallest game first (Kirby), mods off, `--headless`, then `--audio-wav` and frame dumps for end-to-end comparisons.
+- GPU backends (planned): conformance tests with the Metal backend as the reference, so a new backend (Vulkan) is
+  developed against recorded frames instead of the running game, and a graphics fix in one backend shows up as a
+  failing test in the others.
+  - A frame capture (`--capture-frame=N`, recorded on the Mac): the frame's decoded NVN command stream, the memory
+    it reaches (GPU memory pools, texture and sampler descriptor pools, shader code, NVN texture objects) at its
+    addresses, and Metal's results: each color target as it stands when its render pass ends, and the presented
+    image.
+  - Replay maps the memory back at the same addresses (`os::reserve`, `At::Exactly`), runs the stream on the backend
+    under test, reads the same targets back (a readback method on `gpu::Backend`) and compares them with per-capture
+    tolerances (blending and filtering round differently across GPUs). It stops at the first pass that differs and
+    writes a diff image.
+  - Two tiers: captures of games hold game data and stay outside the repository (the tests take their directory and
+    skip without one); synthetic scenarios (short NVN sequences built through the NVN API layer, with small
+    hand-encoded Maxwell shaders so they go through sass2spv) are committed, their references also recorded on Metal.
+  - A fix found in one backend: re-record the affected references (the diff images show what changed), then make
+    the other backends match.
 
 ## Order of work
 
