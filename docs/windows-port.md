@@ -183,22 +183,33 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
   addresses are fixed, so a native run and a lifted run of the same game produce comparable traces, on the same Mac
   or across machines; the first difference points to the lifted function that is wrong.
 - Smallest game first (Kirby), mods off, `--headless`, then `--audio-wav` and frame dumps for end-to-end comparisons.
-- GPU backends (planned): conformance tests with the Metal backend as the reference, so a new backend (Vulkan) is
-  developed against recorded frames instead of the running game, and a graphics fix in one backend shows up as a
-  failing test in the others.
-  - A frame capture (`--capture-frame=N`, recorded on the Mac): the frame's decoded NVN command stream, the memory
-    it reaches (GPU memory pools, texture and sampler descriptor pools, shader code, NVN texture objects) at its
-    addresses, and Metal's results: each color target as it stands when its render pass ends, and the presented
-    image.
-  - Replay maps the memory back at the same addresses (`os::reserve`, `At::Exactly`), runs the stream on the backend
-    under test, reads the same targets back (a readback method on `gpu::Backend`) and compares them with per-capture
-    tolerances (blending and filtering round differently across GPUs). It stops at the first pass that differs and
-    writes a diff image.
-  - Two tiers: captures of games hold game data and stay outside the repository (the tests take their directory and
-    skip without one); synthetic scenarios (short NVN sequences built through the NVN API layer, with small
-    hand-encoded Maxwell shaders so they go through sass2spv) are committed, their references also recorded on Metal.
+- GPU backends: conformance tests with the Metal backend as the reference, so a new backend (Vulkan) is developed
+  against recorded frames instead of the running game, and a graphics fix in one backend shows up as a failing test in
+  the others (crates/engine/src/capture, crates/cli/tests/gpu_conformance.rs).
+  - A frame capture (`nxport --capture-frame=N`, default destination the game's data directory's captures/): the
+    frame's decoded NVN command lists, the NVN frontend's state the backend consults (memory pools, virtual mappings,
+    texture snapshots and pool registrations, samplers, programs), the guest memory the frame reaches at its addresses,
+    and the textures only the GPU held (read back through `gpu::Backend::gpu_only_textures` in the guest's texel
+    encoding). It is taken after the frame's last submit with the GPU drained, the game's fence wait held, as
+    `--replay` re-runs frames.
+  - `nxport-cli gpu-replay DIR` maps the memory back at the same addresses (`os::reserve`, `At::Exactly`), writes the
+    GPU-only textures into it in guest layout (where the Switch's GPU would have left them, so a backend uploads them like
+    any guest data), installs the frontend state, flattens the frame's command stream and cuts it into passes (runs with
+    the same color targets bound). Each pass is submitted and waited for alone and its color targets are read back
+    (`gpu::Backend::read_texture`); `--record` keeps them as references, a check compares against them with the
+    capture's tolerance.toml, stops at the first differing pass and writes diff images.
+  - Two tiers: game captures hold game data and stay outside the repository (the test checks the ones in the games'
+    data directories and skips without any); synthetic scenarios (`nxport-cli gpu-scenario`: short NVN sequences
+    recorded through the frontend, with hand-encoded Maxwell shaders that go through sass2spv) are committed with their
+    references (crates/cli/tests/gpu).
   - A fix found in one backend: re-record the affected references (the diff images show what changed), then make
     the other backends match.
+  - Measured on TotK (Hateno): 1.2 GB of memory (578 MB compressed) and 3,196 GPU-only texture subresources per capture,
+    138 passes and 252 targets; a replay takes ~10 s. Two Metal replays differ in a few dozen pixels (GPU particles),
+    which the capture's tolerance allows.
+  - Not covered yet: depth formats Metal widens (D24, D24S8, D32FS8) are neither compared nor restored, multisample
+    targets are not read back, and memory is the state after the frame (an inline uniform update over a range the frame
+    read before it shows the newer data in a replay).
 
 ## Order of work
 
