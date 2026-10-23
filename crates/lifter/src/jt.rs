@@ -19,11 +19,11 @@ pub trait Memory {
     fn bytes(&self, addr: u64, len: usize) -> Option<&[u8]>;
 }
 
-/// A load of a table entry: `table` indexed by register `idx` (scaled by `scale` bits), `size` bytes, sign-extended
-/// or not, by the instruction at `at`.
+/// A load of a table entry: `table` (None: not known from the instructions before) indexed by register `idx` (scaled by
+/// `scale` bits), `size` bytes, sign-extended or not, by the instruction at `at`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Load {
-    table: u64,
+    table: Option<u64>,
     idx: u32,
     size: u32,
     signed: bool,
@@ -42,11 +42,10 @@ enum Sym {
 const WINDOW: u64 = 24;
 const MAX_ENTRIES: u64 = 4096;
 
-/// The targets of the `br` at `br_pc` in the function starting at `entry`, or None if it is not a recognised table.
-pub fn resolve(mem: &dyn Memory, entry: u64, br_pc: u64) -> Option<Vec<u64>> {
-    let w = mem.word(br_pc)?;
-    let t = bits(w, 5, 5);
-    let Sym::Target { base, load: Load { table, idx, size, signed, scale, at }, shift } = value(mem, entry, br_pc, t, 0)?
+/// The targets of a jump through register `r` holding its value just before `pc` (a `br` there, or the instruction
+/// after one that sets it), in the function starting at `entry`; None if it is not a recognised table.
+pub fn resolve(mem: &dyn Memory, entry: u64, pc: u64, r: u32) -> Option<Vec<u64>> {
+    let Sym::Target { base, load: Load { table, idx, size, signed, scale, at }, shift } = value(mem, entry, pc, r, 0)?
     else {
         return None;
     };
@@ -54,7 +53,7 @@ pub fn resolve(mem: &dyn Memory, entry: u64, br_pc: u64) -> Option<Vec<u64>> {
     if count == 0 || count > MAX_ENTRIES || (1u32 << scale) != size {
         return None;
     }
-    let raw = mem.bytes(table, (count as usize) * size as usize)?;
+    let raw = mem.bytes(table?, (count as usize) * size as usize)?;
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count as usize {
         let e = &raw[i * size as usize..(i + 1) * size as usize];
@@ -73,6 +72,16 @@ pub fn resolve(mem: &dyn Memory, entry: u64, br_pc: u64) -> Option<Vec<u64>> {
     out.sort_unstable();
     out.dedup();
     Some(out)
+}
+
+/// For a jump (as `resolve`) with the shape of a table (`base + (entry << shift)`) that `resolve` cannot read (the
+/// table address or its bounds check is out of sight), the range every target lies in: any entry the load's size can
+/// hold.
+pub fn reach(mem: &dyn Memory, entry: u64, pc: u64, r: u32) -> Option<std::ops::RangeInclusive<u64>> {
+    let Sym::Target { base, load, shift } = value(mem, entry, pc, r, 0)? else { return None };
+    let bits = load.size as u64 * 8;
+    let (lo, hi) = if load.signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
+    Some(base.wrapping_add((lo << shift) as u64)..=base.wrapping_add((hi << shift) as u64))
 }
 
 /// The symbolic value of register `r` just before `pc`, from the closest instruction before it that writes it.
@@ -116,7 +125,10 @@ fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sy
             if opc == 0 || size == 3 || (size == 2 && opc == 3) || !matches!(option, 2 | 3 | 6 | 7) {
                 return None;
             }
-            let Sym::Const(table) = value(mem, entry, a, bits(w, 5, 5), depth + 1)? else { return None };
+            let table = match value(mem, entry, a, bits(w, 5, 5), depth + 1) {
+                Some(Sym::Const(t)) => Some(t),
+                _ => None,
+            };
             let scale = if s == 1 { size } else { 0 };
             return Some(Sym::Load(Load { table, idx: bits(w, 16, 5), size: 1 << size, signed: opc >= 2, scale, at: a }));
         }
@@ -148,7 +160,7 @@ fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sy
 }
 
 /// The number of table entries, from the bounds check of register `idx` before the table load at `load_pc` (following
-/// register copies: `cmp w0, #5; b.hi ..; mov w8, w0; .. ldrsw x8, [x9, x8, lsl #2]`).
+/// register copies and zero extensions: `cmp w0, #5; b.hi ..; mov w8, w0; .. ldrsw x8, [x9, x8, lsl #2]`).
 fn bound(mem: &dyn Memory, entry: u64, load_pc: u64, mut idx: u32) -> Option<u64> {
     let mut a = load_pc;
     let mut limit_cond = None;
@@ -172,7 +184,7 @@ fn bound(mem: &dyn Memory, entry: u64, load_pc: u64, mut idx: u32) -> Option<u64
             };
         }
         if writes(w, idx) {
-            match mov_reg(w) {
+            match mov_reg(w).or_else(|| zero_extend(w)) {
                 Some(src) => idx = src,
                 None => return None,
             }
@@ -186,12 +198,18 @@ fn mov_reg(w: u32) -> Option<u32> {
     (w & 0x7f20_ffe0 == 0x2a00_03e0).then(|| bits(w, 16, 5))
 }
 
-fn is_call(w: u32) -> bool {
+/// The source register of a zero extension of its low 32 bits: `and xd, xs, #0xffffffff` / `ubfx xd, xs, #0, #32`
+/// (uxtw), which keep a 32-bit bound.
+fn zero_extend(w: u32) -> Option<u32> {
+    (w & 0xffff_fc00 == 0x9240_7c00 || w & 0xffff_fc00 == 0xd340_7c00).then(|| bits(w, 5, 5))
+}
+
+pub(crate) fn is_call(w: u32) -> bool {
     w & 0xfc00_0000 == 0x9400_0000 || w & 0xffff_fc1f == 0xd63f_0000
 }
 
 /// Registers a call preserves (AAPCS64 x19-x28): a table base kept in one survives the call.
-fn callee_saved(r: u32) -> bool {
+pub(crate) fn callee_saved(r: u32) -> bool {
     (19..=28).contains(&r)
 }
 
@@ -205,7 +223,7 @@ fn is_bcond(w: u32) -> bool {
 }
 
 /// Whether `w` may write general register `r` (conservative: anything with Rd = r that is not a store or a compare).
-fn writes(w: u32, r: u32) -> bool {
+pub(crate) fn writes(w: u32, r: u32) -> bool {
     let op0 = bits(w, 25, 4);
     let is_ldst = op0 & 0b0101 == 0b0100;
     if is_ldst {
@@ -216,13 +234,19 @@ fn writes(w: u32, r: u32) -> bool {
         };
         let rn_wb = (bits(w, 27, 3) == 0b111 && bits(w, 24, 2) == 0 && bits(w, 21, 1) == 0 && bits(w, 10, 1) == 1)
             || (bits(w, 27, 3) == 0b101 && matches!(bits(w, 23, 2), 1 | 3));
-        let pair_rt2 = bits(w, 27, 3) == 0b101 && load && bits(w, 10, 5) == r;
+        let pair_rt2 = bits(w, 27, 3) == 0b101 && load && bits(w, 26, 1) == 0 && bits(w, 10, 5) == r;
         let excl_status = bits(w, 24, 6) == 0b001000 && !load && bits(w, 16, 5) == r;
         return (load && bits(w, 26, 1) == 0 && bits(w, 0, 5) == r) || (rn_wb && bits(w, 5, 5) == r) || pair_rt2
             || excl_status;
     }
     if is_branch(w) {
         return bits(w, 26, 5) == 0b00101 && bits(w, 31, 1) == 1 && r == 30;
+    }
+    if op0 & 0b0111 == 0b0111 {
+        // floating point and SIMD: only conversions to and from integers (fmov w, s; fcvtzs ..) and umov / smov /
+        // dup (general) have a general register as Rd
+        let to_general = w & 0x7f20_fc00 == 0x1e20_0000 || w & 0xbfe0_8400 == 0x0e00_0400;
+        return to_general && bits(w, 0, 5) == r;
     }
     bits(w, 0, 5) == r
 }
@@ -258,7 +282,7 @@ mod tests {
         }
         data[0x100..0x104].copy_from_slice(&[0, 1, 2, 4]); // targets 0x1020, 0x1024, 0x1028, 0x1030
         let img = Img { base: 0x1000, data };
-        assert_eq!(resolve(&img, 0x1000, 0x101c), Some(vec![0x1020, 0x1024, 0x1028, 0x1030]));
+        assert_eq!(resolve(&img, 0x1000, 0x101c, 11), Some(vec![0x1020, 0x1024, 0x1028, 0x1030]));
     }
 
     #[test]
@@ -276,6 +300,34 @@ mod tests {
             data[0x100 + 4 * i..0x104 + 4 * i].copy_from_slice(&off.to_le_bytes());
         }
         let img = Img { base: 0x2000, data };
-        assert_eq!(resolve(&img, 0x2000, 0x201c), Some(vec![0x2020, 0x2028, 0x2030, 0x2038, 0x2040, 0x2048]));
+        assert_eq!(resolve(&img, 0x2000, 0x201c, 8), Some(vec![0x2020, 0x2028, 0x2030, 0x2038, 0x2040, 0x2048]));
+    }
+
+    #[test]
+    fn general_register_writes() {
+        assert!(!writes(0x1e262890, 16)); // fadd s16, s4, s6
+        assert!(writes(0x1e260010, 16)); // fmov w16, s0
+        assert!(writes(0x0e043c10, 16)); // umov w16, v0.s[0]
+        assert!(!writes(0xad404410, 17)); // ldp q16, q17, [x0]
+        assert!(writes(0xa9404410, 17)); // ldp x16, x17, [x0]
+    }
+
+    #[test]
+    fn zero_extended_index() {
+        // TotK: 0x3000: cmp w27, #2; b.hi ..; ubfx x8, x27, #0, #32; adrp x11, 0x3000; add x11, x11, #0x100;
+        //       adr x9, 0x3028; ldrh w10, [x11, x8, lsl #1]; add x9, x9, x10, lsl #2; mov w23, wzr; br x9
+        let code: [u32; 10] = [
+            0x71000b7f, 0x54000208, 0xd3407f68, 0x9000000b, 0x9104016b, 0x100000a9, 0x7868796a, 0x8b0a0929, 0x2a1f03f7,
+            0xd61f0120,
+        ];
+        let mut data = vec![0u8; 0x200];
+        for (i, w) in code.iter().enumerate() {
+            data[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+        }
+        for (i, e) in [0u16, 1, 3].iter().enumerate() {
+            data[0x100 + 2 * i..0x102 + 2 * i].copy_from_slice(&e.to_le_bytes());
+        }
+        let img = Img { base: 0x3000, data };
+        assert_eq!(resolve(&img, 0x3000, 0x3024, 9), Some(vec![0x3028, 0x302c, 0x3034]));
     }
 }

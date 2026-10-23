@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use crate::bits::hx;
+use crate::bits::{bits, hx, sext};
 use crate::insn::{lift, Insn};
 use crate::jt;
 
@@ -33,7 +33,7 @@ pub struct Output {
     /// Instructions lifted to traps because their encoding is not handled, by reason.
     pub unsupported: BTreeMap<String, usize>,
     pub jump_tables: usize,
-    /// Computed branches that are not a recognised table: their function gets a label at every instruction.
+    /// Computed branches that are not a recognised table: their function is split into a function per block.
     pub unresolved_computed: usize,
 }
 
@@ -99,9 +99,12 @@ impl<'m, 'a> Lifted<'m, 'a> {
 
 /// How the `br`s of a function are emitted.
 enum Table {
+    /// Every target known: a switch over them (anything else goes through the dispatcher).
     Cases(Vec<u64>),
-    /// Unresolved computed branch: any instruction of the function may be the target.
-    All,
+    /// Unresolved computed branch: through the dispatcher, to function starts at the targets that are known, at every
+    /// instruction table entries can reach, and at every block start if some definition of the register is arithmetic
+    /// the matcher cannot follow.
+    All { known: Vec<u64>, reach: Vec<std::ops::RangeInclusive<u64>>, blocks: bool },
 }
 
 struct Scan {
@@ -112,6 +115,17 @@ struct Scan {
 
 fn scan(l: &Lifted, entry: u64, end: u64) -> Scan {
     let mut s = Scan { labels: BTreeSet::from([entry]), external: BTreeSet::new(), tables: BTreeMap::new() };
+    let taken = taken_labels(l, entry, end);
+    let mut preds: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    let mut a = entry;
+    while a < end {
+        if let Insn::B(t) | Insn::BCond(_, t) = l.at(a) {
+            if (entry..end).contains(t) {
+                preds.entry(*t).or_default().push(a);
+            }
+        }
+        a += 4;
+    }
     let mut a = entry;
     while a < end {
         match l.at(a) {
@@ -125,8 +139,8 @@ fn scan(l: &Lifted, entry: u64, end: u64) -> Scan {
             Insn::Bl(t) if l.in_text(*t) => {
                 s.external.insert(*t);
             }
-            Insn::Br(_) => {
-                if let Some(targets) = jt::resolve(l.m, entry, a) {
+            Insn::Br(_) => match branch_table(l, entry, &preds, &taken, a) {
+                Some(Table::Cases(targets)) => {
                     for &t in &targets {
                         if (entry..end).contains(&t) {
                             s.labels.insert(t);
@@ -135,18 +149,132 @@ fn scan(l: &Lifted, entry: u64, end: u64) -> Scan {
                         }
                     }
                     s.tables.insert(a, Table::Cases(targets));
-                } else if computed(l, entry, a) {
-                    s.tables.insert(a, Table::All);
                 }
-            }
+                Some(t) => {
+                    s.tables.insert(a, t);
+                }
+                None => {}
+            },
             _ => {}
         }
         a += 4;
     }
-    if let Some(Table::All) = s.tables.values().find(|t| matches!(t, Table::All)) {
-        s.labels.extend((entry..end).step_by(4));
+    // An unresolved branch's possible targets become function starts, which it reaches through the dispatcher (a
+    // switch into the function would do too, but compilers take minutes over a large function entered at hundreds of
+    // labels): every instruction table entries can reach, or, when even that is not known, every block start (case
+    // bodies start after a block ends, unless a case falls into the next one). A target that is not a start stops as
+    // code that was not lifted, naming it. The function is then split at those starts, so the targets of its switches
+    // become starts too: a switch and its cases may end up in different pieces.
+    let mut block_starts = false;
+    for t in s.tables.values() {
+        if let Table::All { known, reach, blocks } = t {
+            s.external.extend(known);
+            for r in reach {
+                let (lo, hi) = ((*r.start()).max(entry), (*r.end()).min(end - 4));
+                s.external.extend((lo.next_multiple_of(4)..=hi).step_by(4));
+            }
+            block_starts |= blocks;
+        }
+    }
+    if s.tables.values().any(|t| matches!(t, Table::All { .. })) {
+        for t in s.tables.values() {
+            if let Table::Cases(targets) = t {
+                s.external.extend(targets);
+            }
+        }
+    }
+    if block_starts {
+        let mut a = entry;
+        while a + 4 < end {
+            if l.at(a).ends_block() {
+                s.external.insert(a + 4);
+            }
+            a += 4;
+        }
     }
     s
+}
+
+/// How the `br` at `br_pc` is emitted, from what each definition of its register that reaches it is: a recognised
+/// table, a table whose entries are out of sight (`jt::reach`), an `adr` (a computed goto), arithmetic the matcher cannot
+/// follow, or anything else (a function pointer: a plain dispatch). Compilers merge the `br`s of several switches into
+/// one, so a definition may be in any block before it. None: a plain dispatch.
+fn branch_table(
+    l: &Lifted,
+    entry: u64,
+    preds: &BTreeMap<u64, Vec<u64>>,
+    taken: &[u64],
+    br_pc: u64,
+) -> Option<Table> {
+    let r = bits(jt::Memory::word(l.m, br_pc)?, 5, 5);
+    let (mut known, mut reach, mut blocks) = (BTreeSet::new(), Vec::new(), false);
+    let Some(defs) = reaching_defs(l, entry, preds, br_pc, r) else {
+        // A definition is out of sight (before the function, or past a call): the instructions just before the `br`.
+        return if let Some(targets) = jt::resolve(l.m, entry, br_pc, r) {
+            Some(Table::Cases(targets))
+        } else if let Some(range) = jt::reach(l.m, entry, br_pc, r) {
+            Some(Table::All { known: Vec::new(), reach: vec![range], blocks: false })
+        } else if computed(l, entry, br_pc) {
+            Some(Table::All { known: Vec::new(), reach: Vec::new(), blocks: true })
+        } else if !taken.is_empty() {
+            Some(Table::Cases(taken.to_vec()))
+        } else {
+            None
+        };
+    };
+    for d in defs {
+        let w = jt::Memory::word(l.m, d).unwrap_or(0);
+        if let Some(targets) = jt::resolve(l.m, entry, d + 4, r) {
+            known.extend(targets);
+        } else if w & 0x9f00_0000 == 0x1000_0000 {
+            known.insert(d.wrapping_add(sext(((bits(w, 5, 19) << 2) | bits(w, 29, 2)) as u64, 21) as u64));
+        } else if let Some(range) = jt::reach(l.m, entry, d + 4, r) {
+            reach.push(range);
+        } else if w & 0x1f00_0000 == 0x0b00_0000 {
+            blocks = true; // add/sub (register)
+        }
+    }
+    let known: Vec<u64> = known.into_iter().filter(|&t| l.in_text(t)).collect();
+    if reach.is_empty() && !blocks {
+        return (!known.is_empty()).then_some(Table::Cases(known));
+    }
+    Some(Table::All { known, reach, blocks })
+}
+
+/// The instructions in the function that may have set register `r` last before `pc`, following its branches back
+/// (`preds`: the branches to each address); None if one is out of sight: a path reaches the function's start, or a
+/// call that does not preserve `r`, or the search grows too large.
+fn reaching_defs(l: &Lifted, entry: u64, preds: &BTreeMap<u64, Vec<u64>>, pc: u64, r: u32) -> Option<Vec<u64>> {
+    let (mut defs, mut seen, mut work) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
+    // Control reached `a`: from the branches to it, and from the instruction before unless that ends a block.
+    let arrive = |a: u64, work: &mut Vec<u64>| -> Option<()> {
+        if a == entry {
+            return None;
+        }
+        work.extend(preds.get(&a).into_iter().flatten());
+        if !l.at(a - 4).ends_block() {
+            work.push(a - 4);
+        }
+        Some(())
+    };
+    arrive(pc, &mut work)?;
+    while let Some(a) = work.pop() {
+        if !seen.insert(a) {
+            continue;
+        }
+        if seen.len() > 512 {
+            return None;
+        }
+        let w = jt::Memory::word(l.m, a)?;
+        if jt::writes(w, r) {
+            defs.insert(a);
+        } else if jt::is_call(w) && !jt::callee_saved(r) {
+            return None;
+        } else {
+            arrive(a, &mut work)?;
+        }
+    }
+    Some(defs.into_iter().collect())
 }
 
 /// Whether the `br` register comes from address arithmetic close before it (a table the matcher did not recognise),
@@ -162,10 +290,29 @@ fn computed(l: &Lifted, entry: u64, br_pc: u64) -> bool {
         }
         let w = jt::Memory::word(l.m, a).unwrap_or(0);
         if w & 31 == rn {
-            return w & 0x1f00_0000 == 0x0b00_0000 || w & 0x9f00_0000 == 0x1000_0000; // add/sub (register), adr
+            return w & 0x1f00_0000 == 0x0b00_0000; // add/sub (register); an adr is a computed goto (taken_labels)
         }
     }
     false
+}
+
+/// The addresses inside the function that it takes with `adr`: the labels a computed goto (`br` of a register no table
+/// explains) may go to.
+fn taken_labels(l: &Lifted, entry: u64, end: u64) -> Vec<u64> {
+    let mut taken = BTreeSet::new();
+    let mut a = entry;
+    while a < end {
+        let w = jt::Memory::word(l.m, a).unwrap_or(0);
+        if w & 0x9f00_0000 == 0x1000_0000 {
+            let imm = sext(((bits(w, 5, 19) << 2) | bits(w, 29, 2)) as u64, 21);
+            let t = a.wrapping_add(imm as u64);
+            if (entry..end).contains(&t) && t % 4 == 0 {
+                taken.insert(t);
+            }
+        }
+        a += 4;
+    }
+    taken.into_iter().collect()
 }
 
 /// Function starts: the seeds and every `bl` target, then every target branched to from another function, until no
@@ -219,7 +366,6 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
         }
     };
     let _ = writeln!(out, "RT_FN void {}(Cpu *c) {{", fname(entry));
-    let all = s.tables.values().any(|t| matches!(t, Table::All));
     let mut a = entry;
     let mut last_ends = false;
     while a < end {
@@ -245,8 +391,7 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
                     }
                     format!("{{ uint64_t t = {target}; switch (t) {{ {cases}default: c->pc = t; {TAIL_DISPATCH} }} }}")
                 }
-                Some(Table::All) => format!("c->pc = {target}; goto L_dispatch;"),
-                None => format!("c->pc = {target}; {TAIL_DISPATCH}"),
+                Some(Table::All { .. }) | None => format!("c->pc = {target}; {TAIL_DISPATCH}"),
             },
             Insn::Ret(target) => format!("c->pc = {target}; return;"),
         };
@@ -258,15 +403,6 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
         // falls through into the next function
         let line = if end < l.m.text.end { jump(end, refs) } else { format!("rt_udf(c, {});", hx(end)) };
         let _ = writeln!(out, "    {line}");
-    }
-    if all {
-        let mut cases = String::new();
-        let mut t = entry;
-        while t < end {
-            let _ = write!(cases, "case {}: goto L_{t:x}; ", hx(t));
-            t += 4;
-        }
-        let _ = writeln!(out, "L_dispatch:\n    switch (c->pc) {{ {cases}default: break; }}\n    {TAIL_DISPATCH}");
     }
     out.push_str("}\n\n");
 }
@@ -297,7 +433,7 @@ pub fn lift_module(m: &Module, opts: &Options) -> Output {
         let end = starts.get(i + 1).copied().unwrap_or(m.text.end);
         let s = scan(&l, entry, end);
         jump_tables += s.tables.values().filter(|t| matches!(t, Table::Cases(_))).count();
-        unresolved_computed += s.tables.values().filter(|t| matches!(t, Table::All)).count();
+        unresolved_computed += s.tables.values().filter(|t| matches!(t, Table::All { .. })).count();
         emit_function(&l, entry, end, &mut body, &mut refs);
         defined.insert(entry);
         in_chunk += ((end - entry) / 4) as usize;
@@ -379,5 +515,67 @@ mod tests {
         assert!(body.contains("c->x[30] = 0x100010ull; f_100100(c); RT_RETURNED(c, 0x100010ull)"));
         assert!(body.contains("case 0x100238ull: goto L_100238;"));
         assert!(body.contains("goto L_100104;")); // the loop's back edge
+    }
+
+    #[test]
+    fn computed_goto() {
+        // 0x1000: adr x19, 0x1010; cbz x0, 0x100c; adr x19, 0x1014; br x19; 0x1010: ret; 0x1014: ret
+        let mut img = Vec::new();
+        for w in [0x10000093u32, 0xb4000040, 0x10000073, 0xd61f0260, 0xd65f03c0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]) };
+        let out = lift_module(&m, &Options::default());
+        assert_eq!((out.functions, out.unresolved_computed), (1, 0));
+        let body = &out.files[0].1;
+        assert!(body.contains("case 0x1010ull: goto L_1010; case 0x1014ull: goto L_1014;"));
+        assert!(!body.contains("L_1004:")); // no label at every instruction
+    }
+
+    #[test]
+    fn unresolved_table() {
+        // 0x1000: adr x9, 0x1010; add x9, x9, x0, lsl #2; br x9; 0x100c, 0x1010, 0x1014: ret
+        let mut img = Vec::new();
+        for w in [0x10000089u32, 0x8b000929, 0xd61f0120, 0xd65f03c0, 0xd65f03c0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]) };
+        let out = lift_module(&m, &Options::default());
+        assert_eq!((out.functions, out.unresolved_computed), (4, 1)); // a function per block
+        let body = &out.files[0].1;
+        assert!(body.contains("RT_FN void f_1010(Cpu *c) {") && !body.contains("switch"));
+    }
+
+    #[test]
+    fn table_out_of_sight() {
+        // The table's address is an argument: 0x1000: adr x9, 0x1010; ldrb w10, [x1, x0]; add x9, x9, x10, lsl #2;
+        // br x9; 0x1010: mov x0, #1 (falls into the next case); 0x1014: mov x0, #2; ret
+        let mut img = Vec::new();
+        for w in [0x10000089u32, 0x3860682a, 0x8b0a0929, 0xd61f0120, 0xd2800020, 0xd2800040, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x101c, seeds: BTreeSet::from([0x1000]) };
+        let out = lift_module(&m, &Options::default());
+        assert_eq!((out.functions, out.unresolved_computed), (4, 1)); // a start at each instruction a byte reaches
+        assert!(out.files[0].1.contains("RT_FN void f_1014(Cpu *c) {"));
+    }
+
+    #[test]
+    fn merged_branch() {
+        // Two paths set x9 and share one `br`: 0x1000: cbz x1, 0x1010; adr x9, 0x1020; b 0x1018; adr x10, 0x101c;
+        // 0x1010: adr x9, 0x1024; mov x2, #0; 0x1018: br x9; ret; 0x1020: ret; 0x1024: ret
+        let mut img = Vec::new();
+        for w in [
+            0xb4000081u32, 0x100000e9, 0x14000004, 0x1000008a, 0x100000a9, 0xd2800002, 0xd61f0120, 0xd65f03c0, 0xd65f03c0,
+            0xd65f03c0,
+        ] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1028, seeds: BTreeSet::from([0x1000]) };
+        let out = lift_module(&m, &Options::default());
+        assert_eq!((out.functions, out.unresolved_computed), (1, 0));
+        let body = &out.files[0].1;
+        // the cases are what reaches the `br`, not every address the function takes (0x101c)
+        assert!(body.contains("switch (t) { case 0x1020ull: goto L_1020; case 0x1024ull: goto L_1024; default:"));
     }
 }
