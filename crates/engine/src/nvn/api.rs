@@ -3527,6 +3527,29 @@ pub fn textures_near_storage(storage: usize, span: usize) -> Vec<(usize, u64, Nv
         .collect()
 }
 
+/// textures_near_storage without the textures whose declared size ends at or below `storage`.
+pub fn textures_reaching(storage: usize, span: usize) -> Vec<(usize, u64, NvnTexture)> {
+    let addrs: Vec<usize> = {
+        let idx = TEX_BY_STORAGE.lock().unwrap();
+        let Some(idx) = idx.as_ref() else {
+            return Vec::new();
+        };
+        idx.range(storage.saturating_sub(span)..=storage)
+            .flat_map(|(_, v)| v.iter().copied())
+            .collect()
+    };
+    let snaps = TEX_SNAPSHOTS.lock().unwrap();
+    let Some(snaps) = snaps.as_ref() else {
+        return Vec::new();
+    };
+    addrs
+        .iter()
+        .filter_map(|a| snaps.get(a).map(|(g, t)| (*a, *g, t)))
+        .filter(|(_, _, t)| t.size == 0 || t.storage + t.size > storage)
+        .map(|(a, g, t)| (a, g, *t))
+        .collect()
+}
+
 /// Called when a command naming the NVNtexture at `addr` is recorded. Real NVN reads the texture then; the executor
 /// reads its snapshot later. Games copy initialized NVNtexture structs (they hold their descriptor inline) and bind the
 /// copies, which never went through nvnTextureInitialize: the copy is snapshotted here, before the game frees or reuses

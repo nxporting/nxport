@@ -477,7 +477,7 @@ impl Ctx {
                         if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
                             let a = crate::nvn::api::translate_virtual(addr as usize);
                             let len = size.min(0x10000);
-                            if a > 0x10000 && self.gpu_dirty.iter().any(|&(s, e)| a < e && s < a + len) {
+                            if a > 0x10000 && self.gpu_dirty.overlaps(a, a + len) {
                                 if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
                                     if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
                                         limits.push((b.binding, len));
@@ -590,7 +590,7 @@ impl Ctx {
     /// written back after the submit.
     unsafe fn storage_buffer(&mut self, addr: usize, size: usize) -> Option<vk::DescriptorBufferInfo> {
         let a = crate::nvn::api::translate_virtual(addr);
-        self.gpu_dirty.push((a, a + size));
+        self.gpu_dirty.add(a, a + size);
         // GPU writes cannot fault: pages the write tracking protected would lose them.
         crate::guest::dirty_track::release_for_gpu(a, size);
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
