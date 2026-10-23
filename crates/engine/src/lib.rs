@@ -44,6 +44,8 @@ pub mod metal {
 }
 #[cfg(nx_runtime)]
 mod nvn;
+#[cfg(nx_runtime)]
+pub mod vulkan;
 pub mod profile;
 pub mod settings;
 
@@ -239,14 +241,24 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
 }
 
 #[cfg(nx_native)]
-/// Runs the frame capture in `dir` (capture::replay) on the Metal backend, headless, with the settings from `layers`.
-/// Once per process: it maps the capture's memory at its addresses and installs its frontend state.
+/// Runs the frame capture in `dir` (capture::replay) on the backend `opts` names (Metal or Vulkan), headless, with the
+/// settings from `layers`. Once per process: it maps the capture's memory at its addresses and installs its frontend
+/// state.
 pub fn replay_capture(
     dir: &std::path::Path,
     opts: &capture::replay::Options,
     layers: Vec<settings::SettingsPatch>,
 ) -> Result<capture::replay::Report, String> {
-    gpu::install(&metal::backend::METAL);
+    let vulkan = match opts.backend.as_str() {
+        "" | "metal" => false,
+        "vulkan" => true,
+        b => return Err(format!("no backend {b} (metal, vulkan)")),
+    };
+    if vulkan {
+        gpu::install(&vulkan::VULKAN);
+    } else {
+        gpu::install(&metal::backend::METAL);
+    }
     let mut s = resolve_settings(layers);
     s.display.headless = true;
     s.graphics.early_fence = false;
@@ -256,6 +268,10 @@ pub fn replay_capture(
     s.graphics.record_pipelines = false;
     s.files.no_miss_dump = true;
     let s = settings::install(s);
+    if vulkan {
+        vulkan::init(s.debug.validate)?;
+        return capture::replay::run(dir, opts);
+    }
     if s.debug.validate {
         std::env::set_var("MTL_SHADER_VALIDATION", "1");
         std::env::set_var("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1");

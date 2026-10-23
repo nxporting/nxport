@@ -27,6 +27,8 @@ pub struct HostCapabilities {
     pub supports_shader_barrier_divergence: bool,
     pub supports_shader_float64: bool,
     pub supports_shader_non_uniform_indexing: bool,
+    pub supports_image_gather_extended: bool,
+    pub supports_draw_parameters: bool,
 }
 
 #[derive(Clone)]
@@ -420,7 +422,9 @@ pub fn generate(
     m.add_capability(Capability::GROUP_NON_UNIFORM_SHUFFLE);
     m.add_capability(Capability::GROUP_NON_UNIFORM_VOTE);
     m.add_capability(Capability::IMAGE_BUFFER);
-    m.add_capability(Capability::IMAGE_GATHER_EXTENDED);
+    if host.supports_image_gather_extended {
+        m.add_capability(Capability::IMAGE_GATHER_EXTENDED);
+    }
     m.add_capability(Capability::IMAGE_QUERY);
     m.add_capability(Capability::SAMPLED_BUFFER);
     if host.supports_shader_float64 {
@@ -447,7 +451,8 @@ pub fn generate(
             }
         }
         ShaderStage::TessellationControl | ShaderStage::TessellationEvaluation => m.add_capability(Capability::TESSELLATION),
-        ShaderStage::Vertex => m.add_capability(Capability::DRAW_PARAMETERS),
+        ShaderStage::Vertex if host.supports_draw_parameters => m.add_capability(Capability::DRAW_PARAMETERS),
+        ShaderStage::Vertex => {}
         ShaderStage::Compute => {}
     }
     if !matches!(stage, ShaderStage::Fragment | ShaderStage::Geometry | ShaderStage::Compute)

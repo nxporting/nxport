@@ -132,9 +132,19 @@ impl<'a> EmitterContext<'a> {
         label
     }
 
-    /// Transform feedback emulation, viewport transform and depth mode fixups are all off for the engine, so a
-    /// vertex return needs nothing.
-    fn prepare_for_vertex_return(&mut self) {}
+    /// Transform feedback emulation and the viewport transform are off for the engine. A GL depth mode (-1..1) on a
+    /// host without depth clip control becomes 0..1 here: z = z / 2 + w / 2 (Ryujinx's PrepareForVertexReturn).
+    fn prepare_for_vertex_return(&mut self) {
+        if self.tc.definitions.depth_mode() && !self.tc.gpu.host_supports_depth_clip_control() {
+            let (k2, k3) = (self.const_i(2), self.const_i(3));
+            let z = self.load_io2(StorageKind::Output, IoVariable::Position, None, k2);
+            let w = self.load_io2(StorageKind::Output, IoVariable::Position, None, k3);
+            let half = self.const_f(0.5);
+            let half_w = self.fp_multiply(w, half, I::FP32);
+            let z = self.fp_fused_multiply_add(z, half, half_w, I::FP32);
+            self.store_io(StorageKind::Output, IoVariable::Position, None, &[k2, z]);
+        }
+    }
 
     pub fn prepare_for_return(&mut self) -> bool {
         if self.is_non_main {

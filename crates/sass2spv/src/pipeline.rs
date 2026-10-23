@@ -107,6 +107,8 @@ pub fn translate_functions(
         supports_shader_barrier_divergence: gpu.host_supports_shader_barrier_divergence(),
         supports_shader_float64: gpu.host_supports_shader_float64(),
         supports_shader_non_uniform_indexing: gpu.host_supports_shader_non_uniform_indexing(),
+        supports_image_gather_extended: gpu.host.image_gather_extended,
+        supports_draw_parameters: gpu.host.draw_parameters,
     };
     let (binary_code, msl) = match target {
         Target::Spirv => (codegen::generate(&mut s_info, &d.tc.definitions, &rm.properties, &host)?, String::new()),
@@ -165,6 +167,20 @@ pub fn translate_stage_to(
     compute_fields: Option<[i32; 4]>,
     target: &Target,
 ) -> Result<ShaderProgram, String> {
+    translate_stage_for(stage, stage_hint, cb1_hint, compute_fields, target, None, crate::accessor::Host::default())
+}
+
+/// translate_stage_to for a given draw-time state (inputs, outputs and clip conventions typed for one pipeline) and
+/// host (crate::accessor::Host).
+pub fn translate_stage_for(
+    stage: &[u8],
+    stage_hint: i32,
+    cb1_hint: i32,
+    compute_fields: Option<[i32; 4]>,
+    target: &Target,
+    state: Option<crate::accessor::GraphicsState>,
+    host: crate::accessor::Host,
+) -> Result<ShaderProgram, String> {
     let magic = if stage.len() >= 4 { u32::from_le_bytes(stage[..4].try_into().unwrap()) } else { 0 };
     let compute = (stage.len() > 0x100 && magic == 0x12345679) || (magic != 0x12345678 && stage_hint == 3);
     let sass = if compute && magic == 0x12345679 {
@@ -176,6 +192,8 @@ pub fn translate_stage_to(
     };
     let cb1 = if cb1_hint > 0 { cb1_hint } else { GpuAccessor::find_const_bank(stage) };
     let mut gpu = GpuAccessor::new(sass, compute, stage, cb1);
+    gpu.state = state;
+    gpu.host = host;
     if let Some(f) = compute_fields {
         gpu.local_size = [f[0].max(1), f[1].max(1), f[2].max(1)];
         gpu.shared_memory_size = f[3];
