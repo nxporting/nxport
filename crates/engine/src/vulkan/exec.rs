@@ -67,7 +67,8 @@ unsafe impl Send for Ctx {}
 
 pub struct Ctx {
     dev: Dev,
-    pub programs: HashMap<usize, Vec<(u64, u64)>>,
+    /// Program stages: (code, control section, content hash).
+    pub programs: HashMap<usize, Vec<(u64, u64, u64)>>,
     tex: Textures,
     imports: Imports,
     arena: Arena,
@@ -80,8 +81,6 @@ pub struct Ctx {
     st: Nvn,
     cb: vk::CommandBuffer,
     pass: Option<Pass>,
-    /// Reports to write once the submit completed: (address, value).
-    reports: Vec<(u64, u64)>,
     /// The device was lost: nothing more is submitted.
     lost: bool,
     /// Storage buffers bound as copies (the device could not use guest memory in place): (guest address, copy, length),
@@ -100,12 +99,31 @@ pub struct Ctx {
     /// pass ends. Proxies by (texture, level, view format); the ones the current pass renders.
     bc_proxies: HashMap<(texture::Desc, u32, vk::Format), texture::Image>,
     bc_pending: Vec<(texture::Desc, u32, vk::Format)>,
+    /// Render-target write-back: TotK moves textures with CPU copies (heap compaction) and reads some on the CPU, so
+    /// GPU-rendered contents must reach guest memory, as on the Switch where the GPU renders into memory the CPU shares.
+    /// Targets not rendered in the previous 4 frames (generated maps, not per-frame targets) are copied back at the
+    /// present of the frame that drew them (the Metal backend's writeback_pass waits one more frame for its GPU work;
+    /// submits here complete before they return). Last frame each storage was rendered in; this frame's candidates.
+    rt_history: HashMap<usize, u64>,
+    writeback_rts: Vec<NvnTexture>,
     default_sampler: vk::Sampler,
     warned: HashSet<String>,
 }
 
 unsafe fn dev_sampler(dev: &Dev) -> vk::Sampler {
     dev.device.create_sampler(&vk::SamplerCreateInfo::default(), None).unwrap_or(vk::Sampler::null())
+}
+
+/// Writes a report (NVNcounterData: value, timestamp) when the command is recorded: what follows in the stream
+/// (conditional rendering, uniform copies) sees it in order. Submits complete before they return, so the guest cannot
+/// observe it earlier than the GPU's own write.
+unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
+    let a = crate::nvn::api::translate_virtual(addr as usize);
+    if a < 0x10000 {
+        return;
+    }
+    std::ptr::write_unaligned(a as *mut u64, value);
+    std::ptr::write_unaligned((a + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
 }
 
 fn hash<T: Hash>(v: &T) -> u64 {
@@ -167,13 +185,14 @@ impl Ctx {
             },
             cb: vk::CommandBuffer::null(),
             pass: None,
-            reports: Vec::new(),
             lost: false,
             writebacks: Vec::new(),
             gpu_dirty: Vec::new(),
             fb_snaps: HashMap::new(),
             bc_proxies: HashMap::new(),
             bc_pending: Vec::new(),
+            rt_history: HashMap::new(),
+            writeback_rts: Vec::new(),
             fb_epoch: 1,
             default_sampler,
             warned: HashSet::new(),
@@ -216,16 +235,55 @@ impl Ctx {
         for (addr, src, len) in std::mem::take(&mut self.writebacks) {
             std::ptr::copy_nonoverlapping(src, addr as *mut u8, len);
         }
-        for (addr, value) in std::mem::take(&mut self.reports) {
-            let a = crate::nvn::api::translate_virtual(addr as usize);
-            std::ptr::write_unaligned(a as *mut u64, value);
-            std::ptr::write_unaligned((a + 8) as *mut u64, 0);
-        }
+        self.tex.settle();
         for p in self.desc_pools.drain(..) {
             self.dev.device.destroy_descriptor_pool(p, None);
         }
         self.arena.reset(&self.dev);
         self.imports.release_retired(&self.dev);
+    }
+
+    /// Records a color target this submit renders: a write-back candidate unless it was rendered in the previous 4 frames.
+    fn note_rendered(&mut self, t: &NvnTexture) {
+        let f = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed) + 1;
+        let prev = self.rt_history.insert(t.storage, f);
+        if prev.is_none_or(|p| p + 4 < f) && !self.writeback_rts.iter().any(|w| w.storage == t.storage) {
+            self.writeback_rts.push(*t);
+        }
+        if self.rt_history.len() > 1 << 14 {
+            self.rt_history.retain(|_, &mut v| v + 600 > f);
+        }
+    }
+
+    /// At a present: copies this frame's write-back candidates into guest memory (2D single-sample uncompressed color,
+    /// every level).
+    pub unsafe fn write_back_rts(&mut self) {
+        let done = std::mem::take(&mut self.writeback_rts);
+        if self.lost {
+            return;
+        }
+        for t in done {
+            let Some(info) = crate::nvn::layout::format_info(t.format) else { continue };
+            if info.block_w != 1 || t.target != crate::nvn::layout::NVN_TARGET_2D || t.samples > 1 || t.storage < 0x10000 {
+                continue;
+            }
+            // Only memory still inside a live memory pool: freed texture memory may hold game data by now.
+            let len = crate::nvn::layout::compute_layout(&texture::Desc::of(&t).params).total as usize;
+            if crate::nvn::api::containing_pool(t.storage, len).is_none() {
+                continue;
+            }
+            let (d, at_level, at_layer) = self.tex.locate(&t);
+            let Some(img) = self.tex.get_desc(&self.dev, &d) else { continue };
+            if format::is_depth(img.format) {
+                continue;
+            }
+            for level in 0..t.levels.max(1) as u32 {
+                let Some(texels) = Textures::read(&self.dev, img, t.format, level + at_level, at_layer) else { break };
+                crate::nvn::api::guest_write_level(&t, level as usize, &texels.data);
+            }
+            // The image's own contents: not a CPU write.
+            self.tex.resettle(&d);
+        }
     }
 
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
@@ -364,15 +422,17 @@ impl Ctx {
                     *instances,
                 )
             }
-            Cmd::ReportValue { value, addr } => self.reports.push((*addr, *value as u64)),
+            Cmd::ReportValue { value, addr } => write_report(*addr, *value as u64, true),
             Cmd::ReportCounter { counter, addr } => {
-                // Only the counters the guest's frame logic reads so far: timestamps (TOP reads as 0) and occlusion
-                // results (every sample passes until queries are implemented).
+                // TIMESTAMP (0) reports the time, TIMESTAMP_TOP (0x10) zero (games reset the markers of conditional
+                // rendering with it), SAMPLES_PASSED (1) one: every sample passes until occlusion queries are
+                // implemented. ZCULL_STATS (0xF) has no timestamp.
                 let v = match counter {
+                    0 => crate::clock::now_ns(),
                     1 => 1,
                     _ => 0,
                 };
-                self.reports.push((*addr, v));
+                write_report(*addr, v, *counter != 0xF);
             }
             Cmd::SetPointSize(_) | Cmd::ResetCounter { .. } | Cmd::SetDepthBounds { .. } => {}
             other => {
@@ -392,7 +452,7 @@ impl Ctx {
                 return Some(p);
             }
         }
-        let img = self.tex.get(&self.dev, &t)?;
+        let (img, at_level, at_layer) = self.tex.get(&self.dev, &t)?;
         img.gpu_written = true;
         let fmt = if r.view_format != 0 && format::view_compatible(t.format, r.view_format as i32) {
             texture::device_format(&self.dev, r.view_format as i32)
@@ -403,11 +463,11 @@ impl Ctx {
         };
         // A 3D texture renders into one depth slice (the reference's layer) through a 2D view of its 2D_ARRAY_COMPATIBLE
         // image; the slice counts as the view's layer.
-        let (layer, ty) = (r.layer as u32, vk::ImageViewType::TYPE_2D);
-        let extent = ((img.extent.width >> r.level).max(1), (img.extent.height >> r.level).max(1));
+        let (level, layer, ty) = (r.level as u32 + at_level, r.layer as u32 + at_layer, vk::ImageViewType::TYPE_2D);
+        let extent = ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1));
         let samples = img.samples;
         let image = img.image;
-        let view = Textures::view(&self.dev, img, ty, fmt, r.level as u32, 1, layer, 1, [2, 3, 4, 5], false)?;
+        let view = Textures::view(&self.dev, img, ty, fmt, level, 1, layer, 1, [2, 3, 4, 5], false)?;
         Some((t, view, fmt, extent, samples, image))
     }
 
@@ -426,6 +486,7 @@ impl Ctx {
             }
             match self.target(&r) {
                 Some((t, view, fmt, e, s, image)) => {
+                    self.note_rendered(&t);
                     extent = (extent.0.min(e.0), extent.1.min(e.1));
                     samples = s;
                     images.push(image);
@@ -505,15 +566,15 @@ impl Ctx {
             return None;
         }
         let fmt = texture::device_format(&self.dev, r.view_format as i32)?;
-        let d = texture::Desc::of(t);
-        let level = r.level as u32;
+        let (d, at_level, _) = self.tex.locate(t);
+        let level = r.level as u32 + at_level;
         let key = (d, level, fmt);
         if !self.bc_proxies.contains_key(&key) {
             let mut pd = d;
             pd.storage = 0;
-            pd.params.width = ((t.width >> level).max(1) as u32).div_ceil(info.block_w) as i32;
-            pd.params.height = ((t.height >> level).max(1) as u32).div_ceil(info.block_h) as i32;
-            pd.params.depth = if t.target == crate::nvn::layout::NVN_TARGET_3D { (t.depth >> level).max(1) } else { t.depth };
+            pd.params.width = ((d.params.width >> level).max(1) as u32).div_ceil(info.block_w) as i32;
+            pd.params.height = ((d.params.height >> level).max(1) as u32).div_ceil(info.block_h) as i32;
+            pd.params.depth = if d.params.target == crate::nvn::layout::NVN_TARGET_3D { (d.params.depth >> level).max(1) } else { d.params.depth };
             pd.params.levels = 1;
             pd.params.format = r.view_format as i32;
             pd.params.flags = 0;
@@ -528,7 +589,7 @@ impl Ctx {
         if !self.bc_pending.contains(&key) {
             self.bc_pending.push(key);
         }
-        if let Some(img) = self.tex.get(&self.dev, t) {
+        if let Some(img) = self.tex.get_desc(&self.dev, &d) {
             img.gpu_written = true;
         }
         let p = self.bc_proxies.get_mut(&key).unwrap();
@@ -628,8 +689,8 @@ impl Ctx {
     pub unsafe fn read_texture(&mut self, texture: usize, gen: u32, level: u32, layer: u32) -> Option<Texels> {
         let addr = crate::nvn::api::resolve_texture_ref(texture, gen);
         let (_, t) = crate::nvn::api::texture_snapshot(addr)?;
-        let img = self.tex.get(&self.dev, &t)?;
-        Textures::read(&self.dev, img, t.format, level, layer)
+        let (img, at_level, at_layer) = self.tex.get(&self.dev, &t)?;
+        Textures::read(&self.dev, img, t.format, level + at_level, layer + at_layer)
     }
 
     pub unsafe fn gpu_only_textures(&mut self, f: &mut dyn FnMut(GpuOnlyTexture)) -> usize {

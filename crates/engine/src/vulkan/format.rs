@@ -254,3 +254,19 @@ pub fn view_compatible(image: i32, view: i32) -> bool {
         _ => false,
     }
 }
+
+/// Whether textures of NVN formats `a` and `b` over the same memory share one image: the same format, or its sRGB /
+/// linear twin (what the Metal backend aliases; other reinterpretations stay separate images).
+pub fn alias_compatible(a: i32, b: i32) -> bool {
+    use vk::Format as F;
+    let base = |f: i32| match texture(f) {
+        Some(F::R8G8B8A8_SRGB) => Some(F::R8G8B8A8_UNORM),
+        Some(F::B8G8R8A8_SRGB) => Some(F::B8G8R8A8_UNORM),
+        Some(F::BC1_RGBA_SRGB_BLOCK) => Some(F::BC1_RGBA_UNORM_BLOCK),
+        Some(F::BC2_SRGB_BLOCK) => Some(F::BC2_UNORM_BLOCK),
+        Some(F::BC3_SRGB_BLOCK) => Some(F::BC3_UNORM_BLOCK),
+        Some(F::BC7_SRGB_BLOCK) => Some(F::BC7_UNORM_BLOCK),
+        f => f,
+    };
+    a == b || (base(a).is_some() && base(a) == base(b))
+}

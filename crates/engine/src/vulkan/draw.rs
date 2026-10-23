@@ -33,19 +33,19 @@ pub(super) struct VStream {
 const ZERO_STREAM: u32 = 16;
 
 impl Ctx {
-    /// The guest program's vertex and fragment stages: (code, control section).
-    fn graphics_stages(&self) -> Option<((u64, u64), Option<(u64, u64)>)> {
+    /// The guest program's vertex and fragment stages: (code, control section, content hash).
+    fn graphics_stages(&self) -> Option<((u64, u64, u64), Option<(u64, u64, u64)>)> {
         let stages = self.programs.get(&self.st.program)?;
         let mut vs = None;
         let mut fs = None;
-        for &(data, control) in stages {
+        for &(data, control, content) in stages {
             if data < 0x10000 {
                 continue;
             }
             let sph = unsafe { std::ptr::read_unaligned((data + 0x30) as *const u32) };
             match (sph >> 10) & 0xF {
-                5 => fs = Some((data, control)),
-                0 | 1 => vs = Some((data, control)),
+                5 => fs = Some((data, control, content)),
+                0 | 1 => vs = Some((data, control, content)),
                 _ => {}
             }
         }
@@ -127,17 +127,19 @@ impl Ctx {
             self.warn(format!("draw mode {mode} is not implemented"));
             return;
         };
-        let Some(((vd, vc), fs)) = self.graphics_stages() else {
+        let Some(((vd, vc, vh), fs)) = self.graphics_stages() else {
             self.warn(format!("program {:#x} has no vertex stage", self.st.program));
             return;
         };
         let (vstate, vkey) = self.vertex_state();
+        let vkey = hash(&(vkey, vh));
         if !self.stage(vd, vc, 0, vstate, vkey, 0) {
             return;
         }
         let fkey = match fs {
-            Some((fd, fc)) => {
+            Some((fd, fc, fh)) => {
                 let (fstate, fkey) = self.fragment_state();
+                let fkey = hash(&(fkey, fh));
                 if !self.stage(fd, fc, 1, fstate, fkey, 1) {
                     return;
                 }
@@ -148,7 +150,7 @@ impl Ctx {
         let vl = self.vertex_layout();
         let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl) else { return };
         let mut sets = vec![self.descriptors((vd, vkey), vd, vc, 0, &call, base_instance)];
-        if let (Some(k), Some((fd, fc))) = (fkey, fs) {
+        if let (Some(k), Some((fd, fc, _))) = (fkey, fs) {
             sets.push(self.descriptors(k, fd, fc, 1, &call, base_instance));
         }
         // A feedback copy ended the pass: it resumes (loading what was rendered).
@@ -182,18 +184,18 @@ impl Ctx {
             return;
         }
         self.end_pass();
-        let Some(&(data, control)) = self.programs.get(&self.st.compute_program).and_then(|s| s.first()) else {
+        let Some(&(data, control, content)) = self.programs.get(&self.st.compute_program).and_then(|s| s.first()) else {
             self.warn(format!("compute program {:#x} has no stage", self.st.compute_program));
             return;
         };
-        if !self.stage(data, control, 0, GraphicsState::zeroed(), 0, 0) {
+        if !self.stage(data, control, 0, GraphicsState::zeroed(), content, 0) {
             return;
         }
-        let key = hash(&("compute", data));
+        let key = hash(&("compute", data, content));
         let (pipe, layout) = match self.pipelines.get(&key) {
             Some(&p) => p,
             None => {
-                let s = &self.stages[&(data, 0)];
+                let s = &self.stages[&(data, content)];
                 let lk = (s.set_layout, self.empty_layout);
                 let layout = match self.layouts.get(&lk) {
                     Some(&l) => l,
@@ -218,7 +220,7 @@ impl Ctx {
                 (pipe, layout)
             }
         };
-        let set = self.descriptors((data, 0), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0);
+        let set = self.descriptors((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0);
         let d = &self.dev.device;
         d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
         if let Some(s) = set {
@@ -595,7 +597,7 @@ impl Ctx {
         let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
-            let img = self.tex.get(&self.dev, &t)?.image;
+            let img = self.tex.get(&self.dev, &t)?.0.image;
             if self.pass.as_ref().is_some_and(|p| p.images.contains(&img)) {
                 return self.feedback_view(&t, view.as_ref(), declared);
             }
@@ -608,7 +610,7 @@ impl Ctx {
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
     /// has none: the pass ends for the copy and resumes at the next draw.
     unsafe fn feedback_view(&mut self, t: &NvnTexture, view: Option<&crate::nvn::api::NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
-        let d = texture::Desc::of(t);
+        let (d, level, layer) = self.tex.locate(t);
         let fresh = self.fb_snaps.get(&d).is_some_and(|(e, _)| *e == self.fb_epoch);
         if !fresh {
             if !self.fb_snaps.contains_key(&d) {
@@ -634,16 +636,17 @@ impl Ctx {
             self.fb_snaps.get_mut(&d)?.0 = self.fb_epoch;
         }
         let (_, snap) = self.fb_snaps.get_mut(&d)?;
-        Textures::sampled_view_of(&self.dev, snap, t, view, declared)
+        Textures::sampled_view_of(&self.dev, snap, (level, layer), t, view, declared)
     }
 
     unsafe fn image_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> vk::ImageView {
         let Some(h) = handle else { return vk::ImageView::null() };
         let Some((obj, view)) = crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32) else { return vk::ImageView::null() };
         let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return vk::ImageView::null() };
-        let Some(img) = self.tex.get(&self.dev, &t) else { return vk::ImageView::null() };
+        let Some((img, at_level, at_layer)) = self.tex.get(&self.dev, &t) else { return vk::ImageView::null() };
         img.gpu_written = true;
         let (level, layer) = view.map_or((0, 0), |v| (v.min_level as u32, v.min_layer as u32));
+        let (level, layer) = (level + at_level, layer + at_layer);
         let fmt = img.format;
         let layers = if declared == vk::ImageViewType::TYPE_2D || declared == vk::ImageViewType::TYPE_3D { 1 } else { img.layers - layer };
         Textures::view(&self.dev, img, declared, fmt, level, 1, layer, layers, [2, 3, 4, 5], false).unwrap_or(vk::ImageView::null())

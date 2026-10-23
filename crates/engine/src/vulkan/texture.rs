@@ -49,11 +49,14 @@ pub struct Image {
     /// GPU work rendered or wrote into it: guest memory no longer has its contents.
     pub gpu_written: bool,
     views: HashMap<ViewKey, vk::ImageView>,
-    /// The submit it was last checked against guest memory in, the hash of the guest bytes uploaded then, and the
-    /// write-tracking token of those bytes (guest/dirty_track.rs; None: untracked, hash at every check).
+    /// The submit it was last checked against guest memory in, the hash of the guest bytes uploaded then (for a
+    /// GPU-written image: of the guest bytes when the GPU work completed), and the write-tracking token of those bytes
+    /// (guest/dirty_track.rs; None: untracked, hash at every check).
     checked: u64,
     hash: u64,
     token: Option<u64>,
+    /// A GPU-written image's hash and token were taken (`settle`).
+    settled: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,6 +78,9 @@ pub struct Textures {
     pub warned: std::collections::HashSet<String>,
     /// Counts submits: textures are checked for CPU writes once per submit.
     pub serial: u64,
+    /// Alias roots found in this frame (see `locate`; textures are re-initialized between frames).
+    roots: HashMap<Desc, (Desc, u32, u32)>,
+    roots_frame: u64,
 }
 
 fn image_type(target: i32) -> (vk::ImageType, vk::ImageViewType) {
@@ -118,10 +124,113 @@ fn samples(n: i32) -> vk::SampleCountFlags {
     }
 }
 
+/// A texture's memory size, measured the same way for every texture (declared size or layout, whichever is larger).
+fn mem_size(t: &NvnTexture, l: &layout::TextureLayout) -> u64 {
+    (t.size as u64).max(l.total)
+}
+
+/// A strict order among same-size textures over the same memory, so every alias of it picks the same root.
+fn order(d: &Desc) -> (i32, i32, i32, i32, i32, i32, i64) {
+    let p = &d.params;
+    (p.levels, p.depth, p.target, p.format, p.flags, p.width, p.stride)
+}
+
 impl Textures {
-    /// The image for texture `t`, made and filled from guest memory the first time.
-    pub unsafe fn get(&mut self, dev: &Dev, t: &NvnTexture) -> Option<&mut Image> {
+    /// Where texture `t` lives: the description of the image holding it and the level / layer it starts at there.
+    /// Several texture objects over the same memory (a mip level or layer of a larger texture, a render target over a
+    /// mip chain, another format of the same texels) share the image of the largest live texture containing them, so
+    /// rendering through one is visible through the others, as on the GPU (the Metal backend's alias views).
+    pub unsafe fn locate(&mut self, t: &NvnTexture) -> (Desc, u32, u32) {
         let d = Desc::of(t);
+        let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+        if self.roots_frame != frame {
+            self.roots.clear();
+            self.roots_frame = frame;
+        }
+        if let Some(&r) = self.roots.get(&d) {
+            return r;
+        }
+        let mut r = (d, 0, 0);
+        // Roots are strictly larger in (size, order), so the chain ends.
+        for _ in 0..4 {
+            let Some((root, level, layer)) = Self::alias_root(&r.0) else { break };
+            r = (root, r.1 + level, r.2 + layer);
+        }
+        self.roots.insert(d, r);
+        r
+    }
+
+    /// The largest live texture whose memory holds `d` at one of its mip levels / layers with `d`'s shape there and a
+    /// view-compatible format.
+    unsafe fn alias_root(d: &Desc) -> Option<(Desc, u32, u32)> {
+        let p = &d.params;
+        if d.storage <= 0x10000 || p.samples > 1 || p.width <= 0 || p.height <= 0 || p.target == layout::NVN_TARGET_BUFFER {
+            return None;
+        }
+        let my_layout = layout::compute_layout(p);
+        let my_size = my_layout.total;
+        let my_layers = match p.target {
+            layout::NVN_TARGET_3D => 1,
+            layout::NVN_TARGET_CUBEMAP => 6,
+            _ => my_layout.layers.max(1),
+        };
+        let layered = |target: i32| {
+            use layout::*;
+            matches!(target, NVN_TARGET_2D | NVN_TARGET_2D_ARRAY | NVN_TARGET_CUBEMAP | NVN_TARGET_CUBEMAP_ARRAY | NVN_TARGET_RECTANGLE)
+        };
+        let mut best: Option<(u64, Desc, u32, u32)> = None;
+        for (_, _, c) in crate::nvn::api::textures_near_storage(d.storage, crate::nvn::api::max_texture_span()) {
+            // Most candidates end below this texture: their declared size says so without a layout.
+            if c.size > 0 && c.storage + c.size <= d.storage {
+                continue;
+            }
+            let cd = Desc::of(&c);
+            if cd == *d || c.samples > 1 || c.width <= 0 || c.height <= 0 || c.target == layout::NVN_TARGET_BUFFER {
+                continue;
+            }
+            if !format::alias_compatible(p.format, c.format) {
+                continue;
+            }
+            let lay = layout::compute_layout(&cd.params);
+            let size = mem_size(&c, &lay);
+            if (size, order(&cd)) <= (my_size, order(d)) || d.storage as u64 >= c.storage as u64 + size {
+                continue;
+            }
+            if !(c.target == p.target || (layered(c.target) && layered(p.target))) {
+                continue;
+            }
+            let rel = (d.storage - c.storage) as u64;
+            let (slice, in_layer) = if lay.layer_stride > 0 { (rel / lay.layer_stride, rel % lay.layer_stride) } else { (0, rel) };
+            let Some(level) = lay.level_offsets.iter().position(|&o| o == in_layer) else { continue };
+            if ((c.width >> level).max(1), (c.height >> level).max(1)) != (p.width, p.height) {
+                continue;
+            }
+            let c_layers = match c.target {
+                layout::NVN_TARGET_3D => 1,
+                layout::NVN_TARGET_CUBEMAP => 6,
+                _ => lay.layers.max(1),
+            };
+            if level + p.levels.max(1) as usize > c.levels.max(1) as usize || slice as u32 + my_layers > c_layers {
+                continue;
+            }
+            if best.as_ref().is_none_or(|b| (size, order(&cd)) > (b.0, order(&b.1))) {
+                best = Some((size, cd, level as u32, slice as u32));
+            }
+        }
+        best.map(|(_, cd, level, slice)| (cd, level, slice))
+    }
+
+    /// The image holding texture `t` (made and filled from guest memory the first time), and the level and layer `t`
+    /// starts at in it.
+    pub unsafe fn get(&mut self, dev: &Dev, t: &NvnTexture) -> Option<(&mut Image, u32, u32)> {
+        let (d, level, layer) = self.locate(t);
+        let img = self.get_desc(dev, &d)?;
+        Some((img, level, layer))
+    }
+
+    /// The image of description `d`.
+    pub unsafe fn get_desc(&mut self, dev: &Dev, d: &Desc) -> Option<&mut Image> {
+        let d = *d;
         if !self.images.contains_key(&d) {
             let img = self.create(dev, &d)?;
             self.images.insert(d, img);
@@ -134,12 +243,13 @@ impl Textures {
 
     /// Uploads the texture again when the CPU wrote its guest memory since the last upload (the game fills textures
     /// after creating them: streamed assets, glyphs rasterized into the font atlas; and reuses memory for new contents).
-    /// Once per submit; skipped while write tracking shows its pages untouched. Textures GPU work wrote hold contents
-    /// guest memory lacks and are left alone.
+    /// Once per submit; skipped while write tracking shows its pages untouched. An image GPU work wrote holds contents
+    /// guest memory lacks: it is uploaded again only when the CPU changed the guest bytes since that work completed (the
+    /// game reused the memory for a texture it fills itself), and from then on follows guest memory again.
     unsafe fn refresh(&mut self, dev: &Dev, d: &Desc, first: bool) {
         let serial = self.serial;
         let Some(img) = self.images.get_mut(d) else { return };
-        if !first && (img.checked == serial || img.gpu_written) {
+        if !first && (img.checked == serial || (img.gpu_written && !img.settled)) {
             return;
         }
         img.checked = serial;
@@ -164,7 +274,39 @@ impl Textures {
             return;
         }
         img.hash = h;
+        img.gpu_written = false;
+        img.settled = false;
         self.upload(dev, d);
+    }
+
+    /// After a submit completed: GPU-written images not yet settled take the hash and write-tracking token of their guest
+    /// bytes, against which later CPU writes are detected.
+    pub unsafe fn settle(&mut self) {
+        for (d, img) in self.images.iter_mut() {
+            if img.gpu_written && !img.settled {
+                Self::settle_one(d, img);
+            }
+        }
+    }
+
+    /// settle for one image (also after a write-back changed its guest bytes).
+    pub unsafe fn resettle(&mut self, d: &Desc) {
+        if let Some(img) = self.images.get_mut(d) {
+            if img.gpu_written {
+                Self::settle_one(d, img);
+            }
+        }
+    }
+
+    unsafe fn settle_one(d: &Desc, img: &mut Image) {
+        img.settled = true;
+        if d.storage <= 0x10000 || !crate::nvn::api::memory_pool_cpu_writable(d.storage) {
+            return;
+        }
+        let len = layout::compute_layout(&d.params).total as usize;
+        use crate::guest::dirty_track;
+        img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
+        img.hash = hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len));
     }
 
     pub unsafe fn create(&mut self, dev: &Dev, d: &Desc) -> Option<Image> {
@@ -278,6 +420,7 @@ impl Textures {
             checked: 0,
             hash: 0,
             token: None,
+            settled: false,
         })
     }
 
@@ -435,23 +578,38 @@ impl Textures {
 
     /// A sampling view of texture `t` through the pool view `view` (levels, layers, format, swizzle).
     pub unsafe fn sampled_view(&mut self, dev: &Dev, t: &NvnTexture, view: Option<&NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
-        let img = self.get(dev, t)?;
-        Self::sampled_view_of(dev, img, t, view, declared)
+        let (img, level, layer) = self.get(dev, t)?;
+        Self::sampled_view_of(dev, img, (level, layer), t, view, declared)
     }
 
-    /// sampled_view on a given image of `t` (its render-target feedback snapshot).
-    pub unsafe fn sampled_view_of(dev: &Dev, img: &mut Image, t: &NvnTexture, view: Option<&NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
+    /// sampled_view on a given image of `t` (its render-target feedback snapshot), `t` starting at level / layer `at`.
+    pub unsafe fn sampled_view_of(
+        dev: &Dev,
+        img: &mut Image,
+        at: (u32, u32),
+        t: &NvnTexture,
+        view: Option<&NvnTextureView>,
+        declared: vk::ImageViewType,
+    ) -> Option<vk::ImageView> {
         let fmt_nvn = view.map(|v| v.format as i32).filter(|&f| f != 0 && format::view_compatible(t.format, f)).unwrap_or(t.format);
         let fmt = device_format(dev, fmt_nvn).filter(|f| format::aspects(*f) == format::aspects(img.format)).unwrap_or(img.format);
+        let own_levels = (t.levels.max(1) as u32).min(img.levels.saturating_sub(at.0).max(1));
+        let own_layers = match t.target {
+            layout::NVN_TARGET_3D => 1,
+            layout::NVN_TARGET_CUBEMAP => 6,
+            _ => layout::compute_layout(&Desc::of(t).params).layers.max(1),
+        }
+        .min(img.layers.saturating_sub(at.1).max(1));
         let (base_level, levels, base_layer, layers) = match view {
             Some(v) => (
                 v.min_level as u32,
-                if v.num_levels == 0 { img.levels } else { v.num_levels as u32 },
+                if v.num_levels == 0 { own_levels } else { v.num_levels as u32 },
                 v.min_layer as u32,
-                if v.num_layers == 0 { img.layers } else { v.num_layers as u32 },
+                if v.num_layers == 0 { own_layers } else { v.num_layers as u32 },
             ),
-            None => (0, img.levels, 0, img.layers),
+            None => (0, own_levels, 0, own_layers),
         };
+        let (base_level, base_layer) = (base_level + at.0, base_layer + at.1);
         // A view's swizzle replaces the texture's.
         let swizzle = match view {
             Some(v) if v.swizzle != [0; 4] => v.swizzle,
