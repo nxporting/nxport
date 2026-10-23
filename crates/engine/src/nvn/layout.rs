@@ -116,7 +116,7 @@ pub struct TextureLayout {
     pub total: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TextureParams {
     pub target: i32,
     pub width: i32,

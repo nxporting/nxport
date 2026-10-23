@@ -31,6 +31,8 @@ pub struct Options {
     pub refs: Option<PathBuf>,
     /// Also write every target read back as a PNG (to `out`).
     pub images: bool,
+    /// The backend to run on: "metal" (default where there is Metal) or "vulkan".
+    pub backend: String,
 }
 
 #[derive(Clone, Debug, Default)]

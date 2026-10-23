@@ -92,6 +92,9 @@ enum Command {
         /// Also write every target read back as a PNG (to --out)
         #[arg(long)]
         images: bool,
+        /// The backend: metal or vulkan
+        #[arg(long, default_value = "metal")]
+        backend: String,
         /// Engine options (as nxport takes them, e.g. --shader-cache=DIR), after --
         #[arg(last = true)]
         engine: Vec<String>,
@@ -354,10 +357,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => println!("{}", nxport::capture::scenarios::NAMES.join("\n")),
         },
         #[cfg(target_os = "macos")]
-        Command::GpuReplay { capture, record, all, out, refs, images, engine } => {
+        Command::GpuReplay { capture, record, all, out, refs, images, backend, engine } => {
             let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
                 .map_err(|e| e.to_string())?;
-            let opts = nxport::capture::replay::Options { record, out, all, refs, images };
+            let opts = nxport::capture::replay::Options { record, out, all, refs, images, backend };
             let report = nxport::replay_capture(&capture, &opts, layers)?;
             if report.first_failure.is_some() {
                 std::process::exit(1);

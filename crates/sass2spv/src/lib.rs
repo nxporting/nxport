@@ -15,7 +15,7 @@ pub mod translation;
 pub mod types;
 
 pub use manifest::{ManifestCBuffer, ManifestSBuffer, ManifestTextureOrImage, ShaderManifest};
-pub use pipeline::{manifest_json, translate_stage, translate_stage_to, ShaderProgram, Target, MSL_ENTRY_PLACEHOLDER};
+pub use pipeline::{manifest_json, translate_stage, translate_stage_for, translate_stage_to, ShaderProgram, Target, MSL_ENTRY_PLACEHOLDER};
 pub use types::ShaderStage;
 
 /// Changes whenever the translator's source does.

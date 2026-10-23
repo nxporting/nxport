@@ -56,7 +56,8 @@ pub fn shader_stage_prefix(stage: ShaderStage) -> &'static str {
 }
 
 impl ResourceManager {
-    pub fn new(stage: ShaderStage) -> ResourceManager {
+    /// `support_set`: the descriptor set of the support buffer (GpuAccessor::set_for(0)).
+    pub fn new(stage: ShaderStage, support_set: i32) -> ResourceManager {
         let unset = SetBindingPair::new(-1, -1);
         let mut rm = ResourceManager {
             stage,
@@ -74,7 +75,7 @@ impl ResourceManager {
         };
         rm.properties.add_or_update_constant_buffer(BufferDefinition {
             layout: BufferLayout::Std140,
-            set: 0,
+            set: support_set,
             binding: SUPPORT_BUFFER_BINDING,
             name: "support_buffer".into(),
             ty: support_buffer_structure_type(),
