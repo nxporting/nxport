@@ -101,6 +101,9 @@ enum Command {
         /// PASS:K: run pass PASS only up to its K-th draw and stop (bisecting where two backends part)
         #[arg(long, value_parser = parse_cut)]
         cut_draw: Option<(usize, u32)>,
+        /// List the capture's GPU-only textures (storage, description, subresource, content hash) and exit
+        #[arg(long)]
+        list_textures: bool,
         /// Engine options (as nxport takes them, e.g. --shader-cache=DIR), after --
         #[arg(last = true)]
         engine: Vec<String>,
@@ -368,7 +371,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => println!("{}", nxport::capture::scenarios::NAMES.join("\n")),
         },
         #[cfg(any(target_os = "macos", windows))]
-        Command::GpuReplay { capture, record, all, out, refs, images, backend, trace_pass, cut_draw, engine } => {
+        Command::GpuReplay { capture, list_textures: true, .. } => nxport::capture::replay::list_gpu_textures(&capture)?,
+        #[cfg(any(target_os = "macos", windows))]
+        Command::GpuReplay { capture, record, all, out, refs, images, backend, trace_pass, cut_draw, engine, .. } => {
             let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
                 .map_err(|e| e.to_string())?;
             let opts = nxport::capture::replay::Options { record, out, all, refs, images, backend, trace_passes: trace_pass, cut_draw };

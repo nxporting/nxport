@@ -432,6 +432,16 @@ impl Ctx {
         let mut buffers: Vec<(u32, vk::DescriptorType, vk::DescriptorBufferInfo)> = Vec::new();
         let mut images: Vec<(u32, vk::DescriptorType, Vec<vk::DescriptorImageInfo>)> = Vec::new();
         let zero = self.arena.copy(&self.dev, &[0u8; 256]);
+        // Constant buffer contents by slot, read once per draw (storage descriptors and bindless handles read them).
+        let mut cbufs: Vec<(i32, Option<std::rc::Rc<Vec<u8>>>)> = Vec::new();
+        let mut cbuf = |me: &Self, slot: i32| -> Option<std::rc::Rc<Vec<u8>>> {
+            if let Some((_, c)) = cbufs.iter().find(|(s, _)| *s == slot) {
+                return c.clone();
+            }
+            let c = me.cbuf_bytes(stage, slot, &driver, (data, control)).map(std::rc::Rc::new);
+            cbufs.push((slot, c.clone()));
+            c
+        };
         // Constant buffers first: the support buffer records their bound sizes.
         let mut limits: Vec<(u32, usize)> = Vec::new();
         let mut ordered: Vec<&shader::Binding> = bindings.iter().filter(|b| !matches!(b.feed, Feed::Support)).collect();
@@ -479,7 +489,7 @@ impl Ctx {
                             }
                         }
                     }
-                    let bytes = self.cbuf_bytes(stage, *slot, &driver, (data, control));
+                    let bytes = cbuf(self, *slot);
                     let x = match &bytes {
                         Some(v) => self.arena.copy(&self.dev, v).map(|(b, o)| (b, o, v.len() as u64)),
                         None => zero.map(|(b, o)| (b, o, 256)),
@@ -490,7 +500,7 @@ impl Ctx {
                     }
                 }
                 Feed::Sbuf { cb_slot, cb_offset } => {
-                    let desc = self.cbuf_bytes(stage, *cb_slot, &driver, (data, control)).and_then(|c| {
+                    let desc = cbuf(self, *cb_slot).and_then(|c| {
                         // In 32-bit words.
                         let o = *cb_offset as usize * 4;
                         (o + 12 <= c.len()).then(|| {
@@ -513,7 +523,7 @@ impl Ctx {
                             let k = (handle_index - 8) / 2 + j as i32;
                             self.st.textures.get(&(stage, k)).copied()
                         } else {
-                            self.cbuf_bytes(stage, *cbuf_slot, &driver, (data, control)).and_then(|c| {
+                            cbuf(self, *cbuf_slot).and_then(|c| {
                                 let o = (*handle_index as usize + j as usize) * 4;
                                 (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
                             })

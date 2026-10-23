@@ -490,7 +490,14 @@ impl Ctx {
                     extent = (extent.0.min(e.0), extent.1.min(e.1));
                     samples = s;
                     images.push(image);
-                    colors.push(Some((view, fmt, t.format)));
+                    // The format rendered: the view format where the attachment uses it (an integer view of a
+                    // compressed texture's proxy, a reinterpreting view); the fragment stage's outputs follow it.
+                    let rendered = if r.view_format != 0 && texture::device_format(&self.dev, r.view_format as i32) == Some(fmt) {
+                        r.view_format as i32
+                    } else {
+                        t.format
+                    };
+                    colors.push(Some((view, fmt, rendered)));
                 }
                 None => colors.push(None),
             }
@@ -581,8 +588,12 @@ impl Ctx {
             pd.params.stride = 0;
             let p = self.tex.create(&self.dev, &pd)?;
             println!(
-                "[vulkan] rendering compressed format {} ({}x{}, level {level}) through a format {} proxy",
-                t.format, t.width, t.height, r.view_format
+                "[vulkan] rendering compressed format {} ({}x{}, level {level}) through a format {} proxy (frame {})",
+                t.format,
+                t.width,
+                t.height,
+                r.view_format,
+                super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed) + 1
             );
             self.bc_proxies.insert(key, p);
         }
