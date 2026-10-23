@@ -123,7 +123,7 @@ impl Textures {
         self.images.get_mut(&d)
     }
 
-    unsafe fn create(&mut self, dev: &Dev, d: &Desc) -> Option<Image> {
+    pub unsafe fn create(&mut self, dev: &Dev, d: &Desc) -> Option<Image> {
         let p = &d.params;
         let Some(fmt) = device_format(dev, p.format) else {
             if self.warned.insert(format!("fmt{}", p.format)) {
@@ -205,6 +205,17 @@ impl Textures {
                 &[],
                 &b,
             );
+            // Defined contents for what the upload leaves (depth formats, multisample images): zeros, as guest memory
+            // that was never written holds.
+            let range = vk::ImageSubresourceRange::default().aspect_mask(aspect).level_count(levels).layer_count(layers);
+            if format::is_depth(fmt) {
+                let v = vk::ClearDepthStencilValue { depth: 0.0, stencil: 0 };
+                dev.device.cmd_clear_depth_stencil_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]);
+            } else {
+                let v = vk::ClearColorValue { uint32: [0; 4] };
+                dev.device.cmd_clear_color_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]);
+            }
+            dev.full_barrier(cb);
         });
         Some(Image {
             image,
@@ -367,8 +378,13 @@ impl Textures {
 
     /// A sampling view of texture `t` through the pool view `view` (levels, layers, format, swizzle).
     pub unsafe fn sampled_view(&mut self, dev: &Dev, t: &NvnTexture, view: Option<&NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
-        let fmt_nvn = view.map(|v| v.format as i32).filter(|&f| f != 0).unwrap_or(t.format);
         let img = self.get(dev, t)?;
+        Self::sampled_view_of(dev, img, t, view, declared)
+    }
+
+    /// sampled_view on a given image of `t` (its render-target feedback snapshot).
+    pub unsafe fn sampled_view_of(dev: &Dev, img: &mut Image, t: &NvnTexture, view: Option<&NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
+        let fmt_nvn = view.map(|v| v.format as i32).filter(|&f| f != 0).unwrap_or(t.format);
         let fmt = device_format(dev, fmt_nvn).filter(|f| format::aspects(*f) == format::aspects(img.format)).unwrap_or(img.format);
         let (base_level, levels, base_layer, layers) = match view {
             Some(v) => (

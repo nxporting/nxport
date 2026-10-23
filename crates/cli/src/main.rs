@@ -95,6 +95,12 @@ enum Command {
         /// The backend: metal or vulkan
         #[arg(long, default_value = "metal")]
         backend: String,
+        /// Print the commands of these passes
+        #[arg(long, value_delimiter = ',')]
+        trace_pass: Vec<usize>,
+        /// PASS:K: run pass PASS only up to its K-th draw and stop (bisecting where two backends part)
+        #[arg(long, value_parser = parse_cut)]
+        cut_draw: Option<(usize, u32)>,
         /// Engine options (as nxport takes them, e.g. --shader-cache=DIR), after --
         #[arg(last = true)]
         engine: Vec<String>,
@@ -151,6 +157,11 @@ enum Command {
         #[arg(short)]
         j: Option<usize>,
     },
+}
+
+fn parse_cut(s: &str) -> Result<(usize, u32), String> {
+    let (p, k) = s.split_once(':').ok_or("PASS:K")?;
+    Ok((p.parse().map_err(|_| "PASS:K")?, k.parse().map_err(|_| "PASS:K")?))
 }
 
 fn parse_hex(s: &str) -> Result<u64, String> {
@@ -357,10 +368,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => println!("{}", nxport::capture::scenarios::NAMES.join("\n")),
         },
         #[cfg(target_os = "macos")]
-        Command::GpuReplay { capture, record, all, out, refs, images, backend, engine } => {
+        Command::GpuReplay { capture, record, all, out, refs, images, backend, trace_pass, cut_draw, engine } => {
             let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
                 .map_err(|e| e.to_string())?;
-            let opts = nxport::capture::replay::Options { record, out, all, refs, images, backend };
+            let opts = nxport::capture::replay::Options { record, out, all, refs, images, backend, trace_passes: trace_pass, cut_draw };
             let report = nxport::replay_capture(&capture, &opts, layers)?;
             if report.first_failure.is_some() {
                 std::process::exit(1);

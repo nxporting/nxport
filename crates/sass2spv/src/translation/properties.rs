@@ -151,9 +151,21 @@ pub enum SupportBufferField {
     TfeVertexCount,
 }
 
+/// Constant buffer bound sizes in the support buffer (Host::cbuf_limits): one u32 per binding (in vec4 units), at this
+/// byte offset (std140: after tfe_vertex_count, an array of 16-byte elements).
+pub const SUPPORT_CBUF_LIMITS_OFFSET: usize = 1392;
+pub const SUPPORT_CBUF_LIMITS_COUNT: i32 = 32;
+/// Its field index.
+pub const SUPPORT_CBUF_LIMITS_FIELD: i32 = 8;
+
 pub fn support_buffer_structure_type() -> StructureType {
+    support_buffer_structure_type_for(false)
+}
+
+/// The support buffer, with the constant buffer bound sizes when `limits` (Host::cbuf_limits).
+pub fn support_buffer_structure_type_for(limits: bool) -> StructureType {
     use AggregateType as A;
-    StructureType {
+    let mut t = StructureType {
         fields: vec![
             StructureField::new(A::U32, "alpha_test", 1),
             StructureField::new(A::ARRAY | A::U32, "is_bgra", FRAGMENT_IS_BGRA_COUNT),
@@ -164,7 +176,11 @@ pub fn support_buffer_structure_type() -> StructureType {
             StructureField::new(A::VECTOR4 | A::S32, "tfe_offset", 1),
             StructureField::new(A::S32, "tfe_vertex_count", 1),
         ],
+    };
+    if limits {
+        t.fields.push(StructureField::new(A::ARRAY | A::U32, "cbuf_limits", SUPPORT_CBUF_LIMITS_COUNT));
     }
+    t
 }
 
 #[derive(Clone, Copy, Debug)]

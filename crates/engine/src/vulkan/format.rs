@@ -143,6 +143,23 @@ pub fn aspects(fmt: vk::Format) -> vk::ImageAspectFlags {
     }
 }
 
+/// Bytes one element of a vertex format occupies.
+pub fn vertex_size(f: vk::Format) -> u32 {
+    use vk::Format as F;
+    match f {
+        F::R8_UNORM | F::R8_SNORM | F::R8_UINT | F::R8_SINT => 1,
+        F::R16_SFLOAT | F::R16_UNORM | F::R16_SNORM | F::R16_UINT | F::R16_SINT => 2,
+        F::R8G8_UNORM | F::R8G8_SNORM | F::R8G8_UINT | F::R8G8_SINT => 2,
+        F::R8G8B8_UNORM | F::R8G8B8_SNORM | F::R8G8B8_UINT | F::R8G8B8_SINT => 3,
+        F::R16G16B16_SFLOAT | F::R16G16B16_UNORM | F::R16G16B16_SNORM | F::R16G16B16_UINT | F::R16G16B16_SINT => 6,
+        F::R32G32_SFLOAT | F::R32G32_UINT | F::R32G32_SINT => 8,
+        F::R16G16B16A16_SFLOAT | F::R16G16B16A16_UNORM | F::R16G16B16A16_SNORM | F::R16G16B16A16_UINT | F::R16G16B16A16_SINT => 8,
+        F::R32G32B32_SFLOAT | F::R32G32B32_UINT | F::R32G32B32_SINT => 12,
+        F::R32G32B32A32_SFLOAT | F::R32G32B32A32_UINT | F::R32G32B32A32_SINT => 16,
+        _ => 4,
+    }
+}
+
 /// An NVN vertex attribute format: the Vulkan format the fetch uses and how the shader reads it.
 pub fn vertex(fmt: u32) -> Option<(vk::Format, sass2spv::types::AttributeType)> {
     use sass2spv::types::AttributeType as A;

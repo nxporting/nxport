@@ -109,6 +109,7 @@ pub fn translate_functions(
         supports_shader_non_uniform_indexing: gpu.host_supports_shader_non_uniform_indexing(),
         supports_image_gather_extended: gpu.host.image_gather_extended,
         supports_draw_parameters: gpu.host.draw_parameters,
+        cbuf_limits: gpu.host.cbuf_limits,
     };
     let (binary_code, msl) = match target {
         Target::Spirv => (codegen::generate(&mut s_info, &d.tc.definitions, &rm.properties, &host)?, String::new()),

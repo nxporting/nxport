@@ -198,7 +198,7 @@ pub fn translate(d: Decoded) -> Result<crate::ShaderProgram, String> {
 }
 
 pub fn translate_to(mut d: Decoded, target: &crate::pipeline::Target) -> Result<crate::ShaderProgram, String> {
-    let mut rm = ResourceManager::new(d.stage(), d.tc.gpu.set_for(0));
+    let mut rm = ResourceManager::new(d.stage(), d.tc.gpu.set_for(0), d.tc.gpu.host.cbuf_limits);
     let uses_local_memory = d.program.used_features.has(FeatureFlags::LOCAL_MEMORY);
     rm.set_current_local_memory(d.tc.local_memory_size, uses_local_memory);
     if d.stage() == ShaderStage::Compute {
