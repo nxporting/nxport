@@ -26,6 +26,14 @@ pub struct Host {
     pub image_gather_extended: bool,
     /// gl_BaseVertex and friends (DrawParameters): unused while draw parameters come from the driver constant buffer.
     pub draw_parameters: bool,
+    /// A fragment stage that can discard writes its depth (FragCoord.z, a promise of depth greater or equal) when the
+    /// pipeline has a depth target: on Apple GPUs the depth such a shader leaves is not always bit-identical to the depth
+    /// a later draw of the same triangle is tested with (the Metal path's msl_specialize does the same).
+    pub discard_writes_depth: bool,
+    /// Constant buffer reads beyond the bound size return zero (as on the GPU) by a check in the shader, against sizes the
+    /// host writes into the support buffer (properties::SUPPORT_CBUF_LIMITS_OFFSET): for hosts whose bounds checking does
+    /// not cover uniform buffers (MoltenVK). SPIR-V only; the Metal path's msl_specialize does its own.
+    pub cbuf_limits: bool,
     /// Every resource of the stage in this descriptor set, textures numbered from TEXTURE_BASE_ONE_SET (Vulkan, one set
     /// per stage). None: Ryujinx's sets (uniform buffers 0, images 1, storage buffers 2, textures 3).
     pub stage_set: Option<i32>,
@@ -40,6 +48,8 @@ impl Default for Host {
             scaled_vertex_formats: true,
             image_gather_extended: true,
             draw_parameters: true,
+            discard_writes_depth: false,
+            cbuf_limits: false,
             stage_set: None,
         }
     }

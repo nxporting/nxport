@@ -164,6 +164,12 @@ impl<'a> EmitterContext<'a> {
             if defs.omap_depth {
                 let src = self.gpr(self.tc.depth_register());
                 self.store_io(StorageKind::Output, IoVariable::FragmentOutputDepth, None, &[src]);
+            } else if self.tc.gpu.host.discard_writes_depth
+                && self.program.blocks.iter().any(|b| b.op_codes.iter().any(|o| o.name == crate::decoders::InstName::Kil))
+            {
+                let k2 = self.const_i(2);
+                let z = self.load_io2(StorageKind::Input, IoVariable::FragmentCoord, None, k2);
+                self.store_io(StorageKind::Output, IoVariable::FragmentOutputDepth, None, &[z]);
             }
 
             let alpha_test_op = defs.alpha_test_compare();

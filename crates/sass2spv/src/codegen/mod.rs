@@ -29,6 +29,7 @@ pub struct HostCapabilities {
     pub supports_shader_non_uniform_indexing: bool,
     pub supports_image_gather_extended: bool,
     pub supports_draw_parameters: bool,
+    pub cbuf_limits: bool,
 }
 
 #[derive(Clone)]
@@ -585,6 +586,11 @@ fn generate_function(c: &mut CodeGenContext, func_index: usize) -> R<()> {
                 c.m.add_execution_mode(&spv_func, if d.origin_upper_left() { ExecutionMode::ORIGIN_UPPER_LEFT } else { ExecutionMode::ORIGIN_LOWER_LEFT }, &[]);
                 if c.info.io_definitions.contains(&io(StorageKind::Output, IoVariable::FragmentOutputDepth)) {
                     c.m.add_execution_mode(&spv_func, ExecutionMode::DEPTH_REPLACING, &[]);
+                    // The depth a discarding stage writes for the host (Host::discard_writes_depth) is its own: a true
+                    // promise that keeps early rejection for LESS tests.
+                    if !d.omap_depth {
+                        c.m.add_execution_mode(&spv_func, ExecutionMode::DEPTH_GREATER, &[]);
+                    }
                 }
                 if d.early_z_force() {
                     c.m.add_execution_mode(&spv_func, ExecutionMode::EARLY_FRAGMENT_TESTS, &[]);

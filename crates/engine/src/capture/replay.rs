@@ -33,6 +33,11 @@ pub struct Options {
     pub images: bool,
     /// The backend to run on: "metal" (default where there is Metal) or "vulkan".
     pub backend: String,
+    /// Print the commands of these passes.
+    pub trace_passes: Vec<usize>,
+    /// (pass, k): run pass `pass` only up to its k-th draw (counting from 1) and stop there (finding the draw where two
+    /// backends part: record on one, check on the other, bisect k).
+    pub cut_draw: Option<(usize, u32)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -265,6 +270,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
         crate::nvn::api::insert_command_list(*h, ops.clone());
     }
     crate::nvn::api::import_frontend(&frame.frontend);
+    let programs = frame.frontend.programs.clone();
 
     let mut ops = Vec::new();
     let mut missing = 0;
@@ -273,7 +279,26 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
             flatten(&lists, h, 0, &mut ops, &mut missing);
         }
     }
-    let passes = passes(&ops);
+    let mut passes = passes(&ops);
+    if let Some((cp, k)) = opts.cut_draw {
+        passes.truncate(cp + 1);
+        if let Some(p) = passes.get_mut(cp) {
+            let mut seen = 0;
+            for i in p.first..p.end {
+                if matches!(
+                    ops[i].typed,
+                    Some(Cmd::DrawArrays { .. } | Cmd::DrawElements { .. } | Cmd::DrawArraysInstanced { .. } | Cmd::DrawElementsInstanced { .. })
+                ) {
+                    seen += 1;
+                    if seen == k {
+                        p.end = i + 1;
+                        break;
+                    }
+                }
+            }
+            p.draws = seen.min(k);
+        }
+    }
     let mut report = Report {
         passes: passes.len(),
         ..Default::default()
@@ -315,6 +340,49 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     let t1 = std::time::Instant::now();
     for (pi, p) in passes.iter().enumerate() {
         handle += 1;
+        if opts.trace_passes.contains(&pi) {
+            // The state it inherits: the latest command of each kind (and binding slot) before it.
+            let mut latest: std::collections::BTreeMap<String, (usize, String)> = Default::default();
+            for (k, op) in ops[..p.first].iter().enumerate() {
+                if let Some(c) = &op.typed {
+                    let d = format!("{c:?}");
+                    let kind = d.split([' ', '(', '{']).next().unwrap_or("").to_string();
+                    if kind.starts_with("Draw") || kind.starts_with("Clear") || kind.starts_with("Copy") || kind == "Barrier" {
+                        continue;
+                    }
+                    let slot = match c {
+                        Cmd::BindTexture { stage, index, .. }
+                        | Cmd::BindImage { stage, index, .. }
+                        | Cmd::BindUniformBuffer { stage, index, .. }
+                        | Cmd::BindStorageBuffer { stage, index, .. } => format!(" {stage}/{index}"),
+                        Cmd::BindVertexBuffer { index, .. } => format!(" {index}"),
+                        Cmd::BindBlendState(b) => format!(" {}", b & 0xF),
+                        _ => String::new(),
+                    };
+                    latest.insert(kind + &slot, (k, d));
+                }
+            }
+            println!("[gpu-replay] pass {pi}: state from earlier passes");
+            for (k, (at, d)) in &latest {
+                println!("[gpu-replay]   {at:5} {k}: {}", d.chars().take(300).collect::<String>());
+            }
+            for op in ops[..p.end].iter().rev() {
+                if let Some(Cmd::BindProgram { program, stages: bits }) = &op.typed {
+                    let stages = programs.iter().find(|(a, _)| *a == *program as u64).map(|(_, s)| s.clone());
+                    println!("[gpu-replay]   program {program:#x} (stage bits {bits:#x}) stages (code, control): {stages:x?}");
+                    if bits & 0x1F != 0 {
+                        break;
+                    }
+                }
+            }
+            println!("[gpu-replay] pass {pi}: commands {}..{}", p.first, p.end);
+            for (k, op) in ops[p.first..p.end].iter().enumerate() {
+                match &op.typed {
+                    Some(c) => println!("[gpu-replay]   {:5} {:?}", p.first + k, c),
+                    None => println!("[gpu-replay]   {:5} {} {:x?}", p.first + k, op.name, op.args),
+                }
+            }
+        }
         crate::nvn::api::insert_command_list(handle, ops[p.first..p.end].to_vec());
         gpu.submit(&[handle]);
         gpu.wait_serial(gpu.submitted_serial(), u64::MAX);

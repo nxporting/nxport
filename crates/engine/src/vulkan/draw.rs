@@ -3,6 +3,34 @@
 use super::*;
 
 const DRIVER_CBUF_SIZE: usize = 0x1000;
+/// The support buffer with the constant buffer bound sizes (sass2spv::accessor::Host::cbuf_limits).
+const SUPPORT_SIZE: usize = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET
+    + 16 * sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_COUNT as usize;
+
+/// A vertex attribute as the pipeline reads it, and where its data is in the guest's stream.
+#[derive(Clone, Copy, Hash)]
+pub(super) struct VAttr {
+    location: u32,
+    format: i32,
+    offset: u32,
+    src_offset: u32,
+    size: u32,
+}
+
+/// A vertex stream as the pipeline reads it.
+#[derive(Clone, Hash)]
+pub(super) struct VStream {
+    stream: u32,
+    stride: u32,
+    src_stride: u32,
+    divisor: u32,
+    per_instance: bool,
+    /// Copied into an aligned layout (`stride`, the attributes' `offset`) instead of bound in place.
+    repack: bool,
+    attrs: Vec<VAttr>,
+}
+/// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
+const ZERO_STREAM: u32 = 16;
 
 impl Ctx {
     /// The guest program's vertex and fragment stages: (code, control section).
@@ -27,6 +55,8 @@ impl Ctx {
     /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions.
     fn vertex_state(&self) -> (GraphicsState, u64) {
         let mut s = GraphicsState::engine();
+        // Unbound attributes read float zeros (ZERO_STREAM).
+        s.attribute_types = [AttributeType::Float; 32];
         let mut codes = [0u8; 32];
         for (i, &bits) in self.st.attribs.as_slice().iter().enumerate().take(32) {
             if let Some((_, t)) = format::vertex((bits >> 5) & 0x1FF) {
@@ -58,10 +88,17 @@ impl Ctx {
             }
         }
         s.origin_upper_left = true;
-        (s, hash(&codes))
+        let depth = self.discard_depth();
+        (s, hash(&(codes, depth)))
+    }
+
+    /// Whether this pass's discarding fragment stages write their depth (Dev::discard_writes_depth, with a depth target).
+    fn discard_depth(&self) -> bool {
+        self.dev.discard_writes_depth && self.pass.as_ref().is_some_and(|p| p.depth.is_some_and(|(_, f)| format::aspects(f).contains(vk::ImageAspectFlags::DEPTH)))
     }
 
     unsafe fn stage(&mut self, data: u64, control: u64, index: usize, state: GraphicsState, key: u64, set: u32) -> bool {
+        let discard_depth = set == 1 && self.discard_depth();
         let k = (data, key);
         if self.stages.contains_key(&k) {
             return true;
@@ -69,7 +106,7 @@ impl Ctx {
         if self.failed_stages.contains(&k) {
             return false;
         }
-        match shader::translate(&self.dev, data, control, index, Some(state), set) {
+        match shader::translate(&self.dev, data, control, index, Some(state), set, discard_depth) {
             Ok(s) => {
                 self.stages.insert(k, s);
                 true
@@ -108,10 +145,15 @@ impl Ctx {
             }
             None => None,
         };
-        let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey) else { return };
+        let vl = self.vertex_layout();
+        let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl) else { return };
         let mut sets = vec![self.descriptors((vd, vkey), vd, vc, 0, &call, base_instance)];
         if let (Some(k), Some((fd, fc))) = (fkey, fs) {
             sets.push(self.descriptors(k, fd, fc, 1, &call, base_instance));
+        }
+        // A feedback copy ended the pass: it resumes (loading what was rendered).
+        if self.pass.is_none() && !self.begin_pass() {
+            return;
         }
         let d = &self.dev.device;
         d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::GRAPHICS, pipe);
@@ -120,7 +162,7 @@ impl Ctx {
                 d.cmd_bind_descriptor_sets(self.cb, vk::PipelineBindPoint::GRAPHICS, layout, i as u32, &[*s], &[]);
             }
         }
-        self.bind_vertex_buffers();
+        self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
         match call {
             Draw::Arrays { first, count } => {
@@ -135,24 +177,67 @@ impl Ctx {
         }
     }
 
-    unsafe fn pipeline(&mut self, topology: vk::PrimitiveTopology, vs: (u64, u64), fs: Option<(u64, u64)>) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
+    pub(super) unsafe fn dispatch(&mut self, x: i32, y: i32, z: i32) {
+        if x <= 0 || y <= 0 || z <= 0 {
+            return;
+        }
+        self.end_pass();
+        let Some(&(data, control)) = self.programs.get(&self.st.compute_program).and_then(|s| s.first()) else {
+            self.warn(format!("compute program {:#x} has no stage", self.st.compute_program));
+            return;
+        };
+        if !self.stage(data, control, 0, GraphicsState::zeroed(), 0, 0) {
+            return;
+        }
+        let key = hash(&("compute", data));
+        let (pipe, layout) = match self.pipelines.get(&key) {
+            Some(&p) => p,
+            None => {
+                let s = &self.stages[&(data, 0)];
+                let lk = (s.set_layout, self.empty_layout);
+                let layout = match self.layouts.get(&lk) {
+                    Some(&l) => l,
+                    None => {
+                        let sl = [s.set_layout];
+                        let Ok(l) = self.dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl), None) else { return };
+                        self.layouts.insert(lk, l);
+                        l
+                    }
+                };
+                let info = vk::ComputePipelineCreateInfo::default()
+                    .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(s.module).name(c"main"))
+                    .layout(layout);
+                let pipe = match self.dev.device.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) {
+                    Ok(p) => p[0],
+                    Err((_, e)) => {
+                        self.warn(format!("compute pipeline for {data:#x}: {e}"));
+                        return;
+                    }
+                };
+                self.pipelines.insert(key, (pipe, layout));
+                (pipe, layout)
+            }
+        };
+        let set = self.descriptors((data, 0), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0);
+        let d = &self.dev.device;
+        d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
+        if let Some(s) = set {
+            d.cmd_bind_descriptor_sets(self.cb, vk::PipelineBindPoint::COMPUTE, layout, 0, &[s], &[]);
+        }
+        d.cmd_dispatch(self.cb, x as u32, y as u32, z as u32);
+        self.dev.full_barrier(self.cb);
+    }
+
+    unsafe fn pipeline(&mut self, topology: vk::PrimitiveTopology, vs: (u64, u64), fs: Option<(u64, u64)>, vl: &[VStream]) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
         let pass = self.pass.as_ref()?;
         let upper_left = crate::nvn::api::window_origin_mode() == 1;
         let gl_depth = crate::nvn::api::depth_mode() == 0;
-        let attribs: Vec<u32> = self.st.attribs.as_slice().to_vec();
-        let used_streams: Vec<usize> = {
-            let mut v: Vec<usize> = attribs.iter().filter(|&&b| format::vertex((b >> 5) & 0x1FF).is_some()).map(|&b| (b & 31) as usize).collect();
-            v.sort();
-            v.dedup();
-            v
-        };
-        let streams: Vec<u64> = used_streams.iter().map(|&s| self.st.streams.get(s).copied().unwrap_or(0)).collect();
         let color_fmts: Vec<vk::Format> = pass.colors.iter().map(|c| c.map_or(vk::Format::UNDEFINED, |c| c.1)).collect();
         let depth_fmt = pass.depth.map_or(vk::Format::UNDEFINED, |d| d.1);
         let restart = self.st.prim_restart.is_some()
             && matches!(topology, vk::PrimitiveTopology::LINE_STRIP | vk::PrimitiveTopology::TRIANGLE_STRIP | vk::PrimitiveTopology::TRIANGLE_FAN);
         let key = hash(&(
-            (vs, fs, &attribs, &used_streams, &streams, &self.st.blend),
+            (vs, fs, vl, &self.st.blend),
             (self.st.color_state, self.st.channel_mask, self.st.depth_stencil, self.st.polygon, self.st.multisample),
             (color_fmts.iter().map(|f| f.as_raw()).collect::<Vec<_>>(), depth_fmt.as_raw(), pass.samples.as_raw()),
             (topology.as_raw(), restart, self.st.depth_clamp, upper_left, gl_depth),
@@ -177,25 +262,34 @@ impl Ctx {
         if let Some(f) = fstage {
             stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(f.module).name(entry));
         }
-        let vb: Vec<vk::VertexInputBindingDescription> = used_streams
+        let vb: Vec<vk::VertexInputBindingDescription> = vl
             .iter()
-            .zip(&streams)
-            .map(|(&s, &bits)| {
-                let divisor = (bits >> 32) as u32;
+            .map(|v| {
                 vk::VertexInputBindingDescription::default()
-                    .binding(s as u32)
-                    .stride(bits as u32)
-                    .input_rate(if divisor != 0 { vk::VertexInputRate::INSTANCE } else { vk::VertexInputRate::VERTEX })
+                    .binding(v.stream)
+                    .stride(v.stride)
+                    .input_rate(if v.per_instance { vk::VertexInputRate::INSTANCE } else { vk::VertexInputRate::VERTEX })
             })
             .collect();
-        let va: Vec<vk::VertexInputAttributeDescription> = attribs
+        let va: Vec<vk::VertexInputAttributeDescription> = vl
             .iter()
-            .enumerate()
-            .filter_map(|(i, &b)| {
-                let (f, _) = format::vertex((b >> 5) & 0x1FF)?;
-                Some(vk::VertexInputAttributeDescription::default().location(i as u32).binding(b & 31).format(f).offset(b >> 14))
+            .flat_map(|v| {
+                v.attrs.iter().map(move |a| {
+                    vk::VertexInputAttributeDescription::default().location(a.location).binding(v.stream).format(vk::Format::from_raw(a.format)).offset(a.offset)
+                })
             })
             .collect();
+        // Attributes the vertex stage reads but the game leaves unbound read zeros (NVN), from a buffer of zeros.
+        let mut va = va;
+        let mut vb = vb;
+        let missing: Vec<u32> = vstage.inputs.iter().copied().filter(|l| !va.iter().any(|a| a.location == *l)).collect();
+        if !missing.is_empty() {
+            let zb = ZERO_STREAM;
+            vb.push(vk::VertexInputBindingDescription::default().binding(zb).stride(0).input_rate(vk::VertexInputRate::VERTEX));
+            for l in missing {
+                va.push(vk::VertexInputAttributeDescription::default().location(l).binding(zb).format(vk::Format::R32G32B32A32_SFLOAT).offset(0));
+            }
+        }
         let vi = vk::PipelineVertexInputStateCreateInfo::default().vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va);
         let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology).primitive_restart_enable(restart);
         let mut dcc = vk::PipelineViewportDepthClipControlCreateInfoEXT::default().negative_one_to_one(true);
@@ -268,6 +362,16 @@ impl Ctx {
         c[0x640..0x644].copy_from_slice(&base_vertex.to_le_bytes());
         c[0x644..0x648].copy_from_slice(&base_instance.to_le_bytes());
         let base = if stage == 5 { 0x310 } else { 0x110 + 0x100 * stage as usize };
+        // Compute stages also find their uniform buffers' descriptors here.
+        if stage == 5 {
+            for (&(s, i), &(addr, size)) in &self.st.uniforms {
+                if s == 5 && (0..14).contains(&i) {
+                    let o = 0x210 + 0x10 * i as usize;
+                    c[o..o + 8].copy_from_slice(&addr.to_le_bytes());
+                    c[o + 8..o + 12].copy_from_slice(&(size as u32).to_le_bytes());
+                }
+            }
+        }
         for (&(s, i), &(addr, size)) in &self.st.storage {
             if s == stage && (0..16).contains(&i) {
                 let o = base + 0x10 * i as usize;
@@ -314,10 +418,14 @@ impl Ctx {
         let mut buffers: Vec<(u32, vk::DescriptorType, vk::DescriptorBufferInfo)> = Vec::new();
         let mut images: Vec<(u32, vk::DescriptorType, Vec<vk::DescriptorImageInfo>)> = Vec::new();
         let zero = self.arena.copy(&self.dev, &[0u8; 256]);
-        for b in &bindings {
+        // Constant buffers first: the support buffer records their bound sizes.
+        let mut limits: Vec<(u32, usize)> = Vec::new();
+        let mut ordered: Vec<&shader::Binding> = bindings.iter().filter(|b| !matches!(b.feed, Feed::Support)).collect();
+        ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::Support)));
+        for b in ordered {
             match &b.feed {
                 Feed::Support => {
-                    let mut sup = vec![0u8; 1600];
+                    let mut sup = vec![0u8; SUPPORT_SIZE];
                     let put = |s: &mut Vec<u8>, off: usize, v: [f32; 4]| {
                         for (i, x) in v.iter().enumerate() {
                             s[off + i * 4..off + i * 4 + 4].copy_from_slice(&x.to_le_bytes());
@@ -328,23 +436,49 @@ impl Ctx {
                     for i in 0..73 {
                         put(&mut sup, 192 + i * 16, [1.0, 0.0, 0.0, 0.0]);
                     }
+                    // Bound sizes of the constant buffers (vec4 units), for the shader's checks.
+                    for &(binding, len) in &limits {
+                        let o = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET + 16 * binding as usize;
+                        if o + 4 <= sup.len() {
+                            sup[o..o + 4].copy_from_slice(&(len.div_ceil(16) as u32).to_le_bytes());
+                        }
+                    }
                     if let Some((buf, off)) = self.arena.copy(&self.dev, &sup) {
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: sup.len() as u64 }));
                     }
                 }
                 Feed::Cbuf(slot) => {
+                    // Written by GPU work earlier in this submit: in place.
+                    if *slot >= 3 {
+                        if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
+                            let a = crate::nvn::api::translate_virtual(addr as usize);
+                            let len = size.min(0x10000);
+                            if a > 0x10000 && self.gpu_dirty.iter().any(|&(s, e)| a < e && s < a + len) {
+                                if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
+                                    if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
+                                        limits.push((b.binding, len));
+                                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len as u64 }));
+                                        continue;
+                                    }
+                                }
+                                self.warn("a uniform buffer the GPU writes in the same submit could not be bound in place");
+                            }
+                        }
+                    }
                     let bytes = self.cbuf_bytes(stage, *slot, &driver, (data, control));
                     let x = match &bytes {
                         Some(v) => self.arena.copy(&self.dev, v).map(|(b, o)| (b, o, v.len() as u64)),
                         None => zero.map(|(b, o)| (b, o, 256)),
                     };
                     if let Some((buf, off, len)) = x {
+                        limits.push((b.binding, len as usize));
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len }));
                     }
                 }
                 Feed::Sbuf { cb_slot, cb_offset } => {
                     let desc = self.cbuf_bytes(stage, *cb_slot, &driver, (data, control)).and_then(|c| {
-                        let o = *cb_offset as usize;
+                        // In 32-bit words.
+                        let o = *cb_offset as usize * 4;
                         (o + 12 <= c.len()).then(|| {
                             (u64::from_le_bytes(c[o..o + 8].try_into().unwrap()), u32::from_le_bytes(c[o + 8..o + 12].try_into().unwrap()) as usize)
                         })
@@ -432,6 +566,7 @@ impl Ctx {
     /// written back after the submit.
     unsafe fn storage_buffer(&mut self, addr: usize, size: usize) -> Option<vk::DescriptorBufferInfo> {
         let a = crate::nvn::api::translate_virtual(addr);
+        self.gpu_dirty.push((a, a + size));
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
@@ -449,10 +584,46 @@ impl Ctx {
         let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
+            let img = self.tex.get(&self.dev, &t)?.image;
+            if self.pass.as_ref().is_some_and(|p| p.images.contains(&img)) {
+                return self.feedback_view(&t, view.as_ref(), declared);
+            }
             self.tex.sampled_view(&self.dev, &t, view.as_ref(), declared)
         });
         let sampler = crate::nvn::api::lookup_pool_sampler(sampler_id).and_then(|d| self.tex.sampler(&self.dev, &d));
         (view.unwrap_or(vk::ImageView::null()), sampler.unwrap_or(self.default_sampler))
+    }
+
+    /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
+    /// has none: the pass ends for the copy and resumes at the next draw.
+    unsafe fn feedback_view(&mut self, t: &NvnTexture, view: Option<&crate::nvn::api::NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
+        let d = texture::Desc::of(t);
+        let fresh = self.fb_snaps.get(&d).is_some_and(|(e, _)| *e == self.fb_epoch);
+        if !fresh {
+            if !self.fb_snaps.contains_key(&d) {
+                let snap = self.tex.create(&self.dev, &d)?;
+                self.fb_snaps.insert(d, (0, snap));
+            }
+            self.end_pass();
+            let src = self.tex.images.get(&d)?;
+            let (_, snap) = self.fb_snaps.get(&d)?;
+            let aspect = format::aspects(src.format);
+            let regions: Vec<vk::ImageCopy> = (0..src.levels)
+                .map(|l| {
+                    let sub = vk::ImageSubresourceLayers::default().aspect_mask(aspect).mip_level(l).layer_count(src.layers);
+                    vk::ImageCopy::default().src_subresource(sub).dst_subresource(sub).extent(vk::Extent3D {
+                        width: (src.extent.width >> l).max(1),
+                        height: (src.extent.height >> l).max(1),
+                        depth: (src.extent.depth >> l).max(1),
+                    })
+                })
+                .collect();
+            self.dev.device.cmd_copy_image(self.cb, src.image, vk::ImageLayout::GENERAL, snap.image, vk::ImageLayout::GENERAL, &regions);
+            self.dev.full_barrier(self.cb);
+            self.fb_snaps.get_mut(&d)?.0 = self.fb_epoch;
+        }
+        let (_, snap) = self.fb_snaps.get_mut(&d)?;
+        Textures::sampled_view_of(&self.dev, snap, t, view, declared)
     }
 
     unsafe fn image_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> vk::ImageView {
@@ -467,22 +638,111 @@ impl Ctx {
         Textures::view(&self.dev, img, declared, fmt, level, 1, layer, layers, [2, 3, 4, 5], false).unwrap_or(vk::ImageView::null())
     }
 
-    unsafe fn bind_vertex_buffers(&mut self) {
-        let attribs: Vec<u32> = self.st.attribs.as_slice().to_vec();
-        let mut streams: Vec<usize> = attribs.iter().filter(|&&b| format::vertex((b >> 5) & 0x1FF).is_some()).map(|&b| (b & 31) as usize).collect();
-        streams.sort();
-        streams.dedup();
-        for s in streams {
-            let (addr, size) = self.st.vertex_buffers.get(s).copied().unwrap_or((0, 0));
+    /// The bound vertex streams as the pipeline reads them: in place, or repacked where the device needs aligned strides
+    /// and offsets (or cannot read past a stride), and expanded where a stream steps per several instances.
+    fn vertex_layout(&self) -> Vec<VStream> {
+        let mut out: Vec<VStream> = Vec::new();
+        for (i, &b) in self.st.attribs.as_slice().iter().enumerate() {
+            let Some((f, _)) = format::vertex((b >> 5) & 0x1FF) else { continue };
+            let stream = b & 31;
+            let bits = self.st.streams.get(stream as usize).copied().unwrap_or(0);
+            let v = match out.iter_mut().position(|v| v.stream == stream) {
+                Some(k) => &mut out[k],
+                None => {
+                    out.push(VStream {
+                        stream,
+                        stride: bits as u32,
+                        src_stride: bits as u32,
+                        divisor: (bits >> 32) as u32,
+                        per_instance: bits >> 32 != 0,
+                        repack: false,
+                        attrs: Vec::new(),
+                    });
+                    out.last_mut().unwrap()
+                }
+            };
+            let size = format::vertex_size(f);
+            v.attrs.push(VAttr { location: i as u32, format: f.as_raw(), offset: b >> 14, src_offset: b >> 14, size });
+        }
+        let align = self.dev.vertex_align.max(1);
+        for v in out.iter_mut() {
+            let misaligned = v.stride % align != 0 || v.attrs.iter().any(|a| a.offset % align != 0);
+            let beyond = !self.dev.beyond_stride && v.attrs.iter().any(|a| a.offset + a.size > v.stride);
+            if misaligned || beyond || v.divisor > 1 {
+                v.repack = true;
+                let mut off = 0;
+                for a in v.attrs.iter_mut() {
+                    a.offset = off;
+                    off += a.size.next_multiple_of(align.max(4));
+                }
+                v.stride = off.max(align);
+            }
+        }
+        out
+    }
+
+    unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {
+        if let Some((buf, off)) = self.arena.copy(&self.dev, &[0u8; 64]) {
+            self.dev.device.cmd_bind_vertex_buffers(self.cb, ZERO_STREAM, &[buf], &[off]);
+        }
+        for v in vl {
+            let (addr, size) = self.st.vertex_buffers.get(v.stream as usize).copied().unwrap_or((0, 0));
             let a = crate::nvn::api::translate_virtual(addr as usize);
-            let bound = if a > 0x10000 && size > 0 {
+            let bound = if a <= 0x10000 || size == 0 {
+                self.arena.copy(&self.dev, &[0u8; 256])
+            } else if !v.repack {
                 self.imports.find(&self.dev, a, size).or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, size)))
             } else {
-                self.arena.copy(&self.dev, &[0u8; 256])
+                // Elements to write: every vertex the draw can fetch, or every instance it draws.
+                let n = if v.per_instance {
+                    (base_instance.max(0) + instances.max(0)) as usize
+                } else {
+                    match *call {
+                        Draw::Arrays { first, count } => (first.max(0) + count.max(0)) as usize,
+                        Draw::Elements { index_type, count, addr, base_vertex } => {
+                            (self.max_index(index_type, count, addr) as i64 + base_vertex as i64 + 1).max(0) as usize
+                        }
+                    }
+                };
+                let src = std::slice::from_raw_parts(a as *const u8, size);
+                let mut data = vec![0u8; n * v.stride as usize];
+                for e in 0..n {
+                    // A stream stepping per `divisor` instances: element base + i reads source element base + i / d.
+                    let from = if v.per_instance && v.divisor > 1 {
+                        let b = base_instance.max(0) as usize;
+                        if e < b { e } else { b + (e - b) / v.divisor as usize }
+                    } else {
+                        e
+                    };
+                    for at in &v.attrs {
+                        let s0 = from * v.src_stride as usize + at.src_offset as usize;
+                        let d0 = e * v.stride as usize + at.offset as usize;
+                        // Past the bound size reads zero (NVN bounds-checks vertex fetches).
+                        let len = (at.size as usize).min(src.len().saturating_sub(s0));
+                        data[d0..d0 + len].copy_from_slice(&src[s0..s0 + len]);
+                    }
+                }
+                self.arena.copy(&self.dev, &data)
             };
             if let Some((buf, off)) = bound {
-                self.dev.device.cmd_bind_vertex_buffers(self.cb, s as u32, &[buf], &[off]);
+                self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[buf], &[off]);
             }
+        }
+    }
+
+    /// The largest index an indexed draw uses (restart indices excluded).
+    unsafe fn max_index(&self, index_type: i32, count: i32, addr: u64) -> u32 {
+        let a = crate::nvn::api::translate_virtual(addr as usize);
+        if a < 0x10000 || count <= 0 {
+            return 0;
+        }
+        let n = count as usize;
+        let r = self.st.prim_restart;
+        let keep = |i: u32| r != Some(i);
+        match index_type {
+            0 => std::slice::from_raw_parts(a as *const u8, n).iter().map(|&i| i as u32).filter(|&i| keep(i)).max().unwrap_or(0),
+            1 => std::slice::from_raw_parts(a as *const u16, n).iter().map(|&i| i as u32).filter(|&i| keep(i)).max().unwrap_or(0),
+            _ => std::slice::from_raw_parts(a as *const u32, n).iter().copied().filter(|&i| keep(i)).max().unwrap_or(0),
         }
     }
 

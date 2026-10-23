@@ -20,6 +20,12 @@ pub struct Dev {
     pub depth_clip_control: bool,
     pub validation: bool,
     pub cmd_pool: vk::CommandPool,
+    /// Alignment vertex strides and attribute offsets need, and whether attributes may read past their stride: Metal-based
+    /// implementations (MoltenVK) need 4 and no; desktop drivers neither (1, yes).
+    pub vertex_align: u32,
+    pub beyond_stride: bool,
+    /// Apple GPUs (MoltenVK): discarding fragment stages write their depth (sass2spv::accessor::Host::discard_writes_depth).
+    pub discard_writes_depth: bool,
     /// What shader translation may use on this device.
     pub shader_host: sass2spv::accessor::Host,
 }
@@ -73,15 +79,19 @@ impl Dev {
                 layers.push(layer.as_ptr());
             }
             let app = vk::ApplicationInfo::default().application_name(c"nxport").api_version(vk::API_VERSION_1_3);
+            // Validation includes synchronization validation (hazards between commands).
+            let enables = [vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION];
+            let mut vf = vk::ValidationFeaturesEXT::default().enabled_validation_features(&enables);
+            let mut ici = vk::InstanceCreateInfo::default()
+                .application_info(&app)
+                .enabled_extension_names(&exts)
+                .enabled_layer_names(&layers)
+                .flags(flags);
+            if validation {
+                ici = ici.push_next(&mut vf);
+            }
             let instance = entry
-                .create_instance(
-                    &vk::InstanceCreateInfo::default()
-                        .application_info(&app)
-                        .enabled_extension_names(&exts)
-                        .enabled_layer_names(&layers)
-                        .flags(flags),
-                    None,
-                )
+                .create_instance(&ici, None)
                 .map_err(|e| format!("vkCreateInstance: {e}"))?;
             if validation {
                 let du = ash::ext::debug_utils::Instance::new(&entry, &instance);
@@ -189,6 +199,8 @@ impl Dev {
                 scaled_vertex_formats: false,
                 image_gather_extended: supported.shader_image_gather_extended != 0,
                 draw_parameters: q11.shader_draw_parameters != 0,
+                discard_writes_depth: false,
+                cbuf_limits: false,
                 stage_set: None,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
@@ -210,6 +222,24 @@ impl Dev {
             let mut cbc = vk::PhysicalDeviceCustomBorderColorFeaturesEXT::default()
                 .custom_border_colors(qcb.custom_border_colors != 0)
                 .custom_border_color_without_format(qcb.custom_border_color_without_format != 0);
+            // Portability implementations (MoltenVK): everything they offer.
+            let mut port = vk::PhysicalDevicePortabilitySubsetFeaturesKHR::default();
+            let has_portability = has(&dev_exts, portability);
+            let (mut vertex_align, mut beyond_stride) = (1, true);
+            if has_portability {
+                let mut q = vk::PhysicalDeviceFeatures2::default().push_next(&mut port);
+                instance.get_physical_device_features2(pdev, &mut q);
+                let mut pp = vk::PhysicalDevicePortabilitySubsetPropertiesKHR::default();
+                let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pp);
+                instance.get_physical_device_properties2(pdev, &mut p2);
+                // MoltenVK reports alignment 1 and reads past the stride, but on Apple GPUs attributes at offsets that are
+                // not 4-byte aligned fetch wrong data (TotK's skinned meshes: bone indices at offset 6, weights at 9 of a
+                // 12-byte stream, checked against the Metal backend): Metal's own rule, 4 and nothing past the stride.
+                let _ = pp.min_vertex_input_binding_stride_alignment;
+                let _ = port.vertex_attribute_access_beyond_stride;
+                vertex_align = 4;
+                beyond_stride = false;
+            }
             let mut info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&qinfo)
                 .enabled_extension_names(&dexts)
@@ -225,6 +255,9 @@ impl Dev {
             }
             if custom_border {
                 info = info.push_next(&mut cbc);
+            }
+            if has_portability {
+                info = info.push_next(&mut port);
             }
             let device = instance.create_device(pdev, &info, None).map_err(|e| format!("vkCreateDevice: {e}"))?;
             let queue = device.get_device_queue(family, 0);
@@ -267,7 +300,12 @@ impl Dev {
                 host_memory,
                 depth_clip_control,
                 validation,
-                shader_host: sass2spv::accessor::Host { depth_clip_control, ..shader_host },
+                // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
+                // after it in memory): the shaders check them.
+                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, ..shader_host },
+                vertex_align,
+                beyond_stride,
+                discard_writes_depth: has_portability,
                 cmd_pool,
             })
         }

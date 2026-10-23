@@ -109,7 +109,9 @@ impl Arena {
                 | vk::BufferUsageFlags::INDEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST;
-            self.chunks.push(dev.host_buffer(Self::CHUNK.max(len), usage).ok()?);
+            let chunk = dev.host_buffer(Self::CHUNK.max(len), usage).ok()?;
+            std::ptr::write_bytes(chunk.ptr, 0, chunk.size as usize);
+            self.chunks.push(chunk);
             self.used = 0;
             return self.alloc(dev, len as usize);
         }

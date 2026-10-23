@@ -468,8 +468,11 @@ group! {
 group! {
     /// Diagnostics that change what runs: validation, shader replacement, bisection aids, input scripts.
     Debug "Debugging" {
-        /// Metal shader validation (invalid GPU memory accesses are reported instead of faulting)
+        /// Metal shader validation (invalid GPU memory accesses are reported instead of faulting); the Vulkan backend's
+        /// validation layer
         validate: bool = false,
+        /// Vulkan backend: write each translated stage's SPIR-V and manifest here (<code address>_<state>.spv / .json)
+        dump_spirv: Option<PathBuf> = None,
         /// Per-draw debug groups and binding details in GPU error reports
         draw_details: bool = false,
         /// Encoder labels with attachment shapes

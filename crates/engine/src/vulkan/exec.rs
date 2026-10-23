@@ -15,6 +15,8 @@ use crate::gpu::{GpuOnlyTexture, Texels};
 use crate::nvn::api::NvnTexture;
 use crate::nvn::cmd::{AttribState, Cmd, RtRef};
 
+#[path = "copy.rs"]
+mod copy;
 #[path = "draw.rs"]
 mod draw;
 
@@ -36,6 +38,7 @@ struct Nvn {
     stencil: [[u32; 2]; 3],
     blend_color: [f32; 4],
     program: usize,
+    compute_program: usize,
     vertex_buffers: [(u64, usize); 16],
     attribs: AttribState,
     streams: Vec<u64>,
@@ -51,6 +54,8 @@ struct Nvn {
 
 /// The render pass being recorded.
 struct Pass {
+    /// The attached images (render-target feedback: a draw sampling one of them).
+    images: Vec<vk::Image>,
     colors: Vec<Option<(vk::ImageView, vk::Format, i32)>>,
     depth: Option<(vk::ImageView, vk::Format)>,
     extent: (u32, u32),
@@ -80,6 +85,14 @@ pub struct Ctx {
     /// Storage buffers bound as copies (the device could not use guest memory in place): (guest address, copy, length),
     /// copied back once the submit completed.
     writebacks: Vec<(usize, *const u8, usize)>,
+    /// Guest memory GPU work of this submit writes (copy and clear destinations, storage buffers): [start, end). A uniform
+    /// buffer there is bound in place, so it sees those writes in GPU order (a copy taken while recording would not).
+    gpu_dirty: Vec<(usize, usize)>,
+    /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it taken at the first such
+    /// draw after the last barrier that invalidates textures (NVN: it sees the writes from before the barrier; sampling
+    /// an attachment inside a Vulkan render pass is undefined). Copies by texture description, with their epoch.
+    fb_snaps: HashMap<texture::Desc, (u64, texture::Image)>,
+    fb_epoch: u64,
     default_sampler: vk::Sampler,
     warned: HashSet<String>,
 }
@@ -107,6 +120,17 @@ fn attr_type_code(t: AttributeType) -> u8 {
 impl Ctx {
     pub fn new(dev: Dev) -> Result<Ctx, String> {
         let default_sampler = unsafe { dev_sampler(&dev) };
+        // Vertex formats the device cannot fetch (their attributes would read garbage).
+        let missing: Vec<u32> = (1..=120)
+            .filter(|&f| {
+                format::vertex(f).is_some_and(|(vf, _)| unsafe {
+                    !dev.instance.get_physical_device_format_properties(dev.pdev, vf).buffer_features.contains(vk::FormatFeatureFlags::VERTEX_BUFFER)
+                })
+            })
+            .collect();
+        if !missing.is_empty() {
+            println!("[vulkan] vertex formats the device cannot fetch (NVN formats): {missing:?}");
+        }
         let align = dev
             .limits
             .min_uniform_buffer_offset_alignment
@@ -138,6 +162,9 @@ impl Ctx {
             pass: None,
             reports: Vec::new(),
             writebacks: Vec::new(),
+            gpu_dirty: Vec::new(),
+            fb_snaps: HashMap::new(),
+            fb_epoch: 1,
             default_sampler,
             warned: HashSet::new(),
         })
@@ -169,6 +196,7 @@ impl Ctx {
         }
         self.dev.device.free_command_buffers(self.dev.cmd_pool, &[self.cb]);
         self.cb = vk::CommandBuffer::null();
+        self.gpu_dirty.clear();
         for (addr, src, len) in std::mem::take(&mut self.writebacks) {
             std::ptr::copy_nonoverlapping(src, addr as *mut u8, len);
         }
@@ -226,7 +254,22 @@ impl Ctx {
             Cmd::SetPrimitiveRestart { enable, index } => self.st.prim_restart = enable.then_some(*index),
             Cmd::SetPolygonOffset { factor, units, clamp } => self.st.polygon_offset = (*factor, *units, *clamp),
             Cmd::SetBlendColor(c) => self.st.blend_color = *c,
-            Cmd::BindProgram { program, .. } => self.st.program = *program,
+            Cmd::BindProgram { program, stages } => {
+                // Compute and graphics programs are bound independently.
+                if stages & 0x20 != 0 {
+                    self.st.compute_program = *program;
+                }
+                if stages & 0x1F != 0 || *stages == 0 {
+                    self.st.program = *program;
+                }
+            }
+            Cmd::DispatchCompute { x, y, z } => self.dispatch(*x, *y, *z),
+            Cmd::CopyBufferToBuffer { .. }
+            | Cmd::ClearBuffer { .. }
+            | Cmd::CopyBufferToTexture { .. }
+            | Cmd::CopyTextureToBuffer { .. }
+            | Cmd::CopyTextureToTexture(_)
+            | Cmd::ClearTexture(_) => self.exec_copy(c),
             Cmd::BindVertexBuffer { index, addr, size } => {
                 if let Some(v) = self.st.vertex_buffers.get_mut(*index as usize) {
                     *v = (*addr, *size);
@@ -245,9 +288,13 @@ impl Ctx {
             Cmd::BindDepthStencilState(d) => self.st.depth_stencil = Some(*d),
             Cmd::BindPolygonState(p) => self.st.polygon = *p,
             Cmd::BindMultisampleState(m) => self.st.multisample = *m,
-            Cmd::Barrier(_) => {
+            Cmd::Barrier(bits) => {
                 self.end_pass();
                 self.dev.full_barrier(self.cb);
+                // INVALIDATE_TEXTURE: textures read after it see what was rendered before it.
+                if bits & 0x10 != 0 {
+                    self.fb_epoch += 1;
+                }
             }
             Cmd::BindTexture { stage, index, handle } => {
                 self.st.textures.insert((*stage, *index), *handle);
@@ -320,7 +367,7 @@ impl Ctx {
     }
 
     /// The image and NVN texture a render target reference names now.
-    unsafe fn target(&mut self, r: &RtRef) -> Option<(NvnTexture, vk::ImageView, vk::Format, (u32, u32), vk::SampleCountFlags)> {
+    unsafe fn target(&mut self, r: &RtRef) -> Option<(NvnTexture, vk::ImageView, vk::Format, (u32, u32), vk::SampleCountFlags, vk::Image)> {
         let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
         let (_, t) = crate::nvn::api::texture_snapshot(addr)?;
         let img = self.tex.get(&self.dev, &t)?;
@@ -342,8 +389,9 @@ impl Ctx {
         };
         let extent = ((img.extent.width >> r.level).max(1), (img.extent.height >> r.level).max(1));
         let samples = img.samples;
+        let image = img.image;
         let view = Textures::view(&self.dev, img, ty, fmt, r.level as u32, 1, layer, 1, [2, 3, 4, 5], false)?;
-        Some((t, view, fmt, extent, samples))
+        Some((t, view, fmt, extent, samples, image))
     }
 
     unsafe fn begin_pass(&mut self) -> bool {
@@ -351,6 +399,7 @@ impl Ctx {
             return true;
         }
         let mut colors = Vec::new();
+        let mut images = Vec::new();
         let mut extent = (u32::MAX, u32::MAX);
         let mut samples = vk::SampleCountFlags::TYPE_1;
         for r in self.st.colors.clone() {
@@ -359,18 +408,20 @@ impl Ctx {
                 continue;
             }
             match self.target(&r) {
-                Some((t, view, fmt, e, s)) => {
+                Some((t, view, fmt, e, s, image)) => {
                     extent = (extent.0.min(e.0), extent.1.min(e.1));
                     samples = s;
+                    images.push(image);
                     colors.push(Some((view, fmt, t.format)));
                 }
                 None => colors.push(None),
             }
         }
         let depth = match self.st.depth {
-            Some(r) if r.texture != 0 => self.target(&r).map(|(_, view, fmt, e, s)| {
+            Some(r) if r.texture != 0 => self.target(&r).map(|(_, view, fmt, e, s, image)| {
                 extent = (extent.0.min(e.0), extent.1.min(e.1));
                 samples = s;
+                images.push(image);
                 (view, fmt)
             }),
             _ => None,
@@ -416,7 +467,7 @@ impl Ctx {
         }
         self.dev.full_barrier(self.cb);
         self.dev.device.cmd_begin_rendering(self.cb, &info);
-        self.pass = Some(Pass { colors, depth, extent, samples });
+        self.pass = Some(Pass { images, colors, depth, extent, samples });
         true
     }
 

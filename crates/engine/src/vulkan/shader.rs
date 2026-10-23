@@ -14,7 +14,7 @@ pub enum Feed {
     Support,
     /// Guest constant buffer slot (0 driver, 1 the shader's constant bank, n >= 3 the uniform buffer bound at n - 3).
     Cbuf(i32),
-    /// Storage buffer: its descriptor (address, size) is read from guest constant buffer `cb_slot` at `cb_offset`.
+    /// Storage buffer: its descriptor (address, size) is read from guest constant buffer `cb_slot` at word `cb_offset`.
     Sbuf { cb_slot: i32, cb_offset: i32 },
     /// Texture: handle at word `handle_index` of the bound texture table (cbuf_slot -1) or of constant buffer
     /// `cbuf_slot`; declared view type.
@@ -35,6 +35,8 @@ pub struct Stage {
     pub bindings: Vec<Binding>,
     pub set_layout: vk::DescriptorSetLayout,
     pub stage: sass2spv::ShaderStage,
+    /// Input locations (a vertex stage's attributes).
+    pub inputs: Vec<u32>,
 }
 
 fn view_type(ty: &str) -> (vk::ImageViewType, bool) {
@@ -61,6 +63,7 @@ pub unsafe fn translate(
     index: usize,
     state: Option<sass2spv::accessor::GraphicsState>,
     set: u32,
+    discard_writes_depth: bool,
 ) -> Result<Stage, String> {
     let len = match crate::nvn::api::find_memory_pool(crate::nvn::api::translate_virtual(data as usize)) {
         Some((base, size)) => (base + size).saturating_sub(data as usize).min(0x10000),
@@ -93,15 +96,24 @@ pub unsafe fn translate(
         let mem = (ctrl(0x754).max(ctrl(0x760)).max(ctrl(0x710)) + 15) & !15;
         [ctrl(0x748) as i32, ctrl(0x74c) as i32, ctrl(0x750) as i32, mem as i32]
     });
-    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), ..dev.shader_host.clone() };
+    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), discard_writes_depth, ..dev.shader_host.clone() };
     let p = sass2spv::translate_stage_for(code, hint, cb1, compute_fields, &sass2spv::Target::Spirv, state, host)?;
     if p.binary_code.is_empty() {
         return Err("empty SPIR-V".into());
+    }
+    if let Some(dir) = &crate::settings::get().debug.dump_spirv {
+        let _ = std::fs::create_dir_all(dir);
+        let name = format!("{data:012x}_{set}_{}", p.binary_code.len());
+        let _ = std::fs::write(dir.join(format!("{name}.spv")), &p.binary_code);
+        let _ = std::fs::write(dir.join(format!("{name}.json")), sass2spv::manifest_json(&p));
     }
     let m = p.manifest();
     let words: Vec<u32> = p.binary_code.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     // The bindings the module declares (OpDecorate 71, Binding 33), each fed as the manifest says.
     let mut declared = Vec::new();
+    // Inputs: OpVariable (59) of storage class Input (1) with a Location decoration (30).
+    let mut locations: HashMap<u32, u32> = HashMap::new();
+    let mut input_vars = Vec::new();
     let mut i = 5;
     while i < words.len() {
         let (n, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
@@ -111,8 +123,16 @@ pub unsafe fn translate(
         if op == 71 && n >= 4 && words[i + 2] == 33 {
             declared.push(words[i + 3]);
         }
+        if op == 71 && n >= 4 && words[i + 2] == 30 {
+            locations.insert(words[i + 1], words[i + 3]);
+        }
+        if op == 59 && n >= 4 && words[i + 3] == 1 {
+            input_vars.push(words[i + 2]);
+        }
         i += n;
     }
+    let mut inputs: Vec<u32> = input_vars.iter().filter_map(|v| locations.get(v).copied()).collect();
+    inputs.sort();
     let mut out = Vec::new();
     for b in declared {
         let feed = if b == 0 {
@@ -169,5 +189,6 @@ pub unsafe fn translate(
         bindings: out,
         set_layout,
         stage: p.info.stage,
+        inputs,
     })
 }

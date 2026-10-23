@@ -552,8 +552,43 @@ fn load_or_store(c: &mut CodeGenContext, op: &Op, is_store: bool) -> Res {
         Ok(INVALID)
     } else {
         let t = c.get_type(var_type, 1)?;
-        Ok((var_type, Some(c.m.load(&t, &pointer, None))))
+        let v = c.m.load(&t, &pointer, None);
+        Ok((var_type, Some(bounded_cbuf_read(c, op, var_type, v)?)))
     }
+}
+
+/// HostCapabilities::cbuf_limits: a constant buffer read whose vec4 index is not below the binding's bound size (in the
+/// support buffer) reads zero.
+fn bounded_cbuf_read(c: &mut CodeGenContext, op: &Op, var_type: A, value: Inst) -> R<Inst> {
+    use crate::translation::properties::{SUPPORT_BUFFER_BINDING, SUPPORT_CBUF_LIMITS_COUNT, SUPPORT_CBUF_LIMITS_FIELD};
+    if !c.host.cbuf_limits || op.storage_kind != StorageKind::ConstantBuffer || op.sources.len() < 3 {
+        return Ok(value);
+    }
+    let Some(binding) = constant_operand(c, op.src(0)?) else { return Ok(value) };
+    if binding == SUPPORT_BUFFER_BINDING || !(0..SUPPORT_CBUF_LIMITS_COUNT).contains(&binding) {
+        return Ok(value);
+    }
+    let Some(support) = c.constant_buffers.get(&SUPPORT_BUFFER_BINDING).cloned() else { return Ok(value) };
+    let index = c.get(A::S32, op.src(2)?)?;
+    let u = c.type_u32();
+    let s = c.type_s32();
+    let field = c.m.constant(&s, Lit::i32(SUPPORT_CBUF_LIMITS_FIELD));
+    let element = c.m.constant(&s, Lit::i32(binding));
+    let pt = c.m.type_pointer(StorageClass::UNIFORM, &u, false);
+    let limit_ptr = c.m.access_chain(&pt, &support, &[field, element]);
+    let limit = c.m.load(&u, &limit_ptr, None);
+    let index_u = c.m.bitcast(&u, &index);
+    let b = c.type_bool();
+    let in_range = c.m.u_less_than(&b, &index_u, &limit);
+    let t = c.get_type(var_type, 1)?;
+    let zero = match var_type {
+        A::FP32 => {
+            let f = c.type_fp32();
+            c.m.constant(&f, Lit::f32(0.0))
+        }
+        _ => c.m.constant(&t, Lit::i32(0)),
+    };
+    Ok(c.m.select(&t, &in_range, &value, &zero))
 }
 
 fn constant_operand(c: &CodeGenContext, node: Option<AstId>) -> Option<i32> {
