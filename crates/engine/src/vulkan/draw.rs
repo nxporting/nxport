@@ -73,7 +73,9 @@ impl Ctx {
     /// The fragment stage's state: output types from the bound color targets' formats.
     fn fragment_state(&self) -> (GraphicsState, u64) {
         let mut s = GraphicsState::engine();
-        let mut codes = [0u8; 8];
+        // Unbound slots keep the engine default (Uint): a code of their own, or a stage translated for a pass with an
+        // unbound slot is reused for one with a float target there.
+        let mut codes = [0xFFu8; 8];
         if let Some(p) = &self.pass {
             for (i, c) in p.colors.iter().enumerate().take(8) {
                 if let Some((_, _, nvn)) = c {
@@ -346,7 +348,8 @@ impl Ctx {
         let pipe = match self.dev.device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) {
             Ok(p) => p[0],
             Err((_, e)) => {
-                self.warn(format!("pipeline for {:#x}/{:?}: {e}", vs.0, fs.map(|f| f.0)));
+                let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
+                self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
                 return None;
             }
         };
