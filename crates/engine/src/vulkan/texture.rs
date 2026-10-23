@@ -49,6 +49,11 @@ pub struct Image {
     /// GPU work rendered or wrote into it: guest memory no longer has its contents.
     pub gpu_written: bool,
     views: HashMap<ViewKey, vk::ImageView>,
+    /// The submit it was last checked against guest memory in, the hash of the guest bytes uploaded then, and the
+    /// write-tracking token of those bytes (guest/dirty_track.rs; None: untracked, hash at every check).
+    checked: u64,
+    hash: u64,
+    token: Option<u64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,6 +73,8 @@ pub struct Textures {
     pub images: HashMap<Desc, Image>,
     samplers: Vec<(SamplerDesc, vk::Sampler)>,
     pub warned: std::collections::HashSet<String>,
+    /// Counts submits: textures are checked for CPU writes once per submit.
+    pub serial: u64,
 }
 
 fn image_type(target: i32) -> (vk::ImageType, vk::ImageViewType) {
@@ -118,9 +125,46 @@ impl Textures {
         if !self.images.contains_key(&d) {
             let img = self.create(dev, &d)?;
             self.images.insert(d, img);
-            self.upload(dev, &d);
+            self.refresh(dev, &d, true);
+        } else {
+            self.refresh(dev, &d, false);
         }
         self.images.get_mut(&d)
+    }
+
+    /// Uploads the texture again when the CPU wrote its guest memory since the last upload (the game fills textures
+    /// after creating them: streamed assets, glyphs rasterized into the font atlas; and reuses memory for new contents).
+    /// Once per submit; skipped while write tracking shows its pages untouched. Textures GPU work wrote hold contents
+    /// guest memory lacks and are left alone.
+    unsafe fn refresh(&mut self, dev: &Dev, d: &Desc, first: bool) {
+        let serial = self.serial;
+        let Some(img) = self.images.get_mut(d) else { return };
+        if !first && (img.checked == serial || img.gpu_written) {
+            return;
+        }
+        img.checked = serial;
+        if d.storage <= 0x10000 || !crate::nvn::api::memory_pool_cpu_writable(d.storage) {
+            if first {
+                self.upload(dev, d);
+            }
+            return;
+        }
+        let len = layout::compute_layout(&d.params).total as usize;
+        if len == 0 {
+            return;
+        }
+        use crate::guest::dirty_track;
+        if !first && img.token.is_some() && dirty_track::generation(d.storage, len) == img.token {
+            return;
+        }
+        // Protect before hashing: writes during the hash change the token.
+        img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
+        let h = hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len));
+        if !first && h == img.hash {
+            return;
+        }
+        img.hash = h;
+        self.upload(dev, d);
     }
 
     pub unsafe fn create(&mut self, dev: &Dev, d: &Desc) -> Option<Image> {
@@ -231,6 +275,9 @@ impl Textures {
             samples: samples(p.samples),
             gpu_written: false,
             views: HashMap::new(),
+            checked: 0,
+            hash: 0,
+            token: None,
         })
     }
 
@@ -530,4 +577,16 @@ impl Textures {
             dev.device.free_memory(img.memory, None);
         }
     }
+}
+
+fn hash_bytes(b: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64 ^ b.len() as u64;
+    let (words, rest) = b.split_at(b.len() / 8 * 8);
+    for w in words.chunks_exact(8) {
+        h = (h ^ u64::from_le_bytes(w.try_into().unwrap())).wrapping_mul(0x0100_0000_01b3).rotate_left(29);
+    }
+    for &x in rest {
+        h = (h ^ x as u64).wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }

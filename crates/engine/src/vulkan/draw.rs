@@ -576,6 +576,8 @@ impl Ctx {
     unsafe fn storage_buffer(&mut self, addr: usize, size: usize) -> Option<vk::DescriptorBufferInfo> {
         let a = crate::nvn::api::translate_virtual(addr);
         self.gpu_dirty.push((a, a + size));
+        // GPU writes cannot fault: pages the write tracking protected would lose them.
+        crate::guest::dirty_track::release_for_gpu(a, size);
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
