@@ -15,7 +15,7 @@ use std::os::raw::c_int;
 use crate::nvn::api::record_typed;
 
 /// A render target reference: NVNtexture address plus the view's level/layer (0 if no view).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RtRef {
     pub texture: usize,
     /// The object's snapshot generation when the command was recorded, low 32 bits (nvn::api::resolve_texture_ref).
@@ -28,7 +28,7 @@ pub struct RtRef {
 }
 
 /// A texture subresource reference for copies: NVNtexture address plus the view's first level / layer.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TexRef {
     pub texture: usize,
     /// The object's snapshot generation when the command was recorded, low 32 bits (nvn::api::resolve_texture_ref).
@@ -38,7 +38,7 @@ pub struct TexRef {
 }
 
 /// NVNcopyRegion: offsets and sizes in texels (layers for array targets via z / depth).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Region {
     pub x: i32,
     pub y: i32,
@@ -50,7 +50,7 @@ pub struct Region {
 
 /// Bound vertex attribute states, inline (Cmd stays 72 bytes): the executor used to copy them out of a separate heap
 /// allocation for every bind, a cache miss each.
-#[derive(Clone, Copy, Default, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AttribState {
     pub n: u8,
     pub v: [u32; 16],
@@ -72,7 +72,7 @@ impl std::fmt::Debug for AttribState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Cmd {
     SetRenderTargets {
         colors: Vec<RtRef>,
@@ -280,7 +280,7 @@ pub enum Cmd {
     ClearTexture(Box<ClearTextureParams>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CopyTextureToTextureParams {
     pub src: TexRef,
     pub src_region: Region,
@@ -288,7 +288,7 @@ pub struct CopyTextureToTextureParams {
     pub dst_region: Region,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClearTextureParams {
     pub dst: TexRef,
     pub region: Region,

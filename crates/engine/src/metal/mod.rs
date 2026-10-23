@@ -39,6 +39,7 @@ mod pass_prof;
 pub(crate) mod pipeline_archive;
 pub mod pipeline_list;
 mod programs;
+mod readback;
 mod report_guard;
 pub mod shader_cache;
 mod tex_backing;

@@ -6,6 +6,8 @@
 // gpu/), and of those cfg(nx_native) ones run guest code on the host CPU (the code rewriting in cpu/, host/, the Metal
 // backend). Other hosts get the platform-independent parts the builder and the command line use.
 #[cfg(nx_runtime)]
+pub mod capture;
+#[cfg(nx_runtime)]
 mod clock;
 pub mod config;
 #[cfg(nx_runtime)]
@@ -234,6 +236,33 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .expect("spawn guest-watch");
     // The main thread owns the window and the Cocoa run loop; never returns.
     host::display::run_main_thread()
+}
+
+#[cfg(nx_native)]
+/// Runs the frame capture in `dir` (capture::replay) on the Metal backend, headless, with the settings from `layers`.
+/// Once per process: it maps the capture's memory at its addresses and installs its frontend state.
+pub fn replay_capture(
+    dir: &std::path::Path,
+    opts: &capture::replay::Options,
+    layers: Vec<settings::SettingsPatch>,
+) -> Result<capture::replay::Report, String> {
+    gpu::install(&metal::backend::METAL);
+    let mut s = resolve_settings(layers);
+    s.display.headless = true;
+    s.graphics.early_fence = false;
+    s.graphics.report_guard = settings::ReportGuard::Off;
+    s.graphics.async_pipelines = false;
+    s.graphics.precompile_pipelines = false;
+    s.graphics.record_pipelines = false;
+    s.files.no_miss_dump = true;
+    let s = settings::install(s);
+    if s.debug.validate {
+        std::env::set_var("MTL_SHADER_VALIDATION", "1");
+        std::env::set_var("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1");
+    }
+    let device = objc2_metal::MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
+    metal::init(device, None);
+    capture::replay::run(dir, opts)
 }
 
 /// Moves the loaded guest (raw pointers into its memory) to the thread that runs it.
