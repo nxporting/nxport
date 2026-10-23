@@ -446,7 +446,8 @@ impl Textures {
             7 => vk::CompareOp::GREATER_OR_EQUAL,
             _ => vk::CompareOp::ALWAYS,
         };
-        let aniso = d.max_anisotropy.clamp(1.0, 16.0);
+        // Whole sample counts, as the hardware takes them (the Metal backend rounds the same way).
+        let aniso = d.max_anisotropy.round().clamp(1.0, 16.0);
         let info = vk::SamplerCreateInfo::default()
             .min_filter(min)
             .mag_filter(if d.mag_filter != 0 { vk::Filter::LINEAR } else { vk::Filter::NEAREST })

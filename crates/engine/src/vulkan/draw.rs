@@ -361,7 +361,16 @@ impl Ctx {
         };
         c[0x640..0x644].copy_from_slice(&base_vertex.to_le_bytes());
         c[0x644..0x648].copy_from_slice(&base_instance.to_le_bytes());
-        let base = if stage == 5 { 0x310 } else { 0x110 + 0x100 * stage as usize };
+        // Blocks in hardware stage order (vertex, tessellation control, tessellation evaluation, geometry, fragment),
+        // not NVN's stage numbers (vertex 0, fragment 1, geometry 2, tessellation control 3 and evaluation 4).
+        let base = match stage {
+            5 => 0x310,
+            0 => 0x110,
+            1 => 0x510,
+            2 => 0x410,
+            3 => 0x210,
+            _ => 0x310,
+        };
         // Compute stages also find their uniform buffers' descriptors here.
         if stage == 5 {
             for (&(s, i), &(addr, size)) in &self.st.uniforms {

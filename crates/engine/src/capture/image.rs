@@ -158,6 +158,9 @@ pub struct Tolerance {
     pub max_diff: f32,
     /// Fraction of pixels allowed to exceed max_diff (GPU particles and other nondeterministic work).
     pub max_fraction: f64,
+    /// A pixel also matches when a reference pixel at most this far away (in x and y) does: rounding that moves which
+    /// texel a sample lands on along sharp edges, which differs between GPUs and shader compilers. 0: exact positions.
+    pub neighbourhood: u32,
 }
 
 impl Default for Tolerance {
@@ -165,6 +168,7 @@ impl Default for Tolerance {
         Tolerance {
             max_diff: 2.0 / 255.0,
             max_fraction: 0.0,
+            neighbourhood: 0,
         }
     }
 }
@@ -174,6 +178,10 @@ pub struct Diff {
     pub pixels: u64,
     pub differing: u64,
     pub max: f32,
+    /// Largest difference per channel among the differing pixels.
+    pub channel_max: [f32; 4],
+    /// Differing pixels by their largest channel difference: below 0.02, 0.05, 0.1, 0.25, and above.
+    pub histogram: [u64; 5],
     /// Bounding box of the differing pixels (x0, y0, x1, y1).
     pub bbox: Option<(u32, u32, u32, u32)>,
 }
@@ -194,6 +202,8 @@ pub fn compare(reference: &Texels, out: &Texels, tol: &Tolerance) -> Diff {
             pixels,
             differing: pixels,
             max: f32::INFINITY,
+            channel_max: [f32::INFINITY; 4],
+            histogram: [0, 0, 0, 0, pixels],
             bbox: Some((0, 0, reference.width.saturating_sub(1), reference.height.saturating_sub(1))),
         };
     }
@@ -213,7 +223,7 @@ pub fn compare(reference: &Texels, out: &Texels, tol: &Tolerance) -> Diff {
     match (decode(reference), decode(out)) {
         (Some((a, int)), Some((b, _))) => {
             let float = layout(reference.format).is_some_and(|l| l.2 == Kind::Float) || reference.format == 63;
-            for (i, (p, q)) in a.iter().zip(&b).enumerate() {
+            let distance = |p: &[f32; 4], q: &[f32; 4]| {
                 let mut worst = 0f32;
                 for c in 0..4 {
                     let (x, y) = (p[c], q[c]);
@@ -228,10 +238,33 @@ pub fn compare(reference: &Texels, out: &Texels, tol: &Tolerance) -> Diff {
                     };
                     worst = worst.max(diff);
                 }
-                d.max = d.max.max(worst);
-                if (int && worst > 0.0) || (!int && worst > tol.max_diff) {
-                    mark(i, &mut d);
+                worst
+            };
+            let limit = if int { 0.0 } else { tol.max_diff };
+            let (w, h) = (reference.width as i64, reference.height as i64);
+            let r = tol.neighbourhood as i64;
+            for (i, (p, q)) in a.iter().zip(&b).enumerate() {
+                let worst = distance(p, q);
+                if worst <= limit {
+                    continue;
                 }
+                let (x, y) = (i as i64 % w, i as i64 / w);
+                let near = (r > 0)
+                    && (-r..=r).any(|dy| {
+                        (-r..=r).any(|dx| {
+                            let (nx, ny) = (x + dx, y + dy);
+                            nx >= 0 && ny >= 0 && nx < w && ny < h && distance(&a[(ny * w + nx) as usize], q) <= limit
+                        })
+                    });
+                if near {
+                    continue;
+                }
+                d.max = d.max.max(worst);
+                for c in 0..4 {
+                    d.channel_max[c] = d.channel_max[c].max((p[c] - q[c]).abs());
+                }
+                d.histogram[[0.02, 0.05, 0.1, 0.25].iter().position(|&l| worst < l).unwrap_or(4)] += 1;
+                mark(i, &mut d);
             }
         }
         _ => {
