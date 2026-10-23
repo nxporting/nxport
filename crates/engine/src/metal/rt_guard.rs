@@ -524,7 +524,7 @@ pub(super) fn start() {
 // ---- faults (signal context: atomics, mprotect, write and nanosleep only) -------------------------------------------
 
 /// Signal-handler hook: true if `addr` is on a held page (the access is then retried).
-pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool) -> bool {
+pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write: bool) -> bool {
     if !enabled() || HIGH.load(Ordering::Acquire) == 0 {
         return false;
     }
@@ -540,6 +540,11 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool) -> bo
         // The hold ended between the fault and here: retry; a second fault there on a page left inaccessible is
         // repaired (opened) rather than reported as a crash.
         if page != 0 && RECENT_PAGES.iter().any(|p| p.load(Ordering::Acquire) == page) {
+            // A write to a page write tracking or the write guard keeps read-only is theirs: claiming it here
+            // reopened the page read-only on every retry and the writer faulted forever.
+            if write && open_prot(page) & libc::PROT_WRITE == 0 {
+                return false;
+            }
             if LAST_RETRY.with(|r| r.replace(addr)) != addr {
                 return true;
             }
