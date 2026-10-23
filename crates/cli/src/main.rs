@@ -86,9 +86,23 @@ enum Command {
         /// Where diff images go (default: the capture's diff/)
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Where the references are (default: the capture's ref/)
+        #[arg(long)]
+        refs: Option<PathBuf>,
+        /// Also write every target read back as a PNG (to --out)
+        #[arg(long)]
+        images: bool,
         /// Engine options (as nxport takes them, e.g. --shader-cache=DIR), after --
         #[arg(last = true)]
         engine: Vec<String>,
+    },
+    #[cfg(target_os = "macos")]
+    /// Write a synthetic frame capture (short NVN sequences with hand-encoded shaders) for gpu-replay
+    GpuScenario {
+        /// Scenario name (or "list")
+        name: String,
+        /// The capture directory to write
+        out: Option<PathBuf>,
     },
     /// Convert a frame dump (PPM) to PNG
     Ppm2png {
@@ -335,10 +349,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             macho::write_guest_dylib(&img, &out, platform, name)?;
         }
         #[cfg(target_os = "macos")]
-        Command::GpuReplay { capture, record, all, out, engine } => {
+        Command::GpuScenario { name, out } => match out {
+            Some(out) if name != "list" => nxport::write_scenario(&name, &out)?,
+            _ => println!("{}", nxport::capture::scenarios::NAMES.join("\n")),
+        },
+        #[cfg(target_os = "macos")]
+        Command::GpuReplay { capture, record, all, out, refs, images, engine } => {
             let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
                 .map_err(|e| e.to_string())?;
-            let opts = nxport::capture::replay::Options { record, out, all };
+            let opts = nxport::capture::replay::Options { record, out, all, refs, images };
             let report = nxport::replay_capture(&capture, &opts, layers)?;
             if report.first_failure.is_some() {
                 std::process::exit(1);

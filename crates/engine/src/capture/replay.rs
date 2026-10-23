@@ -27,6 +27,10 @@ pub struct Options {
     pub out: Option<PathBuf>,
     /// Check every pass instead of stopping at the first that differs.
     pub all: bool,
+    /// Where the references are (default: the capture's ref/).
+    pub refs: Option<PathBuf>,
+    /// Also write every target read back as a PNG (to `out`).
+    pub images: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -278,7 +282,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
         ));
     }
 
-    let refdir = dir.join("ref");
+    let refdir = opts.refs.clone().unwrap_or_else(|| dir.join("ref"));
     let (mut writer, mut reader, refs) = if opts.record {
         std::fs::create_dir_all(&refdir).map_err(|e| format!("{}: {e}", refdir.display()))?;
         (
@@ -327,6 +331,10 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
                 let img = gpu.read_texture(rt.texture, rt.gen, rt.level as u32, rt.layer as u32);
                 let desc = describe(slot, rt, img.as_ref());
                 report.targets += 1;
+                if let (true, Some(t)) = (opts.images, &img) {
+                    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+                    image::write_png(&out.join(format!("pass{pi:04}_c{slot}_out.png")), t.width, t.height, &image::to_rgba8(t))?;
+                }
                 if let Some(w) = writer.as_mut() {
                     w.push(&img)?;
                 } else if let Some(r) = reader.as_mut() {

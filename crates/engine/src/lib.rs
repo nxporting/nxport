@@ -265,6 +265,16 @@ pub fn replay_capture(
     capture::replay::run(dir, opts)
 }
 
+#[cfg(nx_native)]
+/// Records synthetic capture scenario `name` (capture::scenarios) and writes it to `dir`. Once per process.
+pub fn write_scenario(name: &str, dir: &std::path::Path) -> Result<(), String> {
+    gpu::install(&gpu::null::NULL);
+    let mut s = settings::Settings::default();
+    s.display.headless = true;
+    settings::install(s);
+    capture::scenarios::write(name, dir)
+}
+
 /// Moves the loaded guest (raw pointers into its memory) to the thread that runs it.
 #[cfg(nx_runtime)]
 struct AssertSend<F>(F);

@@ -3,6 +3,9 @@
 
 pub(crate) mod format;
 pub(crate) mod image;
+pub(crate) mod maxwell;
 #[cfg(nx_native)]
 pub(crate) mod record;
 pub mod replay;
+#[cfg(nx_native)]
+pub mod scenarios;
