@@ -95,6 +95,11 @@ pub struct Ctx {
     /// an attachment inside a Vulkan render pass is undefined). Copies by texture description, with their epoch.
     fb_snaps: HashMap<texture::Desc, (u64, texture::Image)>,
     fb_epoch: u64,
+    /// GPU texture compression: the game renders compressed blocks through an integer view of a block-compressed texture
+    /// (one texel per block). Those passes render into an uncompressed proxy, copied into the texture's level when the
+    /// pass ends. Proxies by (texture, level, view format); the ones the current pass renders.
+    bc_proxies: HashMap<(texture::Desc, u32, vk::Format), texture::Image>,
+    bc_pending: Vec<(texture::Desc, u32, vk::Format)>,
     default_sampler: vk::Sampler,
     warned: HashSet<String>,
 }
@@ -167,6 +172,8 @@ impl Ctx {
             writebacks: Vec::new(),
             gpu_dirty: Vec::new(),
             fb_snaps: HashMap::new(),
+            bc_proxies: HashMap::new(),
+            bc_pending: Vec::new(),
             fb_epoch: 1,
             default_sampler,
             warned: HashSet::new(),
@@ -217,6 +224,7 @@ impl Ctx {
             self.dev.device.destroy_descriptor_pool(p, None);
         }
         self.arena.reset(&self.dev);
+        self.imports.release_retired(&self.dev);
     }
 
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
@@ -378,9 +386,14 @@ impl Ctx {
     unsafe fn target(&mut self, r: &RtRef) -> Option<(NvnTexture, vk::ImageView, vk::Format, (u32, u32), vk::SampleCountFlags, vk::Image)> {
         let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
         let (_, t) = crate::nvn::api::texture_snapshot(addr)?;
+        if r.view_format != 0 {
+            if let Some(p) = self.bc_proxy(&t, r) {
+                return Some(p);
+            }
+        }
         let img = self.tex.get(&self.dev, &t)?;
         img.gpu_written = true;
-        let fmt = if r.view_format != 0 {
+        let fmt = if r.view_format != 0 && format::view_compatible(t.format, r.view_format as i32) {
             texture::device_format(&self.dev, r.view_format as i32)
                 .filter(|f| format::aspects(*f) == format::aspects(img.format))
                 .unwrap_or(img.format)
@@ -477,6 +490,80 @@ impl Ctx {
     unsafe fn end_pass(&mut self) {
         if self.pass.take().is_some() {
             self.dev.device.cmd_end_rendering(self.cb);
+            self.dev.full_barrier(self.cb);
+            self.resolve_bc_proxies();
+        }
+    }
+
+    /// The proxy a render target that names a block-compressed texture through a view format of one block per texel
+    /// renders into (None for other targets).
+    unsafe fn bc_proxy(&mut self, t: &NvnTexture, r: &RtRef) -> Option<(NvnTexture, vk::ImageView, vk::Format, (u32, u32), vk::SampleCountFlags, vk::Image)> {
+        let info = crate::nvn::layout::format_info(t.format)?;
+        let view = crate::nvn::layout::format_info(r.view_format as i32)?;
+        if info.block_w <= 1 || view.block_w != 1 || view.bytes != info.bytes {
+            return None;
+        }
+        let fmt = texture::device_format(&self.dev, r.view_format as i32)?;
+        let d = texture::Desc::of(t);
+        let level = r.level as u32;
+        let key = (d, level, fmt);
+        if !self.bc_proxies.contains_key(&key) {
+            let mut pd = d;
+            pd.storage = 0;
+            pd.params.width = ((t.width >> level).max(1) as u32).div_ceil(info.block_w) as i32;
+            pd.params.height = ((t.height >> level).max(1) as u32).div_ceil(info.block_h) as i32;
+            pd.params.depth = if t.target == crate::nvn::layout::NVN_TARGET_3D { (t.depth >> level).max(1) } else { t.depth };
+            pd.params.levels = 1;
+            pd.params.format = r.view_format as i32;
+            pd.params.flags = 0;
+            pd.params.stride = 0;
+            let p = self.tex.create(&self.dev, &pd)?;
+            println!(
+                "[vulkan] rendering compressed format {} ({}x{}, level {level}) through a format {} proxy",
+                t.format, t.width, t.height, r.view_format
+            );
+            self.bc_proxies.insert(key, p);
+        }
+        if !self.bc_pending.contains(&key) {
+            self.bc_pending.push(key);
+        }
+        if let Some(img) = self.tex.get(&self.dev, t) {
+            img.gpu_written = true;
+        }
+        let p = self.bc_proxies.get_mut(&key).unwrap();
+        let (extent, samples, image) = ((p.extent.width, p.extent.height), p.samples, p.image);
+        let v = Textures::view(&self.dev, p, vk::ImageViewType::TYPE_2D, fmt, 0, 1, r.layer as u32, 1, [2, 3, 4, 5], false)?;
+        Some((*t, v, fmt, extent, samples, image))
+    }
+
+    /// Copies the proxies the pass that just ended rendered into their compressed textures: each proxy texel is one
+    /// block, so the bytes go through a buffer unchanged.
+    unsafe fn resolve_bc_proxies(&mut self) {
+        for key in std::mem::take(&mut self.bc_pending) {
+            let (d, level, _) = key;
+            let Some(info) = crate::nvn::layout::format_info(d.params.format) else { continue };
+            let Some(p) = self.bc_proxies.get(&key) else { continue };
+            let Some(target) = self.tex.images.get(&d) else { continue };
+            let (bw, bh, depth, layers) = (p.extent.width, p.extent.height, p.extent.depth, p.layers);
+            let bytes = (bw * bh * depth * layers) as usize * info.bytes as usize;
+            let (pimg, timg) = (p.image, target.image);
+            let (tw, th) = ((target.extent.width >> level).max(1), (target.extent.height >> level).max(1));
+            let td = if target.extent.depth > 1 { (target.extent.depth >> level).max(1) } else { 1 };
+            let Some((buf, off, _)) = self.arena.alloc(&self.dev, bytes) else { continue };
+            let sub = |level| vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).mip_level(level).layer_count(layers);
+            let out = vk::BufferImageCopy::default()
+                .buffer_offset(off)
+                .image_subresource(sub(0))
+                .image_extent(vk::Extent3D { width: bw, height: bh, depth });
+            self.dev.device.cmd_copy_image_to_buffer(self.cb, pimg, vk::ImageLayout::GENERAL, buf, &[out]);
+            self.dev.full_barrier(self.cb);
+            let back = vk::BufferImageCopy::default()
+                .buffer_offset(off)
+                .buffer_row_length(bw * info.block_w)
+                .buffer_image_height(bh * info.block_h)
+                .image_subresource(sub(level))
+                .image_extent(vk::Extent3D { width: tw, height: th, depth: td.min(depth) });
+            self.dev.device.cmd_copy_buffer_to_image(self.cb, buf, timg, vk::ImageLayout::GENERAL, &[back]);
             self.dev.full_barrier(self.cb);
         }
     }

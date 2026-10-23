@@ -394,7 +394,7 @@ impl Textures {
 
     /// sampled_view on a given image of `t` (its render-target feedback snapshot).
     pub unsafe fn sampled_view_of(dev: &Dev, img: &mut Image, t: &NvnTexture, view: Option<&NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
-        let fmt_nvn = view.map(|v| v.format as i32).filter(|&f| f != 0).unwrap_or(t.format);
+        let fmt_nvn = view.map(|v| v.format as i32).filter(|&f| f != 0 && format::view_compatible(t.format, f)).unwrap_or(t.format);
         let fmt = device_format(dev, fmt_nvn).filter(|f| format::aspects(*f) == format::aspects(img.format)).unwrap_or(img.format);
         let (base_level, levels, base_layer, layers) = match view {
             Some(v) => (
