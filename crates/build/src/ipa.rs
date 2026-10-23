@@ -112,7 +112,7 @@ impl std::fmt::Display for IpaBuildPhase {
 pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String> {
     let id = nxport::profile::identify(o.dump);
     let tid = id.title_id.ok_or("no program id in ExeFS/main.npdm")?;
-    let name = id.profile.map_or_else(|| format!("Switch title {tid:016X}"), |p| p.name.to_string());
+    let name = id.name.clone();
     let bundle_id = o.bundle_id.clone().unwrap_or_else(|| nxport::profile::bundle_id(tid, id.profile));
     let engine = ios_artifact("nxport").ok_or("the engine for iOS is missing (ios/nxport next to this program)")?;
 

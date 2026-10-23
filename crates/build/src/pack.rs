@@ -24,7 +24,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     }
     let game = nxport::profile::identify(opts.dump_dir);
     let tid = game.title_id.ok_or("no program id in ExeFS/main.npdm")?;
-    let game_name = game.profile.map_or_else(|| format!("Switch title {tid:016X}"), |p| p.name.to_string());
+    let game_name = game.name.clone();
     let bundle_id = nxport::profile::bundle_id(tid, game.profile);
     let version_str = game.version.map_or("1.0", |v| v.version_string).to_string();
     let default_out = PathBuf::from("target").join(format!("{}.app", game_name.replace(':', " -")));
