@@ -71,9 +71,9 @@ enum Command {
         #[arg(long)]
         macos: bool,
     },
-    #[cfg(target_os = "macos")]
-    /// Run a frame capture (nxport --capture-frame) on the Metal backend and check it against its references, pass
-    /// by pass; --record writes the references
+    #[cfg(any(target_os = "macos", windows))]
+    /// Run a frame capture (nxport --capture-frame) on a GPU backend and check it against its references, pass by
+    /// pass; --record writes the references
     GpuReplay {
         /// The capture directory
         capture: PathBuf,
@@ -92,8 +92,8 @@ enum Command {
         /// Also write every target read back as a PNG (to --out)
         #[arg(long)]
         images: bool,
-        /// The backend: metal or vulkan
-        #[arg(long, default_value = "metal")]
+        /// The backend: metal or vulkan (default: metal where there is Metal, else vulkan)
+        #[arg(long, default_value = "")]
         backend: String,
         /// Print the commands of these passes
         #[arg(long, value_delimiter = ',')]
@@ -367,7 +367,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(out) if name != "list" => nxport::write_scenario(&name, &out)?,
             _ => println!("{}", nxport::capture::scenarios::NAMES.join("\n")),
         },
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         Command::GpuReplay { capture, record, all, out, refs, images, backend, trace_pass, cut_draw, engine } => {
             let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
                 .map_err(|e| e.to_string())?;
