@@ -190,6 +190,38 @@ fn map_memory(dir: &Path) -> Result<(usize, u64), String> {
     Ok((ranges, bytes))
 }
 
+/// Prints the textures only the GPU held when the capture was taken: storage, description, subresource, size, the share
+/// of nonzero bytes and a content hash (to compare captures of the same scene from two runs or backends).
+pub fn list_gpu_textures(dir: &Path) -> Result<(), String> {
+    let mut r = SeqReader::open(&dir.join("textures.bin"))?;
+    while let Some(t) = r.next::<GpuTexture>()? {
+        let p = &t.params;
+        let d = &t.texels.data;
+        let nonzero = d.iter().filter(|&&b| b != 0).count();
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for &b in d {
+            h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+        }
+        println!(
+            "{:#x} {}x{}x{} fmt {} target {} levels {} flags {:#x} level {} layer {}: {} bytes, {:.0}% nonzero, hash {:016x}",
+            t.storage,
+            p.width,
+            p.height,
+            p.depth,
+            p.format,
+            p.target,
+            p.levels,
+            p.flags,
+            t.level,
+            t.layer,
+            d.len(),
+            100.0 * nonzero as f64 / d.len().max(1) as f64,
+            h
+        );
+    }
+    Ok(())
+}
+
 /// Writes the textures only the GPU held into guest memory, oldest first (where they share memory, the texture written
 /// last is what memory holds). Returns (written, skipped).
 fn restore_gpu_textures(dir: &Path) -> Result<(usize, usize), String> {

@@ -278,13 +278,14 @@ impl Dev {
                 )
                 .map_err(|e| e.to_string())?;
             println!(
-                "[vulkan] {} (Vulkan {}.{}), host memory import {}, depth clip control {}, robustness2 {}, validation {}",
+                "[vulkan] {} (Vulkan {}.{}), host memory import {}, depth clip control {}, robustness2 {}, 2D views of 3D images {}, validation {}",
                 name,
                 vk::api_version_major(props.api_version),
                 vk::api_version_minor(props.api_version),
                 host_memory.as_ref().map_or("no".to_string(), |h| format!("yes (alignment {:#x})", h.1)),
                 depth_clip_control,
                 robustness2,
+                !has_portability || port.image_view2_d_on3_d_image != 0,
                 validation
             );
             Ok(Dev {
