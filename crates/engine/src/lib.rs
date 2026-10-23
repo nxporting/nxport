@@ -133,8 +133,19 @@ pub fn guest_modules(s: settings::Settings) -> Result<Vec<GuestModule>, String> 
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    gpu::install(&metal::backend::METAL);
-    let s = settings::install(resolve_settings(layers));
+    let mut s = resolve_settings(layers);
+    let vulkan = s.graphics.gpu == settings::GpuBackend::Vulkan;
+    if vulkan {
+        // No window for it yet: frame dumps (--dump-frame) show what it renders.
+        s.display.headless = true;
+        gpu::install(&vulkan::VULKAN);
+    } else {
+        gpu::install(&metal::backend::METAL);
+    }
+    let s = settings::install(s);
+    if vulkan {
+        vulkan::init(s.debug.validate)?;
+    }
     #[cfg(target_os = "macos")]
     config::app_log();
     if s.debug.validate {
@@ -210,8 +221,10 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .expect("spawn guest-main");
 
     if host::display::headless() {
-        let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("no Metal device");
-        crate::metal::init(device, None);
+        if !vulkan {
+            let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("no Metal device");
+            crate::metal::init(device, None);
+        }
         return match handle.join() {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(e.into()),

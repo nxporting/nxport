@@ -278,6 +278,8 @@ group! {
         ubo_zero_copy: bool = false,
         /// Which work the GPU executor does
         gfx_mode: GfxMode = GfxMode::All,
+        /// The GPU backend
+        gpu: GpuBackend = GpuBackend::Metal,
         /// Do not copy rarely drawn render targets back into guest memory (a workaround: the CPU reads of
         /// GPU-written memory are not trapped)
         no_rt_writeback: bool = false,

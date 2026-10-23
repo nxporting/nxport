@@ -499,6 +499,7 @@ macro_rules! choice {
 
 choice!(
     GfxMode,
+    GpuBackend,
     ReportGuard,
     TexBacking,
     FenceTrap,

@@ -154,11 +154,38 @@ host page (4 KiB on Windows, with 64 KiB allocation granularity), and so can nxp
 
 ## GPU
 
-A Vulkan backend behind `gpu::Backend` (13 methods; the NVN frontend only mentions Metal in comments). sass2spv
-already produces SPIR-V, so Vulkan takes it directly; the MSL step (spirv-cross, msl_specialize) is Metal's only.
-LAS Recomp's `runtime/nvn/vulkan/` (device.c, exec.c, textures.c) maps NVN onto Vulkan and is the reference.
-Zero-copy buffers over guest memory use `VK_EXT_external_memory_host`, or copies with write-watch-driven
-invalidation where that is missing.
+`crate::vulkan` implements `gpu::Backend` on Vulkan 1.3 (ash, the loader opened at run time); `--gpu=vulkan` selects
+it (headless until there is a window for it: `--dump-frame` writes what it presents), and `nxport-cli gpu-replay
+--backend vulkan` runs frame captures on it. It is developed against the Metal backend's results with the
+conformance captures (Testing), on this Mac through MoltenVK.
+
+- Execution: each submit is one command buffer recorded from the NVN command lists in order (CallCommands inlined) and
+  waited for before the submit returns; images stay in the GENERAL layout with full barriers between passes and other
+  work. Correct first: no overlap of frames, no batching.
+- Memory: guest memory pools are imported as buffers (`VK_EXT_external_memory_host`), so vertex, index and storage data
+  are the guest's own pages and GPU writes land in guest memory; uniform buffers are copied when bound (NVN updates
+  them inline in the command stream), except ranges GPU work of the same submit writes. Storage buffers a device cannot
+  use in place are copies written back after the submit.
+- Shaders: sass2spv translates each stage for the pipeline's state (attribute and output types from the bound formats,
+  NVN's clip conventions) and the device (`sass2spv::accessor::Host`: capabilities, one descriptor set per stage,
+  checked constant buffer reads, discarding stages that write their depth). Bindings are fed as the Metal backend feeds
+  them: the support buffer, the driver constant buffer (draw parameters; storage buffer descriptors in hardware stage
+  order, fragment at 0x510), the shader's constant bank, bound uniform and storage buffers, textures and images through
+  the pool registrations.
+- NVN state objects become pipeline state; viewport, scissor, stencil values, blend color and depth bias are dynamic.
+  An upper-left window origin flips the viewport; a GL depth mode uses depth clip control (or the vertex stage converts).
+- Textures: one image per guest texture description, filled from guest memory, zeros where the guest's bytes cannot be
+  uploaded (depth formats); views per binding; a draw sampling an attachment of its own pass reads a copy taken after
+  the last barrier that invalidates textures (render-target feedback).
+- MoltenVK specifics, each checked against the Metal backend: vertex streams with unaligned strides or attribute
+  offsets are repacked (MoltenVK claims it handles them; Apple GPUs fetch wrong data), uniform buffer reads are bounds-
+  checked in the shader (MoltenVK does not), discarding fragment stages write their depth.
+- Status on MoltenVK: the synthetic scenarios match their Metal references exactly; the TotK Hateno capture matches
+  visually, all 252 targets within the capture's `[vulkan]` tolerance (max difference 0.1, one-pixel neighbourhood,
+  0.2% of pixels: the two shader compilers round differently along edges and in normals).
+- Not yet: occlusion queries (SAMPLES_PASSED reads as every sample passing), buffer textures, quads and line loops,
+  aliases of one texture's memory (separate images per description), the render-target write-back to guest memory the
+  Metal backend does for CPU readers, presentation to a window, partial texture clears, depth formats in captures.
 
 ## Host I/O and the builder
 
