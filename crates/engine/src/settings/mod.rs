@@ -124,6 +124,9 @@ group! {
         movie_shim: Option<PathBuf> = None,
         /// libopus, for the hardware Opus decoder
         libopus: Option<PathBuf> = None,
+        /// The game's lifted code, where guest code does not run natively (nxport-cli lift-game, then compile-guest
+        /// with the same settings); its modules.txt beside it
+        guest_library: Option<PathBuf> = None,
         /// System data archives from the console's firmware, one directory per archive named by its id (16 hex digits),
         /// for games that mount them (default: the data directory's system_data/)
         system_data_dir: Option<PathBuf> = None,

@@ -122,6 +122,8 @@ impl GuestLibrary {
     /// # Safety
     /// As `enter`.
     pub unsafe fn call(&self, cpu: &mut Cpu, addr: u64, args: &[u64]) -> u64 {
+        // The registers a guest caller relies on across a call are callee-saved: what the callee does not preserve is
+        // the return address, which is the host's for this call.
         assert!(args.len() <= 8, "lifted call: {} arguments", args.len());
         let saved_lr = cpu.x[30];
         cpu.x[..args.len()].copy_from_slice(args);
@@ -131,4 +133,38 @@ impl GuestLibrary {
         cpu.x[30] = saved_lr;
         cpu.x[0]
     }
+}
+
+static LIBRARY: OnceLock<GuestLibrary> = OnceLock::new();
+
+/// Loads the process's guest library (GuestLibrary::load), which guest::call and guest threads then run in.
+pub fn install(path: &std::path::Path, modules: &[&str], handlers: Handlers) -> Result<(), String> {
+    let lib = GuestLibrary::load(path, modules, handlers)?;
+    LIBRARY.set(lib).map_err(|_| "lifted: a guest library is already installed".to_string())
+}
+
+/// The installed guest library.
+pub fn library() -> &'static GuestLibrary {
+    LIBRARY.get().expect("lifted: no guest library installed")
+}
+
+thread_local! {
+    /// This thread's guest CPU state, made when it first runs guest code.
+    static THREAD_CPU: std::cell::Cell<*mut Cpu> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// The calling thread's guest CPU state: on first use zeroed, with its guest TLS block in TPIDR_EL0 and its Horizon
+/// thread-local region in TPIDRRO_EL0 (guest::tls), and no stack yet (sp 0). It lives as long as the thread.
+#[cfg(nx_runtime)]
+pub fn thread_cpu() -> &'static mut Cpu {
+    let mut c = THREAD_CPU.with(|c| c.get());
+    if c.is_null() {
+        // Cpu is plain data: all zeros is a valid state.
+        let mut cpu: Box<Cpu> = unsafe { Box::new(std::mem::zeroed()) };
+        cpu.tpidr = crate::guest::tls::thread_block() as u64;
+        cpu.tpidrro = crate::guest::tls::current_fake_tlr() as u64;
+        c = Box::into_raw(cpu);
+        THREAD_CPU.with(|t| t.set(c));
+    }
+    unsafe { &mut *c }
 }

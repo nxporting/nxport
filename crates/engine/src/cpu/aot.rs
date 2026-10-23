@@ -167,6 +167,11 @@ pub unsafe fn make_exec(name: &str, start: usize, len: usize) -> i32 {
     crate::os::protect(s, e - s, crate::os::Prot::ReadExec).map_or(-1, |()| 0)
 }
 
+/// The code regions registered so far: (name, start, length), page-rounded.
+pub fn regions() -> Vec<(String, usize, usize)> {
+    REGIONS.lock().unwrap().iter().map(|r| (r.name.clone(), r.start, r.len)).collect()
+}
+
 /// mprotect read+execute for code that is patched again later (flipped RW / RX around each write): a no-op when
 /// loading an image, where nothing becomes executable before `finalize`.
 pub unsafe fn protect_rx(start: usize, len: usize) -> i32 {

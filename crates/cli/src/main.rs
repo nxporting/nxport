@@ -93,6 +93,28 @@ enum Command {
         #[arg(long, default_value = "7000100000", value_parser = parse_hex)]
         base: u64,
     },
+    /// Lift a game to C as the runtime loads and patches it (every module), for hosts without the native runtime
+    LiftGame {
+        /// Game dump (ExeFS/ and RomFS/)
+        dump: PathBuf,
+        /// Output directory for the C files
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    /// Compile lifted C (lift / lift-game) into the guest library
+    CompileGuest {
+        /// The directory of the C files
+        c_dir: PathBuf,
+        /// The library to write (e.g. guest.dll)
+        #[arg(long, short)]
+        out: PathBuf,
+        /// The C compiler command (clang, or "zig cc")
+        #[arg(long, default_value = "clang")]
+        cc: String,
+        /// Files compiled at once (default: the CPU count)
+        #[arg(short)]
+        j: Option<usize>,
+    },
 }
 
 fn parse_hex(s: &str) -> Result<u64, String> {
@@ -296,22 +318,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Ppm2png { input, output, downscale } => ppm2png::convert_ppm_to_png(&input, &output, downscale)?,
         Command::Lift { nso, out, name, base } => {
             let r = nxport_build::lift::lift_nso(&nso, &name, base, &out)?;
-            println!(
-                "[+] {}: {} functions, {} instructions, {} jump tables, {} unresolved computed branches, {} C files",
-                nso.display(),
-                r.functions,
-                r.instructions,
-                r.jump_tables,
-                r.unresolved_computed,
-                r.files.len()
-            );
-            let mut unsupported: Vec<_> = r.unsupported.iter().collect();
-            unsupported.sort_by(|a, b| b.1.cmp(a.1));
-            for (reason, n) in unsupported.iter().take(20) {
-                println!("    {n:>9} not lifted: {reason}");
+            report_lift(&nso.display().to_string(), &r);
+        }
+        Command::LiftGame { dump, out } => {
+            let s = nxport_build::lift::game_settings(&dump, Default::default());
+            for (name, r) in nxport_build::lift::lift_game(s, &out)? {
+                report_lift(&name, &r);
             }
+        }
+        Command::CompileGuest { c_dir, out, cc, j } => {
+            let cc: Vec<String> = cc.split_whitespace().map(String::from).collect();
+            let jobs = j.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
+            nxport_build::lift::compile(&c_dir, &out, &cc, jobs)?;
+            println!("[+] {}", out.display());
         }
     }
     Ok(())
+}
+
+fn report_lift(what: &str, r: &nxport_build::lift::Output) {
+    println!(
+        "[+] {}: {} functions, {} instructions, {} jump tables, {} unresolved computed branches, {} C files",
+        what,
+        r.functions,
+        r.instructions,
+        r.jump_tables,
+        r.unresolved_computed,
+        r.files.len()
+    );
+    let mut unsupported: Vec<_> = r.unsupported.iter().collect();
+    unsupported.sort_by(|a, b| b.1.cmp(a.1));
+    for (reason, n) in unsupported.iter().take(20) {
+        println!("    {n:>9} not lifted: {reason}");
+    }
 }
 

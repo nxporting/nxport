@@ -66,9 +66,14 @@ pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     BOUNDS.with(|b| b.set((0, 0)));
 }
 
-/// Runs guest code `entry(arg)` on the stack [lo, hi): on a lifted host, the thread's lifted CPU state, which does not
-/// exist yet (docs/windows-port.md, step 5).
+/// Runs guest code `entry(arg)` on the stack [lo, hi): on a lifted host, in the thread's lifted CPU state.
 #[cfg(not(nx_native))]
-pub unsafe fn run(_lo: usize, _hi: usize, entry: usize, _arg: usize) {
-    unimplemented!("guest thread entry {entry:#x}: the lifted runtime has no per-thread state yet");
+pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
+    BOUNDS.with(|b| b.set((lo, hi)));
+    let cpu = crate::lifted::thread_cpu();
+    let saved_sp = cpu.sp;
+    cpu.sp = (hi & !15) as u64;
+    crate::lifted::library().call(cpu, entry as u64, &[arg as u64]);
+    cpu.sp = saved_sp;
+    BOUNDS.with(|b| b.set((0, 0)));
 }

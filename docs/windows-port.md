@@ -212,17 +212,26 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    svc.rs's mach_vm_remap aliases where there is none. Checked on Windows with TotK 1.0.0 (no mods): guest_image
    loads and patches main and the SDK and returns the image, and every HLE function the game binds has an adapter
    except printf (`Bind::Raw`).
-   Left for the lifted runtime (step 5): per-thread Cpus, so guest::call, guest threads (horizon::thread_stack::run)
-   and svcExitThread work (they stop with a message now), and host destructors for mods' TLS keys.
+   Left: svcExitThread on lifted threads (it stops with a message), and host destructors for mods' TLS keys.
 5. Lifted runtime on macOS (`--cpu=lifted`), checked against native with boundary traces.
    Core: **done**. The lifter's runtime/rt.c, compiled into the guest library, has the dispatcher (a per-thread cache
    in front of the module tables) and forwards svc / brk / udf / counters and branches to non-lifted addresses to
    the host, whose callbacks it gets at load (a DLL cannot import from the program loading it). `lifted.rs` loads
    the library, registers the module tables and runs guest code; a branch to an HLE trampoline (or an HLE function's
    own address) runs the function's adapter. Checked end to end on Windows with a small program: integer and float
-   HLE calls through trampoline addresses and a supervisor call. Left: per-thread `Cpu`s for guest threads, the
-   load pipeline producing the image to lift (step 4), and the `--cpu=lifted` switch.
+   HLE calls through trampoline addresses and a supervisor call. Each host thread has its own `Cpu`
+   (lifted::thread_cpu), which guest::call and guest threads (horizon::thread_stack::run) run on. Left: the
+   `--cpu=lifted` switch on macOS, and the boundary-trace comparison with native.
 6. Windows x86-64: lifted runtime headless (a null GPU backend that signals fences, for booting), then Vulkan,
    then SDL3 host I/O, then the builder's Windows target.
+   Headless: **done**. `nxport-cli lift-game <dump> -o <dir>` lifts the game as the runtime loads and patches it
+   (nxport::guest_modules: main, the SDK, the code islands) and writes `modules.txt`; `nxport-cli compile-guest
+   <dir> -o guest.dll --cc "zig cc"` compiles the C files in parallel (objects are reused while their C file is
+   unchanged, and lift-game leaves unchanged files alone) and links the library; `nxport <dump>
+   --guest-library=guest.dll` runs it with `gpu::null`. On TotK 1.0.0 the lift takes 20 s (12.7 M instructions,
+   about 630,000 functions, many of them pieces of functions split at computed branches) and the compile about 5
+   minutes on 16 threads with zig cc 0.13; the game boots, loads its resources, and plays its opening (event flows
+   Dm_OP_0017 to 0034, voice and music streaming) for 10 minutes without a fault, presenting about 7 frames a second
+   to the null backend.
 7. Plugin mods: two-pass lifting, then the interpreter fallback.
 8. Windows arm64 on the native path.
