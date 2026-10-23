@@ -55,8 +55,25 @@ impl Backend for Vulkan {
         self.serial.fetch_add(1, Ordering::AcqRel);
     }
 
-    fn present(&self, _texture: usize, _crop: [i32; 4]) {
-        self.frames.fetch_add(1, Ordering::AcqRel);
+    fn present(&self, texture: usize, _crop: [i32; 4]) {
+        let n = self.frames.fetch_add(1, Ordering::AcqRel) + 1;
+        // --dump-frame=N,..: the presented image as /tmp/nxport_frame_N.ppm (as the Metal backend writes it).
+        let dump = &crate::settings::get().dump;
+        if dump.dump_frame.contains(&n) {
+            let img = self.read_texture(texture, crate::nvn::api::texture_ref_gen(texture), 0, 0);
+            match img {
+                Some(t) => {
+                    let path = format!("/tmp/nxport_frame_{n}.ppm");
+                    let _ = std::fs::write(&path, ppm(&t));
+                    println!("[+] Gfx: dumped {}x{} frame to {path}", t.width, t.height);
+                }
+                None => println!("[vulkan] frame {n}: the presented texture could not be read"),
+            }
+            if dump.exit_on_dump && dump.dump_frame.iter().max() == Some(&n) {
+                println!("[+] Dump complete, exiting on request (--exit-on-dump)");
+                std::process::exit(0);
+            }
+        }
     }
 
     fn submitted_serial(&self) -> u64 {
@@ -86,6 +103,21 @@ impl Backend for Vulkan {
         let Some(c) = g.as_mut() else { return 0 };
         unsafe { c.gpu_only_textures(f) }
     }
+}
+
+/// A presented image as a binary PPM, rows as the screen shows them (bottom-up in memory for NVN's lower-left origin).
+fn ppm(t: &Texels) -> Vec<u8> {
+    let (w, h) = (t.width as usize, t.height as usize);
+    let rgba = crate::capture::image::to_rgba8(t);
+    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+    let flip = crate::nvn::api::window_origin_mode() == 0;
+    for y in 0..h {
+        let row = if flip { h - 1 - y } else { y };
+        for px in rgba[row * w * 4..(row + 1) * w * 4].chunks_exact(4) {
+            out.extend_from_slice(&px[..3]);
+        }
+    }
+    out
 }
 
 /// Per-submit host memory for copies (uniform buffers, support and driver buffers, data the device cannot import).

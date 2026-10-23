@@ -82,6 +82,8 @@ pub struct Ctx {
     pass: Option<Pass>,
     /// Reports to write once the submit completed: (address, value).
     reports: Vec<(u64, u64)>,
+    /// The device was lost: nothing more is submitted.
+    lost: bool,
     /// Storage buffers bound as copies (the device could not use guest memory in place): (guest address, copy, length),
     /// copied back once the submit completed.
     writebacks: Vec<(usize, *const u8, usize)>,
@@ -161,6 +163,7 @@ impl Ctx {
             cb: vk::CommandBuffer::null(),
             pass: None,
             reports: Vec::new(),
+            lost: false,
             writebacks: Vec::new(),
             gpu_dirty: Vec::new(),
             fb_snaps: HashMap::new(),
@@ -178,6 +181,9 @@ impl Ctx {
     }
 
     pub unsafe fn submit(&mut self, lists: &[u64]) {
+        if self.lost {
+            return;
+        }
         let d = &self.dev.device;
         let Ok(cbs) = d.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::default().command_pool(self.dev.cmd_pool).command_buffer_count(1),
@@ -192,7 +198,9 @@ impl Ctx {
         self.end_pass();
         let _ = self.dev.device.end_command_buffer(self.cb);
         if let Err(e) = self.dev.submit_wait(self.cb) {
-            self.warn(format!("submit failed: {e}"));
+            let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+            println!("[vulkan] submit of {} lists at presented frame {frame} failed: {e}; no more GPU work", lists.len());
+            self.lost = true;
         }
         self.dev.device.free_command_buffers(self.dev.cmd_pool, &[self.cb]);
         self.cb = vk::CommandBuffer::null();
@@ -379,14 +387,9 @@ impl Ctx {
         } else {
             img.format
         };
-        let ty = if img.extent.depth > 1 { vk::ImageViewType::TYPE_2D_ARRAY } else { vk::ImageViewType::TYPE_2D };
-        let (layer, ty) = if img.extent.depth > 1 {
-            // A 3D texture's slice: Vulkan renders into 3D images through 2D array views only with maintenance1's
-            // 2D_ARRAY_COMPATIBLE images; not made yet.
-            (0, ty)
-        } else {
-            (r.layer as u32, vk::ImageViewType::TYPE_2D)
-        };
+        // A 3D texture renders into one depth slice (the reference's layer) through a 2D view of its 2D_ARRAY_COMPATIBLE
+        // image; the slice counts as the view's layer.
+        let (layer, ty) = (r.layer as u32, vk::ImageViewType::TYPE_2D);
         let extent = ((img.extent.width >> r.level).max(1), (img.extent.height >> r.level).max(1));
         let samples = img.samples;
         let image = img.image;

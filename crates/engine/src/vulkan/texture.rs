@@ -164,6 +164,10 @@ impl Textures {
         if matches!(p.target, layout::NVN_TARGET_CUBEMAP | layout::NVN_TARGET_CUBEMAP_ARRAY) && layers % 6 == 0 {
             flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
         }
+        // 3D textures the GPU renders into: render passes attach one depth slice through a 2D view.
+        if ity == vk::ImageType::TYPE_3D && usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
+            flags |= vk::ImageCreateFlags::TYPE_2D_ARRAY_COMPATIBLE;
+        }
         let levels = (p.levels.max(1) as u32).min(32 - extent.width.max(extent.height).max(extent.depth).leading_zeros());
         let info = vk::ImageCreateInfo::default()
             .image_type(ity)
@@ -332,8 +336,14 @@ impl Textures {
         }
         let base_level = base_level.min(img.levels - 1);
         let levels = levels.clamp(1, img.levels - base_level);
-        let base_layer = base_layer.min(img.layers - 1);
-        let layers = layers.clamp(1, img.layers - base_layer);
+        // 2D views of a 3D image name its depth slices (at the level) as layers.
+        let slices = if img.extent.depth > 1 && ty != vk::ImageViewType::TYPE_3D {
+            (img.extent.depth >> base_level).max(1)
+        } else {
+            img.layers
+        };
+        let base_layer = base_layer.min(slices - 1);
+        let layers = layers.clamp(1, slices - base_layer);
         let key = ViewKey { ty, format: fmt, base_level, levels, base_layer, layers, swizzle, aspect };
         if let Some(&v) = img.views.get(&key) {
             return Some(v);
