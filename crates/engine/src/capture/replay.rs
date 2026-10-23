@@ -235,6 +235,24 @@ fn restore_gpu_textures(dir: &Path) -> Result<(usize, usize), String> {
     Ok((written, skipped))
 }
 
+/// The capture's tolerance (tolerance.toml): its top-level values, then those of the backend's table (`[vulkan]`)
+/// over them (another backend than the references' rounds differently).
+fn tolerance(dir: &Path, backend: &str) -> Result<Tolerance, String> {
+    let Ok(text) = std::fs::read_to_string(dir.join("tolerance.toml")) else {
+        return Ok(Tolerance::default());
+    };
+    let mut v: toml::Table = toml::from_str(&text).map_err(|e| format!("tolerance.toml: {e}"))?;
+    let over = match v.remove(backend) {
+        Some(toml::Value::Table(t)) => Some(t),
+        _ => None,
+    };
+    v.retain(|_, x| !x.is_table());
+    if let Some(o) = over {
+        v.extend(o);
+    }
+    toml::Value::Table(v).try_into().map_err(|e| format!("tolerance.toml: {e}"))
+}
+
 /// Runs the capture in `dir` on the installed backend. Must be called once per process, before anything else used
 /// the frontend or the backend.
 pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
@@ -247,10 +265,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
             format::VERSION
         ));
     }
-    let tol: Tolerance = match std::fs::read_to_string(dir.join("tolerance.toml")) {
-        Ok(s) => toml::from_str(&s).map_err(|e| format!("tolerance.toml: {e}"))?,
-        Err(_) => Tolerance::default(),
-    };
+    let tol = tolerance(dir, &opts.backend)?;
     let t0 = std::time::Instant::now();
     let (ranges, bytes) = map_memory(dir)?;
     let (restored, not_restored) = restore_gpu_textures(dir)?;

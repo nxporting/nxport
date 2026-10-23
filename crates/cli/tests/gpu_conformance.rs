@@ -6,6 +6,9 @@
 // without any that part is skipped. A capture's args.txt holds engine options for its replay, one per line (the shader
 // cache its references were recorded with); its tolerance.toml how far results may stray (capture/image.rs).
 //
+// Every check runs on the Metal backend and on the Vulkan backend (skipped without a Vulkan loader); the references are
+// Metal's, and a capture's tolerance.toml can relax them for another backend ([vulkan] table).
+//
 // Re-recording a scenario's references after a deliberate change:
 //   nxport-cli gpu-scenario NAME DIR && nxport-cli gpu-replay DIR --record --refs crates/cli/tests/gpu/NAME
 #![cfg(target_os = "macos")]
@@ -21,6 +24,13 @@ fn run(mut c: Command) -> (bool, String) {
     let out = c.output().expect("runs nxport-cli");
     let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     (out.status.success(), text)
+}
+
+const BACKENDS: &[&str] = &["metal", "vulkan"];
+
+/// The backend could not start on this machine (no Vulkan loader or device): its checks are skipped.
+fn unavailable(text: &str) -> bool {
+    text.contains("no Vulkan loader") || text.contains("no Vulkan device")
 }
 
 fn summary(text: &str) -> String {
@@ -51,14 +61,20 @@ fn scenarios() {
             failed.push(format!("{name}: no references in {}", refs.join(name).display()));
             continue;
         }
-        let (ok, text) = run({
-            let mut c = cli();
-            c.arg("gpu-replay").arg(&dir).arg("--all").arg("--refs").arg(refs.join(name));
-            c
-        });
-        println!("{name}: {}", summary(&text));
-        if !ok {
-            failed.push(format!("{name} (diff images in {}):\n{}", dir.join("diff").display(), summary(&text)));
+        for backend in BACKENDS {
+            let (ok, text) = run({
+                let mut c = cli();
+                c.arg("gpu-replay").arg(&dir).arg("--all").arg("--backend").arg(backend).arg("--refs").arg(refs.join(name));
+                c
+            });
+            if !ok && unavailable(&text) {
+                println!("{name} on {backend}: backend unavailable, skipped");
+                continue;
+            }
+            println!("{name} on {backend}: {}", summary(&text));
+            if !ok {
+                failed.push(format!("{name} on {backend} (diff images in {}):\n{}", dir.join("diff").display(), summary(&text)));
+            }
         }
     }
     assert!(failed.is_empty(), "scenarios that differ:\n{}", failed.join("\n"));
@@ -90,9 +106,9 @@ fn game_frames() {
         return;
     }
     let mut failed = Vec::new();
-    for (dir, cache) in caps {
+    for ((dir, cache), backend) in caps.iter().flat_map(|c| BACKENDS.iter().map(move |b| (c.clone(), *b))) {
         let mut c = cli();
-        c.arg("gpu-replay").arg(&dir).arg("--");
+        c.arg("gpu-replay").arg(&dir).arg("--backend").arg(backend).arg("--");
         let args: Vec<String> = std::fs::read_to_string(dir.join("args.txt"))
             .unwrap_or_default()
             .lines()
@@ -104,9 +120,13 @@ fn game_frames() {
         }
         c.args(args);
         let (ok, text) = run(c);
-        println!("{}: {}", dir.display(), summary(&text));
+        if !ok && unavailable(&text) {
+            println!("{} on {backend}: backend unavailable, skipped", dir.display());
+            continue;
+        }
+        println!("{} on {backend}: {}", dir.display(), summary(&text));
         if !ok {
-            failed.push(format!("{} (diff images in {}):\n{}", dir.display(), dir.join("diff").display(), summary(&text)));
+            failed.push(format!("{} on {backend} (diff images in {}):\n{}", dir.display(), dir.join("diff").display(), summary(&text)));
         }
     }
     assert!(failed.is_empty(), "game captures that differ:\n{}", failed.join("\n"));

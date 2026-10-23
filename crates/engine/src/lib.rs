@@ -240,7 +240,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     host::display::run_main_thread()
 }
 
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 /// Runs the frame capture in `dir` (capture::replay) on the backend `opts` names (Metal or Vulkan), headless, with the
 /// settings from `layers`. Once per process: it maps the capture's memory at its addresses and installs its frontend
 /// state.
@@ -250,13 +250,17 @@ pub fn replay_capture(
     layers: Vec<settings::SettingsPatch>,
 ) -> Result<capture::replay::Report, String> {
     let vulkan = match opts.backend.as_str() {
+        #[cfg(nx_native)]
         "" | "metal" => false,
+        #[cfg(not(nx_native))]
+        "" => true,
         "vulkan" => true,
-        b => return Err(format!("no backend {b} (metal, vulkan)")),
+        b => return Err(format!("no backend {b} here (vulkan{})", if cfg!(nx_native) { ", metal" } else { "" })),
     };
     if vulkan {
         gpu::install(&vulkan::VULKAN);
     } else {
+        #[cfg(nx_native)]
         gpu::install(&metal::backend::METAL);
     }
     let mut s = resolve_settings(layers);
@@ -272,12 +276,15 @@ pub fn replay_capture(
         vulkan::init(s.debug.validate)?;
         return capture::replay::run(dir, opts);
     }
-    if s.debug.validate {
-        std::env::set_var("MTL_SHADER_VALIDATION", "1");
-        std::env::set_var("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1");
+    #[cfg(nx_native)]
+    {
+        if s.debug.validate {
+            std::env::set_var("MTL_SHADER_VALIDATION", "1");
+            std::env::set_var("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1");
+        }
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
+        metal::init(device, None);
     }
-    let device = objc2_metal::MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
-    metal::init(device, None);
     capture::replay::run(dir, opts)
 }
 
