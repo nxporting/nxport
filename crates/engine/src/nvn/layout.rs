@@ -116,6 +116,7 @@ pub struct TextureLayout {
     pub total: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TextureParams {
     pub target: i32,
     pub width: i32,
@@ -520,6 +521,46 @@ pub unsafe fn read_texels_3d(
                     bd,
                 ));
             }
+        }
+    }
+    true
+}
+
+/// Write depth slice `z` of a level of a 3D block-linear texture from `data` (tightly packed rows).
+/// # Safety
+/// `storage` must be valid for writes across the texture's layout; `data` must hold one slice of the level.
+pub unsafe fn write_texels_3d_slice(
+    storage: *mut u8,
+    p: &TextureParams,
+    level: usize,
+    z: usize,
+    data: *const u8,
+) -> bool {
+    let info = format_info(p.format).unwrap_or(FormatInfo {
+        block_w: 1,
+        block_h: 1,
+        bytes: 4,
+    });
+    let layout = compute_layout(p);
+    if level >= layout.level_offsets.len() || z >= ((p.depth.max(1) as usize) >> level).max(1) {
+        return false;
+    }
+    let lw = ((p.width.max(1) as u64) >> level).max(1);
+    let lh = ((p.height.max(1) as u64) >> level).max(1);
+    let wb = ((lw + info.block_w as u64 - 1) / info.block_w as u64) as usize;
+    let hb = (lh + info.block_h as u64 - 1) / info.block_h as u64;
+    let bpb = info.bytes as usize;
+    let pitch = align(wb as u64 * bpb as u64, 64) as usize;
+    let hb0 = (p.height.max(1) as u64 + info.block_h as u64 - 1) / info.block_h as u64;
+    let (bh, bd) = level_block_dims(hb0, p.depth.max(1) as u64, true, level + 1, info.block_h as u64)[level];
+    let (bh, bd) = (bh as usize, bd as usize);
+    let rows_aligned = align(hb, 8 * bh as u64) as usize;
+    let base = storage.add(layout.level_offsets[level] as usize);
+    let row_bytes = wb * bpb;
+    for r in 0..hb as usize {
+        let src = data.add(r * row_bytes);
+        for xb in 0..row_bytes {
+            *base.add(block_linear_offset_3d(xb, r, z, pitch, rows_aligned, bh, bd)) = *src.add(xb);
         }
     }
     true

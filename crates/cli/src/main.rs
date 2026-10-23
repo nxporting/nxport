@@ -71,6 +71,25 @@ enum Command {
         #[arg(long)]
         macos: bool,
     },
+    #[cfg(target_os = "macos")]
+    /// Run a frame capture (nxport --capture-frame) on the Metal backend and check it against its references, pass
+    /// by pass; --record writes the references
+    GpuReplay {
+        /// The capture directory
+        capture: PathBuf,
+        /// Record the references instead of checking against them
+        #[arg(long)]
+        record: bool,
+        /// Check every pass instead of stopping at the first that differs
+        #[arg(long)]
+        all: bool,
+        /// Where diff images go (default: the capture's diff/)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Engine options (as nxport takes them, e.g. --shader-cache=DIR), after --
+        #[arg(last = true)]
+        engine: Vec<String>,
+    },
     /// Convert a frame dump (PPM) to PNG
     Ppm2png {
         input: PathBuf,
@@ -314,6 +333,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (macho::Platform::IOS, ipa::GUEST_INSTALL_NAME)
             };
             macho::write_guest_dylib(&img, &out, platform, name)?;
+        }
+        #[cfg(target_os = "macos")]
+        Command::GpuReplay { capture, record, all, out, engine } => {
+            let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
+                .map_err(|e| e.to_string())?;
+            let opts = nxport::capture::replay::Options { record, out, all };
+            let report = nxport::replay_capture(&capture, &opts, layers)?;
+            if report.first_failure.is_some() {
+                std::process::exit(1);
+            }
         }
         Command::Ppm2png { input, output, downscale } => ppm2png::convert_ppm_to_png(&input, &output, downscale)?,
         Command::Lift { nso, out, name, base } => {

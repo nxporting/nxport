@@ -5324,6 +5324,7 @@ pub unsafe extern "C" fn hle_nvnProgramInitialize(p: *mut NvnProgram, device: us
 pub unsafe extern "C" fn hle_nvnProgramFinalize(p: *mut NvnProgram) {
     record_hle_call("hle_nvnProgramFinalize");
     if !p.is_null() {
+        PROGRAM_STAGES.lock().unwrap().remove(&(p as usize));
         std::ptr::write_bytes(p, 0, 1);
     }
 }
@@ -5331,6 +5332,10 @@ pub unsafe extern "C" fn hle_nvnProgramFinalize(p: *mut NvnProgram) {
 pub unsafe extern "C" fn hle_nvnProgramSetDebugLabel(_p: *mut NvnProgram, _label: *const c_char) {
     record_hle_call("hle_nvnProgramSetDebugLabel");
 }
+/// The stages each program was last given (frame captures).
+static PROGRAM_STAGES: std::sync::LazyLock<StdMutex<rustc_hash::FxHashMap<usize, Vec<(u64, u64)>>>> =
+    std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
+
 unsafe fn program_set_shaders(
     p: *mut NvnProgram,
     count: i32,
@@ -5352,6 +5357,7 @@ unsafe fn program_set_shaders(
         (*p).first_stage_data = first.data;
         (*p).first_stage_control = first.control;
     }
+    PROGRAM_STAGES.lock().unwrap().insert(p as usize, list.iter().map(|s| (s.data, s.control)).collect());
     crate::gpu::backend().set_program(p as usize, &list);
     1
 }
@@ -5710,7 +5716,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolGetSize(pool: *const NvnSamplerPool) 
 }
 
 /// Sampler state as registered in a sampler pool (NVN enum values).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplerDesc {
     pub min_filter: i32,
     pub mag_filter: i32,
@@ -5858,6 +5864,8 @@ pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) 
     // NVN_SYNC_WAIT_RESULT: ALREADY_SIGNALED 0, CONDITION_SATISFIED 1, TIMEOUT_EXPIRED 2.
     let serial = if sync.is_null() { 0 } else { (*sync).serial };
     let gpu = crate::gpu::backend();
+    #[cfg(nx_native)]
+    crate::capture::record::hold(serial);
     if serial == 0 || gpu.wait_fence(serial, 0) {
         return 0;
     }
@@ -6360,6 +6368,8 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
             && index >= 0
             && (index as usize) < 4
         {
+            #[cfg(nx_native)]
+            crate::capture::record::on_present((*_window).textures[index as usize], (*_window).crop);
             crate::gpu::backend().present((*_window).textures[index as usize], (*_window).crop);
         }
     }
@@ -6463,6 +6473,8 @@ unsafe extern "C" fn hle_nvnQueueSubmitCommands(_queue: *mut (), num: i32, handl
     let hs: Vec<u64> = (0..num as usize)
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
+    #[cfg(nx_native)]
+    crate::capture::record::on_submit(&hs);
     crate::gpu::backend().submit(&hs);
     mark_command_lists_submitted(&hs);
 }
@@ -6538,4 +6550,198 @@ pub fn debug_table_sizes() -> String {
         COMMAND_MEMORY.lock().unwrap().lists.len(),
         DIRTY_TEXTURES.lock().unwrap().len(),
         EVICTED_CLASS.lock().unwrap().len())
+}
+
+/// The frontend state the backend consults while it runs recorded commands (frame captures, capture/format.rs).
+pub(crate) fn export_frontend() -> crate::capture::format::Frontend {
+    use crate::capture::format::{pod_bytes, PoolTexture};
+    use std::sync::atomic::Ordering::Relaxed;
+    let flags = MEMORY_POOL_FLAGS.lock().unwrap().clone();
+    let pools = MEMORY_POOLS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(&b, &s)| (b as u64, s as u64, flags.get(&b).copied().unwrap_or(0)))
+        .collect();
+    let virtual_maps = VIRTUAL_MAPS.lock().unwrap().iter().map(|&(v, s, p)| (v as u64, s as u64, p as u64)).collect();
+    // Stand-in copies (resolve_texture_ref, lookup_pool_texture) are host objects of this process: a replay makes its own.
+    let mut copies: std::collections::HashSet<usize> = Default::default();
+    let mut history = Vec::new();
+    if let Some(h) = TEX_HISTORY.lock().unwrap().as_ref() {
+        copies.extend(h.copies.values().map(|b| &**b as *const NvnTexture as usize));
+        history = h.order.iter().filter_map(|g| h.by_gen.get(g).map(|t| (*g, pod_bytes(t)))).collect();
+    }
+    let pool_textures: Vec<PoolTexture> = POOL_TEXTURES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .map(|(&id, s)| {
+                    if let Some(c) = &s.copy {
+                        copies.insert(&**c as *const NvnTexture as usize);
+                    }
+                    PoolTexture {
+                        id,
+                        obj: s.obj as u64,
+                        gen: s.gen,
+                        state: pod_bytes(&s.state),
+                        view: s.view.as_ref().map(pod_bytes),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let textures = TEX_SNAPSHOTS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter(|(a, _)| !copies.contains(a))
+                .map(|(&a, (g, t))| (a as u64, *g, pod_bytes(t)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let indexed = TEX_BY_STORAGE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.values().flatten().map(|&a| a as u64).collect())
+        .unwrap_or_default();
+    let pool_samplers = POOL_SAMPLERS
+        .get()
+        .map(|m| m.lock().unwrap().iter().map(|(&id, d)| (id, *d)).collect())
+        .unwrap_or_default();
+    let programs = PROGRAM_STAGES.lock().unwrap().iter().map(|(&p, v)| (p as u64, v.clone())).collect();
+    crate::capture::format::Frontend {
+        pools,
+        virtual_maps,
+        textures,
+        indexed,
+        history,
+        next_gen: TEX_GENERATION.load(Relaxed),
+        max_texture_span: MAX_TEXTURE_SPAN.load(Relaxed) as u64,
+        pool_textures,
+        pool_samplers,
+        programs,
+        window_origin_mode: window_origin_mode(),
+        depth_mode: depth_mode(),
+    }
+}
+
+/// Installs exported frontend state (a capture replay, before anything is submitted); hands the programs to the backend.
+pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
+    use crate::capture::format::from_pod;
+    use std::sync::atomic::Ordering::Relaxed;
+    {
+        let mut pools = MEMORY_POOLS.lock().unwrap();
+        let mut flags = MEMORY_POOL_FLAGS.lock().unwrap();
+        for &(b, s, fl) in &f.pools {
+            pools.insert(b as usize, s as usize);
+            flags.insert(b as usize, fl);
+        }
+    }
+    *VIRTUAL_MAPS.lock().unwrap() = f.virtual_maps.iter().map(|&(v, s, p)| (v as usize, s as usize, p as usize)).collect();
+    VIRTUAL_MAPS_EMPTY.store(f.virtual_maps.is_empty(), std::sync::atomic::Ordering::Release);
+    bump_pools_gen();
+    *TEX_SNAPSHOTS.lock().unwrap() = Some(
+        f.textures.iter().map(|(a, g, t)| (*a as usize, (*g, from_pod::<NvnTexture>(t)))).collect(),
+    );
+    {
+        let mut idx: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        let snaps = TEX_SNAPSHOTS.lock().unwrap();
+        for &a in &f.indexed {
+            if let Some((_, t)) = snaps.as_ref().and_then(|m| m.get(&(a as usize))) {
+                idx.entry(t.storage).or_default().push(a as usize);
+            }
+        }
+        *TEX_BY_STORAGE.lock().unwrap() = Some(idx);
+    }
+    *TEX_HISTORY.lock().unwrap() = Some(SnapshotHistory {
+        by_gen: f.history.iter().map(|(g, t)| (*g, from_pod::<NvnTexture>(t))).collect(),
+        order: f.history.iter().map(|(g, _)| *g).collect(),
+        copies: Default::default(),
+    });
+    TEX_GENERATION.fetch_max(f.next_gen, Relaxed);
+    MAX_TEXTURE_SPAN.fetch_max(f.max_texture_span as usize, Relaxed);
+    *POOL_TEXTURES.lock().unwrap() = Some(
+        f.pool_textures
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    PoolSlot {
+                        obj: p.obj as usize,
+                        gen: p.gen,
+                        state: from_pod(&p.state),
+                        view: p.view.as_ref().map(|v| from_pod(v)),
+                        copy: None,
+                    },
+                )
+            })
+            .collect(),
+    );
+    bump_tex_table_epoch();
+    for &(id, d) in &f.pool_samplers {
+        register_pool_sampler(id, d);
+    }
+    WINDOW_ORIGIN_MODE.store(f.window_origin_mode, Relaxed);
+    DEPTH_MODE.store(f.depth_mode, Relaxed);
+    for (p, stages) in &f.programs {
+        let list: Vec<crate::gpu::ShaderStage> =
+            stages.iter().map(|&(data, control)| crate::gpu::ShaderStage { data, control }).collect();
+        PROGRAM_STAGES.lock().unwrap().insert(*p as usize, stages.clone());
+        crate::gpu::backend().set_program(*p as usize, &list);
+    }
+}
+
+/// Every command list reachable from `roots` (through CallCommands), for a capture.
+pub(crate) fn export_lists(roots: &[u64]) -> Vec<(u64, Vec<crate::capture::format::Op>)> {
+    let map = COMMAND_LISTS.lock().unwrap();
+    let mut seen: std::collections::HashSet<u64> = Default::default();
+    let mut stack: Vec<u64> = roots.to_vec();
+    let mut out = Vec::new();
+    while let Some(h) = stack.pop() {
+        if !seen.insert(h) {
+            continue;
+        }
+        let Some(e) = map.get(&h) else { continue };
+        stack.extend_from_slice(&e.0.summary().1);
+        out.push((
+            h,
+            e.0.ops
+                .iter()
+                .map(|op| crate::capture::format::Op {
+                    name: op.name.to_string(),
+                    typed: op.typed.clone(),
+                    args: op.args.as_deref().copied(),
+                })
+                .collect(),
+        ));
+    }
+    out
+}
+
+/// Installs a command list under `handle` (capture replays); it is never evicted as dead or one-shot.
+pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::Op>) {
+    static NAMES: std::sync::LazyLock<StdMutex<std::collections::HashMap<String, &'static str>>> =
+        std::sync::LazyLock::new(Default::default);
+    let ops: Vec<RecordedNvnCommand> = ops
+        .into_iter()
+        .map(|op| {
+            let name = *NAMES.lock().unwrap().entry(op.name.clone()).or_insert_with(|| Box::leak(op.name.into_boxed_str()));
+            RecordedNvnCommand { name, typed: op.typed, args: op.args.map(Box::new) }
+        })
+        .collect();
+    let list = std::sync::Arc::new(RecordedCommandList {
+        ops,
+        summary: std::sync::OnceLock::new(),
+        recorded_frame: 0,
+        visit: std::sync::atomic::AtomicU64::new(0),
+    });
+    let bytes = recorded_list_bytes(&list);
+    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes));
+    COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+    NEXT_COMMAND_HANDLE.fetch_max(handle + 1, std::sync::atomic::Ordering::Relaxed);
 }

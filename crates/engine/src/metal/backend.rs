@@ -88,4 +88,12 @@ impl Backend for Metal {
     fn release_for_gpu(&self, addr: usize, len: usize) {
         unsafe { super::tex_backing::open_overlapping(addr, len) };
     }
+
+    fn read_texture(&self, texture: usize, gen: u32, level: u32, layer: u32) -> Option<crate::gpu::Texels> {
+        super::readback::read_texture(texture, gen, level, layer)
+    }
+
+    fn gpu_only_textures(&self, f: &mut dyn FnMut(crate::gpu::GpuOnlyTexture)) -> usize {
+        super::readback::gpu_only_textures(f)
+    }
 }

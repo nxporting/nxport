@@ -26,6 +26,26 @@ pub struct ShaderStage {
     pub control: u64,
 }
 
+/// One level / layer of a texture in the guest's texel encoding (its NVN format), rows tightly packed.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Texels {
+    pub width: u32,
+    pub height: u32,
+    pub format: i32,
+    pub data: Vec<u8>,
+}
+
+/// A texture level / layer whose contents only the backend holds: GPU work wrote it and guest memory does not have it.
+pub struct GpuOnlyTexture {
+    pub storage: usize,
+    pub params: crate::nvn::layout::TextureParams,
+    pub level: u32,
+    pub layer: u32,
+    pub texels: Texels,
+    /// Frame it was last rendered in (0: unknown); of textures sharing memory, the latest one is what memory holds.
+    pub last_written: u64,
+}
+
 pub trait Backend: Send + Sync {
     /// The stages of program object `program` (its guest address) changed.
     fn set_program(&self, program: usize, stages: &[ShaderStage]);
@@ -62,6 +82,19 @@ pub trait Backend: Send + Sync {
     fn before_host_write(&self, _addr: usize, _len: usize) {}
     /// GPU work will write this range: guards that hold it must let go.
     fn release_for_gpu(&self, _addr: usize, _len: usize) {}
+
+    /// Level `level`, layer `layer` of the texture a recorded reference names (`texture` with its snapshot generation
+    /// `gen`, as RtRef / TexRef hold them), after all submitted work has completed. None when the backend cannot read
+    /// that texture or format back.
+    fn read_texture(&self, _texture: usize, _gen: u32, _level: u32, _layer: u32) -> Option<Texels> {
+        None
+    }
+    /// Every texture level / layer whose contents only the backend holds, after all submitted work has completed. A
+    /// frame capture writes them into its copy of guest memory, where the Switch's GPU would have left them. Returns
+    /// how many it skipped (formats or kinds it cannot read back).
+    fn gpu_only_textures(&self, _f: &mut dyn FnMut(GpuOnlyTexture)) -> usize {
+        0
+    }
 }
 
 static BACKEND: OnceLock<&'static dyn Backend> = OnceLock::new();
