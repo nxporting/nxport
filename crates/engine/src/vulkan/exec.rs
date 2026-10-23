@@ -198,6 +198,7 @@ impl Ctx {
             return;
         };
         self.cb = cbs[0];
+        self.tex.serial += 1;
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
         for &h in lists {
             self.run_list(h, 0);
