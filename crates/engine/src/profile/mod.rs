@@ -111,6 +111,8 @@ pub struct Identified {
     pub title_id: Option<u64>,
     pub profile: Option<&'static GameProfile>,
     pub version: Option<&'static VersionProfile>,
+    /// The profile's name, else the title in the dump's control data, else the program id.
+    pub name: String,
 }
 
 pub fn identify(dump: &std::path::Path) -> Identified {
@@ -121,10 +123,15 @@ pub fn identify(dump: &std::path::Path) -> Identified {
     let version = profile
         .zip(build_id)
         .and_then(|(p, id)| p.match_version(&id));
+    let name = profile
+        .map(|p| p.name.to_string())
+        .or_else(|| crate::game::control_of(dump).and_then(|c| c.title))
+        .unwrap_or_else(|| title_id.map_or_else(|| "Nintendo Switch".to_string(), |t| format!("Switch title {t:016X}")));
     Identified {
         title_id,
         profile,
         version,
+        name,
     }
 }
 
@@ -254,17 +261,8 @@ pub fn app_title() -> &'static str {
         let _ = TITLE.set(bundle_name);
         return TITLE.get().unwrap().as_str();
     }
-    let p = active();
-    if p.kind != GameKind::Unknown(0) && p.name != "Unknown Title" {
-        let _ = TITLE.set(p.name.to_string());
-        return TITLE.get().unwrap().as_str();
-    }
-    if let Some(tid) = crate::game::title_id() {
-        if let Some(prof) = for_title(tid) {
-            let _ = TITLE.set(prof.name.to_string());
-            return TITLE.get().unwrap().as_str();
-        }
-        let _ = TITLE.set(format!("Switch title {tid:016X}"));
+    if let Some(dir) = crate::settings::try_get().and_then(|s| s.files.game_dir.as_deref()) {
+        let _ = TITLE.set(identify(dir).name);
         return TITLE.get().unwrap().as_str();
     }
     "Nintendo Switch"
