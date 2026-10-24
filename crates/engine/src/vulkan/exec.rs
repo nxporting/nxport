@@ -125,6 +125,8 @@ pub struct Ctx {
     pub(super) max_indices: rustc_hash::FxHashMap<(usize, i32, i32, Option<u32>), u32>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
+    /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
+    pub(super) restart_memo: rustc_hash::FxHashMap<(i32, i32, usize, i32, u32, i32), Option<(vk::Buffer, u64, u32)>>,
     /// Uniform buffer copies of this submit by (host address, length, epoch); the epoch advances at every write of guest
     /// memory by this submit's commands (inline uniform updates, reports).
     pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize, u64), (vk::Buffer, u64)>,
@@ -348,6 +350,7 @@ impl Ctx {
             bindings: Default::default(),
             max_indices: Default::default(),
             supports: Default::default(),
+            restart_memo: Default::default(),
             ubo_copies: Default::default(),
             ubo_epoch: 0,
             timestamps,
@@ -484,6 +487,7 @@ impl Ctx {
         self.bindings.clear();
         self.max_indices.clear();
         self.supports.clear();
+        self.restart_memo.clear();
         self.ubo_copies.clear();
     }
 
