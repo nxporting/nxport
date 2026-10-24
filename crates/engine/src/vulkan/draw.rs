@@ -137,7 +137,8 @@ impl Ctx {
     /// `fragment_inputs`: for a fragment stage, the varyings its vertex stage writes (part of `key`).
     unsafe fn stage(&mut self, data: u64, control: u64, index: usize, state: GraphicsState, key: u64, set: u32, fragment_inputs: Option<u32>) -> bool {
         let discard_depth = set == 1 && self.discard_depth();
-        let k = (data, key);
+        // By content and draw state (stable across runs: the disk cache and pipeline lists name stages this way).
+        let k = key;
         if self.stages.contains_key(&k) {
             return true;
         }
@@ -177,7 +178,7 @@ impl Ctx {
             return;
         }
         // Metal links a fragment function's inputs to the vertex function's outputs (MoltenVK).
-        let varyings = self.dev.link_varyings.then(|| self.stages[&(vd, vkey)].outputs);
+        let varyings = self.dev.link_varyings.then(|| self.stages[&vkey].outputs);
         let fkey = match fs {
             Some((fd, fc, fh)) => {
                 let (fstate, fkey) = self.fragment_state();
@@ -185,7 +186,7 @@ impl Ctx {
                 if !self.stage(fd, fc, 1, fstate, fkey, 1, varyings) {
                     return;
                 }
-                Some((fd, fkey))
+                Some(fkey)
             }
             None => None,
         };
@@ -199,10 +200,10 @@ impl Ctx {
                 (vl, h)
             }
         };
-        let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl, vl_hash) else { return };
-        let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), fkey) else { return };
+        let Some((pipe, layout)) = self.pipeline(topology, vkey, fkey, &vl, vl_hash) else { return };
+        let Some((set_layout, _, push)) = self.graphics_layout(vkey, fkey) else { return };
         let mut w = DescWrites::default();
-        self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
+        self.stage_writes(vkey, vd, vc, 0, &call, base_instance, &mut w);
         if let (Some(k), Some((fd, fc, _))) = (fkey, fs) {
             self.stage_writes(k, fd, fc, 1, &call, base_instance, &mut w);
         }
@@ -271,7 +272,7 @@ impl Ctx {
         let (pipe, layout) = match self.pipelines.get(&key) {
             Some(&p) => p,
             None => {
-                let s = &self.stages[&(data, content)];
+                let s = &self.stages[&content];
                 let lk = (s.set_layout, self.empty_layout);
                 let layout = match self.layouts.get(&lk) {
                     Some(&l) => l,
@@ -297,8 +298,8 @@ impl Ctx {
             }
         };
         let mut w = DescWrites::default();
-        self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
-        let set_layout = self.stages[&(data, content)].set_layout;
+        self.stage_writes(content, data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
+        let set_layout = self.stages[&content].set_layout;
         self.dev.device.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
         self.bind_writes(&w, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
         let d = &self.dev.device;
@@ -308,7 +309,7 @@ impl Ctx {
 
     /// The descriptor set layout (both stages' bindings in set 0) and pipeline layout of a vertex / fragment stage pair,
     /// and whether its descriptors are pushed: when each stage stays within the push limits.
-    unsafe fn graphics_layout(&mut self, vs: (u64, u64), fs: Option<(u64, u64)>) -> Option<(vk::DescriptorSetLayout, vk::PipelineLayout, bool)> {
+    unsafe fn graphics_layout(&mut self, vs: u64, fs: Option<u64>) -> Option<(vk::DescriptorSetLayout, vk::PipelineLayout, bool)> {
         if let Some(&l) = self.graphics_layouts.get(&(vs, fs)) {
             return Some(l);
         }
@@ -339,8 +340,8 @@ impl Ctx {
     unsafe fn pipeline(
         &mut self,
         topology: vk::PrimitiveTopology,
-        vs: (u64, u64),
-        fs: Option<(u64, u64)>,
+        vs: u64,
+        fs: Option<u64>,
         vl: &[VStream],
         vl_hash: u64,
     ) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
@@ -464,7 +465,7 @@ impl Ctx {
             Ok(p) => p[0],
             Err((_, e)) => {
                 let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
-                self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
+                self.warn(format!("pipeline for stages {vs:x}/{fs:x?} (targets {targets:?}): {e}"));
                 return None;
             }
         };
@@ -537,7 +538,7 @@ impl Ctx {
     }
 
     /// The descriptors of stage `key`'s bindings for this draw, added to `out`.
-    unsafe fn stage_writes(&mut self, key: (u64, u64), data: u64, control: u64, stage: i32, call: &Draw, base_instance: i32, out: &mut DescWrites) {
+    unsafe fn stage_writes(&mut self, key: u64, data: u64, control: u64, stage: i32, call: &Draw, base_instance: i32, out: &mut DescWrites) {
         let Some((bindings, base)) = self.stages.get(&key).map(|s| (s.bindings.clone(), s.base)) else { return };
         if bindings.is_empty() {
             return;

@@ -133,7 +133,7 @@ pub fn guest_modules(s: settings::Settings) -> Result<Vec<GuestModule>, String> 
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut s = resolve_settings(layers);
+    let s = resolve_settings(layers);
     let vulkan = s.graphics.gpu == settings::GpuBackend::Vulkan;
     if vulkan {
         gpu::install(&vulkan::VULKAN);
