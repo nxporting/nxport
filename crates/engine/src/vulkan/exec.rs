@@ -1022,8 +1022,9 @@ impl Ctx {
             format::Kind::Uint => vk::ClearColorValue { uint32: rgba.map(|v| v as u32) },
             format::Kind::Sint => vk::ClearColorValue { int32: rgba.map(|v| v as i32) },
         };
+        let Some((rect, whole)) = self.clear_rect(w, h) else { return };
         let p = self.pass.as_mut().unwrap();
-        if !p.begun && mask & 0xF == 0xF {
+        if !p.begun && whole && mask & 0xF == 0xF {
             p.color_clears[index as usize] = Some(value);
             return;
         }
@@ -1032,11 +1033,7 @@ impl Ctx {
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .color_attachment(index as u32)
             .clear_value(vk::ClearValue { color: value })];
-        let r = [vk::ClearRect {
-            rect: vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: w, height: h } },
-            base_array_layer: 0,
-            layer_count: 1,
-        }];
+        let r = [vk::ClearRect { rect, base_array_layer: 0, layer_count: 1 }];
         self.dev.device.cmd_clear_attachments(self.cb, &a, &r);
     }
 
@@ -1059,8 +1056,9 @@ impl Ctx {
         }
         let (w, h) = p.extent;
         let value = vk::ClearDepthStencilValue { depth, stencil: stencil as u32 };
+        let Some((rect, whole)) = self.clear_rect(w, h) else { return };
         let p = self.pass.as_mut().unwrap();
-        if !p.begun {
+        if !p.begun && whole {
             // Depth and stencil cleared now and then (separate calls) merge; each aspect keeps its latest value.
             let (old_mask, old) = p.depth_clear.unwrap_or((vk::ImageAspectFlags::empty(), value));
             let merged = vk::ClearDepthStencilValue {
@@ -1074,12 +1072,24 @@ impl Ctx {
         let a = [vk::ClearAttachment::default().aspect_mask(aspect).clear_value(vk::ClearValue {
             depth_stencil: vk::ClearDepthStencilValue { depth, stencil: stencil as u32 },
         })];
-        let r = [vk::ClearRect {
-            rect: vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: w, height: h } },
-            base_array_layer: 0,
-            layer_count: 1,
-        }];
+        let r = [vk::ClearRect { rect, base_array_layer: 0, layer_count: 1 }];
         self.dev.device.cmd_clear_attachments(self.cb, &a, &r);
+    }
+
+    /// The area a clear of a `w` x `h` pass covers: clears honor the scissor (TotK clears its Depths lit-area mask in
+    /// 50x50 tiles, each with the scissor on the tile), and whether that is the whole pass. None when it is empty.
+    fn clear_rect(&self, w: u32, h: u32) -> Option<(vk::Rect2D, bool)> {
+        let (sx, sy, sw, sh) = self.st.scissor.unwrap_or((0, 0, w as i32, h as i32));
+        let (x0, y0) = (sx.clamp(0, w as i32), sy.clamp(0, h as i32));
+        let (x1, y1) = ((sx.saturating_add(sw)).clamp(0, w as i32), (sy.saturating_add(sh)).clamp(0, h as i32));
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let rect = vk::Rect2D {
+            offset: vk::Offset2D { x: x0, y: y0 },
+            extent: vk::Extent2D { width: (x1 - x0) as u32, height: (y1 - y0) as u32 },
+        };
+        Some((rect, (x0, y0, x1, y1) == (0, 0, w as i32, h as i32)))
     }
 
     pub unsafe fn read_texture(&mut self, texture: usize, gen: u32, level: u32, layer: u32) -> Option<Texels> {
