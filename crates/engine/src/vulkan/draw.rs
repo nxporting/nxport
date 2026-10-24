@@ -967,7 +967,11 @@ impl Ctx {
             let bound = if a <= 0x10000 || size == 0 {
                 Some((self.zeros.buffer, 0))
             } else if !v.repack {
-                match self.imports.find(&self.dev, a, size).filter(|_| !crate::vulkan::guard::hot(a, size)) {
+                if let Some(&b) = self.vb_memo.get(&(a, size)) {
+                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    continue;
+                }
+                let b = match self.imports.find(&self.dev, a, size).filter(|_| !crate::vulkan::guard::hot(a, size)) {
                     Some(x) => {
                         crate::vulkan::guard::note_read(a, size);
                         Some(x)
@@ -986,7 +990,11 @@ impl Ctx {
                             }
                         }
                     }
+                };
+                if let Some(b) = b {
+                    self.vb_memo.insert((a, size), b);
                 }
+                b
             } else {
                 // Elements to write: every vertex the draw can fetch, or every instance it draws.
                 let n = if v.per_instance {
