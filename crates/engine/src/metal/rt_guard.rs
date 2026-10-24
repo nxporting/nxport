@@ -113,6 +113,8 @@ static OPEN: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static CLOSED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 static HOLDS: AtomicU64 = AtomicU64::new(0);
+/// Holds ended without a write-back because newer data reached their memory.
+static DROPS: AtomicU64 = AtomicU64::new(0);
 static WRITEBACKS: AtomicU64 = AtomicU64::new(0);
 static WAITS: AtomicU64 = AtomicU64::new(0);
 static WAIT_US: AtomicU64 = AtomicU64::new(0);
@@ -221,12 +223,51 @@ unsafe fn finish(i: usize) {
     }
 }
 
-/// A pass renders into `tex` (the Metal texture of NVN texture `t`) at `level` / `layer`.
-pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize) {
-    if !enabled() || t.storage < 0x10000 || !crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+/// Ends the holds overlapping [start, end) without a write-back, except one covering exactly `keep` (signal-safe).
+/// Newer data reached that memory (or is about to): writing the older rendering back later would overwrite it.
+unsafe fn supersede(start: usize, end: usize, keep: Option<(usize, usize)>) {
+    if LIVE.load(Ordering::Acquire) == 0 || start >= HI.load(Ordering::Relaxed) || end <= LO.load(Ordering::Relaxed) {
         return;
     }
-    start();
+    let n = HIGH.load(Ordering::Acquire).min(SLOTS);
+    for i in 0..n {
+        if STATE[i].load(Ordering::Acquire) != HELD {
+            continue;
+        }
+        let (s, e) = (START[i].load(Ordering::Acquire), END[i].load(Ordering::Acquire));
+        if s < end && e > start && keep != Some((s, e)) {
+            DROPS.fetch_add(1, Ordering::Relaxed);
+            finish(i);
+        }
+    }
+}
+
+/// Newer data reaches guest memory [addr, addr+len) another way than through a hold: an engine write (allocation,
+/// file read), a GPU copy or storage-buffer write. The holds there end without a write-back.
+pub(crate) fn superseded(addr: usize, len: usize) {
+    if !enabled() || len == 0 || HIGH.load(Ordering::Acquire) == 0 {
+        return;
+    }
+    unsafe { supersede(addr & !(PAGE - 1), (addr + len + PAGE - 1) & !(PAGE - 1), None) };
+}
+
+/// A pass renders into `tex` (colour or depth) at `level` / `layer`: other holds on that memory are out of date, and
+/// the target is held itself when write_back can reproduce it.
+pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize) {
+    if !enabled() || t.storage < 0x10000 {
+        return;
+    }
+    let p = params(t);
+    let layout = crate::nvn::layout::compute_layout(&p);
+    let (Some(&off), Some(&size)) = (layout.level_offsets.get(level), layout.level_sizes.get(level)) else {
+        return;
+    };
+    let a = t.storage + layer * layout.layer_stride as usize + off as usize;
+    let (start, end) = (a & !(PAGE - 1), (a + size as usize + PAGE - 1) & !(PAGE - 1));
+    supersede(start, end, Some((start, end)));
+    if !crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+        return;
+    }
     // Only what write_back reproduces exactly: uncompressed single-sample 2D / 2D-array colour data.
     let Some(info) = crate::nvn::layout::format_info(t.format) else {
         return;
@@ -239,18 +280,13 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
         || !matches!(tex.textureType(), MTLTextureType::Type2D | MTLTextureType::Type2DArray)
         || tex.storageMode() == MTLStorageMode::Private
     {
+        // Rendered, but not reproducible: memory under it keeps no hold either (done above).
         return;
     }
-    let p = params(t);
-    let layout = crate::nvn::layout::compute_layout(&p);
-    let (Some(&off), Some(&size)) = (layout.level_offsets.get(level), layout.level_sizes.get(level)) else {
-        return;
-    };
-    let a = t.storage + layer * layout.layer_stride as usize + off as usize;
-    let (start, end) = (a & !(PAGE - 1), (a + size as usize + PAGE - 1) & !(PAGE - 1));
     if crate::nvn::api::containing_pool(start, end - start).is_none() {
         return;
     }
+    start_thread();
     let mut table = TABLE.lock().unwrap();
     if table.len() < SLOTS {
         table.resize_with(SLOTS, || None);
@@ -464,7 +500,7 @@ fn wake() {
 }
 
 /// Starts the write-back thread (once, before the first hold).
-pub(super) fn start() {
+fn start_thread() {
     if !enabled() {
         return;
     }
@@ -566,15 +602,21 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
             RELEASE_NAME[k][0].store(u64::from_le_bytes(name[..8].try_into().unwrap()), Ordering::Relaxed);
             RELEASE_NAME[k][1].store(u64::from_le_bytes(name[8..].try_into().unwrap()), Ordering::Relaxed);
         }
-        // Engine code (often another thread racing with the hold being made) reads or writes the page: open it, and
-        // write the hold back as soon as its rendering is done instead of on the next guest access.
+        // Engine code writes the page: its data is newer than the rendering, which must not be written over it later.
+        if write {
+            supersede(page, page + PAGE, None);
+            return true;
+        }
+        // Engine code (often another thread racing with the hold being made) reads the page: open it for reading only
+        // (a later write still faults: guest writes wait for the write-back, engine writes end the hold), and write the
+        // hold back as soon as its rendering is done instead of on the next guest access.
         for i in 0..n {
             if covers(i, page) {
                 REQ[i].store(1, Ordering::Release);
                 OPENED[i].store(1, Ordering::Release);
             }
         }
-        libc::mprotect(page as *mut libc::c_void, PAGE, open_prot(page));
+        libc::mprotect(page as *mut libc::c_void, PAGE, libc::PROT_READ);
         wake();
         return true;
     }
@@ -781,9 +823,10 @@ pub(super) fn frame_end(frame: u64) {
         .filter(|&i| STATE[i].load(Ordering::Acquire) == HELD)
         .count();
     println!(
-        "[rt-guard] last 300 frames: {} holds, {} write-backs, {} waits ({:.2} ms per frame), engine opens {}, timeouts {}, overflows {}; held now {}",
+        "[rt-guard] last 300 frames: {} holds, {} write-backs, {} superseded, {} waits ({:.2} ms per frame), engine opens {}, timeouts {}, overflows {}; held now {}",
         take(&HOLDS),
         take(&WRITEBACKS),
+        take(&DROPS),
         take(&WAITS),
         take(&WAIT_US) as f64 / 300_000.0,
         take(&HOST_RELEASES),
