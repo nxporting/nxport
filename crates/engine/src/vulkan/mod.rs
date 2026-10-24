@@ -10,6 +10,7 @@
 mod device;
 mod exec;
 mod format;
+mod guard;
 mod inflight;
 mod shader;
 mod state;
@@ -144,7 +145,40 @@ impl Backend for Vulkan {
     }
 
     fn wait_fence(&self, serial: u64, timeout_ns: u64) -> bool {
-        inflight::wait(serial, timeout_ns)
+        // --early-fence: the frame loop's wait (guest-main) returns once the frame is queued, with the previous frame
+        // complete (one frame overlaps) and the pages still-running work reads held by the write guard. Other threads
+        // wait for GPU work whose results they read back.
+        if !guard::enabled() || !on_guest_main() {
+            return inflight::wait(serial, timeout_ns);
+        }
+        static PREV: AtomicU64 = AtomicU64::new(0);
+        let prev = PREV.load(Ordering::Acquire);
+        if prev < serial && !inflight::wait(prev, timeout_ns) {
+            return false;
+        }
+        PREV.fetch_max(serial, Ordering::AcqRel);
+        if inflight::completed() >= serial {
+            guard::release_all();
+            return true;
+        }
+        guard::protect(serial);
+        true
+    }
+
+    fn access_fault(&self, f: &crate::gpu::Fault) -> bool {
+        unsafe { guard::fault(f.addr) }
+    }
+
+    fn describe_page(&self, addr: usize) -> String {
+        if guard::holds(addr) {
+            "held by the Vulkan write guard (GPU work in flight reads it)".into()
+        } else {
+            String::new()
+        }
+    }
+
+    fn before_host_write(&self, addr: usize, len: usize) {
+        unsafe { guard::before_host_write(addr, len) }
     }
 
     fn presented_frames(&self) -> u64 {
@@ -177,6 +211,13 @@ impl Backend for Vulkan {
         let Some(c) = g.as_mut() else { return 0 };
         unsafe { c.gpu_only_textures(f) }
     }
+}
+
+fn on_guest_main() -> bool {
+    thread_local! {
+        static MAIN: bool = std::thread::current().name() == Some("guest-main");
+    }
+    MAIN.with(|m| *m)
 }
 
 /// A content hash of a guest shader stage (its header and first code, and its control section): translations are cached

@@ -7,6 +7,18 @@ const DRIVER_CBUF_SIZE: usize = 0x1000;
 const SUPPORT_SIZE: usize = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET
     + 16 * sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_COUNT as usize;
 
+/// The support buffer's constant part: render scales of 1 for every texture (no resolution scaling).
+fn support_template() -> &'static [u8; SUPPORT_SIZE] {
+    static T: std::sync::OnceLock<[u8; SUPPORT_SIZE]> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut s = [0u8; SUPPORT_SIZE];
+        for i in 0..73 {
+            s[192 + i * 16..196 + i * 16].copy_from_slice(&1.0f32.to_le_bytes());
+        }
+        s
+    })
+}
+
 /// A vertex attribute as the pipeline reads it, and where its data is in the guest's stream.
 #[derive(Clone, Copy, Hash)]
 pub(super) struct VAttr {
@@ -439,11 +451,11 @@ impl Ctx {
         let set = self.alloc_set(layout)?;
         let driver = self.driver_cbuf(stage, call, base_instance);
         let (vw, vh) = (self.st.viewport.2.max(1) as f32, self.st.viewport.3.max(1) as f32);
-        let mut buffers: Vec<(u32, vk::DescriptorType, vk::DescriptorBufferInfo)> = Vec::new();
-        let mut images: Vec<(u32, vk::DescriptorType, Vec<vk::DescriptorImageInfo>)> = Vec::new();
+        let mut buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 16]> = Default::default();
+        let mut images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 16]> = Default::default();
         let zero = Some((self.zeros.buffer, 0u64));
         // Constant buffer contents by slot, read once per draw (storage descriptors and bindless handles read them).
-        let mut cbufs: Vec<(i32, Option<(*const u8, usize)>)> = Vec::new();
+        let mut cbufs: smallvec::SmallVec<[(i32, Option<(*const u8, usize)>); 8]> = Default::default();
         let mut cbuf = |me: &Self, slot: i32| -> Option<&'static [u8]> {
             // Only used within this call, while `driver` and the guest memory are alive.
             let as_slice = |c: Option<(*const u8, usize)>| c.map(|(p, n)| unsafe { std::slice::from_raw_parts(p, n) });
@@ -455,23 +467,20 @@ impl Ctx {
             as_slice(c)
         };
         // Constant buffers first: the support buffer records their bound sizes.
-        let mut limits: Vec<(u32, usize)> = Vec::new();
-        let mut ordered: Vec<&shader::Binding> = bindings.iter().filter(|b| !matches!(b.feed, Feed::Support)).collect();
+        let mut limits: smallvec::SmallVec<[(u32, usize); 16]> = Default::default();
+        let mut ordered: smallvec::SmallVec<[&shader::Binding; 32]> = bindings.iter().filter(|b| !matches!(b.feed, Feed::Support)).collect();
         ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::Support)));
         for b in ordered {
             match &b.feed {
                 Feed::Support => {
-                    let mut sup = vec![0u8; SUPPORT_SIZE];
-                    let put = |s: &mut Vec<u8>, off: usize, v: [f32; 4]| {
+                    let mut sup = *support_template();
+                    let put = |s: &mut [u8; SUPPORT_SIZE], off: usize, v: [f32; 4]| {
                         for (i, x) in v.iter().enumerate() {
                             s[off + i * 4..off + i * 4 + 4].copy_from_slice(&x.to_le_bytes());
                         }
                     };
                     put(&mut sup, 144, [2.0 / vw, 2.0 / vh, 1.0, 0.0]);
                     put(&mut sup, 160, [vw, vh, 1.0, 0.0]);
-                    for i in 0..73 {
-                        put(&mut sup, 192 + i * 16, [1.0, 0.0, 0.0, 0.0]);
-                    }
                     // Bound sizes of the constant buffers (vec4 units), for the shader's checks.
                     for &(binding, len) in &limits {
                         let o = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET + 16 * binding as usize;
@@ -541,7 +550,7 @@ impl Ctx {
                     }
                 }
                 Feed::Texture { cbuf_slot, handle_index, view, count, buffer } => {
-                    let mut infos = Vec::new();
+                    let mut infos: smallvec::SmallVec<[vk::DescriptorImageInfo; 1]> = Default::default();
                     for j in 0..*count {
                         let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                             let k = (handle_index - 8) / 2 + j as i32;
@@ -570,12 +579,12 @@ impl Ctx {
                         None
                     };
                     let v = if *buffer { vk::ImageView::null() } else { self.image_binding(handle, *view) };
-                    images.push((b.binding, b.ty, vec![vk::DescriptorImageInfo { sampler: vk::Sampler::null(), image_view: v, image_layout: vk::ImageLayout::GENERAL }]));
+                    images.push((b.binding, b.ty, smallvec::smallvec![vk::DescriptorImageInfo { sampler: vk::Sampler::null(), image_view: v, image_layout: vk::ImageLayout::GENERAL }]));
                 }
             }
         }
-        let bi: Vec<[vk::DescriptorBufferInfo; 1]> = buffers.iter().map(|b| [b.2]).collect();
-        let mut writes: Vec<vk::WriteDescriptorSet> = buffers
+        let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 16]> = buffers.iter().map(|b| [b.2]).collect();
+        let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 32]> = buffers
             .iter()
             .zip(&bi)
             .map(|((binding, ty, _), info)| vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).buffer_info(info))
@@ -623,6 +632,7 @@ impl Ctx {
         self.gpu_dirty.add(a, a + size);
         // GPU writes cannot fault: pages the write tracking protected would lose them.
         crate::guest::dirty_track::release_for_gpu(a, size);
+        crate::vulkan::guard::note_write(a, size);
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
@@ -764,7 +774,26 @@ impl Ctx {
             let bound = if a <= 0x10000 || size == 0 {
                 Some((self.zeros.buffer, 0))
             } else if !v.repack {
-                self.imports.find(&self.dev, a, size).or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, size)))
+                match self.imports.find(&self.dev, a, size).filter(|_| !crate::vulkan::guard::hot(a, size)) {
+                    Some(x) => {
+                        crate::vulkan::guard::note_read(a, size);
+                        Some(x)
+                    }
+                    // A copy, once per submit.
+                    None => {
+                        let key = super::hash_of(&(a, size, u32::MAX));
+                        match self.repacked.get(&key) {
+                            Some(&b) => Some(b),
+                            None => {
+                                let b = self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, size));
+                                if let Some(b) = b {
+                                    self.repacked.insert(key, b);
+                                }
+                                b
+                            }
+                        }
+                    }
+                }
             } else {
                 // Elements to write: every vertex the draw can fetch, or every instance it draws.
                 let n = if v.per_instance {
@@ -815,19 +844,26 @@ impl Ctx {
     }
 
     /// The largest index an indexed draw uses (restart indices excluded).
-    unsafe fn max_index(&self, index_type: i32, count: i32, addr: u64) -> u32 {
+    /// (Guest memory does not change during a submit: each range is scanned once per submit.)
+    unsafe fn max_index(&mut self, index_type: i32, count: i32, addr: u64) -> u32 {
         let a = crate::nvn::api::translate_virtual(addr as usize);
         if a < 0x10000 || count <= 0 {
             return 0;
         }
         let n = count as usize;
         let r = self.st.prim_restart;
+        let key = (a, count, index_type, r);
+        if let Some(&m) = self.max_indices.get(&key) {
+            return m;
+        }
         let keep = |i: u32| r != Some(i);
-        match index_type {
+        let m = match index_type {
             0 => std::slice::from_raw_parts(a as *const u8, n).iter().map(|&i| i as u32).filter(|&i| keep(i)).max().unwrap_or(0),
             1 => std::slice::from_raw_parts(a as *const u16, n).iter().map(|&i| i as u32).filter(|&i| keep(i)).max().unwrap_or(0),
             _ => std::slice::from_raw_parts(a as *const u32, n).iter().copied().filter(|&i| keep(i)).max().unwrap_or(0),
-        }
+        };
+        self.max_indices.insert(key, m);
+        m
     }
 
     unsafe fn index_buffer(&mut self, index_type: i32, count: i32, addr: u64) -> Option<(vk::Buffer, u64, vk::IndexType)> {
@@ -856,7 +892,10 @@ impl Ctx {
             1 => {
                 // In place only at 4-byte aligned offsets: Metal (under MoltenVK) needs them for 16-bit indices too, and
                 // passed 2-mod-4 offsets through (Super Mario Odyssey's Cap Kingdom ground: draws with garbage indices).
-                let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0);
+                let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0 && !crate::vulkan::guard::hot(a, n * 2));
+                if x.is_some() {
+                    crate::vulkan::guard::note_read(a, n * 2);
+                }
                 x.or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, n * 2)))
                     .map(|(b, o)| (b, o, vk::IndexType::UINT16))
             }
@@ -867,7 +906,10 @@ impl Ctx {
                 self.arena.copy(&self.dev, &v).map(|(b, o)| (b, o, vk::IndexType::UINT32))
             }
             _ => {
-                let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0);
+                let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0 && !crate::vulkan::guard::hot(a, n * 4));
+                if x.is_some() {
+                    crate::vulkan::guard::note_read(a, n * 4);
+                }
                 x.or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, n * 4)))
                     .map(|(b, o)| (b, o, vk::IndexType::UINT32))
             }
