@@ -669,7 +669,7 @@ impl Ctx {
         let Some((obj, view)) = crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32) else { return vk::ImageView::null() };
         let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return vk::ImageView::null() };
         let Some((img, at_level, at_layer)) = self.tex.get(&self.dev, &t) else { return vk::ImageView::null() };
-        img.gpu_written = true;
+        img.mark_gpu_write();
         let (level, layer) = view.map_or((0, 0), |v| (v.min_level as u32, v.min_layer as u32));
         let (level, layer) = (level + at_level, layer + at_layer);
         let fmt = img.format;

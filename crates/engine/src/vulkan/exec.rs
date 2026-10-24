@@ -251,7 +251,7 @@ impl Ctx {
             return;
         };
         self.cb = cbs[0];
-        self.tex.serial += 1;
+        self.tex.begin_submit();
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
         let t0 = std::time::Instant::now();
         for &h in lists {
@@ -493,7 +493,7 @@ impl Ctx {
             }
         }
         let (img, at_level, at_layer) = self.tex.get(&self.dev, &t)?;
-        img.gpu_written = true;
+        img.mark_gpu_write();
         let fmt = if r.view_format != 0 && format::view_compatible(t.format, r.view_format as i32) {
             texture::device_format(&self.dev, r.view_format as i32)
                 .filter(|f| format::aspects(*f) == format::aspects(img.format))
@@ -641,7 +641,7 @@ impl Ctx {
             self.bc_pending.push(key);
         }
         if let Some(img) = self.tex.get_desc(&self.dev, &d) {
-            img.gpu_written = true;
+            img.mark_gpu_write();
         }
         let p = self.bc_proxies.get_mut(&key).unwrap();
         let (extent, samples, image) = ((p.extent.width, p.extent.height), p.samples, p.image);

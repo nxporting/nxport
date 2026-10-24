@@ -35,9 +35,9 @@ static RECORD_NS: AtomicU64 = AtomicU64::new(0);
 static WAIT_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Recording and GPU wait time not yet reported on an fps line, in ms (replays report them at the end).
-pub fn timing() -> (f64, f64) {
+pub fn timing() -> (f64, f64, u64) {
     let ms = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 1e6;
-    (ms(&RECORD_NS), ms(&WAIT_NS))
+    (ms(&RECORD_NS), ms(&WAIT_NS), texture::FLUSHES.swap(0, Ordering::Relaxed))
 }
 
 pub static VULKAN: Vulkan = Vulkan {
@@ -79,10 +79,11 @@ impl Backend for Vulkan {
             if let Some(s) = *start {
                 let per_frame = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 50.0 / 1e6;
                 println!(
-                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame",
+                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame, {} overlap flushes",
                     50.0 / now.duration_since(s).as_secs_f64(),
                     per_frame(&RECORD_NS),
-                    per_frame(&WAIT_NS)
+                    per_frame(&WAIT_NS),
+                    texture::FLUSHES.swap(0, Ordering::Relaxed)
                 );
             }
             *start = Some(now);

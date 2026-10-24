@@ -288,8 +288,8 @@ pub fn replay_capture(
     if vulkan {
         vulkan::init(s.debug.validate)?;
         let r = capture::replay::run(dir, opts);
-        let (record, wait) = vulkan::timing();
-        println!("[gpu-replay] vulkan: recording {record:.1} ms, GPU wait {wait:.1} ms (all passes)");
+        let (record, wait, flushes) = vulkan::timing();
+        println!("[gpu-replay] vulkan: recording {record:.1} ms, GPU wait {wait:.1} ms (all passes), {flushes} overlap flushes");
         return r;
     }
     #[cfg(nx_native)]
