@@ -142,7 +142,7 @@ pub struct Ctx {
     /// The dynamic state set in the current pass (draw.rs dynamic_state).
     pub(super) dynamic_memo: Option<u64>,
     /// The vertex layout of the bound attribute and stream state, and its hash (draw.rs vertex_layout).
-    pub(super) vl_cache: Option<(std::sync::Arc<[draw::VStream]>, u64)>,
+    pub(super) vl_cache: Option<(std::sync::Arc<[draw::VStream]>, u64, u64)>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).

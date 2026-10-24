@@ -35,19 +35,76 @@ pub struct Binding {
     pub extent: i32,
 }
 
-/// What a stage was made from, the same in every session: its disk cache key (stage_cache.rs), the hash of its guest
-/// code, and how it was translated.
+/// A stage as translated, the same in every session: its shader cache name (stage_cache.rs), the key of its translation
+/// (stage and translation inputs) and its binding base.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StageId {
+    pub full: u64,
     pub key: u64,
-    pub code: u64,
-    pub hint: i32,
-    pub compute: bool,
     pub base: u32,
+}
+
+/// What translation takes from a stage's code and control section besides the code: the stage kind hint, the constant
+/// bank offset, where the code the translator may read ends (code and constant bank), compute dimensions.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct Prep {
+    pub hint: i32,
+    pub cb1: i32,
+    pub code_len: usize,
+    pub compute: bool,
+    pub compute_fields: Option<[i32; 4]>,
+}
+
+/// The guest stage code at `data`: up to 64 KiB, within its memory pool.
+pub unsafe fn guest_code<'a>(data: u64) -> &'a [u8] {
+    let len = match crate::nvn::api::find_memory_pool(crate::nvn::api::translate_virtual(data as usize)) {
+        Some((base, size)) => (base + size).saturating_sub(data as usize).min(0x10000),
+        None => 0x10000,
+    };
+    std::slice::from_raw_parts(data as *const u8, len)
+}
+
+/// The GLSLC control section at `control`, if there is one.
+pub unsafe fn guest_ctrl<'a>(control: u64) -> Option<&'a [u8]> {
+    (control >= 0x1_0000_0000 && *(control as *const u32) == 0x9876_1234).then(|| std::slice::from_raw_parts(control as *const u8, 0x780))
+}
+
+/// The translation inputs of a stage (`index`: the program stage slot, 1 = fragment).
+pub fn prep(code: &[u8], ctrl: Option<&[u8]>, index: usize) -> Prep {
+    let word = |b: &[u8], off: usize| b.get(off..off + 4).map_or(0, |w| u32::from_le_bytes(w.try_into().unwrap()));
+    let magic = word(code, 0);
+    let c = |off: usize| ctrl.map_or(0, |c| word(c, off));
+    let ctrl_len = c(0x20);
+    let compute = magic == 0x12345679 || (magic != 0x12345678 && ctrl.is_some() && ctrl_len >= 0x74c && c(0x748) > 0);
+    let hint = if compute {
+        3
+    } else if magic == 0x12345678 {
+        match (word(code, 0x30) >> 10) & 0xF {
+            5 => 1,
+            _ => 2,
+        }
+    } else if index == 1 {
+        1
+    } else {
+        2
+    };
+    let (cb1, code_len) = if ctrl.is_some() && ctrl_len >= 0x708 {
+        let off = c(0x700) as i32;
+        if off > 0 && off <= 0x10_0000 { (off, off as usize + (c(0x6fc) as usize).min(0x10000)) } else { (-1, 0) }
+    } else {
+        (-1, 0)
+    };
+    let compute_fields = (compute && ctrl.is_some() && ctrl_len >= 0x764).then(|| {
+        let mem = (c(0x754).max(c(0x760)).max(c(0x710)) + 15) & !15;
+        [c(0x748) as i32, c(0x74c) as i32, c(0x750) as i32, mem as i32]
+    });
+    Prep { hint, cb1, code_len, compute, compute_fields }
 }
 
 pub struct Stage {
     pub id: StageId,
+    /// Its shader cache name and input locations.
+    pub known: std::sync::Arc<super::stage_cache::Known>,
     pub module: vk::ShaderModule,
     /// Its bindings, numbered from the stage's binding base (graphics stages share one set: vertex 0.., fragment
     /// FRAGMENT_BINDING_BASE..).
@@ -85,76 +142,107 @@ fn view_type(ty: &str) -> (vk::ImageViewType, bool) {
     (t, ty.contains("Buffer"))
 }
 
-/// The guest stage at `data` (code) with `control` (GLSLC control section, may be 0) as SPIR-V for `state`.
-pub unsafe fn translate(
+/// Bytes of a stage its shader cache name covers: its header and the `size` bytes of code the translator decoded.
+fn named_len(code: &[u8], size: i32) -> usize {
+    let magic = code.get(..4).map_or(0, |w| u32::from_le_bytes(w.try_into().unwrap()));
+    let size = size.max(0) as usize;
+    match magic {
+        0x12345679 => 0x100 + size,
+        0x12345678 => 0x30 + size,
+        _ => size,
+    }
+}
+
+/// The input locations a SPIR-V module declares.
+fn spirv_inputs(spirv: &[u8]) -> Vec<u32> {
+    let words: Vec<u32> = spirv.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let mut locations: HashMap<u32, u32> = HashMap::new();
+    let mut vars = Vec::new();
+    let mut i = 5;
+    while i < words.len() {
+        let (n, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
+        if n == 0 {
+            break;
+        }
+        if op == 71 && n >= 4 && words[i + 2] == 30 {
+            locations.insert(words[i + 1], words[i + 3]);
+        }
+        if op == 59 && n >= 4 && words[i + 3] == 1 {
+            vars.push(words[i + 2]);
+        }
+        i += n;
+    }
+    let mut v: Vec<u32> = vars.iter().filter_map(|v| locations.get(v).copied()).collect();
+    v.sort();
+    v
+}
+
+/// The stage `code` (`known`: as seen before) translated for the state `state_for` gives: None, the draw's whole state
+/// (a stage seen for the first time is translated with it to learn its inputs); Some(inputs), the state for those
+/// inputs only (what the translation is keyed by: a vertex stage's other attributes do not change it). From the disk
+/// cache when it has the translation.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn get(
     dev: &Dev,
-    data: u64,
-    control: u64,
-    index: usize,
-    state: Option<sass2spv::accessor::GraphicsState>,
+    code: &[u8],
+    prep: Prep,
+    known: Option<std::sync::Arc<super::stage_cache::Known>>,
+    state_for: &dyn Fn(Option<&[u32]>) -> Option<sass2spv::accessor::GraphicsState>,
     set: u32,
     binding_base: u32,
     fragment_inputs: Option<u32>,
     discard_writes_depth: bool,
 ) -> Result<Stage, String> {
-    let len = match crate::nvn::api::find_memory_pool(crate::nvn::api::translate_virtual(data as usize)) {
-        Some((base, size)) => (base + size).saturating_sub(data as usize).min(0x10000),
-        None => 0x10000,
-    };
-    let code = std::slice::from_raw_parts(data as *const u8, len);
-    let magic = u32::from_le_bytes(code[..4].try_into().unwrap());
-    let ctrl_ok = control >= 0x1_0000_0000 && *(control as *const u32) == 0x9876_1234;
-    let ctrl = |off: u64| *((control + off) as *const u32);
-    let compute = magic == 0x12345679 || (magic != 0x12345678 && ctrl_ok && ctrl(0x20) >= 0x74c && ctrl(0x748) > 0);
-    let hint = if compute {
-        3
-    } else if magic == 0x12345678 {
-        match (u32::from_le_bytes(code[0x30..0x34].try_into().unwrap()) >> 10) & 0xF {
-            5 => 1,
-            _ => 2,
-        }
-    } else if index == 1 {
-        1
-    } else {
-        2
-    };
-    let cb1 = if ctrl_ok && ctrl(0x20) >= 0x708 {
-        let off = ctrl(0x700) as i32;
-        if off > 0 && off <= 0x10_0000 { off } else { -1 }
-    } else {
-        -1
-    };
-    let compute_fields = (compute && ctrl_ok && ctrl(0x20) >= 0x764).then(|| {
-        let mem = (ctrl(0x754).max(ctrl(0x760)).max(ctrl(0x710)) + 15) & !15;
-        [ctrl(0x748) as i32, ctrl(0x74c) as i32, ctrl(0x750) as i32, mem as i32]
-    });
+    use super::stage_cache as sc;
     let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
-    // The disk cache (stage_cache.rs), by the stage's leading bytes and control section and the translation inputs.
-    let cache_key = super::exec::hash_of(&(super::stage_hash(data, control), hint, cb1, compute_fields, format!("{state:?}"), format!("{host:?}")));
-    if let Some((spirv, m, code)) = super::stage_cache::load(cache_key, data, control, len) {
-        return build_stage(dev, &spirv, &m, StageId { key: cache_key, code, hint, compute, base: binding_base });
+    let translate = |state: Option<sass2spv::accessor::GraphicsState>| -> Result<sass2spv::ShaderProgram, String> {
+        let p = sass2spv::translate_stage_for(code, prep.hint, prep.cb1, prep.compute_fields, &sass2spv::Target::Spirv, state, host.clone())?;
+        if p.binary_code.is_empty() {
+            return Err("empty SPIR-V".into());
+        }
+        Ok(p)
+    };
+    let key_of = |full: u64, state: &Option<sass2spv::accessor::GraphicsState>| super::exec::hash_of(&(full, prep, format!("{state:?}"), format!("{host:?}")));
+    let mut first = None;
+    let known = match known {
+        Some(k) => k,
+        None => {
+            let whole = state_for(None);
+            let p = translate(whole.clone())?;
+            let k = sc::remember(code, named_len(code, p.size), prep, spirv_inputs(&p.binary_code));
+            first = Some((format!("{whole:?}"), p));
+            k
+        }
+    };
+    let state = state_for(Some(&known.inputs));
+    let key = key_of(known.full, &state);
+    let id = StageId { full: known.full, key, base: binding_base };
+    if let Some((_, p)) = first.filter(|(whole, _)| *whole == format!("{state:?}")) {
+        let m = p.manifest();
+        sc::store(key, &p.binary_code, &m);
+        return build_stage(dev, &p.binary_code, &m, id, &prep, known);
     }
-    let p = sass2spv::translate_stage_for(code, hint, cb1, compute_fields, &sass2spv::Target::Spirv, state, host)?;
-    if p.binary_code.is_empty() {
-        return Err("empty SPIR-V".into());
+    if let Some((spirv, m)) = sc::load(key) {
+        return build_stage(dev, &spirv, &m, id, &prep, known);
     }
+    let p = translate(state)?;
     let m = p.manifest();
-    let used = (p.size.max(0) as usize).min(len);
-    let code = super::stage_cache::code_hash(data, control, used);
-    super::stage_cache::store(cache_key, used, code, &p.binary_code, &m);
+    sc::store(key, &p.binary_code, &m);
     if let Some(dir) = &crate::settings::get().debug.dump_spirv {
         let _ = std::fs::create_dir_all(dir);
-        let name = format!("{data:012x}_{binding_base}_{}", p.binary_code.len());
+        let name = format!("s_{:016x}_{binding_base}_{key:016x}", known.full);
         let _ = std::fs::write(dir.join(format!("{name}.spv")), &p.binary_code);
         let _ = std::fs::write(dir.join(format!("{name}.json")), sass2spv::manifest_json(&p));
     }
-    build_stage(dev, &p.binary_code, &m, StageId { key: cache_key, code, hint, compute, base: binding_base })
+    build_stage(dev, &p.binary_code, &m, id, &prep, known)
 }
 
-/// The stage `id` from the disk cache, without its guest code (pipeline precompilation).
-pub unsafe fn from_cache(dev: &Dev, id: StageId) -> Result<Stage, String> {
-    let (spirv, m) = super::stage_cache::load_id(id.key, id.code).ok_or("not in the stage cache")?;
-    build_stage(dev, &spirv, &m, id)
+/// The stage `id` from the disk cache (pipeline precompilation).
+pub unsafe fn from_cache(dev: &Dev, id: StageId) -> Option<Stage> {
+    let known = super::stage_cache::by_name(id.full)?;
+    let (spirv, m) = super::stage_cache::load(id.key)?;
+    let prep = known.prep;
+    build_stage(dev, &spirv, &m, id, &prep, known).ok()
 }
 
 /// A stage from its SPIR-V and manifest.
@@ -163,8 +251,10 @@ unsafe fn build_stage(
     spirv: &[u8],
     m: &sass2spv::manifest::ShaderManifest,
     id: StageId,
+    prep: &Prep,
+    known: std::sync::Arc<super::stage_cache::Known>,
 ) -> Result<Stage, String> {
-    let (compute, hint, binding_base) = (id.compute, id.hint, id.base);
+    let (compute, hint, binding_base) = (prep.compute, prep.hint, id.base);
     let words: Vec<u32> = spirv.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     // The bindings the module declares (OpDecorate 71, Binding 33), each fed as the manifest says.
     let mut declared = Vec::new();
@@ -275,6 +365,7 @@ unsafe fn build_stage(
         .sum();
     Ok(Stage {
         id,
+        known,
         module,
         bindings: out.into(),
         set_layout,

@@ -134,7 +134,9 @@ impl Ctx {
     }
 
     /// `fragment_inputs`: for a fragment stage, the varyings its vertex stage writes (part of `key`).
-    unsafe fn stage(&mut self, data: u64, control: u64, index: usize, state: GraphicsState, key: u64, set: u32, fragment_inputs: Option<u32>) -> bool {
+    /// `vertex`: a graphics vertex stage (its translation depends only on the attributes it reads).
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn stage(&mut self, data: u64, control: u64, index: usize, state: GraphicsState, key: u64, set: u32, fragment_inputs: Option<u32>, vertex: bool) -> bool {
         let discard_depth = set == 1 && self.discard_depth();
         let k = (data, key);
         if self.stages.contains_key(&k) {
@@ -145,7 +147,21 @@ impl Ctx {
         }
         // Graphics stages share set 0, the fragment stage's bindings above the vertex stage's.
         let base = if set == 1 { shader::FRAGMENT_BINDING_BASE } else { 0 };
-        match shader::translate(&self.dev, data, control, index, Some(state), 0, base, fragment_inputs, discard_depth) {
+        let code = shader::guest_code(data);
+        let prep = shader::prep(code, shader::guest_ctrl(control), index);
+        let known = crate::vulkan::stage_cache::identify(code, &prep);
+        let state_for = |inputs: Option<&[u32]>| {
+            let mut s = state.clone();
+            if let (true, Some(inputs)) = (vertex, inputs) {
+                for (i, t) in s.attribute_types.iter_mut().enumerate() {
+                    if !inputs.contains(&(i as u32)) {
+                        *t = AttributeType::Float;
+                    }
+                }
+            }
+            Some(s)
+        };
+        match shader::get(&self.dev, code, prep, known, &state_for, 0, base, fragment_inputs, discard_depth) {
             Ok(s) => {
                 self.stages.insert(k, s);
                 true
@@ -177,7 +193,7 @@ impl Ctx {
         };
         let (vstate, vkey) = self.vertex_state();
         let vkey = hash(&(vkey, vh));
-        if !self.stage(vd, vc, 0, vstate, vkey, 0, None) {
+        if !self.stage(vd, vc, 0, vstate, vkey, 0, None, true) {
             return;
         }
         // Metal links a fragment function's inputs to the vertex function's outputs (MoltenVK).
@@ -186,20 +202,21 @@ impl Ctx {
             Some((fd, fc, fh)) => {
                 let (fstate, fkey) = self.fragment_state();
                 let fkey = hash(&(fkey, fh, varyings));
-                if !self.stage(fd, fc, 1, fstate, fkey, 1, varyings) {
+                if !self.stage(fd, fc, 1, fstate, fkey, 1, varyings, false) {
                     return;
                 }
                 Some((fd, fkey))
             }
             None => None,
         };
-        // Rebuilt only after the attribute or stream state changed.
+        // Rebuilt only after the attribute or stream state or the vertex stage's inputs changed.
+        let vfull = self.stages[&(vd, vkey)].known.clone();
         let (vl, vl_hash) = match &self.vl_cache {
-            Some(c) => c.clone(),
-            None => {
-                let vl: std::sync::Arc<[VStream]> = self.vertex_layout().into();
+            Some((vl, h, f)) if *f == vfull.full => (vl.clone(), *h),
+            _ => {
+                let vl: std::sync::Arc<[VStream]> = self.vertex_layout(&vfull.inputs).into();
                 let h = hash(&vl);
-                self.vl_cache = Some((vl.clone(), h));
+                self.vl_cache = Some((vl.clone(), h, vfull.full));
                 (vl, h)
             }
         };
@@ -268,7 +285,7 @@ impl Ctx {
             self.warn(format!("compute program {:#x} has no stage", self.st.compute_program));
             return;
         };
-        if !self.stage(data, control, 0, GraphicsState::zeroed(), content, 0, None) {
+        if !self.stage(data, control, 0, GraphicsState::zeroed(), content, 0, None, false) {
             return;
         }
         let key = hash(&("compute", data, content));
@@ -925,9 +942,13 @@ impl Ctx {
 
     /// The bound vertex streams as the pipeline reads them: in place, or repacked where the device needs aligned strides
     /// and offsets (or cannot read past a stride), and expanded where a stream steps per several instances.
-    fn vertex_layout(&self) -> Vec<VStream> {
+    /// The vertex streams and attributes for the attribute locations `inputs` (the vertex stage's).
+    fn vertex_layout(&self, inputs: &[u32]) -> Vec<VStream> {
         let mut out: Vec<VStream> = Vec::new();
         for (i, &b) in self.st.attribs.as_slice().iter().enumerate() {
+            if !inputs.contains(&(i as u32)) {
+                continue;
+            }
             let Some((f, _)) = format::vertex((b >> 5) & 0x1FF) else { continue };
             let stream = b & 31;
             let bits = self.st.streams.get(stream as usize).copied().unwrap_or(0);
