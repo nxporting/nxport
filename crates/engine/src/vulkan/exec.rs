@@ -157,6 +157,8 @@ pub struct Ctx {
     /// Guest memory this submit's commands write while it is recorded (inline uniform updates, reports): uniform
     /// buffers there are copied when bound (draws before the write must not see it), others are read in place.
     pub(super) cmd_writes: Ranges,
+    /// Pre-scans of lists without calls, by list.
+    scan_cache: rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan)>,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -420,6 +422,7 @@ impl Ctx {
             chunk_start: std::time::Instant::now(),
             op_index: 0,
             cmd_writes: Ranges::default(),
+            scan_cache: Default::default(),
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
             pool_tx,
@@ -511,9 +514,13 @@ impl Ctx {
         let mut writes = std::mem::take(&mut self.cmd_writes);
         writes.clear();
         for &h in lists {
-            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes);
+            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache);
         }
         self.cmd_writes = writes;
+        // Lists not reached in this submit may be gone: forget them now and then.
+        if self.scan_cache.len() > 1 << 15 {
+            self.scan_cache.clear();
+        }
         self.occl.upcoming = upcoming;
         self.occl.cursor = 0;
         self.op_index = 0;
@@ -704,33 +711,47 @@ impl Ctx {
 
     /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them), and the guest
     /// memory their commands write (inline uniform updates, reports).
-    unsafe fn scan_counters(handle: u64, depth: u32, index: &mut u64, out: &mut Vec<(u64, bool)>, writes: &mut Ranges) {
+    unsafe fn scan_counters(
+        handle: u64,
+        depth: u32,
+        index: &mut u64,
+        out: &mut Vec<(u64, bool)>,
+        writes: &mut Ranges,
+        cache: &mut rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan)>,
+    ) {
         let Some(list) = crate::nvn::api::command_list(handle, depth > 0) else { return };
+        // Lists without calls (most: TotK records each mesh's list once) are scanned once.
+        if list.summary().1.is_empty() {
+            let key = std::sync::Arc::as_ptr(&list) as usize;
+            let scan = &cache.entry(key).or_insert_with(|| (list.clone(), ListScan::of(&list))).1;
+            out.extend(scan.events.iter().map(|&(i, report)| (*index + i, report)));
+            for &(addr, len) in &scan.writes {
+                let a = crate::nvn::api::translate_virtual(addr as usize);
+                writes.add(a, a + len);
+            }
+            *index += scan.ops;
+            return;
+        }
         for op in &list.ops {
             match &op.typed {
                 Some(Cmd::CallCommands(hs)) if depth < 16 => {
                     for &h in hs.iter() {
-                        Self::scan_counters(h, depth + 1, index, out, writes);
+                        Self::scan_counters(h, depth + 1, index, out, writes, cache);
                     }
                     continue;
                 }
-                Some(Cmd::ResetCounter { counter: 1 }) => out.push((*index, false)),
-                Some(Cmd::ReportCounter { counter, addr }) => {
-                    if *counter == 1 {
-                        out.push((*index, true));
+                Some(c) => {
+                    if let Some((report, write)) = ListScan::classify(c) {
+                        if let Some(r) = report {
+                            out.push((*index, r));
+                        }
+                        if let Some((addr, len)) = write {
+                            let a = crate::nvn::api::translate_virtual(addr as usize);
+                            writes.add(a, a + len);
+                        }
                     }
-                    let a = crate::nvn::api::translate_virtual(*addr as usize);
-                    writes.add(a, a + 16);
                 }
-                Some(Cmd::ReportValue { addr, .. }) => {
-                    let a = crate::nvn::api::translate_virtual(*addr as usize);
-                    writes.add(a, a + 16);
-                }
-                Some(Cmd::UpdateUniformBuffer { addr, offset, data }) => {
-                    let a = crate::nvn::api::translate_virtual((*addr as i64 + *offset as i64) as usize);
-                    writes.add(a, a + data.len());
-                }
-                _ => {}
+                None => {}
             }
             *index += 1;
         }
@@ -1348,4 +1369,40 @@ unsafe fn new_timestamp_pool(dev: &Dev, supported: bool) -> vk::QueryPool {
     dev.device
         .create_query_pool(&vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(2 + PASS_TIMESTAMPS), None)
         .unwrap_or(vk::QueryPool::null())
+}
+
+/// What a list without calls contributes to a submit's pre-scan (Ctx::scan_counters): its command count, its counter
+/// resets (false) and reports (true) by command index in the list, and the guest memory its commands write.
+pub(super) struct ListScan {
+    ops: u64,
+    events: Vec<(u64, bool)>,
+    writes: Vec<(u64, usize)>,
+}
+
+impl ListScan {
+    fn of(list: &crate::nvn::api::RecordedCommandList) -> ListScan {
+        let mut s = ListScan { ops: list.ops.len() as u64, events: Vec::new(), writes: Vec::new() };
+        for (i, op) in list.ops.iter().enumerate() {
+            if let Some((report, write)) = op.typed.as_ref().and_then(Self::classify) {
+                if let Some(r) = report {
+                    s.events.push((i as u64, r));
+                }
+                if let Some(w) = write {
+                    s.writes.push(w);
+                }
+            }
+        }
+        s
+    }
+
+    /// A command's occlusion counter event and the guest memory it writes (untranslated address, length).
+    fn classify(c: &Cmd) -> Option<(Option<bool>, Option<(u64, usize)>)> {
+        match c {
+            Cmd::ResetCounter { counter: 1 } => Some((Some(false), None)),
+            Cmd::ReportCounter { counter, addr } => Some(((*counter == 1).then_some(true), Some((*addr, 16)))),
+            Cmd::ReportValue { addr, .. } => Some((None, Some((*addr, 16)))),
+            Cmd::UpdateUniformBuffer { addr, offset, data } => Some((None, Some(((*addr as i64 + *offset as i64) as u64, data.len())))),
+            _ => None,
+        }
+    }
 }
