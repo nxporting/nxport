@@ -390,7 +390,8 @@ impl Ctx {
         let has_stencil = format::aspects(depth_fmt).contains(vk::ImageAspectFlags::STENCIL) && depth_fmt != vk::Format::UNDEFINED;
         let ds = state::depth_stencil(self.st.depth_stencil.unwrap_or_else(state::default_depth_stencil), has_depth, has_stencil);
         let mask = self.st.channel_mask.unwrap_or(u32::MAX);
-        // Formats that cannot blend (integer targets) are written unblended, as the Switch GPU does.
+        // Targets the fragment stage does not write keep their contents (Apple GPUs store zeros there: write mask 0).
+        let written = fstage.map_or(u32::MAX, |f| f.outputs);
         let att: Vec<vk::PipelineColorBlendAttachmentState> = color_fmts
             .iter()
             .enumerate()
@@ -398,6 +399,8 @@ impl Ctx {
                 let a = state::attachment(i, self.st.blend[i], self.st.color_state, mask);
                 let blends = f != vk::Format::UNDEFINED
                     && self.dev.instance.get_physical_device_format_properties(self.dev.pdev, f).optimal_tiling_features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND);
+                let a = if written >> i & 1 != 0 { a } else { a.color_write_mask(vk::ColorComponentFlags::empty()) };
+                // Formats that cannot blend (integer targets) are written unblended, as the Switch GPU does.
                 if blends { a } else { a.blend_enable(false) }
             })
             .collect();
