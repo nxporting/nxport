@@ -46,6 +46,8 @@ static LAST_WAIT_NS: AtomicU64 = AtomicU64::new(0);
 static SUBMITS: AtomicU64 = AtomicU64::new(0);
 static ONE_SHOTS: AtomicU64 = AtomicU64::new(0);
 static ONE_SHOT_NS: AtomicU64 = AtomicU64::new(0);
+/// Pipelines created.
+static PIPELINES: AtomicU64 = AtomicU64::new(0);
 
 /// Recording and GPU wait time not yet reported on an fps line, in ms (replays report them at the end).
 pub fn timing() -> (f64, f64, f64, u64) {
@@ -105,7 +107,7 @@ impl Backend for Vulkan {
             if let Some(s) = *start {
                 let per_frame = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 50.0 / 1e6;
                 println!(
-                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame (GPU {:.1}), {} overlap flushes, {:.1} submits, {:.1} one-shots ({:.1} ms)",
+                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame (GPU {:.1}), {} overlap flushes, {:.1} submits, {:.1} one-shots ({:.1} ms), {:.1} pipelines created",
                     50.0 / now.duration_since(s).as_secs_f64(),
                     per_frame(&RECORD_NS),
                     per_frame(&WAIT_NS),
@@ -114,6 +116,7 @@ impl Backend for Vulkan {
                     SUBMITS.swap(0, Ordering::Relaxed) as f64 / 50.0,
                     ONE_SHOTS.swap(0, Ordering::Relaxed) as f64 / 50.0,
                     per_frame(&ONE_SHOT_NS),
+                    PIPELINES.swap(0, Ordering::Relaxed) as f64 / 50.0,
                 );
             }
             *start = Some(now);

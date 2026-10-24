@@ -431,6 +431,7 @@ impl Ctx {
             .dynamic_state(&dy)
             .layout(layout)
             .push_next(&mut ri);
+        crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pipe = match self.dev.device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) {
             Ok(p) => p[0],
             Err((_, e)) => {

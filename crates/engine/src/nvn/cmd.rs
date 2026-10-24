@@ -767,10 +767,11 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindColorState(cmd: usize, s: *cons
     rec!(
         "nvnCommandBufferBindColorState",
         cmd,
+        // Only bits 0..17 are state (nvn::state::ColorState).
         Cmd::BindColorState(if s.is_null() {
             0
         } else {
-            std::ptr::read_unaligned(s)
+            std::ptr::read_unaligned(s) & 0x1FFFF
         })
     );
 }
@@ -819,10 +820,11 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindPolygonState(cmd: usize, s: *co
     rec!(
         "nvnCommandBufferBindPolygonState",
         cmd,
+        // Only bits 0..8 are state (nvn::state::PolygonState); TotK's objects carry varying bytes above them.
         Cmd::BindPolygonState(if s.is_null() {
             0
         } else {
-            std::ptr::read_unaligned(s)
+            std::ptr::read_unaligned(s) & 0xFF
         })
     );
 }
