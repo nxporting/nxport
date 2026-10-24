@@ -3398,15 +3398,8 @@ impl Gfx {
         rgba: [f32; 4],
         mask: i32,
     ) {
-        if mask != 0xF || index < 0 || index as usize >= st.colors.len() {
-            static WARNED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            if mask != 0xF && WARNED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
-                println!(
-                    "[!] Gfx: partial-channel clear dropped: c{} mask {:#x} rgba {:?}",
-                    index, mask, rgba
-                );
-            }
-            return; // partial-channel clears need a draw; not needed yet
+        if index < 0 || index as usize >= st.colors.len() {
+            return;
         }
         let rt = st.colors[index as usize];
         let Some(tex) = self.texture(&mut st.tc, rt.texture) else {
@@ -3431,7 +3424,31 @@ impl Gfx {
         if !is_color_renderable(&tex) {
             return; // e.g. a compressed or depth texture named as a color target; Metal would abort
         }
-        let _ = cb;
+        // Clears are scissored (TotK clears its Depths lit-area mask in 50x50 tiles, each followed by that tile's
+        // drawing) and channel-masked: those are drawn over the scissor rectangle, in order with everything else.
+        // Whole-level clears of all channels stay deferred, to be folded into the next pass.
+        let level = rt.level as usize;
+        let (lw, lh) = ((tex.width() >> level).max(1), (tex.height() >> level).max(1));
+        let (sx, sy, sw, sh) = st.scissor.unwrap_or((0, 0, lw as i32, lh as i32));
+        let scissored = sx > 0 || sy > 0 || (sx + sw) < lw as i32 || (sy + sh) < lh as i32;
+        if scissored || mask & 0xF != 0xF {
+            if mask & 0xF == 0 || sw <= 0 || sh <= 0 || sx >= lw as i32 || sy >= lh as i32 {
+                return;
+            }
+            self.end_encoder(st);
+            let (x0, y0) = (sx.max(0), sy.max(0));
+            let region = crate::nvn::cmd::Region {
+                x: x0,
+                y: y0,
+                z: rt.layer as i32,
+                w: (sx + sw).min(lw as i32) - x0,
+                h: (sy + sh).min(lh as i32) - y0,
+                d: 1,
+            };
+            let dst = crate::nvn::cmd::TexRef { texture: rt.texture, gen: rt.gen, level: rt.level, layer: rt.layer };
+            self.clear_region(st, cb, &tex, &dst, &region, &rgba.map(f32::to_bits), mask, level, (lw, lh));
+            return;
+        }
         let root = cached_root_id(st, &tex);
         if st
             .enc_targets
