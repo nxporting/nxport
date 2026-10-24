@@ -685,7 +685,24 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
     }
 }
 
-/// Whether [addr, addr+len) touches a held page.
+/// Whether [addr, addr+len) touches a held page (reading it directly would fault).
+fn overlaps_held_pages(addr: usize, len: usize) -> bool {
+    if LIVE.load(Ordering::Acquire) == 0
+        || addr >= HI.load(Ordering::Relaxed)
+        || addr + len <= LO.load(Ordering::Relaxed)
+    {
+        return false;
+    }
+    let n = HIGH.load(Ordering::Acquire).min(SLOTS);
+    (0..n).any(|i| {
+        STATE[i].load(Ordering::Acquire) == HELD
+            && START[i].load(Ordering::Acquire) < addr + len
+            && END[i].load(Ordering::Acquire) > addr
+    })
+}
+
+/// Whether [addr, addr+len) overlaps the bytes of a held subresource (sharing a page with one is not enough: the
+/// texture refresh skipped CPU-written textures next to a held target, whose CPU writes then never reached Metal).
 pub(crate) fn overlaps_held(addr: usize, len: usize) -> bool {
     if LIVE.load(Ordering::Acquire) == 0
         || addr >= HI.load(Ordering::Relaxed)
@@ -697,8 +714,8 @@ pub(crate) fn overlaps_held(addr: usize, len: usize) -> bool {
     n != 0
         && (0..n).any(|i| {
             STATE[i].load(Ordering::Acquire) == HELD
-                && START[i].load(Ordering::Acquire) < addr + len
-                && END[i].load(Ordering::Acquire) > addr
+                && BSTART[i].load(Ordering::Acquire) < addr + len
+                && BEND[i].load(Ordering::Acquire) > addr
         })
 }
 
@@ -706,7 +723,7 @@ pub(crate) fn overlaps_held(addr: usize, len: usize) -> bool {
 /// range touches a held page (reading it directly would end the hold), else None (read it in place).
 pub(crate) unsafe fn guest_copy<T: Copy + Default>(addr: usize, n: usize) -> Option<Vec<T>> {
     let len = n * std::mem::size_of::<T>();
-    if !overlaps_held(addr, len) {
+    if !overlaps_held_pages(addr, len) {
         return None;
     }
     let mut v = vec![T::default(); n];
@@ -717,7 +734,7 @@ pub(crate) unsafe fn guest_copy<T: Copy + Default>(addr: usize, n: usize) -> Opt
 /// Runs `f` with the held pages of [addr, addr+len) accessible (Metal refuses a no-copy buffer over inaccessible pages;
 /// one made before they are protected keeps working), then protects them again.
 pub(crate) unsafe fn with_open<R>(addr: usize, len: usize, f: impl FnOnce() -> R) -> R {
-    if !overlaps_held(addr, len) {
+    if !overlaps_held_pages(addr, len) {
         return f();
     }
     let (start, end) = (addr & !(PAGE - 1), (addr + len + PAGE - 1) & !(PAGE - 1));
