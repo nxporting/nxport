@@ -145,6 +145,11 @@ pub struct Ctx {
     /// Index of the command being executed in this submit (in run_list order).
     op_index: u64,
     inflight: std::collections::VecDeque<InFlight>,
+    /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
+    /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
+    pool: vk::CommandPool,
+    pool_tx: std::sync::mpsc::Sender<(vk::CommandPool, Vec<vk::CommandBuffer>)>,
+    free_pools: std::sync::Arc<std::sync::Mutex<Vec<vk::CommandPool>>>,
     /// Query and descriptor pools of retired submits, for reuse.
     free_occl: Vec<vk::QueryPool>,
     free_timestamps: Vec<vk::QueryPool>,
@@ -265,6 +270,7 @@ impl Occlusion {
 /// A submit the GPU may still be running, with what it uses: freed once its serial completed (inflight.rs).
 struct InFlight {
     serial: u64,
+    pool: vk::CommandPool,
     cbs: Vec<vk::CommandBuffer>,
     desc_pools: Vec<vk::DescriptorPool>,
     chunks: Vec<super::device::HostBuffer>,
@@ -302,6 +308,21 @@ impl Ctx {
         let timestamps_supported = dev.limits.timestamp_compute_and_graphics != 0;
         let timestamps = unsafe { new_timestamp_pool(&dev, timestamps_supported) };
         super::inflight::start(dev.device.clone(), dev.limits.timestamp_period);
+        let free_pools: std::sync::Arc<std::sync::Mutex<Vec<vk::CommandPool>>> = Default::default();
+        let (pool_tx, pool_rx) = std::sync::mpsc::channel::<(vk::CommandPool, Vec<vk::CommandBuffer>)>();
+        {
+            let device = dev.device.clone();
+            let free = free_pools.clone();
+            std::thread::Builder::new()
+                .name("vk-pool-free".into())
+                .spawn(move || {
+                    while let Ok((pool, cbs)) = pool_rx.recv() {
+                        unsafe { device.free_command_buffers(pool, &cbs) };
+                        free.lock().unwrap().push(pool);
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+        }
         let zeros = unsafe {
             let usage = vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER;
             let b = dev.host_buffer(ZEROS, usage)?;
@@ -376,6 +397,9 @@ impl Ctx {
             chunk_start: std::time::Instant::now(),
             op_index: 0,
             inflight: Default::default(),
+            pool: vk::CommandPool::null(),
+            pool_tx,
+            free_pools,
             free_occl: Vec::new(),
             free_timestamps: Vec::new(),
             free_desc_pools: Vec::new(),
@@ -414,9 +438,23 @@ impl Ctx {
             super::inflight::wait(oldest, u64::MAX);
             self.retire();
         }
+        let pool = self.free_pools.lock().unwrap().pop();
+        self.pool = match pool {
+            Some(p) => p,
+            None => match self.dev.device.create_command_pool(
+                &vk::CommandPoolCreateInfo::default().queue_family_index(self.dev.family).flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                None,
+            ) {
+                Ok(p) => p,
+                Err(_) => {
+                    super::inflight::watch(empty(serial));
+                    return;
+                }
+            },
+        };
         let d = &self.dev.device;
         let Ok(cbs) = d.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::default().command_pool(self.dev.cmd_pool).command_buffer_count(1),
+            &vk::CommandBufferAllocateInfo::default().command_pool(self.pool).command_buffer_count(1),
         ) else {
             super::inflight::watch(empty(serial));
             return;
@@ -496,6 +534,7 @@ impl Ctx {
         self.occl.next = 0;
         self.inflight.push_back(InFlight {
             serial,
+            pool: self.pool,
             cbs,
             desc_pools: std::mem::take(&mut self.desc_pools),
             chunks: self.arena.take_used(),
@@ -521,7 +560,8 @@ impl Ctx {
         while self.inflight.front().is_some_and(|f| f.serial <= done) {
             let f = self.inflight.pop_front().unwrap();
             let d = &self.dev.device;
-            d.free_command_buffers(self.dev.cmd_pool, &f.cbs);
+            // Freeing MoltenVK command buffers releases every recorded command: done on another thread.
+            let _ = self.pool_tx.send((f.pool, f.cbs));
             for p in f.desc_pools {
                 if d.reset_descriptor_pool(p, vk::DescriptorPoolResetFlags::empty()).is_ok() {
                     self.free_desc_pools.push(p);
@@ -996,7 +1036,7 @@ impl Ctx {
     unsafe fn submit_chunk(&mut self) {
         let d = &self.dev.device;
         let Ok(next) =
-            d.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(self.dev.cmd_pool).command_buffer_count(1))
+            d.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(self.pool).command_buffer_count(1))
         else {
             return;
         };
