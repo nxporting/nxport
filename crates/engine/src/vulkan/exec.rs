@@ -233,7 +233,7 @@ impl Ctx {
             programs: HashMap::new(),
             tex: Textures::default(),
             imports: Imports::default(),
-            arena: Arena { chunks: Vec::new(), used: 0, align },
+            arena: Arena { chunks: Vec::new(), cur: 0, used: 0, align },
             stages: HashMap::new(),
             failed_stages: HashSet::new(),
             pipelines: HashMap::new(),

@@ -171,6 +171,8 @@ fn ppm(t: &Texels) -> Vec<u8> {
 /// Per-submit host memory for copies (uniform buffers, support and driver buffers, data the device cannot import).
 pub(crate) struct Arena {
     chunks: Vec<device::HostBuffer>,
+    /// The chunk being filled and how much of it is used.
+    cur: usize,
     used: u64,
     align: u64,
 }
@@ -180,9 +182,19 @@ impl Arena {
 
     unsafe fn alloc(&mut self, dev: &device::Dev, len: usize) -> Option<(vk::Buffer, u64, *mut u8)> {
         let len = (len as u64).max(16);
-        let off = self.used.next_multiple_of(self.align);
-        let fits = self.chunks.last().is_some_and(|c| off + len <= c.size);
-        if !fits {
+        loop {
+            let off = self.used.next_multiple_of(self.align);
+            if let Some(c) = self.chunks.get(self.cur) {
+                if off + len <= c.size {
+                    self.used = off + len;
+                    return Some((c.buffer, off, c.ptr.add(off as usize)));
+                }
+                if self.cur + 1 < self.chunks.len() {
+                    self.cur += 1;
+                    self.used = 0;
+                    continue;
+                }
+            }
             let usage = vk::BufferUsageFlags::UNIFORM_BUFFER
                 | vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::VERTEX_BUFFER
@@ -192,12 +204,9 @@ impl Arena {
             let chunk = dev.host_buffer(Self::CHUNK.max(len), usage).ok()?;
             std::ptr::write_bytes(chunk.ptr, 0, chunk.size as usize);
             self.chunks.push(chunk);
+            self.cur = self.chunks.len() - 1;
             self.used = 0;
-            return self.alloc(dev, len as usize);
         }
-        let c = self.chunks.last().unwrap();
-        self.used = off + len;
-        Some((c.buffer, off, c.ptr.add(off as usize)))
     }
 
     /// A copy of `data`.
@@ -207,12 +216,19 @@ impl Arena {
         Some((b, off))
     }
 
-    /// Keeps the first chunk for the next submit.
+    /// The next submit fills the chunks again from the start (they stay allocated: making and zeroing 64 MB chunks for
+    /// every submit was a visible part of recording); oversized ones are freed.
     unsafe fn reset(&mut self, dev: &device::Dev) {
-        while self.chunks.len() > 1 {
-            let c = self.chunks.pop().unwrap();
-            dev.free_host_buffer(&c);
+        let mut i = 0;
+        while i < self.chunks.len() {
+            if self.chunks[i].size > Self::CHUNK {
+                let c = self.chunks.remove(i);
+                dev.free_host_buffer(&c);
+            } else {
+                i += 1;
+            }
         }
+        self.cur = 0;
         self.used = 0;
     }
 }
