@@ -4465,6 +4465,8 @@ impl Gfx {
                 // Inline storage for the per-draw temporaries: heap allocations were ~6% of the encoding thread.
                 let mut color_texs: smallvec::SmallVec<[(usize, Tex, RtRef); 8]> =
                     smallvec::SmallVec::new();
+                let mut bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]> =
+                    smallvec::SmallVec::new();
                 let ncolors = st.colors.len().min(8);
                 for i in 0..ncolors {
                     let rt = &st.colors[i].clone();
@@ -4475,14 +4477,9 @@ impl Gfx {
                         // GPU texture compression: the game renders compressed blocks through an integer view of a BCn texture.
                         Some(t) if rt.view_format != 0 && self.bc_proxy(st, &t, rt).is_some() => {
                             let p = self.bc_proxy(st, &t, rt).unwrap();
-                            if !st
-                                .bc_pending
-                                .iter()
-                                .any(|(q, _, _)| Retained::as_ptr(q) == Retained::as_ptr(&p))
-                            {
-                                st.bc_pending
-                                    .push((p.clone(), t.clone(), rt.level as usize));
-                            }
+                            // Registered for resolve_bc_proxies when the pass opens: the previous pass ends after this
+                            // point and would copy the proxy before anything was drawn into it.
+                            bc.push((p.clone(), t.clone(), rt.level as usize));
                             // The proxy is that one level (single-mip texture; resolve_bc_proxies copies it into rt.level of the
                             // target): attach its level 0. Attaching rt.level was out of range (Metal validation abort; undefined
                             // without validation, so GPU-compressed mips above 0 were never rendered correctly).
@@ -4635,6 +4632,7 @@ impl Gfx {
                         depth_pf,
                         enc_key,
                         target_size,
+                        bc,
                     }),
                     targetless,
                 )
@@ -5000,6 +4998,15 @@ impl Gfx {
                 .map(|(t, d)| (t.clone(), d.layer as usize, d.level as usize));
             st.enc_draws = 0;
             st.enc = Some(st.issuer.clone());
+            for (p, t, level) in &rts.bc {
+                if !st
+                    .bc_pending
+                    .iter()
+                    .any(|(q, _, _)| Retained::as_ptr(q) == Retained::as_ptr(p))
+                {
+                    st.bc_pending.push((p.clone(), t.clone(), *level));
+                }
+            }
             st.enc_fb_epoch = st.fb_epoch;
             st.cx.ec = EncCache::default();
             // --no-enc-cache: every draw sets all state (A/B).

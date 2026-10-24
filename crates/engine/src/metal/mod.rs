@@ -75,6 +75,8 @@ pub(super) struct CachedPassRts {
     pub(super) depth_pf: MTLPixelFormat,
     pub(super) enc_key: smallvec::SmallVec<[u64; 36]>,
     pub(super) target_size: (f64, f64),
+    /// Block-compressed targets rendered through proxies: (proxy, target, level), see `bc_proxy`.
+    pub(super) bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]>,
 }
 
 pub(crate) struct State {
