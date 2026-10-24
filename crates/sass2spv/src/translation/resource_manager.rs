@@ -58,7 +58,7 @@ pub fn shader_stage_prefix(stage: ShaderStage) -> &'static str {
 impl ResourceManager {
     /// `support_set`: the descriptor set of the support buffer (GpuAccessor::set_for(0)); `cbuf_limits`: it holds the
     /// constant buffers' bound sizes (Host::cbuf_limits).
-    pub fn new(stage: ShaderStage, support_set: i32, cbuf_limits: bool) -> ResourceManager {
+    pub fn new(stage: ShaderStage, support_set: i32, cbuf_limits: bool, sampler_slots: bool) -> ResourceManager {
         let unset = SetBindingPair::new(-1, -1);
         let mut rm = ResourceManager {
             stage,
@@ -79,7 +79,7 @@ impl ResourceManager {
             set: support_set,
             binding: SUPPORT_BUFFER_BINDING,
             name: "support_buffer".into(),
-            ty: crate::translation::properties::support_buffer_structure_type_for(cbuf_limits),
+            ty: crate::translation::properties::support_buffer_structure_type_for(cbuf_limits, sampler_slots),
         });
         rm
     }

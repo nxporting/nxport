@@ -49,6 +49,9 @@ pub struct Host {
     /// function reading a varying its vertex function does not write, while the Switch GPU leaves it undefined. None:
     /// every input is linked.
     pub fragment_inputs: Option<u32>,
+    /// Samplers a stage may bind (0: no limit). A stage needing more samples its textures through a sampler table
+    /// (properties::sampler_table_plan): Metal without argument buffers (MoltenVK) has 16 per stage.
+    pub sampler_slots: u32,
 }
 
 impl Default for Host {
@@ -66,6 +69,7 @@ impl Default for Host {
             stage_set: None,
             binding_base: 0,
             fragment_inputs: None,
+            sampler_slots: 0,
         }
     }
 }

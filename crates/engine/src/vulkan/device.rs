@@ -113,12 +113,17 @@ impl Dev {
             }
             // MoltenVK: vkQueueSubmit encodes the Metal commands on its own thread instead of the caller's (the
             // Presentation Thread records the next commands meanwhile).
+            // Descriptor sets bound directly instead of through Metal argument buffers, which cost GPU time per draw
+            // (Hateno: ~17% of the frame); stages needing more than Metal's 16 samplers then use a sampler table
+            // (Host::sampler_slots).
             let off: i32 = 0;
             let settings: Vec<vk::LayerSettingEXT> = [
                 c"MVK_CONFIG_FAST_MATH_ENABLED",
                 c"FAST_MATH_ENABLED",
                 c"MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS",
                 c"SYNCHRONOUS_QUEUE_SUBMITS",
+                c"MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS",
+                c"USE_METAL_ARGUMENT_BUFFERS",
             ]
             .iter()
             .map(|name| vk::LayerSettingEXT {
@@ -262,6 +267,7 @@ impl Dev {
                 stage_set: None,
                 binding_base: 0,
                 fragment_inputs: None,
+                sampler_slots: 0,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
@@ -373,7 +379,13 @@ impl Dev {
                 validation,
                 // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
                 // after it in memory): the shaders check them.
-                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, reduced_precision: has_portability, ..shader_host },
+                shader_host: sass2spv::accessor::Host {
+                    depth_clip_control,
+                    cbuf_limits: has_portability,
+                    reduced_precision: has_portability,
+                    sampler_slots: if has_portability { 16 } else { 0 },
+                    ..shader_host
+                },
                 vertex_align,
                 beyond_stride,
                 discard_writes_depth: has_portability,

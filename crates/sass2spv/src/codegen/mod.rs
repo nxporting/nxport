@@ -32,6 +32,7 @@ pub struct HostCapabilities {
     pub cbuf_limits: bool,
     pub binding_base: i32,
     pub fragment_inputs: Option<u32>,
+    pub sampler_slots: u32,
 }
 
 #[derive(Clone)]
@@ -41,6 +42,9 @@ pub struct SamplerDeclaration {
     pub sampled_image_pointer_type: Inst,
     pub image: Inst,
     pub is_indexed: bool,
+    /// Sampled through the sampler table (HostCapabilities::sampler_slots): its first texture slot. `image` is then a
+    /// separate image and `sampled_image_pointer_type` points to `image_type`.
+    pub table_slot: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -70,6 +74,8 @@ pub struct CodeGenContext<'a> {
     pub shared_memories: HashMap<i32, Inst>,
     pub samplers_types: HashMap<SetBindingPair, SamplerType>,
     pub samplers: HashMap<SetBindingPair, SamplerDeclaration>,
+    /// The sampler table (HostCapabilities::sampler_slots): its variable, the sampler type and a pointer to one sampler.
+    pub sampler_table: Option<(Inst, Inst, Inst)>,
     pub images: HashMap<SetBindingPair, ImageDeclaration>,
     pub inputs: NetMap<IoDefinition, Inst>,
     pub outputs: NetMap<IoDefinition, Inst>,
@@ -492,6 +498,7 @@ pub fn generate(
         shared_memories: HashMap::new(),
         samplers_types: HashMap::new(),
         samplers: HashMap::new(),
+        sampler_table: None,
         images: HashMap::new(),
         inputs: NetMap::new(),
         outputs: NetMap::new(),

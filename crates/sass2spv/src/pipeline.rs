@@ -21,6 +21,9 @@ pub struct ShaderProgramInfo {
     pub stage: ShaderStage,
     pub uses_instance_id: bool,
     pub uses_draw_parameters: bool,
+    /// The sampler table (Host::sampler_slots; properties::sampler_table_plan): its size and the first texture slot of
+    /// each texture binding sampled through it.
+    pub sampler_table: Option<(u32, Vec<(i32, i32)>)>,
 }
 
 /// Entry point name for callers that name the entry after translating (the name can depend on the translated size).
@@ -98,7 +101,14 @@ pub fn translate_functions(
         stage: d.tc.definitions.stage,
         uses_instance_id: used_features.has(FeatureFlags::INSTANCE_ID),
         uses_draw_parameters: used_features.has(FeatureFlags::DRAW_PARAMETERS),
+        sampler_table: None,
     };
+    let kinds: Vec<(i32, i32, crate::translation::properties::TextureKind)> = info
+        .textures
+        .iter()
+        .map(|t| (t.binding, t.array_length, crate::translation::properties::TextureKind::of(t.ty, t.separate)))
+        .collect();
+    let info = ShaderProgramInfo { sampler_table: crate::translation::properties::sampler_table_plan(&kinds, d.tc.gpu.host.sampler_slots), ..info };
     let gpu = &d.tc.gpu;
     let host = HostCapabilities {
         reduced_precision: gpu.host_reduced_precision(),
@@ -112,6 +122,7 @@ pub fn translate_functions(
         cbuf_limits: gpu.host.cbuf_limits,
         binding_base: gpu.host.binding_base,
         fragment_inputs: gpu.host.fragment_inputs,
+        sampler_slots: gpu.host.sampler_slots,
     };
     let (binary_code, msl) = match target {
         Target::Spirv => (codegen::generate(&mut s_info, &d.tc.definitions, &rm.properties, &host)?, String::new()),
