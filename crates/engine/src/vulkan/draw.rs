@@ -507,6 +507,18 @@ impl Ctx {
                             (u64::from_le_bytes(c[o..o + 8].try_into().unwrap()), u32::from_le_bytes(c[o + 8..o + 12].try_into().unwrap()) as usize)
                         })
                     });
+                    // Only the driver's descriptors (constant buffer 0) carry a size; in the game's own buffers the
+                    // word after the address is whatever the game keeps there (TotK's Depths walls: a texture handle,
+                    // read as 258 MB). Those are sized by the memory mapped from the address, at most 1 MiB, as
+                    // Ryujinx does (StateUpdater: GetMappedSize, MaxUnknownStorageSize).
+                    let desc = desc.and_then(|(addr, size)| {
+                        if *cb_slot == 0 {
+                            return Some((addr, size));
+                        }
+                        let a = crate::nvn::api::translate_virtual(addr as usize);
+                        let (base, len) = crate::nvn::api::find_memory_pool(a)?;
+                        Some((addr, (base + len - a).min(1 << 20)))
+                    });
                     let info = match desc {
                         Some((addr, size)) if addr > 0x10000 && size > 0 => self.storage_buffer(addr as usize, size),
                         _ => None,

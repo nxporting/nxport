@@ -34,6 +34,12 @@ pub struct Vulkan {
 static RECORD_NS: AtomicU64 = AtomicU64::new(0);
 static WAIT_NS: AtomicU64 = AtomicU64::new(0);
 
+/// Recording and GPU wait time not yet reported on an fps line, in ms (replays report them at the end).
+pub fn timing() -> (f64, f64) {
+    let ms = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 1e6;
+    (ms(&RECORD_NS), ms(&WAIT_NS))
+}
+
 pub static VULKAN: Vulkan = Vulkan {
     ctx: Mutex::new(None),
     serial: AtomicU64::new(0),

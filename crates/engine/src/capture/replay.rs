@@ -38,6 +38,9 @@ pub struct Options {
     /// (pass, k): run pass `pass` only up to its k-th draw (counting from 1) and stop there (finding the draw where two
     /// backends part: record on one, check on the other, bisect k).
     pub cut_draw: Option<(usize, u32)>,
+    /// Then run the whole frame this many more times as one submit and report its time (steady state: shaders and
+    /// pipelines made, images uploaded).
+    pub repeat: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -572,6 +575,24 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     );
     for n in &report.notes {
         println!("[gpu-replay] {n}");
+    }
+    if opts.repeat > 0 {
+        handle += 1;
+        crate::nvn::api::insert_command_list(handle, ops.clone());
+        let mut times = Vec::new();
+        for _ in 0..opts.repeat {
+            let t = std::time::Instant::now();
+            gpu.submit(&[handle]);
+            gpu.wait_serial(gpu.submitted_serial(), u64::MAX);
+            times.push(t.elapsed().as_secs_f64() * 1e3);
+        }
+        times.sort_by(|a, b| a.total_cmp(b));
+        println!(
+            "[gpu-replay] whole frame {} times: min {:.1} ms, median {:.1} ms",
+            times.len(),
+            times[0],
+            times[times.len() / 2]
+        );
     }
     Ok(report)
 }

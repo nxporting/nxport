@@ -82,6 +82,26 @@ impl Dev {
             // Validation includes synchronization validation (hazards between commands).
             let enables = [vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION];
             let mut vf = vk::ValidationFeaturesEXT::default().enabled_validation_features(&enables);
+            // MoltenVK: shaders compiled without fast math (guest shaders rely on inf / NaN; with fast math TotK's
+            // frames come out black on the Metal path).
+            let layer_settings_ext = c"VK_EXT_layer_settings";
+            let layer_settings = has(&inst_exts, layer_settings_ext);
+            if layer_settings {
+                exts.push(layer_settings_ext.as_ptr());
+            }
+            let never: i32 = 0;
+            let settings: Vec<vk::LayerSettingEXT> = [c"MVK_CONFIG_FAST_MATH_ENABLED", c"FAST_MATH_ENABLED"]
+                .iter()
+                .map(|name| vk::LayerSettingEXT {
+                    p_layer_name: c"MoltenVK".as_ptr(),
+                    p_setting_name: name.as_ptr(),
+                    ty: vk::LayerSettingTypeEXT::INT32,
+                    value_count: 1,
+                    p_values: &never as *const i32 as *const std::ffi::c_void,
+                    ..Default::default()
+                })
+                .collect();
+            let mut lsi = vk::LayerSettingsCreateInfoEXT { setting_count: settings.len() as u32, p_settings: settings.as_ptr(), ..Default::default() };
             let mut ici = vk::InstanceCreateInfo::default()
                 .application_info(&app)
                 .enabled_extension_names(&exts)
@@ -89,6 +109,9 @@ impl Dev {
                 .flags(flags);
             if validation {
                 ici = ici.push_next(&mut vf);
+            }
+            if layer_settings {
+                ici = ici.push_next(&mut lsi);
             }
             let instance = entry
                 .create_instance(&ici, None)
@@ -201,6 +224,7 @@ impl Dev {
                 draw_parameters: q11.shader_draw_parameters != 0,
                 discard_writes_depth: false,
                 cbuf_limits: false,
+                reduced_precision: false,
                 stage_set: None,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
@@ -303,7 +327,7 @@ impl Dev {
                 validation,
                 // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
                 // after it in memory): the shaders check them.
-                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, ..shader_host },
+                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, reduced_precision: has_portability, ..shader_host },
                 vertex_align,
                 beyond_stride,
                 discard_writes_depth: has_portability,

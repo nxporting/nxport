@@ -287,7 +287,10 @@ pub fn replay_capture(
     let s = settings::install(s);
     if vulkan {
         vulkan::init(s.debug.validate)?;
-        return capture::replay::run(dir, opts);
+        let r = capture::replay::run(dir, opts);
+        let (record, wait) = vulkan::timing();
+        println!("[gpu-replay] vulkan: recording {record:.1} ms, GPU wait {wait:.1} ms (all passes)");
+        return r;
     }
     #[cfg(nx_native)]
     {

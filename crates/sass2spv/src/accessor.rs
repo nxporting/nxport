@@ -34,6 +34,10 @@ pub struct Host {
     /// host writes into the support buffer (properties::SUPPORT_CBUF_LIMITS_OFFSET): for hosts whose bounds checking does
     /// not cover uniform buffers (MoltenVK). SPIR-V only; the Metal path's msl_specialize does its own.
     pub cbuf_limits: bool,
+    /// No NoContraction on floating-point results, invariant positions: for hosts whose shader compiler turns
+    /// NoContraction into unoptimized calls (MoltenVK's SPIRV-Cross, one call per add or multiply; the Metal path's
+    /// msl_specialize strips them the same way).
+    pub reduced_precision: bool,
     /// Every resource of the stage in this descriptor set, textures numbered from TEXTURE_BASE_ONE_SET (Vulkan, one set
     /// per stage). None: Ryujinx's sets (uniform buffers 0, images 1, storage buffers 2, textures 3).
     pub stage_set: Option<i32>,
@@ -50,6 +54,7 @@ impl Default for Host {
             draw_parameters: true,
             discard_writes_depth: false,
             cbuf_limits: false,
+            reduced_precision: false,
             stage_set: None,
         }
     }
@@ -275,7 +280,7 @@ impl GpuAccessor {
         0
     }
     pub fn host_reduced_precision(&self) -> bool {
-        false
+        self.host.reduced_precision
     }
     pub fn host_has_front_facing_bug(&self) -> bool {
         false
