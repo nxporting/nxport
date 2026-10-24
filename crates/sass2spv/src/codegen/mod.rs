@@ -76,6 +76,8 @@ pub struct CodeGenContext<'a> {
     pub samplers: HashMap<SetBindingPair, SamplerDeclaration>,
     /// The sampler table (HostCapabilities::sampler_slots): its variable, the sampler type and a pointer to one sampler.
     pub sampler_table: Option<(Inst, Inst, Inst)>,
+    /// Bytes of each constant buffer binding the stage reads (literal offsets), -1 when it indexes one at run time.
+    pub cbuf_extents: std::collections::BTreeMap<i32, i32>,
     pub images: HashMap<SetBindingPair, ImageDeclaration>,
     pub inputs: NetMap<IoDefinition, Inst>,
     pub outputs: NetMap<IoDefinition, Inst>,
@@ -432,7 +434,7 @@ pub fn generate(
     definitions: &ShaderDefinitions,
     properties: &ShaderProperties,
     host: &HostCapabilities,
-) -> R<Vec<u8>> {
+) -> R<(Vec<u8>, std::collections::BTreeMap<i32, i32>)> {
     let mut m = Module::new(SPIRV_VERSION_PACKED);
     m.add_capability(Capability::SHADER);
     m.set_memory_model(AddressingModel::LOGICAL, MemoryModel::GLSL450);
@@ -499,6 +501,7 @@ pub fn generate(
         samplers_types: HashMap::new(),
         samplers: HashMap::new(),
         sampler_table: None,
+        cbuf_extents: Default::default(),
         images: HashMap::new(),
         inputs: NetMap::new(),
         outputs: NetMap::new(),
@@ -532,7 +535,8 @@ pub fn generate(
     for func_index in 0..info.functions.len() {
         generate_function(&mut c, func_index)?;
     }
-    Ok(c.m.generate())
+    let extents = std::mem::take(&mut c.cbuf_extents);
+    Ok((c.m.generate(), extents))
 }
 
 fn generate_function(c: &mut CodeGenContext, func_index: usize) -> R<()> {

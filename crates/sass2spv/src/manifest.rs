@@ -29,6 +29,13 @@ fn bool_or_int<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error>
 pub struct ManifestCBuffer {
     pub binding: u32,
     pub slot: i32,
+    /// Bytes the stage reads at literal offsets; -1 when it indexes the buffer at run time or the extent is unknown.
+    #[serde(default = "unknown_extent")]
+    pub extent: i32,
+}
+
+fn unknown_extent() -> i32 {
+    -1
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +95,15 @@ impl ShaderProgram {
             stage: Some(i.stage.to_string()),
             uses_instance_id: i.uses_instance_id,
             uses_draw_parameters: i.uses_draw_parameters,
-            cbuffers: i.cbuffers.iter().map(|b| ManifestCBuffer { binding: b.binding as u32, slot: b.slot as i32 }).collect(),
+            cbuffers: i
+                .cbuffers
+                .iter()
+                .map(|b| ManifestCBuffer {
+                    binding: b.binding as u32,
+                    slot: b.slot as i32,
+                    extent: i.cbuf_extents.iter().find(|e| e.0 == b.binding).map_or(if i.cbuf_extents.is_empty() { -1 } else { 0 }, |e| e.1),
+                })
+                .collect(),
             sbuffers: i
                 .sbuffers
                 .iter()

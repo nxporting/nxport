@@ -594,29 +594,50 @@ impl Ctx {
                             }
                         }
                     }
+                    // In place (as the Metal backend binds them) unless this submit's commands write that memory: the
+                    // write guard holds the pages while the GPU reads them, and the shader checks the bound size.
+                    if *slot >= 3 {
+                        if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
+                            let a = crate::nvn::api::translate_virtual(addr as usize);
+                            let len = size.min(0x10000);
+                            if a > 0x10000 && len > 0 && !self.cmd_writes.overlaps(a, a + len) && !crate::vulkan::guard::hot(a, len) {
+                                if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
+                                    if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
+                                        crate::vulkan::guard::note_read(a, len);
+                                        limits.push((b.binding - base, len));
+                                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len as u64 }));
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let bytes = cbuf(self, *slot);
                     let x = match &bytes {
                         // The driver buffer changes per draw; others are copied once per contents (the same memory
                         // with no write by this submit's commands in between).
+                        // Only what the stage reads at literal offsets (all of it when it indexes at run time); the bound
+                        // size still goes to the shader's check.
                         Some(v) if *slot != 0 => {
-                            let key = (v.as_ptr() as usize, v.len(), self.ubo_epoch);
+                            let n = if b.extent >= 0 { (b.extent as usize).max(16).min(v.len()) } else { v.len() };
+                            let key = (v.as_ptr() as usize, n, self.ubo_epoch);
                             match self.ubo_copies.get(&key) {
-                                Some(&(b, o)) => Some((b, o, v.len() as u64)),
+                                Some(&(b, o)) => Some((b, o, n as u64, v.len())),
                                 None => {
-                                    let c = self.arena.copy(&self.dev, v);
+                                    let c = self.arena.copy(&self.dev, &v[..n]);
                                     if let Some(c) = c {
                                         self.ubo_copies.insert(key, c);
                                     }
-                                    c.map(|(b, o)| (b, o, v.len() as u64))
+                                    c.map(|(b, o)| (b, o, n as u64, v.len()))
                                 }
                             }
                         }
-                        Some(v) => self.arena.copy(&self.dev, v).map(|(b, o)| (b, o, v.len() as u64)),
-                        None => zero.map(|(b, o)| (b, o, 256)),
+                        Some(v) => self.arena.copy(&self.dev, v).map(|(b, o)| (b, o, v.len() as u64, v.len())),
+                        None => zero.map(|(b, o)| (b, o, 256, 256)),
                     };
-                    if let Some((buf, off, len)) = x {
-                        limits.push((b.binding - base, len as usize));
-                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len }));
+                    if let Some((buf, off, len, bound)) = x {
+                        limits.push((b.binding - base, bound));
+                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
                     }
                 }
                 Feed::Sbuf { cb_slot, cb_offset } => {

@@ -31,6 +31,8 @@ pub struct Binding {
     pub ty: vk::DescriptorType,
     pub count: u32,
     pub feed: Feed,
+    /// Constant buffers: bytes the stage reads at literal offsets (-1: it indexes the buffer at run time).
+    pub extent: i32,
 }
 
 pub struct Stage {
@@ -188,7 +190,10 @@ pub unsafe fn translate(
             })
         };
         match feed {
-            Some((ty, count, feed)) => out.push(Binding { binding: b, ty, count, feed }),
+            Some((ty, count, feed)) => {
+                let extent = m.cbuffers.iter().find(|c| c.binding == mb).map_or(-1, |c| c.extent);
+                out.push(Binding { binding: b, ty, count, feed, extent })
+            }
             None => return Err(format!("binding {b} is not in the manifest")),
         }
     }
