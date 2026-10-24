@@ -330,7 +330,7 @@ impl Dev {
                 validation,
                 // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
                 // after it in memory): the shaders check them.
-                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, ..shader_host },
+                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, reduced_precision: has_portability, ..shader_host },
                 vertex_align,
                 beyond_stride,
                 discard_writes_depth: has_portability,
