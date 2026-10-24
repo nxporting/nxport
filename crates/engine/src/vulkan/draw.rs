@@ -159,6 +159,7 @@ impl Ctx {
         if self.pass.is_none() && !self.begin_pass() {
             return;
         }
+        self.ensure_begun();
         let d = &self.dev.device;
         d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::GRAPHICS, pipe);
         for (i, s) in sets.iter().enumerate() {

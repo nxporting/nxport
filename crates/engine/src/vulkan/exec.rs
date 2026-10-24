@@ -60,6 +60,11 @@ struct Pass {
     depth: Option<(vk::ImageView, vk::Format)>,
     extent: (u32, u32),
     samples: vk::SampleCountFlags,
+    /// Rendering begins at the first draw: clears of whole attachments before it become their load operation (a tiled
+    /// GPU then never loads them), as the Metal backend folds clears into its load actions.
+    begun: bool,
+    color_clears: Vec<Option<vk::ClearColorValue>>,
+    depth_clear: Option<(vk::ImageAspectFlags, vk::ClearDepthStencilValue)>,
 }
 
 // The context is only used under the backend's lock; its raw pointers point into guest memory and mapped buffers.
@@ -608,45 +613,75 @@ impl Ctx {
             // Only targets that could not be made: the draws go nowhere.
             return false;
         }
-        let ca: Vec<vk::RenderingAttachmentInfo> = colors
+        let n = colors.len();
+        self.pass = Some(Pass { images, colors, depth, extent, samples, begun: false, color_clears: vec![None; n], depth_clear: None });
+        true
+    }
+
+    /// Begins rendering for the current pass if it has not begun, with its pending clears as load operations.
+    pub(super) unsafe fn ensure_begun(&mut self) {
+        let Some(p) = self.pass.as_mut() else { return };
+        if p.begun {
+            return;
+        }
+        p.begun = true;
+        let ca: Vec<vk::RenderingAttachmentInfo> = p
+            .colors
             .iter()
-            .map(|c| match c {
-                Some((v, _, _)) => vk::RenderingAttachmentInfo::default()
-                    .image_view(*v)
-                    .image_layout(vk::ImageLayout::GENERAL)
-                    .load_op(vk::AttachmentLoadOp::LOAD)
-                    .store_op(vk::AttachmentStoreOp::STORE),
+            .zip(&p.color_clears)
+            .map(|(c, clear)| match c {
+                Some((v, _, _)) => {
+                    let a = vk::RenderingAttachmentInfo::default()
+                        .image_view(*v)
+                        .image_layout(vk::ImageLayout::GENERAL)
+                        .store_op(vk::AttachmentStoreOp::STORE);
+                    match clear {
+                        Some(value) => a.load_op(vk::AttachmentLoadOp::CLEAR).clear_value(vk::ClearValue { color: *value }),
+                        None => a.load_op(vk::AttachmentLoadOp::LOAD),
+                    }
+                }
                 None => vk::RenderingAttachmentInfo::default(),
             })
             .collect();
-        let da = depth.map(|(v, _)| {
-            vk::RenderingAttachmentInfo::default()
-                .image_view(v)
-                .image_layout(vk::ImageLayout::GENERAL)
-                .load_op(vk::AttachmentLoadOp::LOAD)
-                .store_op(vk::AttachmentStoreOp::STORE)
-        });
-        let has_stencil = depth.is_some_and(|(_, f)| format::aspects(f).contains(vk::ImageAspectFlags::STENCIL));
-        let has_depth = depth.is_some_and(|(_, f)| format::aspects(f).contains(vk::ImageAspectFlags::DEPTH));
+        let att = |aspect: vk::ImageAspectFlags| {
+            p.depth.map(|(v, _)| {
+                let a = vk::RenderingAttachmentInfo::default()
+                    .image_view(v)
+                    .image_layout(vk::ImageLayout::GENERAL)
+                    .store_op(vk::AttachmentStoreOp::STORE);
+                match p.depth_clear {
+                    Some((mask, value)) if mask.contains(aspect) => {
+                        a.load_op(vk::AttachmentLoadOp::CLEAR).clear_value(vk::ClearValue { depth_stencil: value })
+                    }
+                    _ => a.load_op(vk::AttachmentLoadOp::LOAD),
+                }
+            })
+        };
+        let (dd, ds) = (att(vk::ImageAspectFlags::DEPTH), att(vk::ImageAspectFlags::STENCIL));
+        let has_stencil = p.depth.is_some_and(|(_, f)| format::aspects(f).contains(vk::ImageAspectFlags::STENCIL));
+        let has_depth = p.depth.is_some_and(|(_, f)| format::aspects(f).contains(vk::ImageAspectFlags::DEPTH));
+        let extent = p.extent;
         let mut info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D { offset: vk::Offset2D { x: 0, y: 0 }, extent: vk::Extent2D { width: extent.0, height: extent.1 } })
             .layer_count(1)
             .color_attachments(&ca);
-        if let Some(d) = da.as_ref() {
-            if has_depth {
+        if has_depth {
+            if let Some(d) = dd.as_ref() {
                 info = info.depth_attachment(d);
             }
-            if has_stencil {
+        }
+        if has_stencil {
+            if let Some(d) = ds.as_ref() {
                 info = info.stencil_attachment(d);
             }
         }
         self.dev.full_barrier(self.cb);
         self.dev.device.cmd_begin_rendering(self.cb, &info);
-        self.pass = Some(Pass { images, colors, depth, extent, samples });
-        true
     }
 
     unsafe fn end_pass(&mut self) {
+        // A pass with only clears still performs them.
+        self.ensure_begun();
         if self.pass.take().is_some() {
             self.dev.device.cmd_end_rendering(self.cb);
             self.dev.full_barrier(self.cb);
@@ -746,6 +781,12 @@ impl Ctx {
             format::Kind::Uint => vk::ClearColorValue { uint32: rgba.map(|v| v as u32) },
             format::Kind::Sint => vk::ClearColorValue { int32: rgba.map(|v| v as i32) },
         };
+        let p = self.pass.as_mut().unwrap();
+        if !p.begun && mask & 0xF == 0xF {
+            p.color_clears[index as usize] = Some(value);
+            return;
+        }
+        self.ensure_begun();
         let a = [vk::ClearAttachment::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .color_attachment(index as u32)
@@ -776,6 +817,19 @@ impl Ctx {
             return;
         }
         let (w, h) = p.extent;
+        let value = vk::ClearDepthStencilValue { depth, stencil: stencil as u32 };
+        let p = self.pass.as_mut().unwrap();
+        if !p.begun {
+            // Depth and stencil cleared now and then (separate calls) merge; each aspect keeps its latest value.
+            let (old_mask, old) = p.depth_clear.unwrap_or((vk::ImageAspectFlags::empty(), value));
+            let merged = vk::ClearDepthStencilValue {
+                depth: if aspect.contains(vk::ImageAspectFlags::DEPTH) { depth } else { old.depth },
+                stencil: if aspect.contains(vk::ImageAspectFlags::STENCIL) { stencil as u32 } else { old.stencil },
+            };
+            p.depth_clear = Some((old_mask | aspect, merged));
+            return;
+        }
+        self.ensure_begun();
         let a = [vk::ClearAttachment::default().aspect_mask(aspect).clear_value(vk::ClearValue {
             depth_stencil: vk::ClearDepthStencilValue { depth, stencil: stencil as u32 },
         })];
