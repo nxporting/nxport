@@ -28,6 +28,7 @@ pub const NVN_TARGET_BUFFER: i32 = 10;
 const NVN_TEXTURE_FLAGS_COMPRESSIBLE_BIT: i32 = 0x08;
 const NVN_TEXTURE_FLAGS_LINEAR_BIT: i32 = 0x10;
 const NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT: i32 = 0x40;
+const NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT: i32 = 0x200;
 
 /// Texture storage must be at least this aligned / padded.
 pub const TEXTURE_STORAGE_ALIGNMENT: usize = 0x1000;
@@ -142,6 +143,19 @@ fn block_height_gobs(hb: u64) -> u64 {
     bh
 }
 
+/// Level-0 block height in GOBs of a 2D texture. MINIMAL_LAYOUT ("prefer the smallest tile size") takes one GOB.
+/// Ground truth is the size only: TotK packs its 320x320 R16 Depths terrain maps (minimal layout) 0x32000 bytes apart,
+/// the size with a block height of at most 8 GOBs; the usual 16 made each 0x3c000 bytes and its texel writes overran
+/// the next map. Heights 1 and 8 render the same there (nothing reads those maps raw); which one the driver picks is
+/// unverified.
+fn level0_bh(hb0: u64, flags: i32) -> u64 {
+    if flags & NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT != 0 {
+        1
+    } else {
+        block_height_gobs(hb0)
+    }
+}
+
 fn block_depth_gobs(d: u64) -> u64 {
     let mut bd = 16;
     while bd > 1 && d <= bd / 2 {
@@ -175,11 +189,12 @@ fn level_block_dims(
     is_3d: bool,
     levels: usize,
     block_h: u64,
+    flags: i32,
 ) -> Vec<(u64, u64)> {
     let (mut bh, mut bd) = if is_3d {
         block_dims_3d(hb0, d0)
     } else {
-        (block_height_gobs(hb0), 1)
+        (level0_bh(hb0, flags), 1)
     };
     let h0 = hb0 * block_h;
     (0..levels)
@@ -199,7 +214,7 @@ fn level_block_dims(
 /// Block height in GOBs of one level of a 2D (or array / cube) texture (see level_block_dims).
 fn level_bh(p: &TextureParams, info: &FormatInfo, level: usize) -> usize {
     let hb0 = (p.height.max(1) as u64 + info.block_h as u64 - 1) / info.block_h as u64;
-    level_block_dims(hb0, 1, false, level + 1, info.block_h as u64)[level].0 as usize
+    level_block_dims(hb0, 1, false, level + 1, info.block_h as u64, p.flags)[level].0 as usize
 }
 
 pub fn sample_dims(samples: i32) -> (u32, u32) {
@@ -295,6 +310,7 @@ pub fn compute_layout(p: &TextureParams) -> TextureLayout {
         is_3d,
         levels,
         info.block_h as u64,
+        p.flags,
     );
     for l in 0..levels {
         let lw = (w >> l).max(1);
@@ -313,7 +329,7 @@ pub fn compute_layout(p: &TextureParams) -> TextureLayout {
     let mut layer_stride = off;
     if layers > 1 {
         let hb0 = (h + info.block_h as u64 - 1) / info.block_h as u64;
-        layer_stride = align(off, 512 * block_height_gobs(hb0));
+        layer_stride = align(off, 512 * level0_bh(hb0, p.flags));
     }
     TextureLayout {
         level_offsets: offsets,
@@ -501,6 +517,7 @@ pub unsafe fn read_texels_3d(
         true,
         level + 1,
         info.block_h as u64,
+        p.flags,
     )[level];
     let (bh, bd) = (bh as usize, bd as usize);
     let rows_aligned = align(hb, 8 * bh as u64) as usize;
