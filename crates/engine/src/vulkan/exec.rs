@@ -133,6 +133,8 @@ pub struct Ctx {
     repack_swept: u64,
     /// Largest index of index ranges scanned in this submit, by (address, count, type, restart index).
     pub(super) max_indices: rustc_hash::FxHashMap<(usize, i32, i32, Option<u32>), u32>,
+    /// Vertex streams bound in place or as copies in this submit, by (host address, size).
+    pub(super) vb_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
@@ -157,6 +159,8 @@ pub struct Ctx {
     /// Guest memory this submit's commands write while it is recorded (inline uniform updates, reports): uniform
     /// buffers there are copied when bound (draws before the write must not see it), others are read in place.
     pub(super) cmd_writes: Ranges,
+    /// The submit's command lists by handle (fetched once by the pre-scan).
+    lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
     /// Pre-scans of lists without calls, by list.
     scan_cache: rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan)>,
     inflight: std::collections::VecDeque<InFlight>,
@@ -407,6 +411,7 @@ impl Ctx {
             repacked: Default::default(),
             bindings: Default::default(),
             max_indices: Default::default(),
+            vb_memo: Default::default(),
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),
@@ -423,6 +428,7 @@ impl Ctx {
             op_index: 0,
             cmd_writes: Ranges::default(),
             scan_cache: Default::default(),
+            lists: Default::default(),
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
             pool_tx,
@@ -514,7 +520,7 @@ impl Ctx {
         let mut writes = std::mem::take(&mut self.cmd_writes);
         writes.clear();
         for &h in lists {
-            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache);
+            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache, &mut self.lists);
         }
         self.cmd_writes = writes;
         // Lists not reached in this submit may be gone: forget them now and then.
@@ -592,6 +598,8 @@ impl Ctx {
         self.repacked.clear();
         self.bindings.clear();
         self.max_indices.clear();
+        self.lists.clear();
+        self.vb_memo.clear();
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
@@ -718,8 +726,16 @@ impl Ctx {
         out: &mut Vec<(u64, bool)>,
         writes: &mut Ranges,
         cache: &mut rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan)>,
+        lists: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
     ) {
-        let Some(list) = crate::nvn::api::command_list(handle, depth > 0) else { return };
+        let list = match lists.get(&handle) {
+            Some(l) => l.clone(),
+            None => {
+                let Some(l) = crate::nvn::api::command_list(handle, depth > 0) else { return };
+                lists.insert(handle, l.clone());
+                l
+            }
+        };
         // Lists without calls (most: TotK records each mesh's list once) are scanned once.
         if list.summary().1.is_empty() {
             let key = std::sync::Arc::as_ptr(&list) as usize;
@@ -736,7 +752,7 @@ impl Ctx {
             match &op.typed {
                 Some(Cmd::CallCommands(hs)) if depth < 16 => {
                     for &h in hs.iter() {
-                        Self::scan_counters(h, depth + 1, index, out, writes, cache);
+                        Self::scan_counters(h, depth + 1, index, out, writes, cache, lists);
                     }
                     continue;
                 }
@@ -758,7 +774,14 @@ impl Ctx {
     }
 
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
-        let Some(list) = crate::nvn::api::command_list(handle, depth > 0) else { return };
+        // Fetched by the pre-scan.
+        let list = match self.lists.get(&handle) {
+            Some(l) => l.clone(),
+            None => match crate::nvn::api::command_list(handle, depth > 0) {
+                Some(l) => l,
+                None => return,
+            },
+        };
         for op in &list.ops {
             match &op.typed {
                 Some(Cmd::CallCommands(hs)) if depth < 16 => {
