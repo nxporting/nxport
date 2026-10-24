@@ -89,6 +89,15 @@ pub struct Textures {
     /// Settled images with unflushed GPU contents, by storage address (`flush_overlaps`), and the largest one's size.
     unflushed: std::collections::BTreeMap<usize, Vec<Desc>>,
     unflushed_span: usize,
+    /// While a submit is recorded: image creation and uploads go into a command buffer queued ahead of the submit's next
+    /// chunk (Ctx::submit_chunk), instead of blocking one-time submits; with the staging memory to free once it ran.
+    batch: Option<Batch>,
+}
+
+struct Batch {
+    pool: vk::CommandPool,
+    cb: Option<vk::CommandBuffer>,
+    staging: Vec<super::device::HostBuffer>,
 }
 
 fn image_type(target: i32) -> (vk::ImageType, vk::ImageViewType) {
@@ -497,7 +506,7 @@ impl Textures {
         let aspect = format::aspects(fmt);
         // Block-compressed images cannot be cleared (their uploads fill them).
         let compressed = layout::format_info(p.format).is_some_and(|i| i.block_w > 1);
-        let _ = dev.one_shot(|cb| {
+        self.record(dev, |cb| {
             let b = [vk::ImageMemoryBarrier::default()
                 .image(image)
                 .old_layout(vk::ImageLayout::UNDEFINED)
@@ -623,12 +632,56 @@ impl Textures {
         let Ok(staging) = dev.host_buffer(data.len() as u64, vk::BufferUsageFlags::TRANSFER_SRC) else { return };
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
         let image = img.image;
-        let _ = dev.one_shot(|cb| {
+        let batched = self.batch.is_some();
+        self.record(dev, |cb| {
             // Submits still in flight may read the old contents.
             dev.full_barrier(cb);
             dev.device.cmd_copy_buffer_to_image(cb, staging.buffer, image, vk::ImageLayout::GENERAL, &regions);
         });
-        dev.free_host_buffer(&staging);
+        match &mut self.batch {
+            Some(b) if batched => b.staging.push(staging),
+            _ => dev.free_host_buffer(&staging),
+        }
+    }
+
+    /// Image creation and uploads of the submit being recorded go into command buffers from `pool` (`take_batch`).
+    pub fn begin_batch(&mut self, pool: vk::CommandPool) {
+        self.batch = Some(Batch { pool, cb: None, staging: Vec::new() });
+    }
+
+    /// The batch's commands recorded since the last take (ended), and the staging memory they read.
+    pub unsafe fn take_batch(&mut self, dev: &Dev) -> (Option<vk::CommandBuffer>, Vec<super::device::HostBuffer>) {
+        let Some(b) = self.batch.as_mut() else { return (None, Vec::new()) };
+        let cb = b.cb.take();
+        if let Some(cb) = cb {
+            dev.full_barrier(cb);
+            let _ = dev.device.end_command_buffer(cb);
+        }
+        (cb, std::mem::take(&mut b.staging))
+    }
+
+    /// After the submit: blocking one-time submits again (reads, presents, captures).
+    pub fn end_batch(&mut self) {
+        self.batch = None;
+    }
+
+    /// Records `f` into the batch when a submit is being recorded, else submits it alone and waits.
+    unsafe fn record(&mut self, dev: &Dev, f: impl FnOnce(vk::CommandBuffer)) {
+        let Some(b) = self.batch.as_mut() else {
+            let _ = dev.one_shot(f);
+            return;
+        };
+        if b.cb.is_none() {
+            let Ok(cbs) = dev.device.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(b.pool).command_buffer_count(1)) else {
+                let _ = dev.one_shot(f);
+                return;
+            };
+            let _ = dev.device.begin_command_buffer(cbs[0], &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
+            // After whatever the queue ran before.
+            dev.full_barrier(cbs[0]);
+            b.cb = Some(cbs[0]);
+        }
+        f(b.cb.unwrap());
     }
 
     /// A view of `img` for sampling or rendering.
