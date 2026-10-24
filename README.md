@@ -64,6 +64,10 @@ Nintendo - For being awesome. I hope. Please don't take this down.
   * Miis facial features cull too eagerly
   * Trophy flickering
   * Some things are overly shiny
+  * Selecting time trials crashes game
+  * Selecting multiplayer crashes game
+  * Selecting online play crashes game
+  * Selecting wireless play crashes game
 * Super Mario Odyssey
   * Rendering looks good so far
   * Some saving-related bug, I think. For all I know I was out of storage space
