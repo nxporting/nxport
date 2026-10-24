@@ -860,12 +860,18 @@ impl Textures {
     }
 }
 
+/// A content hash of guest bytes (change detection): four independent lanes over 32-byte steps.
 fn hash_bytes(b: &[u8]) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64 ^ b.len() as u64;
-    let (words, rest) = b.split_at(b.len() / 8 * 8);
-    for w in words.chunks_exact(8) {
-        h = (h ^ u64::from_le_bytes(w.try_into().unwrap())).wrapping_mul(0x0100_0000_01b3).rotate_left(29);
+    const K: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut l = [0xcbf2_9ce4_8422_2325u64 ^ b.len() as u64, 1, 2, 3];
+    let (body, rest) = b.split_at(b.len() / 32 * 32);
+    for c in body.chunks_exact(32) {
+        for (k, lane) in l.iter_mut().enumerate() {
+            let w = u64::from_le_bytes(c[k * 8..k * 8 + 8].try_into().unwrap());
+            *lane = (*lane ^ w).wrapping_mul(K).rotate_left(31);
+        }
     }
+    let mut h = l[0] ^ l[1].rotate_left(17) ^ l[2].rotate_left(34) ^ l[3].rotate_left(51);
     for &x in rest {
         h = (h ^ x as u64).wrapping_mul(0x0100_0000_01b3);
     }

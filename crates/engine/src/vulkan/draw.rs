@@ -397,9 +397,11 @@ impl Ctx {
     }
 
     /// Guest constant buffer `slot` of NVN stage `stage` as the shader sees it (None: nothing bound).
-    unsafe fn cbuf_bytes(&self, stage: i32, slot: i32, driver: &[u8], code: (u64, u64)) -> Option<Vec<u8>> {
+    /// A constant buffer's bytes where they are (the driver buffer being built, the shader's constant bank, guest
+    /// memory): (start, length).
+    unsafe fn cbuf_bytes(&self, stage: i32, slot: i32, driver: &[u8], code: (u64, u64)) -> Option<(*const u8, usize)> {
         match slot {
-            0 => Some(driver.to_vec()),
+            0 => Some((driver.as_ptr(), driver.len())),
             1 => {
                 let (data, control) = code;
                 if control < 0x1_0000_0000 || *(control as *const u32) != 0x9876_1234 || *((control + 0x20) as *const u32) < 0x708 {
@@ -407,12 +409,12 @@ impl Ctx {
                 }
                 let off = *((control + 0x700) as *const u32) as u64;
                 let size = (*((control + 0x6fc) as *const u32) as usize).min(0x10000);
-                (size > 0).then(|| std::slice::from_raw_parts((data + off) as *const u8, size).to_vec())
+                (size > 0).then(|| ((data + off) as *const u8, size))
             }
             n if n >= 3 => {
                 let &(addr, size) = self.st.uniforms.get(&(stage, n - 3))?;
                 let a = crate::nvn::api::translate_virtual(addr as usize);
-                (a > 0x10000 && size > 0).then(|| std::slice::from_raw_parts(a as *const u8, size.min(0x10000)).to_vec())
+                (a > 0x10000 && size > 0).then(|| (a as *const u8, size.min(0x10000)))
             }
             _ => None,
         }
@@ -433,14 +435,16 @@ impl Ctx {
         let mut images: Vec<(u32, vk::DescriptorType, Vec<vk::DescriptorImageInfo>)> = Vec::new();
         let zero = Some((self.zeros.buffer, 0u64));
         // Constant buffer contents by slot, read once per draw (storage descriptors and bindless handles read them).
-        let mut cbufs: Vec<(i32, Option<std::rc::Rc<Vec<u8>>>)> = Vec::new();
-        let mut cbuf = |me: &Self, slot: i32| -> Option<std::rc::Rc<Vec<u8>>> {
+        let mut cbufs: Vec<(i32, Option<(*const u8, usize)>)> = Vec::new();
+        let mut cbuf = |me: &Self, slot: i32| -> Option<&'static [u8]> {
+            // Only used within this call, while `driver` and the guest memory are alive.
+            let as_slice = |c: Option<(*const u8, usize)>| c.map(|(p, n)| unsafe { std::slice::from_raw_parts(p, n) });
             if let Some((_, c)) = cbufs.iter().find(|(s, _)| *s == slot) {
-                return c.clone();
+                return as_slice(*c);
             }
-            let c = me.cbuf_bytes(stage, slot, &driver, (data, control)).map(std::rc::Rc::new);
-            cbufs.push((slot, c.clone()));
-            c
+            let c = me.cbuf_bytes(stage, slot, &driver, (data, control));
+            cbufs.push((slot, c));
+            as_slice(c)
         };
         // Constant buffers first: the support buffer records their bound sizes.
         let mut limits: Vec<(u32, usize)> = Vec::new();
