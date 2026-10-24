@@ -60,7 +60,10 @@ Nintendo - For being awesome. I hope. Please don't take this down.
 * Super Mario Wonder, MacOS
   * Button prompts are "?"
 * Mario Kart 8 Deluxe v3.0.4, MacOS
-  * Looks good so far
+  * Flickering behind press-LR-to-start prompt
+  * Miis facial features cull too eagerly
+  * Trophy flickering
+  * Characters too shiny in select screen, maybe elsewhere too
 * Super Mario Odyssey
   * Rendering looks good so far
   * Some saving-related bug, I think. For all I know I was out of storage space
