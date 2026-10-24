@@ -162,10 +162,12 @@ pub unsafe fn translate(
     let mut out = Vec::new();
     for b in declared {
         let mb = b.wrapping_sub(binding_base);
+        // Uniform buffers are dynamic: the offset is given when the set is bound, so draws whose copies differ only in
+        // where they sit share a set.
         let feed = if mb == 0 {
-            Some((vk::DescriptorType::UNIFORM_BUFFER, 1, Feed::Support))
+            Some((vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC, 1, Feed::Support))
         } else if let Some(c) = m.cbuffers.iter().find(|c| c.binding == mb) {
-            Some((vk::DescriptorType::UNIFORM_BUFFER, 1, Feed::Cbuf(c.slot)))
+            Some((vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC, 1, Feed::Cbuf(c.slot)))
         } else if let Some(s) = m.sbuffers.iter().find(|s| s.binding == mb) {
             Some((vk::DescriptorType::STORAGE_BUFFER, 1, Feed::Sbuf { cb_slot: s.cb_slot, cb_offset: s.cb_offset, write: s.write }))
         } else if mb == sass2spv::translation::properties::SAMPLER_TABLE_BINDING as u32 && m.sampler_table > 0 {
@@ -230,7 +232,9 @@ pub unsafe fn translate(
         .sum();
     let buffers = out
         .iter()
-        .filter(|b| matches!(b.ty, vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER))
+        .filter(|b| {
+            matches!(b.ty, vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC | vk::DescriptorType::STORAGE_BUFFER)
+        })
         .map(|b| b.count)
         .sum();
     Ok(Stage {
