@@ -62,6 +62,9 @@ pub struct Image {
     unflushed: bool,
     gpu_seq: u64,
     gpu_submit: u64,
+    /// Bytes of guest memory its description covers; whether that memory's pool is CPU-writable, at a pool generation.
+    guest_len: usize,
+    cpu_writable: (u64, bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -309,14 +312,18 @@ impl Textures {
             return;
         }
         img.checked = serial;
-        if d.storage <= 0x10000 || !crate::nvn::api::memory_pool_cpu_writable(d.storage) {
+        let gen = crate::nvn::api::pools_gen();
+        if img.cpu_writable.0 != gen {
+            img.cpu_writable = (gen, d.storage > 0x10000 && crate::nvn::api::memory_pool_cpu_writable(d.storage));
+        }
+        if !img.cpu_writable.1 {
             if first {
                 self.flush_overlaps(dev, d);
                 self.upload(dev, d);
             }
             return;
         }
-        let len = layout::compute_layout(&d.params).total as usize;
+        let len = img.guest_len;
         if len == 0 {
             return;
         }
@@ -573,6 +580,8 @@ impl Textures {
             unflushed: false,
             gpu_seq: 0,
             gpu_submit: 0,
+            guest_len: layout::compute_layout(&d.params).total as usize,
+            cpu_writable: (u64::MAX, false),
         })
     }
 

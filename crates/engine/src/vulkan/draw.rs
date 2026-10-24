@@ -189,8 +189,17 @@ impl Ctx {
             }
             None => None,
         };
-        let vl = self.vertex_layout();
-        let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl) else { return };
+        // Rebuilt only after the attribute or stream state changed.
+        let (vl, vl_hash) = match &self.vl_cache {
+            Some(c) => c.clone(),
+            None => {
+                let vl: std::sync::Arc<[VStream]> = self.vertex_layout().into();
+                let h = hash(&vl);
+                self.vl_cache = Some((vl.clone(), h));
+                (vl, h)
+            }
+        };
+        let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl, vl_hash) else { return };
         let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), fkey) else { return };
         let mut w = DescWrites::default();
         self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
@@ -327,7 +336,14 @@ impl Ctx {
         Some((dsl, layout, push))
     }
 
-    unsafe fn pipeline(&mut self, topology: vk::PrimitiveTopology, vs: (u64, u64), fs: Option<(u64, u64)>, vl: &[VStream]) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
+    unsafe fn pipeline(
+        &mut self,
+        topology: vk::PrimitiveTopology,
+        vs: (u64, u64),
+        fs: Option<(u64, u64)>,
+        vl: &[VStream],
+        vl_hash: u64,
+    ) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
         let (_, layout, _) = self.graphics_layout(vs, fs)?;
         let pass = self.pass.as_ref()?;
         let upper_left = crate::nvn::api::window_origin_mode() == 1;
@@ -337,7 +353,7 @@ impl Ctx {
         let restart = self.st.prim_restart.is_some()
             && matches!(topology, vk::PrimitiveTopology::LINE_STRIP | vk::PrimitiveTopology::TRIANGLE_STRIP | vk::PrimitiveTopology::TRIANGLE_FAN);
         let key = hash(&(
-            (vs, fs, vl, &self.st.blend),
+            (vs, fs, vl_hash, &self.st.blend),
             (self.st.color_state, self.st.channel_mask, self.st.depth_stencil, self.st.polygon, self.st.multisample),
             (color_fmts.iter().map(|f| f.as_raw()).collect::<Vec<_>>(), depth_fmt.as_raw(), pass.samples.as_raw()),
             (topology.as_raw(), restart, self.st.depth_clamp, upper_left, gl_depth),
