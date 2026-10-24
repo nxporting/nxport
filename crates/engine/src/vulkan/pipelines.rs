@@ -291,7 +291,7 @@ pub(super) fn precompile(dev: Arc<Dev>, cache: vk::PipelineCache) {
                 if let Some(s) = stages.lock().unwrap().get(&id) {
                     return s.clone();
                 }
-                let s = super::shader::from_cache(&dev, id).ok().map(Arc::new);
+                let s = super::shader::from_cache(&dev, id).map(Arc::new);
                 stages.lock().unwrap().insert(id, s.clone());
                 s
             };

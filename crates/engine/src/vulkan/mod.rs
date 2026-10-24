@@ -14,7 +14,7 @@ mod guard;
 mod inflight;
 mod pipelines;
 mod shader;
-mod stage_cache;
+pub(crate) mod stage_cache;
 mod state;
 mod texture;
 mod window;

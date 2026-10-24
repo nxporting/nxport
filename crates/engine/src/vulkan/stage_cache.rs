@@ -1,23 +1,37 @@
-// Translated stages on disk (<data dir>/vulkan_stages/<translation hash>/), so a later session skips the translation of
-// every stage it has seen. A file per lookup key (the stage's leading bytes and control section, as the in-memory
-// stage key hashes them, and the translation inputs) holds its candidates: the guest code length each one was
-// translated from, a hash of that code, the SPIR-V and its manifest. A candidate is used only when the guest code
-// hashes the same. A change to the translation (its source, hashed by build.rs) starts a new directory; older ones
-// are removed.
+// Shader stages on disk, per game, under <data dir>/vulkan_stages/<translator source hash>/:
+// - stages.txt: every stage seen, by its shader cache name (`s_<full>`: FNV-1a 64 over the stage's code, as the Metal
+//   shader cache names it) with what a draw needs to recognise it (the hash of its first 0x130 bytes, its length,
+//   the inputs derived from its control section) and its vertex inputs;
+// - code/<full>.bin: its code (for pipeline lists, which name stages that are not in memory yet);
+// - t/<key>.bin: translations, by stage and translation inputs (Stage key);
+// - pipelines.vkcache: the Vulkan pipeline cache.
+// A change to the translator (its source hash) starts a new directory; older ones are removed.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ash::vk;
 
-const MAGIC: u32 = 0x3153_584E; // "NXS1"
+use super::shader::Prep;
+
+/// Bytes of a stage's start that select its candidates (the Metal shader cache's weak hash).
+pub(super) const WEAK_LEN: usize = 0x130;
+
+pub(super) fn fnv1a64(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in data {
+        h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
 
 fn dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         let root = crate::profile::data_subdir("vulkan_stages")?;
-        let build = env!("NX_TRANSLATION_HASH");
+        let build = sass2spv::SOURCE_HASH;
         if let Ok(entries) = std::fs::read_dir(&root) {
             for e in entries.flatten() {
                 if e.file_name().to_string_lossy() != build {
@@ -26,84 +40,135 @@ fn dir() -> Option<&'static PathBuf> {
             }
         }
         let d = root.join(build);
-        std::fs::create_dir_all(&d).ok()?;
+        std::fs::create_dir_all(d.join("t")).ok()?;
+        std::fs::create_dir_all(d.join("code")).ok()?;
         Some(d)
     })
     .as_ref()
 }
 
-/// A hash of the guest code a stage was translated from: its first `len` bytes and the constant bank the
-/// translator reads from the code (jump tables), as the control section places it.
-pub(super) unsafe fn code_hash(data: u64, control: u64, len: usize) -> u64 {
-    let mut h = super::texture::hash_bytes(std::slice::from_raw_parts(data as *const u8, len));
-    if control >= 0x1_0000_0000 && *(control as *const u32) == 0x9876_1234 && *((control + 0x20) as *const u32) >= 0x708 {
-        let off = *((control + 0x700) as *const u32) as u64;
-        let size = (*((control + 0x6fc) as *const u32) as usize).min(0x10000);
-        if off > 0 && size > 0 {
-            h ^= super::texture::hash_bytes(std::slice::from_raw_parts((data + off) as *const u8, size)).rotate_left(1);
-        }
-    }
-    h
+/// A stage seen in this or an earlier session.
+#[derive(Clone, Debug)]
+pub(super) struct Known {
+    pub full: u64,
+    pub weak: u64,
+    /// Bytes of code the name covers.
+    pub size: usize,
+    pub prep: Prep,
+    /// Its input locations (a vertex stage's attributes).
+    pub inputs: Vec<u32>,
 }
 
-/// The cached SPIR-V and manifest for lookup key `key` whose guest code at `data` (with `control`) is unchanged.
-/// Also returns the code's hash.
-pub(super) unsafe fn load(key: u64, data: u64, control: u64, readable: usize) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest, u64)> {
-    let mut found = None;
-    candidates(key, |len, hash| {
-        let hit = len <= readable && code_hash(data, control, len) == hash;
-        if hit {
-            found = Some(hash);
+impl Known {
+    fn line(&self) -> String {
+        let p = &self.prep;
+        let cf = p.compute_fields.map_or("-".into(), |c| c.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+        let inputs = if self.inputs.is_empty() { ".".into() } else { self.inputs.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",") };
+        format!("s {:016x} {} {:016x} {} {} {} {} {cf} {inputs}", self.weak, self.size, self.full, p.hint, p.cb1, p.code_len, p.compute as u8)
+    }
+
+    fn parse(l: &str) -> Option<Known> {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let ["s", weak, size, full, hint, cb1, code_len, compute, cf, inputs] = f.as_slice() else { return None };
+        let compute_fields = if *cf == "-" {
+            None
+        } else {
+            let v: Vec<i32> = cf.split(',').filter_map(|v| v.parse().ok()).collect();
+            Some(v.try_into().ok()?)
+        };
+        Some(Known {
+            weak: u64::from_str_radix(weak, 16).ok()?,
+            size: size.parse().ok()?,
+            full: u64::from_str_radix(full, 16).ok()?,
+            prep: Prep { hint: hint.parse().ok()?, cb1: cb1.parse().ok()?, code_len: code_len.parse().ok()?, compute: *compute == "1", compute_fields },
+            inputs: if *inputs == "." { Vec::new() } else { inputs.split(',').filter_map(|v| v.parse().ok()).collect() },
+        })
+    }
+}
+
+#[derive(Default)]
+struct Index {
+    by_weak: HashMap<u64, Vec<Arc<Known>>>,
+    by_full: HashMap<u64, Arc<Known>>,
+    file: Option<std::fs::File>,
+}
+
+fn index() -> &'static Mutex<Index> {
+    static I: OnceLock<Mutex<Index>> = OnceLock::new();
+    I.get_or_init(|| {
+        let mut i = Index::default();
+        if let Some(text) = dir().and_then(|d| std::fs::read_to_string(d.join("stages.txt")).ok()) {
+            for k in text.lines().filter_map(Known::parse) {
+                let k = Arc::new(k);
+                i.by_weak.entry(k.weak).or_default().push(k.clone());
+                i.by_full.insert(k.full, k);
+            }
         }
-        hit
+        Mutex::new(i)
     })
-    .map(|(s, m)| (s, m, found.unwrap()))
 }
 
-/// The cached SPIR-V and manifest of lookup key `key` translated from code hashing to `code`.
-pub(super) fn load_id(key: u64, code: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
-    candidates(key, |_, hash| hash == code)
+/// The known stage whose code `code` starts with, translated with `prep`.
+pub(super) fn identify(code: &[u8], prep: &Prep) -> Option<Arc<Known>> {
+    let weak = fnv1a64(code.get(..WEAK_LEN)?);
+    let i = index().lock().unwrap();
+    i.by_weak.get(&weak)?.iter().find(|k| k.prep == *prep && k.size <= code.len() && fnv1a64(&code[..k.size]) == k.full).cloned()
 }
 
-/// The first of `key`'s entries `pick` (given its code length and hash) accepts.
-fn candidates(key: u64, mut pick: impl FnMut(usize, u64) -> bool) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
-    let bytes = std::fs::read(dir()?.join(format!("{key:016x}.bin"))).ok()?;
-    let mut at = 0;
-    let u32_at = |b: &[u8], o: usize| b.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap()));
-    while at + 24 <= bytes.len() {
-        if u32_at(&bytes, at)? != MAGIC {
-            return None;
+/// The known stage named `full`.
+pub(super) fn by_name(full: u64) -> Option<Arc<Known>> {
+    index().lock().unwrap().by_full.get(&full).cloned()
+}
+
+/// Adds a stage (its first `size` bytes name it) and keeps its code.
+pub(super) fn remember(code: &[u8], size: usize, prep: Prep, inputs: Vec<u32>) -> Arc<Known> {
+    let size = size.min(code.len());
+    let full = fnv1a64(&code[..size]);
+    let k = Arc::new(Known { full, weak: fnv1a64(&code[..WEAK_LEN.min(code.len())]), size, prep, inputs });
+    let mut i = index().lock().unwrap();
+    if let Some(old) = i.by_full.get(&full).filter(|o| o.prep == k.prep) {
+        return old.clone();
+    }
+    i.by_weak.entry(k.weak).or_default().push(k.clone());
+    i.by_full.insert(full, k.clone());
+    if let Some(d) = dir() {
+        let keep = code.len().min(k.prep.code_len.max(size));
+        let _ = std::fs::write(d.join("code").join(format!("{full:016x}.bin")), &code[..keep]);
+        if i.file.is_none() {
+            i.file = std::fs::OpenOptions::new().create(true).append(true).open(d.join("stages.txt")).ok();
         }
-        let len = u32_at(&bytes, at + 4)? as usize;
-        let hash = u64::from_le_bytes(bytes.get(at + 8..at + 16)?.try_into().unwrap());
-        let (spv_len, man_len) = (u32_at(&bytes, at + 16)? as usize, u32_at(&bytes, at + 20)? as usize);
-        let spv = bytes.get(at + 24..at + 24 + spv_len)?;
-        let man = bytes.get(at + 24 + spv_len..at + 24 + spv_len + man_len)?;
-        at += 24 + spv_len + man_len;
-        if pick(len, hash) {
-            let m = serde_json::from_slice(man).ok()?;
-            return Some((spv.to_vec(), m));
+        let line = k.line();
+        if let Some(f) = i.file.as_mut() {
+            let _ = writeln!(f, "{line}");
         }
     }
-    None
+    k
 }
 
-/// Adds a translation to the cache.
-pub(super) fn store(key: u64, len: usize, hash: u64, spirv: &[u8], manifest: &sass2spv::manifest::ShaderManifest) {
-    let Some(d) = dir() else { return };
-    let Ok(man) = serde_json::to_vec(manifest) else { return };
-    let mut rec = Vec::with_capacity(24 + spirv.len() + man.len());
-    for v in [MAGIC, len as u32] {
-        rec.extend_from_slice(&v.to_le_bytes());
-    }
-    rec.extend_from_slice(&hash.to_le_bytes());
-    for v in [spirv.len() as u32, man.len() as u32] {
-        rec.extend_from_slice(&v.to_le_bytes());
-    }
+/// The code kept for a known stage.
+pub(super) fn code(full: u64) -> Option<Vec<u8>> {
+    std::fs::read(dir()?.join("code").join(format!("{full:016x}.bin"))).ok()
+}
+
+/// A translation: SPIR-V and its manifest.
+pub(super) fn load(key: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
+    let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;
+    let n = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap()) as usize;
+    let spv = bytes.get(4..4 + n)?.to_vec();
+    let m = serde_json::from_slice(bytes.get(4 + n..)?).ok()?;
+    Some((spv, m))
+}
+
+pub(super) fn store(key: u64, spirv: &[u8], manifest: &sass2spv::manifest::ShaderManifest) {
+    let (Some(d), Ok(man)) = (dir(), serde_json::to_vec(manifest)) else { return };
+    let mut rec = Vec::with_capacity(4 + spirv.len() + man.len());
+    rec.extend_from_slice(&(spirv.len() as u32).to_le_bytes());
     rec.extend_from_slice(spirv);
     rec.extend_from_slice(&man);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(d.join(format!("{key:016x}.bin"))) {
-        let _ = f.write_all(&rec);
+    let path = d.join("t").join(format!("{key:016x}.bin"));
+    let tmp = path.with_extension(format!("tmp{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+    if std::fs::write(&tmp, &rec).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 
