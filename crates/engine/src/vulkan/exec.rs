@@ -135,6 +135,8 @@ pub struct Ctx {
     pub(super) max_indices: rustc_hash::FxHashMap<(usize, i32, i32, Option<u32>), u32>,
     /// Vertex streams bound in place or as copies in this submit, by (host address, size).
     pub(super) vb_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
+    /// Scratch for the driver constant buffer of a draw (draw.rs driver_cbuf).
+    pub(super) driver_scratch: Vec<u8>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
@@ -412,6 +414,7 @@ impl Ctx {
             bindings: Default::default(),
             max_indices: Default::default(),
             vb_memo: Default::default(),
+            driver_scratch: Vec::new(),
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),

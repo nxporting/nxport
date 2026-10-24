@@ -457,8 +457,10 @@ impl Ctx {
     }
 
     /// The driver's constant buffer 0 for NVN stage `stage`: draw parameters and the bound storage buffers' descriptors.
-    fn driver_cbuf(&self, stage: i32, call: &Draw, base_instance: i32) -> Vec<u8> {
-        let mut c = vec![0u8; DRIVER_CBUF_SIZE];
+    /// Fills `c` (DRIVER_CBUF_SIZE bytes) with the driver constant buffer of `stage` for this draw.
+    fn driver_cbuf(&self, stage: i32, call: &Draw, base_instance: i32, c: &mut Vec<u8>) {
+        c.clear();
+        c.resize(DRIVER_CBUF_SIZE, 0);
         let base_vertex = match call {
             Draw::Arrays { first, .. } => *first,
             Draw::Elements { base_vertex, .. } => *base_vertex,
@@ -492,7 +494,6 @@ impl Ctx {
                 c[o + 8..o + 12].copy_from_slice(&(size as u32).to_le_bytes());
             }
         }
-        c
     }
 
     /// Guest constant buffer `slot` of NVN stage `stage` as the shader sees it (None: nothing bound).
@@ -525,7 +526,15 @@ impl Ctx {
         if bindings.is_empty() {
             return;
         }
-        let driver = self.driver_cbuf(stage, call, base_instance);
+        // Only for stages that read it (most do not).
+        let mut driver = std::mem::take(&mut self.driver_scratch);
+        if bindings.iter().any(|b| {
+            matches!(b.feed, Feed::Cbuf(0) | Feed::Sbuf { cb_slot: 0, .. } | Feed::Texture { cbuf_slot: 0, .. } | Feed::Image { cbuf_slot: 0, .. })
+        }) {
+            self.driver_cbuf(stage, call, base_instance, &mut driver);
+        } else {
+            driver.clear();
+        }
         let (vw, vh) = (self.st.viewport.2.max(1) as f32, self.st.viewport.3.max(1) as f32);
         let DescWrites { buffers, images } = out;
         let zero = Some((self.zeros.buffer, 0u64));
@@ -743,6 +752,7 @@ impl Ctx {
                 }
             }
         }
+        self.driver_scratch = driver;
     }
 
     /// Binds `w` for the next draw or dispatch: pushed into the command buffer, or written into a new set of `set_layout`.
