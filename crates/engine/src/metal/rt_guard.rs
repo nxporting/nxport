@@ -64,6 +64,9 @@ static STATE: [AtomicU8; SLOTS] = [const { AtomicU8::new(FREE) }; SLOTS];
 /// Page-aligned guest range [START, END) of the held subresource.
 static START: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
 static END: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
+/// The subresource's own bytes (START / END are its pages, which neighbouring levels and layers can share).
+static BSTART: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
+static BEND: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
 /// Second mapping of the range (engine access and write-back).
 static ALIAS: [AtomicUsize; SLOTS] = [const { AtomicUsize::new(0) }; SLOTS];
 static SERIAL: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
@@ -113,6 +116,13 @@ static OPEN: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static CLOSED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 static HOLDS: AtomicU64 = AtomicU64::new(0);
+/// Game-thread waits of the current frame for the journal (page, pc, microseconds), written in the signal handler.
+const WAIT_LOG: usize = 64;
+static WAIT_LOG_N: AtomicU64 = AtomicU64::new(0);
+static WAIT_LOG_SEEN: AtomicU64 = AtomicU64::new(0);
+static WAIT_LOG_PAGE: [AtomicUsize; WAIT_LOG] = [const { AtomicUsize::new(0) }; WAIT_LOG];
+static WAIT_LOG_PC: [AtomicUsize; WAIT_LOG] = [const { AtomicUsize::new(0) }; WAIT_LOG];
+static WAIT_LOG_US: [AtomicU64; WAIT_LOG] = [const { AtomicU64::new(0) }; WAIT_LOG];
 /// Holds ended without a write-back because newer data reached their memory.
 static DROPS: AtomicU64 = AtomicU64::new(0);
 static WRITEBACKS: AtomicU64 = AtomicU64::new(0);
@@ -223,9 +233,10 @@ unsafe fn finish(i: usize) {
     }
 }
 
-/// Ends the holds overlapping [start, end) without a write-back, except one covering exactly `keep` (signal-safe).
-/// Newer data reached that memory (or is about to): writing the older rendering back later would overwrite it.
-unsafe fn supersede(start: usize, end: usize, keep: Option<(usize, usize)>) {
+/// Ends the holds whose bytes overlap [start, end) without a write-back, except one of exactly those bytes when
+/// `keep` (signal-safe). Newer data reached that memory (or is about to): writing the older rendering back later would
+/// overwrite it. Bytes, not pages: mip levels and layers share pages without sharing texels.
+unsafe fn supersede(start: usize, end: usize, keep: bool, why: Option<&str>) {
     if LIVE.load(Ordering::Acquire) == 0 || start >= HI.load(Ordering::Relaxed) || end <= LO.load(Ordering::Relaxed) {
         return;
     }
@@ -234,10 +245,13 @@ unsafe fn supersede(start: usize, end: usize, keep: Option<(usize, usize)>) {
         if STATE[i].load(Ordering::Acquire) != HELD {
             continue;
         }
-        let (s, e) = (START[i].load(Ordering::Acquire), END[i].load(Ordering::Acquire));
-        if s < end && e > start && keep != Some((s, e)) {
+        let (s, e) = (BSTART[i].load(Ordering::Acquire), BEND[i].load(Ordering::Acquire));
+        if s < end && e > start && !(keep && (s, e) == (start, end)) {
             DROPS.fetch_add(1, Ordering::Relaxed);
             finish(i);
+            if let Some(w) = why {
+                super::journal(|| format!("  rt-guard end {:#x}..{:#x} without write-back: {} {:#x}..{:#x}", s, e, w, start, end));
+            }
         }
     }
 }
@@ -248,7 +262,7 @@ pub(crate) fn superseded(addr: usize, len: usize) {
     if !enabled() || len == 0 || HIGH.load(Ordering::Acquire) == 0 {
         return;
     }
-    unsafe { supersede(addr & !(PAGE - 1), (addr + len + PAGE - 1) & !(PAGE - 1), None) };
+    unsafe { supersede(addr, addr + len, false, Some("newer write")) };
 }
 
 /// A pass renders into `tex` (colour or depth) at `level` / `layer`: other holds on that memory are out of date, and
@@ -264,7 +278,7 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
     };
     let a = t.storage + layer * layout.layer_stride as usize + off as usize;
     let (start, end) = (a & !(PAGE - 1), (a + size as usize + PAGE - 1) & !(PAGE - 1));
-    supersede(start, end, Some((start, end)));
+    supersede(a, a + size as usize, true, Some("render target"));
     if !crate::nvn::api::memory_pool_cpu_writable(t.storage) {
         return;
     }
@@ -293,10 +307,11 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
     }
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
     // The same subresource held already: a newer rendering of it.
+    let (bs, be) = (a, a + size as usize);
     let i = match (0..n).find(|&i| {
         STATE[i].load(Ordering::Acquire) == HELD
-            && START[i].load(Ordering::Acquire) == start
-            && END[i].load(Ordering::Acquire) == end
+            && BSTART[i].load(Ordering::Acquire) == bs
+            && BEND[i].load(Ordering::Acquire) == be
     }) {
         Some(i) => i,
         None => {
@@ -342,6 +357,8 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
             ALIAS[i].store(alias, Ordering::Release);
             START[i].store(start, Ordering::Release);
             END[i].store(end, Ordering::Release);
+            BSTART[i].store(bs, Ordering::Release);
+            BEND[i].store(be, Ordering::Release);
             REQ[i].store(0, Ordering::Release);
             if i >= n {
                 HIGH.store(i + 1, Ordering::Release);
@@ -361,6 +378,7 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
     LO.fetch_min(start, Ordering::Relaxed);
     HI.fetch_max(end, Ordering::Relaxed);
     let new = STATE[i].swap(HELD, Ordering::AcqRel) != HELD;
+    super::journal(|| format!("  rt-guard hold {:#x}..{:#x} {}x{} fmt {} level {} layer {}{}", start, end, t.width, t.height, t.format, level, layer, if new { "" } else { " (again)" }));
     if new {
         LIVE.fetch_add(1, Ordering::AcqRel);
         HOLDS.fetch_add(1, Ordering::Relaxed);
@@ -531,6 +549,7 @@ fn start_thread() {
                             continue;
                         }
                         objc2::rc::autoreleasepool(|_| unsafe { write_back(i) });
+                        super::journal(|| format!("  rt-guard write-back {:#x}..{:#x} (held since frame {})", START[i].load(Ordering::Acquire), END[i].load(Ordering::Acquire), FRAME[i].load(Ordering::Acquire)));
                         // A newer rendering held it meanwhile: its own command buffer decides.
                         if SERIAL[i].load(Ordering::Acquire) == s {
                             unsafe { finish(i) };
@@ -604,7 +623,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
         }
         // Engine code writes the page: its data is newer than the rendering, which must not be written over it later.
         if write {
-            supersede(page, page + PAGE, None);
+            supersede(page, page + PAGE, false, None);
             return true;
         }
         // Engine code (often another thread racing with the hold being made) reads the page: open it for reading only
@@ -645,6 +664,10 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
     }
     GUEST_WAITING.fetch_sub(1, Ordering::AcqRel);
     WAIT_US.fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+    let k = WAIT_LOG_N.fetch_add(1, Ordering::Relaxed) as usize % WAIT_LOG;
+    WAIT_LOG_PAGE[k].store(page, Ordering::Relaxed);
+    WAIT_LOG_PC[k].store(pc, Ordering::Relaxed);
+    WAIT_LOG_US[k].store(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
     true
 }
 
@@ -753,6 +776,15 @@ pub(crate) fn released(addr: usize, len: usize) {
 pub(super) fn frame_end(frame: u64) {
     if !enabled() {
         return;
+    }
+    let (seen, n_now) = (WAIT_LOG_SEEN.swap(WAIT_LOG_N.load(Ordering::Relaxed), Ordering::Relaxed), WAIT_LOG_N.load(Ordering::Relaxed));
+    if n_now > seen {
+        let base = crate::cpu::crash_handler::get_guest_base();
+        for k in seen.max(n_now.saturating_sub(WAIT_LOG as u64))..n_now {
+            let k = k as usize % WAIT_LOG;
+            let pc = WAIT_LOG_PC[k].load(Ordering::Relaxed);
+            super::journal(|| format!("  rt-guard game wait page {:#x} pc main+{:#x} {} us", WAIT_LOG_PAGE[k].load(Ordering::Relaxed), pc.wrapping_sub(base), WAIT_LOG_US[k].load(Ordering::Relaxed)));
+        }
     }
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
     let mut aged = false;

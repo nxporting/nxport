@@ -3076,6 +3076,8 @@ impl Gfx {
                     }
                 }
                 Cmd::ReportCounter { counter, addr } => {
+                    // Reports are written into guest memory by the engine: older render-target holds there end.
+                    rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     if *counter == 1 && self.real_samples() {
                         self.occl_report(st, *addr);
                     } else {
@@ -3093,6 +3095,7 @@ impl Gfx {
                     st.ubo_plan_epoch += 1;
                 }
                 Cmd::ReportValue { value, addr } => {
+                    rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     write_counter(0, *addr, Some(*value as u64));
                     st.plan_ubo.invalidate(*addr, *addr + 16);
                     st.ubo_plan_epoch += 1;
@@ -4310,6 +4313,7 @@ pub(super) enum GuestWrite {
 /// ~77 occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
 pub(super) fn note_gpu_guest_write(kind: GuestWrite, addr: u64, len: usize) {
     if !matches!(kind, GuestWrite::Occlusion) {
+        // (Reports end holds where they are recorded, Cmd::ReportCounter / ReportValue.)
         rt_guard::superseded(crate::nvn::api::translate_virtual(addr as usize), len);
     }
     if !early_fence() {
