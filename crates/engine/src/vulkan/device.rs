@@ -26,6 +26,10 @@ pub struct Dev {
     pub beyond_stride: bool,
     /// Apple GPUs (MoltenVK): discarding fragment stages write their depth (sass2spv::accessor::Host::discard_writes_depth).
     pub discard_writes_depth: bool,
+    /// Tile-based GPUs (MoltenVK): a draw may sample an attachment of its own pass begun after the last texture barrier:
+    /// memory holds the pass-start contents until each tile is stored, what NVN's barrier gives the pixel being shaded.
+    /// Elsewhere such draws read a copy taken after the barrier.
+    pub feedback_in_place: bool,
     /// Occlusion queries count samples exactly (else only zero / nonzero).
     pub precise_occlusion: bool,
     /// What shader translation may use on this device.
@@ -91,18 +95,25 @@ impl Dev {
             if layer_settings {
                 exts.push(layer_settings_ext.as_ptr());
             }
-            let never: i32 = 0;
-            let settings: Vec<vk::LayerSettingEXT> = [c"MVK_CONFIG_FAST_MATH_ENABLED", c"FAST_MATH_ENABLED"]
-                .iter()
-                .map(|name| vk::LayerSettingEXT {
-                    p_layer_name: c"MoltenVK".as_ptr(),
-                    p_setting_name: name.as_ptr(),
-                    ty: vk::LayerSettingTypeEXT::INT32,
-                    value_count: 1,
-                    p_values: &never as *const i32 as *const std::ffi::c_void,
-                    ..Default::default()
-                })
-                .collect();
+            // MoltenVK: vkQueueSubmit encodes the Metal commands on its own thread instead of the caller's (the
+            // Presentation Thread records the next commands meanwhile).
+            let off: i32 = 0;
+            let settings: Vec<vk::LayerSettingEXT> = [
+                c"MVK_CONFIG_FAST_MATH_ENABLED",
+                c"FAST_MATH_ENABLED",
+                c"MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS",
+                c"SYNCHRONOUS_QUEUE_SUBMITS",
+            ]
+            .iter()
+            .map(|name| vk::LayerSettingEXT {
+                p_layer_name: c"MoltenVK".as_ptr(),
+                p_setting_name: name.as_ptr(),
+                ty: vk::LayerSettingTypeEXT::INT32,
+                value_count: 1,
+                p_values: &off as *const i32 as *const std::ffi::c_void,
+                ..Default::default()
+            })
+            .collect();
             let mut lsi = vk::LayerSettingsCreateInfoEXT { setting_count: settings.len() as u32, p_settings: settings.as_ptr(), ..Default::default() };
             let mut ici = vk::InstanceCreateInfo::default()
                 .application_info(&app)
@@ -334,6 +345,7 @@ impl Dev {
                 vertex_align,
                 beyond_stride,
                 discard_writes_depth: has_portability,
+                feedback_in_place: has_portability,
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
             })
@@ -440,7 +452,10 @@ impl Dev {
             .map_err(|e| e.to_string())?;
         f(cb);
         self.device.end_command_buffer(cb).map_err(|e| e.to_string())?;
+        let t = std::time::Instant::now();
         let r = self.submit_wait(cb);
+        super::ONE_SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        super::ONE_SHOT_NS.fetch_add(t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         self.device.free_command_buffers(self.cmd_pool, &[cb]);
         r
     }

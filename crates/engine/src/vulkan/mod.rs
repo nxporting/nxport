@@ -10,6 +10,7 @@
 mod device;
 mod exec;
 mod format;
+mod inflight;
 mod shader;
 mod state;
 mod texture;
@@ -36,6 +37,14 @@ static WAIT_NS: AtomicU64 = AtomicU64::new(0);
 /// GPU time of the submits (timestamps around each one's commands).
 static GPU_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_GPU_NS: AtomicU64 = AtomicU64::new(0);
+/// GPU time per pass of the last submit (when profiling passes): (ns, description).
+static PASS_PROFILE: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+static LAST_RECORD_NS: AtomicU64 = AtomicU64::new(0);
+static LAST_WAIT_NS: AtomicU64 = AtomicU64::new(0);
+/// Submits, and blocking one-time submits (texture creation and uploads, reads) with their wait time.
+static SUBMITS: AtomicU64 = AtomicU64::new(0);
+static ONE_SHOTS: AtomicU64 = AtomicU64::new(0);
+static ONE_SHOT_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Recording and GPU wait time not yet reported on an fps line, in ms (replays report them at the end).
 pub fn timing() -> (f64, f64, f64, u64) {
@@ -65,10 +74,22 @@ impl Backend for Vulkan {
     }
 
     fn submit(&self, lists: &[u64]) {
-        if let Some(c) = self.ctx.lock().unwrap().as_mut() {
-            unsafe { c.submit(lists) };
+        let mut g = self.ctx.lock().unwrap();
+        let serial = self.serial.load(Ordering::Acquire) + 1;
+        match g.as_mut() {
+            Some(c) => unsafe { c.submit(lists, serial) },
+            None => inflight::watch(inflight::Done {
+                serial,
+                fence: vk::Fence::null(),
+                occl_pool: vk::QueryPool::null(),
+                queries: 0,
+                occl: Vec::new(),
+                writebacks: Vec::new(),
+                timestamps: vk::QueryPool::null(),
+                pass_labels: Vec::new(),
+            }),
         }
-        self.serial.fetch_add(1, Ordering::AcqRel);
+        self.serial.store(serial, Ordering::Release);
     }
 
     fn present(&self, texture: usize, _crop: [i32; 4]) {
@@ -82,12 +103,15 @@ impl Backend for Vulkan {
             if let Some(s) = *start {
                 let per_frame = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 50.0 / 1e6;
                 println!(
-                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame (GPU {:.1}), {} overlap flushes",
+                    "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame (GPU {:.1}), {} overlap flushes, {:.1} submits, {:.1} one-shots ({:.1} ms)",
                     50.0 / now.duration_since(s).as_secs_f64(),
                     per_frame(&RECORD_NS),
                     per_frame(&WAIT_NS),
                     per_frame(&GPU_NS),
-                    texture::FLUSHES.swap(0, Ordering::Relaxed)
+                    texture::FLUSHES.swap(0, Ordering::Relaxed),
+                    SUBMITS.swap(0, Ordering::Relaxed) as f64 / 50.0,
+                    ONE_SHOTS.swap(0, Ordering::Relaxed) as f64 / 50.0,
+                    per_frame(&ONE_SHOT_NS),
                 );
             }
             *start = Some(now);
@@ -115,12 +139,12 @@ impl Backend for Vulkan {
         self.serial.load(Ordering::Acquire)
     }
 
-    fn wait_serial(&self, _serial: u64, _timeout_ns: u64) -> bool {
-        true
+    fn wait_serial(&self, serial: u64, timeout_ns: u64) -> bool {
+        inflight::wait(serial, timeout_ns)
     }
 
-    fn wait_fence(&self, _serial: u64, _timeout_ns: u64) -> bool {
-        true
+    fn wait_fence(&self, serial: u64, timeout_ns: u64) -> bool {
+        inflight::wait(serial, timeout_ns)
     }
 
     fn presented_frames(&self) -> u64 {
@@ -135,6 +159,17 @@ impl Backend for Vulkan {
 
     fn last_submit_gpu_ns(&self) -> Option<u64> {
         Some(LAST_GPU_NS.load(Ordering::Relaxed))
+    }
+
+    fn profile_passes(&self, on: bool) -> Option<Vec<(u64, String)>> {
+        if let Some(c) = self.ctx.lock().unwrap().as_mut() {
+            c.profile_passes = on;
+        }
+        Some(std::mem::take(&mut *PASS_PROFILE.lock().unwrap()))
+    }
+
+    fn last_submit_cpu_ns(&self) -> Option<(u64, u64)> {
+        Some((LAST_RECORD_NS.load(Ordering::Relaxed), LAST_WAIT_NS.load(Ordering::Relaxed)))
     }
 
     fn gpu_only_textures(&self, f: &mut dyn FnMut(GpuOnlyTexture)) -> usize {
@@ -175,7 +210,9 @@ fn ppm(t: &Texels) -> Vec<u8> {
 
 /// Per-submit host memory for copies (uniform buffers, support and driver buffers, data the device cannot import).
 pub(crate) struct Arena {
+    /// Chunks this submit uses; chunks of completed submits, for reuse.
     chunks: Vec<device::HostBuffer>,
+    free: Vec<device::HostBuffer>,
     /// The chunk being filled and how much of it is used.
     cur: usize,
     used: u64,
@@ -200,6 +237,12 @@ impl Arena {
                     continue;
                 }
             }
+            if let Some(i) = self.free.iter().position(|c| c.size >= len) {
+                self.chunks.push(self.free.swap_remove(i));
+                self.cur = self.chunks.len() - 1;
+                self.used = 0;
+                continue;
+            }
             let usage = vk::BufferUsageFlags::UNIFORM_BUFFER
                 | vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::VERTEX_BUFFER
@@ -221,20 +264,23 @@ impl Arena {
         Some((b, off))
     }
 
-    /// The next submit fills the chunks again from the start (they stay allocated: making and zeroing 64 MB chunks for
-    /// every submit was a visible part of recording); oversized ones are freed.
-    unsafe fn reset(&mut self, dev: &device::Dev) {
-        let mut i = 0;
-        while i < self.chunks.len() {
-            if self.chunks[i].size > Self::CHUNK {
-                let c = self.chunks.remove(i);
-                dev.free_host_buffer(&c);
-            } else {
-                i += 1;
-            }
-        }
+    /// The chunks this submit used (they stay allocated until it completed: making and zeroing 64 MB chunks for every
+    /// submit was a visible part of recording).
+    fn take_used(&mut self) -> Vec<device::HostBuffer> {
         self.cur = 0;
         self.used = 0;
+        std::mem::take(&mut self.chunks)
+    }
+
+    /// Chunks of a completed submit; oversized ones are freed.
+    unsafe fn give_back(&mut self, dev: &device::Dev, chunks: Vec<device::HostBuffer>) {
+        for c in chunks {
+            if c.size > Self::CHUNK {
+                dev.free_host_buffer(&c);
+            } else {
+                self.free.push(c);
+            }
+        }
     }
 }
 
@@ -244,8 +290,8 @@ pub(crate) struct Imports {
     by_start: BTreeMap<usize, (usize, vk::Buffer, vk::DeviceMemory)>,
     failed: std::collections::HashSet<(usize, usize)>,
     gen: u64,
-    /// Imports dropped while a submit was being recorded: its command buffer may still use them.
-    retired: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    /// Imports dropped while a submit was being recorded: its command buffers may still use them.
+    pub(super) retired: Vec<(vk::Buffer, vk::DeviceMemory)>,
 }
 
 impl Imports {
@@ -279,14 +325,6 @@ impl Imports {
                 self.failed.insert((start, end));
                 None
             }
-        }
-    }
-
-    /// Frees the imports dropped during the submit that just completed.
-    unsafe fn release_retired(&mut self, dev: &device::Dev) {
-        for (b, m) in self.retired.drain(..) {
-            dev.device.destroy_buffer(b, None);
-            dev.device.free_memory(m, None);
         }
     }
 }

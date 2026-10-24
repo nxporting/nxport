@@ -624,6 +624,8 @@ impl Textures {
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
         let image = img.image;
         let _ = dev.one_shot(|cb| {
+            // Submits still in flight may read the old contents.
+            dev.full_barrier(cb);
             dev.device.cmd_copy_buffer_to_image(cb, staging.buffer, image, vk::ImageLayout::GENERAL, &regions);
         });
         dev.free_host_buffer(&staging);

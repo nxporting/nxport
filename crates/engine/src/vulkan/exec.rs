@@ -65,6 +65,7 @@ struct Pass {
     begun: bool,
     color_clears: Vec<Option<vk::ClearColorValue>>,
     depth_clear: Option<(vk::ImageAspectFlags, vk::ClearDepthStencilValue)>,
+    pub(super) draws: u32,
 }
 
 // The context is only used under the backend's lock; its raw pointers point into guest memory and mapped buffers.
@@ -118,13 +119,22 @@ pub struct Ctx {
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
-    /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none).
+    /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none); then, when
+    /// profiling passes, one at the end of each pass, with a description of the pass.
     timestamps: vk::QueryPool,
+    timestamps_supported: bool,
+    pub(super) profile_passes: bool,
+    pass_labels: Vec<String>,
     occl: Occlusion,
     /// The submit's command buffers already handed to the queue (the GPU starts on them while the rest is recorded: an
     /// idle GPU runs at a fraction of its speed), and when the current one began.
     chunks: Vec<vk::CommandBuffer>,
     chunk_start: std::time::Instant,
+    inflight: std::collections::VecDeque<InFlight>,
+    /// Query and descriptor pools of retired submits, for reuse.
+    free_occl: Vec<vk::QueryPool>,
+    free_timestamps: Vec<vk::QueryPool>,
+    free_desc_pools: Vec<vk::DescriptorPool>,
     warned: HashSet<String>,
 }
 
@@ -135,7 +145,7 @@ unsafe fn dev_sampler(dev: &Dev) -> vk::Sampler {
 /// Writes a report (NVNcounterData: value, timestamp) when the command is recorded: what follows in the stream
 /// (conditional rendering, uniform copies) sees it in order. Submits complete before they return, so the guest cannot
 /// observe it earlier than the GPU's own write.
-unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
+pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
     let a = crate::nvn::api::translate_virtual(addr as usize);
     if a < 0x10000 {
         return;
@@ -178,8 +188,16 @@ impl Ranges {
     }
 }
 
-/// Recording time after which the command buffer so far is submitted (at the next pass end).
-const CHUNK: std::time::Duration = std::time::Duration::from_millis(1);
+/// Pass-end timestamps per submit when profiling passes.
+const PASS_TIMESTAMPS: u32 = 1000;
+
+/// --split-ms=T (default 1, 0 = one command buffer per submit): the command buffer is handed to the queue between
+/// passes once T ms were spent recording it.
+fn chunk() -> Option<std::time::Duration> {
+    static T: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    let ms = *T.get_or_init(|| crate::settings::get().graphics.split_ms);
+    (ms > 0.0).then(|| std::time::Duration::from_secs_f64(ms / 1e3))
+}
 
 /// Size of the zero buffer.
 const ZEROS: u64 = 4096;
@@ -193,11 +211,10 @@ pub(super) struct Occlusion {
     /// Queries of this submit: next free, the one running in the current pass.
     next: u32,
     active: Option<u32>,
-    /// Since the last reset: the total of earlier submits and this submit's queries.
-    carried: u64,
-    since_reset: Vec<u32>,
-    /// Reports of this submit: (address, total carried then, queries).
-    reports: Vec<(u64, u64, Vec<u32>)>,
+    /// This submit's query ends, resets and reports in order (the watcher sums them, inflight::Occl), and its report
+    /// addresses.
+    events: Vec<super::inflight::Occl>,
+    reports: Vec<u64>,
     precise: bool,
 }
 
@@ -205,18 +222,30 @@ impl Occlusion {
     const QUERIES: u32 = 8192;
 
     fn new(dev: &Dev) -> Occlusion {
-        let pool = unsafe {
+        let pool = Self::new_pool(dev);
+        Occlusion { pool, next: 0, active: None, events: Vec::new(), reports: Vec::new(), precise: dev.precise_occlusion }
+    }
+
+    fn new_pool(dev: &Dev) -> vk::QueryPool {
+        unsafe {
             dev.device
                 .create_query_pool(&vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::OCCLUSION).query_count(Self::QUERIES), None)
                 .unwrap_or(vk::QueryPool::null())
-        };
-        Occlusion { pool, next: 0, active: None, carried: 0, since_reset: Vec::new(), reports: Vec::new(), precise: dev.precise_occlusion }
+        }
     }
+}
 
-    /// Whether `addr` (or the report after it, which conditions compare it with) is a report of this submit.
-    fn pending(&self, addr: u64) -> bool {
-        self.reports.iter().any(|r| r.0 == addr || r.0 == addr + 16)
-    }
+/// A submit the GPU may still be running, with what it uses: freed once its serial completed (inflight.rs).
+struct InFlight {
+    serial: u64,
+    cbs: Vec<vk::CommandBuffer>,
+    desc_pools: Vec<vk::DescriptorPool>,
+    chunks: Vec<super::device::HostBuffer>,
+    occl_pool: vk::QueryPool,
+    timestamps: vk::QueryPool,
+    imports: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    /// Occlusion report addresses, written by the watcher.
+    reports: Vec<u64>,
 }
 
 pub(super) fn hash_of<T: Hash>(v: &T) -> u64 {
@@ -243,15 +272,9 @@ impl Ctx {
     pub fn new(dev: Dev) -> Result<Ctx, String> {
         let default_sampler = unsafe { dev_sampler(&dev) };
         let occl = Occlusion::new(&dev);
-        let timestamps = unsafe {
-            if dev.limits.timestamp_compute_and_graphics != 0 {
-                dev.device
-                    .create_query_pool(&vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(2), None)
-                    .unwrap_or(vk::QueryPool::null())
-            } else {
-                vk::QueryPool::null()
-            }
-        };
+        let timestamps_supported = dev.limits.timestamp_compute_and_graphics != 0;
+        let timestamps = unsafe { new_timestamp_pool(&dev, timestamps_supported) };
+        super::inflight::start(dev.device.clone(), dev.limits.timestamp_period);
         let zeros = unsafe {
             let usage = vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER;
             let b = dev.host_buffer(ZEROS, usage)?;
@@ -284,7 +307,7 @@ impl Ctx {
             programs: HashMap::new(),
             tex: Textures::default(),
             imports: Imports::default(),
-            arena: Arena { chunks: Vec::new(), cur: 0, used: 0, align },
+            arena: Arena { chunks: Vec::new(), free: Vec::new(), cur: 0, used: 0, align },
             stages: HashMap::new(),
             failed_stages: HashSet::new(),
             pipelines: HashMap::new(),
@@ -312,9 +335,16 @@ impl Ctx {
             repacked: Default::default(),
             bindings: Default::default(),
             timestamps,
+            timestamps_supported,
+            profile_passes: false,
+            pass_labels: Vec::new(),
             occl,
             chunks: Vec::new(),
             chunk_start: std::time::Instant::now(),
+            inflight: Default::default(),
+            free_occl: Vec::new(),
+            free_timestamps: Vec::new(),
+            free_desc_pools: Vec::new(),
             warned: HashSet::new(),
         })
     }
@@ -326,24 +356,51 @@ impl Ctx {
         }
     }
 
-    pub unsafe fn submit(&mut self, lists: &[u64]) {
-        if self.lost {
+    /// Records and queues a submit with `serial` (inflight.rs completes it).
+    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64) {
+        let empty = |serial| super::inflight::Done {
+            serial,
+            fence: vk::Fence::null(),
+            occl_pool: vk::QueryPool::null(),
+            queries: 0,
+            occl: Vec::new(),
+            writebacks: Vec::new(),
+            timestamps: vk::QueryPool::null(),
+            pass_labels: Vec::new(),
+        };
+        self.retire();
+        if self.lost || super::inflight::LOST.load(std::sync::atomic::Ordering::Acquire) {
+            self.lost = true;
+            super::inflight::watch(empty(serial));
             return;
+        }
+        // At most a few submits ahead of the GPU.
+        while self.inflight.len() >= 3 {
+            let oldest = self.inflight.front().map_or(0, |f| f.serial);
+            super::inflight::wait(oldest, u64::MAX);
+            self.retire();
         }
         let d = &self.dev.device;
         let Ok(cbs) = d.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::default().command_pool(self.dev.cmd_pool).command_buffer_count(1),
         ) else {
+            super::inflight::watch(empty(serial));
             return;
         };
         self.cb = cbs[0];
         self.tex.begin_submit();
+        self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
+        if self.timestamps_supported {
+            self.timestamps = self.free_timestamps.pop().unwrap_or_else(|| new_timestamp_pool(&self.dev, true));
+        }
+        let d = &self.dev.device;
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
         if self.occl.pool != vk::QueryPool::null() {
             d.cmd_reset_query_pool(self.cb, self.occl.pool, 0, Occlusion::QUERIES);
         }
         if self.timestamps != vk::QueryPool::null() {
-            d.cmd_reset_query_pool(self.cb, self.timestamps, 0, 2);
+            d.cmd_reset_query_pool(self.cb, self.timestamps, 0, 2 + if self.profile_passes { PASS_TIMESTAMPS } else { 0 });
+            self.pass_labels.clear();
             d.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::TOP_OF_PIPE, self.timestamps, 0);
         }
         let t0 = std::time::Instant::now();
@@ -352,46 +409,97 @@ impl Ctx {
             self.run_list(h, 0);
         }
         self.end_pass();
+        if let Some(q) = self.occl.active.take() {
+            self.dev.device.cmd_end_query(self.cb, self.occl.pool, q);
+            self.occl.events.push(super::inflight::Occl::Query(q));
+        }
         if self.timestamps != vk::QueryPool::null() {
             self.dev.device.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, self.timestamps, 1);
         }
-        let _ = self.dev.device.end_command_buffer(self.cb);
-        let t1 = std::time::Instant::now();
-        let waited = self.dev.submit_wait(self.cb);
-        let t2 = std::time::Instant::now();
-        super::RECORD_NS.fetch_add((t1 - t0).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-        super::WAIT_NS.fetch_add((t2 - t1).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-        self.occlusion_resolve(waited.is_ok());
-        if waited.is_ok() && self.timestamps != vk::QueryPool::null() {
-            let mut ts = [0u64; 2];
-            if self.dev.device.get_query_pool_results(self.timestamps, 0, &mut ts, vk::QueryResultFlags::TYPE_64).is_ok() && ts[1] > ts[0] {
-                let ns = ((ts[1] - ts[0]) as f64 * self.dev.limits.timestamp_period as f64) as u64;
-                super::GPU_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
-                super::LAST_GPU_NS.store(ns, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-        if let Err(e) = waited {
+        let d = &self.dev.device;
+        let _ = d.end_command_buffer(self.cb);
+        let fence = d.create_fence(&vk::FenceCreateInfo::default(), None).unwrap_or(vk::Fence::null());
+        let cbs = [self.cb];
+        if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
-            println!("[vulkan] submit of {} lists at presented frame {frame} failed: {e}; no more GPU work", lists.len());
+            println!("[vulkan] submit of {} lists at presented frame {frame}: vkQueueSubmit: {e}; no more GPU work", lists.len());
             self.lost = true;
         }
-        self.dev.device.free_command_buffers(self.dev.cmd_pool, &[self.cb]);
-        for cb in std::mem::take(&mut self.chunks) {
-            self.dev.device.free_command_buffers(self.dev.cmd_pool, &[cb]);
-        }
+        super::SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let record = t0.elapsed().as_nanos() as u64;
+        super::RECORD_NS.fetch_add(record, std::sync::atomic::Ordering::Relaxed);
+        super::LAST_RECORD_NS.store(record, std::sync::atomic::Ordering::Relaxed);
+        super::LAST_WAIT_NS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let mut cbs = std::mem::take(&mut self.chunks);
+        cbs.push(self.cb);
         self.cb = vk::CommandBuffer::null();
+        let occl_pool = std::mem::replace(&mut self.occl.pool, vk::QueryPool::null());
+        let timestamps = std::mem::replace(&mut self.timestamps, vk::QueryPool::null());
+        let reports = std::mem::take(&mut self.occl.reports);
+        super::inflight::watch(super::inflight::Done {
+            serial,
+            fence: if self.lost { vk::Fence::null() } else { fence },
+            occl_pool,
+            queries: self.occl.next,
+            occl: std::mem::take(&mut self.occl.events),
+            writebacks: std::mem::take(&mut self.writebacks).into_iter().map(|(a, p, n)| (a, p as usize, n)).collect(),
+            timestamps,
+            pass_labels: if self.profile_passes { std::mem::take(&mut self.pass_labels) } else { Vec::new() },
+        });
+        if self.lost && fence != vk::Fence::null() {
+            self.dev.device.destroy_fence(fence, None);
+        }
+        self.occl.next = 0;
+        self.inflight.push_back(InFlight {
+            serial,
+            cbs,
+            desc_pools: std::mem::take(&mut self.desc_pools),
+            chunks: self.arena.take_used(),
+            occl_pool,
+            timestamps,
+            imports: std::mem::take(&mut self.imports.retired),
+            reports,
+        });
         self.gpu_dirty.clear();
-        for (addr, src, len) in std::mem::take(&mut self.writebacks) {
-            std::ptr::copy_nonoverlapping(src, addr as *mut u8, len);
-        }
+        // Guest memory under GPU-written images is CPU memory: what it holds now is what later CPU writes change.
         self.tex.settle();
-        for p in self.desc_pools.drain(..) {
-            self.dev.device.destroy_descriptor_pool(p, None);
-        }
-        self.arena.reset(&self.dev);
         self.repacked.clear();
         self.bindings.clear();
-        self.imports.release_retired(&self.dev);
+    }
+
+    /// Frees what completed submits used.
+    unsafe fn retire(&mut self) {
+        let done = super::inflight::completed();
+        while self.inflight.front().is_some_and(|f| f.serial <= done) {
+            let f = self.inflight.pop_front().unwrap();
+            let d = &self.dev.device;
+            d.free_command_buffers(self.dev.cmd_pool, &f.cbs);
+            for p in f.desc_pools {
+                if d.reset_descriptor_pool(p, vk::DescriptorPoolResetFlags::empty()).is_ok() {
+                    self.free_desc_pools.push(p);
+                } else {
+                    d.destroy_descriptor_pool(p, None);
+                }
+            }
+            self.arena.give_back(&self.dev, f.chunks);
+            if f.occl_pool != vk::QueryPool::null() {
+                self.free_occl.push(f.occl_pool);
+            }
+            if f.timestamps != vk::QueryPool::null() {
+                self.free_timestamps.push(f.timestamps);
+            }
+            for (b, m) in f.imports {
+                d.destroy_buffer(b, None);
+                d.free_memory(m, None);
+            }
+        }
+    }
+
+    /// Whether `addr` (or the report after it, which conditions compare it with) is an occlusion report not yet written.
+    fn report_pending(&self, addr: u64) -> bool {
+        let hit = |r: &u64| *r == addr || *r == addr + 16;
+        let done = super::inflight::completed();
+        self.occl.reports.iter().any(hit) || self.inflight.iter().any(|f| f.serial > done && f.reports.iter().any(hit))
     }
 
     /// Records a color target this submit renders: a write-back candidate unless it was rendered in the previous 4 frames.
@@ -537,7 +645,7 @@ impl Ctx {
             Cmd::SetRenderEnable(e) => self.st.render_disabled = !*e,
             Cmd::SetRenderEnableConditional { mode, counters } => {
                 let a = crate::nvn::api::translate_virtual(*counters as usize);
-                if self.occl.pending(*counters) {
+                if self.report_pending(*counters) {
                     self.st.render_disabled = false;
                 } else if a > 0x10000 {
                     let (x, y) = (std::ptr::read_unaligned(a as *const u64), std::ptr::read_unaligned((a + 16) as *const u64));
@@ -672,7 +780,7 @@ impl Ctx {
             return false;
         }
         let n = colors.len();
-        self.pass = Some(Pass { images, colors, depth, extent, samples, begun: false, color_clears: vec![None; n], depth_clear: None });
+        self.pass = Some(Pass { images, colors, depth, extent, samples, begun: false, color_clears: vec![None; n], depth_clear: None, draws: 0 });
         true
     }
 
@@ -697,7 +805,7 @@ impl Ctx {
     unsafe fn end_query(&mut self) {
         if let Some(q) = self.occl.active.take() {
             self.dev.device.cmd_end_query(self.cb, self.occl.pool, q);
-            self.occl.since_reset.push(q);
+            self.occl.events.push(super::inflight::Occl::Query(q));
         }
     }
 
@@ -706,34 +814,16 @@ impl Ctx {
         if let Some(q) = self.occl.active.take() {
             self.dev.device.cmd_end_query(self.cb, self.occl.pool, q);
         }
-        self.occl.since_reset.clear();
-        self.occl.carried = 0;
+        self.occl.events.push(super::inflight::Occl::Reset);
         self.begin_query();
     }
 
     /// ReportCounter(SAMPLES_PASSED): the samples counted since the reset, written once the submit completed.
     unsafe fn occlusion_report(&mut self, addr: u64) {
         self.end_query();
-        let o = &mut self.occl;
-        o.reports.push((addr, o.carried, o.since_reset.clone()));
+        self.occl.events.push(super::inflight::Occl::Report(addr));
+        self.occl.reports.push(addr);
         self.begin_query();
-    }
-
-    /// After the submit completed: the reports' values, and this submit's count carried into the next.
-    unsafe fn occlusion_resolve(&mut self, completed: bool) {
-        let o = &mut self.occl;
-        let mut results = vec![0u64; o.next as usize];
-        if completed && o.next > 0 {
-            let _ = self.dev.device.get_query_pool_results(o.pool, 0, &mut results, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT);
-        }
-        let sum = |qs: &[u32]| qs.iter().map(|&q| results.get(q as usize).copied().unwrap_or(0)).sum::<u64>();
-        for (addr, carried, qs) in std::mem::take(&mut o.reports) {
-            write_report(addr, carried + sum(&qs), true);
-        }
-        o.carried += sum(&o.since_reset);
-        o.since_reset.clear();
-        o.next = 0;
-        o.active = None;
     }
 
     /// Begins rendering for the current pass if it has not begun, with its pending clears as load operations.
@@ -802,11 +892,19 @@ impl Ctx {
         // A pass with only clears still performs them.
         self.ensure_begun();
         self.end_query();
-        if self.pass.take().is_some() {
+        if let Some(p) = self.pass.take() {
             self.dev.device.cmd_end_rendering(self.cb);
+            if self.profile_passes && self.timestamps != vk::QueryPool::null() && self.pass_labels.len() < PASS_TIMESTAMPS as usize {
+                let target = match p.colors.iter().flatten().next() {
+                    Some((_, f, _)) => format!("{f:?}"),
+                    None => p.depth.map(|(_, f)| format!("depth {f:?}")).unwrap_or_default(),
+                };
+                self.dev.device.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, self.timestamps, 2 + self.pass_labels.len() as u32);
+                self.pass_labels.push(format!("{}x{} {target}, {} draws", p.extent.0, p.extent.1, p.draws));
+            }
             self.dev.full_barrier(self.cb);
             self.resolve_bc_proxies();
-            if self.chunk_start.elapsed() > CHUNK {
+            if chunk().is_some_and(|c| self.chunk_start.elapsed() > c) {
                 self.submit_chunk();
             }
         }
@@ -1018,3 +1116,12 @@ enum Draw {
     Elements { index_type: i32, count: i32, addr: u64, base_vertex: i32 },
 }
 
+
+unsafe fn new_timestamp_pool(dev: &Dev, supported: bool) -> vk::QueryPool {
+    if !supported {
+        return vk::QueryPool::null();
+    }
+    dev.device
+        .create_query_pool(&vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(2 + PASS_TIMESTAMPS), None)
+        .unwrap_or(vk::QueryPool::null())
+}
