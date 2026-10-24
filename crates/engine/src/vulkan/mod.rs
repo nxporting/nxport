@@ -35,6 +35,7 @@ static RECORD_NS: AtomicU64 = AtomicU64::new(0);
 static WAIT_NS: AtomicU64 = AtomicU64::new(0);
 /// GPU time of the submits (timestamps around each one's commands).
 static GPU_NS: AtomicU64 = AtomicU64::new(0);
+static LAST_GPU_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Recording and GPU wait time not yet reported on an fps line, in ms (replays report them at the end).
 pub fn timing() -> (f64, f64, f64, u64) {
@@ -130,6 +131,10 @@ impl Backend for Vulkan {
         let mut g = self.ctx.lock().unwrap();
         let c = g.as_mut()?;
         unsafe { c.read_texture(texture, gen, level, layer) }
+    }
+
+    fn last_submit_gpu_ns(&self) -> Option<u64> {
+        Some(LAST_GPU_NS.load(Ordering::Relaxed))
     }
 
     fn gpu_only_textures(&self, f: &mut dyn FnMut(GpuOnlyTexture)) -> usize {
