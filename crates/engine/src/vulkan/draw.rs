@@ -285,7 +285,9 @@ impl Ctx {
                 let info = vk::ComputePipelineCreateInfo::default()
                     .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(s.module).name(c"main"))
                     .layout(layout);
-                let pipe = match self.dev.device.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) {
+                let cache = self.pipeline_cache();
+                crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let pipe = match self.dev.device.create_compute_pipelines(cache, &[info], None) {
                     Ok(p) => p[0],
                     Err((_, e)) => {
                         self.warn(format!("compute pipeline for {data:#x}: {e}"));
@@ -345,6 +347,7 @@ impl Ctx {
         vl_hash: u64,
     ) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
         let (_, layout, _) = self.graphics_layout(vs, fs)?;
+        let cache = self.pipeline_cache();
         let pass = self.pass.as_ref()?;
         let upper_left = crate::nvn::api::window_origin_mode() == 1;
         let gl_depth = crate::nvn::api::depth_mode() == 0;
@@ -460,7 +463,8 @@ impl Ctx {
             .layout(layout)
             .push_next(&mut ri);
         crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let pipe = match self.dev.device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) {
+        crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pipe = match self.dev.device.create_graphics_pipelines(cache, &[info], None) {
             Ok(p) => p[0],
             Err((_, e)) => {
                 let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();

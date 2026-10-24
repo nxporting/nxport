@@ -13,6 +13,7 @@ mod format;
 mod guard;
 mod inflight;
 mod shader;
+mod stage_cache;
 mod state;
 mod texture;
 mod window;
@@ -56,6 +57,8 @@ pub fn display_fps() -> f32 {
 
 /// Pipelines created; bytes of host memory filled for the GPU (uniform copies, data the GPU cannot read in place).
 static PIPELINES: AtomicU64 = AtomicU64::new(0);
+/// Pipelines created in all (the saved pipeline cache is written when it grew).
+static PIPELINES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ARENA_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Counts bytes written for the GPU outside the arena (repacked vertex streams).

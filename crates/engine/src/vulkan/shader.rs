@@ -48,7 +48,6 @@ pub struct Stage {
     /// Combined image samplers and buffer descriptors it binds (push descriptor limits).
     pub samplers: u32,
     pub buffers: u32,
-    pub stage: sass2spv::ShaderStage,
     /// Input locations (a vertex stage's attributes).
     pub inputs: Vec<u32>,
     /// User output locations it declares (a vertex stage's varyings; bit N = location N).
@@ -118,18 +117,37 @@ pub unsafe fn translate(
         [ctrl(0x748) as i32, ctrl(0x74c) as i32, ctrl(0x750) as i32, mem as i32]
     });
     let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
+    // The disk cache (stage_cache.rs), by the stage's leading bytes and control section and the translation inputs.
+    let cache_key = super::exec::hash_of(&(super::stage_hash(data, control), hint, cb1, compute_fields, format!("{state:?}"), format!("{host:?}")));
+    if let Some((spirv, m)) = super::stage_cache::load(cache_key, data, control, len) {
+        return build_stage(dev, &spirv, &m, compute, hint, binding_base);
+    }
     let p = sass2spv::translate_stage_for(code, hint, cb1, compute_fields, &sass2spv::Target::Spirv, state, host)?;
     if p.binary_code.is_empty() {
         return Err("empty SPIR-V".into());
     }
+    let m = p.manifest();
+    let used = (p.size.max(0) as usize).min(len);
+    super::stage_cache::store(cache_key, used, super::stage_cache::code_hash(data, control, used), &p.binary_code, &m);
     if let Some(dir) = &crate::settings::get().debug.dump_spirv {
         let _ = std::fs::create_dir_all(dir);
         let name = format!("{data:012x}_{binding_base}_{}", p.binary_code.len());
         let _ = std::fs::write(dir.join(format!("{name}.spv")), &p.binary_code);
         let _ = std::fs::write(dir.join(format!("{name}.json")), sass2spv::manifest_json(&p));
     }
-    let m = p.manifest();
-    let words: Vec<u32> = p.binary_code.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    build_stage(dev, &p.binary_code, &m, compute, hint, binding_base)
+}
+
+/// A stage from its SPIR-V and manifest.
+unsafe fn build_stage(
+    dev: &Dev,
+    spirv: &[u8],
+    m: &sass2spv::manifest::ShaderManifest,
+    compute: bool,
+    hint: i32,
+    binding_base: u32,
+) -> Result<Stage, String> {
+    let words: Vec<u32> = spirv.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     // The bindings the module declares (OpDecorate 71, Binding 33), each fed as the manifest says.
     let mut declared = Vec::new();
     // Inputs: OpVariable (59) of storage class Input (1) with a Location decoration (30).
@@ -245,7 +263,6 @@ pub unsafe fn translate(
         base: binding_base,
         samplers,
         buffers,
-        stage: p.info.stage,
         inputs,
         outputs,
     })
