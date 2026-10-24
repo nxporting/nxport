@@ -176,6 +176,9 @@ pub struct Ctx {
     free_timestamps: Vec<vk::QueryPool>,
     free_desc_pools: Vec<vk::DescriptorPool>,
     warned: HashSet<String>,
+    /// Commands warned about as not implemented (by name, by kind).
+    unimplemented: HashSet<&'static str>,
+    unimplemented_kinds: HashSet<std::mem::Discriminant<Cmd>>,
 }
 
 unsafe fn dev_sampler(dev: &Dev) -> vk::Sampler {
@@ -440,6 +443,8 @@ impl Ctx {
             free_timestamps: Vec::new(),
             free_desc_pools: Vec::new(),
             warned: Default::default(),
+            unimplemented: Default::default(),
+            unimplemented_kinds: Default::default(),
         })
     }
 
@@ -796,7 +801,9 @@ impl Ctx {
                 Some(c) => self.exec(c),
                 None => {
                     let name = op.name;
-                    self.warn(format!("{name} is not implemented"));
+                    if self.unimplemented.insert(name) {
+                        self.warn(format!("{name} is not implemented"));
+                    }
                 }
             }
             self.op_index += 1;
@@ -850,7 +857,10 @@ impl Ctx {
                 }
             }
             Cmd::BindVertexAttribState(a) => self.st.attribs = *a,
-            Cmd::BindVertexStreamState(s) => self.st.streams = s.clone(),
+            Cmd::BindVertexStreamState(s) => {
+                self.st.streams.clear();
+                self.st.streams.extend_from_slice(s);
+            }
             Cmd::BindBlendState(b) => {
                 let target = (b & 0xF) as usize;
                 if target < 8 {
@@ -942,9 +952,12 @@ impl Ctx {
             Cmd::ResetCounter { counter: 1 } => self.occlusion_reset(),
             Cmd::SetPointSize(_) | Cmd::ResetCounter { .. } | Cmd::SetDepthBounds { .. } => {}
             other => {
-                let name = format!("{other:?}");
-                let name = name.split([' ', '(', '{']).next().unwrap_or("").to_string();
-                self.warn(format!("command {name} is not implemented"));
+                // Once per kind (formatting the command for every occurrence was a cost per frame).
+                if self.unimplemented_kinds.insert(std::mem::discriminant(other)) {
+                    let name = format!("{other:?}");
+                    let name = name.split([' ', '(', '{']).next().unwrap_or("").to_string();
+                    self.warn(format!("command {name} is not implemented"));
+                }
             }
         }
     }
