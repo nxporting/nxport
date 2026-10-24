@@ -1,6 +1,6 @@
 // Running recorded NVN command lists on Vulkan.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::hash::{Hash, Hasher};
 
 use ash::vk;
@@ -119,6 +119,8 @@ pub struct Ctx {
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
+    /// Largest index of index ranges scanned in this submit, by (address, count, type, restart index).
+    pub(super) max_indices: rustc_hash::FxHashMap<(usize, i32, i32, Option<u32>), u32>,
     /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none); then, when
     /// profiling passes, one at the end of each pass, with a description of the pass.
     timestamps: vk::QueryPool,
@@ -150,6 +152,7 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
     if a < 0x10000 {
         return;
     }
+    super::guard::note_write(a, 16);
     std::ptr::write_unaligned(a as *mut u64, value);
     std::ptr::write_unaligned((a + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
 }
@@ -304,14 +307,14 @@ impl Ctx {
         };
         Ok(Ctx {
             dev,
-            programs: HashMap::new(),
+            programs: Default::default(),
             tex: Textures::default(),
             imports: Imports::default(),
             arena: Arena { chunks: Vec::new(), free: Vec::new(), cur: 0, used: 0, align },
-            stages: HashMap::new(),
-            failed_stages: HashSet::new(),
-            pipelines: HashMap::new(),
-            layouts: HashMap::new(),
+            stages: Default::default(),
+            failed_stages: Default::default(),
+            pipelines: Default::default(),
+            layouts: Default::default(),
             empty_layout,
             desc_pools: Vec::new(),
             st: Nvn {
@@ -327,13 +330,14 @@ impl Ctx {
             fb_snaps: Default::default(),
             bc_proxies: Default::default(),
             bc_pending: Vec::new(),
-            rt_history: HashMap::new(),
+            rt_history: Default::default(),
             writeback_rts: Vec::new(),
             fb_epoch: 1,
             default_sampler,
             zeros,
             repacked: Default::default(),
             bindings: Default::default(),
+            max_indices: Default::default(),
             timestamps,
             timestamps_supported,
             profile_passes: false,
@@ -345,7 +349,7 @@ impl Ctx {
             free_occl: Vec::new(),
             free_timestamps: Vec::new(),
             free_desc_pools: Vec::new(),
-            warned: HashSet::new(),
+            warned: Default::default(),
         })
     }
 
@@ -388,6 +392,7 @@ impl Ctx {
             return;
         };
         self.cb = cbs[0];
+        super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
         self.tex.begin_submit();
         self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
         if self.timestamps_supported {
@@ -465,6 +470,7 @@ impl Ctx {
         self.tex.settle();
         self.repacked.clear();
         self.bindings.clear();
+        self.max_indices.clear();
     }
 
     /// Frees what completed submits used.
@@ -822,6 +828,7 @@ impl Ctx {
     unsafe fn occlusion_report(&mut self, addr: u64) {
         self.end_query();
         self.occl.events.push(super::inflight::Occl::Report(addr));
+        super::guard::note_write(crate::nvn::api::translate_virtual(addr as usize), 16);
         self.occl.reports.push(addr);
         self.begin_query();
     }

@@ -32,7 +32,7 @@ pub struct Binding {
 
 pub struct Stage {
     pub module: vk::ShaderModule,
-    pub bindings: Vec<Binding>,
+    pub bindings: std::sync::Arc<[Binding]>,
     pub set_layout: vk::DescriptorSetLayout,
     pub stage: sass2spv::ShaderStage,
     /// Input locations (a vertex stage's attributes).
@@ -186,7 +186,7 @@ pub unsafe fn translate(
         .map_err(|e| e.to_string())?;
     Ok(Stage {
         module,
-        bindings: out,
+        bindings: out.into(),
         set_layout,
         stage: p.info.stage,
         inputs,
