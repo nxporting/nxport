@@ -3,6 +3,13 @@
 use super::*;
 
 const DRIVER_CBUF_SIZE: usize = 0x1000;
+
+/// One draw's or dispatch's descriptors: (binding, type, buffer) and (binding, type, images).
+#[derive(Default)]
+pub(super) struct DescWrites {
+    buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 24]>,
+    images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
+}
 /// The support buffer with the constant buffer bound sizes (sass2spv::accessor::Host::cbuf_limits).
 const SUPPORT_SIZE: usize = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET
     + 16 * sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_COUNT as usize;
@@ -124,7 +131,9 @@ impl Ctx {
         if self.failed_stages.contains(&k) {
             return false;
         }
-        match shader::translate(&self.dev, data, control, index, Some(state), set, discard_depth) {
+        // Graphics stages share set 0, the fragment stage's bindings above the vertex stage's.
+        let base = if set == 1 { shader::FRAGMENT_BINDING_BASE } else { 0 };
+        match shader::translate(&self.dev, data, control, index, Some(state), 0, base, discard_depth) {
             Ok(s) => {
                 self.stages.insert(k, s);
                 true
@@ -167,9 +176,11 @@ impl Ctx {
         };
         let vl = self.vertex_layout();
         let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl) else { return };
-        let mut sets = vec![self.descriptors((vd, vkey), vd, vc, 0, &call, base_instance)];
+        let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), fkey) else { return };
+        let mut w = DescWrites::default();
+        self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
         if let (Some(k), Some((fd, fc, _))) = (fkey, fs) {
-            sets.push(self.descriptors(k, fd, fc, 1, &call, base_instance));
+            self.stage_writes(k, fd, fc, 1, &call, base_instance, &mut w);
         }
         // A feedback copy ended the pass: it resumes (loading what was rendered).
         if self.pass.is_none() && !self.begin_pass() {
@@ -178,11 +189,7 @@ impl Ctx {
         self.ensure_begun();
         let d = &self.dev.device;
         d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::GRAPHICS, pipe);
-        for (i, s) in sets.iter().enumerate() {
-            if let Some(s) = s {
-                d.cmd_bind_descriptor_sets(self.cb, vk::PipelineBindPoint::GRAPHICS, layout, i as u32, &[*s], &[]);
-            }
-        }
+        self.bind_writes(&w, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
         if let Some(p) = self.pass.as_mut() {
@@ -242,17 +249,48 @@ impl Ctx {
                 (pipe, layout)
             }
         };
-        let set = self.descriptors((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0);
+        let mut w = DescWrites::default();
+        self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
+        let set_layout = self.stages[&(data, content)].set_layout;
+        self.dev.device.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
+        self.bind_writes(&w, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
         let d = &self.dev.device;
-        d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
-        if let Some(s) = set {
-            d.cmd_bind_descriptor_sets(self.cb, vk::PipelineBindPoint::COMPUTE, layout, 0, &[s], &[]);
-        }
         d.cmd_dispatch(self.cb, x as u32, y as u32, z as u32);
         self.dev.full_barrier(self.cb);
     }
 
+    /// The descriptor set layout (both stages' bindings in set 0) and pipeline layout of a vertex / fragment stage pair,
+    /// and whether its descriptors are pushed: when each stage stays within the push limits.
+    unsafe fn graphics_layout(&mut self, vs: (u64, u64), fs: Option<(u64, u64)>) -> Option<(vk::DescriptorSetLayout, vk::PipelineLayout, bool)> {
+        if let Some(&l) = self.graphics_layouts.get(&(vs, fs)) {
+            return Some(l);
+        }
+        let vstage = self.stages.get(&vs)?;
+        let fstage = fs.and_then(|k| self.stages.get(&k));
+        let mut lb: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
+        for st in std::iter::once(vstage).chain(fstage) {
+            lb.extend(st.bindings.iter().map(|b| {
+                vk::DescriptorSetLayoutBinding::default().binding(b.binding).descriptor_type(b.ty).descriptor_count(b.count).stage_flags(st.stage_flags)
+            }));
+        }
+        let total: u32 = lb.iter().map(|b| b.descriptor_count).sum();
+        // Vertex streams (up to 16, and the zero stream) share the vertex stage's buffer slots.
+        let push = self.dev.push.as_ref().is_some_and(|p| {
+            total <= p.max
+                && vstage.samplers <= p.samplers
+                && fstage.is_none_or(|f| f.samplers <= p.samplers && f.buffers <= p.buffers)
+                && vstage.buffers + 17 <= p.buffers
+        });
+        let flags = if push { vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR } else { vk::DescriptorSetLayoutCreateFlags::empty() };
+        let dsl = self.dev.device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().flags(flags).bindings(&lb), None).ok()?;
+        let sl = [dsl];
+        let layout = self.dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl), None).ok()?;
+        self.graphics_layouts.insert((vs, fs), (dsl, layout, push));
+        Some((dsl, layout, push))
+    }
+
     unsafe fn pipeline(&mut self, topology: vk::PrimitiveTopology, vs: (u64, u64), fs: Option<(u64, u64)>, vl: &[VStream]) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
+        let (_, layout, _) = self.graphics_layout(vs, fs)?;
         let pass = self.pass.as_ref()?;
         let upper_left = crate::nvn::api::window_origin_mode() == 1;
         let gl_depth = crate::nvn::api::depth_mode() == 0;
@@ -271,16 +309,6 @@ impl Ctx {
         }
         let vstage = self.stages.get(&vs)?;
         let fstage = fs.and_then(|k| self.stages.get(&k));
-        let lk = (vstage.set_layout, fstage.map_or(self.empty_layout, |s| s.set_layout));
-        let layout = match self.layouts.get(&lk) {
-            Some(&l) => l,
-            None => {
-                let sl = [lk.0, lk.1];
-                let l = self.dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl), None).ok()?;
-                self.layouts.insert(lk, l);
-                l
-            }
-        };
         let entry = c"main";
         let mut stages = vec![vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vstage.module).name(entry)];
         if let Some(f) = fstage {
@@ -440,19 +468,15 @@ impl Ctx {
         }
     }
 
-    unsafe fn descriptors(&mut self, key: (u64, u64), data: u64, control: u64, stage: i32, call: &Draw, base_instance: i32) -> Option<vk::DescriptorSet> {
-        let (bindings, layout) = {
-            let s = self.stages.get(&key)?;
-            (s.bindings.clone(), s.set_layout)
-        };
+    /// The descriptors of stage `key`'s bindings for this draw, added to `out`.
+    unsafe fn stage_writes(&mut self, key: (u64, u64), data: u64, control: u64, stage: i32, call: &Draw, base_instance: i32, out: &mut DescWrites) {
+        let Some((bindings, base)) = self.stages.get(&key).map(|s| (s.bindings.clone(), s.base)) else { return };
         if bindings.is_empty() {
-            return None;
+            return;
         }
-        let set = self.alloc_set(layout)?;
         let driver = self.driver_cbuf(stage, call, base_instance);
         let (vw, vh) = (self.st.viewport.2.max(1) as f32, self.st.viewport.3.max(1) as f32);
-        let mut buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 16]> = Default::default();
-        let mut images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 16]> = Default::default();
+        let DescWrites { buffers, images } = out;
         let zero = Some((self.zeros.buffer, 0u64));
         // Constant buffer contents by slot, read once per draw (storage descriptors and bindless handles read them).
         let mut cbufs: smallvec::SmallVec<[(i32, Option<(*const u8, usize)>); 8]> = Default::default();
@@ -473,6 +497,12 @@ impl Ctx {
         for b in ordered {
             match &b.feed {
                 Feed::Support => {
+                    // Its contents depend on the viewport and the bound sizes only: one copy per submit each.
+                    let key = super::hash_of(&(vw.to_bits(), vh.to_bits(), &limits[..]));
+                    if let Some(&(buf, off)) = self.supports.get(&key) {
+                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: SUPPORT_SIZE as u64 }));
+                        continue;
+                    }
                     let mut sup = *support_template();
                     let put = |s: &mut [u8; SUPPORT_SIZE], off: usize, v: [f32; 4]| {
                         for (i, x) in v.iter().enumerate() {
@@ -489,6 +519,7 @@ impl Ctx {
                         }
                     }
                     if let Some((buf, off)) = self.arena.copy(&self.dev, &sup) {
+                        self.supports.insert(key, (buf, off));
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: sup.len() as u64 }));
                     }
                 }
@@ -501,7 +532,7 @@ impl Ctx {
                             if a > 0x10000 && self.gpu_dirty.overlaps(a, a + len) {
                                 if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
                                     if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
-                                        limits.push((b.binding, len));
+                                        limits.push((b.binding - base, len));
                                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len as u64 }));
                                         continue;
                                     }
@@ -512,11 +543,26 @@ impl Ctx {
                     }
                     let bytes = cbuf(self, *slot);
                     let x = match &bytes {
+                        // The driver buffer changes per draw; others are copied once per contents (the same memory
+                        // with no write by this submit's commands in between).
+                        Some(v) if *slot != 0 => {
+                            let key = (v.as_ptr() as usize, v.len(), self.ubo_epoch);
+                            match self.ubo_copies.get(&key) {
+                                Some(&(b, o)) => Some((b, o, v.len() as u64)),
+                                None => {
+                                    let c = self.arena.copy(&self.dev, v);
+                                    if let Some(c) = c {
+                                        self.ubo_copies.insert(key, c);
+                                    }
+                                    c.map(|(b, o)| (b, o, v.len() as u64))
+                                }
+                            }
+                        }
                         Some(v) => self.arena.copy(&self.dev, v).map(|(b, o)| (b, o, v.len() as u64)),
                         None => zero.map(|(b, o)| (b, o, 256)),
                     };
                     if let Some((buf, off, len)) = x {
-                        limits.push((b.binding, len as usize));
+                        limits.push((b.binding - base, len as usize));
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len }));
                     }
                 }
@@ -583,20 +629,42 @@ impl Ctx {
                 }
             }
         }
-        let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 16]> = buffers.iter().map(|b| [b.2]).collect();
-        let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 32]> = buffers
+    }
+
+    /// Binds `w` for the next draw or dispatch: pushed into the command buffer, or written into a new set of `set_layout`.
+    unsafe fn bind_writes(&mut self, w: &DescWrites, bind_point: vk::PipelineBindPoint, layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout, push: bool) {
+        if w.buffers.is_empty() && w.images.is_empty() {
+            return;
+        }
+        let set = if push {
+            vk::DescriptorSet::null()
+        } else {
+            match self.alloc_set(set_layout) {
+                Some(s) => s,
+                None => return,
+            }
+        };
+        let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 32]> = w.buffers.iter().map(|b| [b.2]).collect();
+        let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 64]> = w
+            .buffers
             .iter()
             .zip(&bi)
             .map(|((binding, ty, _), info)| vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).buffer_info(info))
             .collect();
-        for (binding, ty, infos) in &images {
+        for (binding, ty, infos) in &w.images {
             if *ty == vk::DescriptorType::UNIFORM_TEXEL_BUFFER || *ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER {
                 continue;
             }
             writes.push(vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).image_info(infos));
         }
-        self.dev.device.update_descriptor_sets(&writes, &[]);
-        Some(set)
+        if push {
+            if let Some(p) = &self.dev.push {
+                p.ext.cmd_push_descriptor_set(self.cb, bind_point, layout, 0, &writes);
+            }
+        } else {
+            self.dev.device.update_descriptor_sets(&writes, &[]);
+            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[set], &[]);
+        }
     }
 
     unsafe fn alloc_set(&mut self, layout: vk::DescriptorSetLayout) -> Option<vk::DescriptorSet> {

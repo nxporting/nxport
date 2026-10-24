@@ -30,6 +30,7 @@ pub struct HostCapabilities {
     pub supports_image_gather_extended: bool,
     pub supports_draw_parameters: bool,
     pub cbuf_limits: bool,
+    pub binding_base: i32,
 }
 
 #[derive(Clone)]

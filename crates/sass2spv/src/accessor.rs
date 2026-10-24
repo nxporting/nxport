@@ -41,6 +41,9 @@ pub struct Host {
     /// Every resource of the stage in this descriptor set, textures numbered from TEXTURE_BASE_ONE_SET (Vulkan, one set
     /// per stage). None: Ryujinx's sets (uniform buffers 0, images 1, storage buffers 2, textures 3).
     pub stage_set: Option<i32>,
+    /// Added to every binding the module declares (the manifest keeps the unshifted numbers): stages sharing one
+    /// descriptor set keep their bindings apart.
+    pub binding_base: i32,
 }
 
 impl Default for Host {
@@ -56,6 +59,7 @@ impl Default for Host {
             cbuf_limits: false,
             reduced_precision: false,
             stage_set: None,
+            binding_base: 0,
         }
     }
 }

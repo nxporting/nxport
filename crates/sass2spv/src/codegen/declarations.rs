@@ -103,7 +103,7 @@ fn declare_buffers(c: &mut CodeGenContext, buffers: &[&BufferDefinition], is_buf
         let variable = c.m.variable(&pointer_type, StorageClass::UNIFORM, None);
         c.m.name(&variable, &buffer.name);
         c.m.decorate(&variable, Decoration::DESCRIPTOR_SET, &[Lit::i32(set_index).into()]);
-        c.m.decorate(&variable, Decoration::BINDING, &[Lit::i32(buffer.binding).into()]);
+        c.m.decorate(&variable, Decoration::BINDING, &[Lit::i32(buffer.binding + c.host.binding_base).into()]);
         c.m.add_global_variable(&variable);
         if is_buffer {
             c.storage_buffers.insert(buffer.binding, variable);
@@ -174,7 +174,7 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
         c.samplers_types.insert(key, sampler.ty);
         c.m.name(&sampled_image_variable, &sampler.name);
         c.m.decorate(&sampled_image_variable, Decoration::DESCRIPTOR_SET, &[Lit::i32(set_index).into()]);
-        c.m.decorate(&sampled_image_variable, Decoration::BINDING, &[Lit::i32(sampler.binding).into()]);
+        c.m.decorate(&sampled_image_variable, Decoration::BINDING, &[Lit::i32(sampler.binding + c.host.binding_base).into()]);
         c.m.add_global_variable(&sampled_image_variable);
     }
     Ok(())
@@ -214,7 +214,7 @@ fn declare_images(c: &mut CodeGenContext, images: &[&TextureDefinition]) -> R<()
         );
         c.m.name(&image_variable, &image.name);
         c.m.decorate(&image_variable, Decoration::DESCRIPTOR_SET, &[Lit::i32(set_index).into()]);
-        c.m.decorate(&image_variable, Decoration::BINDING, &[Lit::i32(image.binding).into()]);
+        c.m.decorate(&image_variable, Decoration::BINDING, &[Lit::i32(image.binding + c.host.binding_base).into()]);
         if image.flags.has(TextureUsageFlags::IMAGE_COHERENT) {
             c.m.decorate(&image_variable, Decoration::COHERENT, &[]);
         }

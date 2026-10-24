@@ -82,6 +82,8 @@ pub struct Ctx {
     failed_stages: HashSet<(u64, u64)>,
     pipelines: HashMap<u64, (vk::Pipeline, vk::PipelineLayout)>,
     layouts: HashMap<(vk::DescriptorSetLayout, vk::DescriptorSetLayout), vk::PipelineLayout>,
+    /// Vertex / fragment stage pairs: (set layout, pipeline layout, descriptors pushed).
+    graphics_layouts: HashMap<((u64, u64), Option<(u64, u64)>), (vk::DescriptorSetLayout, vk::PipelineLayout, bool)>,
     empty_layout: vk::DescriptorSetLayout,
     desc_pools: Vec<vk::DescriptorPool>,
     st: Nvn,
@@ -121,6 +123,12 @@ pub struct Ctx {
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
     /// Largest index of index ranges scanned in this submit, by (address, count, type, restart index).
     pub(super) max_indices: rustc_hash::FxHashMap<(usize, i32, i32, Option<u32>), u32>,
+    /// Support buffers of this submit, by contents (viewport, bound sizes).
+    pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
+    /// Uniform buffer copies of this submit by (host address, length, epoch); the epoch advances at every write of guest
+    /// memory by this submit's commands (inline uniform updates, reports).
+    pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize, u64), (vk::Buffer, u64)>,
+    pub(super) ubo_epoch: u64,
     /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none); then, when
     /// profiling passes, one at the end of each pass, with a description of the pass.
     timestamps: vk::QueryPool,
@@ -315,6 +323,7 @@ impl Ctx {
             failed_stages: Default::default(),
             pipelines: Default::default(),
             layouts: Default::default(),
+            graphics_layouts: Default::default(),
             empty_layout,
             desc_pools: Vec::new(),
             st: Nvn {
@@ -338,6 +347,9 @@ impl Ctx {
             repacked: Default::default(),
             bindings: Default::default(),
             max_indices: Default::default(),
+            supports: Default::default(),
+            ubo_copies: Default::default(),
+            ubo_epoch: 0,
             timestamps,
             timestamps_supported,
             profile_passes: false,
@@ -471,6 +483,8 @@ impl Ctx {
         self.repacked.clear();
         self.bindings.clear();
         self.max_indices.clear();
+        self.supports.clear();
+        self.ubo_copies.clear();
     }
 
     /// Frees what completed submits used.
@@ -667,6 +681,7 @@ impl Ctx {
             Cmd::UpdateUniformBuffer { addr, offset, data } => {
                 // In stream order: draws recorded before it took their copies already.
                 let a = crate::nvn::api::translate_virtual((*addr as i64 + *offset as i64) as usize);
+                self.ubo_epoch += 1;
                 if a > 0x10000 {
                     std::ptr::copy_nonoverlapping(data.as_ptr(), a as *mut u8, data.len());
                 }
@@ -689,7 +704,10 @@ impl Ctx {
                     *instances,
                 )
             }
-            Cmd::ReportValue { value, addr } => write_report(*addr, *value as u64, true),
+            Cmd::ReportValue { value, addr } => {
+                self.ubo_epoch += 1;
+                write_report(*addr, *value as u64, true)
+            }
             Cmd::ReportCounter { counter, addr } => {
                 // SAMPLES_PASSED (1): occlusion queries. TIMESTAMP (0) reports the time, TIMESTAMP_TOP (0x10) zero (games
                 // reset the markers of conditional rendering with it). ZCULL_STATS (0xF) has no timestamp.
@@ -697,6 +715,7 @@ impl Ctx {
                     self.occlusion_report(*addr);
                 } else {
                     let v = if *counter == 0 { crate::clock::now_ns() } else { 0 };
+                    self.ubo_epoch += 1;
                     write_report(*addr, v, *counter != 0xF);
                 }
             }

@@ -110,6 +110,7 @@ pub fn translate_functions(
         supports_image_gather_extended: gpu.host.image_gather_extended,
         supports_draw_parameters: gpu.host.draw_parameters,
         cbuf_limits: gpu.host.cbuf_limits,
+        binding_base: gpu.host.binding_base,
     };
     let (binary_code, msl) = match target {
         Target::Spirv => (codegen::generate(&mut s_info, &d.tc.definitions, &rm.properties, &host)?, String::new()),
