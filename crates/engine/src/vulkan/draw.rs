@@ -367,8 +367,17 @@ impl Ctx {
         let has_stencil = format::aspects(depth_fmt).contains(vk::ImageAspectFlags::STENCIL) && depth_fmt != vk::Format::UNDEFINED;
         let ds = state::depth_stencil(self.st.depth_stencil.unwrap_or_else(state::default_depth_stencil), has_depth, has_stencil);
         let mask = self.st.channel_mask.unwrap_or(u32::MAX);
-        let att: Vec<vk::PipelineColorBlendAttachmentState> =
-            (0..color_fmts.len()).map(|i| state::attachment(i, self.st.blend[i], self.st.color_state, mask)).collect();
+        // Formats that cannot blend (integer targets) are written unblended, as the Switch GPU does.
+        let att: Vec<vk::PipelineColorBlendAttachmentState> = color_fmts
+            .iter()
+            .enumerate()
+            .map(|(i, &f)| {
+                let a = state::attachment(i, self.st.blend[i], self.st.color_state, mask);
+                let blends = f != vk::Format::UNDEFINED
+                    && self.dev.instance.get_physical_device_format_properties(self.dev.pdev, f).optimal_tiling_features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND);
+                if blends { a } else { a.blend_enable(false) }
+            })
+            .collect();
         let cbs = vk::PipelineColorBlendStateCreateInfo::default().attachments(&att);
         let dyns = [
             vk::DynamicState::VIEWPORT,
