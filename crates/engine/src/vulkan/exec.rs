@@ -182,6 +182,11 @@ pub struct Ctx {
     free_timestamps: Vec<vk::QueryPool>,
     free_desc_pools: Vec<vk::DescriptorPool>,
     warned: HashSet<String>,
+    /// The pipeline cache (stage_cache.rs; made at the first pipeline), and pipelines created since it was last saved.
+    pipeline_cache: Option<vk::PipelineCache>,
+    /// Pipelines created at the last save, and its frame.
+    saved_pipelines: u64,
+    pipeline_cache_saved: u64,
     /// Window output (vulkan/window.rs), made at the first present when the display has a layer.
     window: Option<super::window::Window>,
     window_tried: bool,
@@ -456,6 +461,9 @@ impl Ctx {
             free_desc_pools: Vec::new(),
             warned: Default::default(),
             unimplemented: Default::default(),
+            pipeline_cache: None,
+            saved_pipelines: 0,
+            pipeline_cache_saved: 0,
             window: None,
             window_tried: false,
             unimplemented_kinds: Default::default(),
@@ -628,8 +636,23 @@ impl Ctx {
         self.ubo_copies.clear();
     }
 
+    /// The pipeline cache.
+    pub(super) unsafe fn pipeline_cache(&mut self) -> vk::PipelineCache {
+        *self.pipeline_cache.get_or_insert_with(|| super::stage_cache::open_pipeline_cache(&self.dev))
+    }
+
     /// Frees what completed submits used.
     unsafe fn retire(&mut self) {
+        // The pipeline cache to disk now and then (the process has no clean exit to save it at).
+        let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+        let total = super::PIPELINES_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        if total > self.saved_pipelines && frame >= self.pipeline_cache_saved + 1800 {
+            if let Some(c) = self.pipeline_cache {
+                super::stage_cache::save_pipeline_cache(&self.dev, c);
+            }
+            self.saved_pipelines = total;
+            self.pipeline_cache_saved = frame;
+        }
         // Repacked streams no draw used for 600 frames (no submit in flight reads them).
         let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         if frame >= self.repack_swept + 600 {
