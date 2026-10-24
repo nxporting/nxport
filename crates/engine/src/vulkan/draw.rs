@@ -785,7 +785,9 @@ impl Ctx {
                 h.write_u32(*binding);
                 h.write_i32(ty.as_raw());
                 h.write_u64(vk::Handle::as_raw(info.buffer));
-                h.write_u64(info.offset);
+                if *ty != vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC {
+                    h.write_u64(info.offset);
+                }
                 h.write_u64(info.range);
             }
             for (binding, ty, infos) in &w.images {
@@ -798,8 +800,17 @@ impl Ctx {
             }
             h.finish()
         });
+        // Dynamic offsets in binding order.
+        let mut dynamic: smallvec::SmallVec<[(u32, u32); 32]> = w
+            .buffers
+            .iter()
+            .filter(|b| b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+            .map(|b| (b.0, b.2.offset as u32))
+            .collect();
+        dynamic.sort_unstable_by_key(|d| d.0);
+        let offsets: smallvec::SmallVec<[u32; 32]> = dynamic.iter().map(|d| d.1).collect();
         if let Some(&s) = key.and_then(|k| self.set_memo.get(&k)) {
-            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[s], &[]);
+            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[s], &offsets);
             return;
         }
         let set = if push {
@@ -813,7 +824,11 @@ impl Ctx {
         if let Some(k) = key {
             self.set_memo.insert(k, set);
         }
-        let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 32]> = w.buffers.iter().map(|b| [b.2]).collect();
+        let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 32]> = w
+            .buffers
+            .iter()
+            .map(|b| if b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC { [vk::DescriptorBufferInfo { offset: 0, ..b.2 }] } else { [b.2] })
+            .collect();
         let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 64]> = w
             .buffers
             .iter()
@@ -832,7 +847,7 @@ impl Ctx {
             }
         } else {
             self.dev.device.update_descriptor_sets(&writes, &[]);
-            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[set], &[]);
+            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[set], &offsets);
         }
     }
 
@@ -850,7 +865,8 @@ impl Ctx {
             }
         }
         let sizes = [
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 16384 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1024 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC, descriptor_count: 16384 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8192 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 16384 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 2048 },
