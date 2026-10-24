@@ -94,6 +94,10 @@ pub trait Backend: Send + Sync {
     fn gpu_only_textures(&self, _f: &mut dyn FnMut(GpuOnlyTexture)) -> usize {
         0
     }
+    /// The GPU's own time for the last completed submit, in ns, where the backend measures it.
+    fn last_submit_gpu_ns(&self) -> Option<u64> {
+        None
+    }
 }
 
 static BACKEND: OnceLock<&'static dyn Backend> = OnceLock::new();

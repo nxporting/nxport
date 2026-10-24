@@ -41,6 +41,8 @@ pub struct Options {
     /// Then run the whole frame this many more times as one submit and report its time (steady state: shaders and
     /// pipelines made, images uploaded).
     pub repeat: usize,
+    /// Print each pass's GPU time (backends that measure it), slowest first.
+    pub profile: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -424,6 +426,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     let mut infos = Vec::new();
     let mut handle = 1u64 << 62;
     let t1 = std::time::Instant::now();
+    let mut profile: Vec<(u64, usize, u32, u32, String)> = Vec::new();
     for (pi, p) in passes.iter().enumerate() {
         handle += 1;
         if opts.trace_passes.contains(&pi) {
@@ -493,6 +496,15 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
         crate::nvn::api::insert_command_list(handle, ops[p.first..p.end].to_vec());
         gpu.submit(&[handle]);
         gpu.wait_serial(gpu.submitted_serial(), u64::MAX);
+        if opts.profile {
+            if let Some(ns) = gpu.last_submit_gpu_ns() {
+                let target = p.colors.iter().find(|r| r.texture != 0).and_then(|r| {
+                    let (_, t) = crate::nvn::api::texture_snapshot(crate::nvn::api::resolve_texture_ref(r.texture, r.gen))?;
+                    Some(format!("{}x{} fmt {}", t.width, t.height, t.format))
+                });
+                profile.push((ns, pi, p.draws, p.clears, target.unwrap_or_default()));
+            }
+        }
         let mut info = PassInfo {
             first: p.first,
             end: p.end,
@@ -632,6 +644,14 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     );
     for n in &report.notes {
         println!("[gpu-replay] {n}");
+    }
+    if !profile.is_empty() {
+        let total: u64 = profile.iter().map(|p| p.0).sum();
+        profile.sort_by_key(|p| std::cmp::Reverse(p.0));
+        println!("[gpu-replay] GPU time of the {} passes: {:.2} ms; slowest:", profile.len(), total as f64 / 1e6);
+        for (ns, pi, draws, clears, target) in profile.iter().take(25) {
+            println!("[gpu-replay]   pass {pi:3}: {:6.3} ms, {draws} draws, {clears} clears, {target}", *ns as f64 / 1e6);
+        }
     }
     if opts.repeat > 0 {
         handle += 1;

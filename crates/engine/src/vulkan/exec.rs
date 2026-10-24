@@ -121,6 +121,10 @@ pub struct Ctx {
     /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none).
     timestamps: vk::QueryPool,
     occl: Occlusion,
+    /// The submit's command buffers already handed to the queue (the GPU starts on them while the rest is recorded: an
+    /// idle GPU runs at a fraction of its speed), and when the current one began.
+    chunks: Vec<vk::CommandBuffer>,
+    chunk_start: std::time::Instant,
     warned: HashSet<String>,
 }
 
@@ -173,6 +177,9 @@ impl Ranges {
         self.0.clear();
     }
 }
+
+/// Recording time after which the command buffer so far is submitted (at the next pass end).
+const CHUNK: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Size of the zero buffer.
 const ZEROS: u64 = 4096;
@@ -306,6 +313,8 @@ impl Ctx {
             bindings: Default::default(),
             timestamps,
             occl,
+            chunks: Vec::new(),
+            chunk_start: std::time::Instant::now(),
             warned: HashSet::new(),
         })
     }
@@ -338,6 +347,7 @@ impl Ctx {
             d.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::TOP_OF_PIPE, self.timestamps, 0);
         }
         let t0 = std::time::Instant::now();
+        self.chunk_start = t0;
         for &h in lists {
             self.run_list(h, 0);
         }
@@ -357,6 +367,7 @@ impl Ctx {
             if self.dev.device.get_query_pool_results(self.timestamps, 0, &mut ts, vk::QueryResultFlags::TYPE_64).is_ok() && ts[1] > ts[0] {
                 let ns = ((ts[1] - ts[0]) as f64 * self.dev.limits.timestamp_period as f64) as u64;
                 super::GPU_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
+                super::LAST_GPU_NS.store(ns, std::sync::atomic::Ordering::Relaxed);
             }
         }
         if let Err(e) = waited {
@@ -365,6 +376,9 @@ impl Ctx {
             self.lost = true;
         }
         self.dev.device.free_command_buffers(self.dev.cmd_pool, &[self.cb]);
+        for cb in std::mem::take(&mut self.chunks) {
+            self.dev.device.free_command_buffers(self.dev.cmd_pool, &[cb]);
+        }
         self.cb = vk::CommandBuffer::null();
         self.gpu_dirty.clear();
         for (addr, src, len) in std::mem::take(&mut self.writebacks) {
@@ -792,7 +806,30 @@ impl Ctx {
             self.dev.device.cmd_end_rendering(self.cb);
             self.dev.full_barrier(self.cb);
             self.resolve_bc_proxies();
+            if self.chunk_start.elapsed() > CHUNK {
+                self.submit_chunk();
+            }
         }
+    }
+
+    /// Hands the command buffer recorded so far to the queue and continues in a new one.
+    unsafe fn submit_chunk(&mut self) {
+        let d = &self.dev.device;
+        let Ok(next) =
+            d.allocate_command_buffers(&vk::CommandBufferAllocateInfo::default().command_pool(self.dev.cmd_pool).command_buffer_count(1))
+        else {
+            return;
+        };
+        let _ = d.end_command_buffer(self.cb);
+        let cbs = [self.cb];
+        if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()) {
+            println!("[vulkan] vkQueueSubmit: {e}");
+            self.lost = true;
+        }
+        self.chunks.push(self.cb);
+        self.cb = next[0];
+        let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
+        self.chunk_start = std::time::Instant::now();
     }
 
     /// The proxy a render target that names a block-compressed texture through a view format of one block per texel
