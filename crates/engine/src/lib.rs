@@ -143,6 +143,8 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         gpu::install(&metal::backend::METAL);
     }
     let s = settings::install(s);
+    // Write-tracked pages fault on writes (guest/dirty_track.rs), ours included.
+    unsafe { cpu::crash_handler::install_signal_handlers() };
     if vulkan {
         vulkan::init(s.debug.validate)?;
     }
@@ -288,8 +290,8 @@ pub fn replay_capture(
     if vulkan {
         vulkan::init(s.debug.validate)?;
         let r = capture::replay::run(dir, opts);
-        let (record, wait, flushes) = vulkan::timing();
-        println!("[gpu-replay] vulkan: recording {record:.1} ms, GPU wait {wait:.1} ms (all passes), {flushes} overlap flushes");
+        let (record, wait, gpu, flushes) = vulkan::timing();
+        println!("[gpu-replay] vulkan: recording {record:.1} ms, GPU wait {wait:.1} ms, GPU {gpu:.1} ms (all passes), {flushes} overlap flushes");
         return r;
     }
     #[cfg(nx_native)]

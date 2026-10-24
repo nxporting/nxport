@@ -174,9 +174,12 @@ fn describe(slot: usize, rt: &RtRef, t: Option<&Texels>) -> String {
 fn map_memory(dir: &Path) -> Result<(usize, u64), String> {
     let mut ranges = 0;
     let mut bytes = 0u64;
+    let (mut lo, mut hi) = (u64::MAX, 0u64);
     format::read_memory(
         &dir.join("memory.bin"),
         |start, len| unsafe {
+            lo = lo.min(start);
+            hi = hi.max(start + len);
             crate::os::reserve(crate::os::At::Exactly(start as usize), len as usize)
                 .map_err(|e| format!("memory at {start:#x} (+{len:#x}): {e}"))?;
             crate::os::commit(start as usize, len as usize, crate::os::Prot::ReadWrite)
@@ -190,6 +193,11 @@ fn map_memory(dir: &Path) -> Result<(usize, u64), String> {
             Ok(())
         },
     )?;
+    // Write tracking over the captured memory, as over the guest heap in a live run: texture checks are skipped while
+    // their pages are untouched (without it every texture was hashed at every submit and replay timings meant little).
+    if lo < hi {
+        crate::guest::dirty_track::register_domain(lo as usize, (hi - lo) as usize);
+    }
     Ok((ranges, bytes))
 }
 

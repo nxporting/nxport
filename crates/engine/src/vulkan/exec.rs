@@ -107,6 +107,12 @@ pub struct Ctx {
     rt_history: HashMap<usize, u64>,
     writeback_rts: Vec<NvnTexture>,
     default_sampler: vk::Sampler,
+    /// Zeros for unbound vertex attributes and resources (never written).
+    pub(super) zeros: super::device::HostBuffer,
+    /// Repacked vertex streams of this submit, by (guest range, layout, elements).
+    pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
+    /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none).
+    timestamps: vk::QueryPool,
     warned: HashSet<String>,
 }
 
@@ -160,8 +166,15 @@ impl Ranges {
     }
 }
 
+/// Size of the zero buffer.
+const ZEROS: u64 = 4096;
+
+pub(super) fn hash_of<T: Hash>(v: &T) -> u64 {
+    hash(v)
+}
+
 fn hash<T: Hash>(v: &T) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = rustc_hash::FxHasher::default();
     v.hash(&mut h);
     h.finish()
 }
@@ -179,6 +192,21 @@ fn attr_type_code(t: AttributeType) -> u8 {
 impl Ctx {
     pub fn new(dev: Dev) -> Result<Ctx, String> {
         let default_sampler = unsafe { dev_sampler(&dev) };
+        let timestamps = unsafe {
+            if dev.limits.timestamp_compute_and_graphics != 0 {
+                dev.device
+                    .create_query_pool(&vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::TIMESTAMP).query_count(2), None)
+                    .unwrap_or(vk::QueryPool::null())
+            } else {
+                vk::QueryPool::null()
+            }
+        };
+        let zeros = unsafe {
+            let usage = vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::VERTEX_BUFFER;
+            let b = dev.host_buffer(ZEROS, usage)?;
+            std::ptr::write_bytes(b.ptr, 0, ZEROS as usize);
+            b
+        };
         // Vertex formats the device cannot fetch (their attributes would read garbage).
         let missing: Vec<u32> = (1..=120)
             .filter(|&f| {
@@ -229,6 +257,9 @@ impl Ctx {
             writeback_rts: Vec::new(),
             fb_epoch: 1,
             default_sampler,
+            zeros,
+            repacked: Default::default(),
+            timestamps,
             warned: HashSet::new(),
         })
     }
@@ -253,17 +284,31 @@ impl Ctx {
         self.cb = cbs[0];
         self.tex.begin_submit();
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
+        if self.timestamps != vk::QueryPool::null() {
+            d.cmd_reset_query_pool(self.cb, self.timestamps, 0, 2);
+            d.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::TOP_OF_PIPE, self.timestamps, 0);
+        }
         let t0 = std::time::Instant::now();
         for &h in lists {
             self.run_list(h, 0);
         }
         self.end_pass();
+        if self.timestamps != vk::QueryPool::null() {
+            self.dev.device.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, self.timestamps, 1);
+        }
         let _ = self.dev.device.end_command_buffer(self.cb);
         let t1 = std::time::Instant::now();
         let waited = self.dev.submit_wait(self.cb);
         let t2 = std::time::Instant::now();
         super::RECORD_NS.fetch_add((t1 - t0).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         super::WAIT_NS.fetch_add((t2 - t1).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        if waited.is_ok() && self.timestamps != vk::QueryPool::null() {
+            let mut ts = [0u64; 2];
+            if self.dev.device.get_query_pool_results(self.timestamps, 0, &mut ts, vk::QueryResultFlags::TYPE_64).is_ok() && ts[1] > ts[0] {
+                let ns = ((ts[1] - ts[0]) as f64 * self.dev.limits.timestamp_period as f64) as u64;
+                super::GPU_NS.fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         if let Err(e) = waited {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
             println!("[vulkan] submit of {} lists at presented frame {frame} failed: {e}; no more GPU work", lists.len());
@@ -280,6 +325,7 @@ impl Ctx {
             self.dev.device.destroy_descriptor_pool(p, None);
         }
         self.arena.reset(&self.dev);
+        self.repacked.clear();
         self.imports.release_retired(&self.dev);
     }
 
