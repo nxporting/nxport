@@ -44,6 +44,11 @@ pub struct Host {
     /// Added to every binding the module declares (the manifest keeps the unshifted numbers): stages sharing one
     /// descriptor set keep their bindings apart.
     pub binding_base: i32,
+    /// Fragment stages: the user locations the vertex stage paired with it writes (bit N = location N). Inputs at other
+    /// locations read zero (the Metal path's function constants 48 + N do the same): Metal refuses to link a fragment
+    /// function reading a varying its vertex function does not write, while the Switch GPU leaves it undefined. None:
+    /// every input is linked.
+    pub fragment_inputs: Option<u32>,
 }
 
 impl Default for Host {
@@ -60,6 +65,7 @@ impl Default for Host {
             reduced_precision: false,
             stage_set: None,
             binding_base: 0,
+            fragment_inputs: None,
         }
     }
 }

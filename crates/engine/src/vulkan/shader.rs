@@ -46,6 +46,8 @@ pub struct Stage {
     pub stage: sass2spv::ShaderStage,
     /// Input locations (a vertex stage's attributes).
     pub inputs: Vec<u32>,
+    /// User output locations it declares (a vertex stage's varyings; bit N = location N).
+    pub outputs: u32,
 }
 
 /// Fragment stages' first binding (vertex stages start at 0; sass2spv numbers a stage's bindings below 256).
@@ -76,6 +78,7 @@ pub unsafe fn translate(
     state: Option<sass2spv::accessor::GraphicsState>,
     set: u32,
     binding_base: u32,
+    fragment_inputs: Option<u32>,
     discard_writes_depth: bool,
 ) -> Result<Stage, String> {
     let len = match crate::nvn::api::find_memory_pool(crate::nvn::api::translate_virtual(data as usize)) {
@@ -109,7 +112,7 @@ pub unsafe fn translate(
         let mem = (ctrl(0x754).max(ctrl(0x760)).max(ctrl(0x710)) + 15) & !15;
         [ctrl(0x748) as i32, ctrl(0x74c) as i32, ctrl(0x750) as i32, mem as i32]
     });
-    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, discard_writes_depth, ..dev.shader_host.clone() };
+    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
     let p = sass2spv::translate_stage_for(code, hint, cb1, compute_fields, &sass2spv::Target::Spirv, state, host)?;
     if p.binary_code.is_empty() {
         return Err("empty SPIR-V".into());
@@ -127,6 +130,7 @@ pub unsafe fn translate(
     // Inputs: OpVariable (59) of storage class Input (1) with a Location decoration (30).
     let mut locations: HashMap<u32, u32> = HashMap::new();
     let mut input_vars = Vec::new();
+    let mut output_vars = Vec::new();
     let mut i = 5;
     while i < words.len() {
         let (n, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
@@ -142,10 +146,14 @@ pub unsafe fn translate(
         if op == 59 && n >= 4 && words[i + 3] == 1 {
             input_vars.push(words[i + 2]);
         }
+        if op == 59 && n >= 4 && words[i + 3] == 3 {
+            output_vars.push(words[i + 2]);
+        }
         i += n;
     }
     let mut inputs: Vec<u32> = input_vars.iter().filter_map(|v| locations.get(v).copied()).collect();
     inputs.sort();
+    let outputs = output_vars.iter().filter_map(|v| locations.get(v)).filter(|&&l| l < 32).fold(0u32, |m, &l| m | 1 << l);
     let mut out = Vec::new();
     for b in declared {
         let mb = b.wrapping_sub(binding_base);
@@ -214,5 +222,6 @@ pub unsafe fn translate(
         buffers,
         stage: p.info.stage,
         inputs,
+        outputs,
     })
 }

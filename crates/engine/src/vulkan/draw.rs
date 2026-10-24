@@ -122,7 +122,8 @@ impl Ctx {
         self.dev.discard_writes_depth && self.pass.as_ref().is_some_and(|p| p.depth.is_some_and(|(_, f)| format::aspects(f).contains(vk::ImageAspectFlags::DEPTH)))
     }
 
-    unsafe fn stage(&mut self, data: u64, control: u64, index: usize, state: GraphicsState, key: u64, set: u32) -> bool {
+    /// `fragment_inputs`: for a fragment stage, the varyings its vertex stage writes (part of `key`).
+    unsafe fn stage(&mut self, data: u64, control: u64, index: usize, state: GraphicsState, key: u64, set: u32, fragment_inputs: Option<u32>) -> bool {
         let discard_depth = set == 1 && self.discard_depth();
         let k = (data, key);
         if self.stages.contains_key(&k) {
@@ -133,7 +134,7 @@ impl Ctx {
         }
         // Graphics stages share set 0, the fragment stage's bindings above the vertex stage's.
         let base = if set == 1 { shader::FRAGMENT_BINDING_BASE } else { 0 };
-        match shader::translate(&self.dev, data, control, index, Some(state), 0, base, discard_depth) {
+        match shader::translate(&self.dev, data, control, index, Some(state), 0, base, fragment_inputs, discard_depth) {
             Ok(s) => {
                 self.stages.insert(k, s);
                 true
@@ -160,14 +161,16 @@ impl Ctx {
         };
         let (vstate, vkey) = self.vertex_state();
         let vkey = hash(&(vkey, vh));
-        if !self.stage(vd, vc, 0, vstate, vkey, 0) {
+        if !self.stage(vd, vc, 0, vstate, vkey, 0, None) {
             return;
         }
+        // Metal links a fragment function's inputs to the vertex function's outputs (MoltenVK).
+        let varyings = self.dev.link_varyings.then(|| self.stages[&(vd, vkey)].outputs);
         let fkey = match fs {
             Some((fd, fc, fh)) => {
                 let (fstate, fkey) = self.fragment_state();
-                let fkey = hash(&(fkey, fh));
-                if !self.stage(fd, fc, 1, fstate, fkey, 1) {
+                let fkey = hash(&(fkey, fh, varyings));
+                if !self.stage(fd, fc, 1, fstate, fkey, 1, varyings) {
                     return;
                 }
                 Some((fd, fkey))
@@ -217,7 +220,7 @@ impl Ctx {
             self.warn(format!("compute program {:#x} has no stage", self.st.compute_program));
             return;
         };
-        if !self.stage(data, control, 0, GraphicsState::zeroed(), content, 0) {
+        if !self.stage(data, control, 0, GraphicsState::zeroed(), content, 0, None) {
             return;
         }
         let key = hash(&("compute", data, content));
