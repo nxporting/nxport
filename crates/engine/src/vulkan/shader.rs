@@ -35,7 +35,19 @@ pub struct Binding {
     pub extent: i32,
 }
 
+/// What a stage was made from, the same in every session: its disk cache key (stage_cache.rs), the hash of its guest
+/// code, and how it was translated.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StageId {
+    pub key: u64,
+    pub code: u64,
+    pub hint: i32,
+    pub compute: bool,
+    pub base: u32,
+}
+
 pub struct Stage {
+    pub id: StageId,
     pub module: vk::ShaderModule,
     /// Its bindings, numbered from the stage's binding base (graphics stages share one set: vertex 0.., fragment
     /// FRAGMENT_BINDING_BASE..).
@@ -119,8 +131,8 @@ pub unsafe fn translate(
     let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
     // The disk cache (stage_cache.rs), by the stage's leading bytes and control section and the translation inputs.
     let cache_key = super::exec::hash_of(&(super::stage_hash(data, control), hint, cb1, compute_fields, format!("{state:?}"), format!("{host:?}")));
-    if let Some((spirv, m)) = super::stage_cache::load(cache_key, data, control, len) {
-        return build_stage(dev, &spirv, &m, compute, hint, binding_base);
+    if let Some((spirv, m, code)) = super::stage_cache::load(cache_key, data, control, len) {
+        return build_stage(dev, &spirv, &m, StageId { key: cache_key, code, hint, compute, base: binding_base });
     }
     let p = sass2spv::translate_stage_for(code, hint, cb1, compute_fields, &sass2spv::Target::Spirv, state, host)?;
     if p.binary_code.is_empty() {
@@ -128,14 +140,21 @@ pub unsafe fn translate(
     }
     let m = p.manifest();
     let used = (p.size.max(0) as usize).min(len);
-    super::stage_cache::store(cache_key, used, super::stage_cache::code_hash(data, control, used), &p.binary_code, &m);
+    let code = super::stage_cache::code_hash(data, control, used);
+    super::stage_cache::store(cache_key, used, code, &p.binary_code, &m);
     if let Some(dir) = &crate::settings::get().debug.dump_spirv {
         let _ = std::fs::create_dir_all(dir);
         let name = format!("{data:012x}_{binding_base}_{}", p.binary_code.len());
         let _ = std::fs::write(dir.join(format!("{name}.spv")), &p.binary_code);
         let _ = std::fs::write(dir.join(format!("{name}.json")), sass2spv::manifest_json(&p));
     }
-    build_stage(dev, &p.binary_code, &m, compute, hint, binding_base)
+    build_stage(dev, &p.binary_code, &m, StageId { key: cache_key, code, hint, compute, base: binding_base })
+}
+
+/// The stage `id` from the disk cache, without its guest code (pipeline precompilation).
+pub unsafe fn from_cache(dev: &Dev, id: StageId) -> Result<Stage, String> {
+    let (spirv, m) = super::stage_cache::load_id(id.key, id.code).ok_or("not in the stage cache")?;
+    build_stage(dev, &spirv, &m, id)
 }
 
 /// A stage from its SPIR-V and manifest.
@@ -143,10 +162,9 @@ unsafe fn build_stage(
     dev: &Dev,
     spirv: &[u8],
     m: &sass2spv::manifest::ShaderManifest,
-    compute: bool,
-    hint: i32,
-    binding_base: u32,
+    id: StageId,
 ) -> Result<Stage, String> {
+    let (compute, hint, binding_base) = (id.compute, id.hint, id.base);
     let words: Vec<u32> = spirv.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     // The bindings the module declares (OpDecorate 71, Binding 33), each fed as the manifest says.
     let mut declared = Vec::new();
@@ -256,6 +274,7 @@ unsafe fn build_stage(
         .map(|b| b.count)
         .sum();
     Ok(Stage {
+        id,
         module,
         bindings: out.into(),
         set_layout,

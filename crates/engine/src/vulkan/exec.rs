@@ -10,7 +10,7 @@ use sass2spv::types::AttributeType;
 use super::device::Dev;
 use super::shader::{self, Feed, Stage};
 use super::texture::{self, Textures};
-use super::{format, state, Arena, Imports};
+use super::{format, pipelines, state, Arena, Imports};
 use crate::gpu::{GpuOnlyTexture, Texels};
 use crate::nvn::api::NvnTexture;
 use crate::nvn::cmd::{AttribState, Cmd, RtRef};
@@ -72,7 +72,7 @@ struct Pass {
 unsafe impl Send for Ctx {}
 
 pub struct Ctx {
-    dev: Dev,
+    dev: std::sync::Arc<Dev>,
     /// Program stages: (code, control section, content hash).
     pub programs: HashMap<usize, Vec<(u64, u64, u64)>>,
     tex: Textures,
@@ -393,7 +393,7 @@ impl Ctx {
                 .map_err(|e| e.to_string())?
         };
         Ok(Ctx {
-            dev,
+            dev: std::sync::Arc::new(dev),
             programs: Default::default(),
             tex: Textures::default(),
             imports: Imports::default(),

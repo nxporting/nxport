@@ -65,7 +65,6 @@ pub(super) struct VStream {
 const TEXTURE_TABLE_CBUF: i32 = 2;
 
 /// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
-const ZERO_STREAM: u32 = 16;
 
 impl Ctx {
     /// The guest program's vertex and fragment stages: (code, control section, content hash).
@@ -160,6 +159,11 @@ impl Ctx {
     }
 
     pub(super) unsafe fn draw(&mut self, mode: i32, call: Draw, base_instance: i32, instances: i32) {
+        // Pipelines listed by earlier sessions, made on worker threads from the first draw.
+        if self.pipeline_cache.is_none() {
+            let cache = self.pipeline_cache();
+            pipelines::precompile(self.dev.clone(), cache);
+        }
         if self.st.render_disabled || instances <= 0 || !self.begin_pass() {
             return;
         }
@@ -316,26 +320,13 @@ impl Ctx {
         }
         let vstage = self.stages.get(&vs)?;
         let fstage = fs.and_then(|k| self.stages.get(&k));
-        let mut lb: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
-        for st in std::iter::once(vstage).chain(fstage) {
-            lb.extend(st.bindings.iter().map(|b| {
-                vk::DescriptorSetLayoutBinding::default().binding(b.binding).descriptor_type(b.ty).descriptor_count(b.count).stage_flags(st.stage_flags)
-            }));
-        }
-        let total: u32 = lb.iter().map(|b| b.descriptor_count).sum();
-        // Vertex streams (up to 16, and the zero stream) share the vertex stage's buffer slots.
-        let push = self.dev.push.as_ref().is_some_and(|p| {
-            total <= p.max
-                && vstage.samplers <= p.samplers
-                && fstage.is_none_or(|f| f.samplers <= p.samplers && f.buffers <= p.buffers)
-                && vstage.buffers + 17 <= p.buffers
-        });
-        let flags = if push { vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR } else { vk::DescriptorSetLayoutCreateFlags::empty() };
-        let dsl = self.dev.device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().flags(flags).bindings(&lb), None).ok()?;
-        let sl = [dsl];
-        let layout = self.dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl), None).ok()?;
-        self.graphics_layouts.insert((vs, fs), (dsl, layout, push));
-        Some((dsl, layout, push))
+        // The one the pipeline workers made for this pair, if any (their pipelines were made with it).
+        let l = match pipelines::made_layout(vstage.id, fstage.map(|f| f.id)) {
+            Some(l) => l,
+            None => pipelines::layout(&self.dev, vstage, fstage)?,
+        };
+        self.graphics_layouts.insert((vs, fs), l);
+        Some(l)
     }
 
     unsafe fn pipeline(
@@ -355,9 +346,18 @@ impl Ctx {
         let depth_fmt = pass.depth.map_or(vk::Format::UNDEFINED, |d| d.1);
         let restart = self.st.prim_restart.is_some()
             && matches!(topology, vk::PrimitiveTopology::LINE_STRIP | vk::PrimitiveTopology::TRIANGLE_STRIP | vk::PrimitiveTopology::TRIANGLE_FAN);
+        // Only the state the pipeline is made from (pipelines::normalize): the game leaves other bits set at random.
+        let (blend, color_state, channel_mask, depth_stencil) = pipelines::normalize(
+            &self.st.blend,
+            self.st.color_state,
+            self.st.channel_mask,
+            self.st.depth_stencil,
+            &color_fmts,
+            depth_fmt,
+        );
         let key = hash(&(
-            (vs, fs, vl_hash, &self.st.blend),
-            (self.st.color_state, self.st.channel_mask, self.st.depth_stencil, self.st.polygon, self.st.multisample),
+            (vs, fs, vl_hash, &blend),
+            (color_state, channel_mask, depth_stencil, self.st.polygon, self.st.multisample),
             (color_fmts.iter().map(|f| f.as_raw()).collect::<Vec<_>>(), depth_fmt.as_raw(), pass.samples.as_raw()),
             (topology.as_raw(), restart, self.st.depth_clamp, upper_left, gl_depth),
         ));
@@ -366,110 +366,42 @@ impl Ctx {
         }
         let vstage = self.stages.get(&vs)?;
         let fstage = fs.and_then(|k| self.stages.get(&k));
-        let entry = c"main";
-        let mut stages = vec![vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vstage.module).name(entry)];
-        if let Some(f) = fstage {
-            stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(f.module).name(entry));
-        }
-        let vb: Vec<vk::VertexInputBindingDescription> = vl
-            .iter()
-            .map(|v| {
-                vk::VertexInputBindingDescription::default()
-                    .binding(v.stream)
-                    .stride(v.stride)
-                    .input_rate(if v.per_instance { vk::VertexInputRate::INSTANCE } else { vk::VertexInputRate::VERTEX })
-            })
-            .collect();
-        let va: Vec<vk::VertexInputAttributeDescription> = vl
-            .iter()
-            .flat_map(|v| {
-                v.attrs.iter().map(move |a| {
-                    vk::VertexInputAttributeDescription::default().location(a.location).binding(v.stream).format(vk::Format::from_raw(a.format)).offset(a.offset)
-                })
-            })
-            .collect();
-        // Attributes the vertex stage reads but the game leaves unbound read zeros (NVN), from a buffer of zeros.
-        let mut va = va;
-        let mut vb = vb;
-        let missing: Vec<u32> = vstage.inputs.iter().copied().filter(|l| !va.iter().any(|a| a.location == *l)).collect();
-        if !missing.is_empty() {
-            let zb = ZERO_STREAM;
-            vb.push(vk::VertexInputBindingDescription::default().binding(zb).stride(0).input_rate(vk::VertexInputRate::VERTEX));
-            for l in missing {
-                va.push(vk::VertexInputAttributeDescription::default().location(l).binding(zb).format(vk::Format::R32G32B32A32_SFLOAT).offset(0));
-            }
-        }
-        let vi = vk::PipelineVertexInputStateCreateInfo::default().vertex_binding_descriptions(&vb).vertex_attribute_descriptions(&va);
-        let ia = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology).primitive_restart_enable(restart);
-        let mut dcc = vk::PipelineViewportDepthClipControlCreateInfoEXT::default().negative_one_to_one(true);
-        let mut vp = vk::PipelineViewportStateCreateInfo::default().viewport_count(1).scissor_count(1);
-        if gl_depth && self.dev.depth_clip_control {
-            vp = vp.push_next(&mut dcc);
-        }
-        let (cull, front, pm, bias) = state::polygon(self.st.polygon, upper_left);
-        let rs = vk::PipelineRasterizationStateCreateInfo::default()
-            .depth_clamp_enable(self.st.depth_clamp)
-            .polygon_mode(pm)
-            .cull_mode(cull)
-            .front_face(front)
-            .depth_bias_enable(bias)
-            .line_width(1.0);
-        let ms = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(pass.samples)
-            .alpha_to_coverage_enable(self.st.multisample >> 1 & 1 != 0);
-        let has_depth = format::aspects(depth_fmt).contains(vk::ImageAspectFlags::DEPTH) && depth_fmt != vk::Format::UNDEFINED;
-        let has_stencil = format::aspects(depth_fmt).contains(vk::ImageAspectFlags::STENCIL) && depth_fmt != vk::Format::UNDEFINED;
-        let ds = state::depth_stencil(self.st.depth_stencil.unwrap_or_else(state::default_depth_stencil), has_depth, has_stencil);
-        let mask = self.st.channel_mask.unwrap_or(u32::MAX);
-        // Targets the fragment stage does not write keep their contents (Apple GPUs store zeros there: write mask 0).
-        let written = fstage.map_or(u32::MAX, |f| f.outputs);
-        let att: Vec<vk::PipelineColorBlendAttachmentState> = color_fmts
-            .iter()
-            .enumerate()
-            .map(|(i, &f)| {
-                let a = state::attachment(i, self.st.blend[i], self.st.color_state, mask);
-                let blends = f != vk::Format::UNDEFINED
-                    && self.dev.instance.get_physical_device_format_properties(self.dev.pdev, f).optimal_tiling_features.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND);
-                let a = if written >> i & 1 != 0 { a } else { a.color_write_mask(vk::ColorComponentFlags::empty()) };
-                // Formats that cannot blend (integer targets) are written unblended, as the Switch GPU does.
-                if blends { a } else { a.blend_enable(false) }
-            })
-            .collect();
-        let cbs = vk::PipelineColorBlendStateCreateInfo::default().attachments(&att);
-        let dyns = [
-            vk::DynamicState::VIEWPORT,
-            vk::DynamicState::SCISSOR,
-            vk::DynamicState::STENCIL_REFERENCE,
-            vk::DynamicState::STENCIL_COMPARE_MASK,
-            vk::DynamicState::STENCIL_WRITE_MASK,
-            vk::DynamicState::BLEND_CONSTANTS,
-            vk::DynamicState::DEPTH_BIAS,
-        ];
-        let dy = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dyns);
-        let mut ri = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&color_fmts)
-            .depth_attachment_format(if has_depth { depth_fmt } else { vk::Format::UNDEFINED })
-            .stencil_attachment_format(if has_stencil { depth_fmt } else { vk::Format::UNDEFINED });
-        let info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
-            .vertex_input_state(&vi)
-            .input_assembly_state(&ia)
-            .viewport_state(&vp)
-            .rasterization_state(&rs)
-            .multisample_state(&ms)
-            .depth_stencil_state(&ds)
-            .color_blend_state(&cbs)
-            .dynamic_state(&dy)
-            .layout(layout)
-            .push_next(&mut ri);
-        crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let pipe = match self.dev.device.create_graphics_pipelines(cache, &[info], None) {
-            Ok(p) => p[0],
-            Err((_, e)) => {
-                let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
-                self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
-                return None;
+        let desc = pipelines::Desc {
+            vs: vstage.id,
+            fs: fstage.map(|f| f.id),
+            topology: topology.as_raw(),
+            restart,
+            streams: vl.iter().map(|v| (v.stream, v.stride, v.per_instance, v.attrs.iter().map(|a| (a.location, a.format, a.offset)).collect())).collect(),
+            blend,
+            color_state,
+            channel_mask,
+            depth_stencil,
+            polygon: self.st.polygon,
+            multisample: self.st.multisample,
+            depth_clamp: self.st.depth_clamp,
+            colors: color_fmts.iter().map(|f| f.as_raw()).collect(),
+            depth: depth_fmt.as_raw(),
+            samples: pass.samples.as_raw(),
+            upper_left,
+            gl_depth,
+        };
+        let made = pipelines::take(hash(&desc)).filter(|&(_, l)| l == layout);
+        let pipe = match made {
+            Some((p, _)) => p,
+            None => {
+                crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                match pipelines::create(&self.dev, &desc, vstage, fstage, layout, cache) {
+                    Ok(p) => {
+                        pipelines::record(&desc);
+                        p
+                    }
+                    Err(e) => {
+                        let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
+                        self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
+                        return None;
+                    }
+                }
             }
         };
         self.pipelines.insert(key, (pipe, layout));
@@ -1035,7 +967,7 @@ impl Ctx {
     }
 
     unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {
-        self.dev.device.cmd_bind_vertex_buffers(self.cb, ZERO_STREAM, &[self.zeros.buffer], &[0]);
+        self.dev.device.cmd_bind_vertex_buffers(self.cb, pipelines::ZERO_STREAM, &[self.zeros.buffer], &[0]);
         for v in vl {
             let (addr, size) = self.st.vertex_buffers.get(v.stream as usize).copied().unwrap_or((0, 0));
             let a = crate::nvn::api::translate_virtual(addr as usize);
