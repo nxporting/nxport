@@ -613,6 +613,15 @@ fn storage_pointer(c: &mut CodeGenContext, op: &Op) -> R<(Inst, A)> {
             let base = if sk == StorageKind::ConstantBuffer { c.constant_buffers.get(&binding) } else { c.storage_buffers.get(&binding) }
                 .cloned()
                 .ok_or("System.Collections.Generic.KeyNotFoundException")?;
+            if sk == StorageKind::ConstantBuffer {
+                // The vec4 index follows the field.
+                let extent = match op.sources.get(src_index + 1).and_then(|&n| constant_operand(c, n)) {
+                    Some(v) if v >= 0 => (v + 1) * 16,
+                    _ => -1,
+                };
+                let e = c.cbuf_extents.entry(binding).or_insert(0);
+                *e = if *e < 0 || extent < 0 { -1 } else { (*e).max(extent) };
+            }
             (StorageClass::UNIFORM, field.ty.element(), base)
         }
         StorageKind::LocalMemory | StorageKind::SharedMemory => {

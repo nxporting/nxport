@@ -151,6 +151,9 @@ pub struct Ctx {
     chunk_start: std::time::Instant,
     /// Index of the command being executed in this submit (in run_list order).
     op_index: u64,
+    /// Guest memory this submit's commands write while it is recorded (inline uniform updates, reports): uniform
+    /// buffers there are copied when bound (draws before the write must not see it), others are read in place.
+    pub(super) cmd_writes: Ranges,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -411,6 +414,7 @@ impl Ctx {
             chunks: Vec::new(),
             chunk_start: std::time::Instant::now(),
             op_index: 0,
+            cmd_writes: Ranges::default(),
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
             pool_tx,
@@ -499,9 +503,12 @@ impl Ctx {
         let mut upcoming = std::mem::take(&mut self.occl.upcoming);
         upcoming.clear();
         let mut n = 0;
+        let mut writes = std::mem::take(&mut self.cmd_writes);
+        writes.clear();
         for &h in lists {
-            Self::scan_counters(h, 0, &mut n, &mut upcoming);
+            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes);
         }
+        self.cmd_writes = writes;
         self.occl.upcoming = upcoming;
         self.occl.cursor = 0;
         self.op_index = 0;
@@ -677,19 +684,34 @@ impl Ctx {
         self.dev.full_barrier(self.cb);
     }
 
-    /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them).
-    unsafe fn scan_counters(handle: u64, depth: u32, index: &mut u64, out: &mut Vec<(u64, bool)>) {
+    /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them), and the guest
+    /// memory their commands write (inline uniform updates, reports).
+    unsafe fn scan_counters(handle: u64, depth: u32, index: &mut u64, out: &mut Vec<(u64, bool)>, writes: &mut Ranges) {
         let Some(list) = crate::nvn::api::command_list(handle, depth > 0) else { return };
         for op in &list.ops {
             match &op.typed {
                 Some(Cmd::CallCommands(hs)) if depth < 16 => {
                     for &h in hs.iter() {
-                        Self::scan_counters(h, depth + 1, index, out);
+                        Self::scan_counters(h, depth + 1, index, out, writes);
                     }
                     continue;
                 }
                 Some(Cmd::ResetCounter { counter: 1 }) => out.push((*index, false)),
-                Some(Cmd::ReportCounter { counter: 1, .. }) => out.push((*index, true)),
+                Some(Cmd::ReportCounter { counter, addr }) => {
+                    if *counter == 1 {
+                        out.push((*index, true));
+                    }
+                    let a = crate::nvn::api::translate_virtual(*addr as usize);
+                    writes.add(a, a + 16);
+                }
+                Some(Cmd::ReportValue { addr, .. }) => {
+                    let a = crate::nvn::api::translate_virtual(*addr as usize);
+                    writes.add(a, a + 16);
+                }
+                Some(Cmd::UpdateUniformBuffer { addr, offset, data }) => {
+                    let a = crate::nvn::api::translate_virtual((*addr as i64 + *offset as i64) as usize);
+                    writes.add(a, a + data.len());
+                }
                 _ => {}
             }
             *index += 1;
