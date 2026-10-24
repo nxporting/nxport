@@ -272,6 +272,7 @@ pub fn replay_capture(
         "vulkan" => true,
         b => return Err(format!("no backend {b} here (vulkan{})", if cfg!(nx_native) { ", metal" } else { "" })),
     };
+    capture::replay::map_early(dir)?;
     if vulkan {
         gpu::install(&vulkan::VULKAN);
     } else {

@@ -171,6 +171,29 @@ fn describe(slot: usize, rt: &RtRef, t: Option<&Texels>) -> String {
 }
 
 /// Maps the capture's memory at its addresses and fills it.
+/// What a texture handle names in the bound pools: the texture's description and the pool view.
+fn describe_handle(handle: u64) -> String {
+    let id = (handle & 0xFFFFF) as i32;
+    let Some((obj, view)) = crate::nvn::api::lookup_pool_texture(id) else { return format!("texture {id}: not in the pool") };
+    let Some((g, t)) = crate::nvn::api::texture_snapshot(obj) else { return format!("texture {id}: no snapshot") };
+    let v = view.map(|v| format!(" view levels {}+{} layers {}+{} fmt {}", v.min_level, v.num_levels, v.min_layer, v.num_layers, v.format)).unwrap_or_default();
+    format!(
+        "texture {id} (gen {g}): target {} {}x{}x{} fmt {} levels {} flags {:#x} stride {} storage {:#x}{v}",
+        t.target, t.width, t.height, t.depth, t.format, t.levels, t.flags, t.stride, t.storage
+    )
+}
+
+/// The capture's memory when mapped before the backend started (map_early).
+static MAPPED: std::sync::OnceLock<(usize, u64)> = std::sync::OnceLock::new();
+
+/// Maps the capture's memory at its addresses before anything else takes them: a backend's own allocations at startup
+/// landed on a capture's ranges ("is not free").
+pub fn map_early(dir: &Path) -> Result<(), String> {
+    let m = map_memory(dir)?;
+    let _ = MAPPED.set(m);
+    Ok(())
+}
+
 fn map_memory(dir: &Path) -> Result<(usize, u64), String> {
     let mut ranges = 0;
     let mut bytes = 0u64;
@@ -310,7 +333,10 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     }
     let tol = tolerance(dir, &opts.backend)?;
     let t0 = std::time::Instant::now();
-    let (ranges, bytes) = map_memory(dir)?;
+    let (ranges, bytes) = match MAPPED.get() {
+        Some(&m) => m,
+        None => map_memory(dir)?,
+    };
     let (restored, not_restored) = restore_gpu_textures(dir)?;
     println!(
         "[gpu-replay] {}: frame {} of {}; memory {} ranges, {} MB; {} GPU-only texture subresources restored ({} not); {:.1} s",
@@ -436,7 +462,23 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
             println!("[gpu-replay] pass {pi}: commands {}..{}", p.first, p.end);
             for (k, op) in ops[p.first..p.end].iter().enumerate() {
                 match &op.typed {
-                    Some(c) => println!("[gpu-replay]   {:5} {:?}", p.first + k, c),
+                    Some(c) => {
+                        println!("[gpu-replay]   {:5} {:?}", p.first + k, c);
+                        if let Cmd::BindTexture { handle, .. } | Cmd::BindImage { handle, .. } = c {
+                            println!("[gpu-replay]         -> {}", describe_handle(*handle));
+                        }
+                        if let Cmd::SetRenderTargets { colors, depth } = c {
+                            for r in colors.iter().chain(depth.iter()).filter(|r| r.texture != 0) {
+                                let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
+                                if let Some((_, t)) = crate::nvn::api::texture_snapshot(addr) {
+                                    println!(
+                                        "[gpu-replay]         -> target {:#x}: target {} {}x{}x{} fmt {} levels {} flags {:#x} stride {} storage {:#x}",
+                                        r.texture, t.target, t.width, t.height, t.depth, t.format, t.levels, t.flags, t.stride, t.storage
+                                    );
+                                }
+                            }
+                        }
+                    }
                     None => println!("[gpu-replay]   {:5} {} {:x?}", p.first + k, op.name, op.args),
                 }
             }
