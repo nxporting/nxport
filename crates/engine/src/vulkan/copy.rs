@@ -103,7 +103,7 @@ impl Ctx {
             Cmd::CopyBufferToTexture { src, dst, region, row_stride, image_stride } => {
                 let Some((t, d, image, at)) = self.tex_ref(dst) else { return };
                 let img = self.tex.images.get_mut(&d).unwrap();
-                img.gpu_written = true;
+                img.mark_gpu_write();
                 let Some(g) = geometry(&t, img, at, dst, region, *row_stride, *image_stride) else {
                     self.warn("CopyBufferToTexture with a row stride that is not whole texels");
                     return;
@@ -140,7 +140,7 @@ impl Ctx {
                 let (sfmt, saspect) = (simg.format, format::aspects(simg.format));
                 let Some(sg) = geometry(&st_, simg, sat, &p.src, &p.src_region, 0, 0) else { return };
                 let dimg = self.tex.images.get_mut(&dd).unwrap();
-                dimg.gpu_written = true;
+                dimg.mark_gpu_write();
                 let dfmt = dimg.format;
                 let Some(dg) = geometry(&dt, dimg, dat, &p.dst, &p.dst_region, 0, 0) else { return };
                 let sub = |g: &Geometry, aspect| {
@@ -171,7 +171,7 @@ impl Ctx {
             Cmd::ClearTexture(p) => {
                 let Some((t, d, image, at)) = self.tex_ref(&p.dst) else { return };
                 let img = self.tex.images.get_mut(&d).unwrap();
-                img.gpu_written = true;
+                img.mark_gpu_write();
                 let (fmt, levels, layers, extent) = (img.format, img.levels, img.layers, img.extent);
                 let Some(g) = geometry(&t, img, at, &p.dst, &p.region, 0, 0) else { return };
                 let level_extent = ((extent.width >> g.level).max(1), (extent.height >> g.level).max(1));

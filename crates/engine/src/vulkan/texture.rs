@@ -57,6 +57,11 @@ pub struct Image {
     token: Option<u64>,
     /// A GPU-written image's hash and token were taken (`settle`).
     settled: bool,
+    /// GPU work wrote it since its contents were last written to guest memory; when (a global sequence, ordering the
+    /// writes of overlapping images) and in which submit.
+    unflushed: bool,
+    gpu_seq: u64,
+    gpu_submit: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,6 +86,9 @@ pub struct Textures {
     /// Alias roots found in this frame (see `locate`; textures are re-initialized between frames).
     roots: FxHashMap<Desc, (Desc, u32, u32)>,
     roots_frame: u64,
+    /// Settled images with unflushed GPU contents, by storage address (`flush_overlaps`), and the largest one's size.
+    unflushed: std::collections::BTreeMap<usize, Vec<Desc>>,
+    unflushed_span: usize,
 }
 
 fn image_type(target: i32) -> (vk::ImageType, vk::ImageViewType) {
@@ -135,7 +143,30 @@ fn order(d: &Desc) -> (i32, i32, i32, i32, i32, i32, i64) {
     (p.levels, p.depth, p.target, p.format, p.flags, p.width, p.stride)
 }
 
+/// The submit being recorded (Image::mark_gpu_write) and a sequence ordering GPU writes.
+static SUBMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GPU_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Images written to guest memory by flush_overlaps (reported with the fps line).
+pub static FLUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl Image {
+    /// GPU work of the submit being recorded writes this image.
+    pub fn mark_gpu_write(&mut self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.gpu_written = true;
+        self.unflushed = true;
+        self.gpu_seq = GPU_SEQ.fetch_add(1, Relaxed) + 1;
+        self.gpu_submit = SUBMIT.load(Relaxed);
+    }
+}
+
 impl Textures {
+    /// A submit starts recording.
+    pub fn begin_submit(&mut self) {
+        self.serial += 1;
+        SUBMIT.store(self.serial, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Where texture `t` lives: the description of the image holding it and the level / layer it starts at there.
     /// Several texture objects over the same memory (a mip level or layer of a larger texture, a render target over a
     /// mip chain, another format of the same texels) share the image of the largest live texture containing them, so
@@ -251,6 +282,7 @@ impl Textures {
         img.checked = serial;
         if d.storage <= 0x10000 || !crate::nvn::api::memory_pool_cpu_writable(d.storage) {
             if first {
+                self.flush_overlaps(dev, d);
                 self.upload(dev, d);
             }
             return;
@@ -263,6 +295,9 @@ impl Textures {
         if !first && img.token.is_some() && dirty_track::generation(d.storage, len) == img.token {
             return;
         }
+        // GPU contents of other images over this memory reach it first.
+        self.flush_overlaps(dev, d);
+        let Some(img) = self.images.get_mut(d) else { return };
         // Protect before hashing: writes during the hash change the token.
         img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
         let h = hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len));
@@ -272,6 +307,7 @@ impl Textures {
         img.hash = h;
         img.gpu_written = false;
         img.settled = false;
+        img.unflushed = false;
         self.upload(dev, d);
     }
 
@@ -282,7 +318,93 @@ impl Textures {
             if img.gpu_written && !img.settled {
                 Self::settle_one(d, img);
             }
+            if img.unflushed && img.gpu_submit == self.serial {
+                let v = self.unflushed.entry(d.storage).or_default();
+                if !v.contains(d) {
+                    v.push(*d);
+                }
+                self.unflushed_span = self.unflushed_span.max(layout::compute_layout(&d.params).total as usize);
+            }
         }
+    }
+
+    /// Before guest memory under `d` is read for an upload: images over that memory that GPU work wrote in completed
+    /// submits, whose guest bytes the CPU has not changed since, are written to guest memory first, oldest write first, so
+    /// the memory holds what the GPU left there (Ryujinx's texture cache flushes such overlaps likewise).
+    unsafe fn flush_overlaps(&mut self, dev: &Dev, d: &Desc) {
+        if self.unflushed.is_empty() || d.storage <= 0x10000 {
+            return;
+        }
+        let end = d.storage + layout::compute_layout(&d.params).total as usize;
+        let mut hits: Vec<(u64, Desc)> = Vec::new();
+        for (_, v) in self.unflushed.range(d.storage.saturating_sub(self.unflushed_span)..end) {
+            for o in v {
+                let o_end = o.storage + layout::compute_layout(&o.params).total as usize;
+                if o == d || o_end <= d.storage {
+                    continue;
+                }
+                if let Some(img) = self.images.get(o) {
+                    if img.unflushed && img.gpu_submit != self.serial {
+                        hits.push((img.gpu_seq, *o));
+                    }
+                }
+            }
+        }
+        hits.sort_by_key(|h| h.0);
+        for (_, o) in hits {
+            self.flush(dev, &o);
+        }
+    }
+
+    /// Writes image `d`'s contents to its guest memory (every level and layer) if the CPU has not changed that memory
+    /// since the GPU work completed; either way it no longer counts as unflushed.
+    unsafe fn flush(&mut self, dev: &Dev, d: &Desc) {
+        if let Some(v) = self.unflushed.get_mut(&d.storage) {
+            v.retain(|o| o != d);
+            if v.is_empty() {
+                self.unflushed.remove(&d.storage);
+            }
+        }
+        let Some(img) = self.images.get_mut(d) else { return };
+        img.unflushed = false;
+        let p = d.params;
+        let lay = layout::compute_layout(&p);
+        let len = lay.total as usize;
+        if !crate::nvn::api::memory_pool_cpu_writable(d.storage) || crate::nvn::api::containing_pool(d.storage, len).is_none() {
+            return;
+        }
+        use crate::guest::dirty_track;
+        let unchanged = img.token.is_some_and(|t| dirty_track::generation(d.storage, len) == Some(t))
+            || hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len)) == img.hash;
+        if !unchanged {
+            return;
+        }
+        let img = &self.images[d];
+        let is3d = p.target == layout::NVN_TARGET_3D;
+        for level in 0..img.levels {
+            let n = if is3d { (img.extent.depth >> level).max(1) } else { img.layers };
+            for layer in 0..n {
+                let Some(t) = Self::read(dev, img, p.format, level, layer) else { continue };
+                if is3d {
+                    layout::write_texels_3d_slice(d.storage as *mut u8, &p, level as usize, layer as usize, t.data.as_ptr());
+                } else {
+                    layout::write_texels_2d(
+                        d.storage as *mut u8,
+                        layer as usize * lay.layer_stride as usize,
+                        &p,
+                        level as usize,
+                        0,
+                        0,
+                        t.width as i32,
+                        t.height as i32,
+                        t.data.as_ptr(),
+                    );
+                }
+            }
+        }
+        FLUSHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Its own contents now: the baseline for later CPU writes.
+        self.resettle(d);
     }
 
     /// settle for one image (also after a write-back changed its guest bytes).
@@ -419,6 +541,9 @@ impl Textures {
             hash: 0,
             token: None,
             settled: false,
+            unflushed: false,
+            gpu_seq: 0,
+            gpu_submit: 0,
         })
     }
 
