@@ -1231,6 +1231,33 @@ impl Ctx {
             offset: vk::Offset2D { x: x0, y: y0 },
             extent: vk::Extent2D { width: (x1 - x0).max(0) as u32, height: (y1 - y0).max(0) as u32 },
         };
+        // Unchanged since the previous draw of this pass: nothing to set.
+        let key = {
+            use std::hash::Hasher;
+            let mut hs = rustc_hash::FxHasher::default();
+            for f in [vp.x, vp.y, vp.width, vp.height, vp.min_depth, vp.max_depth] {
+                hs.write_u32(f.to_bits());
+            }
+            hs.write_i32(sc.offset.x);
+            hs.write_i32(sc.offset.y);
+            hs.write_u32(sc.extent.width);
+            hs.write_u32(sc.extent.height);
+            for v in self.st.stencil.iter().flatten() {
+                hs.write_u32(*v);
+            }
+            for f in self.st.blend_color {
+                hs.write_u32(f.to_bits());
+            }
+            let (factor, units, clamp) = self.st.polygon_offset;
+            for f in [factor, units, clamp] {
+                hs.write_u32(f.to_bits());
+            }
+            hs.finish()
+        };
+        if self.dynamic_memo == Some(key) {
+            return;
+        }
+        self.dynamic_memo = Some(key);
         let d = &self.dev.device;
         d.cmd_set_viewport(self.cb, 0, &[vp]);
         d.cmd_set_scissor(self.cb, 0, &[sc]);

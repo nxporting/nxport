@@ -139,6 +139,8 @@ pub struct Ctx {
     pub(super) driver_scratch: Vec<u8>,
     /// Descriptor sets written in this submit, by contents.
     pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
+    /// The dynamic state set in the current pass (draw.rs dynamic_state).
+    pub(super) dynamic_memo: Option<u64>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
@@ -421,6 +423,7 @@ impl Ctx {
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
             set_memo: Default::default(),
+            dynamic_memo: None,
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),
@@ -1103,6 +1106,7 @@ impl Ctx {
             return;
         }
         p.begun = true;
+        self.dynamic_memo = None;
         let ca: Vec<vk::RenderingAttachmentInfo> = p
             .colors
             .iter()
