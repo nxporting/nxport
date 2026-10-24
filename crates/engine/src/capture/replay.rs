@@ -177,8 +177,10 @@ fn describe_handle(handle: u64) -> String {
     let Some((obj, view)) = crate::nvn::api::lookup_pool_texture(id) else { return format!("texture {id}: not in the pool") };
     let Some((g, t)) = crate::nvn::api::texture_snapshot(obj) else { return format!("texture {id}: no snapshot") };
     let v = view.map(|v| format!(" view levels {}+{} layers {}+{} fmt {}", v.min_level, v.num_levels, v.min_layer, v.num_layers, v.format)).unwrap_or_default();
+    let sid = ((handle >> 20) & 0xFFF) as i32;
+    let smp = crate::nvn::api::lookup_pool_sampler(sid).map(|d| format!("; sampler {sid}: {d:?}")).unwrap_or_default();
     format!(
-        "texture {id} (gen {g}): target {} {}x{}x{} fmt {} levels {} flags {:#x} stride {} storage {:#x}{v}",
+        "texture {id} (gen {g}): target {} {}x{}x{} fmt {} levels {} flags {:#x} stride {} storage {:#x}{v}{smp}",
         t.target, t.width, t.height, t.depth, t.format, t.levels, t.flags, t.stride, t.storage
     )
 }
@@ -466,6 +468,11 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
                         println!("[gpu-replay]   {:5} {:?}", p.first + k, c);
                         if let Cmd::BindTexture { handle, .. } | Cmd::BindImage { handle, .. } = c {
                             println!("[gpu-replay]         -> {}", describe_handle(*handle));
+                        }
+                        if let Cmd::BindProgram { program, .. } = c {
+                            for (data, control) in crate::nvn::api::program_stages(*program as usize) {
+                                println!("[gpu-replay]         -> stage code {data:#x} control {control:#x}");
+                            }
                         }
                         if let Cmd::SetRenderTargets { colors, depth } = c {
                             for r in colors.iter().chain(depth.iter()).filter(|r| r.texture != 0) {

@@ -26,6 +26,8 @@ pub struct Dev {
     pub beyond_stride: bool,
     /// Apple GPUs (MoltenVK): discarding fragment stages write their depth (sass2spv::accessor::Host::discard_writes_depth).
     pub discard_writes_depth: bool,
+    /// Occlusion queries count samples exactly (else only zero / nonzero).
+    pub precise_occlusion: bool,
     /// What shader translation may use on this device.
     pub shader_host: sass2spv::accessor::Host,
 }
@@ -187,6 +189,7 @@ impl Dev {
             }
             let features = vk::PhysicalDeviceFeatures {
                 robust_buffer_access: supported.robust_buffer_access,
+                occlusion_query_precise: supported.occlusion_query_precise,
                 independent_blend: supported.independent_blend,
                 depth_clamp: supported.depth_clamp,
                 depth_bias_clamp: supported.depth_bias_clamp,
@@ -327,10 +330,11 @@ impl Dev {
                 validation,
                 // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
                 // after it in memory): the shaders check them.
-                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, reduced_precision: has_portability, ..shader_host },
+                shader_host: sass2spv::accessor::Host { depth_clip_control, cbuf_limits: has_portability, ..shader_host },
                 vertex_align,
                 beyond_stride,
                 discard_writes_depth: has_portability,
+                precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
             })
         }
