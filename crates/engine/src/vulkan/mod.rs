@@ -15,6 +15,7 @@ mod inflight;
 mod shader;
 mod state;
 mod texture;
+mod window;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +47,13 @@ static LAST_WAIT_NS: AtomicU64 = AtomicU64::new(0);
 static SUBMITS: AtomicU64 = AtomicU64::new(0);
 static ONE_SHOTS: AtomicU64 = AtomicU64::new(0);
 static ONE_SHOT_NS: AtomicU64 = AtomicU64::new(0);
+/// Frames per second over the last fps line (the window title shows it).
+static DISPLAY_FPS: AtomicU64 = AtomicU64::new(0);
+
+pub fn display_fps() -> f32 {
+    f64::from_bits(DISPLAY_FPS.load(Ordering::Relaxed)) as f32
+}
+
 /// Pipelines created; bytes of host memory filled for the GPU (uniform copies, data the GPU cannot read in place).
 static PIPELINES: AtomicU64 = AtomicU64::new(0);
 static ARENA_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -102,15 +110,17 @@ impl Backend for Vulkan {
         self.serial.store(serial, Ordering::Release);
     }
 
-    fn present(&self, texture: usize, _crop: [i32; 4]) {
+    fn present(&self, texture: usize, crop: [i32; 4]) {
         if let Some(c) = self.ctx.lock().unwrap().as_mut() {
             c.write_back_rts();
+            unsafe { c.present_window(texture, crop) };
         }
         let n = self.frames.fetch_add(1, Ordering::AcqRel) + 1;
         if n % 50 == 0 {
             let now = std::time::Instant::now();
             let mut start = self.interval.lock().unwrap();
             if let Some(s) = *start {
+                DISPLAY_FPS.store((50.0 / now.duration_since(s).as_secs_f64()).to_bits(), Ordering::Relaxed);
                 let per_frame = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 50.0 / 1e6;
                 println!(
                     "[+] Gfx: present #{n} {:.1} fps, record {:.1} ms/frame, GPU wait {:.1} ms/frame (GPU {:.1}), {} overlap flushes, {:.1} submits, {:.1} one-shots ({:.1} ms), {:.1} pipelines created, {:.1} MB copied",

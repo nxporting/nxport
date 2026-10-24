@@ -46,7 +46,11 @@ define_class!(
         #[unsafe(method(updateTitle:))]
         fn update_title(&self, _timer: &objc2::runtime::AnyObject) {
             let mtm = MainThreadMarker::from(self);
-            let fps = crate::metal::display_fps();
+            let fps = if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
+                crate::vulkan::display_fps()
+            } else {
+                crate::metal::display_fps()
+            };
             let app_name = crate::profile::app_title();
             let base_title = format!("{app_name} - native");
             let title = if fps > 0.0 {
@@ -324,7 +328,10 @@ pub fn run_main_thread() -> ! {
     app.activate();
     crate::host::controls_ui::install(mtm, Some(&window));
 
-    crate::metal::init(device.clone(), Some(layer.clone()));
+    // The Vulkan backend presents to the layer itself (vulkan/window.rs).
+    if crate::settings::get().graphics.gpu != crate::settings::GpuBackend::Vulkan {
+        crate::metal::init(device.clone(), Some(layer.clone()));
+    }
     LAYER_PTR.store((&*layer) as *const CAMetalLayer as usize, Ordering::Release);
     if crate::horizon::hle::is_handheld() {
         update_handheld_drawable(true);
@@ -393,6 +400,11 @@ pub fn follow_window_shape(layer: &CAMetalLayer) -> bool {
 }
 
 static LAYER_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The window's CAMetalLayer (0 before the window is up or without one).
+pub fn layer_ptr() -> usize {
+    LAYER_PTR.load(Ordering::Acquire)
+}
 
 pub fn update_handheld_drawable(handheld: bool) {
     let ptr = LAYER_PTR.load(Ordering::Acquire);
