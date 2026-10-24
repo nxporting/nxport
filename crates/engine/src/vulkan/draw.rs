@@ -652,7 +652,7 @@ impl Ctx {
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
                     }
                 }
-                Feed::Sbuf { cb_slot, cb_offset } => {
+                Feed::Sbuf { cb_slot, cb_offset, write } => {
                     let desc = cbuf(self, *cb_slot).and_then(|c| {
                         // In 32-bit words.
                         let o = *cb_offset as usize * 4;
@@ -673,7 +673,7 @@ impl Ctx {
                         Some((addr, (base + len - a).min(1 << 20)))
                     });
                     let info = match desc {
-                        Some((addr, size)) if addr > 0x10000 && size > 0 => self.storage_buffer(addr as usize, size),
+                        Some((addr, size)) if addr > 0x10000 && size > 0 => self.storage_buffer(addr as usize, size, *write),
                         _ => None,
                     };
                     match info.or_else(|| zero.map(|(b, o)| vk::DescriptorBufferInfo { buffer: b, offset: o, range: 256 })) {
@@ -811,12 +811,19 @@ impl Ctx {
 
     /// A storage buffer over guest memory: in place when its pool is imported and the offset aligned, else a copy that is
     /// written back after the submit.
-    unsafe fn storage_buffer(&mut self, addr: usize, size: usize) -> Option<vk::DescriptorBufferInfo> {
+    /// `write`: the stage writes it; read-only ones leave the write tracking and the write guard as they are (bindings
+    /// from the game's own buffers are sized up to 1 MiB past their address and covered unrelated textures).
+    unsafe fn storage_buffer(&mut self, addr: usize, size: usize, write: bool) -> Option<vk::DescriptorBufferInfo> {
         let a = crate::nvn::api::translate_virtual(addr);
-        self.gpu_dirty.add(a, a + size);
-        // GPU writes cannot fault: pages the write tracking protected would lose them.
-        crate::guest::dirty_track::release_for_gpu(a, size);
-        crate::vulkan::guard::note_write(a, size);
+        if write {
+            self.gpu_dirty.add(a, a + size);
+            // GPU writes cannot fault: pages the write tracking protected would lose them.
+            crate::guest::dirty_track::release_for_gpu(a, size);
+            crate::vulkan::guard::note_write(a, size);
+        }
+        // Read-only ones are not held by the write guard either: their bound sizes overstate what the GPU reads (up to
+        // 1 MiB for bindings from the game's own buffers), and holding all of it made the game fault on every
+        // neighbouring write (walking in Hateno: 49 -> 29 fps).
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
@@ -825,7 +832,9 @@ impl Ctx {
         }
         let (buf, off, p) = self.arena.alloc(&self.dev, size)?;
         std::ptr::copy_nonoverlapping(a as *const u8, p, size);
-        self.writebacks.push((a, p, size));
+        if write {
+            self.writebacks.push((a, p, size));
+        }
         Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 })
     }
 
