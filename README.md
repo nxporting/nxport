@@ -50,11 +50,14 @@ Nintendo - For being awesome. I hope. Please don't take this down.
 
 ## This project has been tested on:
 * Tears of the Kingdom, iOS, MacOS
-  * ~60-90 fps on MacBook Pro M4, almost 30 on iPhone 16e
+  * ~60-90 fps when unlocked on MacBook Pro M4, almost 30 on iPhone 16e
+  * Occasional flickering
+  * Terrain tile normal zeroing
   * Rauru is silent
 * Kirby and the Forgotten Land, iOS, MacOS
-  * Two known visual bugs 
-* Super Mario Wonder
-  * One known visual bug
-* Mario Kart 8 Deluxe
-  * Several visual bugs
+  * Invisible exhale
+  * Some sort of shadow rounding bug? Hard to describe
+* Super Mario Wonder, MacOS
+  * Button prompts are "?"
+* Mario Kart 8 Deluxe v3.0.4, MacOS
+  * Looks good so far
