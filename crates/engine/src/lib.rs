@@ -136,8 +136,6 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     let mut s = resolve_settings(layers);
     let vulkan = s.graphics.gpu == settings::GpuBackend::Vulkan;
     if vulkan {
-        // No window for it yet: frame dumps (--dump-frame) show what it renders.
-        s.display.headless = true;
         gpu::install(&vulkan::VULKAN);
     } else {
         gpu::install(&metal::backend::METAL);

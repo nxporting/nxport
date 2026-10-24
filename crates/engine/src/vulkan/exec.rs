@@ -182,6 +182,9 @@ pub struct Ctx {
     free_timestamps: Vec<vk::QueryPool>,
     free_desc_pools: Vec<vk::DescriptorPool>,
     warned: HashSet<String>,
+    /// Window output (vulkan/window.rs), made at the first present when the display has a layer.
+    window: Option<super::window::Window>,
+    window_tried: bool,
     /// Commands warned about as not implemented (by name, by kind).
     unimplemented: HashSet<&'static str>,
     unimplemented_kinds: HashSet<std::mem::Discriminant<Cmd>>,
@@ -453,6 +456,8 @@ impl Ctx {
             free_desc_pools: Vec::new(),
             warned: Default::default(),
             unimplemented: Default::default(),
+            window: None,
+            window_tried: false,
             unimplemented_kinds: Default::default(),
         })
     }
@@ -733,6 +738,34 @@ impl Ctx {
             self.rt_resettle.push(d);
         }
         self.dev.full_barrier(self.cb);
+    }
+
+    /// Shows the presented texture in the window, if there is one.
+    pub unsafe fn present_window(&mut self, texture: usize, crop: [i32; 4]) {
+        if self.lost || crate::settings::get().display.headless {
+            return;
+        }
+        if self.window.is_none() {
+            #[cfg(target_os = "macos")]
+            let layer = crate::host::display::layer_ptr();
+            #[cfg(not(target_os = "macos"))]
+            let layer = 0;
+            if layer == 0 || self.window_tried {
+                return;
+            }
+            self.window_tried = true;
+            self.window = super::window::Window::new(&self.dev, layer);
+            if self.window.is_none() {
+                println!("[vulkan] cannot present to the window");
+                return;
+            }
+        }
+        let Some((_, t)) = crate::nvn::api::texture_snapshot(texture) else { return };
+        let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
+        let (image, size) = (img.image, ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1)));
+        if let Some(w) = self.window.as_mut() {
+            w.present(&self.dev, image, level, layer, size, crop);
+        }
     }
 
     /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them), and the guest

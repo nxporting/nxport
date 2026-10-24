@@ -5,6 +5,8 @@ use std::ffi::CStr;
 use ash::vk;
 
 pub struct Dev {
+    /// Window output (VK_EXT_metal_surface, VK_KHR_swapchain), where the implementation has it.
+    pub surfaces: Option<Surfaces>,
     pub _entry: ash::Entry,
     pub instance: ash::Instance,
     pub pdev: vk::PhysicalDevice,
@@ -42,6 +44,12 @@ pub struct Dev {
     /// VK_KHR_push_descriptor: draws whose stages fit bind their resources in the command buffer (MoltenVK then binds them
     /// directly: its Metal argument buffers for descriptor sets cost about a microsecond of GPU time per draw).
     pub push: Option<PushDescriptors>,
+}
+
+pub struct Surfaces {
+    pub surface: ash::khr::surface::Instance,
+    pub metal: ash::ext::metal_surface::Instance,
+    pub swapchain: ash::khr::swapchain::Device,
 }
 
 pub struct PushDescriptors {
@@ -89,6 +97,12 @@ impl Dev {
             if has(&inst_exts, ash::khr::portability_enumeration::NAME) {
                 exts.push(ash::khr::portability_enumeration::NAME.as_ptr());
                 flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+            }
+            // Window output: a surface on the window's CAMetalLayer (vulkan/window.rs).
+            let metal_surface = has(&inst_exts, ash::khr::surface::NAME) && has(&inst_exts, ash::ext::metal_surface::NAME);
+            if metal_surface {
+                exts.push(ash::khr::surface::NAME.as_ptr());
+                exts.push(ash::ext::metal_surface::NAME.as_ptr());
             }
             let validation = validation && has(&inst_exts, ash::ext::debug_utils::NAME);
             let layer = c"VK_LAYER_KHRONOS_validation";
@@ -194,6 +208,10 @@ impl Dev {
             let robustness2 = has(&dev_exts, ash::ext::robustness2::NAME);
             if robustness2 {
                 dexts.push(ash::ext::robustness2::NAME.as_ptr());
+            }
+            let swapchain = metal_surface && has(&dev_exts, ash::khr::swapchain::NAME);
+            if swapchain {
+                dexts.push(ash::khr::swapchain::NAME.as_ptr());
             }
             let push_descriptor = has(&dev_exts, ash::khr::push_descriptor::NAME);
             if push_descriptor {
@@ -366,7 +384,13 @@ impl Dev {
                 push_descriptor,
                 validation
             );
+            let surfaces = swapchain.then(|| Surfaces {
+                surface: ash::khr::surface::Instance::new(&entry, &instance),
+                metal: ash::ext::metal_surface::Instance::new(&entry, &instance),
+                swapchain: ash::khr::swapchain::Device::new(&instance, &device),
+            });
             Ok(Dev {
+                surfaces,
                 _entry: entry,
                 instance,
                 pdev,
