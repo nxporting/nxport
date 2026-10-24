@@ -142,6 +142,8 @@ pub struct Ctx {
     /// idle GPU runs at a fraction of its speed), and when the current one began.
     chunks: Vec<vk::CommandBuffer>,
     chunk_start: std::time::Instant,
+    /// Index of the command being executed in this submit (in run_list order).
+    op_index: u64,
     inflight: std::collections::VecDeque<InFlight>,
     /// Query and descriptor pools of retired submits, for reuse.
     free_occl: Vec<vk::QueryPool>,
@@ -229,6 +231,9 @@ pub(super) struct Occlusion {
     events: Vec<super::inflight::Occl>,
     reports: Vec<u64>,
     precise: bool,
+    /// The submit's counter resets (false) and reports (true) by command index (Ctx::op_index), and the next one.
+    upcoming: Vec<(u64, bool)>,
+    cursor: usize,
 }
 
 impl Occlusion {
@@ -236,7 +241,16 @@ impl Occlusion {
 
     fn new(dev: &Dev) -> Occlusion {
         let pool = Self::new_pool(dev);
-        Occlusion { pool, next: 0, active: None, events: Vec::new(), reports: Vec::new(), precise: dev.precise_occlusion }
+        Occlusion {
+            pool,
+            next: 0,
+            active: None,
+            events: Vec::new(),
+            reports: Vec::new(),
+            precise: dev.precise_occlusion,
+            upcoming: Vec::new(),
+            cursor: 0,
+        }
     }
 
     fn new_pool(dev: &Dev) -> vk::QueryPool {
@@ -360,6 +374,7 @@ impl Ctx {
             occl,
             chunks: Vec::new(),
             chunk_start: std::time::Instant::now(),
+            op_index: 0,
             inflight: Default::default(),
             free_occl: Vec::new(),
             free_timestamps: Vec::new(),
@@ -425,6 +440,15 @@ impl Ctx {
         }
         let t0 = std::time::Instant::now();
         self.chunk_start = t0;
+        let mut upcoming = std::mem::take(&mut self.occl.upcoming);
+        upcoming.clear();
+        let mut n = 0;
+        for &h in lists {
+            Self::scan_counters(h, 0, &mut n, &mut upcoming);
+        }
+        self.occl.upcoming = upcoming;
+        self.occl.cursor = 0;
+        self.op_index = 0;
         for &h in lists {
             self.run_list(h, 0);
         }
@@ -569,6 +593,25 @@ impl Ctx {
         }
     }
 
+    /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them).
+    unsafe fn scan_counters(handle: u64, depth: u32, index: &mut u64, out: &mut Vec<(u64, bool)>) {
+        let Some(list) = crate::nvn::api::command_list(handle, depth > 0) else { return };
+        for op in &list.ops {
+            match &op.typed {
+                Some(Cmd::CallCommands(hs)) if depth < 16 => {
+                    for &h in hs.iter() {
+                        Self::scan_counters(h, depth + 1, index, out);
+                    }
+                    continue;
+                }
+                Some(Cmd::ResetCounter { counter: 1 }) => out.push((*index, false)),
+                Some(Cmd::ReportCounter { counter: 1, .. }) => out.push((*index, true)),
+                _ => {}
+            }
+            *index += 1;
+        }
+    }
+
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
         let Some(list) = crate::nvn::api::command_list(handle, depth > 0) else { return };
         for op in &list.ops {
@@ -577,6 +620,7 @@ impl Ctx {
                     for &h in hs.iter() {
                         self.run_list(h, depth + 1);
                     }
+                    continue;
                 }
                 Some(c) => self.exec(c),
                 None => {
@@ -584,6 +628,7 @@ impl Ctx {
                     self.warn(format!("{name} is not implemented"));
                 }
             }
+            self.op_index += 1;
         }
     }
 
@@ -816,6 +861,13 @@ impl Ctx {
     unsafe fn begin_query(&mut self) {
         let o = &mut self.occl;
         if o.pool == vk::QueryPool::null() || o.active.is_some() || self.pass.as_ref().is_none_or(|p| !p.begun) {
+            return;
+        }
+        // Samples count only toward a report: none are needed when the counter is reset before the next report.
+        while o.cursor < o.upcoming.len() && o.upcoming[o.cursor].0 <= self.op_index {
+            o.cursor += 1;
+        }
+        if o.upcoming.get(o.cursor).is_some_and(|&(_, report)| !report) {
             return;
         }
         if o.next >= Occlusion::QUERIES {
