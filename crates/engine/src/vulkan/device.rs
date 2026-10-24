@@ -34,6 +34,17 @@ pub struct Dev {
     pub precise_occlusion: bool,
     /// What shader translation may use on this device.
     pub shader_host: sass2spv::accessor::Host,
+    /// VK_KHR_push_descriptor: draws whose stages fit bind their resources in the command buffer (MoltenVK then binds them
+    /// directly: its Metal argument buffers for descriptor sets cost about a microsecond of GPU time per draw).
+    pub push: Option<PushDescriptors>,
+}
+
+pub struct PushDescriptors {
+    pub ext: ash::khr::push_descriptor::Device,
+    /// Descriptors in one push set; per-stage samplers and buffers (vertex streams included) a push set may use.
+    pub max: u32,
+    pub samplers: u32,
+    pub buffers: u32,
 }
 
 fn has(exts: &[vk::ExtensionProperties], name: &CStr) -> bool {
@@ -174,6 +185,10 @@ impl Dev {
             if robustness2 {
                 dexts.push(ash::ext::robustness2::NAME.as_ptr());
             }
+            let push_descriptor = has(&dev_exts, ash::khr::push_descriptor::NAME);
+            if push_descriptor {
+                dexts.push(ash::khr::push_descriptor::NAME.as_ptr());
+            }
             let custom_border = has(&dev_exts, ash::ext::custom_border_color::NAME);
             if custom_border {
                 dexts.push(ash::ext::custom_border_color::NAME.as_ptr());
@@ -240,6 +255,7 @@ impl Dev {
                 cbuf_limits: false,
                 reduced_precision: false,
                 stage_set: None,
+                binding_base: 0,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
@@ -307,6 +323,15 @@ impl Dev {
                 let align = hp.min_imported_host_pointer_alignment;
                 (ash::ext::external_memory_host::Device::new(&instance, &device), align)
             });
+            let push = push_descriptor.then(|| {
+                let mut pp = vk::PhysicalDevicePushDescriptorPropertiesKHR::default();
+                let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pp);
+                instance.get_physical_device_properties2(pdev, &mut p2);
+                // MoltenVK binds push descriptors directly (not through a Metal argument buffer): Metal's per-stage
+                // limits apply, 16 samplers and 31 buffers (vertex streams included).
+                let (samplers, buffers) = if has_portability { (16, 31) } else { (u32::MAX, u32::MAX) };
+                PushDescriptors { ext: ash::khr::push_descriptor::Device::new(&instance, &device), max: pp.max_push_descriptors, samplers, buffers }
+            });
             let cmd_pool = device
                 .create_command_pool(
                     &vk::CommandPoolCreateInfo::default()
@@ -316,7 +341,7 @@ impl Dev {
                 )
                 .map_err(|e| e.to_string())?;
             println!(
-                "[vulkan] {} (Vulkan {}.{}), host memory import {}, depth clip control {}, robustness2 {}, 2D views of 3D images {}, validation {}",
+                "[vulkan] {} (Vulkan {}.{}), host memory import {}, depth clip control {}, robustness2 {}, 2D views of 3D images {}, push descriptors {}, validation {}",
                 name,
                 vk::api_version_major(props.api_version),
                 vk::api_version_minor(props.api_version),
@@ -324,6 +349,7 @@ impl Dev {
                 depth_clip_control,
                 robustness2,
                 !has_portability || port.image_view2_d_on3_d_image != 0,
+                push_descriptor,
                 validation
             );
             Ok(Dev {
@@ -348,6 +374,7 @@ impl Dev {
                 feedback_in_place: has_portability,
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
+                push,
             })
         }
     }

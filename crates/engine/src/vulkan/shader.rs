@@ -32,12 +32,24 @@ pub struct Binding {
 
 pub struct Stage {
     pub module: vk::ShaderModule,
+    /// Its bindings, numbered from the stage's binding base (graphics stages share one set: vertex 0.., fragment
+    /// FRAGMENT_BINDING_BASE..).
     pub bindings: std::sync::Arc<[Binding]>,
+    /// A set of its bindings alone (compute).
     pub set_layout: vk::DescriptorSetLayout,
+    pub stage_flags: vk::ShaderStageFlags,
+    /// The binding base it was translated with.
+    pub base: u32,
+    /// Combined image samplers and buffer descriptors it binds (push descriptor limits).
+    pub samplers: u32,
+    pub buffers: u32,
     pub stage: sass2spv::ShaderStage,
     /// Input locations (a vertex stage's attributes).
     pub inputs: Vec<u32>,
 }
+
+/// Fragment stages' first binding (vertex stages start at 0; sass2spv numbers a stage's bindings below 256).
+pub const FRAGMENT_BINDING_BASE: u32 = 256;
 
 fn view_type(ty: &str) -> (vk::ImageViewType, bool) {
     let array = ty.contains("Array");
@@ -63,6 +75,7 @@ pub unsafe fn translate(
     index: usize,
     state: Option<sass2spv::accessor::GraphicsState>,
     set: u32,
+    binding_base: u32,
     discard_writes_depth: bool,
 ) -> Result<Stage, String> {
     let len = match crate::nvn::api::find_memory_pool(crate::nvn::api::translate_virtual(data as usize)) {
@@ -96,14 +109,14 @@ pub unsafe fn translate(
         let mem = (ctrl(0x754).max(ctrl(0x760)).max(ctrl(0x710)) + 15) & !15;
         [ctrl(0x748) as i32, ctrl(0x74c) as i32, ctrl(0x750) as i32, mem as i32]
     });
-    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), discard_writes_depth, ..dev.shader_host.clone() };
+    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, discard_writes_depth, ..dev.shader_host.clone() };
     let p = sass2spv::translate_stage_for(code, hint, cb1, compute_fields, &sass2spv::Target::Spirv, state, host)?;
     if p.binary_code.is_empty() {
         return Err("empty SPIR-V".into());
     }
     if let Some(dir) = &crate::settings::get().debug.dump_spirv {
         let _ = std::fs::create_dir_all(dir);
-        let name = format!("{data:012x}_{set}_{}", p.binary_code.len());
+        let name = format!("{data:012x}_{binding_base}_{}", p.binary_code.len());
         let _ = std::fs::write(dir.join(format!("{name}.spv")), &p.binary_code);
         let _ = std::fs::write(dir.join(format!("{name}.json")), sass2spv::manifest_json(&p));
     }
@@ -135,19 +148,20 @@ pub unsafe fn translate(
     inputs.sort();
     let mut out = Vec::new();
     for b in declared {
-        let feed = if b == 0 {
+        let mb = b.wrapping_sub(binding_base);
+        let feed = if mb == 0 {
             Some((vk::DescriptorType::UNIFORM_BUFFER, 1, Feed::Support))
-        } else if let Some(c) = m.cbuffers.iter().find(|c| c.binding == b) {
+        } else if let Some(c) = m.cbuffers.iter().find(|c| c.binding == mb) {
             Some((vk::DescriptorType::UNIFORM_BUFFER, 1, Feed::Cbuf(c.slot)))
-        } else if let Some(s) = m.sbuffers.iter().find(|s| s.binding == b) {
+        } else if let Some(s) = m.sbuffers.iter().find(|s| s.binding == mb) {
             Some((vk::DescriptorType::STORAGE_BUFFER, 1, Feed::Sbuf { cb_slot: s.cb_slot, cb_offset: s.cb_offset }))
-        } else if let Some(t) = m.textures.iter().find(|t| t.binding == b) {
+        } else if let Some(t) = m.textures.iter().find(|t| t.binding == mb) {
             let (view, buffer) = view_type(&t.texture_type);
             let count = t.array_length.max(1) as u32;
             let ty = if buffer { vk::DescriptorType::UNIFORM_TEXEL_BUFFER } else { vk::DescriptorType::COMBINED_IMAGE_SAMPLER };
             Some((ty, count, Feed::Texture { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, count, buffer }))
         } else {
-            m.images.iter().find(|t| t.binding == b).map(|t| {
+            m.images.iter().find(|t| t.binding == mb).map(|t| {
                 let (view, buffer) = view_type(&t.texture_type);
                 let ty = if buffer { vk::DescriptorType::STORAGE_TEXEL_BUFFER } else { vk::DescriptorType::STORAGE_IMAGE };
                 (ty, 1, Feed::Image { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, buffer })
@@ -184,10 +198,20 @@ pub unsafe fn translate(
         .device
         .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&lb), None)
         .map_err(|e| e.to_string())?;
+    let samplers = out.iter().filter(|b| b.ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER).map(|b| b.count).sum();
+    let buffers = out
+        .iter()
+        .filter(|b| matches!(b.ty, vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER))
+        .map(|b| b.count)
+        .sum();
     Ok(Stage {
         module,
         bindings: out.into(),
         set_layout,
+        stage_flags,
+        base: binding_base,
+        samplers,
+        buffers,
         stage: p.info.stage,
         inputs,
     })
