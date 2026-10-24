@@ -141,6 +141,8 @@ pub struct Ctx {
     pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
     /// The dynamic state set in the current pass (draw.rs dynamic_state).
     pub(super) dynamic_memo: Option<u64>,
+    /// The vertex layout of the bound attribute and stream state, and its hash (draw.rs vertex_layout).
+    pub(super) vl_cache: Option<(std::sync::Arc<[draw::VStream]>, u64)>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
@@ -424,6 +426,7 @@ impl Ctx {
             driver_scratch: Vec::new(),
             set_memo: Default::default(),
             dynamic_memo: None,
+            vl_cache: None,
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),
@@ -863,8 +866,12 @@ impl Ctx {
                     *v = (*addr, *size);
                 }
             }
-            Cmd::BindVertexAttribState(a) => self.st.attribs = *a,
+            Cmd::BindVertexAttribState(a) => {
+                self.st.attribs = *a;
+                self.vl_cache = None;
+            }
             Cmd::BindVertexStreamState(s) => {
+                self.vl_cache = None;
                 self.st.streams.clear();
                 self.st.streams.extend_from_slice(s);
             }
