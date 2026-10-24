@@ -61,3 +61,8 @@ Nintendo - For being awesome. I hope. Please don't take this down.
   * Button prompts are "?"
 * Mario Kart 8 Deluxe v3.0.4, MacOS
   * Looks good so far
+* Super Mario Odyssey
+  * Rendering looks good so far
+  * Some saving-related bug, I think. For all I know I was out of storage space
+* Breath of the Wild
+  * Still in the weeds of making this playable
