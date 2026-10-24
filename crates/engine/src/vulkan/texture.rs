@@ -926,7 +926,7 @@ impl Textures {
 }
 
 /// A content hash of guest bytes (change detection): four independent lanes over 32-byte steps.
-fn hash_bytes(b: &[u8]) -> u64 {
+pub(super) fn hash_bytes(b: &[u8]) -> u64 {
     const K: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut l = [0xcbf2_9ce4_8422_2325u64 ^ b.len() as u64, 1, 2, 3];
     let (body, rest) = b.split_at(b.len() / 32 * 32);

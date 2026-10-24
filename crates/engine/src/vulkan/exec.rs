@@ -128,6 +128,9 @@ pub struct Ctx {
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
+    /// Repacked vertex streams kept across submits (draw.rs cached_repack), by (memory, layout).
+    pub(super) repack_cache: rustc_hash::FxHashMap<u64, draw::RepackedStream>,
+    repack_swept: u64,
     /// Largest index of index ranges scanned in this submit, by (address, count, type, restart index).
     pub(super) max_indices: rustc_hash::FxHashMap<(usize, i32, i32, Option<u32>), u32>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
@@ -402,6 +405,8 @@ impl Ctx {
             repacked: Default::default(),
             bindings: Default::default(),
             max_indices: Default::default(),
+            repack_cache: Default::default(),
+            repack_swept: 0,
             supports: Default::default(),
             restart_memo: Default::default(),
             ubo_copies: Default::default(),
@@ -587,6 +592,19 @@ impl Ctx {
 
     /// Frees what completed submits used.
     unsafe fn retire(&mut self) {
+        // Repacked streams no draw used for 600 frames (no submit in flight reads them).
+        let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+        if frame >= self.repack_swept + 600 {
+            self.repack_swept = frame;
+            let dev = &self.dev;
+            self.repack_cache.retain(|_, e| {
+                let keep = e.used + 600 > frame;
+                if !keep {
+                    dev.free_host_buffer(&e.buf);
+                }
+                keep
+            });
+        }
         let done = super::inflight::completed();
         while self.inflight.front().is_some_and(|f| f.serial <= done) {
             let f = self.inflight.pop_front().unwrap();

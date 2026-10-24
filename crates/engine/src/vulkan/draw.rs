@@ -26,6 +26,18 @@ fn support_template() -> &'static [u8; SUPPORT_SIZE] {
     })
 }
 
+/// Largest vertex stream kept repacked across submits.
+const REPACK_CACHE_MAX: usize = 8 << 20;
+
+/// A vertex stream repacked for all its elements, with the hash of its guest bytes then and the last frame a draw
+/// used it.
+pub(super) struct RepackedStream {
+    pub(super) buf: crate::vulkan::device::HostBuffer,
+    elems: usize,
+    token: u64,
+    pub(super) used: u64,
+}
+
 /// A vertex attribute as the pipeline reads it, and where its data is in the guest's stream.
 #[derive(Clone, Copy, Hash)]
 pub(super) struct VAttr {
@@ -978,6 +990,21 @@ impl Ctx {
                         }
                     }
                 };
+                // Per-vertex streams: repacked once for all their elements and kept across submits while the write
+                // tracking shows their guest bytes unchanged (most are static meshes).
+                if !v.per_instance && size <= REPACK_CACHE_MAX {
+                    // Checked once per submit (guest memory does not change during one).
+                    let skey = super::hash_of(&(a, size, v, n, u32::MAX - 1));
+                    if let Some(&b) = self.repacked.get(&skey) {
+                        self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                        continue;
+                    }
+                    if let Some(b) = self.cached_repack(a, size, v, n) {
+                        self.repacked.insert(skey, (b, 0));
+                        self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b], &[0]);
+                        continue;
+                    }
+                }
                 // The same stream repacked the same way earlier in this submit (guest memory does not change during
                 // one).
                 let key = super::hash_of(&(a, size, v, n, base_instance));
@@ -1013,6 +1040,45 @@ impl Ctx {
                 self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[buf], &[off]);
             }
         }
+    }
+
+    /// Stream `v` at host `a` (`size` bytes) repacked for all its elements (at least `n`), from the cache when its
+    /// guest bytes still hash the same, else made now.
+    unsafe fn cached_repack(&mut self, a: usize, size: usize, v: &VStream, n: usize) -> Option<vk::Buffer> {
+        let key = super::hash_of(&(a, size, v));
+        let frame = crate::vulkan::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+        let token = super::texture::hash_bytes(std::slice::from_raw_parts(a as *const u8, size));
+        if let Some(e) = self.repack_cache.get_mut(&key) {
+            if e.elems >= n && e.token == token {
+                e.used = frame;
+                return Some(e.buf.buffer);
+            }
+        }
+        let elems = n.max(size.div_ceil(v.src_stride.max(1) as usize));
+        let stride = v.stride as usize;
+        let buf = self.dev.host_buffer((elems * stride).max(16) as u64, vk::BufferUsageFlags::VERTEX_BUFFER).ok()?;
+        let dst = std::slice::from_raw_parts_mut(buf.ptr, elems * stride);
+        dst.fill(0);
+        let src = std::slice::from_raw_parts(a as *const u8, size);
+        for e in 0..elems {
+            for at in &v.attrs {
+                let s0 = e * v.src_stride as usize + at.src_offset as usize;
+                let d0 = e * stride + at.offset as usize;
+                // Past the bound size reads zero (NVN bounds-checks vertex fetches).
+                if s0 >= src.len() {
+                    continue;
+                }
+                let len = (at.size as usize).min(src.len() - s0);
+                dst[d0..d0 + len].copy_from_slice(&src[s0..s0 + len]);
+            }
+        }
+        crate::vulkan::note_copied(elems * stride);
+        let b = buf.buffer;
+        if let Some(old) = self.repack_cache.insert(key, RepackedStream { buf, elems, token, used: frame }) {
+            // Submits in flight may still read it.
+            self.staging.push(old.buf);
+        }
+        Some(b)
     }
 
     /// The largest index an indexed draw uses (restart indices excluded).

@@ -50,6 +50,11 @@ static ONE_SHOT_NS: AtomicU64 = AtomicU64::new(0);
 static PIPELINES: AtomicU64 = AtomicU64::new(0);
 static ARENA_BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// Counts bytes written for the GPU outside the arena (repacked vertex streams).
+pub(crate) fn note_copied(n: usize) {
+    ARENA_BYTES.fetch_add(n as u64, Ordering::Relaxed);
+}
+
 /// Recording and GPU wait time not yet reported on an fps line, in ms (replays report them at the end).
 pub fn timing() -> (f64, f64, f64, u64) {
     let ms = |a: &AtomicU64| a.swap(0, Ordering::Relaxed) as f64 / 1e6;
