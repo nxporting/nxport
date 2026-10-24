@@ -645,7 +645,8 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     for n in &report.notes {
         println!("[gpu-replay] {n}");
     }
-    if !profile.is_empty() {
+    // With --repeat the steady-state profile below replaces it (first executions are slow on some GPUs).
+    if !profile.is_empty() && opts.repeat == 0 {
         let total: u64 = profile.iter().map(|p| p.0).sum();
         profile.sort_by_key(|p| std::cmp::Reverse(p.0));
         println!("[gpu-replay] GPU time of the {} passes: {:.2} ms; slowest:", profile.len(), total as f64 / 1e6);
@@ -656,20 +657,49 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
     if opts.repeat > 0 {
         handle += 1;
         crate::nvn::api::insert_command_list(handle, ops.clone());
+        if opts.profile {
+            gpu.profile_passes(true);
+        }
         let mut times = Vec::new();
+        let (mut record, mut wait, mut gpu_ns) = (Vec::new(), Vec::new(), Vec::new());
         for _ in 0..opts.repeat {
             let t = std::time::Instant::now();
             gpu.submit(&[handle]);
             gpu.wait_serial(gpu.submitted_serial(), u64::MAX);
             times.push(t.elapsed().as_secs_f64() * 1e3);
+            if let Some((r, w)) = gpu.last_submit_cpu_ns() {
+                record.push(r as f64 / 1e6);
+                wait.push(w as f64 / 1e6);
+            }
+            if let Some(g) = gpu.last_submit_gpu_ns() {
+                gpu_ns.push(g as f64 / 1e6);
+            }
         }
-        times.sort_by(|a, b| a.total_cmp(b));
+        let median = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.total_cmp(b));
+            v.get(v.len() / 2).copied().unwrap_or(0.0)
+        };
+        let min = times.iter().copied().fold(f64::MAX, f64::min);
         println!(
-            "[gpu-replay] whole frame {} times: min {:.1} ms, median {:.1} ms",
+            "[gpu-replay] whole frame {} times: min {:.1} ms, median {:.1} ms (recording {:.1}, GPU wait {:.1}, GPU {:.1})",
             times.len(),
-            times[0],
-            times[times.len() / 2]
+            min,
+            median(&mut times),
+            median(&mut record),
+            median(&mut wait),
+            median(&mut gpu_ns)
         );
+        if opts.profile {
+            if let Some(mut passes) = gpu.profile_passes(false).filter(|p| !p.is_empty()) {
+                let total: u64 = passes.iter().map(|p| p.0).sum();
+                let mut indexed: Vec<(usize, (u64, String))> = passes.drain(..).enumerate().collect();
+                indexed.sort_by_key(|p| std::cmp::Reverse(p.1 .0));
+                println!("[gpu-replay] last repetition: {} passes, {:.2} ms from the submit's start to its last pass end; slowest (with the work before them):", indexed.len(), total as f64 / 1e6);
+                for (i, (ns, d)) in indexed.iter().take(25) {
+                    println!("[gpu-replay]   pass {i:3}: {:6.3} ms, {d}", *ns as f64 / 1e6);
+                }
+            }
+        }
     }
     Ok(report)
 }

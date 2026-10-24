@@ -98,6 +98,15 @@ pub trait Backend: Send + Sync {
     fn last_submit_gpu_ns(&self) -> Option<u64> {
         None
     }
+    /// Turns per-pass GPU timing of whole submits on or off; returns the last profiled submit's passes (GPU ns,
+    /// description), for backends that measure it.
+    fn profile_passes(&self, _on: bool) -> Option<Vec<(u64, String)>> {
+        None
+    }
+    /// CPU time of the last submit, in ns: recording it, then waiting for the GPU (backends that measure it).
+    fn last_submit_cpu_ns(&self) -> Option<(u64, u64)> {
+        None
+    }
 }
 
 static BACKEND: OnceLock<&'static dyn Backend> = OnceLock::new();

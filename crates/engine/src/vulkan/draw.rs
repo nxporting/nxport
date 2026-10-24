@@ -173,6 +173,9 @@ impl Ctx {
         }
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
+        if let Some(p) = self.pass.as_mut() {
+            p.draws += 1;
+        }
         match call {
             Draw::Arrays { first, count } => {
                 self.dev.device.cmd_draw(self.cb, count.max(0) as u32, instances as u32, first.max(0) as u32, base_instance.max(0) as u32);
@@ -594,6 +597,12 @@ impl Ctx {
                 return Some(s[0]);
             }
         }
+        if let Some(p) = self.free_desc_pools.pop() {
+            self.desc_pools.push(p);
+            if let Ok(s) = self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)) {
+                return Some(s[0]);
+            }
+        }
         let sizes = [
             vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 16384 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8192 },
@@ -642,9 +651,12 @@ impl Ctx {
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
             image = self.tex.get(&self.dev, &t)?.0.image;
+            // Every barrier ends the pass, so the current pass began after the last one.
             if self.pass.as_ref().is_some_and(|p| p.images.contains(&image)) {
                 feedback = true;
-                return self.feedback_view(&t, view.as_ref(), declared);
+                if !self.dev.feedback_in_place {
+                    return self.feedback_view(&t, view.as_ref(), declared);
+                }
             }
             self.tex.sampled_view(&self.dev, &t, view.as_ref(), declared)
         });
