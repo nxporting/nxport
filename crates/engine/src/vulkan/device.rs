@@ -33,6 +33,8 @@ pub struct Dev {
     /// Fragment inputs must be written by the vertex stage (Metal links them; MoltenVK): unwritten ones are translated
     /// as zero.
     pub link_varyings: bool,
+    /// Primitive restart follows Metal's rules (MoltenVK): strips only, compared after adding the base vertex.
+    pub metal_restart: bool,
     /// Occlusion queries count samples exactly (else only zero / nonzero).
     pub precise_occlusion: bool,
     /// What shader translation may use on this device.
@@ -377,6 +379,7 @@ impl Dev {
                 discard_writes_depth: has_portability,
                 feedback_in_place: has_portability,
                 link_varyings: has_portability,
+                metal_restart: has_portability,
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
                 push,

@@ -203,6 +203,29 @@ impl Ctx {
                 self.dev.device.cmd_draw(self.cb, count.max(0) as u32, instances as u32, first.max(0) as u32, base_instance.max(0) as u32);
             }
             Draw::Elements { index_type, count, addr, base_vertex } => {
+                // Restart indices present: Metal-based hosts restart only strips and compare after adding the base
+                // vertex, so such ranges become 32-bit indices with the base vertex folded in (gpu::restart).
+                if let Some(r) = self.st.prim_restart.filter(|_| self.dev.metal_restart) {
+                    let a = crate::nvn::api::translate_virtual(addr as usize);
+                    let key = (mode, index_type, a, count, r, base_vertex);
+                    let rewritten = match self.restart_memo.get(&key) {
+                        Some(&x) => x,
+                        None => {
+                            let x = crate::gpu::restart::restart_rewrite(mode, index_type, a as u64, count, r, base_vertex).and_then(|v| {
+                                let bytes = std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4);
+                                self.arena.copy(&self.dev, bytes).map(|(b, o)| (b, o, v.len() as u32))
+                            });
+                            self.restart_memo.insert(key, x);
+                            x
+                        }
+                    };
+                    if let Some((buf, off, n)) = rewritten {
+                        let d = &self.dev.device;
+                        d.cmd_bind_index_buffer(self.cb, buf, off, vk::IndexType::UINT32);
+                        d.cmd_draw_indexed(self.cb, n, instances as u32, 0, 0, base_instance.max(0) as u32);
+                        return;
+                    }
+                }
                 let Some((buf, off, ty)) = self.index_buffer(index_type, count, addr) else { return };
                 let d = &self.dev.device;
                 d.cmd_bind_index_buffer(self.cb, buf, off, ty);
