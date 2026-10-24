@@ -838,7 +838,9 @@ impl Ctx {
                 self.arena.copy(&self.dev, &v).map(|(b, o)| (b, o, vk::IndexType::UINT16))
             }
             1 => {
-                let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 2 == 0);
+                // In place only at 4-byte aligned offsets: Metal (under MoltenVK) needs them for 16-bit indices too, and
+                // passed 2-mod-4 offsets through (Super Mario Odyssey's Cap Kingdom ground: draws with garbage indices).
+                let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0);
                 x.or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, n * 2)))
                     .map(|(b, o)| (b, o, vk::IndexType::UINT16))
             }
