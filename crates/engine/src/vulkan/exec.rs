@@ -111,6 +111,8 @@ pub struct Ctx {
     pub(super) zeros: super::device::HostBuffer,
     /// Repacked vertex streams of this submit, by (guest range, layout, elements).
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
+    /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
+    pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
     /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none).
     timestamps: vk::QueryPool,
     warned: HashSet<String>,
@@ -259,6 +261,7 @@ impl Ctx {
             default_sampler,
             zeros,
             repacked: Default::default(),
+            bindings: Default::default(),
             timestamps,
             warned: HashSet::new(),
         })
@@ -326,6 +329,7 @@ impl Ctx {
         }
         self.arena.reset(&self.dev);
         self.repacked.clear();
+        self.bindings.clear();
         self.imports.release_retired(&self.dev);
     }
 

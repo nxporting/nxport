@@ -619,17 +619,32 @@ impl Ctx {
 
     unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
+        // Pools change between submits only (registration is CPU work): a handle resolves the same way within one,
+        // except where its image is an attachment of the current pass (render-target feedback).
+        let key = (h, declared);
+        if let Some(&(img, v, s)) = self.bindings.get(&key) {
+            if !self.pass.as_ref().is_some_and(|p| p.images.contains(&img)) {
+                return (v, s);
+            }
+        }
         let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
+        let mut image = vk::Image::null();
+        let mut feedback = false;
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
-            let img = self.tex.get(&self.dev, &t)?.0.image;
-            if self.pass.as_ref().is_some_and(|p| p.images.contains(&img)) {
+            image = self.tex.get(&self.dev, &t)?.0.image;
+            if self.pass.as_ref().is_some_and(|p| p.images.contains(&image)) {
+                feedback = true;
                 return self.feedback_view(&t, view.as_ref(), declared);
             }
             self.tex.sampled_view(&self.dev, &t, view.as_ref(), declared)
         });
         let sampler = crate::nvn::api::lookup_pool_sampler(sampler_id).and_then(|d| self.tex.sampler(&self.dev, &d));
-        (view.unwrap_or(vk::ImageView::null()), sampler.unwrap_or(self.default_sampler))
+        let r = (view.unwrap_or(vk::ImageView::null()), sampler.unwrap_or(self.default_sampler));
+        if !feedback {
+            self.bindings.insert(key, (image, r.0, r.1));
+        }
+        r
     }
 
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
