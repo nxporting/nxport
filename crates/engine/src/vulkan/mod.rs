@@ -12,6 +12,7 @@ mod exec;
 mod format;
 mod guard;
 mod inflight;
+mod pipelines;
 mod shader;
 mod stage_cache;
 mod state;

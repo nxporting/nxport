@@ -1,9 +1,9 @@
-// Translated stages on disk (<data dir>/vulkan_stages/<engine build>/), so a later session skips the translation of
+// Translated stages on disk (<data dir>/vulkan_stages/<translation hash>/), so a later session skips the translation of
 // every stage it has seen. A file per lookup key (the stage's leading bytes and control section, as the in-memory
 // stage key hashes them, and the translation inputs) holds its candidates: the guest code length each one was
 // translated from, a hash of that code, the SPIR-V and its manifest. A candidate is used only when the guest code
-// hashes the same. Another engine build starts a new directory (the translator may have changed); older ones are
-// removed.
+// hashes the same. A change to the translation (its source, hashed by build.rs) starts a new directory; older ones
+// are removed.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -17,13 +17,10 @@ fn dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         let root = crate::profile::data_subdir("vulkan_stages")?;
-        let exe = std::env::current_exe().ok()?;
-        let meta = std::fs::metadata(&exe).ok()?;
-        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-        let build = format!("{:016x}", super::exec::hash_of(&(meta.len(), modified)));
+        let build = env!("NX_TRANSLATION_HASH");
         if let Ok(entries) = std::fs::read_dir(&root) {
             for e in entries.flatten() {
-                if e.file_name().to_string_lossy() != build.as_str() {
+                if e.file_name().to_string_lossy() != build {
                     let _ = std::fs::remove_dir_all(e.path());
                 }
             }
@@ -50,7 +47,26 @@ pub(super) unsafe fn code_hash(data: u64, control: u64, len: usize) -> u64 {
 }
 
 /// The cached SPIR-V and manifest for lookup key `key` whose guest code at `data` (with `control`) is unchanged.
-pub(super) unsafe fn load(key: u64, data: u64, control: u64, readable: usize) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
+/// Also returns the code's hash.
+pub(super) unsafe fn load(key: u64, data: u64, control: u64, readable: usize) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest, u64)> {
+    let mut found = None;
+    candidates(key, |len, hash| {
+        let hit = len <= readable && code_hash(data, control, len) == hash;
+        if hit {
+            found = Some(hash);
+        }
+        hit
+    })
+    .map(|(s, m)| (s, m, found.unwrap()))
+}
+
+/// The cached SPIR-V and manifest of lookup key `key` translated from code hashing to `code`.
+pub(super) fn load_id(key: u64, code: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
+    candidates(key, |_, hash| hash == code)
+}
+
+/// The first of `key`'s entries `pick` (given its code length and hash) accepts.
+fn candidates(key: u64, mut pick: impl FnMut(usize, u64) -> bool) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
     let bytes = std::fs::read(dir()?.join(format!("{key:016x}.bin"))).ok()?;
     let mut at = 0;
     let u32_at = |b: &[u8], o: usize| b.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap()));
@@ -64,7 +80,7 @@ pub(super) unsafe fn load(key: u64, data: u64, control: u64, readable: usize) ->
         let spv = bytes.get(at + 24..at + 24 + spv_len)?;
         let man = bytes.get(at + 24 + spv_len..at + 24 + spv_len + man_len)?;
         at += 24 + spv_len + man_len;
-        if len <= readable && code_hash(data, control, len) == hash {
+        if pick(len, hash) {
             let m = serde_json::from_slice(man).ok()?;
             return Some((spv.to_vec(), m));
         }
