@@ -45,6 +45,13 @@ pub struct ManifestSBuffer {
     pub slot: i32,
     pub cb_slot: i32,
     pub cb_offset: i32,
+    /// The stage writes it (stores or atomics); manifests without the field count as written.
+    #[serde(default = "written")]
+    pub write: bool,
+}
+
+fn written() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,7 +114,13 @@ impl ShaderProgram {
             sbuffers: i
                 .sbuffers
                 .iter()
-                .map(|b| ManifestSBuffer { binding: b.binding as u32, slot: b.slot as i32, cb_slot: b.sb_cb_slot as i32, cb_offset: b.sb_cb_offset as i32 })
+                .map(|b| ManifestSBuffer {
+                    binding: b.binding as u32,
+                    slot: b.slot as i32,
+                    cb_slot: b.sb_cb_slot as i32,
+                    cb_offset: b.sb_cb_offset as i32,
+                    write: b.write,
+                })
                 .collect(),
             textures: i
                 .textures

@@ -50,9 +50,14 @@ fn wait_done(serial: u64) -> bool {
     true
 }
 
+/// Protection as this guard needs it; pages the write tracking (guest::dirty_track) holds stay read-only.
 unsafe fn set_prot(a: usize, len: usize, write: bool) -> bool {
     let prot = if write { crate::os::Prot::ReadWrite } else { crate::os::Prot::Read };
-    crate::os::protect(a, len, prot).is_ok()
+    let ok = crate::os::protect(a, len, prot).is_ok();
+    if write {
+        crate::guest::dirty_track::reprotect_held(a, len);
+    }
+    ok
 }
 
 // ---- hot pages ----------------------------------------------------------------------------------------------------
@@ -223,9 +228,15 @@ pub(super) unsafe fn fault(addr: usize) -> bool {
         }
         mark_hot(addr);
         release_slot(gen, i);
+        // A page the write tracking holds too: the write is its to record (and its handler makes the page writable).
+        crate::guest::dirty_track::handle_fault(addr);
         return true;
     }
-    find(&TABLES[(gen + 1) & 1], addr).is_some()
+    if find(&TABLES[(gen + 1) & 1], addr).is_some() {
+        crate::guest::dirty_track::handle_fault(addr);
+        return true;
+    }
+    false
 }
 
 /// Before the host kernel writes [addr, addr+len) (it cannot fault, it fails): wait for and release held ranges there.
@@ -241,6 +252,27 @@ pub(super) unsafe fn before_host_write(addr: usize, len: usize) {
             break;
         }
         release_slot(gen, i);
+    }
+}
+
+/// Write tracking made [addr, addr+len) writable: the ranges held here become read-only again.
+pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
+    if !enabled() {
+        return;
+    }
+    let t = &TABLES[ACTIVE.load(Ordering::Acquire) & 1];
+    let n = t.n.load(Ordering::Acquire).min(SLOTS);
+    for i in first_slot(t, n, addr)..n {
+        let (s, e) = (t.start[i].load(Ordering::Acquire), t.end[i].load(Ordering::Acquire));
+        if s >= addr + len {
+            break;
+        }
+        if t.released[i].load(Ordering::Acquire) == 0 {
+            let (x, y) = (s.max(addr & !(PAGE - 1)), e.min((addr + len + PAGE - 1) & !(PAGE - 1)));
+            if x < y {
+                let _ = crate::os::protect(x, y - x, crate::os::Prot::Read);
+            }
+        }
     }
 }
 
@@ -321,8 +353,6 @@ pub(super) fn protect(fence: u64) {
     ACTIVE.store(next, Ordering::Release);
     let mut pages = 0;
     for (i, &(a, b, _)) in ranges.iter().enumerate() {
-        // Write-tracked pages here: write tracking would unprotect them without waiting.
-        crate::guest::dirty_track::release_for_gpu(a, b - a);
         if !unsafe { set_prot(a, b - a, false) } {
             t.released[i].store(1, Ordering::Release);
         }

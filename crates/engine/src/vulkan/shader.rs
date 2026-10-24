@@ -15,7 +15,7 @@ pub enum Feed {
     /// Guest constant buffer slot (0 driver, 1 the shader's constant bank, n >= 3 the uniform buffer bound at n - 3).
     Cbuf(i32),
     /// Storage buffer: its descriptor (address, size) is read from guest constant buffer `cb_slot` at word `cb_offset`.
-    Sbuf { cb_slot: i32, cb_offset: i32 },
+    Sbuf { cb_slot: i32, cb_offset: i32, write: bool },
     /// Texture: handle at word `handle_index` of the bound texture table (cbuf_slot -1) or of constant buffer
     /// `cbuf_slot`; declared view type.
     /// `slot`: its first texture slot when sampled through the sampler table (a separate image).
@@ -167,7 +167,7 @@ pub unsafe fn translate(
         } else if let Some(c) = m.cbuffers.iter().find(|c| c.binding == mb) {
             Some((vk::DescriptorType::UNIFORM_BUFFER, 1, Feed::Cbuf(c.slot)))
         } else if let Some(s) = m.sbuffers.iter().find(|s| s.binding == mb) {
-            Some((vk::DescriptorType::STORAGE_BUFFER, 1, Feed::Sbuf { cb_slot: s.cb_slot, cb_offset: s.cb_offset }))
+            Some((vk::DescriptorType::STORAGE_BUFFER, 1, Feed::Sbuf { cb_slot: s.cb_slot, cb_offset: s.cb_offset, write: s.write }))
         } else if mb == sass2spv::translation::properties::SAMPLER_TABLE_BINDING as u32 && m.sampler_table > 0 {
             Some((vk::DescriptorType::SAMPLER, m.sampler_table, Feed::SamplerTable))
         } else if let Some(t) = m.textures.iter().find(|t| t.binding == mb) {

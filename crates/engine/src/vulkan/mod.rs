@@ -188,6 +188,10 @@ impl Backend for Vulkan {
         }
     }
 
+    fn pages_reprotected(&self, addr: usize, len: usize) {
+        unsafe { guard::reprotect_held(addr, len) }
+    }
+
     fn before_host_write(&self, addr: usize, len: usize) {
         unsafe { guard::before_host_write(addr, len) }
     }

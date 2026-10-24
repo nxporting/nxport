@@ -203,6 +203,25 @@ pub unsafe fn handle_fault(addr: usize) -> bool {
     true
 }
 
+/// Another page guard made [start, start+len) writable: the pages tracked here are made read-only again (signal-safe:
+/// atomics and mprotect only).
+pub unsafe fn reprotect_held(start: usize, len: usize) {
+    let Some((_, f, first, last)) = locate(start, len) else { return };
+    let mut p = first;
+    while p <= last {
+        if f[p].load(Ordering::Acquire) & PROTECTED == 0 {
+            p += 1;
+            continue;
+        }
+        let run = p;
+        while p <= last && f[p].load(Ordering::Acquire) & PROTECTED != 0 {
+            p += 1;
+        }
+        let at = (start & !(PAGE - 1)) + (run - first) * PAGE;
+        let _ = crate::os::protect(at, (p - run) * PAGE, crate::os::Prot::Read);
+    }
+}
+
 /// Makes the protected pages among [first, last] writable and bumps their generations.
 unsafe fn unprotect_pages(
     g: &[AtomicU32],
