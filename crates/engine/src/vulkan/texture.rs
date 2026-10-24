@@ -83,9 +83,11 @@ pub struct Textures {
     pub warned: std::collections::HashSet<String>,
     /// Counts submits: textures are checked for CPU writes once per submit.
     pub serial: u64,
-    /// Alias roots found in this frame (see `locate`; textures are re-initialized between frames).
+    /// Alias roots found (see `locate`), kept while no texture over their memory changes (`begin_submit`).
     roots: FxHashMap<Desc, (Desc, u32, u32)>,
-    roots_frame: u64,
+    /// The texture index change sequence the roots are valid at (begin_submit), and scratch for the changes.
+    roots_seq: u64,
+    root_changes: Vec<(usize, usize)>,
     /// Settled images with unflushed GPU contents, by storage address (`flush_overlaps`), and the largest one's size.
     unflushed: std::collections::BTreeMap<usize, Vec<Desc>>,
     unflushed_span: usize,
@@ -174,6 +176,29 @@ impl Textures {
     pub fn begin_submit(&mut self) {
         self.serial += 1;
         SUBMIT.store(self.serial, std::sync::atomic::Ordering::Relaxed);
+        // Alias roots stay valid while no texture over their memory was indexed or unindexed.
+        let mut changes = std::mem::take(&mut self.root_changes);
+        changes.clear();
+        let (seq, complete) = crate::nvn::api::index_changes_since(self.roots_seq, &mut changes);
+        self.roots_seq = seq;
+        if !complete || self.roots.len() > 1 << 15 {
+            self.roots.clear();
+        } else if !changes.is_empty() {
+            changes.sort_unstable();
+            // Merged, so a lookup is one binary search.
+            let mut merged: Vec<(usize, usize)> = Vec::with_capacity(changes.len());
+            for &(a, b) in &changes {
+                match merged.last_mut() {
+                    Some(m) if a <= m.1 => m.1 = m.1.max(b),
+                    _ => merged.push((a, b)),
+                }
+            }
+            self.roots.retain(|d, _| {
+                let i = merged.partition_point(|m| m.1 <= d.storage);
+                !(i < merged.len() && merged[i].0 <= d.storage)
+            });
+        }
+        self.root_changes = changes;
     }
 
     /// Where texture `t` lives: the description of the image holding it and the level / layer it starts at there.
@@ -182,11 +207,6 @@ impl Textures {
     /// rendering through one is visible through the others, as on the GPU (the Metal backend's alias views).
     pub unsafe fn locate(&mut self, t: &NvnTexture) -> (Desc, u32, u32) {
         let d = Desc::of(t);
-        let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
-        if self.roots_frame != frame {
-            self.roots.clear();
-            self.roots_frame = frame;
-        }
         if let Some(&r) = self.roots.get(&d) {
             return r;
         }

@@ -3409,9 +3409,11 @@ fn snapshot_texture(addr: usize, t: NvnTexture) {
     let idx = idx.get_or_insert_with(Default::default);
     if let Some((_, o)) = old {
         unindex_texture(idx, addr, o.storage);
+        log_index_change(o.storage, texture_span(&o));
     }
     if t.storage > 0x10000 {
         idx.entry(t.storage).or_default().push(addr);
+        log_index_change(t.storage, texture_span(&t));
         // Bound for the alias search (a container starts at most its own size below a texture it contains).
         let span = texture_span(&t);
         MAX_TEXTURE_SPAN.fetch_max(span, std::sync::atomic::Ordering::Relaxed);
@@ -3419,6 +3421,34 @@ fn snapshot_texture(addr: usize, t: NvnTexture) {
             TEX_LARGE_BY_STORAGE.lock().unwrap().get_or_insert_with(Default::default).entry(t.storage).or_default().push(addr);
         }
     }
+}
+
+/// Recent changes of the live-texture index: (sequence, start, end) of the memory each indexed or unindexed texture
+/// covers. Backends caching alias resolutions drop the entries these touch (index_changes_since).
+static INDEX_CHANGES: std::sync::Mutex<(u64, std::collections::VecDeque<(u64, usize, usize)>)> =
+    std::sync::Mutex::new((0, std::collections::VecDeque::new()));
+const INDEX_CHANGES_KEPT: usize = 1 << 14;
+
+fn log_index_change(storage: usize, span: usize) {
+    if storage <= 0x10000 {
+        return;
+    }
+    let mut g = INDEX_CHANGES.lock().unwrap();
+    g.0 += 1;
+    let seq = g.0;
+    if g.1.len() == INDEX_CHANGES_KEPT {
+        g.1.pop_front();
+    }
+    g.1.push_back((seq, storage, storage + span.max(1)));
+}
+
+/// The live-texture index changes after sequence `since` as memory ranges, and the current sequence; None when some
+/// of them are no longer kept (everything must be considered changed).
+pub fn index_changes_since(since: u64, out: &mut Vec<(usize, usize)>) -> (u64, bool) {
+    let g = INDEX_CHANGES.lock().unwrap();
+    let complete = g.1.front().is_none_or(|f| f.0 <= since + 1) || g.0 == since;
+    out.extend(g.1.iter().filter(|c| c.0 > since).map(|c| (c.1, c.2)));
+    (g.0, complete)
 }
 
 /// Memory a texture covers: its declared size or its layout's, the larger.
@@ -3609,6 +3639,7 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
     if let Some((_, t)) = texture_snapshot(tex as usize) {
         if let Some(idx) = TEX_BY_STORAGE.lock().unwrap().as_mut() {
             unindex_texture(idx, tex as usize, t.storage);
+            log_index_change(t.storage, texture_span(&t));
         }
         let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(s) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
