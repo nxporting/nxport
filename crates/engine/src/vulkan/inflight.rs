@@ -30,6 +30,8 @@ pub(super) struct Done {
     /// Two timestamps around the submit, then one per pass end with its description when profiling passes.
     pub timestamps: vk::QueryPool,
     pub pass_labels: Vec<String>,
+    /// Render-target write-back: (texture, level, copy of its texels, bytes), written to guest memory.
+    pub rt_writebacks: Vec<(crate::nvn::api::NvnTexture, u32, usize, usize)>,
 }
 
 // The copies are arena memory the context keeps until the serial completed; the handles are plain Vulkan handles.
@@ -89,6 +91,11 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
     }
     for &(addr, src, len) in &d.writebacks {
         std::ptr::copy_nonoverlapping(src as *const u8, addr as *mut u8, len);
+    }
+    if ok {
+        for (t, level, src, len) in &d.rt_writebacks {
+            crate::nvn::api::guest_write_level(t, *level as usize, std::slice::from_raw_parts(*src as *const u8, *len));
+        }
     }
     if ok && d.timestamps != vk::QueryPool::null() {
         let mut ts = [0u64; 2];

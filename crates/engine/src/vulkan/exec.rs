@@ -114,6 +114,11 @@ pub struct Ctx {
     /// submits here complete before they return). Last frame each storage was rendered in; this frame's candidates.
     rt_history: HashMap<usize, u64>,
     writeback_rts: Vec<NvnTexture>,
+    /// Candidates of presented frames, read by the next submit; that submit's reads (texture, level, copy, bytes) and
+    /// the images whose guest bytes it rewrites (settled again once it completed).
+    pending_rt_reads: Vec<NvnTexture>,
+    rt_reads: Vec<(NvnTexture, u32, usize, usize)>,
+    rt_resettle: Vec<texture::Desc>,
     default_sampler: vk::Sampler,
     /// Zeros for unbound vertex attributes and resources (never written).
     pub(super) zeros: super::device::HostBuffer,
@@ -279,6 +284,8 @@ struct InFlight {
     imports: Vec<(vk::Buffer, vk::DeviceMemory)>,
     /// Occlusion report addresses, written by the watcher.
     reports: Vec<u64>,
+    /// Images whose guest bytes the watcher rewrote (render-target write-back).
+    resettle: Vec<texture::Desc>,
 }
 
 pub(super) fn hash_of<T: Hash>(v: &T) -> u64 {
@@ -378,6 +385,9 @@ impl Ctx {
             bc_pending: Vec::new(),
             rt_history: Default::default(),
             writeback_rts: Vec::new(),
+            pending_rt_reads: Vec::new(),
+            rt_reads: Vec::new(),
+            rt_resettle: Vec::new(),
             fb_epoch: 1,
             default_sampler,
             zeros,
@@ -425,6 +435,7 @@ impl Ctx {
             writebacks: Vec::new(),
             timestamps: vk::QueryPool::null(),
             pass_labels: Vec::new(),
+            rt_writebacks: Vec::new(),
         };
         self.retire();
         if self.lost || super::inflight::LOST.load(std::sync::atomic::Ordering::Acquire) {
@@ -476,6 +487,7 @@ impl Ctx {
             self.pass_labels.clear();
             d.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::TOP_OF_PIPE, self.timestamps, 0);
         }
+        self.record_rt_reads();
         let t0 = std::time::Instant::now();
         self.chunk_start = t0;
         let mut upcoming = std::mem::take(&mut self.occl.upcoming);
@@ -527,6 +539,7 @@ impl Ctx {
             writebacks: std::mem::take(&mut self.writebacks).into_iter().map(|(a, p, n)| (a, p as usize, n)).collect(),
             timestamps,
             pass_labels: if self.profile_passes { std::mem::take(&mut self.pass_labels) } else { Vec::new() },
+            rt_writebacks: std::mem::take(&mut self.rt_reads),
         });
         if self.lost && fence != vk::Fence::null() {
             self.dev.device.destroy_fence(fence, None);
@@ -542,6 +555,7 @@ impl Ctx {
             timestamps,
             imports: std::mem::take(&mut self.imports.retired),
             reports,
+            resettle: std::mem::take(&mut self.rt_resettle),
         });
         self.gpu_dirty.clear();
         // Guest memory under GPU-written images is CPU memory: what it holds now is what later CPU writes change.
@@ -576,6 +590,10 @@ impl Ctx {
             if f.timestamps != vk::QueryPool::null() {
                 self.free_timestamps.push(f.timestamps);
             }
+            // The image's own contents: not a CPU write.
+            for d in &f.resettle {
+                self.tex.resettle(d);
+            }
             for (b, m) in f.imports {
                 d.destroy_buffer(b, None);
                 d.free_memory(m, None);
@@ -602,14 +620,22 @@ impl Ctx {
         }
     }
 
-    /// At a present: copies this frame's write-back candidates into guest memory (2D single-sample uncompressed color,
-    /// every level).
-    pub unsafe fn write_back_rts(&mut self) {
+    /// At a present: this frame's write-back candidates are read by the next submit (when this frame's GPU work is
+    /// done: one frame later, as the Metal backend's write-back), and written to guest memory when it completed.
+    pub fn write_back_rts(&mut self) {
         let done = std::mem::take(&mut self.writeback_rts);
-        if self.lost {
+        self.pending_rt_reads.extend(done);
+    }
+
+    /// Records the copies of the pending write-back candidates (2D single-sample uncompressed color, every level) into
+    /// host memory, at the start of the submit.
+    unsafe fn record_rt_reads(&mut self) {
+        let pending = std::mem::take(&mut self.pending_rt_reads);
+        if pending.is_empty() {
             return;
         }
-        for t in done {
+        self.dev.full_barrier(self.cb);
+        for t in pending {
             let Some(info) = crate::nvn::layout::format_info(t.format) else { continue };
             if info.block_w != 1 || t.target != crate::nvn::layout::NVN_TARGET_2D || t.samples > 1 || t.storage < 0x10000 {
                 continue;
@@ -625,12 +651,17 @@ impl Ctx {
                 continue;
             }
             for level in 0..t.levels.max(1) as u32 {
-                let Some(texels) = Textures::read(&self.dev, img, t.format, level + at_level, at_layer) else { break };
-                crate::nvn::api::guest_write_level(&t, level as usize, &texels.data);
+                let Some((mut region, _, _, n)) = Textures::read_region(img, t.format, level + at_level, at_layer) else { break };
+                let Some((buf, off, ptr)) = self.arena.alloc(&self.dev, n as usize) else { break };
+                region.buffer_offset = off;
+                self.dev.device.cmd_copy_image_to_buffer(self.cb, img.image, vk::ImageLayout::GENERAL, buf, &[region]);
+                self.rt_reads.push((t, level, ptr as usize, n as usize));
             }
-            // The image's own contents: not a CPU write.
-            self.tex.resettle(&d);
+            // The watcher writes it: the write guard must not hold these pages.
+            crate::vulkan::guard::note_write(t.storage, len);
+            self.rt_resettle.push(d);
         }
+        self.dev.full_barrier(self.cb);
     }
 
     /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them).

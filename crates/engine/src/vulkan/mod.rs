@@ -88,6 +88,7 @@ impl Backend for Vulkan {
                 writebacks: Vec::new(),
                 timestamps: vk::QueryPool::null(),
                 pass_labels: Vec::new(),
+                rt_writebacks: Vec::new(),
             }),
         }
         self.serial.store(serial, Ordering::Release);
@@ -95,7 +96,7 @@ impl Backend for Vulkan {
 
     fn present(&self, texture: usize, _crop: [i32; 4]) {
         if let Some(c) = self.ctx.lock().unwrap().as_mut() {
-            unsafe { c.write_back_rts() };
+            c.write_back_rts();
         }
         let n = self.frames.fetch_add(1, Ordering::AcqRel) + 1;
         if n % 50 == 0 {
