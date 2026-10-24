@@ -30,6 +30,9 @@ pub struct Dev {
     /// memory holds the pass-start contents until each tile is stored, what NVN's barrier gives the pixel being shaded.
     /// Elsewhere such draws read a copy taken after the barrier.
     pub feedback_in_place: bool,
+    /// Fragment inputs must be written by the vertex stage (Metal links them; MoltenVK): unwritten ones are translated
+    /// as zero.
+    pub link_varyings: bool,
     /// Occlusion queries count samples exactly (else only zero / nonzero).
     pub precise_occlusion: bool,
     /// What shader translation may use on this device.
@@ -256,6 +259,7 @@ impl Dev {
                 reduced_precision: false,
                 stage_set: None,
                 binding_base: 0,
+                fragment_inputs: None,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
@@ -372,6 +376,7 @@ impl Dev {
                 beyond_stride,
                 discard_writes_depth: has_portability,
                 feedback_in_place: has_portability,
+                link_varyings: has_portability,
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
                 push,

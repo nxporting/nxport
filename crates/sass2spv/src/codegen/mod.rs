@@ -31,6 +31,7 @@ pub struct HostCapabilities {
     pub supports_draw_parameters: bool,
     pub cbuf_limits: bool,
     pub binding_base: i32,
+    pub fragment_inputs: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -132,11 +133,20 @@ impl CodeGenContext<'_> {
     }
 
     pub fn main_interface(&self) -> Vec<Inst> {
-        let mut v: Vec<Inst> = self.inputs.values().cloned().collect();
+        let mut v: Vec<Inst> = self.inputs.iter().filter(|(io, _)| !self.unlinked_input(io)).map(|(_, v)| v.clone()).collect();
         v.extend(self.outputs.values().cloned());
         v.extend(self.inputs_per_patch.values().cloned());
         v.extend(self.outputs_per_patch.values().cloned());
         v
+    }
+
+    /// A fragment input at a location the vertex stage does not write (HostCapabilities::fragment_inputs): a private
+    /// variable holding zero.
+    pub fn unlinked_input(&self, io: &IoDefinition) -> bool {
+        self.definitions.stage == ShaderStage::Fragment
+            && io.io_variable == IoVariable::UserDefined
+            && !io.storage_kind.is_output()
+            && self.host.fragment_inputs.is_some_and(|m| io.location >= 32 || m & (1 << io.location) == 0)
     }
 
     pub fn declare_local(&mut self, local: AstId, spv_local: Inst) -> R<()> {

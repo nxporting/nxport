@@ -111,6 +111,7 @@ pub fn translate_functions(
         supports_draw_parameters: gpu.host.draw_parameters,
         cbuf_limits: gpu.host.cbuf_limits,
         binding_base: gpu.host.binding_base,
+        fragment_inputs: gpu.host.fragment_inputs,
     };
     let (binary_code, msl) = match target {
         Target::Spirv => (codegen::generate(&mut s_info, &d.tc.definitions, &rm.properties, &host)?, String::new()),

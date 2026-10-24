@@ -387,6 +387,16 @@ fn declare_input_or_output(c: &mut CodeGenContext, io: IoDefinition, is_output: 
         let len = c.const_u32_i(d.threads_per_input_primitive);
         spv_type = c.m.type_array(&spv_type, &len, false);
     }
+    if !is_per_patch && c.unlinked_input(&io) {
+        let pointer_type = c.m.type_pointer(StorageClass::PRIVATE, &spv_type, false);
+        let zero = c.m.constant_null(&spv_type);
+        let spv_var = c.m.variable(&pointer_type, StorageClass::PRIVATE, Some(&zero));
+        c.m.add_global_variable(&spv_var);
+        if !c.inputs.try_add(io, spv_var) {
+            return Err("System.ArgumentException: An item with the same key has already been added.".into());
+        }
+        return Ok(());
+    }
     let pointer_type = c.m.type_pointer(storage_class, &spv_type, false);
     let spv_var = c.m.variable(&pointer_type, storage_class, None);
     if is_builtin {
