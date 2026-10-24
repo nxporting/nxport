@@ -63,7 +63,7 @@ Nintendo - For being awesome. I hope. Please don't take this down.
   * Flickering behind press-LR-to-start prompt
   * Miis facial features cull too eagerly
   * Trophy flickering
-  * Characters too shiny in select screen, maybe elsewhere too
+  * Some things are overly shiny
 * Super Mario Odyssey
   * Rendering looks good so far
   * Some saving-related bug, I think. For all I know I was out of storage space
