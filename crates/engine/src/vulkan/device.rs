@@ -335,7 +335,9 @@ impl Dev {
                 let align = hp.min_imported_host_pointer_alignment;
                 (ash::ext::external_memory_host::Device::new(&instance, &device), align)
             });
-            let push = push_descriptor.then(|| {
+            // Not on MoltenVK: with its argument buffers off, descriptor sets bind as directly, and its push descriptors
+            // copy every write per draw (Hateno replay: recording 9.8 -> 9.1 ms without them).
+            let push = (push_descriptor && !has_portability).then(|| {
                 let mut pp = vk::PhysicalDevicePushDescriptorPropertiesKHR::default();
                 let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pp);
                 instance.get_physical_device_properties2(pdev, &mut p2);
