@@ -5356,6 +5356,11 @@ pub unsafe extern "C" fn hle_nvnProgramSetDebugLabel(_p: *mut NvnProgram, _label
     record_hle_call("hle_nvnProgramSetDebugLabel");
 }
 /// The stages each program was last given (frame captures).
+/// The stages (code, control section) program `p` was last given.
+pub fn program_stages(p: usize) -> Vec<(u64, u64)> {
+    PROGRAM_STAGES.lock().unwrap().get(&p).cloned().unwrap_or_default()
+}
+
 static PROGRAM_STAGES: std::sync::LazyLock<StdMutex<rustc_hash::FxHashMap<usize, Vec<(u64, u64)>>>> =
     std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
 

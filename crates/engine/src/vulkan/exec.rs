@@ -120,6 +120,7 @@ pub struct Ctx {
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
     /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none).
     timestamps: vk::QueryPool,
+    occl: Occlusion,
     warned: HashSet<String>,
 }
 
@@ -176,6 +177,41 @@ impl Ranges {
 /// Size of the zero buffer.
 const ZEROS: u64 = 4096;
 
+/// Occlusion queries (SAMPLES_PASSED counters). Each stretch of a render pass gets its own Vulkan query (one cannot span
+/// passes); a report sums those since the counter's last reset and is written to guest memory once its submit completed,
+/// as the GPU would. Conditional rendering on a report still pending in the submit being recorded renders (its value is
+/// not known yet; the Metal backend and Ryujinx do the same).
+pub(super) struct Occlusion {
+    pool: vk::QueryPool,
+    /// Queries of this submit: next free, the one running in the current pass.
+    next: u32,
+    active: Option<u32>,
+    /// Since the last reset: the total of earlier submits and this submit's queries.
+    carried: u64,
+    since_reset: Vec<u32>,
+    /// Reports of this submit: (address, total carried then, queries).
+    reports: Vec<(u64, u64, Vec<u32>)>,
+    precise: bool,
+}
+
+impl Occlusion {
+    const QUERIES: u32 = 8192;
+
+    fn new(dev: &Dev) -> Occlusion {
+        let pool = unsafe {
+            dev.device
+                .create_query_pool(&vk::QueryPoolCreateInfo::default().query_type(vk::QueryType::OCCLUSION).query_count(Self::QUERIES), None)
+                .unwrap_or(vk::QueryPool::null())
+        };
+        Occlusion { pool, next: 0, active: None, carried: 0, since_reset: Vec::new(), reports: Vec::new(), precise: dev.precise_occlusion }
+    }
+
+    /// Whether `addr` (or the report after it, which conditions compare it with) is a report of this submit.
+    fn pending(&self, addr: u64) -> bool {
+        self.reports.iter().any(|r| r.0 == addr || r.0 == addr + 16)
+    }
+}
+
 pub(super) fn hash_of<T: Hash>(v: &T) -> u64 {
     hash(v)
 }
@@ -199,6 +235,7 @@ fn attr_type_code(t: AttributeType) -> u8 {
 impl Ctx {
     pub fn new(dev: Dev) -> Result<Ctx, String> {
         let default_sampler = unsafe { dev_sampler(&dev) };
+        let occl = Occlusion::new(&dev);
         let timestamps = unsafe {
             if dev.limits.timestamp_compute_and_graphics != 0 {
                 dev.device
@@ -268,6 +305,7 @@ impl Ctx {
             repacked: Default::default(),
             bindings: Default::default(),
             timestamps,
+            occl,
             warned: HashSet::new(),
         })
     }
@@ -292,6 +330,9 @@ impl Ctx {
         self.cb = cbs[0];
         self.tex.begin_submit();
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
+        if self.occl.pool != vk::QueryPool::null() {
+            d.cmd_reset_query_pool(self.cb, self.occl.pool, 0, Occlusion::QUERIES);
+        }
         if self.timestamps != vk::QueryPool::null() {
             d.cmd_reset_query_pool(self.cb, self.timestamps, 0, 2);
             d.cmd_write_timestamp(self.cb, vk::PipelineStageFlags::TOP_OF_PIPE, self.timestamps, 0);
@@ -310,6 +351,7 @@ impl Ctx {
         let t2 = std::time::Instant::now();
         super::RECORD_NS.fetch_add((t1 - t0).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         super::WAIT_NS.fetch_add((t2 - t1).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.occlusion_resolve(waited.is_ok());
         if waited.is_ok() && self.timestamps != vk::QueryPool::null() {
             let mut ts = [0u64; 2];
             if self.dev.device.get_query_pool_results(self.timestamps, 0, &mut ts, vk::QueryResultFlags::TYPE_64).is_ok() && ts[1] > ts[0] {
@@ -481,7 +523,9 @@ impl Ctx {
             Cmd::SetRenderEnable(e) => self.st.render_disabled = !*e,
             Cmd::SetRenderEnableConditional { mode, counters } => {
                 let a = crate::nvn::api::translate_virtual(*counters as usize);
-                if a > 0x10000 {
+                if self.occl.pending(*counters) {
+                    self.st.render_disabled = false;
+                } else if a > 0x10000 {
                     let (x, y) = (std::ptr::read_unaligned(a as *const u64), std::ptr::read_unaligned((a + 16) as *const u64));
                     self.st.render_disabled = if *mode == 0 { x != y } else { x == y };
                 }
@@ -519,16 +563,16 @@ impl Ctx {
             }
             Cmd::ReportValue { value, addr } => write_report(*addr, *value as u64, true),
             Cmd::ReportCounter { counter, addr } => {
-                // TIMESTAMP (0) reports the time, TIMESTAMP_TOP (0x10) zero (games reset the markers of conditional
-                // rendering with it), SAMPLES_PASSED (1) one: every sample passes until occlusion queries are
-                // implemented. ZCULL_STATS (0xF) has no timestamp.
-                let v = match counter {
-                    0 => crate::clock::now_ns(),
-                    1 => 1,
-                    _ => 0,
-                };
-                write_report(*addr, v, *counter != 0xF);
+                // SAMPLES_PASSED (1): occlusion queries. TIMESTAMP (0) reports the time, TIMESTAMP_TOP (0x10) zero (games
+                // reset the markers of conditional rendering with it). ZCULL_STATS (0xF) has no timestamp.
+                if *counter == 1 {
+                    self.occlusion_report(*addr);
+                } else {
+                    let v = if *counter == 0 { crate::clock::now_ns() } else { 0 };
+                    write_report(*addr, v, *counter != 0xF);
+                }
             }
+            Cmd::ResetCounter { counter: 1 } => self.occlusion_reset(),
             Cmd::SetPointSize(_) | Cmd::ResetCounter { .. } | Cmd::SetDepthBounds { .. } => {}
             other => {
                 let name = format!("{other:?}");
@@ -618,6 +662,66 @@ impl Ctx {
         true
     }
 
+    unsafe fn begin_query(&mut self) {
+        let o = &mut self.occl;
+        if o.pool == vk::QueryPool::null() || o.active.is_some() || self.pass.as_ref().is_none_or(|p| !p.begun) {
+            return;
+        }
+        if o.next >= Occlusion::QUERIES {
+            if self.warned.insert("occlusion queries".into()) {
+                println!("[vulkan] more than {} render passes in one submit: later ones are not counted", Occlusion::QUERIES);
+            }
+            return;
+        }
+        let q = o.next;
+        o.next += 1;
+        let flags = if o.precise { vk::QueryControlFlags::PRECISE } else { vk::QueryControlFlags::empty() };
+        self.dev.device.cmd_begin_query(self.cb, o.pool, q, flags);
+        o.active = Some(q);
+    }
+
+    unsafe fn end_query(&mut self) {
+        if let Some(q) = self.occl.active.take() {
+            self.dev.device.cmd_end_query(self.cb, self.occl.pool, q);
+            self.occl.since_reset.push(q);
+        }
+    }
+
+    /// ResetCounter(SAMPLES_PASSED): counting starts again from zero.
+    unsafe fn occlusion_reset(&mut self) {
+        if let Some(q) = self.occl.active.take() {
+            self.dev.device.cmd_end_query(self.cb, self.occl.pool, q);
+        }
+        self.occl.since_reset.clear();
+        self.occl.carried = 0;
+        self.begin_query();
+    }
+
+    /// ReportCounter(SAMPLES_PASSED): the samples counted since the reset, written once the submit completed.
+    unsafe fn occlusion_report(&mut self, addr: u64) {
+        self.end_query();
+        let o = &mut self.occl;
+        o.reports.push((addr, o.carried, o.since_reset.clone()));
+        self.begin_query();
+    }
+
+    /// After the submit completed: the reports' values, and this submit's count carried into the next.
+    unsafe fn occlusion_resolve(&mut self, completed: bool) {
+        let o = &mut self.occl;
+        let mut results = vec![0u64; o.next as usize];
+        if completed && o.next > 0 {
+            let _ = self.dev.device.get_query_pool_results(o.pool, 0, &mut results, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT);
+        }
+        let sum = |qs: &[u32]| qs.iter().map(|&q| results.get(q as usize).copied().unwrap_or(0)).sum::<u64>();
+        for (addr, carried, qs) in std::mem::take(&mut o.reports) {
+            write_report(addr, carried + sum(&qs), true);
+        }
+        o.carried += sum(&o.since_reset);
+        o.since_reset.clear();
+        o.next = 0;
+        o.active = None;
+    }
+
     /// Begins rendering for the current pass if it has not begun, with its pending clears as load operations.
     pub(super) unsafe fn ensure_begun(&mut self) {
         let Some(p) = self.pass.as_mut() else { return };
@@ -677,11 +781,13 @@ impl Ctx {
         }
         self.dev.full_barrier(self.cb);
         self.dev.device.cmd_begin_rendering(self.cb, &info);
+        self.begin_query();
     }
 
     unsafe fn end_pass(&mut self) {
         // A pass with only clears still performs them.
         self.ensure_begun();
+        self.end_query();
         if self.pass.take().is_some() {
             self.dev.device.cmd_end_rendering(self.cb);
             self.dev.full_barrier(self.cb);

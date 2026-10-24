@@ -793,9 +793,12 @@ impl Textures {
             .address_mode_u(wrap(d.wrap_s))
             .address_mode_v(wrap(d.wrap_t))
             .address_mode_w(wrap(d.wrap_r))
-            .min_lod(d.lod_min)
-            // No mip filter: the base level only (GL's non-mipmapped minification).
-            .max_lod(if mip.is_none() { d.lod_min.max(0.0) + 0.25 } else { d.lod_max })
+            // No mip filter: the view's base level only, whatever the LOD clamp says (Metal's NotMipmapped; Ryujinx's
+            // SamplerHolder sets 0 / 0.25 likewise). Clamping to lod_min sampled another level: Super Mario Odyssey's
+            // mip chains (samplers clamped to the level being read, no mip filter) went wrong and the Cap Kingdom ground
+            // came out as blocks.
+            .min_lod(if mip.is_none() { 0.0 } else { d.lod_min })
+            .max_lod(if mip.is_none() { 0.25 } else { d.lod_max })
             .mip_lod_bias(d.lod_bias)
             .anisotropy_enable(aniso > 1.0)
             .max_anisotropy(aniso)

@@ -34,9 +34,10 @@ pub struct Host {
     /// host writes into the support buffer (properties::SUPPORT_CBUF_LIMITS_OFFSET): for hosts whose bounds checking does
     /// not cover uniform buffers (MoltenVK). SPIR-V only; the Metal path's msl_specialize does its own.
     pub cbuf_limits: bool,
-    /// No NoContraction on floating-point results, invariant positions: for hosts whose shader compiler turns
-    /// NoContraction into unoptimized calls (MoltenVK's SPIRV-Cross, one call per add or multiply; the Metal path's
-    /// msl_specialize strips them the same way).
+    /// No NoContraction on floating-point results, invariant positions. Not for MoltenVK: its SPIRV-Cross turns
+    /// NoContraction into unoptimized calls, but without it Metal fuses a depth pre-pass and its colour pass's vertex
+    /// shaders differently despite invariant positions, and depth EQUAL tests fail in whole tiles (Super Mario
+    /// Odyssey's Cap Kingdom ground).
     pub reduced_precision: bool,
     /// Every resource of the stage in this descriptor set, textures numbered from TEXTURE_BASE_ONE_SET (Vulkan, one set
     /// per stage). None: Ryujinx's sets (uniform buffers 0, images 1, storage buffers 2, textures 3).

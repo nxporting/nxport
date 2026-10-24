@@ -29,6 +29,10 @@ pub(super) struct VStream {
     repack: bool,
     attrs: Vec<VAttr>,
 }
+/// The constant buffer NVN keeps bound texture and image handles in: handles a shader reads from it are the bound
+/// tables (the Metal backend reads every handle from them).
+const TEXTURE_TABLE_CBUF: i32 = 2;
+
 /// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
 const ZERO_STREAM: u32 = 16;
 
@@ -536,7 +540,7 @@ impl Ctx {
                 Feed::Texture { cbuf_slot, handle_index, view, count, buffer } => {
                     let mut infos = Vec::new();
                     for j in 0..*count {
-                        let handle = if *cbuf_slot < 0 {
+                        let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                             let k = (handle_index - 8) / 2 + j as i32;
                             self.st.textures.get(&(stage, k)).copied()
                         } else {
@@ -556,7 +560,7 @@ impl Ctx {
                     images.push((b.binding, b.ty, infos));
                 }
                 Feed::Image { cbuf_slot, handle_index, view, buffer } => {
-                    let handle = if *cbuf_slot < 0 {
+                    let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                         let k = (handle_index - 8) / 2;
                         self.st.images.get(&(stage, k)).copied()
                     } else {
