@@ -1746,6 +1746,23 @@ impl DrawPacket {
     }
 }
 
+/// Size of a storage buffer whose descriptor a shader reads from one of the game's own uniform buffers. Only the
+/// driver's descriptors in cbuf 0 carry a size; there the word after the address is whatever the game keeps next to it
+/// (TotK's Depths terrain: a texture handle, read as 258 MB, so the binding failed and the walls were drawn from zeros).
+/// The mapped size from the address instead, at most 1 MiB, as Ryujinx does.
+fn user_sb_size(addr: u64) -> u64 {
+    const MAX: usize = 0x100000;
+    if addr <= 0x10000 {
+        return 0;
+    }
+    let a = crate::nvn::api::translate_virtual(addr as usize);
+    match crate::nvn::api::containing_pool(a, 1) {
+        Some((base, size)) => (base + size).saturating_sub(a).min(MAX) as u64,
+        // Outside every pool (not GPU-mapped on the console): as much as the copy path takes.
+        None => (ARENA_CHUNK / 2) as u64,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DrawKind {
     Arrays {
@@ -3249,11 +3266,8 @@ impl Gfx {
                     .copied()
                     .and_then(|(ua, usz)| {
                         (ua > 0x10000 && byte + 12 <= usz).then(|| {
-                            let p = (ua as usize + byte) as *const u8;
-                            (
-                                std::ptr::read_unaligned(p as *const u64),
-                                std::ptr::read_unaligned(p.add(8) as *const u32) as u64,
-                            )
+                            let a = std::ptr::read_unaligned((ua as usize + byte) as *const u64);
+                            (a, user_sb_size(a))
                         })
                     })
             } else {
@@ -5209,11 +5223,8 @@ impl Gfx {
                 let byte = cb_off as usize * 4;
                 let desc = pkt.ubo(stage, cb_slot as i32 - 3).and_then(|(ua, usz)| {
                     (ua > 0x10000 && byte + 12 <= usz).then(|| {
-                        let q = (ua as usize + byte) as *const u8;
-                        (
-                            std::ptr::read_unaligned(q as *const u64),
-                            std::ptr::read_unaligned(q.add(8) as *const u32) as u64,
-                        )
+                        let a = std::ptr::read_unaligned((ua as usize + byte) as *const u64);
+                        (a, user_sb_size(a))
                     })
                 });
                 pkt.sb_desc.push((stage, binding, desc));
