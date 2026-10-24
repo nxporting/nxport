@@ -431,7 +431,7 @@ impl Ctx {
         let (vw, vh) = (self.st.viewport.2.max(1) as f32, self.st.viewport.3.max(1) as f32);
         let mut buffers: Vec<(u32, vk::DescriptorType, vk::DescriptorBufferInfo)> = Vec::new();
         let mut images: Vec<(u32, vk::DescriptorType, Vec<vk::DescriptorImageInfo>)> = Vec::new();
-        let zero = self.arena.copy(&self.dev, &[0u8; 256]);
+        let zero = Some((self.zeros.buffer, 0u64));
         // Constant buffer contents by slot, read once per draw (storage descriptors and bindless handles read them).
         let mut cbufs: Vec<(i32, Option<std::rc::Rc<Vec<u8>>>)> = Vec::new();
         let mut cbuf = |me: &Self, slot: i32| -> Option<std::rc::Rc<Vec<u8>>> {
@@ -721,14 +721,12 @@ impl Ctx {
     }
 
     unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {
-        if let Some((buf, off)) = self.arena.copy(&self.dev, &[0u8; 64]) {
-            self.dev.device.cmd_bind_vertex_buffers(self.cb, ZERO_STREAM, &[buf], &[off]);
-        }
+        self.dev.device.cmd_bind_vertex_buffers(self.cb, ZERO_STREAM, &[self.zeros.buffer], &[0]);
         for v in vl {
             let (addr, size) = self.st.vertex_buffers.get(v.stream as usize).copied().unwrap_or((0, 0));
             let a = crate::nvn::api::translate_virtual(addr as usize);
             let bound = if a <= 0x10000 || size == 0 {
-                self.arena.copy(&self.dev, &[0u8; 256])
+                Some((self.zeros.buffer, 0))
             } else if !v.repack {
                 self.imports.find(&self.dev, a, size).or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, size)))
             } else {
@@ -743,6 +741,13 @@ impl Ctx {
                         }
                     }
                 };
+                // The same stream repacked the same way earlier in this submit (guest memory does not change during
+                // one).
+                let key = super::hash_of(&(a, size, v, n, base_instance));
+                if let Some(&b) = self.repacked.get(&key) {
+                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    continue;
+                }
                 let src = std::slice::from_raw_parts(a as *const u8, size);
                 let mut data = vec![0u8; n * v.stride as usize];
                 for e in 0..n {
@@ -761,7 +766,11 @@ impl Ctx {
                         data[d0..d0 + len].copy_from_slice(&src[s0..s0 + len]);
                     }
                 }
-                self.arena.copy(&self.dev, &data)
+                let b = self.arena.copy(&self.dev, &data);
+                if let Some(b) = b {
+                    self.repacked.insert(key, b);
+                }
+                b
             };
             if let Some((buf, off)) = bound {
                 self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[buf], &[off]);
