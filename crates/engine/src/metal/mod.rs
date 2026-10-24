@@ -2870,12 +2870,10 @@ impl Gfx {
                         }
                     }
                     // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
+                    // Every target (depth too) ends older holds on its memory.
                     if rt_guard::enabled() {
-                        for c in colors.iter() {
+                        for c in colors.iter().chain(depth.iter()) {
                             let Some((_, t)) = tex_info(c.texture) else { continue };
-                            if !crate::nvn::api::memory_pool_cpu_writable(t.storage) {
-                                continue;
-                            }
                             if let Some(tex) = self.texture(&mut st.tc, c.texture) {
                                 rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
                             }
@@ -4311,6 +4309,9 @@ pub(super) enum GuestWrite {
 /// falls back to a full wait while any is pending: correct, but in Hateno play every frame has some (one buffer copy,
 /// ~77 occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
 pub(super) fn note_gpu_guest_write(kind: GuestWrite, addr: u64, len: usize) {
+    if !matches!(kind, GuestWrite::Occlusion) {
+        rt_guard::superseded(crate::nvn::api::translate_virtual(addr as usize), len);
+    }
     if !early_fence() {
         return;
     }

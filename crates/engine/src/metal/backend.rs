@@ -85,9 +85,11 @@ impl Backend for Metal {
             super::fence_guard::before_host_write(addr, len);
             super::tex_backing::open_overlapping(addr, len);
         }
+        super::rt_guard::superseded(addr, len);
     }
 
     fn release_for_gpu(&self, addr: usize, len: usize) {
         unsafe { super::tex_backing::open_overlapping(addr, len) };
+        super::rt_guard::superseded(addr, len);
     }
 }
