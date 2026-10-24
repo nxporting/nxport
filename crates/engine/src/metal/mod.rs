@@ -1952,6 +1952,7 @@ impl Gfx {
         }
         // GPU output not written back yet: the CPU has not written it since (that would have ended the hold).
         if rt_guard::overlaps_held(snap.storage as usize, len) {
+            journal(|| format!("  refresh skipped: tex {:#x} storage {:#x}+{:#x} under a held render target", nvn_tex, snap.storage, len));
             why("held render target");
             return;
         }
@@ -2885,6 +2886,10 @@ impl Gfx {
                             let Some((_, t)) = tex_info(c.texture) else {
                                 continue;
                             };
+                            // The guard covers targets in CPU-visible pools (rt_guard::hold); the rest keep this.
+                            if rt_guard::enabled() && crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+                                continue;
+                            }
                             // Only targets not rendered in the previous 4 frames: per-frame targets, swapchain images and
                             // ping-pong pairs are skipped after their first use, textures rendered once (generated maps)
                             // are written back.
@@ -6842,7 +6847,7 @@ fn watch_size() -> Option<(u32, u32)> {
 /// --no-rt-writeback disables.
 fn rt_writeback_enabled() -> bool {
     static E: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *E.get_or_init(|| !crate::settings::get().graphics.no_rt_writeback && !rt_guard::enabled())
+    *E.get_or_init(|| !crate::settings::get().graphics.no_rt_writeback)
 }
 
 /// Writes last frame's write-back candidates into guest memory (their GPU work has completed: TotK waits for each
