@@ -137,6 +137,8 @@ pub struct Ctx {
     pub(super) vb_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
     /// Scratch for the driver constant buffer of a draw (draw.rs driver_cbuf).
     pub(super) driver_scratch: Vec<u8>,
+    /// Descriptor sets written in this submit, by contents.
+    pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
@@ -418,6 +420,7 @@ impl Ctx {
             max_indices: Default::default(),
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
+            set_memo: Default::default(),
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),
@@ -608,6 +611,7 @@ impl Ctx {
         self.max_indices.clear();
         self.lists.clear();
         self.vb_memo.clear();
+        self.set_memo.clear();
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
