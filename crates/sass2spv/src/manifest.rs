@@ -50,6 +50,13 @@ pub struct ManifestTextureOrImage {
     pub texture_type: String,
     #[serde(default)]
     pub array_length: i32,
+    /// Its first slot in the sampler table (ShaderManifest::sampler_table), or -1.
+    #[serde(default = "no_slot")]
+    pub sampler_slot: i32,
+}
+
+fn no_slot() -> i32 {
+    -1
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +76,9 @@ pub struct ShaderManifest {
     pub textures: Vec<ManifestTextureOrImage>,
     #[serde(default)]
     pub images: Vec<ManifestTextureOrImage>,
+    /// Size of the sampler table (properties::SAMPLER_TABLE_BINDING), 0 without one.
+    #[serde(default)]
+    pub sampler_table: u32,
 }
 
 impl ShaderProgram {
@@ -93,6 +103,11 @@ impl ShaderProgram {
                     handle_index: t.handle_index,
                     texture_type: t.ty.to_string(),
                     array_length: t.array_length,
+                    sampler_slot: i
+                        .sampler_table
+                        .as_ref()
+                        .and_then(|(_, b)| b.iter().find(|b| b.0 == t.binding))
+                        .map_or(-1, |b| b.1),
                 })
                 .collect(),
             images: i
@@ -104,8 +119,10 @@ impl ShaderProgram {
                     handle_index: t.handle_index,
                     texture_type: t.ty.to_string(),
                     array_length: 0,
+                    sampler_slot: -1,
                 })
                 .collect(),
+            sampler_table: i.sampler_table.as_ref().map_or(0, |t| t.0),
         }
     }
 }

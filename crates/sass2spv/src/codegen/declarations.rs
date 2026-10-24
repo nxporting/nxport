@@ -126,7 +126,32 @@ fn dim_of(ty: SamplerType) -> R<Dim> {
 }
 
 fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> R<()> {
+    let kinds: Vec<(i32, i32, crate::translation::properties::TextureKind)> =
+        samplers.iter().map(|t| (t.binding, t.array_length, crate::translation::properties::TextureKind::of(t.ty, t.separate))).collect();
+    let plan = crate::translation::properties::sampler_table_plan(&kinds, c.host.sampler_slots);
+    if let Some((size, _)) = &plan {
+        let set = samplers.first().map_or(0, |s| s.set);
+        let st = c.m.type_sampler(false);
+        let len = c.const_u32_i(*size as i32);
+        let at = c.m.type_array(&st, &len, false);
+        let pt = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &at, false);
+        let var = c.m.variable(&pt, StorageClass::UNIFORM_CONSTANT, None);
+        c.m.name(&var, "sampler_table");
+        c.m.decorate(&var, Decoration::DESCRIPTOR_SET, &[Lit::i32(set).into()]);
+        c.m.decorate(
+            &var,
+            Decoration::BINDING,
+            &[Lit::i32(crate::translation::properties::SAMPLER_TABLE_BINDING + c.host.binding_base).into()],
+        );
+        c.m.add_global_variable(&var);
+        let one = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &st, false);
+        c.sampler_table = Some((var, st, one));
+    }
     for sampler in samplers {
+        let table_slot = plan
+            .as_ref()
+            .and_then(|(_, bases)| bases.iter().find(|b| b.0 == sampler.binding))
+            .map(|b| b.1);
         let set_index = sampler.set;
         let (image_type, sampled_image_type) = if sampler.ty != SamplerType::NONE {
             let dim = dim_of(sampler.ty)?;
@@ -148,7 +173,8 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
             let s = c.m.type_sampler(false);
             (s.clone(), s)
         };
-        let sampled_or_separate_image_type = if sampler.separate { image_type.clone() } else { sampled_image_type.clone() };
+        let sampled_or_separate_image_type =
+            if sampler.separate || table_slot.is_some() { image_type.clone() } else { sampled_image_type.clone() };
         let sampled_image_pointer_type = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &sampled_or_separate_image_type, false);
         let mut sampled_image_array_pointer_type = sampled_image_pointer_type.clone();
         if sampler.array_length == 0 {
@@ -169,6 +195,7 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
                 sampled_image_pointer_type,
                 image: sampled_image_variable.clone(),
                 is_indexed: sampler.array_length != 1,
+                table_slot,
             },
         );
         c.samplers_types.insert(key, sampler.ty);

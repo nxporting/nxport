@@ -18,7 +18,10 @@ pub enum Feed {
     Sbuf { cb_slot: i32, cb_offset: i32 },
     /// Texture: handle at word `handle_index` of the bound texture table (cbuf_slot -1) or of constant buffer
     /// `cbuf_slot`; declared view type.
-    Texture { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, count: u32, buffer: bool },
+    /// `slot`: its first texture slot when sampled through the sampler table (a separate image).
+    Texture { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, count: u32, buffer: bool, slot: Option<u32> },
+    /// The sampler table (sass2spv properties::sampler_table_plan): the textures' samplers, deduplicated.
+    SamplerTable,
     Image { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, buffer: bool },
 }
 
@@ -163,11 +166,20 @@ pub unsafe fn translate(
             Some((vk::DescriptorType::UNIFORM_BUFFER, 1, Feed::Cbuf(c.slot)))
         } else if let Some(s) = m.sbuffers.iter().find(|s| s.binding == mb) {
             Some((vk::DescriptorType::STORAGE_BUFFER, 1, Feed::Sbuf { cb_slot: s.cb_slot, cb_offset: s.cb_offset }))
+        } else if mb == sass2spv::translation::properties::SAMPLER_TABLE_BINDING as u32 && m.sampler_table > 0 {
+            Some((vk::DescriptorType::SAMPLER, m.sampler_table, Feed::SamplerTable))
         } else if let Some(t) = m.textures.iter().find(|t| t.binding == mb) {
             let (view, buffer) = view_type(&t.texture_type);
             let count = t.array_length.max(1) as u32;
-            let ty = if buffer { vk::DescriptorType::UNIFORM_TEXEL_BUFFER } else { vk::DescriptorType::COMBINED_IMAGE_SAMPLER };
-            Some((ty, count, Feed::Texture { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, count, buffer }))
+            let slot = (t.sampler_slot >= 0).then_some(t.sampler_slot as u32);
+            let ty = if buffer {
+                vk::DescriptorType::UNIFORM_TEXEL_BUFFER
+            } else if slot.is_some() {
+                vk::DescriptorType::SAMPLED_IMAGE
+            } else {
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER
+            };
+            Some((ty, count, Feed::Texture { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, count, buffer, slot }))
         } else {
             m.images.iter().find(|t| t.binding == mb).map(|t| {
                 let (view, buffer) = view_type(&t.texture_type);
@@ -206,7 +218,11 @@ pub unsafe fn translate(
         .device
         .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&lb), None)
         .map_err(|e| e.to_string())?;
-    let samplers = out.iter().filter(|b| b.ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER).map(|b| b.count).sum();
+    let samplers = out
+        .iter()
+        .filter(|b| matches!(b.ty, vk::DescriptorType::COMBINED_IMAGE_SAMPLER | vk::DescriptorType::SAMPLER))
+        .map(|b| b.count)
+        .sum();
     let buffers = out
         .iter()
         .filter(|b| matches!(b.ty, vk::DescriptorType::UNIFORM_BUFFER | vk::DescriptorType::STORAGE_BUFFER))

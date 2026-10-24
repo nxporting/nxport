@@ -907,12 +907,39 @@ fn lod(c: &mut CodeGenContext, op: &Op) -> Res {
 fn sampled_image_load(c: &mut CodeGenContext, tex: &AstTexture, declaration: &super::SamplerDeclaration, srcs: &mut Srcs) -> R<Inst> {
     let mut image = declaration.image.clone();
     let image_indexed = declaration.is_indexed;
+    let mut element = None;
     if image_indexed {
         let texture_index = srcs.next(c, A::S32)?;
+        element = Some(texture_index.clone());
         image = c.m.access_chain(&declaration.sampled_image_pointer_type, &image, &[texture_index]);
         mark_non_uniform(c, &image);
     }
-    if tex.is_separate() {
+    if let Some(first_slot) = declaration.table_slot {
+        // Separate image, sampler from the table at the index the host wrote for this texture slot.
+        image = c.m.load(&declaration.image_type, &image, None);
+        if image_indexed {
+            mark_non_uniform(c, &image);
+        }
+        use crate::translation::properties::{SUPPORT_BUFFER_BINDING, SUPPORT_SAMPLER_SLOTS_FIELD};
+        let (table, sampler_type, sampler_pointer) = c.sampler_table.clone().ok_or("sampler table")?;
+        let support = c.constant_buffers.get(&SUPPORT_BUFFER_BINDING).cloned().ok_or("support buffer")?;
+        let s = c.type_s32();
+        let u = c.type_u32();
+        let mut slot = c.m.constant(&s, Lit::i32(first_slot));
+        if let Some(element) = &element {
+            slot = c.m.i_add(&s, &slot, element);
+        }
+        let field = c.m.constant(&s, Lit::i32(SUPPORT_SAMPLER_SLOTS_FIELD));
+        let pt = c.m.type_pointer(StorageClass::UNIFORM, &u, false);
+        let p = c.m.access_chain(&pt, &support, &[field, slot]);
+        let index = c.m.load(&u, &p, None);
+        let sp = c.m.access_chain(&sampler_pointer, &table, &[index]);
+        let sampler = c.m.load(&sampler_type, &sp, None);
+        image = c.m.sampled_image(&declaration.sampled_image_type, &image, &sampler);
+        if image_indexed {
+            mark_non_uniform(c, &image);
+        }
+    } else if tex.is_separate() {
         image = c.m.load(&declaration.image_type, &image, None);
         if image_indexed {
             mark_non_uniform(c, &image);

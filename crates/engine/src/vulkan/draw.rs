@@ -11,8 +11,8 @@ pub(super) struct DescWrites {
     images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
 }
 /// The support buffer with the constant buffer bound sizes (sass2spv::accessor::Host::cbuf_limits).
-const SUPPORT_SIZE: usize = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET
-    + 16 * sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_COUNT as usize;
+const SUPPORT_SIZE: usize = sass2spv::translation::properties::SUPPORT_SAMPLER_SLOTS_OFFSET
+    + 16 * sass2spv::translation::properties::SUPPORT_SAMPLER_SLOTS_COUNT as usize;
 
 /// The support buffer's constant part: render scales of 1 for every texture (no resolution scaling).
 fn support_template() -> &'static [u8; SUPPORT_SIZE] {
@@ -530,13 +530,21 @@ impl Ctx {
         };
         // Constant buffers first: the support buffer records their bound sizes.
         let mut limits: smallvec::SmallVec<[(u32, usize); 16]> = Default::default();
-        let mut ordered: smallvec::SmallVec<[&shader::Binding; 32]> = bindings.iter().filter(|b| !matches!(b.feed, Feed::Support)).collect();
+        // Then the sampler table (filled by the textures), then the support buffer (holding the bound sizes and the
+        // textures' table indices).
+        let mut ordered: smallvec::SmallVec<[&shader::Binding; 32]> =
+            bindings.iter().filter(|b| !matches!(b.feed, Feed::Support | Feed::SamplerTable)).collect();
+        ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::SamplerTable)));
         ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::Support)));
+        // Sampler table: the distinct samplers, and each texture slot's index in it.
+        let mut table: smallvec::SmallVec<[vk::Sampler; 16]> = Default::default();
+        let mut slots: smallvec::SmallVec<[(u32, u32); 32]> = Default::default();
+        let table_size = bindings.iter().find(|b| matches!(b.feed, Feed::SamplerTable)).map_or(0, |b| b.count as usize);
         for b in ordered {
             match &b.feed {
                 Feed::Support => {
                     // Its contents depend on the viewport and the bound sizes only: one copy per submit each.
-                    let key = super::hash_of(&(vw.to_bits(), vh.to_bits(), &limits[..]));
+                    let key = super::hash_of(&(vw.to_bits(), vh.to_bits(), &limits[..], &slots[..]));
                     if let Some(&(buf, off)) = self.supports.get(&key) {
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: SUPPORT_SIZE as u64 }));
                         continue;
@@ -549,6 +557,12 @@ impl Ctx {
                     };
                     put(&mut sup, 144, [2.0 / vw, 2.0 / vh, 1.0, 0.0]);
                     put(&mut sup, 160, [vw, vh, 1.0, 0.0]);
+                    for &(slot, index) in &slots {
+                        let o = sass2spv::translation::properties::SUPPORT_SAMPLER_SLOTS_OFFSET + 16 * slot as usize;
+                        if o + 4 <= sup.len() {
+                            sup[o..o + 4].copy_from_slice(&index.to_le_bytes());
+                        }
+                    }
                     // Bound sizes of the constant buffers (vec4 units), for the shader's checks.
                     for &(binding, len) in &limits {
                         let o = sass2spv::translation::properties::SUPPORT_CBUF_LIMITS_OFFSET + 16 * binding as usize;
@@ -633,7 +647,7 @@ impl Ctx {
                         None => {}
                     }
                 }
-                Feed::Texture { cbuf_slot, handle_index, view, count, buffer } => {
+                Feed::Texture { cbuf_slot, handle_index, view, count, buffer, slot } => {
                     let mut infos: smallvec::SmallVec<[vk::DescriptorImageInfo; 1]> = Default::default();
                     for j in 0..*count {
                         let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
@@ -651,8 +665,36 @@ impl Ctx {
                         } else {
                             self.texture_binding(handle, *view)
                         };
+                        let s = match slot {
+                            Some(first) => {
+                                let index = match table.iter().position(|&t| t == s) {
+                                    Some(i) => i,
+                                    None if table.len() < table_size => {
+                                        table.push(s);
+                                        table.len() - 1
+                                    }
+                                    None => {
+                                        self.warn("a draw uses more distinct samplers than its sampler table holds");
+                                        table_size.saturating_sub(1)
+                                    }
+                                };
+                                slots.push((first + j, index as u32));
+                                vk::Sampler::null()
+                            }
+                            None => s,
+                        };
                         infos.push(vk::DescriptorImageInfo { sampler: s, image_view: v, image_layout: vk::ImageLayout::GENERAL });
                     }
+                    images.push((b.binding, b.ty, infos));
+                }
+                Feed::SamplerTable => {
+                    let infos = (0..b.count)
+                        .map(|i| vk::DescriptorImageInfo {
+                            sampler: table.get(i as usize).copied().unwrap_or(self.default_sampler),
+                            image_view: vk::ImageView::null(),
+                            image_layout: vk::ImageLayout::GENERAL,
+                        })
+                        .collect();
                     images.push((b.binding, b.ty, infos));
                 }
                 Feed::Image { cbuf_slot, handle_index, view, buffer } => {
@@ -725,6 +767,8 @@ impl Ctx {
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 2048 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER, descriptor_count: 1024 },
             vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_TEXEL_BUFFER, descriptor_count: 1024 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 4096 },
+            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 4096 },
         ];
         let p = self.dev.device.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(2048).pool_sizes(&sizes), None).ok()?;
         self.desc_pools.push(p);
