@@ -119,6 +119,8 @@ pub struct Ctx {
     pending_rt_reads: Vec<NvnTexture>,
     rt_reads: Vec<(NvnTexture, u32, usize, usize)>,
     rt_resettle: Vec<texture::Desc>,
+    /// Staging memory of the uploads of the submit being recorded.
+    staging: Vec<super::device::HostBuffer>,
     default_sampler: vk::Sampler,
     /// Zeros for unbound vertex attributes and resources (never written).
     pub(super) zeros: super::device::HostBuffer,
@@ -286,6 +288,8 @@ struct InFlight {
     reports: Vec<u64>,
     /// Images whose guest bytes the watcher rewrote (render-target write-back).
     resettle: Vec<texture::Desc>,
+    /// Staging memory of its uploads.
+    staging: Vec<super::device::HostBuffer>,
 }
 
 pub(super) fn hash_of<T: Hash>(v: &T) -> u64 {
@@ -388,6 +392,7 @@ impl Ctx {
             pending_rt_reads: Vec::new(),
             rt_reads: Vec::new(),
             rt_resettle: Vec::new(),
+            staging: Vec::new(),
             fb_epoch: 1,
             default_sampler,
             zeros,
@@ -471,6 +476,7 @@ impl Ctx {
             return;
         };
         self.cb = cbs[0];
+        self.tex.begin_batch(self.pool);
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
         self.tex.begin_submit();
         self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
@@ -513,7 +519,9 @@ impl Ctx {
         let d = &self.dev.device;
         let _ = d.end_command_buffer(self.cb);
         let fence = d.create_fence(&vk::FenceCreateInfo::default(), None).unwrap_or(vk::Fence::null());
-        let cbs = [self.cb];
+        let cbs = self.with_uploads(self.cb);
+        self.tex.end_batch();
+        let d = &self.dev.device;
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
             println!("[vulkan] submit of {} lists at presented frame {frame}: vkQueueSubmit: {e}; no more GPU work", lists.len());
@@ -524,8 +532,9 @@ impl Ctx {
         super::RECORD_NS.fetch_add(record, std::sync::atomic::Ordering::Relaxed);
         super::LAST_RECORD_NS.store(record, std::sync::atomic::Ordering::Relaxed);
         super::LAST_WAIT_NS.store(0, std::sync::atomic::Ordering::Relaxed);
-        let mut cbs = std::mem::take(&mut self.chunks);
-        cbs.push(self.cb);
+        let mut all = std::mem::take(&mut self.chunks);
+        all.extend_from_slice(&cbs);
+        let cbs = all;
         self.cb = vk::CommandBuffer::null();
         let occl_pool = std::mem::replace(&mut self.occl.pool, vk::QueryPool::null());
         let timestamps = std::mem::replace(&mut self.timestamps, vk::QueryPool::null());
@@ -556,6 +565,7 @@ impl Ctx {
             imports: std::mem::take(&mut self.imports.retired),
             reports,
             resettle: std::mem::take(&mut self.rt_resettle),
+            staging: std::mem::take(&mut self.staging),
         });
         self.gpu_dirty.clear();
         // Guest memory under GPU-written images is CPU memory: what it holds now is what later CPU writes change.
@@ -593,6 +603,9 @@ impl Ctx {
             // The image's own contents: not a CPU write.
             for d in &f.resettle {
                 self.tex.resettle(d);
+            }
+            for b in &f.staging {
+                self.dev.free_host_buffer(b);
             }
             for (b, m) in f.imports {
                 d.destroy_buffer(b, None);
@@ -1064,6 +1077,13 @@ impl Ctx {
     }
 
     /// Hands the command buffer recorded so far to the queue and continues in a new one.
+    /// `cb` with the uploads recorded while it was (queued first: what it draws with), as one batch for the queue.
+    unsafe fn with_uploads(&mut self, cb: vk::CommandBuffer) -> smallvec::SmallVec<[vk::CommandBuffer; 2]> {
+        let (upload, staging) = self.tex.take_batch(&self.dev);
+        self.staging.extend(staging);
+        upload.into_iter().chain(std::iter::once(cb)).collect()
+    }
+
     unsafe fn submit_chunk(&mut self) {
         let d = &self.dev.device;
         let Ok(next) =
@@ -1072,12 +1092,13 @@ impl Ctx {
             return;
         };
         let _ = d.end_command_buffer(self.cb);
-        let cbs = [self.cb];
+        let cbs = self.with_uploads(self.cb);
+        let d = &self.dev.device;
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()) {
             println!("[vulkan] vkQueueSubmit: {e}");
             self.lost = true;
         }
-        self.chunks.push(self.cb);
+        self.chunks.extend_from_slice(&cbs);
         self.cb = next[0];
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
         self.chunk_start = std::time::Instant::now();
