@@ -3413,11 +3413,24 @@ fn snapshot_texture(addr: usize, t: NvnTexture) {
     if t.storage > 0x10000 {
         idx.entry(t.storage).or_default().push(addr);
         // Bound for the alias search (a container starts at most its own size below a texture it contains).
-        let span = (t.size as u64)
-            .max(crate::nvn::layout::compute_layout(&texture_layout_params(&t)).total);
-        MAX_TEXTURE_SPAN.fetch_max(span as usize, std::sync::atomic::Ordering::Relaxed);
+        let span = texture_span(&t);
+        MAX_TEXTURE_SPAN.fetch_max(span, std::sync::atomic::Ordering::Relaxed);
+        if span > SMALL_TEXTURE_SPAN {
+            TEX_LARGE_BY_STORAGE.lock().unwrap().get_or_insert_with(Default::default).entry(t.storage).or_default().push(addr);
+        }
     }
 }
+
+/// Memory a texture covers: its declared size or its layout's, the larger.
+fn texture_span(t: &NvnTexture) -> usize {
+    (t.size as u64).max(crate::nvn::layout::compute_layout(&texture_layout_params(t)).total) as usize
+}
+
+/// textures_reaching scans TEX_BY_STORAGE this far below an address; larger textures are also indexed in
+/// TEX_LARGE_BY_STORAGE (few), scanned over the whole MAX_TEXTURE_SPAN.
+const SMALL_TEXTURE_SPAN: usize = 4 << 20;
+static TEX_LARGE_BY_STORAGE: std::sync::Mutex<Option<std::collections::BTreeMap<usize, Vec<usize>>>> =
+    std::sync::Mutex::new(None);
 
 /// Snapshots replaced at their address, by generation (bounded): commands recorded while an object described one
 /// texture still name that texture after the game re-initializes or reuses the object (resolve_texture_ref).
@@ -3498,10 +3511,12 @@ fn unindex_texture(
     addr: usize,
     storage: usize,
 ) {
-    if let Some(v) = idx.get_mut(&storage) {
-        v.retain(|a| *a != addr);
-        if v.is_empty() {
-            idx.remove(&storage);
+    for idx in [Some(idx), TEX_LARGE_BY_STORAGE.lock().unwrap().as_mut()].into_iter().flatten() {
+        if let Some(v) = idx.get_mut(&storage) {
+            v.retain(|a| *a != addr);
+            if v.is_empty() {
+                idx.remove(&storage);
+            }
         }
     }
 }
@@ -3534,9 +3549,17 @@ pub fn textures_reaching(storage: usize, span: usize) -> Vec<(usize, u64, NvnTex
         let Some(idx) = idx.as_ref() else {
             return Vec::new();
         };
-        idx.range(storage.saturating_sub(span)..=storage)
+        let mut a: Vec<usize> = idx
+            .range(storage.saturating_sub(span.min(SMALL_TEXTURE_SPAN))..=storage)
             .flat_map(|(_, v)| v.iter().copied())
-            .collect()
+            .collect();
+        if span > SMALL_TEXTURE_SPAN {
+            if let Some(large) = TEX_LARGE_BY_STORAGE.lock().unwrap().as_ref() {
+                let below = storage.saturating_sub(SMALL_TEXTURE_SPAN);
+                a.extend(large.range(storage.saturating_sub(span)..below).flat_map(|(_, v)| v.iter().copied()));
+            }
+        }
+        a
     };
     let snaps = TEX_SNAPSHOTS.lock().unwrap();
     let Some(snaps) = snaps.as_ref() else {
@@ -6678,13 +6701,18 @@ pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
     );
     {
         let mut idx: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        let mut large: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
         let snaps = TEX_SNAPSHOTS.lock().unwrap();
         for &a in &f.indexed {
             if let Some((_, t)) = snaps.as_ref().and_then(|m| m.get(&(a as usize))) {
                 idx.entry(t.storage).or_default().push(a as usize);
+                if texture_span(t) > SMALL_TEXTURE_SPAN {
+                    large.entry(t.storage).or_default().push(a as usize);
+                }
             }
         }
         *TEX_BY_STORAGE.lock().unwrap() = Some(idx);
+        *TEX_LARGE_BY_STORAGE.lock().unwrap() = Some(large);
     }
     *TEX_HISTORY.lock().unwrap() = Some(SnapshotHistory {
         by_gen: f.history.iter().map(|(g, t)| (*g, from_pod::<NvnTexture>(t))).collect(),
