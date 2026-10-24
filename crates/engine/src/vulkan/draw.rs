@@ -760,6 +760,32 @@ impl Ctx {
         if w.buffers.is_empty() && w.images.is_empty() {
             return;
         }
+        // A set with the same contents written earlier in this submit is bound again (draws of one mesh or material).
+        let key = (!push).then(|| {
+            use std::hash::Hasher;
+            let mut h = rustc_hash::FxHasher::default();
+            h.write_u64(vk::Handle::as_raw(set_layout));
+            for (binding, ty, info) in &w.buffers {
+                h.write_u32(*binding);
+                h.write_i32(ty.as_raw());
+                h.write_u64(vk::Handle::as_raw(info.buffer));
+                h.write_u64(info.offset);
+                h.write_u64(info.range);
+            }
+            for (binding, ty, infos) in &w.images {
+                h.write_u32(*binding);
+                h.write_i32(ty.as_raw());
+                for i in infos {
+                    h.write_u64(vk::Handle::as_raw(i.sampler));
+                    h.write_u64(vk::Handle::as_raw(i.image_view));
+                }
+            }
+            h.finish()
+        });
+        if let Some(&s) = key.and_then(|k| self.set_memo.get(&k)) {
+            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[s], &[]);
+            return;
+        }
         let set = if push {
             vk::DescriptorSet::null()
         } else {
@@ -768,6 +794,9 @@ impl Ctx {
                 None => return,
             }
         };
+        if let Some(k) = key {
+            self.set_memo.insert(k, set);
+        }
         let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 32]> = w.buffers.iter().map(|b| [b.2]).collect();
         let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 64]> = w
             .buffers
