@@ -815,6 +815,20 @@ impl Textures {
     /// Level `level`, layer `layer` of `img` as the guest stores its texels (rows tightly packed). Depth formats the
     /// device widened and multisample images are not read.
     pub unsafe fn read(dev: &Dev, img: &Image, nvn_format: i32, level: u32, layer: u32) -> Option<Texels> {
+        let (region, w, h, len) = Self::read_region(img, nvn_format, level, layer)?;
+        let buf = dev.host_buffer(len, vk::BufferUsageFlags::TRANSFER_DST).ok()?;
+        let r = dev.one_shot(|cb| {
+            dev.full_barrier(cb);
+            dev.device.cmd_copy_image_to_buffer(cb, img.image, vk::ImageLayout::GENERAL, buf.buffer, &[region]);
+        });
+        let data = r.ok().map(|_| std::slice::from_raw_parts(buf.ptr, len as usize).to_vec());
+        dev.free_host_buffer(&buf);
+        Some(Texels { width: w, height: h, format: nvn_format, data: data? })
+    }
+
+    /// The copy of `level` / `layer` of `img` into a buffer of texels as `nvn_format` lays them out: (region, width,
+    /// height, bytes).
+    pub fn read_region(img: &Image, nvn_format: i32, level: u32, layer: u32) -> Option<(vk::BufferImageCopy, u32, u32, u64)> {
         let info = layout::format_info(nvn_format)?;
         if level >= img.levels || img.samples != vk::SampleCountFlags::TYPE_1 {
             return None;
@@ -834,7 +848,6 @@ impl Textures {
         let w = (img.extent.width >> level).max(1);
         let h = (img.extent.height >> level).max(1);
         let len = w.div_ceil(info.block_w) as u64 * h.div_ceil(info.block_h) as u64 * info.bytes as u64;
-        let buf = dev.host_buffer(len, vk::BufferUsageFlags::TRANSFER_DST).ok()?;
         let region = vk::BufferImageCopy::default()
             .image_subresource(
                 vk::ImageSubresourceLayers::default()
@@ -845,13 +858,7 @@ impl Textures {
             )
             .image_offset(vk::Offset3D { x: 0, y: 0, z: if is3d { layer as i32 } else { 0 } })
             .image_extent(vk::Extent3D { width: w, height: h, depth: 1 });
-        let r = dev.one_shot(|cb| {
-            dev.full_barrier(cb);
-            dev.device.cmd_copy_image_to_buffer(cb, img.image, vk::ImageLayout::GENERAL, buf.buffer, &[region]);
-        });
-        let data = r.ok().map(|_| std::slice::from_raw_parts(buf.ptr, len as usize).to_vec());
-        dev.free_host_buffer(&buf);
-        Some(Texels { width: w, height: h, format: nvn_format, data: data? })
+        Some((region, w, h, len))
     }
 
     pub unsafe fn destroy(&mut self, dev: &Dev) {
