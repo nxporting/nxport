@@ -6,6 +6,12 @@
 //   p1 <vs> <fs|-> <point size bits> <depth_gl> <y_negate> <color state> <channel mask> <depth format>
 //      <8 color formats> <8 blend states> <attribute bits> <stream bits>
 // Lists are comma separated ('-' an unset attribute, '.' an empty list); formats are MTLPixelFormat values.
+// p2 entries name the targets by the game's own formats and add the state other GPU APIs make pipelines from, so any
+// backend can derive its pipeline from them:
+//   p2 <vs> <fs|-> <point size bits> <depth_gl> <y_negate> <color state> <channel mask> <8 color formats> <depth format>
+//      <samples> <draw mode> <restart> <polygon bits> <depth-stencil bits> <multisample bits> <depth clamp>
+//      <8 blend states> <attribute bits> <stream bits>
+// where a format is <texture format>:<view format> (NVN format numbers, 0 = none / the texture's own).
 // A list starts with `# nxport pipelines title <title id> build <main build id>`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -24,6 +30,22 @@ pub struct Entry {
     pub blends: [u64; 8],
     pub attr_bits: Vec<Option<u32>>,
     pub streams: Vec<u64>,
+    /// p2: the game's formats and the other draw state (then `depth_pf` and `color_pfs` are 0).
+    pub nvn: Option<Nvn>,
+}
+
+/// What a p2 entry adds: targets by NVN format (texture, view; 0 = none / the texture's own) and draw state as NVN bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct Nvn {
+    pub colors: [(u32, u32); 8],
+    pub depth: (u32, u32),
+    pub samples: u32,
+    pub mode: u32,
+    pub restart: bool,
+    pub polygon: u32,
+    pub depth_stencil: u64,
+    pub multisample: u64,
+    pub depth_clamp: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,8 +78,77 @@ fn is_entry_name(s: &str) -> bool {
     s.len() == 18 && s.starts_with("s_") && s[2..].bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+fn fmt_pair(p: &(u32, u32)) -> String {
+    format!("{:x}:{:x}", p.0, p.1)
+}
+
+fn parse_pair(s: &str) -> Option<(u32, u32)> {
+    let (a, b) = s.split_once(':')?;
+    Some((u32::try_from(hex(a)?).ok()?, u32::try_from(hex(b)?).ok()?))
+}
+
 impl Entry {
+    /// The entry without state no pipeline is made from: blend states of targets without blending or a target, channel
+    /// mask bits of missing targets, streams no attribute reads, depth-stencil bits past the stencil faces (games leave
+    /// other bits there).
+    pub fn normalized(mut self) -> Entry {
+        let bound = |i: usize| match &self.nvn {
+            Some(n) => n.colors[i].0 != 0,
+            None => self.color_pfs[i] != 0,
+        };
+        for i in 0..8 {
+            if !bound(i) || self.color_state >> i & 1 == 0 {
+                self.blends[i] = 0;
+            }
+            if !bound(i) {
+                self.channel_mask &= !(0xF << (i * 4));
+            }
+        }
+        for i in 0..8 {
+            if !bound(i) {
+                self.color_state &= !(1 << i);
+            }
+        }
+        let read: Vec<usize> = self.attr_bits.iter().flatten().map(|b| (b & 31) as usize).collect();
+        for (s, bits) in self.streams.iter_mut().enumerate() {
+            if !read.contains(&s) {
+                *bits = 0;
+            }
+        }
+        while self.streams.last() == Some(&0) {
+            self.streams.pop();
+        }
+        if let Some(n) = self.nvn.as_mut() {
+            n.depth_stencil &= 0x7F_FFFF_FFFF;
+        }
+        self
+    }
+
     pub fn line(&self) -> String {
+        if let Some(n) = &self.nvn {
+            return format!(
+                "p2 {} {} {:x} {} {} {:x} {:x} {} {} {:x} {:x} {} {:x} {:x} {:x} {} {} {} {}",
+                self.vs,
+                self.fs.as_deref().unwrap_or("-"),
+                self.point_size,
+                self.depth_gl as u8,
+                self.y_negate as u8,
+                self.color_state,
+                self.channel_mask,
+                list(&n.colors, fmt_pair),
+                fmt_pair(&n.depth),
+                n.samples,
+                n.mode,
+                n.restart as u8,
+                n.polygon,
+                n.depth_stencil,
+                n.multisample,
+                n.depth_clamp as u8,
+                list(&self.blends, |b| format!("{b:x}")),
+                list(&self.attr_bits, |a| a.map_or("-".into(), |a| format!("{a:x}"))),
+                list(&self.streams, |s| format!("{s:x}")),
+            );
+        }
         format!(
             "p1 {} {} {:x} {} {} {:x} {:x} {} {} {} {} {}",
             self.vs,
@@ -77,14 +168,50 @@ impl Entry {
 
     pub fn parse(line: &str) -> Option<Entry> {
         let f: Vec<&str> = line.split_whitespace().collect();
-        let ["p1", vs, fs, ps, dg, yn, cs, cm, dpf, cpfs, blends, attrs, streams] = f.as_slice() else {
-            return None;
-        };
         let name = |s: &str| is_entry_name(s).then(|| s.to_string());
         let flag = |s: &str| match s {
             "0" => Some(false),
             "1" => Some(true),
             _ => None,
+        };
+        let attr_list = |s: &str| {
+            parse_list(s, |a| {
+                if a == "-" {
+                    Some(None)
+                } else {
+                    hex(a).and_then(|a| u32::try_from(a).ok()).map(Some)
+                }
+            })
+        };
+        if let ["p2", vs, fs, ps, dg, yn, cs, cm, colors, depth, samples, mode, restart, polygon, ds, ms, clamp, blends, attrs, streams] = f.as_slice() {
+            return Some(Entry {
+                vs: name(vs)?,
+                fs: if *fs == "-" { None } else { Some(name(fs)?) },
+                point_size: u32::try_from(hex(ps)?).ok()?,
+                depth_gl: flag(dg)?,
+                y_negate: flag(yn)?,
+                color_state: u32::try_from(hex(cs)?).ok()?,
+                channel_mask: u32::try_from(hex(cm)?).ok()?,
+                depth_pf: 0,
+                color_pfs: [0; 8],
+                blends: parse_list(blends, hex)?.try_into().ok()?,
+                attr_bits: attr_list(attrs)?,
+                streams: parse_list(streams, hex)?,
+                nvn: Some(Nvn {
+                    colors: parse_list(colors, parse_pair)?.try_into().ok()?,
+                    depth: parse_pair(depth)?,
+                    samples: u32::try_from(hex(samples)?).ok()?,
+                    mode: u32::try_from(hex(mode)?).ok()?,
+                    restart: flag(restart)?,
+                    polygon: u32::try_from(hex(polygon)?).ok()?,
+                    depth_stencil: hex(ds)?,
+                    multisample: hex(ms)?,
+                    depth_clamp: flag(clamp)?,
+                }),
+            });
+        }
+        let ["p1", vs, fs, ps, dg, yn, cs, cm, dpf, cpfs, blends, attrs, streams] = f.as_slice() else {
+            return None;
         };
         Some(Entry {
             vs: name(vs)?,
@@ -97,14 +224,9 @@ impl Entry {
             depth_pf: dpf.parse().ok()?,
             color_pfs: parse_list(cpfs, |p| p.parse().ok())?.try_into().ok()?,
             blends: parse_list(blends, hex)?.try_into().ok()?,
-            attr_bits: parse_list(attrs, |a| {
-                if a == "-" {
-                    Some(None)
-                } else {
-                    hex(a).and_then(|a| u32::try_from(a).ok()).map(Some)
-                }
-            })?,
+            attr_bits: attr_list(attrs)?,
             streams: parse_list(streams, hex)?,
+            nvn: None,
         })
     }
 
@@ -125,6 +247,10 @@ impl Entry {
             && self.blends.iter().all(|&b| blend_ok(b))
             && self.attr_bits.len() <= 32
             && self.streams.len() <= 32
+            && self.nvn.as_ref().is_none_or(|n| {
+                let fmt_ok = |p: &(u32, u32)| p.0 < 1024 && p.1 < 1024;
+                n.colors.iter().all(fmt_ok) && fmt_ok(&n.depth) && n.samples <= 16 && n.mode < 16 && n.depth_stencil >> 39 == 0
+            })
     }
 }
 
@@ -273,7 +399,24 @@ mod tests {
             blends: [0x6401_1185_1850, 1, 2, 3, 4, 5, 6, 7],
             attr_bits: vec![Some(0x520), None],
             streams: vec![],
+            nvn: None,
         }
+    }
+
+    #[test]
+    fn p2_round_trip() {
+        let mut e = entry();
+        e.color_pfs = [0; 8];
+        e.depth_pf = 0;
+        let mut n = Nvn { samples: 1, mode: 4, depth_stencil: 0x1234, depth_clamp: true, ..Default::default() };
+        n.colors[0] = (0x25, 0x26);
+        n.depth = (0x33, 0);
+        e.nvn = Some(n);
+        assert_eq!(Entry::parse(&e.line()), Some(e.clone()));
+        assert!(e.valid(None));
+        let mut d = e.clone();
+        d.nvn.as_mut().unwrap().depth_stencil |= 0x3f00 << 40;
+        assert_eq!(d.normalized(), e.clone().normalized());
     }
 
     #[test]

@@ -281,8 +281,10 @@ pub(super) fn queue_precompile(e: &super::pipeline_list::Entry) -> bool {
         },
         None => None,
     };
-    let color_pfs = e.color_pfs.map(|f| MTLPixelFormat(f as _));
-    let depth_pf = MTLPixelFormat(e.depth_pf as _);
+    let (color_pfs, depth_pf) = match &e.nvn {
+        Some(n) => (n.colors.map(|(t, v)| target_pf(t, v)), target_pf(n.depth.0, n.depth.1)),
+        None => (e.color_pfs.map(|f| MTLPixelFormat(f as _)), MTLPixelFormat(e.depth_pf as _)),
+    };
     let point_size = f32::from_bits(e.point_size);
     let l = derive_layout(vs, &e.attr_bits, &e.streams);
     let key = pipeline_key(
@@ -1348,20 +1350,67 @@ fn record_pipeline(
     depth_gl: bool,
     blends: &[u64; 8],
 ) {
-    super::pipeline_list::record(super::pipeline_list::Entry {
-        vs: vs.entry.clone(),
-        fs: fs.map(|f| f.entry.clone()),
-        point_size: point_size.to_bits(),
-        depth_gl,
-        y_negate: y_negate(),
-        color_state: p.color_state,
-        channel_mask: p.channel_mask,
-        depth_pf: p.depth_pf.0 as u64,
-        color_pfs: p.color_pfs.map(|f| f.0 as u64),
-        blends: *blends,
-        attr_bits: p.attr_bits.to_vec(),
-        streams: p.vertex_streams.to_vec(),
-    });
+    let (colors, depth, samples) = p.nvn_targets;
+    // The formats a list entry gives back must be the ones drawn with, or listed pipelines are never the drawn ones.
+    let derived = (colors.map(|(t, v)| target_pf(t, v)), target_pf(depth.0, depth.1));
+    if derived != (p.color_pfs, p.depth_pf) {
+        warn_once(
+            format!("pipeline-list-pf-{colors:?}-{depth:?}"),
+            format!("pipeline list: targets {colors:?} / {depth:?} drawn as {:?} / {:?}, listed as {:?} / {:?}", p.color_pfs, p.depth_pf, derived.0, derived.1),
+        );
+    }
+    super::pipeline_list::record(
+        super::pipeline_list::Entry {
+            vs: vs.entry.clone(),
+            fs: fs.map(|f| f.entry.clone()),
+            point_size: point_size.to_bits(),
+            depth_gl,
+            y_negate: y_negate(),
+            color_state: p.color_state,
+            channel_mask: p.channel_mask,
+            depth_pf: 0,
+            color_pfs: [0; 8],
+            blends: *blends,
+            attr_bits: p.attr_bits.to_vec(),
+            streams: p.vertex_streams.to_vec(),
+            nvn: Some(nxport_pipelines::Nvn {
+                colors,
+                depth,
+                samples,
+                mode: p.mode as u32,
+                restart: p.prim_restart.is_some(),
+                polygon: p.polygon,
+                depth_stencil: p.depth_stencil,
+                multisample: p.multisample,
+                depth_clamp: p.depth_clamp,
+            }),
+        }
+        .normalized(),
+    );
+}
+
+/// The Metal pixel format a target of NVN format `tex` viewed as `view` (0: its own) renders in (as plan_draw resolves
+/// targets: GPU compression through an integer view renders into a proxy of the view's format, other compatible views
+/// render in the view's format).
+pub(super) fn target_pf(tex: u32, view: u32) -> MTLPixelFormat {
+    if tex == 0 {
+        return MTLPixelFormat::Invalid;
+    }
+    let own = metal_format(tex as i32).0;
+    if view == 0 || view == tex {
+        return own;
+    }
+    let pf = metal_format(view as i32).0;
+    if let (Some(i), Some(v)) = (crate::nvn::layout::format_info(tex as i32), crate::nvn::layout::format_info(view as i32)) {
+        if i.block_w > 1 && v.block_w == 1 && v.bytes == i.bytes {
+            return pf;
+        }
+    }
+    if pf == MTLPixelFormat::Invalid || pf == own || !super::is_view_compatible(own, pf) {
+        own
+    } else {
+        pf
+    }
 }
 
 /// A draw's vertex attribute descriptors and stream layout (the vertex half of LayoutMemo).
@@ -1526,6 +1575,8 @@ pub(super) struct DrawPacket {
     pub(super) target_size: (f64, f64),
     pub(super) color_pfs: [MTLPixelFormat; 8],
     pub(super) depth_pf: MTLPixelFormat,
+    /// The targets' NVN formats and sample count (CachedPassRts).
+    pub(super) nvn_targets: ([(u32, u32); 8], (u32, u32), u32),
     /// Run as compute instead of in a render pass (decided by Gfx::tiny_plan).
     pub(super) tiny: Option<TinyPlan>,
     /// The draw came from a command list recorded in an earlier frame (--log-phases).
@@ -1595,6 +1646,7 @@ impl Default for DrawPacket {
             target_size: (0.0, 0.0),
             color_pfs: [MTLPixelFormat::Invalid; 8],
             depth_pf: MTLPixelFormat::Invalid,
+            nvn_targets: ([(0, 0); 8], (0, 0), 1),
             tiny: None,
             from_old_list: false,
         }
@@ -1618,7 +1670,9 @@ impl DrawPacket {
         target_size: (f64, f64),
         color_pfs: [MTLPixelFormat; 8],
         depth_pf: MTLPixelFormat,
+        nvn_targets: ([(u32, u32); 8], (u32, u32), u32),
     ) {
+        self.nvn_targets = nvn_targets;
         self.mode = mode;
         self.prim = prim;
         self.call = call;
@@ -4483,6 +4537,19 @@ impl Gfx {
                     .as_ref()
                     .map(|(t, _)| t.pixelFormat())
                     .unwrap_or(MTLPixelFormat::Invalid);
+                let nvn_format = |r: &RtRef| unsafe { super::tex_info(r.texture) }.map_or(0, |(_, t)| t.format as u32);
+                let mut nvn_colors = [(0u32, 0u32); 8];
+                for (idx, _, rt) in &color_texs {
+                    if *idx < 8 {
+                        nvn_colors[*idx] = (nvn_format(rt), rt.view_format as u32);
+                    }
+                }
+                let nvn_depth = depth_tex.as_ref().map_or((0, 0), |(_, d)| (nvn_format(d), d.view_format as u32));
+                let samples = color_texs
+                    .first()
+                    .map(|(_, t, _)| t.sampleCount())
+                    .or_else(|| depth_tex.as_ref().map(|(t, _)| t.sampleCount()))
+                    .unwrap_or(1) as u32;
 
                 let tex_id = |t: &Tex| Retained::as_ptr(t) as *const () as u64;
                 let enc_key: smallvec::SmallVec<[u64; 36]> = color_texs
@@ -4516,6 +4583,9 @@ impl Gfx {
                         depth_tex,
                         color_pfs,
                         depth_pf,
+                        nvn_colors,
+                        nvn_depth,
+                        samples,
                         enc_key,
                         target_size,
                     }),
@@ -4525,6 +4595,7 @@ impl Gfx {
         let color_texs = &rts.color_texs;
         let depth_tex = &rts.depth_tex;
         let (color_pfs, depth_pf, target_size) = (rts.color_pfs, rts.depth_pf, rts.target_size);
+        let nvn_targets = (rts.nvn_colors, rts.nvn_depth, rts.samples);
         let enc_key = &rts.enc_key;
 
         if is_denied(&vs.entry) || fs.map_or(false, |f| is_denied(&f.entry)) {
@@ -4641,6 +4712,7 @@ impl Gfx {
                 target_size,
                 color_pfs,
                 depth_pf,
+                nvn_targets,
             );
             self.plan_uniforms(st, pkt);
             pkt.tiny = Some(tp);
@@ -4987,6 +5059,7 @@ impl Gfx {
             target_size,
             color_pfs,
             depth_pf,
+            nvn_targets,
         );
         self.plan_uniforms(st, pkt);
         Ok(())
