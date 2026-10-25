@@ -178,6 +178,13 @@ pub fn flush_icache(addr: usize, len: usize) {
     imp::flush_icache(addr, len)
 }
 
+/// How many bytes from `addr` (up to `max`) can be read without faulting. Native hosts ask cpu::crash_handler, which
+/// also knows the guest's page guards.
+#[cfg(windows)]
+pub fn readable_len(addr: usize, max: usize) -> usize {
+    imp::readable_len(addr, max)
+}
+
 /// An access fault at `addr` (a write if `write`) by the instruction at `pc`. True if handled: the access is retried.
 pub type FaultHandler = unsafe fn(addr: usize, write: bool, pc: usize) -> bool;
 
@@ -694,6 +701,38 @@ mod imp {
         } else {
             EXCEPTION_CONTINUE_SEARCH
         }
+    }
+
+    #[repr(C)]
+    struct MemoryBasicInformation {
+        base_address: *mut c_void,
+        allocation_base: *mut c_void,
+        allocation_protect: u32,
+        partition_id: u16,
+        region_size: usize,
+        state: u32,
+        protect: u32,
+        ty: u32,
+    }
+
+    extern "system" {
+        fn VirtualQuery(addr: *const c_void, info: *mut MemoryBasicInformation, len: usize) -> usize;
+    }
+
+    pub fn readable_len(addr: usize, max: usize) -> usize {
+        const PAGE_NOACCESS: u32 = 0x01;
+        const PAGE_GUARD: u32 = 0x100;
+        let end = addr + max;
+        let mut at = addr;
+        while at < end {
+            let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
+            let n = unsafe { VirtualQuery(at as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
+            if n == 0 || info.state != MEM_COMMIT || info.protect == 0 || info.protect & (PAGE_NOACCESS | PAGE_GUARD) != 0 {
+                break;
+            }
+            at = info.base_address as usize + info.region_size;
+        }
+        at.min(end) - addr
     }
 
     pub fn on_access_fault(handler: FaultHandler) {

@@ -7,6 +7,7 @@
 // them inline in the command stream). The Metal backend (crate::metal) is the reference this one is checked against
 // with frame captures (crate::capture).
 
+mod astc;
 mod async_pipe;
 mod device;
 mod exec;

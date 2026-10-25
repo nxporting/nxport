@@ -48,3 +48,8 @@ dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 objc2-ui-kit = "0.3"
 objc2-core-foundation = "0.3"
 
+
+# The Vulkan backend's own compute shaders (vulkan/*.comp), compiled to SPIR-V at build time.
+[build-dependencies]
+# wgsl-in only because naga 30's glsl-in needs a module it compiles with the other front ends.
+naga = { version = "30", features = ["glsl-in", "wgsl-in", "spv-out"] }

@@ -101,6 +101,8 @@ pub struct Textures {
     /// While a submit is recorded: image creation and uploads go into a command buffer queued ahead of the submit's next
     /// chunk (Ctx::submit_chunk), instead of blocking one-time submits; with the staging memory to free once it ran.
     batch: Option<Batch>,
+    /// The ASTC decoder (devices without ASTC), made with the first ASTC upload.
+    astc: Option<super::astc::Decoder>,
 }
 
 struct Batch {
@@ -131,6 +133,10 @@ pub unsafe fn device_format(dev: &Dev, fmt: i32) -> Option<vk::Format> {
     };
     if ok(f) {
         return Some(f);
+    }
+    // Decoded on upload (vulkan/astc.rs); the decoder needs push descriptors.
+    if super::astc::is_astc(fmt) && dev.push.is_some() {
+        return Some(super::astc::decoded_format(fmt));
     }
     let alt = match f {
         vk::Format::D24_UNORM_S8_UINT => vk::Format::D32_SFLOAT_S8_UINT,
@@ -496,6 +502,15 @@ impl Textures {
             }
             return None;
         };
+        // A decoded ASTC texture: UNORM whatever its sampled format, so the decoder can write it as a storage image.
+        let fmt = if super::astc::is_astc(p.format) && format::texture(p.format) != Some(fmt) {
+            if p.target == layout::NVN_TARGET_3D {
+                return None;
+            }
+            vk::Format::R8G8B8A8_UNORM
+        } else {
+            fmt
+        };
         if p.target == layout::NVN_TARGET_BUFFER {
             if self.warned.insert("buffer".into()) {
                 println!("[vulkan] buffer textures are not implemented");
@@ -701,6 +716,11 @@ impl Textures {
         if regions.is_empty() {
             return;
         }
+        if super::astc::is_astc(p.format) && img.format == vk::Format::R8G8B8A8_UNORM {
+            let (bw, bh) = (info.block_w as u32, info.block_h as u32);
+            self.upload_astc(dev, d, &data, &regions, bw, bh);
+            return;
+        }
         let Ok(staging) = dev.host_buffer(data.len() as u64, vk::BufferUsageFlags::TRANSFER_SRC) else { return };
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
         let image = img.image;
@@ -710,6 +730,59 @@ impl Textures {
             dev.full_barrier(cb);
             dev.device.cmd_copy_buffer_to_image(cb, staging.buffer, image, vk::ImageLayout::GENERAL, &regions);
         });
+        match &mut self.batch {
+            Some(b) if batched => b.staging.push(staging),
+            _ => dev.free_host_buffer(&staging),
+        }
+    }
+
+    /// An ASTC upload where the device has no ASTC: `data` holds each region's blocks, which the decoder writes into the
+    /// image's levels and layers.
+    unsafe fn upload_astc(&mut self, dev: &Dev, d: &Desc, data: &[u8], regions: &[vk::BufferImageCopy], bw: u32, bh: u32) {
+        if self.astc.is_none() {
+            self.astc = super::astc::Decoder::new(dev);
+            if self.astc.is_none() {
+                if self.warned.insert("astc".into()) {
+                    println!("[vulkan] the ASTC decoder could not be made: ASTC textures stay empty");
+                }
+                return;
+            }
+        }
+        let Some(img) = self.images.get_mut(d) else { return };
+        let srgb = super::astc::decoded_format(d.params.format) == vk::Format::R8G8B8A8_SRGB;
+        let mut jobs = Vec::new();
+        for r in regions {
+            let s = &r.image_subresource;
+            let unorm = vk::Format::R8G8B8A8_UNORM;
+            let ty = vk::ImageViewType::TYPE_2D;
+            let Some(view) = Self::view(dev, img, ty, unorm, s.mip_level, 1, s.base_array_layer, 1, [2, 3, 4, 5], false) else {
+                continue;
+            };
+            let (w, h) = (r.image_extent.width, r.image_extent.height);
+            let p = super::astc::Params {
+                offset: (r.buffer_offset / 4) as u32,
+                blocks_w: w.div_ceil(bw),
+                width: w,
+                height: h,
+                bw,
+                bh,
+                srgb: srgb as u32,
+            };
+            jobs.push((view, p));
+        }
+        let Ok(staging) = dev.host_buffer(data.len() as u64, vk::BufferUsageFlags::STORAGE_BUFFER) else { return };
+        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
+        let decoder = self.astc.take().unwrap();
+        let batched = self.batch.is_some();
+        self.record(dev, |cb| {
+            // Submits still in flight may read the old contents.
+            dev.full_barrier(cb);
+            for (view, p) in &jobs {
+                decoder.record(dev, cb, staging.buffer, *view, *p);
+            }
+            dev.full_barrier(cb);
+        });
+        self.astc = Some(decoder);
         match &mut self.batch {
             Some(b) if batched => b.staging.push(staging),
             _ => dev.free_host_buffer(&staging),
@@ -998,6 +1071,9 @@ impl Textures {
             }
             dev.device.destroy_image(img.image, None);
             dev.device.free_memory(img.memory, None);
+        }
+        if let Some(a) = self.astc.take() {
+            a.destroy(dev);
         }
     }
 }
