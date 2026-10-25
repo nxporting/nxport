@@ -45,6 +45,8 @@ pub struct Image {
     pub extent: vk::Extent3D,
     pub levels: u32,
     pub layers: u32,
+    /// Made cube-compatible (a cube or cube-array texture).
+    pub cube: bool,
     pub samples: vk::SampleCountFlags,
     /// GPU work rendered or wrote into it: guest memory no longer has its contents.
     pub gpu_written: bool,
@@ -583,6 +585,7 @@ impl Textures {
             extent,
             levels,
             layers,
+            cube: flags.contains(vk::ImageCreateFlags::CUBE_COMPATIBLE),
             samples: samples(p.samples),
             gpu_written: false,
             views: FxHashMap::default(),
@@ -757,6 +760,11 @@ impl Textures {
         };
         let base_layer = base_layer.min(slices - 1);
         let layers = layers.clamp(1, slices - base_layer);
+        // A cube view needs a cube-compatible image and whole cubes (Metal aborts on others); a shader declaring a cube
+        // where the game binds another texture reads nothing (a null descriptor).
+        if matches!(ty, vk::ImageViewType::CUBE | vk::ImageViewType::CUBE_ARRAY) && (!img.cube || layers % 6 != 0) {
+            return None;
+        }
         let key = ViewKey { ty, format: fmt, base_level, levels, base_layer, layers, swizzle, aspect };
         if let Some(&v) = img.views.get(&key) {
             return Some(v);
