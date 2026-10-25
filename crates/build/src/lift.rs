@@ -122,9 +122,10 @@ pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(
     if !o.status.success() {
         return Err(format!("linking {}: {}", out.display(), String::from_utf8_lossy(&o.stderr)).into());
     }
-    let modules = c_dir.join(MODULES_FILE);
-    if modules.is_file() {
-        std::fs::copy(&modules, out.with_file_name(MODULES_FILE))?;
+    // Not onto itself when the library goes in the C directory (Windows refuses the copy).
+    let (modules, dest) = (c_dir.join(MODULES_FILE), out.with_file_name(MODULES_FILE));
+    if modules.is_file() && std::fs::canonicalize(&modules).ok() != std::fs::canonicalize(&dest).ok() {
+        std::fs::copy(&modules, dest)?;
     }
     Ok(())
 }

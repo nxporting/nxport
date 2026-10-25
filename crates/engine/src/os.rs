@@ -178,6 +178,16 @@ pub fn flush_icache(addr: usize, len: usize) {
     imp::flush_icache(addr, len)
 }
 
+/// An access fault at `addr` (a write if `write`) by the instruction at `pc`. True if handled: the access is retried.
+pub type FaultHandler = unsafe fn(addr: usize, write: bool, pc: usize) -> bool;
+
+/// Has `handler` see every access fault in the process before anything else does (the page guards: write tracking, the
+/// GPU backends' guards). Native hosts handle faults in cpu::crash_handler, which also rewrites the guest's registers.
+#[cfg(windows)]
+pub fn on_access_fault(handler: FaultHandler) {
+    imp::on_access_fault(handler)
+}
+
 #[cfg(unix)]
 mod imp {
     use super::*;
@@ -641,6 +651,55 @@ mod imp {
 
     pub fn flush_icache(addr: usize, len: usize) {
         unsafe { FlushInstructionCache(GetCurrentProcess(), addr as *const c_void, len) };
+    }
+
+    #[repr(C)]
+    struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        record: *mut ExceptionRecord,
+        address: *mut c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+
+    #[repr(C)]
+    struct ExceptionPointers {
+        record: *mut ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    type VectoredHandler = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
+
+    extern "system" {
+        fn AddVectoredExceptionHandler(first: u32, handler: VectoredHandler) -> *mut c_void;
+    }
+
+    const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC000_0005;
+    const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+
+    static HANDLER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    // An access violation's information: [0] the access (0 read, 1 write, 8 execute), [1] the address.
+    unsafe extern "system" fn vectored(p: *mut ExceptionPointers) -> i32 {
+        let r = &*(*p).record;
+        let h = HANDLER.load(std::sync::atomic::Ordering::Acquire);
+        if r.code != EXCEPTION_ACCESS_VIOLATION || r.parameters < 2 || h == 0 {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        let h: FaultHandler = std::mem::transmute(h);
+        if h(r.information[1], r.information[0] == 1, r.address as usize) {
+            EXCEPTION_CONTINUE_EXECUTION
+        } else {
+            EXCEPTION_CONTINUE_SEARCH
+        }
+    }
+
+    pub fn on_access_fault(handler: FaultHandler) {
+        if HANDLER.swap(handler as usize, std::sync::atomic::Ordering::AcqRel) == 0 {
+            unsafe { AddVectoredExceptionHandler(1, vectored) };
+        }
     }
 }
 

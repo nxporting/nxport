@@ -6,10 +6,13 @@ use super::SettingsPatch;
 pub enum Platform {
     MacOS,
     IOS,
+    Windows,
 }
 
 pub const PLATFORM: Platform = if cfg!(target_os = "ios") {
     Platform::IOS
+} else if cfg!(windows) {
+    Platform::Windows
 } else {
     Platform::MacOS
 };
@@ -27,6 +30,9 @@ pub fn platform(p: Platform) -> SettingsPatch {
         // Encode time, GPU tail and blocked time with the fps line, and GPU time per pass every 600 frames (log.txt).
         s.log.log_timeline = Some(true);
         s.log.gpu_pass_profile = Some(600);
+    }
+    if p == Platform::Windows {
+        s.graphics.gpu = Some(crate::settings::GpuBackend::Vulkan);
     }
     s
 }

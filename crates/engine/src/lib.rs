@@ -1162,12 +1162,20 @@ pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::err
 
 /// Runs a game whose code is lifted (docs/windows-port.md): resolves the settings as the native run does, loads and
 /// patches the game, then runs its entry chain in the guest library `files.guest_library` (nxport-cli lift-game and
-/// compile-guest, with the same settings: the code was lifted as these patch it). Headless, on the null GPU backend,
-/// until there is a window and a GPU backend. Returns when nnMain does.
+/// compile-guest, with the same settings: the code was lifted as these patch it). Headless (Vulkan's --dump-frame
+/// shows what it renders) until there is a window. Returns when nnMain does.
 #[cfg(all(nx_runtime, not(nx_native)))]
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    gpu::install(&gpu::null::NULL);
-    let s = settings::install(resolve_settings(layers));
+    let s = resolve_settings(layers);
+    if s.graphics.gpu != settings::GpuBackend::Vulkan {
+        return Err(format!("no {:?} backend here: --gpu=vulkan", s.graphics.gpu).into());
+    }
+    gpu::install(&vulkan::VULKAN);
+    let s = settings::install(s);
+    // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (cpu::crash_handler).
+    #[cfg(windows)]
+    os::on_access_fault(lifted_access_fault);
+    vulkan::init(s.debug.validate)?;
     let lib = s.files.guest_library.clone().ok_or("no guest library: --guest-library=<the library compile-guest made>")?;
     let list = lib.with_file_name("modules.txt");
     let names = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;
@@ -1194,6 +1202,14 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         Ok(r) => r.map_err(Into::into),
         Err(_) => Err("guest-main thread panicked".into()),
     }
+}
+
+/// A fault on a page the GPU backend or write tracking protects, in the order cpu::crash_handler asks them. The
+/// guest's lr and fp are in its Cpu, not in the faulting host context: the Fault leaves them 0.
+#[cfg(all(nx_runtime, not(nx_native), windows))]
+unsafe fn lifted_access_fault(addr: usize, write: bool, pc: usize) -> bool {
+    let f = gpu::Fault { addr, pc, lr: 0, fp: 0, write };
+    gpu::backend().access_fault(&f) || guest::dirty_track::handle_fault(addr) || gpu::backend().late_access_fault(&f)
 }
 
 /// What lifted code hands the host: supervisor calls (exlaunch mods' runtimes) go to horizon::svc as natively, the
