@@ -4813,6 +4813,83 @@ fn host_secs() -> f64 {
     crate::clock::now_secs()
 }
 
+/// Unlocked frame rates (present interval 0): the game measures each frame's time step from one frame start to the
+/// next. Started whenever the previous frame was done, a frame that just missed a display refresh stayed on screen a
+/// whole extra refresh the game had not counted, so motion ran ahead and fell behind in a slow wave (frame times
+/// drifting around the 8.3 ms of a 120 Hz display). Frames now start on the refresh grid, learned from when drawables
+/// actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen.
+/// Measured in windowed play (--log-frame-pacing, 2026-10-24, walking in Hateno at 65-70 fps): the spread of the time
+/// from a frame's start to its appearance on screen went from 10.7 to 4.6 ms (frames shown 4 or 5 refreshes after their
+/// start). A 60 fps cap (8.3 ms) and presenting each frame a fixed time after its start (11.9 ms: Metal did not keep the
+/// times, and frames held back stalled the drawable queue) were worse. --display-pacing (default on), F6 toggles.
+static DISPLAY_PACING: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+/// Host time (seconds, f64 bits) of the latest frame shown, and the display's refresh period.
+static SHOWN_LAST: AtomicU64 = AtomicU64::new(0);
+static SHOWN_PERIOD: AtomicU64 = AtomicU64::new(0);
+/// Host time the current frame started (left nvnWindowAcquireTexture), for --log-frame-pacing.
+static FRAME_START: AtomicU64 = AtomicU64::new(0);
+
+fn display_pacing_flag() -> &'static std::sync::atomic::AtomicBool {
+    DISPLAY_PACING.get_or_init(|| std::sync::atomic::AtomicBool::new(crate::settings::get().graphics.display_pacing))
+}
+
+pub fn display_pacing() -> bool {
+    display_pacing_flag().load(Ordering::Relaxed)
+}
+
+pub fn toggle_display_pacing() {
+    let on = !display_pacing_flag().fetch_xor(true, Ordering::Relaxed);
+    println!("[+] Gfx: display pacing {}", if on { "on" } else { "off" });
+}
+
+/// How long to wait before starting the next frame so that it starts on the display's refresh grid (None: grid not known
+/// yet, or the last frame shown is too long ago to extrapolate from).
+pub fn display_pacing_wait() -> Option<std::time::Duration> {
+    let (last, period) = (
+        f64::from_bits(SHOWN_LAST.load(Ordering::Acquire)),
+        f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire)),
+    );
+    let now = host_secs();
+    if period <= 0.0 || last <= 0.0 || now < last || now - last > 0.25 {
+        return None;
+    }
+    let next = last + ((now - last) / period).ceil() * period;
+    Some(std::time::Duration::from_secs_f64((next - now).max(0.0)))
+}
+
+/// The frame starts now (nvnWindowAcquireTexture returns).
+pub fn frame_started() {
+    FRAME_START.store(host_secs().to_bits(), Ordering::Release);
+}
+
+/// Called when `drawable` reached the screen: learns the refresh grid; --log-frame-pacing prints the frame's times.
+fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, n: u64, start: f64, presented: f64, paced: bool) {
+    let shown: f64 = unsafe { objc2::msg_send![drawable, presentedTime] };
+    if shown <= 0.0 {
+        return; // dropped (never shown)
+    }
+    let prev = f64::from_bits(SHOWN_LAST.swap(shown.to_bits(), Ordering::AcqRel));
+    let dt = shown - prev;
+    if prev > 0.0 && dt > 1.0 / 500.0 && dt < 0.1 {
+        // Shown times are whole refreshes apart: the smallest gap seen is the period.
+        let p = f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire));
+        if p <= 0.0 || dt < p * 0.9 {
+            SHOWN_PERIOD.store(dt.to_bits(), Ordering::Release);
+        }
+    }
+    if crate::settings::get().log.log_frame_pacing {
+        println!(
+            "[frame-pacing] #{} start {:.3} present +{:.2} ms shown +{:.2} ms (gap {:.2} ms) paced {}",
+            n,
+            start * 1e3,
+            (presented - start) * 1e3,
+            (shown - start) * 1e3,
+            if prev > 0.0 { dt * 1e3 } else { 0.0 },
+            paced
+        );
+    }
+}
+
 /// Names a command buffer after the encoders it holds (--log-tail).
 fn tail_log_label(st: &State, cb: &ProtocolObject<dyn MTLCommandBuffer>) {
     if !tail_log_enabled() {
@@ -5956,6 +6033,20 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 enc.endEncoding();
             }
             crate::host::overlay::render(&g.device, &cb, &drawable.texture());
+            {
+                let (n, start, presented, paced) = (
+                    presented_frames() + 1,
+                    f64::from_bits(FRAME_START.load(Ordering::Acquire)),
+                    host_secs(),
+                    display_pacing(),
+                );
+                let handler = block2::RcBlock::new(
+                    move |d: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLDrawable>>| {
+                        on_shown(unsafe { d.as_ref() }, n, start, presented, paced)
+                    },
+                );
+                unsafe { objc2_metal::MTLDrawable::addPresentedHandler(&*drawable, block2::RcBlock::as_ptr(&handler)) };
+            }
             cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
             cb.commit();
             // Remember it: it is never waited on, so check how it ended when the next frame is presented. A failure here

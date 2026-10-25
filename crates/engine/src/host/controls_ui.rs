@@ -37,6 +37,13 @@ define_class!(
             // F9 or space (unless space is bound to a game input): capture the next frame (image + per-draw trace in the
             // log; with --frame-history also the last frames) to show a glitch from a live session.
             let space_free = || !input::bindings().iter().any(|b| b.key == Some(49));
+            // F6: display pacing of unlocked frame rates on / off (to compare by feel).
+            if event.keyCode() == 97 {
+                if !event.isARepeat() {
+                    crate::metal::toggle_display_pacing();
+                }
+                return;
+            }
             if event.keyCode() == 101 || (event.keyCode() == 49 && space_free()) {
                 if !event.isARepeat() {
                     crate::metal::request_capture();
