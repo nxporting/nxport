@@ -9,18 +9,18 @@
 
 mod astc;
 mod async_pipe;
-mod device;
+pub mod device;
 mod exec;
-mod format;
+pub mod format;
 mod guard;
 mod history;
 mod inflight;
-mod listed;
-mod pipelines;
-mod shader;
-pub(crate) mod stage_cache;
-mod state;
-mod texture;
+pub mod listed;
+pub mod pipelines;
+pub mod shader;
+pub mod stage_cache;
+pub mod state;
+pub mod texture;
 mod window;
 
 use std::collections::BTreeMap;

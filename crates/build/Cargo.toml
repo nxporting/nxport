@@ -20,3 +20,5 @@ libc = "0.2"
 sass2spv = { path = "../sass2spv" }
 nxport-lifter = { path = "../lifter" }
 sha2 = "0.10"
+ash = "0.38"
+nxport-pipelines = { path = "../pipelines" }

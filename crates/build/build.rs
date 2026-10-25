@@ -6,6 +6,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(nx_runtime)");
+    let vendor = std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if (vendor == "apple" && arch == "aarch64") || os == "windows" {
+        println!("cargo::rustc-cfg=nx_runtime");
+    }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest.parent().and_then(Path::parent).unwrap().to_path_buf();
     let target_dir = root.join("target/engines");
