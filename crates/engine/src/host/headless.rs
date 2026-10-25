@@ -1,17 +1,9 @@
-// The host platform where guest code is lifted, until SDL3 gives it a window, input and audio (docs/windows-port.md,
-// step 6): no window, no input, audio discarded. The functions the runtime calls, with the native host modules'
-// signatures.
+// The host platform where guest code is lifted, until SDL3 gives it a window and input (docs/windows-port.md, step 6):
+// no window, no input. Audio is the native hosts' module, whose output device is SDL3's here. The functions the runtime
+// calls, with the native host modules' signatures.
 
-pub mod audio {
-    pub fn push_audio_out(_pcm: &[i16], _channels: usize) {}
-
-    pub fn push(_stereo: &[f32]) {}
-
-    /// (samples trimmed, underruns).
-    pub fn stats() -> (u64, u64) {
-        (0, 0)
-    }
-}
+#[path = "audio.rs"]
+pub mod audio;
 
 pub mod display {
     pub fn window_up() -> bool {

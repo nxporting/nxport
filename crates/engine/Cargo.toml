@@ -44,6 +44,11 @@ objc2-quartz-core = "0.3"
 objc2-app-kit = "0.3"
 dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 
+# SDL3 for host I/O where guest code is lifted (docs/windows-port.md), built from source and linked statically so
+# nxport.exe needs no SDL3.dll beside it.
+[target.'cfg(windows)'.dependencies]
+sdl3 = { version = "0.20.0", features = ["build-from-source-static"] }
+
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-ui-kit = "0.3"
 objc2-core-foundation = "0.3"
