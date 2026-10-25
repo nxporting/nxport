@@ -10,7 +10,7 @@ People like to know if you're using AI to write something, which is understandab
 
 ## Getting Started
 1. Dump your game and extract it. You should have a folder that contains folder titled ExeFS, RomFS, and Logo. (It would be legally dubious to make this project support that extraction, so sorry.)
-2. Download nxport-builder from the releases tab. Run it, and give it the path to your extracted game. Choose a profile and build target and build!
+2. Download nxport-builder from the releases tab (okay there's no release yet, for now clone and build). Run it, and give it the path to your extracted game. Choose a profile and build target and build!
 3. If you're building for MacOS, you should now have an app you can play! If you're building for iOS, you'll have a .ipa that you can sideload with something like [Impactor](https://github.com/claration/Impactor).
 
 ## Screenshots
