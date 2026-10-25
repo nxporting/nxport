@@ -19,6 +19,7 @@ use crate::nvn::cmd::{AttribState, Cmd, RtRef};
 mod copy;
 #[path = "draw.rs"]
 mod draw;
+pub(super) use draw::{desc_streams, fragment_graphics_state, vertex_graphics_state, vertex_streams};
 
 /// NVN state the commands set (it persists across submits, as the queue's does).
 #[derive(Default)]
@@ -50,6 +51,7 @@ struct Nvn {
     prim_restart: Option<u32>,
     depth_clamp: bool,
     polygon_offset: (f32, f32, f32),
+    point_size: f32,
 }
 
 /// The render pass being recorded.
@@ -58,6 +60,9 @@ struct Pass {
     images: Vec<vk::Image>,
     colors: Vec<Option<(vk::ImageView, vk::Format, i32)>>,
     depth: Option<(vk::ImageView, vk::Format)>,
+    /// The targets' NVN formats (texture, view; pipeline lists).
+    nvn_colors: [(u32, u32); 8],
+    nvn_depth: (u32, u32),
     extent: (u32, u32),
     samples: vk::SampleCountFlags,
     /// Rendering begins at the first draw: clears of whole attachments before it become their load operation (a tiled
@@ -408,6 +413,7 @@ impl Ctx {
             st: Nvn {
                 depth_range: (0.0, 1.0),
                 stencil: [[0, 0], [0xFF, 0xFF], [0xFF, 0xFF]],
+                point_size: 1.0,
                 ..Default::default()
             },
             cb: vk::CommandBuffer::null(),
@@ -1020,7 +1026,8 @@ impl Ctx {
                 }
             }
             Cmd::ResetCounter { counter: 1 } => self.occlusion_reset(),
-            Cmd::SetPointSize(_) | Cmd::ResetCounter { .. } | Cmd::SetDepthBounds { .. } => {}
+            Cmd::SetPointSize(s) => self.st.point_size = *s,
+            Cmd::ResetCounter { .. } | Cmd::SetDepthBounds { .. } => {}
             other => {
                 // Once per kind (formatting the command for every occurrence was a cost per frame).
                 if self.unimplemented_kinds.insert(std::mem::discriminant(other)) {
@@ -1065,6 +1072,8 @@ impl Ctx {
             return true;
         }
         let mut colors = Vec::new();
+        let mut nvn_colors = [(0u32, 0u32); 8];
+        let mut nvn_depth = (0u32, 0u32);
         let mut images = Vec::new();
         let mut extent = (u32::MAX, u32::MAX);
         let mut samples = vk::SampleCountFlags::TYPE_1;
@@ -1086,13 +1095,17 @@ impl Ctx {
                     } else {
                         t.format
                     };
+                    if colors.len() < 8 {
+                        nvn_colors[colors.len()] = (t.format as u32, r.view_format as u32);
+                    }
                     colors.push(Some((view, fmt, rendered)));
                 }
                 None => colors.push(None),
             }
         }
         let depth = match self.st.depth {
-            Some(r) if r.texture != 0 => self.target(&r).map(|(_, view, fmt, e, s, image)| {
+            Some(r) if r.texture != 0 => self.target(&r).map(|(t, view, fmt, e, s, image)| {
+                nvn_depth = (t.format as u32, r.view_format as u32);
                 extent = (extent.0.min(e.0), extent.1.min(e.1));
                 samples = s;
                 images.push(image);
@@ -1107,8 +1120,24 @@ impl Ctx {
             // Only targets that could not be made: the draws go nowhere.
             return false;
         }
+        // Unbound slots after the last target are left out (pipelines for the same targets then match).
+        while colors.last().is_some_and(|c| c.is_none()) {
+            colors.pop();
+        }
         let n = colors.len();
-        self.pass = Some(Pass { images, colors, depth, extent, samples, begun: false, color_clears: vec![None; n], depth_clear: None, draws: 0 });
+        self.pass = Some(Pass {
+            images,
+            colors,
+            depth,
+            nvn_colors,
+            nvn_depth,
+            extent,
+            samples,
+            begun: false,
+            color_clears: vec![None; n],
+            depth_clear: None,
+            draws: 0,
+        });
         true
     }
 

@@ -5,6 +5,7 @@
 
 // Lifted hosts until they have a GPU backend, and frame capture scenarios (which record commands without running them).
 pub mod null;
+pub mod pipeline_list;
 pub mod restart;
 
 use std::sync::OnceLock;
