@@ -2,7 +2,8 @@
 // the platform's profile, the game's, the game's on this platform, a preset file, the command line or a front end.
 // Layers are applied in that order onto the defaults, so each overrides the ones before it.
 
-#[cfg(target_os = "macos")]
+// The settings editor (Dear ImGui), for the builder and the overlay: on the hosts with a builder window.
+#[cfg(any(target_os = "macos", windows))]
 pub mod edit;
 pub mod profiles;
 pub mod values;
@@ -69,7 +70,7 @@ macro_rules! group {
             }
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         impl $crate::settings::edit::EditGroup for $name {
             const HEADING: &'static str = $heading;
             const USER: &'static [&'static str] = &[$(stringify!($user)),*];

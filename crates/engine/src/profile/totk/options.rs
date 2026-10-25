@@ -52,7 +52,7 @@ pub struct Options {
 
 impl Options {
     /// This game's settings in an editor, by section.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn sections(&mut self) -> Vec<(&'static str, &mut dyn crate::settings::edit::Section)> {
         vec![
             ("1.1.2", &mut self.v1_1_2),

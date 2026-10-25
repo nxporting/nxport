@@ -2,7 +2,7 @@
 //
 // Synthetic scenarios (nxport-cli gpu-scenario) are written fresh and checked against the references in tests/gpu/.
 // Game captures (nxport --capture-frame) hold game data and stay outside the repository: every capture with references
-// in a game's data directory (~/Library/Application Support/nxport/games/<title id>/captures/*/ref) is checked too, and
+// in a game's data directory (games/<title id>/captures/*/ref in nxport::config::support_dir) is checked too, and
 // without any that part is skipped. A capture's args.txt holds engine options for its replay, one per line (the shader
 // cache its references were recorded with); its tolerance.toml how far results may stray (capture/image.rs).
 //
@@ -82,8 +82,7 @@ fn scenarios() {
 
 /// Captures with references in the games' data directories, with the game's shader cache if it has one.
 fn game_captures() -> Vec<(PathBuf, Option<PathBuf>)> {
-    let Some(home) = std::env::var_os("HOME") else { return Vec::new() };
-    let games = PathBuf::from(home).join("Library/Application Support/nxport/games");
+    let Some(games) = nxport::config::support_dir().map(|d| d.join("games")) else { return Vec::new() };
     let mut out = Vec::new();
     for game in std::fs::read_dir(&games).into_iter().flatten().flatten() {
         let cache = game.path().join("shader_cache");

@@ -12,7 +12,40 @@ use dear_imgui_rs as imgui;
 use imgui::{InputScalarFlags, Ui};
 
 use super::values::*;
-use crate::host::ui::window::{request_path, take_path, PathKind};
+
+/// What a file panel lets the user choose.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PathKind {
+    File,
+    Directory,
+    Either,
+}
+
+thread_local! {
+    /// A file panel requested during a frame (key, what it chooses), and the paths chosen by key. The window running
+    /// the interface (host::ui::window on macOS, the builder's own on Windows) opens the panel between frames.
+    static PICK: RefCell<(Option<(String, PathKind)>, HashMap<String, PathBuf>)> = RefCell::new((None, HashMap::new()));
+}
+
+/// Opens a file panel after this frame; its choice is collected with `take_path(key)`.
+pub fn request_path(key: &str, kind: PathKind) {
+    PICK.with(|p| p.borrow_mut().0 = Some((key.to_string(), kind)));
+}
+
+/// The path chosen for `key` since the last call, if any.
+pub fn take_path(key: &str) -> Option<PathBuf> {
+    PICK.with(|p| p.borrow_mut().1.remove(key))
+}
+
+/// For the window: the file panel asked for since the last call, if any.
+pub fn take_request() -> Option<(String, PathKind)> {
+    PICK.with(|p| p.borrow_mut().0.take())
+}
+
+/// For the window: what the user chose in the panel asked for under `key`.
+pub fn put_path(key: String, path: PathBuf) {
+    PICK.with(|p| p.borrow_mut().1.insert(key, path));
+}
 
 /// A value that can be edited in place; true when it changed.
 pub trait Edit {

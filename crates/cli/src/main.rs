@@ -391,38 +391,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Ppm2png { input, output, downscale } => ppm2png::convert_ppm_to_png(&input, &output, downscale)?,
         Command::Lift { nso, out, name, base } => {
             let r = nxport_build::lift::lift_nso(&nso, &name, base, &out)?;
-            report_lift(&nso.display().to_string(), &r);
+            nxport_build::lift::report(&nso.display().to_string(), &r);
         }
         Command::LiftGame { dump, out } => {
-            let s = nxport_build::lift::game_settings(&dump, Default::default());
-            for (name, r) in nxport_build::lift::lift_game(s, &out)? {
-                report_lift(&name, &r);
+            let s = nxport_build::lift::game_settings(&dump, Default::default(), None);
+            for (name, r) in nxport_build::lift::lift_game(s, &out, &|_, _, _| {})? {
+                nxport_build::lift::report(&name, &r);
             }
         }
         Command::CompileGuest { c_dir, out, cc, j } => {
             let cc: Vec<String> = cc.split_whitespace().map(String::from).collect();
             let jobs = j.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-            nxport_build::lift::compile(&c_dir, &out, &cc, jobs)?;
+            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, &|_, _| {})?;
             println!("[+] {}", out.display());
         }
     }
     Ok(())
-}
-
-fn report_lift(what: &str, r: &nxport_build::lift::Output) {
-    println!(
-        "[+] {}: {} functions, {} instructions, {} jump tables, {} unresolved computed branches, {} C files",
-        what,
-        r.functions,
-        r.instructions,
-        r.jump_tables,
-        r.unresolved_computed,
-        r.files.len()
-    );
-    let mut unsupported: Vec<_> = r.unsupported.iter().collect();
-    unsupported.sort_by(|a, b| b.1.cmp(a.1));
-    for (reason, n) in unsupported.iter().take(20) {
-        println!("    {n:>9} not lifted: {reason}");
-    }
 }
 

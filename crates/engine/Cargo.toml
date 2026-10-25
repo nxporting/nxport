@@ -46,8 +46,10 @@ dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 
 # SDL3 for host I/O where guest code is lifted (docs/windows-port.md), built from source and linked statically so
 # nxport.exe needs no SDL3.dll beside it.
+# The settings editor (settings::edit), which the builder's window shows on Windows too.
 [target.'cfg(windows)'.dependencies]
 sdl3 = { version = "0.20.0", features = ["build-from-source-static"] }
+dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-ui-kit = "0.3"

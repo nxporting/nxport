@@ -1,12 +1,36 @@
 // Settings that come from where the program is installed, and derived display settings.
 
-/// Inside a macOS .app: the dump, mods and shader cache the bundle carries (a platform-environment layer).
+use std::path::PathBuf;
+
+/// nxport's directory in the platform's application data, where the games' data directories (saves, caches) and the
+/// builder's files go: ~/Library/Application Support/nxport on Apple hosts, %APPDATA%\nxport on Windows.
+pub fn support_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    return Some(PathBuf::from(std::env::var_os("APPDATA")?).join("nxport"));
+    #[cfg(not(windows))]
+    Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/nxport"))
+}
+
+/// The settings file an app carries (the builder writes it): in a Windows app folder, beside the program.
+#[cfg(windows)]
+const APP_SETTINGS: &str = "settings.toml";
+
+/// Where an app keeps what it carries: a macOS .app's Contents/Resources; on Windows the folder the builder made (the
+/// program's own directory, when it holds the app's settings file). None when the program is not in an app.
+fn app_resources() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    #[cfg(windows)]
+    return dir.join(APP_SETTINGS).is_file().then(|| dir.to_path_buf());
+    #[cfg(not(windows))]
+    (dir.file_name()? == "MacOS").then(|| dir.parent().map(|c| c.join("Resources")))?
+}
+
+/// Inside an app (a macOS .app, a Windows app folder): the dump, mods and shader cache it carries, and on Windows its
+/// lifted guest library (a platform-environment layer).
 pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
     let mut p = crate::settings::SettingsPatch::default();
-    let Some(resources) = std::env::current_exe().ok().and_then(|exe| {
-        let macos = exe.parent()?;
-        (macos.file_name()? == "MacOS").then(|| macos.parent().map(|c| c.join("Resources")))?
-    }) else {
+    let Some(resources) = app_resources() else {
         return p;
     };
     let dir = |names: &[&str]| names.iter().map(|n| resources.join(n)).find(|d| d.is_dir());
@@ -19,6 +43,11 @@ pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
     }
     p.files.shader_cache = dir(&["shader_cache"]);
     p.files.shared_fonts = dir(&["fonts"]);
+    // The game's code lifted and compiled with the app's settings (its modules.txt beside it).
+    #[cfg(windows)]
+    {
+        p.files.guest_library = Some(resources.join("guest.dll")).filter(|l| l.is_file());
+    }
     p
 }
 
@@ -47,14 +76,9 @@ pub fn app_log() {
     }
 }
 
-/// Inside a macOS .app: the settings it was built with (Resources/settings.toml), a layer above the game's profile.
+/// Inside an app: the settings it was built with (settings.toml in its resources), a layer above the game's profile.
 pub fn app_bundle_settings() -> Option<crate::settings::SettingsPatch> {
-    let exe = std::env::current_exe().ok()?;
-    let macos = exe.parent()?;
-    if macos.file_name()? != "MacOS" {
-        return None;
-    }
-    let file = macos.parent()?.join("Resources/settings.toml");
+    let file = app_resources()?.join("settings.toml");
     if !file.is_file() {
         return None;
     }

@@ -2,7 +2,6 @@
 // drawn by host::ui::renderer at the display's refresh rate.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -237,10 +236,10 @@ define_class!(
         fn tick(&self, _timer: &AnyObject) {
             let keep = draw();
             // A panel asked for during the frame runs now, outside it (its modal loop keeps ticking frames).
-            if let Some((key, kind)) = PICK.with(|p| p.borrow_mut().0.take()) {
+            if let Some((key, kind)) = crate::settings::edit::take_request() {
                 let mtm = MainThreadMarker::from(self);
                 if let Some(path) = choose_path(mtm, kind) {
-                    PICK.with(|p| p.borrow_mut().1.insert(key, path));
+                    crate::settings::edit::put_path(key, path);
                 }
             }
             if !keep {
@@ -265,28 +264,9 @@ define_class!(
     }
 );
 
-/// What a file panel lets the user choose.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PathKind {
-    File,
-    Directory,
-    Either,
-}
-
-thread_local! {
-    /// A file panel requested during a frame (key, what it chooses), and the paths chosen by key.
-    static PICK: RefCell<(Option<(String, PathKind)>, HashMap<String, PathBuf>)> = RefCell::new((None, HashMap::new()));
-}
-
-/// Opens a file panel after this frame; its choice is collected with `take_path(key)`.
-pub fn request_path(key: &str, kind: PathKind) {
-    PICK.with(|p| p.borrow_mut().0 = Some((key.to_string(), kind)));
-}
-
-/// The path chosen for `key` since the last call, if any.
-pub fn take_path(key: &str) -> Option<PathBuf> {
-    PICK.with(|p| p.borrow_mut().1.remove(key))
-}
+// Widgets ask for file panels through settings::edit (shared with the builder's window on Windows); this window opens
+// them between frames.
+pub use crate::settings::edit::{request_path, take_path, PathKind};
 
 fn choose_path(mtm: MainThreadMarker, kind: PathKind) -> Option<PathBuf> {
     let panel = NSOpenPanel::openPanel(mtm);

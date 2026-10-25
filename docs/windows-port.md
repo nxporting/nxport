@@ -212,8 +212,11 @@ SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same)
 - **Rumble (`host/rumble_sdl.rs`):** Translates Switch HD Rumble vibration values (`nn::hid::SendVibrationValue[s]`) to
   SDL dual-motor gamepad rumble (low frequency on left, high frequency on right), with safety decay and periodic renewal.
 - Paths under `~/Library/Application Support/nxport` become `%APPDATA%\nxport`.
-- The builder's window is AppKit + imgui; on Windows it becomes imgui over SDL3, with a "Windows app" target: a folder
-  with nxport.exe, the lifted guest library, the shader cache and the settings.
+- The builder's window is AppKit + imgui on macOS; on Windows it runs Dear ImGui over SDL3, sharing UI state and build
+  coordination with `crates/builder/src/app.rs`. On Windows it targets a standalone "Windows app": a directory
+  containing `nxport.exe`, the lifted `guest.dll`, `modules.txt`, and default `settings.toml`. The build pipeline
+  provisions a bundled Zig 0.13 toolchain, reports per-file lifting and compilation progress, and supports headless
+  snapshot rendering (`--snapshot`) for automated UI testing.
 
 ## Windows on arm64
 
@@ -317,5 +320,9 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    accounting; Apple uses audio_queue.rs (AudioToolbox) and lifted/Windows hosts use audio_sdl.rs (SDL3 playback
    stream at 48 kHz stereo float on default device with 10 ms buffers). Tested on TotK, streaming smoothly with zero
    underruns post-startup, while --headless and --audio=0 remain completely silent.
+   Builder and app target: **done**. ImGui over SDL3 builder UI (`crates/builder/src/window.rs`), platform-split
+   build steps (`crates/builder/src/apple.rs` and `crates/builder/src/windows.rs`), bundled Zig 0.13 acquisition and
+   caching (`crates/build/src/zig.rs`), Windows standalone app packaging (`crates/build/src/winapp.rs`), per-file
+   progress reporting during lifting (`crates/build/src/lift.rs`), and headless snapshot verification.
 7. Plugin mods: two-pass lifting, then the interpreter fallback.
 8. Windows arm64 on the native path.
