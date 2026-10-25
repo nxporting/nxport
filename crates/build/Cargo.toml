@@ -19,3 +19,4 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 libc = "0.2"
 sass2spv = { path = "../sass2spv" }
 nxport-lifter = { path = "../lifter" }
+sha2 = "0.10"

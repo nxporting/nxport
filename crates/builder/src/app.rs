@@ -1,9 +1,9 @@
 // The builder: a window that turns a game dump into a native app. It identifies the game, edits the settings the app
 // starts with (on top of the platform's and the game's profiles, with presets), and runs the build on a worker thread:
-// shader stages from RomFS, the shader cache, then the macOS app or the iOS app. Everything the steps print goes to
-// the log.
+// the steps of the target (apple.rs: shader stages from RomFS, the shader cache, then the macOS app or the iOS app;
+// windows.rs: the game's code lifted and compiled, then the Windows app). Everything the steps print goes to the log.
+// The same screens run in the macOS window (AppKit) and the Windows one (SDL3, window_sdl.rs).
 
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,17 +11,20 @@ use std::sync::{Arc, Mutex};
 use nxport::settings::edit::{Audience, Section};
 use nxport::settings::profiles::{self, Platform};
 use nxport::settings::{self, Settings, SettingsPatch};
-use nxport::ui::imgui;
-use nxport::ui::window::PathKind;
 use struct_patch::Patch;
+
+use crate::log::LOG;
+use crate::window::{self, imgui, PathKind};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum Target {
+pub enum Target {
     #[serde(rename = "mac", alias = "mac-app", alias = "macapp")]
     MacApp,
     #[serde(rename = "ios", alias = "ipa")]
     Ipa,
+    #[serde(rename = "windows", alias = "windows-app")]
+    WindowsApp,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -64,6 +67,8 @@ struct GameMemory {
     mac: Option<TargetMemory>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ios: Option<TargetMemory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    windows: Option<TargetMemory>,
 }
 
 impl GameMemory {
@@ -85,6 +90,7 @@ impl GameMemory {
         match t {
             Target::MacApp => &mut self.mac,
             Target::Ipa => &mut self.ios,
+            Target::WindowsApp => &mut self.windows,
         }
     }
 }
@@ -100,7 +106,7 @@ struct PresetFile {
 
 fn expand_home(p: &str) -> String {
     if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             return PathBuf::from(home).join(rest).display().to_string();
         }
     }
@@ -135,19 +141,44 @@ fn load_builder_preset(path: &Path) -> Result<(Option<BuildPreset>, SettingsPatc
 }
 
 impl Target {
-    const ALL: [Target; 2] = [Target::MacApp, Target::Ipa];
+    /// The targets this host builds (the first is the default). Presets for the others still load their settings.
+    #[cfg(target_os = "macos")]
+    pub const ALL: &'static [Target] = &[Target::MacApp, Target::Ipa];
+    #[cfg(windows)]
+    pub const ALL: &'static [Target] = &[Target::WindowsApp];
+    #[cfg(not(any(target_os = "macos", windows)))]
+    pub const ALL: &'static [Target] = &[];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Target::MacApp => "macOS app",
             Target::Ipa => "iOS app (.ipa)",
+            Target::WindowsApp => "Windows app",
         }
     }
 
-    fn platform(self) -> Platform {
+    pub fn platform(self) -> Platform {
         match self {
             Target::MacApp => Platform::MacOS,
             Target::Ipa => Platform::IOS,
+            Target::WindowsApp => Platform::Windows,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn offered(self) -> bool {
+        Self::ALL.contains(&self)
+    }
+
+    /// Whether the app's shaders can be translated when it is built (Windows: not until the Vulkan backend can
+    /// precompile offline, windows::PRECOMPILES_SHADERS).
+    pub fn prebuilds_shaders(self) -> bool {
+        match self {
+            Target::MacApp | Target::Ipa => true,
+            #[cfg(windows)]
+            Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
+            #[cfg(not(windows))]
+            Target::WindowsApp => false,
         }
     }
 }
@@ -161,52 +192,75 @@ struct Game {
     is_32bit: bool,
 }
 
+/// A build's progress: its steps, the running one's sub-step, and its outcome.
 #[derive(Default)]
-struct Job {
-    step: String,
-    steps_done: usize,
-    steps: usize,
-    sub_step: Option<String>,
-    sub_done: usize,
-    sub_total: usize,
-    sub_frac: f32,
-    result: Option<Result<PathBuf, String>>,
+pub struct Job {
+    pub step: String,
+    pub steps_done: usize,
+    pub steps: usize,
+    pub sub_step: Option<String>,
+    pub sub_done: usize,
+    pub sub_total: usize,
+    pub sub_frac: f32,
+    pub result: Option<Result<PathBuf, String>>,
 }
 
-/// Everything this process prints (the steps' progress), for the log view.
-static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Stop after the running step.
-static CANCEL: AtomicBool = AtomicBool::new(false);
-
-/// Sends this process's stdout and stderr through a pipe into LOG, and on to where they went before.
-fn capture_output() {
-    unsafe {
-        let mut fds = [0; 2];
-        if libc::pipe(fds.as_mut_ptr()) != 0 {
-            return;
-        }
-        let console = libc::dup(1);
-        libc::dup2(fds[1], 1);
-        libc::dup2(fds[1], 2);
-        libc::close(fds[1]);
-        use std::os::fd::FromRawFd;
-        let reader = std::fs::File::from_raw_fd(fds[0]);
-        let mut console = std::fs::File::from_raw_fd(console);
-        std::thread::spawn(move || {
-            for line in BufReader::new(reader).lines().map_while(Result::ok) {
-                let _ = writeln!(console, "{line}");
-                let mut log = LOG.lock().unwrap();
-                log.push(line);
-                let n = log.len();
-                if n > 5000 {
-                    log.drain(..n - 5000);
-                }
+impl Job {
+    /// Where the running build is, in one line (empty before the first step).
+    fn status(&self) -> String {
+        if let Some(sub) = &self.sub_step {
+            if self.sub_total > 0 {
+                format!("{} ({} of {}): {} ({}/{})", self.step, self.steps_done + 1, self.steps, sub, self.sub_done, self.sub_total)
+            } else {
+                format!("{} ({} of {}): {}", self.step, self.steps_done + 1, self.steps, sub)
             }
-        });
+        } else if self.steps > 0 {
+            format!("{} ({} of {})", self.step, self.steps_done + 1, self.steps)
+        } else {
+            String::new()
+        }
     }
 }
 
-type Step = (String, Box<dyn FnOnce() -> Result<(), String> + Send>);
+/// Sets the running step's sub-step: `done` of `total` (0: no count), which is `frac` of the step.
+#[allow(dead_code)]
+pub fn progress(job: &Mutex<Job>, sub: impl Into<String>, done: usize, total: usize, frac: f32) {
+    let mut j = job.lock().unwrap();
+    j.sub_step = Some(sub.into());
+    j.sub_done = done;
+    j.sub_total = total;
+    j.sub_frac = j.sub_frac.max(frac.min(1.0));
+}
+
+/// Stop after the running step.
+static CANCEL: AtomicBool = AtomicBool::new(false);
+
+pub type Step = (String, Box<dyn FnOnce() -> Result<(), String> + Send>);
+
+/// What the build makes, once its last step is done.
+pub type Output = Arc<Mutex<Option<PathBuf>>>;
+
+/// A build, as the target's steps take it: the game, where things go, and the options set.
+#[allow(dead_code)]
+pub struct Request {
+    pub target: Target,
+    pub name: String,
+    pub title_id: u64,
+    /// The builder's directory for this game's builds (shader stages, caches, lifted code).
+    pub work: PathBuf,
+    pub dump: PathBuf,
+    pub mods: Option<PathBuf>,
+    pub out_dir: PathBuf,
+    /// The settings the app starts with, above the game's profile, and all of them resolved.
+    pub edits: SettingsPatch,
+    pub settings: Settings,
+    pub prebuild: bool,
+    pub bundle_game: bool,
+    pub entitlements: bool,
+    pub ios_gpu: String,
+    pub bundle_id: Option<String>,
+    pub job: Arc<Mutex<Job>>,
+}
 
 struct Builder {
     dump: String,
@@ -225,7 +279,7 @@ struct Builder {
     job: Option<Arc<Mutex<Job>>>,
     /// Every settings group open (snapshots).
     expand_all: bool,
-    /// iOS: the game files go into the app (large) instead of its Documents/Game.
+    /// iOS / Windows: the game files go into the app instead of external paths.
     bundle_game: bool,
     /// The dump's RomFS size in bytes, measured in the background.
     romfs_size: Arc<Mutex<Option<u64>>>,
@@ -238,19 +292,20 @@ struct Builder {
     bundle_id: String,
 }
 
-fn data_dir() -> PathBuf {
+pub fn data_dir() -> PathBuf {
     // Tests: a directory per test thread.
     #[cfg(test)]
     return std::env::temp_dir().join(format!("nxport-builder-test-{}-{:?}", std::process::id(), std::thread::current().id()));
     #[cfg(not(test))]
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("Library/Application Support/nxport")
+    nxport::config::support_dir().unwrap_or_default()
 }
 
 fn default_out_dir(target: Target) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
     match target {
         Target::MacApp => home.map(|h| h.join("Applications").display().to_string()).unwrap_or_default(),
         Target::Ipa => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
+        Target::WindowsApp => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
     }
 }
 
@@ -289,17 +344,17 @@ fn valid_preset_name(name: &str) -> bool {
 
 impl Builder {
     fn new(dump: Option<PathBuf>) -> Self {
-        let default_sys = std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join("Library/Application Support/nxport/system_data"))
+        let target = Target::ALL.first().copied().unwrap_or(Target::WindowsApp);
+        let default_sys = Some(data_dir().join("system_data"))
             .filter(|d| d.is_dir())
             .map_or_else(String::new, |d| d.display().to_string());
         let mut b = Builder {
             dump: String::new(),
             game: None,
-            target: Target::MacApp,
+            target,
             mods: String::new(),
             system_data: default_sys,
-            out_dir: default_out_dir(Target::MacApp),
+            out_dir: default_out_dir(target),
             base: Settings::default(),
             settings: Settings::default(),
             preset_name: String::new(),
@@ -312,7 +367,7 @@ impl Builder {
             romfs_size: Arc::new(Mutex::new(None)),
             entitlements: true,
             ios_gpu: String::new(),
-            prebuild_shaders: true,
+            prebuild_shaders: target.prebuilds_shaders(),
             bundle_id: String::new(),
         };
         if let Some(d) = dump {
@@ -358,10 +413,7 @@ impl Builder {
         if let Some(sys) = edits.files.system_data_dir.as_ref() {
             self.system_data = sys.display().to_string();
         } else if self.system_data.is_empty() {
-            if let Some(d) = std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join("Library/Application Support/nxport/system_data"))
-                .filter(|d| d.is_dir())
-            {
+            if let Some(d) = Some(data_dir().join("system_data")).filter(|d| d.is_dir()) {
                 self.system_data = d.display().to_string();
             }
         }
@@ -414,16 +466,16 @@ impl Builder {
     }
 
     fn frame(&mut self, ui: &imgui::Ui) -> bool {
-        if let Some(p) = nxport::ui::window::take_path("dump") {
+        if let Some(p) = window::take_path("dump") {
             self.set_dump(p.display().to_string());
         }
-        if let Some(p) = nxport::ui::window::take_path("mods") {
+        if let Some(p) = window::take_path("mods") {
             self.mods = p.display().to_string();
         }
-        if let Some(p) = nxport::ui::window::take_path("system_data") {
+        if let Some(p) = window::take_path("system_data") {
             self.system_data = p.display().to_string();
         }
-        if let Some(p) = nxport::ui::window::take_path("out") {
+        if let Some(p) = window::take_path("out") {
             self.out_dir = p.display().to_string();
         }
         let size = ui.io().display_size();
@@ -447,7 +499,7 @@ impl Builder {
         }
         ui.same_line();
         if ui.button("Choose…##dump") {
-            nxport::ui::window::request_path("dump", PathKind::Directory);
+            window::request_path("dump", PathKind::Directory);
         }
         match &self.game {
             Some(g) => {
@@ -465,18 +517,19 @@ impl Builder {
         ui.input_text("Mods##mods", &mut self.mods).build();
         ui.same_line();
         if ui.button("Choose…##mods") {
-            nxport::ui::window::request_path("mods", PathKind::Directory);
+            window::request_path("mods", PathKind::Directory);
         }
         ui.input_text("System Data##system_data", &mut self.system_data).build();
         ui.same_line();
         if ui.button("Choose…##system_data") {
-            nxport::ui::window::request_path("system_data", PathKind::Directory);
+            window::request_path("system_data", PathKind::Directory);
         }
 
         ui.separator_with_text("Output");
         let prev_target = self.target;
         let mut t = Target::ALL.iter().position(|&x| x == self.target).unwrap_or(0);
-        if ui.combo_simple_string("Target", &mut t, &Target::ALL.map(Target::label)) {
+        let target_labels: Vec<_> = Target::ALL.iter().map(|&x| x.label()).collect();
+        if ui.combo_simple_string("Target", &mut t, &target_labels) {
             let _ = self.remember();
             self.target = Target::ALL[t];
             if self.out_dir.trim().is_empty() || self.out_dir == default_out_dir(prev_target) {
@@ -489,9 +542,18 @@ impl Builder {
                 let _ = self.remember();
             }
         }
-        ui.checkbox("Translate shaders ahead of time", &mut self.prebuild_shaders);
-        if ui.is_item_hovered() {
-            ui.tooltip_text("Builds the game's shaders into the app (about 25 minutes); the app translates only shaders the cache lacks, and keeps them. Off, the app translates every shader as the game loads it: a much slower first start, then kept for later starts.");
+        if self.target.prebuilds_shaders() {
+            ui.checkbox("Translate shaders ahead of time", &mut self.prebuild_shaders);
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Builds the game's shaders into the app (about 25 minutes); the app translates only shaders the cache lacks, and keeps them. Off, the app translates every shader as the game loads it: a much slower first start, then kept for later starts.");
+            }
+        }
+        if self.target == Target::WindowsApp {
+            ui.checkbox("Game files inside the app", &mut self.bundle_game);
+            if ui.is_item_hovered() {
+                let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
+                ui.tooltip_text(format!("Copies the game files ({size}) into Dump/ inside the app folder. Without it, settings.toml points to the original dump."));
+            }
         }
         if self.target == Target::Ipa {
             ui.checkbox("Game files inside the app", &mut self.bundle_game);
@@ -503,6 +565,7 @@ impl Builder {
             if ui.is_item_hovered() {
                 ui.tooltip_text("Increased memory limit and extended virtual addressing; off for signing setups that refuse them.");
             }
+            #[cfg(target_os = "macos")]
             if self.prebuild_shaders {
                 let gpus = nxport_build::pipeline_archive::IOS_GPUS;
                 let current = gpus.iter().find(|g| g.1 == self.ios_gpu).map_or("None", |g| g.0);
@@ -526,7 +589,7 @@ impl Builder {
         ui.input_text("Folder##out", &mut self.out_dir).build();
         ui.same_line();
         if ui.button("Choose…##out") {
-            nxport::ui::window::request_path("out", PathKind::Directory);
+            window::request_path("out", PathKind::Directory);
         }
 
         ui.separator_with_text("Settings");
@@ -659,7 +722,7 @@ impl Builder {
         let build = BuildPreset {
             target: Some(self.target),
             out: if self.out_dir.trim().is_empty() { None } else { Some(self.out_dir.trim().to_string()) },
-            bundle_game: if self.target == Target::Ipa { Some(self.bundle_game) } else { None },
+            bundle_game: if self.target == Target::Ipa || self.target == Target::WindowsApp { Some(self.bundle_game) } else { None },
             entitlements: if self.target == Target::Ipa { Some(self.entitlements) } else { None },
             prebuild_shaders: Some(self.prebuild_shaders),
         };
@@ -784,19 +847,7 @@ impl Builder {
             (j.steps_done as f32 + j.sub_frac) / j.steps as f32
         };
         let overlay = match &j.result {
-            None => {
-                if let Some(sub) = &j.sub_step {
-                    if j.sub_total > 0 {
-                        format!("{} ({} of {}): {} ({}/{})", j.step, j.steps_done + 1, j.steps, sub, j.sub_done, j.sub_total)
-                    } else {
-                        format!("{} ({} of {}): {}", j.step, j.steps_done + 1, j.steps, sub)
-                    }
-                } else if j.steps > 0 {
-                    format!("{} ({} of {})", j.step, j.steps_done + 1, j.steps)
-                } else {
-                    String::new()
-                }
-            }
+            None => j.status(),
             Some(Ok(app)) => format!("Built {}", app.display()),
             Some(Err(e)) => e.clone(),
         };
@@ -804,7 +855,7 @@ impl Builder {
             None => ui.text(&overlay),
             Some(Ok(app)) => ui.text_colored([0.5, 0.9, 0.5, 1.0], format!("Built {}", app.display())),
             Some(Err(e)) => ui.text_colored([1.0, 0.45, 0.4, 1.0], e),
-        }
+        };
         drop(j);
         ui.progress_bar(fraction).build();
         ui.child_window("log").size([0.0, 0.0]).border(true).build(ui, || {
@@ -827,184 +878,35 @@ impl Builder {
         let mods = Some(PathBuf::from(self.mods.trim())).filter(|m| !m.as_os_str().is_empty());
         let out_dir = PathBuf::from(self.out_dir.trim());
         let edits = self.edits();
-        let (stages, cache) = (work.join("stages"), work.join("shader_cache"));
         let job = Arc::new(Mutex::new(Job::default()));
-        let mut steps: Vec<Step> = Vec::new();
-        // Without the cache the app translates every shader as the game loads it.
-        let prebuild = self.prebuild_shaders;
-        if prebuild {
-            {
-                let (dump, stages) = (dump.clone(), stages.clone());
-                let job = job.clone();
-                steps.push(("Extracting shader stages".into(), Box::new(move || {
-                    let romfs = dump.join("RomFS");
-                    let dirs = nxport_build::extract_shaders::default_dirs(&romfs);
-                    let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
-                    let job_cb = job.clone();
-                    let cb = move |sub: nxport_build::extract_shaders::ShaderExtractPhase, done: usize, total: usize| {
-                        let mut j = job_cb.lock().unwrap();
-                        j.sub_step = Some(sub.to_string());
-                        j.sub_done = done;
-                        j.sub_total = total;
-                        if total > 0 {
-                            let f = (done as f32 / total as f32).min(1.0);
-                            j.sub_frac = j.sub_frac.max(f);
-                        }
-                    };
-                    nxport_build::extract_shaders::extract_all(&romfs, &stages, &dirs, None, Some(&cb)).map_err(|e| e.to_string())
-                })));
-            }
-            let batch_enabled = self.settings.graphics.batch;
-            {
-                let (stages, cache) = (stages.clone(), cache.clone());
-                let job = job.clone();
-                steps.push(("Building the shader cache".into(), Box::new(move || {
-                    let mut translation = nxport_build::translation::get();
-                    translation.no_batch_kernels = !batch_enabled;
-                    nxport_build::translation::install(translation);
-
-                    let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
-                    let jobs = cpus.saturating_sub(2).max(2);
-                    let job_cb = job.clone();
-                    let on_progress = Arc::new(move |phase: nxport_build::shader_cache_build::ShaderBuildPhase, done: usize, total: usize| {
-                        let mut j = job_cb.lock().unwrap();
-                        j.sub_step = Some(phase.to_string());
-                        j.sub_done = done;
-                        j.sub_total = total;
-                        let phase_idx = phase.phase_index();
-                        let num_phases = nxport_build::shader_cache_build::ShaderBuildPhase::NUM_PHASES;
-                        let phase_frac = if total > 0 {
-                            (done as f32 / total as f32).min(1.0)
-                        } else {
-                            0.0
-                        };
-                        let new_sub_frac = (phase_idx as f32 + phase_frac) / num_phases as f32;
-                        j.sub_frac = j.sub_frac.max(new_sub_frac).min(1.0);
-                    });
-                    nxport_build::shader_cache_build::build(&nxport_build::shader_cache_build::Options {
-                        dump_dirs: vec![stages],
-                        out_dir: cache,
-                        ctrl_dir: None,
-                        jobs,
-                        msl_out: None,
-                        index_only: false,
-                        on_progress: Some(on_progress),
-                    })
-                })));
-            }
-        }
-        if prebuild {
-            let (tid, list_cache) = (game.title_id, cache.clone());
-            steps.push(("Getting the shared pipeline list".into(), Box::new(move || pipeline_list(tid, &list_cache))));
-            if self.target == Target::MacApp {
-                let archive_cache = cache.clone();
-                steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_build::pipeline_archive::build_mac(&archive_cache))));
-            }
-        }
-        let result = match self.target {
-            Target::MacApp => {
-                let app = out_dir.join(format!("{}.app", game.name.replace([':', '/'], " -")));
-                let settings_file = work.join("settings.toml");
-                let (dump, cache, app2) = (dump.clone(), cache.clone(), app.clone());
-                steps.push(("Packaging the app".into(), Box::new(move || {
-                    let mut edits = edits.clone();
-                    if mods.is_none() {
-                        edits.files.no_mods = Some(true);
-                    }
-                    if settings_file.exists() || settings_file.is_symlink() {
-                        let _ = nxport_build::pack::ensure_writable(&settings_file);
-                        let _ = std::fs::remove_file(&settings_file);
-                    }
-                    settings::save_preset(&settings_file, &edits)?;
-                    if let Some(parent) = app2.parent() {
-                        let _ = nxport_build::pack::ensure_writable(parent);
-                        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                    }
-                    nxport_build::pack::pack_app(&nxport_build::pack::PackOptions {
-                        dump_dir: &dump,
-                        mods_dir: mods.as_deref(),
-                        shader_cache_dir: prebuild.then_some(cache.as_path()),
-                        out_app: Some(&app2),
-                        settings: Some(&settings_file),
-                        symlink_assets: false,
-                    })
-                    .map_err(|e| e.to_string())
-                })));
-                Arc::new(Mutex::new(Some(app)))
-            }
-            Target::Ipa => {
-                let ios_cache = work.join("shader_cache_ios");
-                if prebuild {
-                    let (cache, ios_cache_dir) = (cache.clone(), ios_cache.clone());
-                    let job = job.clone();
-                    steps.push(("Building the iOS shader cache".into(), Box::new(move || {
-                        let ios_cache = ios_cache_dir;
-                        let job_cb = job.clone();
-                        let cb = move |sub: nxport_build::shader_cache_build::IosShaderBuildPhase, done: usize, total: usize| {
-                            let mut j = job_cb.lock().unwrap();
-                            j.sub_step = Some(sub.to_string());
-                            j.sub_done = done;
-                            j.sub_total = total;
-                            let phase_idx = sub.phase_index();
-                            let num_phases = nxport_build::shader_cache_build::IosShaderBuildPhase::NUM_PHASES;
-                            let phase_frac = if total > 0 {
-                                (done as f32 / total as f32).min(1.0)
-                            } else {
-                                0.0
-                            };
-                            let new_sub_frac = (phase_idx as f32 + phase_frac) / num_phases as f32;
-                            j.sub_frac = j.sub_frac.max(new_sub_frac).min(1.0);
-                        };
-                        let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
-                        let jobs = cpus.saturating_sub(2).max(2);
-                        nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, jobs, false, Some(&cb))?;
-                        let list = cache.join("pipelines.txt");
-                        if list.exists() {
-                            std::fs::copy(&list, ios_cache.join("pipelines.txt")).map_err(|e| e.to_string())?;
-                        }
-                        Ok(())
-                    })));
-                    if !self.ios_gpu.is_empty() {
-                        let (ios_cache, scratch, gpu) = (ios_cache.clone(), work.join("pipeline_script"), self.ios_gpu.clone());
-                        steps.push(("Precompiling pipelines".into(), Box::new(move || {
-                            nxport_build::pipeline_archive::build_ios(&ios_cache, &scratch, &gpu)
-                        })));
-                    }
-                }
-                let out = Arc::new(Mutex::new(None));
-                let (dump, out2) = (dump.clone(), out.clone());
-                let (bundle_game, entitlements) = (self.bundle_game, self.entitlements);
-                let bundle_id = Some(self.bundle_id.trim().to_string()).filter(|s| !s.is_empty());
-                let job = job.clone();
-                steps.push(("Building the iOS app".into(), Box::new(move || {
-                    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-                    let job_cb = job.clone();
-                    let ipa = nxport_build::ipa::build(
-                        &nxport_build::ipa::Options {
-                            dump: &dump,
-                            mods: mods.as_deref(),
-                            cache: prebuild.then_some(ios_cache.as_path()),
-                            out_dir: &out_dir,
-                            edits,
-                            bundle_game,
-                            entitlements,
-                            bundle_id,
-                        },
-                        &move |step| {
-                            println!("[+] {step}");
-                            let mut j = job_cb.lock().unwrap();
-                            j.sub_step = Some(step.to_string());
-                            j.sub_done = 0;
-                            j.sub_total = 0;
-                            j.sub_frac = j.sub_frac.max(step.default_fraction());
-                        },
-                    )?;
-                    *out2.lock().unwrap() = Some(ipa);
-                    Ok(())
-                })));
-                out
-            }
+        let req = Request {
+            target: self.target,
+            name: game.name.clone(),
+            title_id: game.title_id,
+            work: work.clone(),
+            dump,
+            mods,
+            out_dir,
+            edits,
+            settings: self.settings.clone(),
+            prebuild: self.prebuild_shaders,
+            bundle_game: self.bundle_game,
+            entitlements: self.entitlements,
+            ios_gpu: self.ios_gpu.clone(),
+            bundle_id: Some(self.bundle_id.trim().to_string()).filter(|s| !s.is_empty()),
+            job: job.clone(),
         };
+        let mut steps: Vec<Step> = Vec::new();
+        #[cfg(target_os = "macos")]
+        let result = crate::apple::steps(req, &mut steps);
+        #[cfg(windows)]
+        let result = crate::windows::steps(req, &mut steps);
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let result = {
+            let _ = req;
+            Arc::new(Mutex::new(None))
+        };
+
         job.lock().unwrap().steps = steps.len();
         self.job = Some(job.clone());
         LOG.lock().unwrap().clear();
@@ -1017,19 +919,44 @@ impl Builder {
     }
 }
 
+#[allow(dead_code)]
+pub fn extract_stages_step(job: &Arc<Mutex<Job>>, dump: &Path, stages: &Path) -> Step {
+    let (dump, stages) = (dump.to_path_buf(), stages.to_path_buf());
+    let job = job.clone();
+    (
+        "Extracting shader stages".into(),
+        Box::new(move || {
+            let romfs = dump.join("RomFS");
+            let dirs = nxport_build::extract_shaders::default_dirs(&romfs);
+            let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+            let job_cb = job.clone();
+            let cb = move |sub: nxport_build::extract_shaders::ShaderExtractPhase, done: usize, total: usize| {
+                let mut j = job_cb.lock().unwrap();
+                j.sub_step = Some(sub.to_string());
+                j.sub_done = done;
+                j.sub_total = total;
+                if total > 0 {
+                    let f = (done as f32 / total as f32).min(1.0);
+                    j.sub_frac = j.sub_frac.max(f);
+                }
+            };
+            nxport_build::extract_shaders::extract_all(&romfs, &stages, &dirs, None, Some(&cb)).map_err(|e| e.to_string())
+        }),
+    )
+}
 
 /// Where the shared list of a game's render pipelines is published.
 const SHARED_PIPELINES_URL: &str = "https://github.com/nxporting/pipelines/releases/latest/download";
 
 /// Writes the app's pipeline list into its shader cache: the shared list (downloaded; the last download when that
-/// fails) and the player's own (what the game recorded on this Mac), less entries the cache cannot build.
-fn pipeline_list(title_id: u64, cache: &Path) -> Result<(), String> {
+/// fails) and the player's own (what the game recorded), less entries the cache cannot build.
+pub fn pipeline_list(title_id: u64, cache: &Path, filter_stages: bool) -> Result<(), String> {
     let game = data_dir().join("games").join(format!("{title_id:016x}"));
     let shared = game.join("pipelines_shared.txt");
     let _ = std::fs::create_dir_all(&game);
     let tmp = shared.with_extension("download");
     let url = format!("{SHARED_PIPELINES_URL}/{title_id:016x}.txt");
-    let ok = std::process::Command::new("/usr/bin/curl")
+    let ok = nxport_build::lift::command("curl")
         .args(["-fsSL", "--max-time", "60", "-o"])
         .arg(&tmp)
         .arg(&url)
@@ -1041,12 +968,16 @@ fn pipeline_list(title_id: u64, cache: &Path) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         println!("  No shared pipeline list from {url}{}", if shared.exists() { "; using the last one" } else { "" });
     }
-    let index = std::fs::read_to_string(cache.join("index.txt")).map_err(|e| format!("shader cache index: {e}"))?;
-    let kinds = nxport_pipelines::stage_kinds(&index);
+    let kinds = if filter_stages {
+        let index = std::fs::read_to_string(cache.join("index.txt")).map_err(|e| format!("shader cache index: {e}"))?;
+        Some(nxport_pipelines::stage_kinds(&index))
+    } else {
+        None
+    };
     let lists: Vec<String> =
         [shared, game.join("pipelines.txt")].iter().filter_map(|p| std::fs::read_to_string(p).ok()).collect();
     let lists: Vec<&str> = lists.iter().map(String::as_str).collect();
-    let m = nxport_pipelines::merge(&lists, &[], &nxport_pipelines::MergeOptions { kinds: Some(&kinds), ..Default::default() });
+    let m = nxport_pipelines::merge(&lists, &[], &nxport_pipelines::MergeOptions { kinds: kinds.as_ref(), ..Default::default() });
     let out = cache.join("pipelines.txt");
     if m.entries.is_empty() {
         let _ = std::fs::remove_file(&out);
@@ -1139,12 +1070,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     b.expand_all = expand;
     match snapshot {
         Some(png) => {
-            let (w, h, bgra) = nxport::ui::window::snapshot(900.0, height, 2.0, 3, Box::new(move |ui| b.frame(ui)))?;
+            let (w, h, bgra) = window::snapshot(900.0, height, 2.0, 3, Box::new(move |ui| b.frame(ui)))?;
             nxport_build::ppm2png::write_bgra_to_png(w, h, &bgra, &png)?;
         }
         None => {
-            capture_output();
-            nxport::ui::window::run("nxport", 900.0, 760.0, Box::new(move |ui| b.frame(ui)))
+            crate::log::capture_output();
+            window::run("nxport", 900.0, 760.0, Box::new(move |ui| b.frame(ui)))?;
         }
     }
     Ok(())
@@ -1179,6 +1110,8 @@ mod tests {
     fn with_game(title_id: u64) -> Builder {
         let profile = (title_id == WITH).then_some(&PROFILE);
         let mut b = Builder::new(None);
+        b.target = Target::MacApp;
+        b.out_dir = default_out_dir(Target::MacApp);
         b.game = Some(Game {
             name: "Test game".to_string(),
             version: None,
@@ -1242,7 +1175,7 @@ mod tests {
 
     #[test]
     fn presets_belong_to_their_game() {
-                let mut a = with_game(WITH);
+        let mut a = with_game(WITH);
         a.settings.system.handheld = true;
         a.save_preset("Handheld");
         assert_eq!(a.preset_name, "Handheld");

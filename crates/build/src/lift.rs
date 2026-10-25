@@ -29,11 +29,18 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
 
 /// Lifts the game in `s.files.game_dir`, loaded and patched as the runtime loads it, into `out_dir`: the C files of each
 /// module and the runtime files. Returns each module's name and what was lifted, in the order the runtime registers
-/// them (lifted::GuestLibrary::load).
+/// them (lifted::GuestLibrary::load). `on_module(i, n, name)` is told before each of the n modules is lifted.
 #[cfg(any(target_vendor = "apple", windows))]
-pub fn lift_game(s: nxport::settings::Settings, out_dir: &Path) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
+pub fn lift_game(
+    s: nxport::settings::Settings,
+    out_dir: &Path,
+    on_module: &dyn Fn(usize, usize, &str),
+) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
     let mut lifted = Vec::new();
-    for m in nxport::guest_modules(s)? {
+    let modules = nxport::guest_modules(s)?;
+    let n = modules.len();
+    for (i, m) in modules.into_iter().enumerate() {
+        on_module(i, n, &m.name);
         let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
         let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic);
         lifted.push((m.name, out));
@@ -44,14 +51,39 @@ pub fn lift_game(s: nxport::settings::Settings, out_dir: &Path) -> Result<Vec<(S
     Ok(lifted)
 }
 
+/// Prints what was lifted of `what` (a module), with the most frequent reasons instructions were not lifted.
+pub fn report(what: &str, r: &Output) {
+    println!(
+        "[+] {}: {} functions, {} instructions, {} jump tables, {} unresolved computed branches, {} C files",
+        what,
+        r.functions,
+        r.instructions,
+        r.jump_tables,
+        r.unresolved_computed,
+        r.files.len()
+    );
+    let mut unsupported: Vec<_> = r.unsupported.iter().collect();
+    unsupported.sort_by(|a, b| b.1.cmp(a.1));
+    for (reason, n) in unsupported.iter().take(20) {
+        println!("    {n:>9} not lifted: {reason}");
+    }
+}
+
 /// The modules lift_game lifted, one name per line, in the directory of the C files and next to the library compiled
 /// from them (the runtime registers their tables by these names).
 pub const MODULES_FILE: &str = "modules.txt";
 
 /// Compiles the C files in `c_dir` (lift_game's or lift_nso's) into the guest library `out` (a DLL / shared library),
 /// running `cc` (a C compiler command line: clang, or `zig cc`) on `jobs` files at once. The objects stay in
-/// `c_dir/obj` and are reused while newer than their source.
-pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(), Box<dyn std::error::Error>> {
+/// `c_dir/obj` and are reused while newer than their source. `on_file(done, total)` is told as each file is done
+/// (compiled or reused), from the compiling threads.
+pub fn compile(
+    c_dir: &Path,
+    out: &Path,
+    cc: &[String],
+    jobs: usize,
+    on_file: &(dyn Fn(usize, usize) + Sync),
+) -> Result<(), Box<dyn std::error::Error>> {
     let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
     // The x86-64-v3 features, spelled out (zig cc 0.13 misreads -march=x86-64-v3): above all hardware FMA, which the
     // lifted floating-point code needs to round like the guest's.
@@ -70,6 +102,8 @@ pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(
     sources.sort_by_key(|p| std::cmp::Reverse(p.metadata().map_or(0, |m| m.len())));
     let objects: Vec<_> = sources.iter().map(|s| obj_dir.join(s.file_name().unwrap()).with_extension("o")).collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let finished = || on_file(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, sources.len());
     let failed = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..jobs.max(1) {
@@ -83,9 +117,10 @@ pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(
                     }
                 };
                 if obj.is_file() && !newer(src, obj) {
+                    finished();
                     continue;
                 }
-                let r = std::process::Command::new(prog)
+                let r = command(prog)
                     .args(pre)
                     .args(flags)
                     .arg("-c")
@@ -98,6 +133,7 @@ pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(
                     Ok(o) => failed.lock().unwrap().push(format!("{}: {}", src.display(), String::from_utf8_lossy(&o.stderr))),
                     Err(e) => failed.lock().unwrap().push(format!("{}: {e}", src.display())),
                 }
+                finished();
             });
         }
     });
@@ -112,7 +148,7 @@ pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(
     let rsp = obj_dir.join("link.rsp");
     let quoted: String = objects.iter().map(|o| format!("\"{}\"\n", o.display().to_string().replace('\\', "/"))).collect();
     std::fs::write(&rsp, quoted)?;
-    let o = std::process::Command::new(prog)
+    let o = command(prog)
         .args(pre)
         .arg("-shared")
         .arg("-o")
@@ -130,9 +166,24 @@ pub fn compile(c_dir: &Path, out: &Path, cc: &[String], jobs: usize) -> Result<(
     Ok(())
 }
 
+/// A command for a tool run in the background: on Windows without a console window of its own (a builder started
+/// from Explorer has none to share, and compile runs hundreds of compilers).
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut c = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+    }
+    c
+}
+
 /// The settings a game in `dump` is lifted with (and must later run with: patches and hooks depend on them): the
-/// platform's and the game's profiles, then `edits`, without mods.
-pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch) -> nxport::settings::Settings {
+/// platform's and the game's profiles, then `edits`, with the mods in `mods` (their ExeFS patches change the code it
+/// runs), none without.
+pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch, mods: Option<&Path>) -> nxport::settings::Settings {
     use nxport::settings::{profiles, SettingsPatch};
     let mut layers = vec![profiles::platform(profiles::PLATFORM)];
     if let Some(p) = nxport::profile::identify(dump).profile {
@@ -141,7 +192,10 @@ pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch) -> nxp
     layers.push(edits);
     let mut env = SettingsPatch::default();
     env.files.game_dir = Some(dump.to_path_buf());
-    env.files.no_mods = Some(true);
+    match mods {
+        Some(m) => env.files.mods_dir = Some(m.to_path_buf()),
+        None => env.files.no_mods = Some(true),
+    }
     env.display.headless = Some(true);
     layers.push(env);
     nxport::settings::resolve(layers)

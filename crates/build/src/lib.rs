@@ -1,5 +1,6 @@
 // Building ports: shader stages from a game's RomFS, the Metal shader cache, and the apps (macOS .app, iOS .ipa with
-// the signed guest code image), and guest code lifted to C for hosts without the native runtime (lift).
+// the signed guest code image, the Windows app folder), and guest code lifted to C for hosts without the native runtime
+// (lift, compiled with zig cc on Windows).
 
 #[cfg(target_os = "macos")]
 mod batch_kernels;
@@ -22,3 +23,8 @@ mod sarc;
 pub mod shader_cache_build;
 pub mod tiny_kernels;
 pub mod translation;
+// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts.
+#[cfg(windows)]
+pub mod winapp;
+#[cfg(windows)]
+pub mod zig;

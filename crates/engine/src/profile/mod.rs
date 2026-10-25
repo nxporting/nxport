@@ -141,7 +141,7 @@ pub fn for_title(tid: u64) -> Option<&'static GameProfile> {
 }
 
 /// A game's own settings sections (the options its profile defines).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub fn option_sections<'a>(
     p: &GameProfile,
     s: &'a mut crate::settings::Settings,
@@ -353,15 +353,16 @@ pub fn active_version() -> Option<&'static VersionProfile> {
     None
 }
 
-/// The running game's data directory: ~/Library/Application Support/nxport/games/<title id>, holding its saves
-/// (save/), mods (mods/), shader cache (shader_cache/), the stages that cache lacks (shader_dump_missing/) and
+/// The running game's data directory: games/<title id> in nxport's application data (config::support_dir), holding its
+/// saves (save/), mods (mods/), shader cache (shader_cache/), the stages that cache lacks (shader_dump_missing/) and
 /// translated_shaders/. The first time, a directory of the older layout (named after the game's title) is moved into it.
 pub fn data_dir() -> Option<&'static Path> {
     static D: OnceLock<Option<PathBuf>> = OnceLock::new();
     D.get_or_init(|| {
         let tid = crate::game::title_id()?;
-        let support = PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support");
-        let dir = support.join("nxport/games").join(format!("{tid:016x}"));
+        let nxport = crate::config::support_dir()?;
+        let support = nxport.parent()?;
+        let dir = nxport.join("games").join(format!("{tid:016x}"));
         if let Some(p) = for_title(tid) {
             move_old_data(&support.join(p.name.replace(':', " -")), &dir);
         }
