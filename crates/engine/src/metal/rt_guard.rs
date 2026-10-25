@@ -252,6 +252,9 @@ unsafe fn supersede(start: usize, end: usize, keep: bool, why: Option<&str>) {
             if let Some(w) = why {
                 super::journal(|| format!("  rt-guard end {:#x}..{:#x} without write-back: {} {:#x}..{:#x}", s, e, w, start, end));
             }
+            super::watch_log(s, e, || {
+                format!("rt-guard hold {:#x}..{:#x} ended without write-back: {} {:#x}..{:#x}", s, e, why.unwrap_or("engine write"), start, end)
+            });
         }
     }
 }
@@ -379,6 +382,8 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
     HI.fetch_max(end, Ordering::Relaxed);
     let new = STATE[i].swap(HELD, Ordering::AcqRel) != HELD;
     super::journal(|| format!("  rt-guard hold {:#x}..{:#x} {}x{} fmt {} level {} layer {}{}", start, end, t.width, t.height, t.format, level, layer, if new { "" } else { " (again)" }));
+    super::watch_texture(t);
+    super::watch_log(a, a + size as usize, || format!("rt-guard hold {:#x}..{:#x} {}x{} fmt {} level {} layer {}{}", a, a + size as usize, t.width, t.height, t.format, level, layer, if new { "" } else { " (again)" }));
     if new {
         LIVE.fetch_add(1, Ordering::AcqRel);
         HOLDS.fetch_add(1, Ordering::Relaxed);
@@ -550,6 +555,7 @@ fn start_thread() {
                         }
                         objc2::rc::autoreleasepool(|_| unsafe { write_back(i) });
                         super::journal(|| format!("  rt-guard write-back {:#x}..{:#x} (held since frame {})", START[i].load(Ordering::Acquire), END[i].load(Ordering::Acquire), FRAME[i].load(Ordering::Acquire)));
+                        super::watch_log(BSTART[i].load(Ordering::Acquire), BEND[i].load(Ordering::Acquire), || format!("rt-guard write-back {:#x}..{:#x} (held since frame {})", BSTART[i].load(Ordering::Acquire), BEND[i].load(Ordering::Acquire), FRAME[i].load(Ordering::Acquire)));
                         // A newer rendering held it meanwhile: its own command buffer decides.
                         if SERIAL[i].load(Ordering::Acquire) == s {
                             unsafe { finish(i) };
@@ -637,6 +643,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
         }
         libc::mprotect(page as *mut libc::c_void, PAGE, libc::PROT_READ);
         wake();
+        super::watch_log(page, page + PAGE, || format!("engine read of held page {:#x} (pc {:#x}): opened read-only, write-back requested", page, pc));
         return true;
     }
     WAITS.fetch_add(1, Ordering::Relaxed);
@@ -784,6 +791,7 @@ pub(crate) fn released(addr: usize, len: usize) {
             && START[i].load(Ordering::Acquire) < addr + len
             && END[i].load(Ordering::Acquire) > addr
         {
+            super::watch_log(BSTART[i].load(Ordering::Acquire), BEND[i].load(Ordering::Acquire), || format!("rt-guard hold {:#x}..{:#x} ended: memory released", BSTART[i].load(Ordering::Acquire), BEND[i].load(Ordering::Acquire)));
             unsafe { finish(i) };
         }
     }
