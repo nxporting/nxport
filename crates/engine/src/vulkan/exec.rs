@@ -607,6 +607,7 @@ impl Ctx {
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
             println!("[vulkan] submit of {} lists at presented frame {frame}: vkQueueSubmit: {e}; no more GPU work", lists.len());
+            self.dev.report_fault();
             self.lost = true;
         }
         super::SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -937,6 +938,12 @@ impl Ctx {
     }
 
     unsafe fn exec(&mut self, c: &Cmd) {
+        let op = self.op_index;
+        self.dev.checkpoint(self.cb, || {
+            let mut s = format!("op {op}: {c:?}");
+            s.truncate(400);
+            s
+        });
         match c {
             Cmd::SetRenderTargets { colors, depth } => {
                 self.end_pass();
@@ -1335,6 +1342,7 @@ impl Ctx {
         self.end_query();
         if let Some(p) = self.pass.take() {
             self.dev.device.cmd_end_rendering(self.cb);
+            self.dev.checkpoint(self.cb, || format!("end pass {}x{} {:?} depth {:?}", p.extent.0, p.extent.1, p.colors, p.depth));
             if crate::gpu::history::journal_on() {
                 let clears = p.color_clears.iter().filter(|c| c.is_some()).count() + p.depth_clear.is_some() as usize;
                 crate::gpu::history::journal(|| format!("  end draws {} cleared {clears}", p.draws));
@@ -1452,6 +1460,7 @@ impl Ctx {
                 .buffer_offset(off)
                 .image_subresource(sub(0))
                 .image_extent(vk::Extent3D { width: bw, height: bh, depth });
+            self.dev.checkpoint(self.cb, || format!("BC proxy {bw}x{bh}x{depth}x{layers} out to {bytes:#x} bytes"));
             self.dev.device.cmd_copy_image_to_buffer(self.cb, pimg, vk::ImageLayout::GENERAL, buf, &[out]);
             self.dev.full_barrier(self.cb);
             let back = vk::BufferImageCopy::default()
@@ -1460,6 +1469,7 @@ impl Ctx {
                 .buffer_image_height(bh * info.block_h)
                 .image_subresource(sub(level))
                 .image_extent(vk::Extent3D { width: tw, height: th, depth: td.min(depth) });
+            self.dev.checkpoint(self.cb, || format!("BC proxy back into fmt {} level {level} {tw}x{th}x{td} (target {:?})", d.params.format, target.format));
             self.dev.device.cmd_copy_buffer_to_image(self.cb, buf, timg, vk::ImageLayout::GENERAL, &[back]);
             self.dev.full_barrier(self.cb);
         }

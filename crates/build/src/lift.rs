@@ -91,6 +91,8 @@ pub fn compile(
         "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c",
         "-mpopcnt", "-msse4.2", "-mcx16",
     ];
+    outside_git(c_dir)?;
+    outside_git(out.parent().unwrap_or(Path::new(".")))?;
     let obj_dir = c_dir.join("obj");
     std::fs::create_dir_all(&obj_dir)?;
     let mut sources: Vec<_> = std::fs::read_dir(c_dir)?
@@ -201,8 +203,26 @@ pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch, mods: 
     nxport::settings::resolve(layers)
 }
 
+/// Refuses `dir` inside a git work tree. Lifted C, objects and guest libraries are the game's code: they must never land
+/// where they could be committed (nxport's own checkout above all).
+fn outside_git(dir: &Path) -> std::io::Result<()> {
+    let mut at = std::path::absolute(dir)?;
+    // The nearest existing ancestor: the directory may not be created yet.
+    while !at.exists() && at.pop() {}
+    let at = std::fs::canonicalize(&at)?;
+    if let Some(repo) = at.ancestors().find(|a| a.join(".git").exists()) {
+        return Err(std::io::Error::other(format!(
+            "{} is inside the git work tree {}: game code must not be written there",
+            dir.display(),
+            repo.display().to_string().trim_start_matches(r"\\?\")
+        )));
+    }
+    Ok(())
+}
+
 /// Writes the C files, leaving those whose contents did not change untouched: compile reuses their objects.
 fn write_files(out_dir: &Path, outputs: &[&Output]) -> std::io::Result<()> {
+    outside_git(out_dir)?;
     std::fs::create_dir_all(out_dir)?;
     let write = |file: &str, body: &str| -> std::io::Result<()> {
         let path = out_dir.join(file);

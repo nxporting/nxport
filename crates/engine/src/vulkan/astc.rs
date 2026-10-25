@@ -45,7 +45,7 @@ pub struct Decoder {
 impl Decoder {
     /// None without push descriptors (the decoder binds its buffer and image with them).
     pub unsafe fn new(dev: &Dev) -> Option<Decoder> {
-        dev.push.as_ref()?;
+        dev.push_ext.as_ref()?;
         let words: Vec<u32> = SPIRV.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
         let module = dev.device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None).ok()?;
         let bindings = [
@@ -92,7 +92,7 @@ impl Decoder {
 
     /// Records decoding the blocks at `p.offset` words into `src` into `view` (one level and layer, GENERAL layout).
     pub unsafe fn record(&self, dev: &Dev, cb: vk::CommandBuffer, src: vk::Buffer, view: vk::ImageView, p: Params) {
-        let Some(push) = &dev.push else { return };
+        let Some(push) = &dev.push_ext else { return };
         let buffers = [vk::DescriptorBufferInfo::default().buffer(src).range(vk::WHOLE_SIZE)];
         let images = [vk::DescriptorImageInfo::default().image_view(view).image_layout(vk::ImageLayout::GENERAL)];
         let writes = [
@@ -106,7 +106,7 @@ impl Decoder {
                 .image_info(&images),
         ];
         dev.device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, self.pipeline);
-        push.ext.cmd_push_descriptor_set(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &writes);
+        push.cmd_push_descriptor_set(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &writes);
         let bytes = std::slice::from_raw_parts(&p as *const Params as *const u8, std::mem::size_of::<Params>());
         dev.device.cmd_push_constants(cb, self.layout, vk::ShaderStageFlags::COMPUTE, 0, bytes);
         dev.device.cmd_dispatch(cb, p.width.div_ceil(8), p.height.div_ceil(8), 1);

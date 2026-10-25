@@ -185,6 +185,12 @@ pub fn readable_len(addr: usize, max: usize) -> usize {
     imp::readable_len(addr, max)
 }
 
+/// How many bytes from `addr` (up to `max`) can be written without faulting.
+#[cfg(windows)]
+pub fn writable_len(addr: usize, max: usize) -> usize {
+    imp::writable_len(addr, max)
+}
+
 /// An access fault at `addr` (a write if `write`) by the instruction at `pc`. True if handled: the access is retried.
 pub type FaultHandler = unsafe fn(addr: usize, write: bool, pc: usize) -> bool;
 
@@ -728,6 +734,22 @@ mod imp {
             let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
             let n = unsafe { VirtualQuery(at as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
             if n == 0 || info.state != MEM_COMMIT || info.protect == 0 || info.protect & (PAGE_NOACCESS | PAGE_GUARD) != 0 {
+                break;
+            }
+            at = info.base_address as usize + info.region_size;
+        }
+        at.min(end) - addr
+    }
+
+    pub fn writable_len(addr: usize, max: usize) -> usize {
+        // PAGE_READWRITE, PAGE_WRITECOPY, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY.
+        const WRITABLE: u32 = 0x04 | 0x08 | 0x40 | 0x80;
+        let end = addr + max;
+        let mut at = addr;
+        while at < end {
+            let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
+            let n = unsafe { VirtualQuery(at as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
+            if n == 0 || info.state != MEM_COMMIT || info.protect & WRITABLE == 0 {
                 break;
             }
             at = info.base_address as usize + info.region_size;
