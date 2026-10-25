@@ -5,7 +5,7 @@ use std::ffi::CStr;
 use ash::vk;
 
 pub struct Dev {
-    /// Window output (VK_EXT_metal_surface, VK_KHR_swapchain), where the implementation has it.
+    /// Window output (the platform's surface extension, VK_KHR_swapchain), where the implementation has it.
     pub surfaces: Option<Surfaces>,
     pub _entry: ash::Entry,
     pub instance: ash::Instance,
@@ -48,9 +48,19 @@ pub struct Dev {
 
 pub struct Surfaces {
     pub surface: ash::khr::surface::Instance,
+    #[cfg(target_vendor = "apple")]
     pub metal: ash::ext::metal_surface::Instance,
+    #[cfg(windows)]
+    pub win32: ash::khr::win32_surface::Instance,
     pub swapchain: ash::khr::swapchain::Device,
 }
+
+/// The extension that makes surfaces on the host's windows (vulkan/window.rs): on the CAMetalLayer of Apple hosts, on the
+/// HWND of Windows (host/display_sdl.rs).
+#[cfg(target_vendor = "apple")]
+const PLATFORM_SURFACE: &CStr = ash::ext::metal_surface::NAME;
+#[cfg(windows)]
+const PLATFORM_SURFACE: &CStr = ash::khr::win32_surface::NAME;
 
 pub struct PushDescriptors {
     pub ext: ash::khr::push_descriptor::Device,
@@ -98,11 +108,11 @@ impl Dev {
                 exts.push(ash::khr::portability_enumeration::NAME.as_ptr());
                 flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
             }
-            // Window output: a surface on the window's CAMetalLayer (vulkan/window.rs).
-            let metal_surface = has(&inst_exts, ash::khr::surface::NAME) && has(&inst_exts, ash::ext::metal_surface::NAME);
-            if metal_surface {
+            // Window output: a surface on the window's CAMetalLayer or HWND (vulkan/window.rs).
+            let platform_surface = has(&inst_exts, ash::khr::surface::NAME) && has(&inst_exts, PLATFORM_SURFACE);
+            if platform_surface {
                 exts.push(ash::khr::surface::NAME.as_ptr());
-                exts.push(ash::ext::metal_surface::NAME.as_ptr());
+                exts.push(PLATFORM_SURFACE.as_ptr());
             }
             let validation = validation && has(&inst_exts, ash::ext::debug_utils::NAME);
             let layer = c"VK_LAYER_KHRONOS_validation";
@@ -209,7 +219,7 @@ impl Dev {
             if robustness2 {
                 dexts.push(ash::ext::robustness2::NAME.as_ptr());
             }
-            let swapchain = metal_surface && has(&dev_exts, ash::khr::swapchain::NAME);
+            let swapchain = platform_surface && has(&dev_exts, ash::khr::swapchain::NAME);
             if swapchain {
                 dexts.push(ash::khr::swapchain::NAME.as_ptr());
             }
@@ -386,7 +396,10 @@ impl Dev {
             );
             let surfaces = swapchain.then(|| Surfaces {
                 surface: ash::khr::surface::Instance::new(&entry, &instance),
+                #[cfg(target_vendor = "apple")]
                 metal: ash::ext::metal_surface::Instance::new(&entry, &instance),
+                #[cfg(windows)]
+                win32: ash::khr::win32_surface::Instance::new(&entry, &instance),
                 swapchain: ash::khr::swapchain::Device::new(&instance, &device),
             });
             Ok(Dev {

@@ -190,10 +190,7 @@ conformance captures (Testing), on this Mac through MoltenVK.
 
 ## Host I/O and the builder
 
-SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same), through the `sdl3` crate (0.20,
-`build-from-source-static`: SDL is built with CMake and linked into nxport.exe, so building needs `cmake` on the
-path or `CMAKE` naming one; Visual Studio ships one under Common7\IDE\CommonExtensions\Microsoft\CMake).
-
+SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same):
 - Audio: **done**. host/audio.rs is shared by all hosts: the ring the audio renderer and AudioOut push into, the trim
   and underrun accounting, `--audio-wav`, and the rule that `--headless` and `--audio=0` stay silent. Only the device
   differs: an AudioQueue on Apple (audio_queue.rs), an SDL3 audio stream elsewhere (audio_sdl.rs: 48 kHz stereo
@@ -202,11 +199,21 @@ path or `CMAKE` naming one; Visual Studio ships one under Common7\IDE\CommonExte
   as SDL's main thread, which the window has to be created on; it initialises only the audio subsystem, and the
   device is resumed at the first pushed frame as the AudioQueue is started. host/headless.rs includes the module as
   it is.
-
-Paths under
-`~/Library/Application Support/nxport` become `%APPDATA%\nxport`. The builder's window is AppKit + imgui; on
-Windows it becomes imgui over SDL3, with a "Windows app" target: a folder with nxport.exe, the lifted guest
-library, the shader cache and the settings.
+- **Window & Event Loop (`host/display_sdl.rs`):** The process main thread initializes SDL3 and runs the event pump,
+  while the guest threads run independently. Handles window close, focus loss, resizing, and fullscreen toggles
+  (F11 or Alt+Enter). Title displays the presented FPS counter. `--headless` skips window creation entirely.
+- **Vulkan Window Presentation (`vulkan/window.rs`, `device.rs`):** Presents into the window's HWND using
+  `VK_KHR_win32_surface`. The presented NVN texture is blitted and centered with black letterboxing to preserve the
+  aspect ratio. Swapchain recreates automatically upon window resizing or vsync changes (FIFO vs MAILBOX/IMMEDIATE).
+- **Input (`host/input.rs`, `display_sdl.rs`):** SDL keyboard scancodes are mapped to macOS virtual key codes so that
+  `%APPDATA%\nxport\controls.cfg` shares the exact same format and key mappings as macOS. The left mouse button acts as
+  the single-touch capacitive touch screen. SDL game controllers are polled every 4 ms with radial deadzone handling,
+  mapping buttons and sticks to Switch HID Npad state.
+- **Rumble (`host/rumble_sdl.rs`):** Translates Switch HD Rumble vibration values (`nn::hid::SendVibrationValue[s]`) to
+  SDL dual-motor gamepad rumble (low frequency on left, high frequency on right), with safety decay and periodic renewal.
+- Paths under `~/Library/Application Support/nxport` become `%APPDATA%\nxport`.
+- The builder's window is AppKit + imgui; on Windows it becomes imgui over SDL3, with a "Windows app" target: a folder
+  with nxport.exe, the lifted guest library, the shader cache and the settings.
 
 ## Windows on arm64
 
@@ -302,6 +309,10 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    Dm_OP_0017 to 0034, voice and music streaming) for 10 minutes without a fault, presenting about 7 frames a second
    to the null backend.
    Vulkan: **done**, running lifted games with page guards via vectored exception handling.
+   SDL3 host layer (window, Vulkan swapchain, input, rumble): **done**. SDL3 statically linked from source provides
+   the window and event pump on the process main thread (`host/display_sdl.rs`), presenting via `VK_KHR_win32_surface`
+   into the HWND (`vulkan/window.rs`, `device.rs`) with letterboxing, vsync, dynamic resizing, and fullscreen toggles.
+   Keyboard and gamepads map to Switch HID (`host/input.rs`) and HD rumble drives dual-motor rumble (`host/rumble_sdl.rs`).
    Audio: **done**. Shared ring in crates/engine/src/host/audio.rs refactored with target/max latency trim and underrun
    accounting; Apple uses audio_queue.rs (AudioToolbox) and lifted/Windows hosts use audio_sdl.rs (SDL3 playback
    stream at 48 kHz stereo float on default device with 10 ms buffers). Tested on TotK, streaming smoothly with zero

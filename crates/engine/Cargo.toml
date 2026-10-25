@@ -58,3 +58,4 @@ objc2-core-foundation = "0.3"
 [build-dependencies]
 # wgsl-in only because naga 30's glsl-in needs a module it compiles with the other front ends.
 naga = { version = "30", features = ["glsl-in", "wgsl-in", "spv-out"] }
+

@@ -2,12 +2,15 @@
 //
 // Every Switch input (buttons, +Control Pad, each stick direction) has one keyboard binding and one controller
 // binding; both are active at once. Bindings are edited in the Controls window (host/controls_ui.rs, Cmd-,) and saved to
-// ~/Library/Application Support/nxport/controls.cfg (--controls-file overrides the path).
+// ~/Library/Application Support/nxport/controls.cfg (--controls-file overrides the path). Windows reads the same file
+// from %APPDATA%\nxport\controls.cfg: keys are macOS virtual key codes there too (host/display_sdl.rs translates SDL's
+// scancodes into them), so a controls file means the same keys on both.
 //
 // Threading: AppKit and GameController objects are only touched on the main thread (keyboard events arrive there; a
 // 250 Hz timer polls controllers), and guest threads must not call into Objective-C (they clobber thread-local state
 // libobjc relies on). The main thread therefore folds keyboard + controller state through the bindings into a finished
-// Npad state kept in atomics, which nn::hid::GetNpadStates (horizon/hle.rs) reads.
+// Npad state kept in atomics, which nn::hid::GetNpadStates (horizon/hle.rs) reads. On Windows SDL's event loop on the
+// main thread does the same (host/display_sdl.rs).
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -349,6 +352,10 @@ pub fn config_path() -> std::path::PathBuf {
     if let Some(p) = &crate::settings::get().input.controls_file {
         return p.clone();
     }
+    #[cfg(windows)]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return std::path::Path::new(&appdata).join("nxport").join("controls.cfg");
+    }
     let home = std::env::var_os("HOME").unwrap_or_default();
     std::path::Path::new(&home).join("Library/Application Support/nxport/controls.cfg")
 }
@@ -438,7 +445,7 @@ static SUSPENDED: AtomicBool = AtomicBool::new(false);
 static SWAP_AB: AtomicBool = AtomicBool::new(false);
 static SWAP_XY: AtomicBool = AtomicBool::new(false);
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", windows))]
 pub fn set_controller_swaps(ab: bool, xy: bool) {
     SWAP_AB.store(ab, Ordering::Relaxed);
     SWAP_XY.store(xy, Ordering::Relaxed);
@@ -723,10 +730,40 @@ pub fn log_hid(func: &str, id: u32, count: i32) {
 
 // ---- game controllers (GameController.framework, main thread only) ----
 
+/// Takes player 0's controller element values (`PAD_ELEMS` order, combined over its controllers) and refreshes the Npad
+/// state if they changed.
+pub fn set_pad(v: [f32; 25]) {
+    let mut changed = false;
+    for (slot, val) in PLAYER_PADS[0].iter().zip(v) {
+        changed |= slot.swap(val.to_bits(), Ordering::Relaxed) != val.to_bits();
+    }
+    if changed {
+        update_npad();
+    }
+}
+
+/// The elements a controller's buttons labeled A, B, X and Y feed (by label: the button labeled A feeds the element
+/// bound to the Switch's A, East by default), or by position on `physical` controllers with the swaps on.
+pub fn face_elems(physical: bool) -> [PadElem; 4] {
+    use PadElem as P;
+    let (a, b) = if physical && SWAP_AB.load(Ordering::Relaxed) {
+        (P::South, P::East)
+    } else {
+        (P::East, P::South)
+    };
+    let (x, y) = if physical && SWAP_XY.load(Ordering::Relaxed) {
+        (P::West, P::North)
+    } else {
+        (P::North, P::West)
+    };
+    [a, b, x, y]
+}
+
+#[cfg(target_vendor = "apple")]
 #[link(name = "GameController", kind = "framework")]
 extern "C" {}
 
-/// Polls every connected extended gamepad (values combined by maximum) and refreshes the Npad state. Main thread only.
+#[cfg(target_vendor = "apple")]
 /// Reads all elements from one controller (either physical or virtual).
 unsafe fn read_controller_elements(c: *mut objc2::runtime::AnyObject, physical: bool) -> [f32; 25] {
     use objc2::msg_send;
@@ -758,16 +795,7 @@ unsafe fn read_controller_elements(c: *mut objc2::runtime::AnyObject, physical: 
         [y.max(0.0), (-y).max(0.0), (-x).max(0.0), x.max(0.0)]
     };
     let mut put = |e: PadElem, val: f32| v[e.index()] = v[e.index()].max(val);
-    let (a_elem, b_elem) = if physical && SWAP_AB.load(Ordering::Relaxed) {
-        (P::South, P::East)
-    } else {
-        (P::East, P::South)
-    };
-    let (x_elem, y_elem) = if physical && SWAP_XY.load(Ordering::Relaxed) {
-        (P::West, P::North)
-    } else {
-        (P::North, P::West)
-    };
+    let [a_elem, b_elem, x_elem, y_elem] = face_elems(physical);
     put(a_elem, button(sel!(buttonA)));
     put(b_elem, button(sel!(buttonB)));
     put(x_elem, button(sel!(buttonX)));
@@ -817,6 +845,7 @@ unsafe fn read_controller_elements(c: *mut objc2::runtime::AnyObject, physical: 
 
 /// Polls connected gamepads, assigning distinct controllers to players 0..7 (player 0 combines keyboard + controller 0),
 /// and refreshes the Npad state. Main thread only.
+#[cfg(target_vendor = "apple")]
 pub fn poll_controllers(_mtm: objc2::MainThreadMarker) {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};
