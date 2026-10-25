@@ -1017,8 +1017,9 @@ impl Ctx {
                 self.st.images.insert((*stage, *index), *handle);
             }
             Cmd::BindTexturesDeferred { stage, first, count, handles } => {
+                let a = crate::nvn::api::translate_virtual(*handles as usize);
                 for i in 0..(*count).clamp(0, 32) {
-                    let h = if *handles > 0x10000 { std::ptr::read_unaligned((*handles as *const u64).add(i as usize)) } else { 0 };
+                    let h = if a > 0x10000 { std::ptr::read_unaligned((a as *const u64).add(i as usize)) } else { 0 };
                     self.st.textures.insert((*stage, *first + i), h);
                 }
             }

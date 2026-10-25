@@ -42,6 +42,7 @@ pub struct Image {
     pub image: vk::Image,
     memory: vk::DeviceMemory,
     pub format: vk::Format,
+    pub usage: vk::ImageUsageFlags,
     pub extent: vk::Extent3D,
     pub levels: u32,
     pub layers: u32,
@@ -620,6 +621,7 @@ impl Textures {
             image,
             memory,
             format: fmt,
+            usage,
             extent,
             levels,
             layers,
@@ -876,30 +878,38 @@ impl Textures {
             _ => identity,
         };
         use vk::ComponentSwizzle as C;
-        let v = dev
-            .device
-            .create_image_view(
-                &vk::ImageViewCreateInfo::default()
-                    .image(img.image)
-                    .view_type(ty)
-                    .format(fmt)
-                    .components(vk::ComponentMapping {
-                        r: comp(swizzle[0], C::R),
-                        g: comp(swizzle[1], C::G),
-                        b: comp(swizzle[2], C::B),
-                        a: comp(swizzle[3], C::A),
-                    })
-                    .subresource_range(
-                        vk::ImageSubresourceRange::default()
-                            .aspect_mask(aspect)
-                            .base_mip_level(base_level)
-                            .level_count(levels)
-                            .base_array_layer(base_layer)
-                            .layer_count(layers),
-                    ),
-                None,
-            )
-            .ok()?;
+        let props = dev.instance.get_physical_device_format_properties(dev.pdev, fmt).optimal_tiling_features;
+        let mut view_usage = img.usage;
+        if !props.contains(vk::FormatFeatureFlags::STORAGE_IMAGE) {
+            view_usage &= !vk::ImageUsageFlags::STORAGE;
+        }
+        if !props.contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT) {
+            view_usage &= !vk::ImageUsageFlags::COLOR_ATTACHMENT;
+        }
+        if !props.contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT) {
+            view_usage &= !vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        }
+        let mut usage_info = vk::ImageViewUsageCreateInfo::default().usage(view_usage);
+        let create_info = vk::ImageViewCreateInfo::default()
+            .push_next(&mut usage_info)
+            .image(img.image)
+            .view_type(ty)
+            .format(fmt)
+            .components(vk::ComponentMapping {
+                r: comp(swizzle[0], C::R),
+                g: comp(swizzle[1], C::G),
+                b: comp(swizzle[2], C::B),
+                a: comp(swizzle[3], C::A),
+            })
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(aspect)
+                    .base_mip_level(base_level)
+                    .level_count(levels)
+                    .base_array_layer(base_layer)
+                    .layer_count(layers),
+            );
+        let v = dev.device.create_image_view(&create_info, None).ok()?;
         img.views.insert(key, v);
         Some(v)
     }

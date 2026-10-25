@@ -363,17 +363,11 @@ impl Dev {
                 let align = hp.min_imported_host_pointer_alignment;
                 (ash::ext::external_memory_host::Device::new(&instance, &device), align)
             });
-            // Not on MoltenVK: with its argument buffers off, descriptor sets bind as directly, and its push descriptors
-            // copy every write per draw (Hateno replay: recording 9.8 -> 9.1 ms without them).
-            let push = (push_descriptor && !has_portability).then(|| {
-                let mut pp = vk::PhysicalDevicePushDescriptorPropertiesKHR::default();
-                let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut pp);
-                instance.get_physical_device_properties2(pdev, &mut p2);
-                // MoltenVK binds push descriptors directly (not through a Metal argument buffer): Metal's per-stage
-                // limits apply, 16 samplers and 31 buffers (vertex streams included).
-                let (samplers, buffers) = if has_portability { (16, 31) } else { (u32::MAX, u32::MAX) };
-                PushDescriptors { ext: ash::khr::push_descriptor::Device::new(&instance, &device), max: pp.max_push_descriptors, samplers, buffers }
-            });
+            // Push descriptors (VK_KHR_push_descriptor) do not support dynamic uniform buffers
+            // (VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC), which nxport uses for uniform buffers to share
+            // descriptor sets across draws. Pushing dynamic descriptors violates VUID-VkDescriptorSetLayoutCreateInfo-flags-00280
+            // and loses dynamic offsets (forcing offset 0), causing GPU faults and device loss on desktop Vulkan.
+            let push: Option<PushDescriptors> = None;
             let cmd_pool = device
                 .create_command_pool(
                     &vk::CommandPoolCreateInfo::default()
@@ -391,7 +385,7 @@ impl Dev {
                 depth_clip_control,
                 robustness2,
                 !has_portability || port.image_view2_d_on3_d_image != 0,
-                push_descriptor,
+                push.is_some(),
                 validation
             );
             let surfaces = swapchain.then(|| Surfaces {
@@ -429,7 +423,7 @@ impl Dev {
                 beyond_stride,
                 discard_writes_depth: has_portability,
                 feedback_in_place: has_portability,
-                link_varyings: has_portability,
+                link_varyings: true,
                 metal_restart: has_portability,
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,

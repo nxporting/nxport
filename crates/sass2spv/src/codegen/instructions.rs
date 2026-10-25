@@ -672,8 +672,14 @@ fn storage_pointer(c: &mut CodeGenContext, op: &Op) -> R<(Inst, A)> {
                 t
             };
             var_type = var_type.element();
-            let storage_class = if is_output { StorageClass::OUTPUT } else { StorageClass::INPUT };
             let io = IoDefinition { storage_kind: sk, io_variable, location, component };
+            let storage_class = if !is_per_patch && c.unlinked_input(&io) {
+                StorageClass::PRIVATE
+            } else if is_output {
+                StorageClass::OUTPUT
+            } else {
+                StorageClass::INPUT
+            };
             let dict = match (is_per_patch, is_output) {
                 (true, true) => &c.outputs_per_patch,
                 (true, false) => &c.inputs_per_patch,
