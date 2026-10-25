@@ -1,11 +1,7 @@
-// Graphics pipelines by what selects them (Desc), recorded per game (<data dir>/vulkan_pipelines.txt, one JSON line
-// each) and created again on worker threads from the first draw of a later session: a pipeline seen before costs no
-// compile when it is first drawn. Stages come from the disk stage cache (stage_cache.rs) by their StageId; entries whose
-// stages are not cached are skipped.
+// Graphics pipelines by what selects them (Desc), and those the pipeline list's workers made (listed.rs).
 
-use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use ash::vk;
 
@@ -19,7 +15,7 @@ pub(super) const ZERO_STREAM: u32 = 16;
 /// A vertex stream: binding, stride, per-instance, attributes (location, VkFormat, offset).
 pub(super) type Stream = (u32, u32, bool, Vec<(u32, i32, u32)>);
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct Desc {
     pub vs: StageId,
     pub fs: Option<StageId>,
@@ -60,7 +56,8 @@ pub(super) fn normalize(
             b[i] = if blend[i] == 0 { 0 } else { blend[i] & 0xF_FFFF_FFFF | 1 << 63 };
         }
     }
-    let mask = channel_mask.map(|m| (0..8).filter(|&i| bound(i)).fold(0, |a, i| a | m & 0xF << (i * 4)));
+    let m = channel_mask.unwrap_or(u32::MAX);
+    let mask = Some((0..8).filter(|&i| bound(i)).fold(0, |a, i| a | m & 0xF << (i * 4)));
     let aspects = if depth == vk::Format::UNDEFINED { vk::ImageAspectFlags::empty() } else { format::aspects(depth) };
     let ds = depth_stencil.unwrap_or_else(state::default_depth_stencil);
     let mut used = 0u64;
@@ -207,38 +204,6 @@ pub(super) unsafe fn create(
     dev.device.create_graphics_pipelines(cache, &[info], None).map(|p| p[0]).map_err(|(_, e)| e)
 }
 
-/// The list: entries known (read at startup or recorded since) and the file new ones are appended to.
-struct List {
-    seen: HashSet<Desc>,
-    file: Option<std::fs::File>,
-}
-
-fn list() -> &'static Mutex<List> {
-    static L: OnceLock<Mutex<List>> = OnceLock::new();
-    L.get_or_init(|| Mutex::new(List { seen: HashSet::new(), file: None }))
-}
-
-fn path() -> Option<std::path::PathBuf> {
-    crate::profile::data_subdir("vulkan_pipelines.txt")
-}
-
-/// Appends `d` to the list if it is new.
-pub(super) fn record(d: &Desc) {
-    if !crate::settings::get().graphics.record_pipelines {
-        return;
-    }
-    let mut l = list().lock().unwrap();
-    if !l.seen.insert(d.clone()) {
-        return;
-    }
-    if l.file.is_none() {
-        l.file = path().and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
-    }
-    if let (Some(f), Ok(line)) = (l.file.as_mut(), serde_json::to_string(d)) {
-        let _ = writeln!(f, "{line}");
-    }
-}
-
 /// Pipelines and layouts the workers made, for the context to take on a miss.
 #[derive(Default)]
 struct Made {
@@ -261,67 +226,12 @@ pub(super) fn made_layout(vs: StageId, fs: Option<StageId>) -> Option<Layout> {
     made().lock().unwrap().layouts.get(&(vs, fs)).copied()
 }
 
-/// Starts creating the listed pipelines on worker threads (once).
-pub(super) fn precompile(dev: Arc<Dev>, cache: vk::PipelineCache) {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    if STARTED.set(()).is_err() || !crate::settings::get().graphics.precompile_pipelines {
-        return;
-    }
-    let Some(text) = path().and_then(|p| std::fs::read_to_string(p).ok()) else { return };
-    let mut queue = Vec::new();
-    {
-        let mut l = list().lock().unwrap();
-        for d in text.lines().filter_map(|t| serde_json::from_str::<Desc>(t).ok()) {
-            if l.seen.insert(d.clone()) {
-                queue.push(d);
-            }
-        }
-    }
-    let total = queue.len();
-    let queue = Arc::new(Mutex::new(queue));
-    let stages: Arc<Mutex<HashMap<StageId, Option<Arc<Stage>>>>> = Default::default();
-    let built = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let threads = std::thread::available_parallelism().map_or(2, |n| (n.get() / 3).clamp(1, 4));
-    let t0 = std::time::Instant::now();
-    let running = Arc::new(std::sync::atomic::AtomicUsize::new(threads));
-    for i in 0..threads {
-        let (dev, queue, stages, built, running) = (dev.clone(), queue.clone(), stages.clone(), built.clone(), running.clone());
-        let _ = std::thread::Builder::new().name(format!("vk-pipe-compile{i}")).spawn(move || unsafe {
-            let stage = |id: StageId| -> Option<Arc<Stage>> {
-                if let Some(s) = stages.lock().unwrap().get(&id) {
-                    return s.clone();
-                }
-                let s = super::shader::from_cache(&dev, id).map(Arc::new);
-                stages.lock().unwrap().insert(id, s.clone());
-                s
-            };
-            loop {
-                let Some(d) = queue.lock().unwrap().pop() else { break };
-                let Some(v) = stage(d.vs) else { continue };
-                let f = match d.fs {
-                    Some(id) => match stage(id) {
-                        Some(f) => Some(f),
-                        None => continue,
-                    },
-                    None => None,
-                };
-                let lay = made_layout(d.vs, d.fs).or_else(|| {
-                    let l = layout(&dev, &v, f.as_deref())?;
-                    Some(*made().lock().unwrap().layouts.entry((d.vs, d.fs)).or_insert(l))
-                });
-                let Some(lay) = lay else { continue };
-                if let Ok(p) = create(&dev, &d, &v, f.as_deref(), lay.1, cache) {
-                    made().lock().unwrap().pipelines.insert(super::exec::hash_of(&d), (p, lay.1));
-                    built.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            if running.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-                println!(
-                    "[vulkan] precompiled {} of {total} listed pipelines in {:.1} s",
-                    built.load(std::sync::atomic::Ordering::Relaxed),
-                    t0.elapsed().as_secs_f64()
-                );
-            }
-        });
-    }
+/// Adds a pipeline the workers made.
+pub(super) fn put(key: u64, p: vk::Pipeline, layout: vk::PipelineLayout) {
+    made().lock().unwrap().pipelines.insert(key, (p, layout));
+}
+
+/// Adds a layout the workers made for this stage pair (or returns the one another worker added first).
+pub(super) fn put_layout(vs: StageId, fs: Option<StageId>, l: Layout) -> Layout {
+    *made().lock().unwrap().layouts.entry((vs, fs)).or_insert(l)
 }

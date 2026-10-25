@@ -50,7 +50,7 @@ pub(super) struct VAttr {
 
 /// A vertex stream as the pipeline reads it.
 #[derive(Clone, Hash)]
-pub(super) struct VStream {
+pub(in crate::vulkan) struct VStream {
     stream: u32,
     stride: u32,
     src_stride: u32,
@@ -88,42 +88,23 @@ impl Ctx {
 
     /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions.
     fn vertex_state(&self) -> (GraphicsState, u64) {
-        let mut s = GraphicsState::engine();
-        // Unbound attributes read float zeros (ZERO_STREAM).
-        s.attribute_types = [AttributeType::Float; 32];
-        let mut codes = [0u8; 32];
-        for (i, &bits) in self.st.attribs.as_slice().iter().enumerate().take(32) {
-            if let Some((_, t)) = format::vertex((bits >> 5) & 0x1FF) {
-                s.attribute_types[i] = t;
-                codes[i] = attr_type_code(t);
-            }
-        }
-        s.origin_upper_left = true;
-        s.depth_mode = crate::nvn::api::depth_mode() == 0;
+        let s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
+        let codes: Vec<u8> = s.attribute_types.iter().map(|&t| attr_type_code(t)).collect();
         let key = hash(&(codes, s.depth_mode));
         (s, key)
     }
 
     /// The fragment stage's state: output types from the bound color targets' formats.
     fn fragment_state(&self) -> (GraphicsState, u64) {
-        let mut s = GraphicsState::engine();
         // Unbound slots keep the engine default (Uint): a code of their own, or a stage translated for a pass with an
         // unbound slot is reused for one with a float target there.
+        let rendered: Vec<(usize, i32)> =
+            self.pass.iter().flat_map(|p| p.colors.iter().enumerate().take(8).filter_map(|(i, c)| c.map(|c| (i, c.2)))).collect();
+        let s = fragment_graphics_state(rendered.iter().copied());
         let mut codes = [0xFFu8; 8];
-        if let Some(p) = &self.pass {
-            for (i, c) in p.colors.iter().enumerate().take(8) {
-                if let Some((_, _, nvn)) = c {
-                    let t = match format::kind(*nvn) {
-                        format::Kind::Float => AttributeType::Float,
-                        format::Kind::Uint => AttributeType::Uint,
-                        format::Kind::Sint => AttributeType::Sint,
-                    };
-                    s.fragment_output_types[i] = t;
-                    codes[i] = attr_type_code(t);
-                }
-            }
+        for &(i, _) in &rendered {
+            codes[i] = attr_type_code(s.fragment_output_types[i]);
         }
-        s.origin_upper_left = true;
         let depth = self.discard_depth();
         (s, hash(&(codes, depth)))
     }
@@ -178,7 +159,7 @@ impl Ctx {
         // Pipelines listed by earlier sessions, made on worker threads from the first draw.
         if self.pipeline_cache.is_none() {
             let cache = self.pipeline_cache();
-            pipelines::precompile(self.dev.clone(), cache);
+            crate::vulkan::listed::start(self.dev.clone(), cache);
         }
         if self.st.render_disabled || instances <= 0 || !self.begin_pass() {
             return;
@@ -220,7 +201,7 @@ impl Ctx {
                 (vl, h)
             }
         };
-        let Some((pipe, layout)) = self.pipeline(topology, (vd, vkey), fkey, &vl, vl_hash) else { return };
+        let Some((pipe, layout)) = self.pipeline(mode, topology, (vd, vkey), fkey, &vl, vl_hash) else { return };
         let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), fkey) else { return };
         let mut w = DescWrites::default();
         self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
@@ -346,8 +327,10 @@ impl Ctx {
         Some(l)
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn pipeline(
         &mut self,
+        mode: i32,
         topology: vk::PrimitiveTopology,
         vs: (u64, u64),
         fs: Option<(u64, u64)>,
@@ -388,7 +371,7 @@ impl Ctx {
             fs: fstage.map(|f| f.id),
             topology: topology.as_raw(),
             restart,
-            streams: vl.iter().map(|v| (v.stream, v.stride, v.per_instance, v.attrs.iter().map(|a| (a.location, a.format, a.offset)).collect())).collect(),
+            streams: desc_streams(vl),
             blend,
             color_state,
             channel_mask,
@@ -410,7 +393,7 @@ impl Ctx {
                 crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match pipelines::create(&self.dev, &desc, vstage, fstage, layout, cache) {
                     Ok(p) => {
-                        pipelines::record(&desc);
+                        self.record_pipeline(mode, vstage, fstage, &desc);
                         p
                     }
                     Err(e) => {
@@ -944,14 +927,55 @@ impl Ctx {
     /// and offsets (or cannot read past a stride), and expanded where a stream steps per several instances.
     /// The vertex streams and attributes for the attribute locations `inputs` (the vertex stage's).
     fn vertex_layout(&self, inputs: &[u32]) -> Vec<VStream> {
+        let attribs = self.st.attribs.as_slice().iter().enumerate().filter(|(i, _)| inputs.contains(&(*i as u32))).map(|(i, &b)| (i as u32, b));
+        vertex_streams(&self.dev, attribs, &self.st.streams)
+    }
+}
+
+/// A pipeline description's vertex streams.
+pub(in crate::vulkan) fn desc_streams(vl: &[VStream]) -> Vec<pipelines::Stream> {
+    vl.iter().map(|v| (v.stream, v.stride, v.per_instance, v.attrs.iter().map(|a| (a.location, a.format, a.offset)).collect())).collect()
+}
+
+/// A vertex stage's translation state: attribute types from NVN attribute bits by location (unbound attributes read
+/// float zeros from ZERO_STREAM), and the depth mode.
+pub(in crate::vulkan) fn vertex_graphics_state(attribs: impl Iterator<Item = (usize, u32)>, depth_gl: bool) -> GraphicsState {
+    let mut s = GraphicsState::engine();
+    s.attribute_types = [AttributeType::Float; 32];
+    for (i, bits) in attribs {
+        if let (true, Some((_, t))) = (i < 32, format::vertex((bits >> 5) & 0x1FF)) {
+            s.attribute_types[i] = t;
+        }
+    }
+    s.origin_upper_left = true;
+    s.depth_mode = depth_gl;
+    s
+}
+
+/// A fragment stage's translation state: output types from the NVN formats its targets render in, by slot.
+pub(in crate::vulkan) fn fragment_graphics_state(rendered: impl Iterator<Item = (usize, i32)>) -> GraphicsState {
+    let mut s = GraphicsState::engine();
+    for (i, nvn) in rendered {
+        if i < 8 {
+            s.fragment_output_types[i] = match format::kind(nvn) {
+                format::Kind::Float => AttributeType::Float,
+                format::Kind::Uint => AttributeType::Uint,
+                format::Kind::Sint => AttributeType::Sint,
+            };
+        }
+    }
+    s.origin_upper_left = true;
+    s
+}
+
+/// The vertex streams for NVN attribute bits by location (the vertex stage's inputs) and stream bits.
+pub(in crate::vulkan) fn vertex_streams(dev: &Dev, attribs: impl Iterator<Item = (u32, u32)>, streams: &[u64]) -> Vec<VStream> {
+    {
         let mut out: Vec<VStream> = Vec::new();
-        for (i, &b) in self.st.attribs.as_slice().iter().enumerate() {
-            if !inputs.contains(&(i as u32)) {
-                continue;
-            }
+        for (i, b) in attribs {
             let Some((f, _)) = format::vertex((b >> 5) & 0x1FF) else { continue };
             let stream = b & 31;
-            let bits = self.st.streams.get(stream as usize).copied().unwrap_or(0);
+            let bits = streams.get(stream as usize).copied().unwrap_or(0);
             let v = match out.iter_mut().position(|v| v.stream == stream) {
                 Some(k) => &mut out[k],
                 None => {
@@ -968,12 +992,12 @@ impl Ctx {
                 }
             };
             let size = format::vertex_size(f);
-            v.attrs.push(VAttr { location: i as u32, format: f.as_raw(), offset: b >> 14, src_offset: b >> 14, size });
+            v.attrs.push(VAttr { location: i, format: f.as_raw(), offset: b >> 14, src_offset: b >> 14, size });
         }
-        let align = self.dev.vertex_align.max(1);
+        let align = dev.vertex_align.max(1);
         for v in out.iter_mut() {
             let misaligned = v.stride % align != 0 || v.attrs.iter().any(|a| a.offset % align != 0);
-            let beyond = !self.dev.beyond_stride && v.attrs.iter().any(|a| a.offset + a.size > v.stride);
+            let beyond = !dev.beyond_stride && v.attrs.iter().any(|a| a.offset + a.size > v.stride);
             if misaligned || beyond || v.divisor > 1 {
                 v.repack = true;
                 let mut off = 0;
@@ -985,6 +1009,49 @@ impl Ctx {
             }
         }
         out
+    }
+}
+
+impl Ctx {
+    /// Adds a new pipeline to the pipeline list, and checks that the entry gives back this pipeline (listed.rs).
+    unsafe fn record_pipeline(&self, mode: i32, vstage: &Stage, fstage: Option<&Stage>, desc: &pipelines::Desc) {
+        let Some(pass) = self.pass.as_ref() else { return };
+        let attribs = self.st.attribs.as_slice();
+        let e = nxport_pipelines::Entry {
+            vs: crate::vulkan::listed::name(vstage.known.full),
+            fs: fstage.map(|f| crate::vulkan::listed::name(f.known.full)),
+            point_size: self.st.point_size.to_bits(),
+            depth_gl: desc.gl_depth,
+            y_negate: !desc.upper_left,
+            color_state: self.st.color_state,
+            channel_mask: self.st.channel_mask.unwrap_or(u32::MAX),
+            depth_pf: 0,
+            color_pfs: [0; 8],
+            blends: self.st.blend,
+            attr_bits: vstage.known.inputs.iter().map(|&l| attribs.get(l as usize).copied()).collect(),
+            streams: self.st.streams.clone(),
+            nvn: Some(nxport_pipelines::Nvn {
+                colors: pass.nvn_colors,
+                depth: pass.nvn_depth,
+                samples: pass.samples.as_raw(),
+                mode: mode as u32,
+                restart: self.st.prim_restart.is_some(),
+                polygon: self.st.polygon,
+                depth_stencil: self.st.depth_stencil.unwrap_or_else(state::default_depth_stencil),
+                multisample: self.st.multisample,
+                depth_clamp: self.st.depth_clamp,
+            }),
+        }
+        .normalized();
+        let back = crate::vulkan::listed::desc(&self.dev, &e, vstage, fstage);
+        let keys = crate::vulkan::listed::stage_keys(&self.dev, &e, vstage, fstage);
+        if back.as_ref() != Some(desc) || keys != Some((vstage.id.key, fstage.map(|f| f.id.key))) {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
+                println!("[vulkan] pipeline list entry does not give back its pipeline: {}\n  drawn  {desc:?}\n  listed {back:?}\n  stage keys {keys:?}", e.line());
+            }
+        }
+        crate::gpu::pipeline_list::record(e);
     }
 
     unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {

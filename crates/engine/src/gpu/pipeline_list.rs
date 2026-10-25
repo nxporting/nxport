@@ -1,8 +1,8 @@
 // Render pipelines by the draw state that selects them (the format: crates/pipelines), kept per game (<data
-// dir>/pipelines.txt, --pipeline-list) and compiled on the pipeline threads once the game starts drawing: a pipeline
-// seen in an earlier session, or listed by someone else, costs no compile when it is first drawn. The shared list is
-// downloaded at startup (<data dir>/pipelines_shared.txt, also the builder's copy) and its new entries compiled too. The engine derives
-// each entry's Metal pipeline as it does for a draw (translated::derive_layout, pipeline_key).
+// dir>/pipelines.txt, --pipeline-list) and handed to the GPU backend once the game starts drawing: a pipeline seen in
+// an earlier session, or listed by someone else, costs no compile when it is first drawn. The shared list is
+// downloaded at startup (<data dir>/pipelines_shared.txt, also the builder's copy) and its new entries compiled too.
+// Each backend derives its own pipeline from an entry as it does for a draw.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -49,8 +49,9 @@ fn list_state() -> &'static Mutex<List> {
         let mut l = List { seen: HashSet::new(), entries: Vec::new(), file: None, precompiling: false };
         // The list the app ships with its shader cache (the shared one at build time), the last download of the shared
         // list, then this player's own.
-        let shipped = super::shader_cache::cache_dir().join("pipelines.txt");
-        for p in [Some(shipped), shared_path(), path()].into_iter().flatten() {
+        let s = crate::settings::get();
+        let shipped = s.files.shader_cache.clone().or_else(|| crate::profile::data_subdir("shader_cache")).map(|d| d.join("pipelines.txt"));
+        for p in [shipped, shared_path(), path()].into_iter().flatten() {
             if let Ok(text) = std::fs::read_to_string(&p) {
                 l.add(&text);
             }
@@ -60,7 +61,7 @@ fn list_state() -> &'static Mutex<List> {
 }
 
 /// Adds a pipeline the game drew with to the list (once).
-pub(super) fn record(e: Entry) {
+pub fn record(e: Entry) {
     if !crate::settings::get().graphics.record_pipelines {
         return;
     }
@@ -100,11 +101,17 @@ pub(super) fn record(e: Entry) {
     }
 }
 
-/// Queues the list's pipelines for compilation (once, when the game first draws: the window origin and depth mode
-/// the entries were recorded with are known by then).
-pub(super) fn precompile() {
+/// How the backend compiles listed entries (on a thread of their own).
+pub type Compile = fn(Vec<Entry>);
+
+static COMPILE: OnceLock<Compile> = OnceLock::new();
+
+/// Hands the list's pipelines to `compile` (once, when the game first draws: the window origin and depth mode the
+/// entries were recorded with are known by then).
+pub fn precompile(compile: Compile) {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
+        let _ = COMPILE.set(compile);
         if !crate::settings::get().graphics.precompile_pipelines {
             return;
         }
@@ -123,40 +130,20 @@ pub(super) fn precompile() {
     });
 }
 
-/// Queues entries for compilation on a thread of their own.
+/// Hands entries to the backend on a thread of their own.
 fn queue(entries: Vec<Entry>) {
+    let Some(&compile) = COMPILE.get() else { return };
     if entries.is_empty() {
         return;
     }
-    std::thread::Builder::new()
-        .name("pipe-precompile".into())
-        .spawn(move || {
-            // The archives first: compiling without them would do what they hold.
-            if let Some(g) = super::GFX.get() {
-                super::pipeline_archive::load(&g.device);
-            }
-            let (mut queued, mut skipped) = (0, 0);
-            for e in &entries {
-                if super::translated::queue_precompile(e) {
-                    queued += 1;
-                } else {
-                    skipped += 1;
-                }
-            }
-            println!(
-                "[+] Pipelines: {queued} of {} listed queued for compilation ({skipped} the same pipeline as another entry, or with missing shaders or other \
-                 state)",
-                entries.len()
-            );
-        })
-        .expect("spawn pipeline precompile thread");
+    std::thread::Builder::new().name("pipe-precompile".into()).spawn(move || compile(entries)).expect("spawn pipeline precompile thread");
 }
 
 /// Where the shared lists are published (<url>/<title id>.txt).
 const FETCH_URL: &str = "https://github.com/nxporting/pipelines/releases/latest/download";
 
 /// Downloads the shared list in the background (when it changed since the last download) and adds its new entries.
-pub(super) fn fetch() {
+pub fn fetch() {
     let s = crate::settings::get();
     if !s.graphics.fetch_pipelines || !s.graphics.precompile_pipelines {
         return;
@@ -251,6 +238,13 @@ struct Response {
 }
 
 /// An HTTP request (`body` as text/plain; `if_none_match`: the ETag of the copy we have); Err when no response came.
+#[cfg(not(target_vendor = "apple"))]
+fn request(_method: &str, _url: &str, _body: Option<&[u8]>, _if_none_match: Option<&str>) -> Result<Response, String> {
+    Err("no HTTP client on this host".into())
+}
+
+/// An HTTP request (`body` as text/plain; `if_none_match`: the ETag of the copy we have); Err when no response came.
+#[cfg(target_vendor = "apple")]
 fn request(method: &str, url: &str, body: Option<&[u8]>, if_none_match: Option<&str>) -> Result<Response, String> {
     use objc2::rc::Retained;
     use objc2_foundation::{

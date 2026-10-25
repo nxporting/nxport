@@ -268,7 +268,28 @@ fn promote(slot: &std::sync::Arc<Slot>) {
 
 /// Queues a pipeline-list entry for compilation: false when its shaders are not in the cache, it was recorded under
 /// another window origin or depth mode, or its pipeline is already known.
-pub(super) fn queue_precompile(e: &super::pipeline_list::Entry) -> bool {
+/// Queues listed pipelines on the pipeline threads (gpu::pipeline_list).
+fn compile_listed(entries: Vec<crate::gpu::pipeline_list::Entry>) {
+    // The archives first: compiling without them would do what they hold.
+    if let Some(g) = super::GFX.get() {
+        super::pipeline_archive::load(&g.device);
+    }
+    let (mut queued, mut skipped) = (0, 0);
+    for e in &entries {
+        if queue_precompile(e) {
+            queued += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    println!(
+        "[+] Pipelines: {queued} of {} listed queued for compilation ({skipped} the same pipeline as another entry, or with missing shaders or other \
+         state)",
+        entries.len()
+    );
+}
+
+pub(super) fn queue_precompile(e: &crate::gpu::pipeline_list::Entry) -> bool {
     use super::shader_cache::by_entry;
     if e.y_negate != y_negate() || e.depth_gl != (crate::nvn::api::depth_mode() == 0) {
         return false;
@@ -1359,8 +1380,8 @@ fn record_pipeline(
             format!("pipeline list: targets {colors:?} / {depth:?} drawn as {:?} / {:?}, listed as {:?} / {:?}", p.color_pfs, p.depth_pf, derived.0, derived.1),
         );
     }
-    super::pipeline_list::record(
-        super::pipeline_list::Entry {
+    crate::gpu::pipeline_list::record(
+        crate::gpu::pipeline_list::Entry {
             vs: vs.entry.clone(),
             fs: fs.map(|f| f.entry.clone()),
             point_size: point_size.to_bits(),
@@ -5252,7 +5273,7 @@ impl Gfx {
                 e
             }
             None => {
-                super::pipeline_list::precompile();
+                crate::gpu::pipeline_list::precompile(compile_listed);
                 let Layout {
                     attr_descs,
                     streams_used,

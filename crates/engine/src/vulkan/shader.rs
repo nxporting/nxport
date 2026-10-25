@@ -37,7 +37,7 @@ pub struct Binding {
 
 /// A stage as translated, the same in every session: its shader cache name (stage_cache.rs), the key of its translation
 /// (stage and translation inputs) and its binding base.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct StageId {
     pub full: u64,
     pub key: u64,
@@ -177,6 +177,26 @@ fn spirv_inputs(spirv: &[u8]) -> Vec<u32> {
     v
 }
 
+fn key_for(host: &sass2spv::accessor::Host, prep: &Prep, full: u64, state: &Option<sass2spv::accessor::GraphicsState>) -> u64 {
+    super::exec::hash_of(&(full, prep, format!("{state:?}"), format!("{host:?}")))
+}
+
+/// The key of a stage's translation (StageId::key) with these inputs (as get takes them).
+#[allow(clippy::too_many_arguments)]
+pub fn translation_key(
+    dev: &Dev,
+    prep: &Prep,
+    full: u64,
+    state: &Option<sass2spv::accessor::GraphicsState>,
+    set: u32,
+    binding_base: u32,
+    fragment_inputs: Option<u32>,
+    discard_writes_depth: bool,
+) -> u64 {
+    let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
+    key_for(&host, prep, full, state)
+}
+
 /// The stage `code` (`known`: as seen before) translated for the state `state_for` gives: None, the draw's whole state
 /// (a stage seen for the first time is translated with it to learn its inputs); Some(inputs), the state for those
 /// inputs only (what the translation is keyed by: a vertex stage's other attributes do not change it). From the disk
@@ -202,7 +222,7 @@ pub unsafe fn get(
         }
         Ok(p)
     };
-    let key_of = |full: u64, state: &Option<sass2spv::accessor::GraphicsState>| super::exec::hash_of(&(full, prep, format!("{state:?}"), format!("{host:?}")));
+    let key_of = |full: u64, state: &Option<sass2spv::accessor::GraphicsState>| key_for(&host, &prep, full, state);
     let mut first = None;
     let known = match known {
         Some(k) => k,
@@ -235,14 +255,6 @@ pub unsafe fn get(
         let _ = std::fs::write(dir.join(format!("{name}.json")), sass2spv::manifest_json(&p));
     }
     build_stage(dev, &p.binary_code, &m, id, &prep, known)
-}
-
-/// The stage `id` from the disk cache (pipeline precompilation).
-pub unsafe fn from_cache(dev: &Dev, id: StageId) -> Option<Stage> {
-    let known = super::stage_cache::by_name(id.full)?;
-    let (spirv, m) = super::stage_cache::load(id.key)?;
-    let prep = known.prep;
-    build_stage(dev, &spirv, &m, id, &prep, known).ok()
 }
 
 /// A stage from its SPIR-V and manifest.

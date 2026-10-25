@@ -12,6 +12,7 @@ mod exec;
 mod format;
 mod guard;
 mod inflight;
+mod listed;
 mod pipelines;
 mod shader;
 pub(crate) mod stage_cache;
@@ -84,6 +85,7 @@ pub static VULKAN: Vulkan = Vulkan {
 pub fn init(validation: bool) -> Result<(), String> {
     let dev = device::Dev::new(validation)?;
     *VULKAN.ctx.lock().unwrap() = Some(exec::Ctx::new(dev)?);
+    crate::gpu::pipeline_list::fetch();
     Ok(())
 }
 
