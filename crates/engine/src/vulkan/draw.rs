@@ -561,12 +561,13 @@ impl Ctx {
                     }
                 }
                 Feed::Cbuf(slot) => {
-                    // Written by GPU work earlier in this submit: in place.
+                    // Written by GPU work earlier in this submit or by earlier submits still running: in place (the
+                    // GPU reads it after those writes, in queue order; a copy now could catch them half done).
                     if *slot >= 3 {
                         if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
                             let a = crate::nvn::api::translate_virtual(addr as usize);
                             let len = size.min(0x10000);
-                            if a > 0x10000 && self.gpu_dirty.overlaps(a, a + len) {
+                            if a > 0x10000 && self.gpu_writes(a, a + len) {
                                 if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
                                     if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
                                         limits.push((b.binding - base, len));
@@ -850,6 +851,7 @@ impl Ctx {
         }
         let (buf, off, p) = self.arena.alloc(&self.dev, size)?;
         std::ptr::copy_nonoverlapping(a as *const u8, p, size);
+        crate::vulkan::guard::patch(a, p, size);
         if write {
             self.writebacks.push((a, p, size));
         }

@@ -81,6 +81,7 @@ impl Ctx {
         }
         let (buf, off, p) = self.arena.alloc(&self.dev, len)?;
         std::ptr::copy_nonoverlapping(a as *const u8, p, len);
+        crate::vulkan::guard::patch(a, p, len);
         if write {
             self.writebacks.push((a, p, len));
         }
