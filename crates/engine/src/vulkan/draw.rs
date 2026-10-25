@@ -579,9 +579,26 @@ impl Ctx {
                             }
                         }
                     }
-                    // Others are copied now (as the Metal backend copies them): the game's other threads write the next
-                    // frame's constants into its uniform memory while this one is recorded and run (read in place, TotK's
-                    // menus drew stray shapes and whole-frame flashes).
+                    // In place unless this submit's commands write that memory: the write guard holds the pages while the
+                    // GPU reads them, and the shader checks the bound size. TotK finishes some of a frame's constants
+                    // (HUD and dialogue text) after it submits the frame; copies taken while recording, or frozen at the
+                    // submit, drew other glyphs (the "L" key icon as a digit, dialogue text flickering).
+                    if *slot >= 3 {
+                        if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
+                            let a = crate::nvn::api::translate_virtual(addr as usize);
+                            let len = size.min(0x10000);
+                            if a > 0x10000 && len > 0 && !self.cmd_writes.overlaps(a, a + len) && !crate::vulkan::guard::hot(a, len) {
+                                if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
+                                    if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
+                                        crate::vulkan::guard::note_read(a, len);
+                                        limits.push((b.binding - base, len));
+                                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len as u64 }));
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let bytes = cbuf(self, *slot);
                     let x = match &bytes {
                         // The driver buffer changes per draw; others are copied once per contents (the same memory
