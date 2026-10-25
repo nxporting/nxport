@@ -1731,6 +1731,23 @@ impl Gfx {
                 t.storage
             )
         });
+        if watch_texture(&t) {
+            let len = layout_of(&t).total as usize;
+            println!(
+                "[watch-size] f{} new metal {:x} for {:#x}: {}x{} fmt {} lv {} flags {:#x} storage {:#x}+{:#x} held {}",
+                presented_frames() + 1,
+                tex_id(&tex),
+                nvn_tex,
+                t.width,
+                t.height,
+                t.format,
+                levels,
+                t.flags,
+                t.storage,
+                len,
+                rt_guard::overlaps_held(t.storage, len)
+            );
+        }
         if watched {
             println!(
                 "[watch] f{} texture 0x{:x} ({}x{} fmt {} flags {:x}) -> new, storage id {:x}",
@@ -2322,6 +2339,19 @@ impl Gfx {
         });
         if t.storage <= 0x10000 {
             return;
+        }
+        if watch_texture(t) {
+            let len = layout_of(t).total as usize;
+            println!(
+                "[watch-size] f{} upload metal {:x} from {:#x}+{:#x}: {} of {} bytes non-zero, held {}",
+                presented_frames() + 1,
+                tex_id(tex),
+                t.storage,
+                len,
+                watch_nonzero(t.storage, len),
+                len,
+                rt_guard::overlaps_held(t.storage, len)
+            );
         }
         if verify_tex_enabled() {
             UPLOADS
@@ -6699,6 +6729,17 @@ fn sweep_shared_storage(tc: &mut TexCache, colors: &[RtRef], depth: Option<&RtRe
         if tc.tex_by_desc.remove(&k).is_none() {
             continue;
         }
+        watch_log(k.storage, k.storage + 1, || {
+            format!(
+                "sweep evicted metal {:x} storage {:#x} ({}x{} fmt {}, gpu-written {})",
+                id,
+                k.storage,
+                k.width,
+                k.height,
+                k.format,
+                tc.gpu_written.contains(&id)
+            )
+        });
         tc.desc_used.remove(&k);
         tc.gpu_written.remove(&id);
         tc.tex_checked.remove(&k);
@@ -6858,6 +6899,44 @@ pub(crate) fn storage_id(t: &Tex) -> u64 {
 /// finds the writer of a texture whose storage address changes from run to run.
 fn watch_size() -> Option<(u32, u32)> {
     crate::settings::get().trace.watch_size.map(|s| (s.w, s.h))
+}
+
+/// Guest memory of the textures --watch-size has seen; watch_log reports everything else that touches it (holds,
+/// write-backs, ended holds, engine reads of held pages, cache evictions), so a texture's whole history is in the log.
+static WATCH_MEM: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Remembers `t`'s memory when it has the --watch-size size; true if it does.
+pub(crate) fn watch_texture(t: &NvnTexture) -> bool {
+    let Some((w, h)) = watch_size() else {
+        return false;
+    };
+    if t.width as u32 != w || t.height as u32 != h || t.storage <= 0x10000 {
+        return false;
+    }
+    let range = (t.storage, t.storage + layout_of(t).total as usize);
+    let mut m = WATCH_MEM.lock().unwrap();
+    if !m.contains(&range) {
+        if m.len() >= 8192 {
+            m.remove(0);
+        }
+        m.push(range);
+    }
+    true
+}
+
+pub(crate) fn watch_log(start: usize, end: usize, what: impl FnOnce() -> String) {
+    if watch_size().is_none() || !WATCH_MEM.lock().unwrap().iter().any(|&(s, e)| s < end && e > start) {
+        return;
+    }
+    println!("[watch-size] f{} {}", presented_frames() + 1, what());
+}
+
+/// Non-zero bytes of [addr, addr+len) read without disturbing holds (through their second mappings).
+unsafe fn watch_nonzero(addr: usize, len: usize) -> usize {
+    match rt_guard::guest_copy::<u8>(addr, len) {
+        Some(v) => v.iter().filter(|&&b| b != 0).count(),
+        None => std::slice::from_raw_parts(addr as *const u8, len).iter().filter(|&&b| b != 0).count(),
+    }
 }
 
 /// GPU-rendered textures in guest memory. On the Switch the GPU writes render targets into memory the CPU shares, and
