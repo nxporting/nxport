@@ -11,6 +11,7 @@ mod device;
 mod exec;
 mod format;
 mod guard;
+mod history;
 mod inflight;
 mod listed;
 mod pipelines;
@@ -117,11 +118,15 @@ impl Backend for Vulkan {
     }
 
     fn present(&self, texture: usize, crop: [i32; 4]) {
+        let n = self.frames.load(Ordering::Acquire) + 1;
         if let Some(c) = self.ctx.lock().unwrap().as_mut() {
             c.write_back_rts();
-            unsafe { c.present_window(texture, crop) };
+            unsafe {
+                c.present_window(texture, crop);
+                c.keep_history(texture, crop, n);
+            }
         }
-        let n = self.frames.fetch_add(1, Ordering::AcqRel) + 1;
+        self.frames.fetch_add(1, Ordering::AcqRel);
         if n % 50 == 0 {
             let now = std::time::Instant::now();
             let mut start = self.interval.lock().unwrap();

@@ -563,6 +563,19 @@ impl Textures {
             }
             dev.full_barrier(cb);
         });
+        crate::gpu::history::journal(|| {
+            format!(
+                "texture new {:x}: {}x{}x{} fmt {} lv {} flags {:#x} storage {:#x}",
+                vk::Handle::as_raw(image),
+                p.width,
+                p.height,
+                p.depth,
+                p.format,
+                p.levels,
+                p.flags,
+                d.storage
+            )
+        });
         Some(Image {
             image,
             memory,
@@ -589,6 +602,9 @@ impl Textures {
     unsafe fn upload(&mut self, dev: &Dev, d: &Desc) {
         let Some(img) = self.images.get(d) else { return };
         let p = &d.params;
+        crate::gpu::history::journal(|| {
+            format!("upload {:x}: {}x{} fmt {} storage {:#x}", ash::vk::Handle::as_raw(img.image), p.width, p.height, p.format, d.storage)
+        });
         if d.storage <= 0x10000 || img.samples != vk::SampleCountFlags::TYPE_1 || format::is_depth(img.format) {
             return;
         }

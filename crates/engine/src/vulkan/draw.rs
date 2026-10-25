@@ -220,6 +220,13 @@ impl Ctx {
         self.dynamic_state();
         if let Some(p) = self.pass.as_mut() {
             p.draws += 1;
+            if crate::gpu::history::journal_on() {
+                let pair = (self.stages[&(vd, vkey)].known.full, fkey.map_or(0, |k| self.stages[&k].known.full));
+                match p.pairs.iter_mut().find(|e| (e.0, e.1) == pair) {
+                    Some(e) => e.2 += 1,
+                    None => p.pairs.push((pair.0, pair.1, 1)),
+                }
+            }
         }
         match call {
             Draw::Arrays { first, count } => {
@@ -268,6 +275,10 @@ impl Ctx {
         };
         if !self.stage(data, control, 0, GraphicsState::zeroed(), content, 0, None, false) {
             return;
+        }
+        if crate::gpu::history::journal_on() {
+            let full = self.stages[&(data, content)].known.full;
+            crate::gpu::history::journal(|| format!("dispatch s_{full:016x} {x}x{y}x{z}"));
         }
         let key = hash(&("compute", data, content));
         let (pipe, layout) = match self.pipelines.get(&key) {

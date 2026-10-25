@@ -86,7 +86,12 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
         match *e {
             Occl::Query(q) => *carried += results.get(q as usize).copied().unwrap_or(0),
             Occl::Reset => *carried = 0,
-            Occl::Report(addr) => super::exec::write_report(addr, *carried, true),
+            Occl::Report(addr) => {
+                super::exec::write_report(addr, *carried, true);
+                let frame = super::VULKAN.frames.load(Ordering::Relaxed) + 1;
+                let count = *carried;
+                crate::gpu::history::journal(|| format!("occl f{frame} #0 pos [] draws 0 = {count} @{addr:#x} submit {}", d.serial));
+            }
         }
     }
     for &(addr, src, len) in &d.writebacks {
