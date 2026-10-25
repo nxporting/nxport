@@ -1,0 +1,516 @@
+#version 450
+// ASTC LDR decoding for devices without ASTC textures (desktop GPUs): one invocation per texel decodes what that texel
+// needs of its block (Khronos Data Format Specification, "ASTC Compressed Texture Image Formats") and writes it to an
+// RGBA8 image. sRGB formats decode their endpoints as the specification's sRGB mode does; the image's sRGB view then
+// converts when sampled. HDR blocks and illegal encodings give the error colour (magenta), as LDR decoders do.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 0) readonly buffer Blocks {
+    uint words[];
+};
+layout(rgba8, binding = 1) writeonly uniform image2D dst;
+
+layout(push_constant) uniform Params {
+    uint offset;   // the level's first block, in words
+    uint blocks_w; // blocks per row
+    uint width;    // the level's size in texels
+    uint height;
+    uint bw;       // block size
+    uint bh;
+    uint srgb;
+} pc;
+
+const uvec4 ERROR = uvec4(255u, 0u, 255u, 255u);
+
+// Integer sequence encodings, indexed by quantization level (ranges 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48,
+// 64, 80, 96, 128, 160, 192, 256): bits per value, and 0 for bits only, 1 with a trit, 2 with a quint.
+const uint ISE_BITS[21] = uint[21](1u, 0u, 2u, 0u, 1u, 3u, 1u, 2u, 4u, 2u, 3u, 5u, 3u, 4u, 6u, 4u, 5u, 7u, 5u, 6u, 8u);
+const uint ISE_KIND[21] = uint[21](0u, 1u, 0u, 2u, 1u, 0u, 2u, 1u, 0u, 2u, 1u, 0u, 2u, 1u, 0u, 2u, 1u, 0u, 2u, 1u, 0u);
+
+uint word(uvec4 b, uint i) {
+    if (i == 0u) return b.x;
+    if (i == 1u) return b.y;
+    if (i == 2u) return b.z;
+    return b.w;
+}
+
+// `count` (at most 32) bits from bit `start`; bits at `end` and above read as zero.
+uint bits(uvec4 b, uint start, uint count, uint end) {
+    if (start >= end || count == 0u) return 0u;
+    count = min(count, end - start);
+    uint w = start >> 5u;
+    uint o = start & 31u;
+    uint v = word(b, w) >> o;
+    if (o != 0u && w < 3u) v |= word(b, w + 1u) << (32u - o);
+    return count >= 32u ? v : v & ((1u << count) - 1u);
+}
+
+uint ise_bits(uint count, uint q) {
+    uint n = ISE_BITS[q] * count;
+    if (ISE_KIND[q] == 1u) return n + (8u * count + 4u) / 5u;
+    if (ISE_KIND[q] == 2u) return n + (7u * count + 2u) / 3u;
+    return n;
+}
+
+uint trit(uint t, uint j) {
+    uint c;
+    uint t3;
+    uint t4;
+    if (((t >> 2u) & 7u) == 7u) {
+        c = ((t >> 5u) & 7u) << 2u | (t & 3u);
+        t4 = 2u;
+        t3 = 2u;
+    } else {
+        c = t & 31u;
+        if (((t >> 5u) & 3u) == 3u) {
+            t4 = 2u;
+            t3 = (t >> 7u) & 1u;
+        } else {
+            t4 = (t >> 7u) & 1u;
+            t3 = (t >> 5u) & 3u;
+        }
+    }
+    uint t0;
+    uint t1;
+    uint t2;
+    if ((c & 3u) == 3u) {
+        t2 = 2u;
+        t1 = (c >> 4u) & 1u;
+        uint c3 = (c >> 3u) & 1u;
+        t0 = (c3 << 1u) | (((c >> 2u) & 1u) & (c3 ^ 1u));
+    } else if (((c >> 2u) & 3u) == 3u) {
+        t2 = 2u;
+        t1 = 2u;
+        t0 = c & 3u;
+    } else {
+        t2 = (c >> 4u) & 1u;
+        t1 = (c >> 2u) & 3u;
+        uint c1 = (c >> 1u) & 1u;
+        t0 = (c1 << 1u) | ((c & 1u) & (c1 ^ 1u));
+    }
+    if (j == 0u) return t0;
+    if (j == 1u) return t1;
+    if (j == 2u) return t2;
+    if (j == 3u) return t3;
+    return t4;
+}
+
+uint quint(uint q, uint j) {
+    uint q0;
+    uint q1;
+    uint q2;
+    if (((q >> 1u) & 3u) == 3u && ((q >> 5u) & 3u) == 0u) {
+        uint b0 = q & 1u;
+        uint nb0 = b0 ^ 1u;
+        q2 = (b0 << 2u) | ((((q >> 4u) & 1u) & nb0) << 1u) | (((q >> 3u) & 1u) & nb0);
+        q1 = 4u;
+        q0 = 4u;
+    } else {
+        uint c;
+        if (((q >> 1u) & 3u) == 3u) {
+            q2 = 4u;
+            c = (((q >> 3u) & 3u) << 3u) | ((~(q >> 5u) & 3u) << 1u) | (q & 1u);
+        } else {
+            q2 = (q >> 5u) & 3u;
+            c = q & 31u;
+        }
+        if ((c & 7u) == 5u) {
+            q1 = 4u;
+            q0 = (c >> 3u) & 3u;
+        } else {
+            q1 = (c >> 3u) & 3u;
+            q0 = c & 7u;
+        }
+    }
+    if (j == 0u) return q0;
+    if (j == 1u) return q1;
+    return q2;
+}
+
+// Value `i` of the sequence at bit `base` (ending at `end`) in level `q`: its trit / quint above its bits.
+uint ise(uvec4 b, uint base, uint end, uint i, uint q) {
+    uint n = ISE_BITS[q];
+    uint kind = ISE_KIND[q];
+    if (kind == 0u) return bits(b, base + i * n, n, end);
+    if (kind == 1u) {
+        uint s = base + (i / 5u) * (5u * n + 8u);
+        uint j = i % 5u;
+        uint t = bits(b, s + n, 2u, end)
+            | bits(b, s + 2u * n + 2u, 2u, end) << 2u
+            | bits(b, s + 3u * n + 4u, 1u, end) << 4u
+            | bits(b, s + 4u * n + 5u, 2u, end) << 5u
+            | bits(b, s + 5u * n + 7u, 1u, end) << 7u;
+        uint m_at = j == 0u ? 0u : j == 1u ? n + 2u : j == 2u ? 2u * n + 4u : j == 3u ? 3u * n + 5u : 4u * n + 7u;
+        return (trit(t, j) << n) | bits(b, s + m_at, n, end);
+    }
+    uint s = base + (i / 3u) * (3u * n + 7u);
+    uint j = i % 3u;
+    uint qv = bits(b, s + n, 3u, end) | bits(b, s + 2u * n + 3u, 2u, end) << 3u | bits(b, s + 3u * n + 5u, 2u, end) << 5u;
+    uint m_at = j == 0u ? 0u : j == 1u ? n + 3u : 2u * n + 5u;
+    return (quint(qv, j) << n) | bits(b, s + m_at, n, end);
+}
+
+// `v` (n bits) repeated to fill `to` bits.
+uint replicate(uint v, uint n, uint to) {
+    uint r = 0u;
+    int pos = int(to);
+    while (pos > 0) {
+        pos -= int(n);
+        r |= pos >= 0 ? v << uint(pos) : v >> uint(-pos);
+    }
+    return r & ((1u << to) - 1u);
+}
+
+uint unquantize_color(uint v, uint q) {
+    uint n = ISE_BITS[q];
+    uint kind = ISE_KIND[q];
+    if (kind == 0u) return replicate(v, n, 8u);
+    uint d = v >> n;
+    uint m = v & ((1u << n) - 1u);
+    if (n == 0u) {
+        if (kind == 1u) return d == 0u ? 0u : d == 1u ? 128u : 255u;
+        return d == 0u ? 0u : d == 1u ? 64u : d == 2u ? 128u : d == 3u ? 191u : 255u;
+    }
+    uint a = (m & 1u) != 0u ? 0x1FFu : 0u;
+    uint x = m >> 1u;
+    uint bb = 0u;
+    uint c = 0u;
+    if (kind == 1u) {
+        if (n == 1u) { c = 204u; }
+        else if (n == 2u) { bb = x * 0x116u; c = 93u; }
+        else if (n == 3u) { bb = ((x >> 1u) & 1u) * 0x10Au + (x & 1u) * 0x85u; c = 44u; }
+        else if (n == 4u) { bb = (x << 6u) | x; c = 22u; }
+        else if (n == 5u) { bb = (x << 5u) | (x >> 2u); c = 11u; }
+        else { bb = (x << 4u) | (x >> 4u); c = 5u; }
+    } else {
+        if (n == 1u) { c = 113u; }
+        else if (n == 2u) { bb = x * 0x10Cu; c = 54u; }
+        else if (n == 3u) { bb = ((x >> 1u) & 1u) * 0x105u + (x & 1u) * 0x82u; c = 26u; }
+        else if (n == 4u) { bb = (x << 6u) | (x >> 1u); c = 13u; }
+        else { bb = (x << 5u) | (x >> 3u); c = 6u; }
+    }
+    uint t = (d * c + bb) ^ a;
+    return (a & 0x80u) | ((t >> 2u) & 0x7Fu);
+}
+
+uint unquantize_weight(uint v, uint q) {
+    uint n = ISE_BITS[q];
+    uint kind = ISE_KIND[q];
+    uint r;
+    if (kind == 0u) {
+        r = replicate(v, n, 6u);
+    } else {
+        uint d = v >> n;
+        uint m = v & ((1u << n) - 1u);
+        if (n == 0u) {
+            return kind == 1u ? d * 32u : d * 16u;
+        }
+        uint a = (m & 1u) != 0u ? 0x7Fu : 0u;
+        uint x = m >> 1u;
+        uint bb = 0u;
+        uint c;
+        if (kind == 1u) {
+            if (n == 1u) { c = 50u; }
+            else if (n == 2u) { bb = x * 0x45u; c = 23u; }
+            else { bb = (x << 5u) | x; c = 11u; }
+        } else {
+            if (n == 1u) { c = 28u; }
+            else { bb = x * 0x42u; c = 13u; }
+        }
+        uint t = (d * c + bb) ^ a;
+        r = (a & 0x20u) | ((t >> 2u) & 0x1Fu);
+    }
+    return r > 32u ? r + 1u : r;
+}
+
+uint hash52(uint p) {
+    p ^= p >> 15u;
+    p *= 0xEEDE0891u;
+    p ^= p >> 5u;
+    p += p << 16u;
+    p ^= p >> 7u;
+    p ^= p >> 3u;
+    p ^= p << 6u;
+    p ^= p >> 17u;
+    return p;
+}
+
+uint select_partition(uint seed, uint x, uint y, uint count, bool small_block) {
+    if (small_block) {
+        x <<= 1u;
+        y <<= 1u;
+    }
+    seed += (count - 1u) * 1024u;
+    uint r = hash52(seed);
+    uint s1 = r & 15u;
+    uint s2 = (r >> 4u) & 15u;
+    uint s3 = (r >> 8u) & 15u;
+    uint s4 = (r >> 12u) & 15u;
+    uint s5 = (r >> 16u) & 15u;
+    uint s6 = (r >> 20u) & 15u;
+    uint s7 = (r >> 24u) & 15u;
+    uint s8 = (r >> 28u) & 15u;
+    s1 *= s1; s2 *= s2; s3 *= s3; s4 *= s4;
+    s5 *= s5; s6 *= s6; s7 *= s7; s8 *= s8;
+    uint sh1;
+    uint sh2;
+    if ((seed & 1u) != 0u) {
+        sh1 = (seed & 2u) != 0u ? 4u : 5u;
+        sh2 = count == 3u ? 6u : 5u;
+    } else {
+        sh1 = count == 3u ? 6u : 5u;
+        sh2 = (seed & 2u) != 0u ? 4u : 5u;
+    }
+    s1 >>= sh1; s2 >>= sh2; s3 >>= sh1; s4 >>= sh2;
+    s5 >>= sh1; s6 >>= sh2; s7 >>= sh1; s8 >>= sh2;
+    // z is 0 for 2D blocks: seeds 9 to 12 drop out.
+    uint a = (s1 * x + s2 * y + (r >> 14u)) & 63u;
+    uint b = (s3 * x + s4 * y + (r >> 10u)) & 63u;
+    uint c = (s5 * x + s6 * y + (r >> 6u)) & 63u;
+    uint d = (s7 * x + s8 * y + (r >> 2u)) & 63u;
+    if (count < 4u) d = 0u;
+    if (count < 3u) c = 0u;
+    if (a >= b && a >= c && a >= d) return 0u;
+    if (b >= c && b >= d) return 1u;
+    if (c >= d) return 2u;
+    return 3u;
+}
+
+// bit_transfer_signed: b takes a's top bit, a becomes a signed 6-bit offset.
+void transfer(inout int a, inout int b) {
+    b = (b >> 1) | (a & 0x80);
+    a = (a >> 1) & 0x3F;
+    if ((a & 0x20) != 0) a -= 0x40;
+}
+
+ivec4 blue_contract(ivec4 c) {
+    return ivec4((c.r + c.b) >> 1, (c.g + c.b) >> 1, c.b, c.a);
+}
+
+// The endpoints of colour endpoint mode `cem` from its unquantized values; false for HDR modes.
+bool endpoints(uint cem, int v[8], out ivec4 e0, out ivec4 e1) {
+    e0 = ivec4(0);
+    e1 = ivec4(0);
+    if (cem == 0u) {
+        e0 = ivec4(v[0], v[0], v[0], 255);
+        e1 = ivec4(v[1], v[1], v[1], 255);
+    } else if (cem == 1u) {
+        int l0 = (v[0] >> 2) | (v[1] & 0xC0);
+        int l1 = min(l0 + (v[1] & 0x3F), 255);
+        e0 = ivec4(l0, l0, l0, 255);
+        e1 = ivec4(l1, l1, l1, 255);
+    } else if (cem == 4u) {
+        e0 = ivec4(v[0], v[0], v[0], v[2]);
+        e1 = ivec4(v[1], v[1], v[1], v[3]);
+    } else if (cem == 5u) {
+        int v0 = v[0], v1 = v[1], v2 = v[2], v3 = v[3];
+        transfer(v1, v0);
+        transfer(v3, v2);
+        e0 = ivec4(v0, v0, v0, v2);
+        e1 = clamp(ivec4(v0 + v1, v0 + v1, v0 + v1, v2 + v3), 0, 255);
+    } else if (cem == 6u) {
+        e0 = ivec4((v[0] * v[3]) >> 8, (v[1] * v[3]) >> 8, (v[2] * v[3]) >> 8, 255);
+        e1 = ivec4(v[0], v[1], v[2], 255);
+    } else if (cem == 8u || cem == 12u) {
+        int a0 = cem == 12u ? v[6] : 255;
+        int a1 = cem == 12u ? v[7] : 255;
+        if (v[1] + v[3] + v[5] >= v[0] + v[2] + v[4]) {
+            e0 = ivec4(v[0], v[2], v[4], a0);
+            e1 = ivec4(v[1], v[3], v[5], a1);
+        } else {
+            e0 = blue_contract(ivec4(v[1], v[3], v[5], a1));
+            e1 = blue_contract(ivec4(v[0], v[2], v[4], a0));
+        }
+    } else if (cem == 9u || cem == 13u) {
+        int v0 = v[0], v1 = v[1], v2 = v[2], v3 = v[3], v4 = v[4], v5 = v[5], v6 = v[6], v7 = v[7];
+        transfer(v1, v0);
+        transfer(v3, v2);
+        transfer(v5, v4);
+        if (cem == 13u) {
+            transfer(v7, v6);
+        } else {
+            v6 = 255;
+            v7 = 0;
+        }
+        if (v1 + v3 + v5 >= 0) {
+            e0 = ivec4(v0, v2, v4, v6);
+            e1 = ivec4(v0 + v1, v2 + v3, v4 + v5, v6 + v7);
+        } else {
+            e0 = blue_contract(ivec4(v0 + v1, v2 + v3, v4 + v5, v6 + v7));
+            e1 = blue_contract(ivec4(v0, v2, v4, v6));
+        }
+        e0 = clamp(e0, 0, 255);
+        e1 = clamp(e1, 0, 255);
+    } else if (cem == 10u) {
+        e0 = ivec4((v[0] * v[3]) >> 8, (v[1] * v[3]) >> 8, (v[2] * v[3]) >> 8, v[4]);
+        e1 = ivec4(v[0], v[1], v[2], v[5]);
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// The weight grid's size, its quantization level and whether it has two planes, from the block mode; false for
+// reserved modes.
+bool block_mode(uint mode, out uint xw, out uint yw, out uint q, out bool dual) {
+    uint r = (mode >> 4u) & 1u;
+    uint h = (mode >> 9u) & 1u;
+    uint d = (mode >> 10u) & 1u;
+    uint a = (mode >> 5u) & 3u;
+    xw = 0u;
+    yw = 0u;
+    q = 0u;
+    dual = false;
+    if ((mode & 3u) != 0u) {
+        r |= (mode & 3u) << 1u;
+        uint b = (mode >> 7u) & 3u;
+        uint sel = (mode >> 2u) & 3u;
+        if (sel == 0u) { xw = b + 4u; yw = a + 2u; }
+        else if (sel == 1u) { xw = b + 8u; yw = a + 2u; }
+        else if (sel == 2u) { xw = a + 2u; yw = b + 8u; }
+        else if ((mode & 0x100u) != 0u) { xw = (b & 1u) + 2u; yw = a + 2u; }
+        else { xw = a + 2u; yw = (b & 1u) + 6u; }
+    } else {
+        r |= ((mode >> 2u) & 3u) << 1u;
+        if (((mode >> 2u) & 3u) == 0u) return false;
+        uint b = (mode >> 9u) & 3u;
+        uint sel = (mode >> 7u) & 3u;
+        if (sel == 0u) { xw = 12u; yw = a + 2u; }
+        else if (sel == 1u) { xw = a + 2u; yw = 12u; }
+        else if (sel == 2u) { xw = a + 6u; yw = b + 6u; d = 0u; h = 0u; }
+        else if (a == 0u) { xw = 6u; yw = 10u; }
+        else if (a == 1u) { xw = 10u; yw = 6u; }
+        else return false;
+    }
+    q = r - 2u + 6u * h;
+    dual = d != 0u;
+    return true;
+}
+
+// Weight `g` of the grid (plane `p`) from the bit-reversed block.
+uint grid_weight(uvec4 rb, uint wbits, uint g, uint p, bool dual, uint q) {
+    uint i = dual ? g * 2u + p : g;
+    return unquantize_weight(ise(rb, 0u, wbits, i, q), q);
+}
+
+// The weight of texel (s, t) from the grid (bilinear infill).
+uint infill(uvec4 rb, uint wbits, uint s, uint t, uint xw, uint yw, uint p, bool dual, uint q) {
+    uint ds = (1024u + pc.bw / 2u) / (pc.bw - 1u);
+    uint dt = (1024u + pc.bh / 2u) / (pc.bh - 1u);
+    uint gs = (ds * s * (xw - 1u) + 32u) >> 6u;
+    uint gt = (dt * t * (yw - 1u) + 32u) >> 6u;
+    uint js = gs >> 4u;
+    uint fs = gs & 15u;
+    uint jt = gt >> 4u;
+    uint ft = gt & 15u;
+    uint last = xw * yw - 1u;
+    uint v0 = js + jt * xw;
+    uint w11 = (fs * ft + 8u) >> 4u;
+    uint w10 = ft - w11;
+    uint w01 = fs - w11;
+    uint w00 = 16u - fs - ft + w11;
+    uint p00 = grid_weight(rb, wbits, min(v0, last), p, dual, q);
+    uint p01 = w01 + w11 != 0u ? grid_weight(rb, wbits, min(v0 + 1u, last), p, dual, q) : 0u;
+    uint p10 = w10 + w11 != 0u ? grid_weight(rb, wbits, min(v0 + xw, last), p, dual, q) : 0u;
+    uint p11 = w11 != 0u ? grid_weight(rb, wbits, min(v0 + xw + 1u, last), p, dual, q) : 0u;
+    return (p00 * w00 + p01 * w01 + p10 * w10 + p11 * w11 + 8u) >> 4u;
+}
+
+uvec4 decode(uvec4 b, uint s, uint t) {
+    uint mode = b.x & 0x7FFu;
+    if ((mode & 0x1FFu) == 0x1FCu) {
+        // Void extent: one colour (UNORM16) for the block. HDR ones are errors here, and so are 2D ones whose reserved
+        // bits are not both set.
+        if ((mode & 0x200u) != 0u || (mode & 0x400u) == 0u || (b.x & 0x800u) == 0u) return ERROR;
+        return uvec4(b.z & 0xFFFFu, b.z >> 16u, b.w & 0xFFFFu, b.w >> 16u) >> 8u;
+    }
+    uint xw;
+    uint yw;
+    uint wq;
+    bool dual;
+    if (!block_mode(mode, xw, yw, wq, dual) || xw > pc.bw || yw > pc.bh) return ERROR;
+    uint partitions = ((b.x >> 11u) & 3u) + 1u;
+    if (dual && partitions == 4u) return ERROR;
+    uint weights = xw * yw * (dual ? 2u : 1u);
+    uint wbits = ise_bits(weights, wq);
+    if (weights > 64u || wbits < 24u || wbits > 96u) return ERROR;
+    uint below = 128u - wbits;
+
+    uint cem[4] = uint[4](0u, 0u, 0u, 0u);
+    uint color_start;
+    uint seed = 0u;
+    if (partitions == 1u) {
+        cem[0] = (b.x >> 13u) & 15u;
+        color_start = 17u;
+    } else {
+        seed = (b.x >> 13u) & 0x3FFu;
+        uint enc = (b.x >> 23u) & 0x3Fu;
+        if ((enc & 3u) == 0u) {
+            for (uint j = 0u; j < 4u; j++) cem[j] = (enc >> 2u) & 15u;
+        } else {
+            uint extra = 3u * partitions - 4u;
+            below -= extra;
+            uint full = (enc >> 2u) | (bits(b, below, extra, 128u) << 4u);
+            uint cls = (enc & 3u) - 1u;
+            for (uint j = 0u; j < partitions; j++) {
+                cem[j] = ((cls + ((full >> j) & 1u)) << 2u) | ((full >> (partitions + 2u * j)) & 3u);
+            }
+        }
+        color_start = 29u;
+    }
+    uint plane2 = 4u;
+    if (dual) {
+        below -= 2u;
+        plane2 = bits(b, below, 2u, 128u);
+    }
+    uint values = 0u;
+    for (uint j = 0u; j < partitions; j++) values += 2u * ((cem[j] >> 2u) + 1u);
+    if (values > 18u || below < color_start) return ERROR;
+    // The finest colour quantization whose sequence fits the bits between the configuration and the weights.
+    uint avail = below - color_start;
+    int cq = 20;
+    while (cq >= 4 && ise_bits(values, uint(cq)) > avail) cq--;
+    if (cq < 4) return ERROR;
+    uint q = uint(cq);
+    uint color_end = color_start + ise_bits(values, q);
+
+    uint part = partitions > 1u ? select_partition(seed, s, t, partitions, pc.bw * pc.bh < 31u) : 0u;
+    uint first = 0u;
+    for (uint j = 0u; j < part; j++) first += 2u * ((cem[j] >> 2u) + 1u);
+    int v[8] = int[8](0, 0, 0, 0, 0, 0, 0, 0);
+    uint count = 2u * ((cem[part] >> 2u) + 1u);
+    for (uint k = 0u; k < count; k++) v[k] = int(unquantize_color(ise(b, color_start, color_end, first + k, q), q));
+    ivec4 e0;
+    ivec4 e1;
+    if (!endpoints(cem[part], v, e0, e1)) return ERROR;
+
+    // Weights are stored from the top of the block down: read them from the block reversed.
+    uvec4 rb = uvec4(bitfieldReverse(b.w), bitfieldReverse(b.z), bitfieldReverse(b.y), bitfieldReverse(b.x));
+    uint w0 = infill(rb, wbits, s, t, xw, yw, 0u, dual, wq);
+    uint w1 = dual ? infill(rb, wbits, s, t, xw, yw, 1u, dual, wq) : w0;
+
+    uvec4 c0 = uvec4(e0);
+    uvec4 c1 = uvec4(e1);
+    c0 = pc.srgb != 0u ? (c0 << 8u) | 0x80u : (c0 << 8u) | c0;
+    c1 = pc.srgb != 0u ? (c1 << 8u) | 0x80u : (c1 << 8u) | c1;
+    uvec4 w = uvec4(w0);
+    if (plane2 == 0u) w.r = w1;
+    else if (plane2 == 1u) w.g = w1;
+    else if (plane2 == 2u) w.b = w1;
+    else if (plane2 == 3u) w.a = w1;
+    uvec4 c = (c0 * (64u - w) + c1 * w + 32u) >> 6u;
+    // sRGB keeps the top 8 bits for the conversion; linear formats are the nearest 8-bit value to c / 65535, what
+    // sampling a hardware ASTC texture returns.
+    return pc.srgb != 0u ? c >> 8u : (c * 255u + 32767u) / 65535u;
+}
+
+void main() {
+    uvec2 p = gl_GlobalInvocationID.xy;
+    if (p.x >= pc.width || p.y >= pc.height) return;
+    uint bx = p.x / pc.bw;
+    uint by = p.y / pc.bh;
+    uint at = pc.offset + (by * pc.blocks_w + bx) * 4u;
+    uvec4 b = uvec4(words[at], words[at + 1u], words[at + 2u], words[at + 3u]);
+    imageStore(dst, ivec2(p), vec4(decode(b, p.x % pc.bw, p.y % pc.bh)) / 255.0);
+}

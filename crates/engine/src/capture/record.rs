@@ -201,7 +201,10 @@ pub(crate) fn write_capture(
     for &(s, e) in &ranges {
         mw.begin_range(s, e - s)?;
         for p in (s..e).step_by(PAGE) {
+            #[cfg(nx_native)]
             let ok = unsafe { crate::cpu::crash_handler::readable_len(p as usize, PAGE) } == PAGE;
+            #[cfg(not(nx_native))]
+            let ok = crate::os::readable_len(p as usize, PAGE) == PAGE;
             if ok {
                 mw.page(Some(unsafe { std::slice::from_raw_parts(p as *const u8, PAGE) }))?;
             } else {

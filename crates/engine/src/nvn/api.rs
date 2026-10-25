@@ -5947,7 +5947,6 @@ pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) 
     // NVN_SYNC_WAIT_RESULT: ALREADY_SIGNALED 0, CONDITION_SATISFIED 1, TIMEOUT_EXPIRED 2.
     let serial = if sync.is_null() { 0 } else { (*sync).serial };
     let gpu = crate::gpu::backend();
-    #[cfg(nx_native)]
     crate::capture::record::hold(serial);
     if serial == 0 || gpu.wait_fence(serial, 0) {
         return 0;
@@ -6456,7 +6455,6 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
             && index >= 0
             && (index as usize) < 4
         {
-            #[cfg(nx_native)]
             crate::capture::record::on_present((*_window).textures[index as usize], (*_window).crop);
             crate::gpu::backend().present((*_window).textures[index as usize], (*_window).crop);
         }
@@ -6561,7 +6559,6 @@ unsafe extern "C" fn hle_nvnQueueSubmitCommands(_queue: *mut (), num: i32, handl
     let hs: Vec<u64> = (0..num as usize)
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
-    #[cfg(nx_native)]
     crate::capture::record::on_submit(&hs);
     crate::gpu::backend().submit(&hs);
     mark_command_lists_submitted(&hs);
