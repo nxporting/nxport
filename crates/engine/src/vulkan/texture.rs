@@ -136,7 +136,7 @@ pub unsafe fn device_format(dev: &Dev, fmt: i32) -> Option<vk::Format> {
         return Some(f);
     }
     // Decoded on upload (vulkan/astc.rs); the decoder needs push descriptors.
-    if super::astc::is_astc(fmt) && dev.push.is_some() {
+    if super::astc::is_astc(fmt) && dev.push_ext.is_some() {
         return Some(super::astc::decoded_format(fmt));
     }
     let alt = match f {
@@ -730,6 +730,7 @@ impl Textures {
         self.record(dev, |cb| {
             // Submits still in flight may read the old contents.
             dev.full_barrier(cb);
+            dev.checkpoint(cb, || format!("upload {}x{} fmt {} from {:#x}", p.width, p.height, p.format, d.storage));
             dev.device.cmd_copy_buffer_to_image(cb, staging.buffer, image, vk::ImageLayout::GENERAL, &regions);
         });
         match &mut self.batch {
@@ -779,6 +780,7 @@ impl Textures {
         self.record(dev, |cb| {
             // Submits still in flight may read the old contents.
             dev.full_barrier(cb);
+            dev.checkpoint(cb, || format!("ASTC decode {}x{} from {:#x}", d.params.width, d.params.height, d.storage));
             for (view, p) in &jobs {
                 decoder.record(dev, cb, staging.buffer, *view, *p);
             }

@@ -11,3 +11,11 @@ __pycache__/
 
 *.dll
 *.pdb
+
+# Lifted game code and what is built from it (nxport-cli lift-game / compile-guest, the builder), and frame dumps and
+# captures: game content, never committed. nxport_build::lift refuses to write it inside a git work tree.
+/guest_c/
+/modules.txt
+guest*.lib
+*.ppm
+/captures/

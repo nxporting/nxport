@@ -453,6 +453,29 @@ impl Imports {
         if self.failed.contains(&(start, end)) {
             return None;
         }
+        // The driver maps imported pages with the protection they have now (NVIDIA on Windows): pages the write guard or
+        // the write tracking hold read-only would stay read-only for the GPU, and its first write there loses the device.
+        // They are made writable first, as a host write would: the guard waits for the GPU work reading them, and the
+        // tracking counts its pages as written (their textures are checked again).
+        #[cfg(windows)]
+        if crate::os::writable_len(start, end - start) < end - start {
+            guard::before_host_write(start, end - start);
+            let mut at = start;
+            while at < end {
+                let w = crate::os::writable_len(at, end - at);
+                if w == end - at {
+                    break;
+                }
+                let page = at + w;
+                crate::guest::dirty_track::handle_fault(page);
+                at = (page | 0xFFF) + 1;
+            }
+            // Still read-only (protected by something else): copies for now, imported once a later lookup finds it
+            // writable.
+            if crate::os::writable_len(start, end - start) < end - start {
+                return None;
+            }
+        }
         match dev.import(start, end - start) {
             Some((b, m)) => {
                 self.by_start.insert(start, (end - start, b, m));

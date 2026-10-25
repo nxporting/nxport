@@ -483,6 +483,12 @@ group! {
         /// Metal shader validation (invalid GPU memory accesses are reported instead of faulting); the Vulkan backend's
         /// validation layer
         validate: bool = false,
+        /// Vulkan backend: a checkpoint before every command (VK_NV_device_diagnostic_checkpoints), so a lost device
+        /// reports the command the GPU was running
+        gpu_checkpoints: bool = false,
+        /// Vulkan backend: no guest memory imported as GPU buffers (VK_EXT_external_memory_host); everything the GPU
+        /// reads or writes of guest memory is a copy (bisection aid)
+        no_host_import: bool = false,
         /// Vulkan backend: write each translated stage's SPIR-V and manifest here (<code address>_<state>.spv / .json)
         dump_spirv: Option<PathBuf> = None,
         /// Per-draw debug groups and binding details in GPU error reports

@@ -44,7 +44,18 @@ pub struct Dev {
     /// VK_KHR_push_descriptor: draws whose stages fit bind their resources in the command buffer (MoltenVK then binds them
     /// directly: its Metal argument buffers for descriptor sets cost about a microsecond of GPU time per draw).
     pub push: Option<PushDescriptors>,
+    /// VK_KHR_push_descriptor where the device has it, whether or not draws use it: the backend's own compute work
+    /// (vulkan/astc.rs) binds with it.
+    pub push_ext: Option<ash::khr::push_descriptor::Device>,
+    /// VK_EXT_device_fault: what the driver knows about a lost device (report_fault).
+    pub fault: Option<ash::ext::device_fault::Device>,
+    /// VK_NV_device_diagnostic_checkpoints, with --gpu-checkpoints: markers before each command (checkpoint).
+    pub checkpoints: Option<ash::nv::device_diagnostic_checkpoints::Device>,
 }
+
+/// The most recent checkpoints (Dev::checkpoint): marker and what follows it.
+static CHECKPOINTS: std::sync::Mutex<std::collections::VecDeque<(u64, String)>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
 
 pub struct Surfaces {
     pub surface: ash::khr::surface::Instance,
@@ -207,7 +218,7 @@ impl Dev {
             if has(&dev_exts, portability) {
                 dexts.push(portability.as_ptr());
             }
-            let host_memory = has(&dev_exts, ash::ext::external_memory_host::NAME);
+            let host_memory = has(&dev_exts, ash::ext::external_memory_host::NAME) && !crate::settings::get().debug.no_host_import;
             if host_memory {
                 dexts.push(ash::ext::external_memory_host::NAME.as_ptr());
             }
@@ -222,6 +233,15 @@ impl Dev {
             let swapchain = platform_surface && has(&dev_exts, ash::khr::swapchain::NAME);
             if swapchain {
                 dexts.push(ash::khr::swapchain::NAME.as_ptr());
+            }
+            let checkpoints = crate::settings::get().debug.gpu_checkpoints
+                && has(&dev_exts, ash::nv::device_diagnostic_checkpoints::NAME);
+            if checkpoints {
+                dexts.push(ash::nv::device_diagnostic_checkpoints::NAME.as_ptr());
+            }
+            let device_fault = has(&dev_exts, ash::ext::device_fault::NAME);
+            if device_fault {
+                dexts.push(ash::ext::device_fault::NAME.as_ptr());
             }
             let push_descriptor = has(&dev_exts, ash::khr::push_descriptor::NAME);
             if push_descriptor {
@@ -344,6 +364,10 @@ impl Dev {
             if robustness2 {
                 info = info.push_next(&mut r2);
             }
+            let mut fault_features = vk::PhysicalDeviceFaultFeaturesEXT::default().device_fault(true);
+            if device_fault {
+                info = info.push_next(&mut fault_features);
+            }
             if depth_clip_control {
                 info = info.push_next(&mut dcc);
             }
@@ -368,6 +392,9 @@ impl Dev {
             // descriptor sets across draws. Pushing dynamic descriptors violates VUID-VkDescriptorSetLayoutCreateInfo-flags-00280
             // and loses dynamic offsets (forcing offset 0), causing GPU faults and device loss on desktop Vulkan.
             let push: Option<PushDescriptors> = None;
+            let push_ext = push_descriptor.then(|| ash::khr::push_descriptor::Device::new(&instance, &device));
+            let fault = device_fault.then(|| ash::ext::device_fault::Device::new(&instance, &device));
+            let checkpoints = checkpoints.then(|| ash::nv::device_diagnostic_checkpoints::Device::new(&instance, &device));
             let cmd_pool = device
                 .create_command_pool(
                     &vk::CommandPoolCreateInfo::default()
@@ -428,6 +455,9 @@ impl Dev {
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
                 push,
+                push_ext,
+                fault,
+                checkpoints,
             })
         }
     }
@@ -553,6 +583,75 @@ impl Dev {
     }
 
     /// A barrier between everything before and everything after (all stages, all memory).
+    /// Prints what the driver reports about the device having been lost (VK_EXT_device_fault): the faulting GPU
+    /// addresses and the vendor's codes. Once, from whichever path saw the loss first.
+    pub unsafe fn report_fault(&self) {
+        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let Some(f) = &self.fault else { return };
+        if REPORTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let get = f.fp().get_device_fault_info_ext;
+        let mut counts = vk::DeviceFaultCountsEXT::default();
+        if get(f.device(), &mut counts, std::ptr::null_mut()) != vk::Result::SUCCESS {
+            println!("[vulkan] device fault: no report");
+            return;
+        }
+        let mut addresses = vec![vk::DeviceFaultAddressInfoEXT::default(); counts.address_info_count as usize];
+        let mut vendor = vec![vk::DeviceFaultVendorInfoEXT::default(); counts.vendor_info_count as usize];
+        counts.vendor_binary_size = 0;
+        let mut info = vk::DeviceFaultInfoEXT {
+            p_address_infos: addresses.as_mut_ptr(),
+            p_vendor_infos: vendor.as_mut_ptr(),
+            ..Default::default()
+        };
+        let r = get(f.device(), &mut counts, &mut info);
+        let text = |c: &[std::ffi::c_char]| CStr::from_ptr(c.as_ptr()).to_string_lossy().into_owned();
+        println!("[vulkan] device fault ({r:?}): {}", text(&info.description));
+        for a in &addresses[..counts.address_info_count as usize] {
+            println!(
+                "[vulkan]   {:?} at {:#x} (within {:#x})",
+                a.address_type, a.reported_address, a.address_precision
+            );
+        }
+        for v in &vendor[..counts.vendor_info_count as usize] {
+            println!("[vulkan]   {}: code {:#x}, data {:#x}", text(&v.description), v.vendor_fault_code, v.vendor_fault_data);
+        }
+        if let Some(c) = &self.checkpoints {
+            let get = c.fp().get_queue_checkpoint_data_nv;
+            let mut n = 0u32;
+            get(self.queue, &mut n, std::ptr::null_mut());
+            let mut data = vec![vk::CheckpointDataNV::default(); n as usize];
+            get(self.queue, &mut n, data.as_mut_ptr());
+            let log = CHECKPOINTS.lock().unwrap();
+            let markers: Vec<u64> = data[..n as usize].iter().map(|d| d.p_checkpoint_marker as u64).collect();
+            for (d, marker) in data.iter().zip(&markers) {
+                println!("[vulkan]   last checkpoint at {:?}: {marker:#x}", d.stage);
+            }
+            // What the GPU had begun but not finished: from the oldest stage's checkpoint to the newest's.
+            let (Some(&lo), Some(&hi)) = (markers.iter().min(), markers.iter().max()) else { return };
+            for (m, what) in log.iter().filter(|(m, _)| (lo..=hi).contains(m)) {
+                println!("[vulkan]     {m:#x} {what}");
+            }
+        }
+    }
+
+    /// With --gpu-checkpoints: a marker the GPU passes before what `cb` records next, logged with `what` so a lost
+    /// device's report (report_fault) can name the command the GPU had reached.
+    pub unsafe fn checkpoint(&self, cb: vk::CommandBuffer, what: impl FnOnce() -> String) {
+        let Some(c) = &self.checkpoints else { return };
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let marker = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut log = CHECKPOINTS.lock().unwrap();
+            if log.len() == 1 << 16 {
+                log.pop_front();
+            }
+            log.push_back((marker, what()));
+        }
+        (c.fp().cmd_set_checkpoint_nv)(cb, marker as *const std::ffi::c_void);
+    }
+
     pub unsafe fn full_barrier(&self, cb: vk::CommandBuffer) {
         let mb = [vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::MEMORY_READ)
