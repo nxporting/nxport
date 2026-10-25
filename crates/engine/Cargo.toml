@@ -48,7 +48,8 @@ dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 # nxport.exe needs no SDL3.dll beside it.
 # The settings editor (settings::edit), which the builder's window shows on Windows too.
 [target.'cfg(windows)'.dependencies]
-sdl3 = { version = "0.20.0", features = ["build-from-source-static"] }
+sdl3-sys = { version = "0.7.2", default-features = false, features = ["link-static"] }
+sdl3 = { version = "0.20.0", default-features = false, features = ["static-link"] }
 dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]

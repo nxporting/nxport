@@ -15,6 +15,21 @@ fn main() {
     if native || os == "windows" {
         println!("cargo::rustc-cfg=nx_runtime");
     }
+
+    // Vendor SDL3: point the linker at our pre-built static library so that
+    // sdl3-sys's `link-static` feature can find SDL3.lib without CMake.
+    if os == "windows" {
+        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(&manifest_dir);
+        let sdl3_lib = workspace_root.join("vendor/SDL3/lib");
+        if sdl3_lib.exists() {
+            println!("cargo::rustc-link-search=native={}", sdl3_lib.display());
+        }
+    }
+
     compile_shader("src/vulkan/astc.comp", "astc.spv");
 }
 
