@@ -101,7 +101,12 @@ impl Backend for Vulkan {
         let mut g = self.ctx.lock().unwrap();
         let serial = self.serial.load(Ordering::Acquire) + 1;
         match g.as_mut() {
-            Some(c) => unsafe { c.submit(lists, serial) },
+            Some(c) => unsafe {
+                c.submit(lists, serial);
+                // GPU work reads guest memory in place from its submit on: the write guard holds those pages from here,
+                // not only once guest-main waits for the frame.
+                guard::protect(serial);
+            },
             None => inflight::watch(inflight::Done {
                 serial,
                 fence: vk::Fence::null(),

@@ -1,9 +1,11 @@
 // Frame overlap (--early-fence): guest-main's frame fence returns once the frame is queued, so the game prepares the
 // next frame while the GPU runs this one. Draws read vertex, index and some uniform data from guest memory in place
 // (imported pools), and the game writes the next frame's data into memory the running frame still reads (the fence
-// would have held it back on the Switch). So when a fence returns early, the pages that still-running submits read in
-// place become read-only; a write to one faults, waits for the submit that reads it and makes the range writable
-// again, and the write is retried (as the Metal backend's write guard does).
+// would have held it back on the Switch). So from each submit on (not only once guest-main waits for the frame: other
+// game threads write the next frame's data meanwhile; TotK's HUD drew a digit of another string over the "L" key icon
+// while the inventory opened), the pages that still-running submits read in place are read-only; a write to one
+// faults, waits for the submit that reads it and makes the range writable again, and the write is retried (as the
+// Metal backend's write guard does).
 //
 // A page the game wrote that way is hot: later submits copy what they read there when they are recorded (what the GPU
 // would read, since on the Switch the game writes only after the fence) instead of reading it in place, so the game
@@ -282,8 +284,8 @@ pub(super) fn holds(addr: usize) -> bool {
     find(t, addr).is_some_and(|i| t.released[i].load(Ordering::Acquire) == 0)
 }
 
-/// Guest-main's fence `fence` returned early: release the previous ranges (their work completed: at most one frame
-/// overlaps) and protect what submits up to `fence` that are still running read.
+/// After submit `fence` (and when guest-main's wait for it returns early): release the previous ranges and protect
+/// what submits up to `fence` that are still running read.
 pub(super) fn protect(fence: u64) {
     if !enabled() {
         return;
