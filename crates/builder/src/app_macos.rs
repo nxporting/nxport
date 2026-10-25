@@ -883,7 +883,15 @@ impl Builder {
                     if mods.is_none() {
                         edits.files.no_mods = Some(true);
                     }
+                    if settings_file.exists() || settings_file.is_symlink() {
+                        let _ = nxport_build::pack::ensure_writable(&settings_file);
+                        let _ = std::fs::remove_file(&settings_file);
+                    }
                     settings::save_preset(&settings_file, &edits)?;
+                    if let Some(parent) = app2.parent() {
+                        let _ = nxport_build::pack::ensure_writable(parent);
+                        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                    }
                     nxport_build::pack::pack_app(&nxport_build::pack::PackOptions {
                         dump_dir: &dump,
                         mods_dir: mods.as_deref(),
@@ -1268,6 +1276,7 @@ mod tests {
         *mem.target(Target::MacApp) = Some(TargetMemory {
             mods: Some("my_kirby_mods".to_string()),
             bundle_id: None,
+            gpu: None,
             settings: Some(patch.clone()),
         });
         let back: GameMemory = toml::from_str(&toml::to_string_pretty(&mem).unwrap()).unwrap();

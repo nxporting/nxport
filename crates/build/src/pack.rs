@@ -31,6 +31,12 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     let out_app = opts.out_app.unwrap_or(&default_out);
     println!("[+] Packaging {} {} into {}", game_name, version_str, out_app.display());
 
+    // Clean existing app bundle if present so stale files, symlinks, or read-only files
+    // do not cause permission or packaging conflicts.
+    if out_app.exists() || out_app.is_symlink() {
+        clean_path(out_app)?;
+    }
+
     // Bundle directories
     let contents = out_app.join("Contents");
     let macos = contents.join("MacOS");
@@ -44,7 +50,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     // Locate engine executable
     let engine_bin = locate_engine_binary()?;
     let dest_bin = macos.join("nxport");
-    fs::copy(&engine_bin, &dest_bin)?;
+    copy_file_robust(&engine_bin, &dest_bin)?;
 
     // Make sure it is executable
     let mut perms = fs::metadata(&dest_bin)?.permissions();
@@ -61,8 +67,8 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from("movie_shim.dylib"),
     ] {
         if candidate.is_file() {
-            let _ = fs::copy(candidate, macos.join("movie_shim.dylib"));
-            let _ = fs::copy(candidate, frameworks.join("movie_shim.dylib"));
+            let _ = copy_file_robust(candidate, &macos.join("movie_shim.dylib"));
+            let _ = copy_file_robust(candidate, &frameworks.join("movie_shim.dylib"));
             break;
         }
     }
@@ -73,17 +79,27 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
 
     if opts.symlink_assets {
         println!("  Linking assets (symlinks)...");
-        if !dest_exefs.exists() {
-            std::os::unix::fs::symlink(fs::canonicalize(&exefs)?, &dest_exefs)?;
+        if dest_exefs.is_symlink() || dest_exefs.exists() {
+            clean_path(&dest_exefs)?;
         }
-        if romfs.is_dir() && !dest_romfs.exists() {
+        std::os::unix::fs::symlink(fs::canonicalize(&exefs)?, &dest_exefs)?;
+        if romfs.is_dir() {
+            if dest_romfs.is_symlink() || dest_romfs.exists() {
+                clean_path(&dest_romfs)?;
+            }
             std::os::unix::fs::symlink(fs::canonicalize(&romfs)?, &dest_romfs)?;
         }
     } else {
         println!("  Copying ExeFS...");
+        if dest_exefs.is_symlink() {
+            clean_path(&dest_exefs)?;
+        }
         copy_dir_recursive(&exefs, &dest_exefs)?;
         if romfs.is_dir() {
             println!("  Copying RomFS (this may take a few moments)...");
+            if dest_romfs.is_symlink() {
+                clean_path(&dest_romfs)?;
+            }
             copy_dir_recursive(&romfs, &dest_romfs)?;
         }
     }
@@ -117,11 +133,15 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
                     packaged_any_mods = true;
                     if opts.symlink_assets {
                         println!("  Linking mod directory...");
-                        if !dest_mods.exists() {
-                            std::os::unix::fs::symlink(fs::canonicalize(mods)?, &dest_mods)?;
+                        if dest_mods.is_symlink() || dest_mods.exists() {
+                            clean_path(&dest_mods)?;
                         }
+                        std::os::unix::fs::symlink(fs::canonicalize(mods)?, &dest_mods)?;
                     } else {
                         println!("  Copying mod directory...");
+                        if dest_mods.is_symlink() {
+                            clean_path(&dest_mods)?;
+                        }
                         copy_dir_recursive(mods, &dest_mods)?;
                     }
                 }
@@ -138,11 +158,15 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
                     packaged_any_mods = true;
                     let dest = dest_mods.join(entry.file_name());
                     if opts.symlink_assets {
-                        if !dest.exists() {
-                            let _ = fs::create_dir_all(&dest_mods);
-                            std::os::unix::fs::symlink(fs::canonicalize(&path)?, &dest)?;
+                        if dest.is_symlink() || dest.exists() {
+                            clean_path(&dest)?;
                         }
+                        let _ = fs::create_dir_all(&dest_mods);
+                        std::os::unix::fs::symlink(fs::canonicalize(&path)?, &dest)?;
                     } else {
+                        if dest.is_symlink() {
+                            clean_path(&dest)?;
+                        }
                         copy_dir_recursive(&path, &dest)?;
                     }
                 }
@@ -162,15 +186,16 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if !packaged_any_mods {
         app_settings.files.no_mods = Some(true);
     }
+    if settings_path.exists() || settings_path.is_symlink() {
+        let _ = ensure_writable(&settings_path);
+        let _ = fs::remove_file(&settings_path);
+    }
     nxport::settings::save_preset(&settings_path, &app_settings)?;
+    let _ = ensure_writable(&settings_path);
 
     if let Some(shader_cache) = opts.shader_cache_dir.filter(|d| d.is_dir()) {
         let dest_cache = resources.join("shader_cache");
-        if dest_cache.is_symlink() {
-            let _ = fs::remove_file(&dest_cache);
-        } else if dest_cache.is_dir() {
-            let _ = fs::remove_dir_all(&dest_cache);
-        }
+        clean_path(&dest_cache)?;
         if opts.symlink_assets {
             std::os::unix::fs::symlink(fs::canonicalize(&shader_cache)?, &dest_cache)?;
         } else {
@@ -182,7 +207,13 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     // Icon from the game's logo
     let icon = match crate::icon::logo(opts.dump_dir, tid) {
         Some(logo) => {
-            crate::icon::icns(&logo, &resources.join("AppIcon.icns"))?;
+            let icon_path = resources.join("AppIcon.icns");
+            if icon_path.exists() || icon_path.is_symlink() {
+                let _ = ensure_writable(&icon_path);
+                let _ = fs::remove_file(&icon_path);
+            }
+            crate::icon::icns(&logo, &icon_path)?;
+            let _ = ensure_writable(&icon_path);
             "\n    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>"
         }
         None => "",
@@ -217,10 +248,10 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
 "#,
         bundle_id, game_name, game_name, version_str, icon
     );
-    fs::write(contents.join("Info.plist"), plist_content)?;
+    write_file_robust(&contents.join("Info.plist"), plist_content)?;
 
     // Write PkgInfo
-    fs::write(contents.join("PkgInfo"), "APPL????")?;
+    write_file_robust(&contents.join("PkgInfo"), "APPL????")?;
 
     println!("[+] Wrote {}", out_app.display());
 
@@ -251,8 +282,126 @@ pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Erro
     Err("Could not find nxport release binary. Run `cargo build --release` first.".into())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// Ensures that `path` has user write permissions so it can be modified, overwritten, or removed.
+pub fn ensure_writable(path: &Path) -> std::io::Result<()> {
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        if !metadata.is_symlink() {
+            let mut perms = metadata.permissions();
+            let mode = perms.mode();
+            let needed = if metadata.is_dir() { 0o700 } else { 0o600 };
+            if mode & needed != needed {
+                perms.set_mode(mode | needed);
+                let _ = fs::set_permissions(path, perms);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
+            unsafe {
+                libc::chflags(c_path.as_ptr(), 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Recursively removes a file or directory tree, ensuring all permissions allow deletion.
+/// Symlinks are removed without traversing their target.
+pub fn clean_path(path: &Path) -> std::io::Result<()> {
+    if !path.exists() && !path.is_symlink() {
+        return Ok(());
+    }
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
+    if metadata.is_symlink() {
+        if let Some(parent) = path.parent() {
+            let _ = ensure_writable(parent);
+        }
+        return fs::remove_file(path);
+    }
+
+    if metadata.is_dir() {
+        let _ = ensure_writable(path);
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            clean_path(&entry.path())?;
+        }
+        let _ = ensure_writable(path);
+        if let Some(parent) = path.parent() {
+            let _ = ensure_writable(parent);
+        }
+        fs::remove_dir(path)
+    } else {
+        if let Some(parent) = path.parent() {
+            let _ = ensure_writable(parent);
+        }
+        let _ = ensure_writable(path);
+        fs::remove_file(path)
+    }
+}
+
+/// Copies a file robustly: unlinks or makes writable any existing destination file first,
+/// uses APFS cloning where available, and ensures the destination has user write permissions.
+pub fn copy_file_robust(src: &Path, dst: &Path) -> std::io::Result<u64> {
+    if dst.is_symlink() || dst.is_file() {
+        if let Some(parent) = dst.parent() {
+            let _ = ensure_writable(parent);
+        }
+        let _ = ensure_writable(dst);
+        let _ = fs::remove_file(dst);
+    } else if dst.is_dir() {
+        clean_path(dst)?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        if let (Ok(c_src), Ok(c_dst)) = (
+            std::ffi::CString::new(src.as_os_str().as_bytes()),
+            std::ffi::CString::new(dst.as_os_str().as_bytes()),
+        ) {
+            if unsafe { libc::clonefile(c_src.as_ptr(), c_dst.as_ptr(), 0) } == 0 {
+                let _ = ensure_writable(dst);
+                if let Ok(metadata) = fs::symlink_metadata(dst) {
+                    return Ok(metadata.len());
+                }
+                return Ok(0);
+            }
+        }
+    }
+
+    let bytes = fs::copy(src, dst)?;
+    let _ = ensure_writable(dst);
+    Ok(bytes)
+}
+
+/// Writes content to a file, unlinking any existing read-only file first.
+pub fn write_file_robust(path: &Path, content: impl AsRef<[u8]>) -> std::io::Result<()> {
+    if path.exists() || path.is_symlink() {
+        if let Some(parent) = path.parent() {
+            let _ = ensure_writable(parent);
+        }
+        let _ = ensure_writable(path);
+        let _ = fs::remove_file(path);
+    }
+    fs::write(path, content)?;
+    let _ = ensure_writable(path);
+    Ok(())
+}
+
+pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if dst.is_symlink() || dst.is_file() {
+        let _ = clean_path(dst);
+    }
     fs::create_dir_all(dst)?;
+    let _ = ensure_writable(dst);
+
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
@@ -260,8 +409,142 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         if ty.is_dir() {
             copy_dir_recursive(&entry.path(), &dest_path)?;
         } else if ty.is_file() {
-            fs::copy(entry.path(), dest_path)?;
+            copy_file_robust(&entry.path(), &dest_path)?;
+        } else if ty.is_symlink() {
+            if let Ok(target) = fs::read_link(entry.path()) {
+                if dest_path.exists() || dest_path.is_symlink() {
+                    let _ = clean_path(&dest_path);
+                }
+                let _ = std::os::unix::fs::symlink(&target, &dest_path);
+            }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let p = std::env::temp_dir().join(format!(
+                "nxport-pack-test-{}-{}-{:?}",
+                name,
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = clean_path(&p);
+            fs::create_dir_all(&p).unwrap();
+            TempDir(p)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = clean_path(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_ensure_writable() {
+        let t = TempDir::new("writable");
+        let file = t.0.join("test.txt");
+        fs::write(&file, "hello").unwrap();
+        let mut perms = fs::metadata(&file).unwrap().permissions();
+        perms.set_mode(0o444);
+        fs::set_permissions(&file, perms).unwrap();
+        assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o200, 0);
+
+        ensure_writable(&file).unwrap();
+        assert_ne!(fs::metadata(&file).unwrap().permissions().mode() & 0o200, 0);
+    }
+
+    #[test]
+    fn test_copy_file_robust_overwrites_read_only() {
+        let t = TempDir::new("copy_ro");
+        let src = t.0.join("src.bin");
+        let dst = t.0.join("dst.bin");
+        fs::write(&src, "new content").unwrap();
+        let mut src_perms = fs::metadata(&src).unwrap().permissions();
+        src_perms.set_mode(0o444);
+        fs::set_permissions(&src, src_perms).unwrap();
+
+        fs::write(&dst, "old content").unwrap();
+        let mut dst_perms = fs::metadata(&dst).unwrap().permissions();
+        dst_perms.set_mode(0o444);
+        fs::set_permissions(&dst, dst_perms).unwrap();
+
+        // Standard fs::copy would fail with EACCES / PermissionDenied
+        assert!(fs::copy(&src, &dst).is_err());
+
+        // copy_file_robust succeeds and dst becomes writable
+        copy_file_robust(&src, &dst).unwrap();
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "new content");
+        assert_ne!(fs::metadata(&dst).unwrap().permissions().mode() & 0o200, 0);
+    }
+
+    #[test]
+    fn test_clean_path_removes_read_only_tree() {
+        let t = TempDir::new("clean_ro");
+        let sub = t.0.join("bundle").join("Contents").join("Resources");
+        fs::create_dir_all(&sub).unwrap();
+        let f = sub.join("main");
+        fs::write(&f, "switch binary").unwrap();
+        let mut perms = fs::metadata(&f).unwrap().permissions();
+        perms.set_mode(0o444);
+        fs::set_permissions(&f, perms).unwrap();
+
+        // Make the containing directories read-only
+        let mut dir_perms = fs::metadata(&sub).unwrap().permissions();
+        dir_perms.set_mode(0o555);
+        fs::set_permissions(&sub, dir_perms).unwrap();
+
+        let bundle = t.0.join("bundle");
+        clean_path(&bundle).unwrap();
+        assert!(!bundle.exists());
+    }
+
+    #[test]
+    fn test_clean_path_preserves_symlink_targets() {
+        let t = TempDir::new("clean_sym");
+        let target_dir = t.0.join("target_dir");
+        fs::create_dir_all(&target_dir).unwrap();
+        let target_file = target_dir.join("data.bin");
+        fs::write(&target_file, "precious data").unwrap();
+
+        let link_parent = t.0.join("app").join("Dump");
+        fs::create_dir_all(&link_parent).unwrap();
+        let link_path = link_parent.join("RomFS");
+        std::os::unix::fs::symlink(&target_dir, &link_path).unwrap();
+
+        clean_path(&t.0.join("app")).unwrap();
+        assert!(!t.0.join("app").exists());
+        assert!(target_dir.exists());
+        assert_eq!(fs::read_to_string(&target_file).unwrap(), "precious data");
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_overwrites_read_only_files() {
+        let t = TempDir::new("copy_dir_ro");
+        let src = t.0.join("src_exefs");
+        fs::create_dir_all(&src).unwrap();
+        let src_main = src.join("main");
+        fs::write(&src_main, "new main").unwrap();
+        let mut p = fs::metadata(&src_main).unwrap().permissions();
+        p.set_mode(0o444);
+        fs::set_permissions(&src_main, p).unwrap();
+
+        let dst = t.0.join("dst_exefs");
+        fs::create_dir_all(&dst).unwrap();
+        let dst_main = dst.join("main");
+        fs::write(&dst_main, "old main").unwrap();
+        let mut p2 = fs::metadata(&dst_main).unwrap().permissions();
+        p2.set_mode(0o444);
+        fs::set_permissions(&dst_main, p2).unwrap();
+
+        copy_dir_recursive(&src, &dst).unwrap();
+        assert_eq!(fs::read_to_string(&dst_main).unwrap(), "new main");
+        assert_ne!(fs::metadata(&dst_main).unwrap().permissions().mode() & 0o200, 0);
+    }
 }
