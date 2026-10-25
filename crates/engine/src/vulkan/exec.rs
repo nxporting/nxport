@@ -829,7 +829,9 @@ impl Ctx {
         if self.window.is_none() {
             #[cfg(target_os = "macos")]
             let layer = crate::host::display::layer_ptr();
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            let layer = crate::host::display::hwnd();
+            #[cfg(not(any(target_os = "macos", windows)))]
             let layer = 0;
             if layer == 0 || self.window_tried {
                 return;

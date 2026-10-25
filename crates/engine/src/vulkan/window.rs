@@ -1,5 +1,9 @@
 // Window output: each presented texture is blitted into an image of a swapchain on the display's CAMetalLayer
-// (host/display.rs), cropped to what the game presents and flipped for NVN's lower-left window origin.
+// (host/display.rs) or HWND (host/display_sdl.rs), cropped to what the game presents and flipped for NVN's lower-left
+// window origin.
+//
+// On macOS the drawable takes the game's shape and the layer fits it into the window. A Win32 surface is the window's
+// client area itself, so there the picture is fitted into the swapchain image here, with black bars around it.
 
 use ash::vk;
 
@@ -9,11 +13,15 @@ use super::device::Dev;
 const SLOTS: usize = 3;
 
 pub(super) struct Window {
-    layer: usize,
+    /// The CAMetalLayer (Apple) or HWND (Windows) the surface is on.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    handle: usize,
     surface: vk::SurfaceKHR,
     swapchain: vk::SwapchainKHR,
     images: Vec<vk::Image>,
     extent: vk::Extent2D,
+    /// Whether the swapchain waits for vertical blank (FIFO): the VSync setting when it was made.
+    vsync: bool,
     slots: Vec<Slot>,
     next: usize,
     /// The presented content size the drawable was last fitted to.
@@ -28,14 +36,25 @@ struct Slot {
 }
 
 impl Window {
-    /// A window on the CAMetalLayer at `layer`, if the device can present to it.
-    pub(super) unsafe fn new(dev: &Dev, layer: usize) -> Option<Window> {
+    /// A window on `handle` (the CAMetalLayer on Apple hosts, the HWND on Windows), if the device can present to it.
+    pub(super) unsafe fn new(dev: &Dev, handle: usize) -> Option<Window> {
         let Some(s) = dev.surfaces.as_ref() else {
             println!("[vulkan] no surface extensions");
             return None;
         };
-        let info = vk::MetalSurfaceCreateInfoEXT::default().layer(layer as *const vk::CAMetalLayer);
-        let surface = s.metal.create_metal_surface(&info, None).ok()?;
+        #[cfg(target_vendor = "apple")]
+        let surface = {
+            let info = vk::MetalSurfaceCreateInfoEXT::default().layer(handle as *const vk::CAMetalLayer);
+            s.metal.create_metal_surface(&info, None).ok()?
+        };
+        #[cfg(windows)]
+        let surface = {
+            extern "system" {
+                fn GetModuleHandleW(name: *const u16) -> isize;
+            }
+            let info = vk::Win32SurfaceCreateInfoKHR::default().hinstance(GetModuleHandleW(std::ptr::null())).hwnd(handle as isize);
+            s.win32.create_win32_surface(&info, None).ok()?
+        };
         if !s.surface.get_physical_device_surface_support(dev.pdev, dev.family, surface).unwrap_or(false) {
             s.surface.destroy_surface(surface, None);
             return None;
@@ -52,11 +71,12 @@ impl Window {
             slots.push(Slot { cb, fence, acquired, done });
         }
         let mut w = Window {
-            layer,
+            handle,
             surface,
             swapchain: vk::SwapchainKHR::null(),
             images: Vec::new(),
             extent: vk::Extent2D::default(),
+            vsync: true,
             slots,
             next: 0,
             content: (0, 0),
@@ -79,6 +99,14 @@ impl Window {
             return None;
         }
         let count = (caps.min_image_count + 1).max(SLOTS as u32).min(if caps.max_image_count > 0 { caps.max_image_count } else { u32::MAX });
+        // VSync off: the newest frame replaces a waiting one (MAILBOX), else frames show at once and may tear
+        // (IMMEDIATE). FIFO is the only mode every implementation has.
+        let vsync = crate::host::overlay::is_vsync();
+        let modes = s.surface.get_physical_device_surface_present_modes(dev.pdev, self.surface).unwrap_or_default();
+        let mode = [vk::PresentModeKHR::MAILBOX, vk::PresentModeKHR::IMMEDIATE]
+            .into_iter()
+            .find(|m| !vsync && modes.contains(m))
+            .unwrap_or(vk::PresentModeKHR::FIFO);
         let info = vk::SwapchainCreateInfoKHR::default()
             .surface(self.surface)
             .min_image_count(count)
@@ -90,7 +118,7 @@ impl Window {
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(vk::PresentModeKHR::FIFO)
+            .present_mode(mode)
             .clipped(true)
             .old_swapchain(self.swapchain);
         let new = s.swapchain.create_swapchain(&info, None).ok()?;
@@ -103,6 +131,7 @@ impl Window {
         self.swapchain = new;
         self.images = s.swapchain.get_swapchain_images(new).ok()?;
         self.extent = extent;
+        self.vsync = vsync;
         Some(())
     }
 
@@ -119,11 +148,13 @@ impl Window {
         #[cfg(target_os = "macos")]
         if self.content != (cw as u32, ch as u32) {
             self.content = (cw as u32, ch as u32);
-            let l = &*(self.layer as *const objc2_quartz_core::CAMetalLayer);
+            let l = &*(self.handle as *const objc2_quartz_core::CAMetalLayer);
             crate::host::display::content_size_changed(l, cw as f64, ch as f64);
         }
+        // The window was resized (or the VSync setting changed).
         let caps = s.surface.get_physical_device_surface_capabilities(dev.pdev, self.surface);
-        if caps.is_ok_and(|c| c.current_extent.width != u32::MAX && c.current_extent != self.extent) && self.recreate(dev).is_none() {
+        let resized = caps.is_ok_and(|c| c.current_extent.width != u32::MAX && c.current_extent != self.extent);
+        if (resized || self.vsync != crate::host::overlay::is_vsync()) && self.recreate(dev).is_none() {
             return;
         }
         let slot = &self.slots[self.next];
@@ -155,6 +186,32 @@ impl Window {
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .subresource_range(range)];
         d.cmd_pipeline_barrier(slot.cb, vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER, vk::DependencyFlags::empty(), &[], &[], &to_dst);
+        let (full_w, full_h) = (self.extent.width as i32, self.extent.height as i32);
+        // The picture's place in the image: all of it on macOS (the drawable has the picture's shape), else the largest
+        // rectangle of the picture's shape, centred, with the rest cleared to black.
+        #[cfg(target_os = "macos")]
+        let (dx, dy, dw, dh) = (0, 0, full_w, full_h);
+        #[cfg(not(target_os = "macos"))]
+        let (dx, dy, dw, dh) = {
+            let (dw, dh) = if full_w as i64 * ch as i64 > full_h as i64 * cw as i64 {
+                ((full_h as i64 * cw as i64 / ch as i64) as i32, full_h)
+            } else {
+                (full_w, (full_w as i64 * ch as i64 / cw as i64) as i32)
+            };
+            ((full_w - dw) / 2, (full_h - dh) / 2, dw.max(1), dh.max(1))
+        };
+        if (dw, dh) != (full_w, full_h) {
+            let black = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] };
+            d.cmd_clear_color_image(slot.cb, dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &black, &[range]);
+            let cleared = [vk::ImageMemoryBarrier::default()
+                .image(dst)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .subresource_range(range)];
+            d.cmd_pipeline_barrier(slot.cb, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::TRANSFER, vk::DependencyFlags::empty(), &[], &[], &cleared);
+        }
         // NVN's LOWER_LEFT window origin keeps the bottom row first in memory: flipped on the way out.
         let (y0, y1) = if crate::nvn::api::window_origin_mode() == 0 { (cy + ch, cy) } else { (cy, cy + ch) };
         let region = vk::ImageBlit::default()
@@ -163,10 +220,7 @@ impl Window {
             )
             .src_offsets([vk::Offset3D { x: cx, y: y0, z: 0 }, vk::Offset3D { x: cx + cw, y: y1, z: 1 }])
             .dst_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
-            .dst_offsets([
-                vk::Offset3D { x: 0, y: 0, z: 0 },
-                vk::Offset3D { x: self.extent.width as i32, y: self.extent.height as i32, z: 1 },
-            ]);
+            .dst_offsets([vk::Offset3D { x: dx, y: dy, z: 0 }, vk::Offset3D { x: dx + dw, y: dy + dh, z: 1 }]);
         d.cmd_blit_image(slot.cb, src, vk::ImageLayout::GENERAL, dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region], vk::Filter::LINEAR);
         let to_present = [vk::ImageMemoryBarrier::default()
             .image(dst)

@@ -1163,8 +1163,8 @@ pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::err
 
 /// Runs a game whose code is lifted (docs/windows-port.md): resolves the settings as the native run does, loads and
 /// patches the game, then runs its entry chain in the guest library `files.guest_library` (nxport-cli lift-game and
-/// compile-guest, with the same settings: the code was lifted as these patch it). Headless (Vulkan's --dump-frame
-/// shows what it renders) until there is a window. Returns when nnMain does.
+/// compile-guest, with the same settings: the code was lifted as these patch it). The main thread then runs the window
+/// (host/display_sdl.rs) and never returns; with --headless it returns when nnMain does.
 #[cfg(all(nx_runtime, not(nx_native)))]
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
     let s = resolve_settings(layers);
@@ -1201,10 +1201,28 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
                 chain.run().map_err(|e| e.to_string())
             }
         })?;
-    match guest_main.join() {
-        Ok(r) => r.map_err(Into::into),
-        Err(_) => Err("guest-main thread panicked".into()),
+    if host::display::headless() {
+        return match guest_main.join() {
+            Ok(r) => r.map_err(Into::into),
+            Err(_) => Err("guest-main thread panicked".into()),
+        };
     }
+    // As natively: the guest finishing takes the process down, and the main thread owns the window and its event loop.
+    std::thread::Builder::new().name("guest-watch".into()).spawn(move || {
+        let code = match guest_main.join() {
+            Ok(Ok(())) => 0,
+            Ok(Err(e)) => {
+                eprintln!("[-] guest exited with error: {e}");
+                1
+            }
+            Err(_) => {
+                eprintln!("[-] guest-main thread panicked");
+                101
+            }
+        };
+        std::process::exit(code);
+    })?;
+    host::display::run_main_thread()
 }
 
 /// A fault on a page the GPU backend or write tracking protects, in the order cpu::crash_handler asks them. The
