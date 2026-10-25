@@ -198,7 +198,7 @@ pub(super) fn fetch() {
             };
             println!(
                 "[+] Pipelines: shared list downloaded ({} entries, {} not listed before)",
-                text.lines().filter(|l| l.starts_with("p1 ")).count(),
+                text.lines().filter(|l| l.starts_with("p1 ") || l.starts_with("p2 ")).count(),
                 new.len()
             );
             if queue_now {

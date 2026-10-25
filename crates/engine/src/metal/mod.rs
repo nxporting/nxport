@@ -73,6 +73,10 @@ pub(super) struct CachedPassRts {
     pub(super) depth_tex: Option<(Tex, RtRef)>,
     pub(super) color_pfs: [MTLPixelFormat; 8],
     pub(super) depth_pf: MTLPixelFormat,
+    /// The targets' NVN formats (texture, view; pipeline lists) and sample count.
+    pub(super) nvn_colors: [(u32, u32); 8],
+    pub(super) nvn_depth: (u32, u32),
+    pub(super) samples: u32,
     pub(super) enc_key: smallvec::SmallVec<[u64; 36]>,
     pub(super) target_size: (f64, f64),
     /// Block-compressed targets rendered through proxies: (proxy, target, level), see `bc_proxy`.
