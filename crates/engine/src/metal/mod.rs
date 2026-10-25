@@ -4657,6 +4657,10 @@ pub(super) fn describe_fault_page(addr: usize) -> String {
 }
 
 /// The address range of guest code (--report-guard: only accesses made by guest code wait for reports).
+pub(crate) fn set_hle_stub_range(start: usize, end: usize) {
+    report_guard::set_hle_stub_range(start, end);
+}
+
 pub(crate) fn set_guest_code_range(start: usize, end: usize) {
     report_guard::set_guest_code_range(start, end);
 }
