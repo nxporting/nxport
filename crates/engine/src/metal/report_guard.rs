@@ -59,13 +59,43 @@ pub(super) fn set_guest_code_range(start: usize, end: usize) {
     CODE_END.store(end, Ordering::Release);
 }
 
-/// Only guest code waits: a game thread inside our HLE code may hold a lock the submit producing the reports needs (the
-/// gfx state lock), which deadlocked until the timeout at gameplay start (2026-10-15).
-pub(super) fn may_wait(pc: usize) -> bool {
+/// HLE call stubs, and the engine binary's code.
+static STUBS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+static ENGINE_TEXT: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+
+pub(super) fn set_hle_stub_range(start: usize, end: usize) {
+    STUBS[0].store(start, Ordering::Release);
+    STUBS[1].store(end, Ordering::Release);
+    unsafe {
+        let mut info: libc::Dl_info = std::mem::zeroed();
+        if libc::dladdr(may_wait as *const libc::c_void, &mut info) != 0 {
+            extern "C" {
+                fn getsegmentdata(mh: *const libc::c_void, seg: *const libc::c_char, size: *mut libc::c_ulong) -> *const u8;
+            }
+            let mut size: libc::c_ulong = 0;
+            let text = getsegmentdata(info.dli_fbase, c"__TEXT".as_ptr(), &mut size);
+            if !text.is_null() {
+                ENGINE_TEXT[0].store(text as usize, Ordering::Release);
+                ENGINE_TEXT[1].store(text as usize + size as usize, Ordering::Release);
+            }
+        }
+    }
+}
+
+fn within(r: &[AtomicUsize; 2], a: usize) -> bool {
+    a >= r[0].load(Ordering::Acquire) && a < r[1].load(Ordering::Acquire)
+}
+
+/// Guest code waits, and so does a library function the guest called straight through an HLE stub (its return address
+/// is the stub, its code is not ours: memcpy, which TotK copies its freshly rendered terrain normal maps with; reading
+/// them before the write-back gave the copies zeros). Our own code never waits: a game thread inside it may hold a lock
+/// the submit producing the reports needs (the gfx state lock), which deadlocked until the timeout at gameplay start
+/// (2026-10-15).
+pub(super) fn may_wait(pc: usize, lr: usize) -> bool {
     crate::cpu::tls::is_guest_thread()
         && !IN_ENGINE.with(|e| e.get())
-        && pc >= CODE_START.load(Ordering::Acquire)
-        && pc < CODE_END.load(Ordering::Acquire)
+        && ((pc >= CODE_START.load(Ordering::Acquire) && pc < CODE_END.load(Ordering::Acquire))
+            || (within(&STUBS, lr) && !within(&ENGINE_TEXT, pc)))
 }
 
 /// 1 on (default), 0 off (--report-guard=0), 2 log only (--report-guard=log).
@@ -479,7 +509,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
         return true;
     }
     LAST_RETRY.with(|r| r.set(0));
-    let guest = may_wait(pc);
+    let guest = may_wait(pc, lr);
     if mode() == crate::settings::ReportGuard::Log || !guest {
         record_hit(pc, lr, addr, guest, write);
         if !guest {

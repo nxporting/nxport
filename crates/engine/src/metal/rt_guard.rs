@@ -643,7 +643,20 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
         }
         libc::mprotect(page as *mut libc::c_void, PAGE, libc::PROT_READ);
         wake();
-        super::watch_log(page, page + PAGE, || format!("engine read of held page {:#x} (pc {:#x}): opened read-only, write-back requested", page, pc));
+        super::watch_log(page, page + PAGE, || {
+            let mut name = [0u8; 32];
+            libc::pthread_getname_np(libc::pthread_self(), name.as_mut_ptr() as *mut libc::c_char, name.len());
+            let name = std::ffi::CStr::from_bytes_until_nul(&name).map(|c| c.to_string_lossy().into_owned()).unwrap_or_default();
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            let sym = if libc::dladdr(lr as *const libc::c_void, &mut info) != 0 && !info.dli_sname.is_null() {
+                format!("{}+{:#x}", std::ffi::CStr::from_ptr(info.dli_sname).to_string_lossy(), lr - info.dli_saddr as usize)
+            } else if libc::dladdr(lr as *const libc::c_void, &mut info) != 0 {
+                format!("image+{:#x}", lr - info.dli_fbase as usize)
+            } else {
+                format!("{:#x}", lr)
+            };
+            format!("engine read of held page {:#x} (thread {}, pc {:#x}, lr {}): opened read-only, write-back requested", page, name, pc, sym)
+        });
         return true;
     }
     WAITS.fetch_add(1, Ordering::Relaxed);
