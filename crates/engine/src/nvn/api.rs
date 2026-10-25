@@ -6061,7 +6061,11 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             std::time::Duration::from_nanos(16_666_667 * interval.max(1) as u64)
         };
         let wait = if frame.is_zero() {
-            std::time::Duration::ZERO
+            if interval == 0 && crate::metal::display_pacing() && crate::host::overlay::is_vsync() {
+                crate::metal::display_pacing_wait().unwrap_or_default()
+            } else {
+                std::time::Duration::ZERO
+            }
         } else {
             let mut g = NEXT.lock().unwrap();
             let now = std::time::Instant::now();
@@ -6081,6 +6085,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             hle_sleep_ns(wait.as_nanos() as u64);
         }
     }
+    crate::metal::frame_started();
     let idx = (*w).next_index % ((*w).texture_count as u32);
     (*w).next_index = (*w).next_index.wrapping_add(1);
     if !out_index.is_null() {
