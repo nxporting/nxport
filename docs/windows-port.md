@@ -173,6 +173,13 @@ conformance captures (Testing), on this Mac through MoltenVK.
   them: the support buffer, the driver constant buffer (draw parameters; storage buffer descriptors in hardware stage
   order, fragment at 0x510), the shader's constant bank, bound uniform and storage buffers, textures and images through
   the pool registrations.
+- Shader precompilation: an offline pathway (`nxport_build::vulkan_precompile`, CLI `nxport-cli shaders precompile-vulkan --dump <dir>`)
+  extracts shader stages directly from RomFS (`BNSH`/`SHAB`/raw NVN), translates Maxwell SASS to SPIR-V in parallel via `sass2spv`,
+  compiles graphics pipelines offline using the Vulkan driver into a persistent binary cache (`pipelines.vkcache`, `stages.txt`,
+  `code/`, `t/`), and converts legacy `p1` pipeline entries (MTLPixelFormat) to `p2` (NVN format) on the fly so existing shared
+  pipeline lists work seamlessly. The API provides progress reporting (`on_progress`) for integration into the Windows builder app.
+  On TotK 1.0.0, extraction discovers 26,093 unique stages (14,003 vertex, 11,915 fragment, 175 compute) which translate without
+  failure and compile into a 13.4 MB pipeline cache.
 - NVN state objects become pipeline state; viewport, scissor, stencil values, blend color and depth bias are dynamic.
   An upper-left window origin flips the viewport; a GL depth mode uses depth clip control (or the vertex stage converts).
 - Textures: one image per guest texture description, filled from guest memory, zeros where the guest's bytes cannot be
@@ -324,5 +331,8 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    build steps (`crates/builder/src/apple.rs` and `crates/builder/src/windows.rs`), bundled Zig 0.13 acquisition and
    caching (`crates/build/src/zig.rs`), Windows standalone app packaging (`crates/build/src/winapp.rs`), per-file
    progress reporting during lifting (`crates/build/src/lift.rs`), and headless snapshot verification.
+   Vulkan shader precompilation: **done**. `nxport_build::vulkan_precompile` and `nxport-cli shaders precompile-vulkan`
+   provide offline extraction, SASS-to-SPIR-V translation, pipeline synthesis from shared lists (with `p1` to `p2` conversion)
+   and `pipelines.vkcache` generation on the Vulkan driver.
 7. Plugin mods: two-pass lifting, then the interpreter fallback.
 8. Windows arm64 on the native path.

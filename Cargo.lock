@@ -539,11 +539,13 @@ dependencies = [
 name = "nxport-build"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "clap",
  "flate2",
  "libc",
  "nxport",
  "nxport-lifter",
+ "nxport-pipelines",
  "regex",
  "sass2spv",
  "serde",

@@ -144,7 +144,7 @@ fn view_type(ty: &str) -> (vk::ImageViewType, bool) {
 }
 
 /// Bytes of a stage its shader cache name covers: its header and the `size` bytes of code the translator decoded.
-fn named_len(code: &[u8], size: i32) -> usize {
+pub fn named_len(code: &[u8], size: i32) -> usize {
     let magic = code.get(..4).map_or(0, |w| u32::from_le_bytes(w.try_into().unwrap()));
     let size = size.max(0) as usize;
     match magic {
@@ -155,7 +155,7 @@ fn named_len(code: &[u8], size: i32) -> usize {
 }
 
 /// The input locations a SPIR-V module declares.
-fn spirv_inputs(spirv: &[u8]) -> Vec<u32> {
+pub fn spirv_inputs(spirv: &[u8]) -> Vec<u32> {
     let words: Vec<u32> = spirv.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     let mut locations: HashMap<u32, u32> = HashMap::new();
     let mut vars = Vec::new();
@@ -178,7 +178,7 @@ fn spirv_inputs(spirv: &[u8]) -> Vec<u32> {
     v
 }
 
-fn key_for(host: &sass2spv::accessor::Host, prep: &Prep, full: u64, state: &Option<sass2spv::accessor::GraphicsState>) -> u64 {
+pub fn key_for(host: &sass2spv::accessor::Host, prep: &Prep, full: u64, state: &Option<sass2spv::accessor::GraphicsState>) -> u64 {
     super::exec::hash_of(&(full, prep, format!("{state:?}"), format!("{host:?}")))
 }
 

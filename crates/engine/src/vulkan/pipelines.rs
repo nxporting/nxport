@@ -10,13 +10,13 @@ use super::shader::{Stage, StageId};
 use super::{format, state};
 
 /// Attribute stream for attributes a vertex stage reads but the game leaves unbound.
-pub(super) const ZERO_STREAM: u32 = 16;
+pub const ZERO_STREAM: u32 = 16;
 
 /// A vertex stream: binding, stride, per-instance, attributes (location, VkFormat, offset).
-pub(super) type Stream = (u32, u32, bool, Vec<(u32, i32, u32)>);
+pub type Stream = (u32, u32, bool, Vec<(u32, i32, u32)>);
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(super) struct Desc {
+pub struct Desc {
     pub vs: StageId,
     pub fs: Option<StageId>,
     pub topology: i32,
@@ -38,7 +38,7 @@ pub(super) struct Desc {
 
 /// The parts of the blend state, blend enables, channel mask and depth-stencil state a pipeline for these targets
 /// is made from (state.rs reads no other bits).
-pub(super) fn normalize(
+pub fn normalize(
     blend: &[u64; 8],
     color_state: u32,
     channel_mask: Option<u32>,
@@ -71,10 +71,10 @@ pub(super) fn normalize(
 }
 
 /// A descriptor set layout for both stages and its pipeline layout; whether the set is pushed.
-pub(super) type Layout = (vk::DescriptorSetLayout, vk::PipelineLayout, bool);
+pub type Layout = (vk::DescriptorSetLayout, vk::PipelineLayout, bool);
 
 /// The layout of a graphics stage pair (one set: vertex bindings, then fragment ones).
-pub(super) unsafe fn layout(dev: &Dev, vstage: &Stage, fstage: Option<&Stage>) -> Option<Layout> {
+pub unsafe fn layout(dev: &Dev, vstage: &Stage, fstage: Option<&Stage>) -> Option<Layout> {
     let mut lb: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
     for st in std::iter::once(vstage).chain(fstage) {
         lb.extend(st.bindings.iter().map(|b| {
@@ -97,7 +97,7 @@ pub(super) unsafe fn layout(dev: &Dev, vstage: &Stage, fstage: Option<&Stage>) -
 }
 
 /// The pipeline `d` describes.
-pub(super) unsafe fn create(
+pub unsafe fn create(
     dev: &Dev,
     d: &Desc,
     vstage: &Stage,
@@ -217,21 +217,21 @@ fn made() -> &'static Mutex<Made> {
 }
 
 /// A pipeline the workers made for `key` (the hash of its Desc).
-pub(super) fn take(key: u64) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
+pub fn take(key: u64) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
     made().lock().unwrap().pipelines.get(&key).copied()
 }
 
 /// A layout the workers made for this stage pair.
-pub(super) fn made_layout(vs: StageId, fs: Option<StageId>) -> Option<Layout> {
+pub fn made_layout(vs: StageId, fs: Option<StageId>) -> Option<Layout> {
     made().lock().unwrap().layouts.get(&(vs, fs)).copied()
 }
 
 /// Adds a pipeline the workers made.
-pub(super) fn put(key: u64, p: vk::Pipeline, layout: vk::PipelineLayout) {
+pub fn put(key: u64, p: vk::Pipeline, layout: vk::PipelineLayout) {
     made().lock().unwrap().pipelines.insert(key, (p, layout));
 }
 
 /// Adds a layout the workers made for this stage pair (or returns the one another worker added first).
-pub(super) fn put_layout(vs: StageId, fs: Option<StageId>, l: Layout) -> Layout {
+pub fn put_layout(vs: StageId, fs: Option<StageId>, l: Layout) -> Layout {
     *made().lock().unwrap().layouts.entry((vs, fs)).or_insert(l)
 }

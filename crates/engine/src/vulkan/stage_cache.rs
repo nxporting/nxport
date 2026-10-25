@@ -17,9 +17,9 @@ use ash::vk;
 use super::shader::Prep;
 
 /// Bytes of a stage's start that select its candidates (the Metal shader cache's weak hash).
-pub(super) const WEAK_LEN: usize = 0x130;
+pub const WEAK_LEN: usize = 0x130;
 
-pub(super) fn fnv1a64(data: &[u8]) -> u64 {
+pub fn fnv1a64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {
         h = (h ^ b as u64).wrapping_mul(0x100_0000_01b3);
@@ -27,10 +27,20 @@ pub(super) fn fnv1a64(data: &[u8]) -> u64 {
     h
 }
 
-fn dir() -> Option<&'static PathBuf> {
+static CUSTOM_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_cache_dir(dir: PathBuf) {
+    let _ = CUSTOM_DIR.set(dir);
+}
+
+pub fn dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
-        let root = crate::profile::data_subdir("vulkan_stages")?;
+        let root = CUSTOM_DIR.get().cloned().or_else(|| {
+            crate::settings::try_get()
+                .and_then(|s| s.files.shader_cache.clone())
+                .or_else(|| crate::profile::data_subdir("vulkan_stages"))
+        })?;
         let build = sass2spv::SOURCE_HASH;
         if let Ok(entries) = std::fs::read_dir(&root) {
             for e in entries.flatten() {
@@ -49,7 +59,7 @@ fn dir() -> Option<&'static PathBuf> {
 
 /// A stage seen in this or an earlier session.
 #[derive(Clone, Debug)]
-pub(super) struct Known {
+pub struct Known {
     pub full: u64,
     pub weak: u64,
     /// Bytes of code the name covers.
@@ -109,19 +119,19 @@ fn index() -> &'static Mutex<Index> {
 }
 
 /// The known stage whose code `code` starts with, translated with `prep`.
-pub(super) fn identify(code: &[u8], prep: &Prep) -> Option<Arc<Known>> {
+pub fn identify(code: &[u8], prep: &Prep) -> Option<Arc<Known>> {
     let weak = fnv1a64(code.get(..WEAK_LEN)?);
     let i = index().lock().unwrap();
     i.by_weak.get(&weak)?.iter().find(|k| k.prep == *prep && k.size <= code.len() && fnv1a64(&code[..k.size]) == k.full).cloned()
 }
 
 /// The known stage named `full`.
-pub(super) fn by_name(full: u64) -> Option<Arc<Known>> {
+pub fn by_name(full: u64) -> Option<Arc<Known>> {
     index().lock().unwrap().by_full.get(&full).cloned()
 }
 
 /// Adds a stage (its first `size` bytes name it) and keeps its code.
-pub(super) fn remember(code: &[u8], size: usize, prep: Prep, inputs: Vec<u32>) -> Arc<Known> {
+pub fn remember(code: &[u8], size: usize, prep: Prep, inputs: Vec<u32>) -> Arc<Known> {
     let size = size.min(code.len());
     let full = fnv1a64(&code[..size]);
     let k = Arc::new(Known { full, weak: fnv1a64(&code[..WEAK_LEN.min(code.len())]), size, prep, inputs });
@@ -146,12 +156,12 @@ pub(super) fn remember(code: &[u8], size: usize, prep: Prep, inputs: Vec<u32>) -
 }
 
 /// The code kept for a known stage.
-pub(super) fn code(full: u64) -> Option<Vec<u8>> {
+pub fn code(full: u64) -> Option<Vec<u8>> {
     std::fs::read(dir()?.join("code").join(format!("{full:016x}.bin"))).ok()
 }
 
 /// A translation: SPIR-V and its manifest.
-pub(super) fn load(key: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
+pub fn load(key: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
     let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;
     let n = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap()) as usize;
     let spv = bytes.get(4..4 + n)?.to_vec();
@@ -159,7 +169,7 @@ pub(super) fn load(key: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManif
     Some((spv, m))
 }
 
-pub(super) fn store(key: u64, spirv: &[u8], manifest: &sass2spv::manifest::ShaderManifest) {
+pub fn store(key: u64, spirv: &[u8], manifest: &sass2spv::manifest::ShaderManifest) {
     let (Some(d), Ok(man)) = (dir(), serde_json::to_vec(manifest)) else { return };
     let mut rec = Vec::with_capacity(4 + spirv.len() + man.len());
     rec.extend_from_slice(&(spirv.len() as u32).to_le_bytes());
@@ -173,12 +183,12 @@ pub(super) fn store(key: u64, spirv: &[u8], manifest: &sass2spv::manifest::Shade
 }
 
 /// The pipeline cache saved with the stages (the driver's compiled pipelines; MoltenVK keeps its converted shaders).
-fn pipeline_cache_path() -> Option<PathBuf> {
+pub fn pipeline_cache_path() -> Option<PathBuf> {
     Some(dir()?.join("pipelines.vkcache"))
 }
 
 /// A pipeline cache holding what the last session saved.
-pub(super) unsafe fn open_pipeline_cache(dev: &super::device::Dev) -> vk::PipelineCache {
+pub unsafe fn open_pipeline_cache(dev: &super::device::Dev) -> vk::PipelineCache {
     let data = pipeline_cache_path().and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
     let info = vk::PipelineCacheCreateInfo::default().initial_data(&data);
     match dev.device.create_pipeline_cache(&info, None) {
@@ -189,7 +199,7 @@ pub(super) unsafe fn open_pipeline_cache(dev: &super::device::Dev) -> vk::Pipeli
 }
 
 /// Writes the pipeline cache (replacing the saved one whole).
-pub(super) unsafe fn save_pipeline_cache(dev: &super::device::Dev, cache: vk::PipelineCache) {
+pub unsafe fn save_pipeline_cache(dev: &super::device::Dev, cache: vk::PipelineCache) {
     let (Some(path), Ok(data)) = (pipeline_cache_path(), dev.device.get_pipeline_cache_data(cache)) else { return };
     let tmp = path.with_extension("tmp");
     if std::fs::write(&tmp, &data).is_ok() {

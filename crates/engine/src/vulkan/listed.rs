@@ -17,17 +17,97 @@ use super::shader::{self, Stage};
 use super::{format, pipelines, stage_cache, state, texture};
 
 /// The shader cache name of a stage.
-pub(super) fn name(full: u64) -> String {
+pub fn name(full: u64) -> String {
     format!("s_{full:016x}")
 }
 
-fn full_of(name: &str) -> Option<u64> {
+pub fn full_of(name: &str) -> Option<u64> {
     u64::from_str_radix(name.strip_prefix("s_")?, 16).ok()
 }
 
+pub fn mtl_pixel_format_to_nvn(pf: u64) -> u32 {
+    match pf {
+        10 => 1,
+        12 => 2,
+        13 => 3,
+        14 => 4,
+        25 => 5,
+        20 => 6,
+        22 => 7,
+        23 => 8,
+        24 => 9,
+        55 => 10,
+        53 => 11,
+        54 => 12,
+        30 => 13,
+        32 => 14,
+        33 => 15,
+        34 => 16,
+        65 => 17,
+        60 => 18,
+        62 => 19,
+        63 => 20,
+        64 => 21,
+        105 => 22,
+        103 => 23,
+        104 => 24,
+        70 => 37,
+        72 => 38,
+        73 => 39,
+        74 => 40,
+        115 => 41,
+        110 => 42,
+        112 => 43,
+        113 => 44,
+        114 => 45,
+        127 => 46,
+        125 => 47,
+        126 => 48,
+        253 => 49,
+        250 => 50,
+        252 => 52,
+        251 => 53,
+        255 => 54,
+        71 => 56,
+        80 => 37,
+        81 => 56,
+        42 => 57,
+        43 => 59,
+        40 => 60,
+        90 => 61,
+        91 => 62,
+        92 => 63,
+        93 => 64,
+        _ => 0,
+    }
+}
+
+pub fn ensure_nvn(mut e: Entry) -> Entry {
+    if e.nvn.is_none() {
+        let mut colors = [(0, 0); 8];
+        for (i, &pf) in e.color_pfs.iter().enumerate() {
+            colors[i] = (mtl_pixel_format_to_nvn(pf), 0);
+        }
+        let depth = (mtl_pixel_format_to_nvn(e.depth_pf), 0);
+        e.nvn = Some(nxport_pipelines::Nvn {
+            colors,
+            depth,
+            samples: 1,
+            mode: 4, // TRIANGLES
+            restart: false,
+            polygon: 0,
+            depth_stencil: state::default_depth_stencil(),
+            multisample: 0,
+            depth_clamp: false,
+        });
+    }
+    e
+}
+
+
 /// The format a target of NVN format `tex` viewed as `view` (0: its own) renders in, and the NVN format its fragment
 /// outputs follow (as exec.rs's target and bc_proxy resolve targets).
-pub(super) unsafe fn target_format(dev: &Dev, tex: u32, view: u32) -> Option<(vk::Format, i32)> {
+pub unsafe fn target_format(dev: &Dev, tex: u32, view: u32) -> Option<(vk::Format, i32)> {
     let (tex, view) = (tex as i32, view as i32);
     if tex == 0 {
         return None;
@@ -73,21 +153,24 @@ unsafe fn targets(dev: &Dev, n: &nxport_pipelines::Nvn) -> (Vec<vk::Format>, Vec
 }
 
 /// The vertex stage's translation state for an entry (`inputs`: the stage's input locations).
-pub(super) fn vertex_state(e: &Entry, inputs: &[u32]) -> GraphicsState {
+pub fn vertex_state(e: &Entry, inputs: &[u32]) -> GraphicsState {
     vertex_graphics_state(inputs.iter().zip(&e.attr_bits).filter_map(|(&l, b)| b.map(|b| (l as usize, b))), e.depth_gl)
 }
 
 /// The fragment stage's translation state for an entry and whether its discarding fragments write depth.
-pub(super) unsafe fn fragment_state(dev: &Dev, e: &Entry) -> Option<(GraphicsState, bool)> {
+pub unsafe fn fragment_state(dev: &Dev, e: &Entry) -> Option<(GraphicsState, bool)> {
+    let e = ensure_nvn(e.clone());
     let (_, rendered, depth) = targets(dev, e.nvn.as_ref()?);
     let discard = dev.discard_writes_depth && depth != vk::Format::UNDEFINED && format::aspects(depth).contains(vk::ImageAspectFlags::DEPTH);
     Some((fragment_graphics_state(rendered.into_iter()), discard))
 }
 
 /// The pipeline description of an entry with these stages.
-pub(super) unsafe fn desc(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) -> Option<pipelines::Desc> {
+pub unsafe fn desc(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) -> Option<pipelines::Desc> {
+    let e = ensure_nvn(e.clone());
     let n = e.nvn.as_ref()?;
-    let topology = state::topology(n.mode as i32)?;
+    let mode = if n.mode == 0 { 4 } else { n.mode };
+    let topology = state::topology(mode as i32)?;
     let restart = n.restart && matches!(topology, vk::PrimitiveTopology::LINE_STRIP | vk::PrimitiveTopology::TRIANGLE_STRIP | vk::PrimitiveTopology::TRIANGLE_FAN);
     let attribs = v.known.inputs.iter().zip(&e.attr_bits).filter_map(|(&l, b)| b.map(|b| (l, b)));
     let vl = vertex_streams(dev, attribs, &e.streams);
@@ -109,14 +192,14 @@ pub(super) unsafe fn desc(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) ->
         depth_clamp: n.depth_clamp,
         colors: colors.iter().map(|f| f.as_raw()).collect(),
         depth: depth.as_raw(),
-        samples: n.samples,
+        samples: n.samples.max(1),
         upper_left: !e.y_negate,
         gl_depth: e.depth_gl,
     })
 }
 
 /// The translation keys an entry gives its stages (Stage::id.key), for checking recorded entries.
-pub(super) unsafe fn stage_keys(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) -> Option<(u64, Option<u64>)> {
+pub unsafe fn stage_keys(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) -> Option<(u64, Option<u64>)> {
     let vk_ = shader::translation_key(dev, &v.known.prep, v.known.full, &Some(vertex_state(e, &v.known.inputs)), 0, 0, None, false);
     let fk = match f {
         Some(f) => {
@@ -130,7 +213,7 @@ pub(super) unsafe fn stage_keys(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stag
 }
 
 /// The stages of an entry, translated as a draw with its state would have them (from the stage cache's code).
-unsafe fn stages(dev: &Dev, e: &Entry) -> Option<(Stage, Option<Stage>)> {
+pub unsafe fn stages(dev: &Dev, e: &Entry) -> Option<(Stage, Option<Stage>)> {
     let get = |name: &str, state: &GraphicsState, base: u32, inputs: Option<u32>, discard: bool| -> Option<Stage> {
         let k = stage_cache::by_name(full_of(name)?)?;
         let code = stage_cache::code(k.full)?;
@@ -151,15 +234,16 @@ unsafe fn stages(dev: &Dev, e: &Entry) -> Option<(Stage, Option<Stage>)> {
 static TARGET: OnceLock<(Arc<Dev>, vk::PipelineCache)> = OnceLock::new();
 
 /// Hands the list to the workers (once, at the first draw).
-pub(super) fn start(dev: Arc<Dev>, cache: vk::PipelineCache) {
+pub fn start(dev: Arc<Dev>, cache: vk::PipelineCache) {
     if TARGET.set((dev, cache)).is_ok() {
         crate::gpu::pipeline_list::precompile(compile);
     }
 }
 
-fn compile(entries: Vec<Entry>) {
+pub fn compile(entries: Vec<Entry>) {
     let Some((dev, cache)) = TARGET.get().cloned() else { return };
-    let total = entries.iter().filter(|e| e.nvn.is_some()).count();
+    let entries: Vec<Entry> = entries.into_iter().map(ensure_nvn).collect();
+    let total = entries.len();
     let queue = Arc::new(Mutex::new(entries));
     let built = Arc::new(AtomicUsize::new(0));
     let threads = std::thread::available_parallelism().map_or(2, |n| (n.get() / 3).clamp(1, 4));

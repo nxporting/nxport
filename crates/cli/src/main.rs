@@ -1,6 +1,6 @@
 // nxport-cli: shader caches, app bundles and frame-dump conversion for nxport.
 
-use nxport_build::{extract_shaders, ppm2png, tiny_kernels};
+use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
 #[cfg(target_os = "macos")]
 use nxport_build::{ipa, macho, msl_specialize, pack, shader_cache_build, translation};
@@ -273,6 +273,30 @@ enum Shaders {
         #[arg(required = true)]
         stages: Vec<PathBuf>,
     },
+    /// Precompile Vulkan shaders and pipeline cache offline from a game dump or stage dumps
+    PrecompileVulkan {
+        /// Game dump directory containing RomFS and ExeFS
+        #[arg(long, short)]
+        dump: PathBuf,
+        /// Explicit RomFS directory if not `<dump_dir>/RomFS`
+        #[arg(long)]
+        romfs: Option<PathBuf>,
+        /// Optional directory of pre-extracted stages (*.code)
+        #[arg(long)]
+        stages: Option<PathBuf>,
+        /// Explicit pipeline list file (e.g. 0100f2c0115b6000.txt)
+        #[arg(long)]
+        pipeline_list: Option<PathBuf>,
+        /// Disable automatic download of shared pipeline list from GitHub
+        #[arg(long)]
+        no_download: bool,
+        /// Output cache directory (default: engine's vulkan_stages cache dir)
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+        /// Parallel worker jobs (default: CPU cores)
+        #[arg(short)]
+        j: Option<usize>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -340,6 +364,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             println!("[+] {} stages: {} fragment kernels, {} vertex kernels", stages.len(), f_ok, v_ok);
+        }
+        Command::Shaders(Shaders::PrecompileVulkan {
+            dump,
+            romfs,
+            stages,
+            pipeline_list,
+            no_download,
+            out,
+            j,
+        }) => {
+            let options = vulkan_precompile::VulkanPrecompileOptions {
+                dump_dir: dump,
+                romfs_dir: romfs,
+                stages_dir: stages,
+                out_cache_dir: out,
+                pipeline_list,
+                download_shared: !no_download,
+                jobs: j,
+                on_progress: Some(std::sync::Arc::new(|phase, done, total| {
+                    match phase {
+                        vulkan_precompile::VulkanPrecompilePhase::ExtractingStages => {
+                            if total > 0 {
+                                eprintln!("[vulkan-precompile] RomFS extraction: {}/{}", done, total);
+                            } else {
+                                eprintln!("[vulkan-precompile] RomFS extraction started...");
+                            }
+                        }
+                        vulkan_precompile::VulkanPrecompilePhase::TranslatingShaders => {
+                            if done % 500 == 0 || done == total {
+                                eprintln!("[vulkan-precompile] Translating shaders: {}/{}", done, total);
+                            }
+                        }
+                        vulkan_precompile::VulkanPrecompilePhase::CompilingPipelines => {
+                            if done % 500 == 0 || done == total {
+                                eprintln!("[vulkan-precompile] Compiling pipelines: {}/{}", done, total);
+                            }
+                        }
+                    }
+                })),
+            };
+            let stats = vulkan_precompile::precompile(&options)?;
+            println!("[+] Precompile complete:");
+            println!("    Stages extracted: {}", stats.stages_extracted);
+            println!("    Stages translated: {} ({} failed)", stats.stages_translated, stats.stages_failed);
+            println!("    Pipelines compiled: {} ({} skipped)", stats.pipelines_compiled, stats.pipelines_skipped);
+            println!("    Pipeline cache: {} bytes", stats.vkcache_bytes);
+            println!("    Output cache directory: {}", stats.cache_dir.display());
         }
         #[cfg(target_os = "macos")]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
