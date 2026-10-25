@@ -63,6 +63,8 @@ struct Pass {
     /// The targets' NVN formats (texture, view; pipeline lists).
     nvn_colors: [(u32, u32); 8],
     nvn_depth: (u32, u32),
+    /// Draws by (vertex, fragment) stage name (the frame history's journal).
+    pairs: Vec<(u64, u64, u32)>,
     extent: (u32, u32),
     samples: vk::SampleCountFlags,
     /// Rendering begins at the first draw: clears of whole attachments before it become their load operation (a tiled
@@ -195,6 +197,8 @@ pub struct Ctx {
     /// Window output (vulkan/window.rs), made at the first present when the display has a layer.
     window: Option<super::window::Window>,
     window_tried: bool,
+    /// --frame-history: the kept presented frames.
+    history: Option<super::history::History>,
     /// Commands warned about as not implemented (by name, by kind).
     unimplemented: HashSet<&'static str>,
     unimplemented_kinds: HashSet<std::mem::Discriminant<Cmd>>,
@@ -472,6 +476,7 @@ impl Ctx {
             pipeline_cache_saved: 0,
             window: None,
             window_tried: false,
+            history: None,
             unimplemented_kinds: Default::default(),
         })
     }
@@ -485,6 +490,7 @@ impl Ctx {
 
     /// Records and queues a submit with `serial` (inflight.rs completes it).
     pub unsafe fn submit(&mut self, lists: &[u64], serial: u64) {
+        crate::gpu::history::journal(|| format!("submit {} lists serial {serial}", lists.len()));
         let empty = |serial| super::inflight::Done {
             serial,
             fence: vk::Fence::null(),
@@ -769,6 +775,33 @@ impl Ctx {
         self.dev.full_barrier(self.cb);
     }
 
+    /// Keeps presented frame `frame` for the frame history (gpu::history) and writes the history when a capture is due.
+    pub unsafe fn keep_history(&mut self, texture: usize, crop: [i32; 4], frame: u64) {
+        let n = crate::gpu::history::len();
+        if n == 0 || self.lost {
+            return;
+        }
+        if self.history.is_none() {
+            self.history = super::history::History::new(&self.dev, n);
+        }
+        if let Some((_, t)) = crate::nvn::api::texture_snapshot(texture) {
+            if let Some((img, level, layer)) = self.tex.get(&self.dev, &t) {
+                let (image, w, h) = (img.image, (img.extent.width >> level).max(1) as i32, (img.extent.height >> level).max(1) as i32);
+                let c = if crop[2] > 0 && crop[3] > 0 { (crop[0], crop[1], crop[2], crop[3]) } else { (0, 0, w, h) };
+                let lower_left = crate::nvn::api::window_origin_mode() == 0;
+                if let Some(h) = self.history.as_mut() {
+                    h.keep(&self.dev, frame, image, level, layer, c, lower_left);
+                }
+            }
+        }
+        crate::gpu::history::rotate(frame);
+        if crate::gpu::history::due(frame) {
+            if let Some(h) = self.history.as_ref() {
+                h.write(&self.dev, frame);
+            }
+        }
+    }
+
     /// Shows the presented texture in the window, if there is one.
     pub unsafe fn present_window(&mut self, texture: usize, crop: [i32; 4]) {
         if self.lost || crate::settings::get().display.headless {
@@ -971,12 +1004,19 @@ impl Ctx {
             Cmd::SetRenderEnable(e) => self.st.render_disabled = !*e,
             Cmd::SetRenderEnableConditional { mode, counters } => {
                 let a = crate::nvn::api::translate_virtual(*counters as usize);
-                if self.report_pending(*counters) {
+                let pending = self.report_pending(*counters);
+                let mut values = (0, 0);
+                if pending {
                     self.st.render_disabled = false;
                 } else if a > 0x10000 {
                     let (x, y) = (std::ptr::read_unaligned(a as *const u64), std::ptr::read_unaligned((a + 16) as *const u64));
+                    values = (x, y);
                     self.st.render_disabled = if *mode == 0 { x != y } else { x == y };
                 }
+                let en = !self.st.render_disabled;
+                crate::gpu::history::journal(|| {
+                    format!("  cond mode {mode} @{counters:#x} [{:#x}, {:#x}]{} -> {en}", values.0, values.1, if pending { " pending" } else { "" })
+                });
             }
             Cmd::BindUniformBuffer { stage, index, addr, size } => {
                 self.st.uniforms.insert((*stage, *index), (*addr, *size));
@@ -1125,12 +1165,25 @@ impl Ctx {
             colors.pop();
         }
         let n = colors.len();
+        if crate::gpu::history::journal_on() {
+            let mut l = format!("pass {}x{}", extent.0, extent.1);
+            for (i, (c, img)) in self.st.colors.iter().zip(&images).enumerate() {
+                if c.texture != 0 {
+                    l += &format!(" c{i} {:x}:{}", vk::Handle::as_raw(*img), nvn_colors.get(i).map_or(0, |f| f.0));
+                }
+            }
+            if depth.is_some() {
+                l += &format!(" d {:x}:{}", images.last().map_or(0, |i| vk::Handle::as_raw(*i)), nvn_depth.0);
+            }
+            crate::gpu::history::journal(|| l);
+        }
         self.pass = Some(Pass {
             images,
             colors,
             depth,
             nvn_colors,
             nvn_depth,
+            pairs: Vec::new(),
             extent,
             samples,
             begun: false,
@@ -1260,6 +1313,15 @@ impl Ctx {
         self.end_query();
         if let Some(p) = self.pass.take() {
             self.dev.device.cmd_end_rendering(self.cb);
+            if crate::gpu::history::journal_on() {
+                let clears = p.color_clears.iter().filter(|c| c.is_some()).count() + p.depth_clear.is_some() as usize;
+                crate::gpu::history::journal(|| format!("  end draws {} cleared {clears}", p.draws));
+                let mut pairs = p.pairs.clone();
+                pairs.sort_unstable();
+                for (v, f, n) in pairs {
+                    crate::gpu::history::journal(|| format!("    s_{v:016x} / s_{f:016x} x{n}"));
+                }
+            }
             if self.profile_passes && self.timestamps != vk::QueryPool::null() && self.pass_labels.len() < PASS_TIMESTAMPS as usize {
                 let target = match p.colors.iter().flatten().next() {
                     Some((_, f, _)) => format!("{f:?}"),
@@ -1385,6 +1447,7 @@ impl Ctx {
         if self.st.render_disabled || !self.begin_pass() {
             return;
         }
+        crate::gpu::history::journal(|| format!("clear color {index} mask {mask:#x} {rgba:?}"));
         let p = self.pass.as_ref().unwrap();
         let Some(Some((_, _, nvn_fmt))) = p.colors.get(index as usize) else { return };
         let (nvn_fmt, (w, h)) = (*nvn_fmt, p.extent);
@@ -1415,6 +1478,7 @@ impl Ctx {
         if self.st.render_disabled || !self.begin_pass() {
             return;
         }
+        crate::gpu::history::journal(|| format!("clear depth {depth} {depth_mask} stencil {stencil} {stencil_mask:#x}"));
         let p = self.pass.as_ref().unwrap();
         let Some((_, fmt)) = p.depth else { return };
         let mut aspect = vk::ImageAspectFlags::empty();

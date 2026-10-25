@@ -39,7 +39,12 @@ define_class!(
             let space_free = || !input::bindings().iter().any(|b| b.key == Some(49));
             if event.keyCode() == 101 || (event.keyCode() == 49 && space_free()) {
                 if !event.isARepeat() {
-                    crate::metal::request_capture();
+                    if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
+                        crate::gpu::history::request();
+                        println!("[+] Capture requested: the frame history is written at the next present");
+                    } else {
+                        crate::metal::request_capture();
+                    }
                 }
                 return;
             }
