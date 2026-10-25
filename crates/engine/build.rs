@@ -16,8 +16,8 @@ fn main() {
         println!("cargo::rustc-cfg=nx_runtime");
     }
 
-    // Vendor SDL3: point the linker at our pre-built static library so that
-    // sdl3-sys's `link-static` feature can find SDL3.lib without CMake.
+    // Vendor SDL3: point the linker at the pre-built SDL3.dll import lib and
+    // copy SDL3.dll next to the output binary so it can be found at runtime.
     if os == "windows" {
         let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
         let workspace_root = manifest_dir
@@ -26,7 +26,19 @@ fn main() {
             .unwrap_or(&manifest_dir);
         let sdl3_lib = workspace_root.join("vendor/SDL3/lib");
         if sdl3_lib.exists() {
+            // Link against SDL3.lib (import lib) so the linker resolves SDL3 symbols.
             println!("cargo::rustc-link-search=native={}", sdl3_lib.display());
+            // Copy SDL3.dll next to the built binary so it is found at runtime.
+            let dll_src = sdl3_lib.join("SDL3.dll");
+            let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+            // OUT_DIR is target/<profile>/build/<crate>-<hash>/out — walk up to target/<profile>.
+            let mut exe_dir = out_dir.clone();
+            for _ in 0..3 { exe_dir.pop(); }
+            let dll_dst = exe_dir.join("SDL3.dll");
+            if dll_src.exists() && !dll_dst.exists() {
+                std::fs::copy(&dll_src, &dll_dst).ok();
+            }
+            println!("cargo::rerun-if-changed={}", dll_src.display());
         }
     }
 
