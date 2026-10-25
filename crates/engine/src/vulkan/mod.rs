@@ -102,7 +102,9 @@ impl Backend for Vulkan {
         let serial = self.serial.load(Ordering::Acquire) + 1;
         match g.as_mut() {
             Some(c) => unsafe {
+                guard::hold_hot();
                 c.submit(lists, serial);
+                guard::release_hot();
                 // GPU work reads guest memory in place from its submit on: the write guard holds those pages from here,
                 // not only once guest-main waits for the frame.
                 guard::protect(serial);
@@ -344,6 +346,7 @@ impl Arena {
         ARENA_BYTES.fetch_add(data.len() as u64, Ordering::Relaxed);
         let (b, off, p) = self.alloc(dev, data.len())?;
         std::ptr::copy_nonoverlapping(data.as_ptr(), p, data.len());
+        guard::patch(data.as_ptr() as usize, p, data.len());
         Some((b, off))
     }
 

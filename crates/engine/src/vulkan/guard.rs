@@ -7,9 +7,13 @@
 // faults, waits for the submit that reads it and makes the range writable again, and the write is retried (as the
 // Metal backend's write guard does).
 //
-// A page the game wrote that way is hot: later submits copy what they read there when they are recorded (what the GPU
-// would read, since on the Switch the game writes only after the fence) instead of reading it in place, so the game
-// stops waiting for whole frames.
+// A page the game wrote that way is hot: later submits copy what they read there when they are recorded instead of
+// reading it in place, so the game stops waiting for whole frames. Those copies must hold what the pages held when the
+// submit was made, but recording takes milliseconds and the game's other threads go on writing the next frame
+// meanwhile (TotK swimming: per-frame constants copied half rewritten blended whole frames to cyan). So hot pages are
+// read-only while a submit is recorded: the first write to one saves the page's contents (still the submit's) and
+// goes ahead, and the recording's copies of guest memory take the saved pages (patch). The backend's own writes
+// (reports, inline updates) are not saved.
 //
 // Pages GPU work writes (storage buffers, copy destinations, report slots) are never protected: GPU writes cannot
 // fault, and the watcher writes reports and copied buffers into them. The game reads such results a frame late.
@@ -63,6 +67,136 @@ unsafe fn set_prot(a: usize, len: usize, write: bool) -> bool {
 }
 
 // ---- hot pages ----------------------------------------------------------------------------------------------------
+
+/// A submit is being recorded with the hot pages read-only (hold_hot).
+static HOT_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HOT_RANGES: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+const SAVED_MAX: usize = 1024;
+const SAVING: usize = 1 << 63;
+static SAVED_KEYS: [AtomicUsize; SAVED_MAX] = [const { AtomicUsize::new(0) }; SAVED_MAX];
+static SAVED_N: AtomicUsize = AtomicUsize::new(0);
+static SAVED_POOL: std::sync::atomic::AtomicPtr<u8> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static SAVE_LOCK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static RECORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks this thread as one of the backend's own (its writes to held hot pages are not saved).
+pub(super) fn engine_thread() {
+    RECORDER.with(|r| r.set(true));
+}
+
+/// Before a submit is recorded: hot pages become read-only until release_hot.
+pub(super) fn hold_hot() {
+    if !enabled() || !ANY_HOT.load(Ordering::Acquire) {
+        return;
+    }
+    let mut pages: Vec<usize> = HOT.iter().filter_map(|h| h.load(Ordering::Acquire).checked_sub(1)).collect();
+    pages.sort_unstable();
+    let mut ranges = HOT_RANGES.lock().unwrap();
+    ranges.clear();
+    for p in pages {
+        match ranges.last_mut() {
+            Some(r) if r.1 == p * PAGE => r.1 += PAGE,
+            _ => ranges.push((p * PAGE, (p + 1) * PAGE)),
+        }
+    }
+    engine_thread();
+    if SAVED_POOL.load(Ordering::Acquire).is_null() {
+        let layout = std::alloc::Layout::from_size_align(SAVED_MAX * PAGE, PAGE).unwrap();
+        SAVED_POOL.store(unsafe { std::alloc::alloc(layout) }, Ordering::Release);
+    }
+    SAVED_N.store(0, Ordering::Release);
+    HOT_HELD.store(true, Ordering::Release);
+    for &(a, b) in ranges.iter() {
+        let _ = unsafe { crate::os::protect(a, b - a, crate::os::Prot::Read) };
+    }
+}
+
+/// The submit is recorded: hot pages are writable again (write tracking keeps the pages it holds).
+pub(super) fn release_hot() {
+    if !HOT_HELD.load(Ordering::Acquire) {
+        return;
+    }
+    let ranges = HOT_RANGES.lock().unwrap();
+    for &(a, b) in ranges.iter() {
+        unsafe { set_prot(a, b - a, true) };
+    }
+    HOT_HELD.store(false, Ordering::Release);
+}
+
+/// Saves held page `page` (once) before its first write in this recording; false when there is no room.
+unsafe fn save_page(page: usize) -> bool {
+    let key = page / PAGE + 1;
+    while SAVE_LOCK.swap(true, Ordering::Acquire) {
+        std::hint::spin_loop();
+    }
+    let n = SAVED_N.load(Ordering::Acquire);
+    let done = SAVED_KEYS[..n].iter().any(|k| k.load(Ordering::Acquire) & !SAVING == key);
+    let ok = if done {
+        true
+    } else if n < SAVED_MAX {
+        let slot = SAVED_POOL.load(Ordering::Acquire).add(n * PAGE);
+        SAVED_KEYS[n].store(key | SAVING, Ordering::Release);
+        SAVED_N.store(n + 1, Ordering::Release);
+        std::ptr::copy_nonoverlapping(page as *const u8, slot, PAGE);
+        SAVED_KEYS[n].store(key, Ordering::Release);
+        true
+    } else {
+        false
+    };
+    SAVE_LOCK.store(false, Ordering::Release);
+    ok
+}
+
+/// A fault on a hot page (held during recording, or released since the access faulted).
+unsafe fn hot_fault(addr: usize) -> bool {
+    if !hot(addr, 1) {
+        return false;
+    }
+    let page = addr & !(PAGE - 1);
+    if RECORDER.with(|r| r.get()) || !HOT_HELD.load(Ordering::Acquire) || save_page(page) {
+        set_prot(page, PAGE, true);
+        return true;
+    }
+    let t0 = std::time::Instant::now();
+    while HOT_HELD.load(Ordering::Acquire) {
+        std::thread::sleep(std::time::Duration::from_micros(20));
+        if t0.elapsed().as_secs() >= 2 {
+            TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            break;
+        }
+    }
+    BLOCKED_US.fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+    set_prot(page, PAGE, true);
+    true
+}
+
+/// A copy of guest memory [a, a+len) made at `dst` during a recording: parts on pages saved since the recording
+/// began are replaced by the saved contents.
+pub(super) unsafe fn patch(a: usize, dst: *mut u8, len: usize) {
+    if !HOT_HELD.load(Ordering::Acquire) || len == 0 {
+        return;
+    }
+    std::sync::atomic::fence(Ordering::SeqCst);
+    let n = SAVED_N.load(Ordering::Acquire);
+    if n == 0 {
+        return;
+    }
+    let pool = SAVED_POOL.load(Ordering::Acquire);
+    for i in 0..n {
+        let mut k = SAVED_KEYS[i].load(Ordering::Acquire);
+        while k & SAVING != 0 {
+            std::hint::spin_loop();
+            k = SAVED_KEYS[i].load(Ordering::Acquire);
+        }
+        let p = (k - 1) * PAGE;
+        let (x, y) = (p.max(a), (p + PAGE).min(a + len));
+        if x < y {
+            std::ptr::copy_nonoverlapping(pool.add(i * PAGE + (x - p)), dst.add(x - a), y - x);
+        }
+    }
+}
 
 const HOT_SLOTS: usize = 1 << 14;
 /// Open-addressed set of pages (page number + 1; 0 = empty), filled by the fault handler (no allocation there).
@@ -235,6 +369,10 @@ pub(super) unsafe fn fault(addr: usize) -> bool {
         return true;
     }
     if find(&TABLES[(gen + 1) & 1], addr).is_some() {
+        crate::guest::dirty_track::handle_fault(addr);
+        return true;
+    }
+    if hot_fault(addr) {
         crate::guest::dirty_track::handle_fault(addr);
         return true;
     }

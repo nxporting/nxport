@@ -104,6 +104,8 @@ pub struct Ctx {
     /// Guest memory GPU work of this submit writes (copy and clear destinations, storage buffers): [start, end). A uniform
     /// buffer there is bound in place, so it sees those writes in GPU order (a copy taken while recording would not).
     gpu_dirty: Ranges,
+    /// What earlier submits' GPU work writes, until they complete.
+    inflight_dirty: Vec<(u64, Ranges)>,
     /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it taken at the first such
     /// draw after the last barrier that invalidates textures (NVN: it sees the writes from before the barrier; sampling
     /// an attachment inside a Vulkan render pass is undefined). Copies by texture description, with their epoch.
@@ -252,6 +254,17 @@ impl Ranges {
 
     pub(super) fn clear(&mut self) {
         self.0.clear();
+    }
+}
+
+impl Ctx {
+    /// Whether GPU work of this submit, or of earlier ones still running, writes guest memory [a, b).
+    pub(super) fn gpu_writes(&self, a: usize, b: usize) -> bool {
+        if self.gpu_dirty.overlaps(a, b) {
+            return true;
+        }
+        let done = super::inflight::completed();
+        self.inflight_dirty.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
     }
 }
 
@@ -425,6 +438,7 @@ impl Ctx {
             lost: false,
             writebacks: Vec::new(),
             gpu_dirty: Ranges::default(),
+            inflight_dirty: Vec::new(),
             fb_snaps: Default::default(),
             bc_proxies: Default::default(),
             bc_pending: Vec::new(),
@@ -634,7 +648,9 @@ impl Ctx {
             resettle: std::mem::take(&mut self.rt_resettle),
             staging: std::mem::take(&mut self.staging),
         });
-        self.gpu_dirty.clear();
+        let done = super::inflight::completed();
+        self.inflight_dirty.retain(|(s, _)| *s > done);
+        self.inflight_dirty.push((serial, std::mem::take(&mut self.gpu_dirty)));
         // Guest memory under GPU-written images is CPU memory: what it holds now is what later CPU writes change.
         self.tex.settle();
         self.repacked.clear();

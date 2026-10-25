@@ -57,6 +57,7 @@ pub(super) fn start(device: ash::Device, timestamp_period: f32) {
     std::thread::Builder::new()
         .name("vk-fence-watch".into())
         .spawn(move || {
+            super::guard::engine_thread();
             let mut carried = 0u64;
             let mut results: Vec<u64> = Vec::new();
             while let Ok(d) = rx.recv() {
