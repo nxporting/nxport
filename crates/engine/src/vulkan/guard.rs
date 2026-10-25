@@ -358,6 +358,10 @@ pub(super) unsafe fn fault(addr: usize) -> bool {
         return false;
     }
     let gen = ACTIVE.load(Ordering::Acquire);
+    // A held hot page is saved before anything makes it writable (it may also be held for in-place reads).
+    if HOT_HELD.load(Ordering::Acquire) && hot(addr, 1) && !RECORDER.with(|r| r.get()) {
+        save_page(addr & !(PAGE - 1));
+    }
     if let Some(i) = find(&TABLES[gen & 1], addr) {
         if TABLES[gen & 1].released[i].load(Ordering::Acquire) == 0 {
             FAULTS.fetch_add(1, Ordering::Relaxed);
