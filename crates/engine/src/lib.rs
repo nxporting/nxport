@@ -168,6 +168,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     if let Some(out) = &s.graphics.build_pipeline_archive {
         return metal::pipeline_archive::build(out, s.graphics.pipeline_archive_script).map_err(Into::into);
     }
+    host::audio::init();
     let Loaded {
         mem_space,
         sdk: _sdk,
@@ -1176,6 +1177,8 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     #[cfg(windows)]
     os::on_access_fault(lifted_access_fault);
     vulkan::init(s.debug.validate)?;
+    // On this thread, before any guest thread: SDL's subsystems belong to the main thread.
+    host::audio::init();
     let lib = s.files.guest_library.clone().ok_or("no guest library: --guest-library=<the library compile-guest made>")?;
     let list = lib.with_file_name("modules.txt");
     let names = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;

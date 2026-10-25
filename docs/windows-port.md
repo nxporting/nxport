@@ -25,7 +25,8 @@ against, with nothing else changed (see Testing).
 loading (guest/), the OS the guest sees (horizon/), NVN (nvn/) and the GPU interface (gpu/), on Apple + aarch64 and
 Windows so far. `nx_native` marks the hosts among them that run guest code natively: the code rewriting and trap
 handling in cpu/ (all but cpu/aot.rs's image building, which the lifted target needs too), host/ and the Metal
-backend. Lifted hosts get host/headless.rs instead of host/ (no window, input or audio until SDL3). Without either the
+backend. Lifted hosts get host/headless.rs instead of host/ (no window or input until SDL3; audio is host/audio.rs
+with an SDL3 device). Without either the
 engine builds only its platform-independent parts: settings, profiles, game identification, NSO parsing
 (`nxport::nso`) and the MSL tooling the builder uses. `nxport::run` returns an error on lifted hosts until the lifted
 runtime exists. Apple packaging (`ipa`, `pack`, `shader_cache_build`, `pipeline_archive` in nxport-build, the
@@ -189,7 +190,20 @@ conformance captures (Testing), on this Mac through MoltenVK.
 
 ## Host I/O and the builder
 
-SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same). Paths under
+SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same), through the `sdl3` crate (0.20,
+`build-from-source-static`: SDL is built with CMake and linked into nxport.exe, so building needs `cmake` on the
+path or `CMAKE` naming one; Visual Studio ships one under Common7\IDE\CommonExtensions\Microsoft\CMake).
+
+- Audio: **done**. host/audio.rs is shared by all hosts: the ring the audio renderer and AudioOut push into, the trim
+  and underrun accounting, `--audio-wav`, and the rule that `--headless` and `--audio=0` stay silent. Only the device
+  differs: an AudioQueue on Apple (audio_queue.rs), an SDL3 audio stream elsewhere (audio_sdl.rs: 48 kHz stereo
+  float on the default playback device, 10 ms device buffers, its callback filling from the ring). `audio::init`
+  runs on the main thread before any guest thread, because the sdl3 crate takes the thread of its first `sdl3::init`
+  as SDL's main thread, which the window has to be created on; it initialises only the audio subsystem, and the
+  device is resumed at the first pushed frame as the AudioQueue is started. host/headless.rs includes the module as
+  it is.
+
+Paths under
 `~/Library/Application Support/nxport` become `%APPDATA%\nxport`. The builder's window is AppKit + imgui; on
 Windows it becomes imgui over SDL3, with a "Windows app" target: a folder with nxport.exe, the lifted guest
 library, the shader cache and the settings.
@@ -287,5 +301,10 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    minutes on 16 threads with zig cc 0.13; the game boots, loads its resources, and plays its opening (event flows
    Dm_OP_0017 to 0034, voice and music streaming) for 10 minutes without a fault, presenting about 7 frames a second
    to the null backend.
+   Vulkan: **done**, running lifted games with page guards via vectored exception handling.
+   Audio: **done**. Shared ring in crates/engine/src/host/audio.rs refactored with target/max latency trim and underrun
+   accounting; Apple uses audio_queue.rs (AudioToolbox) and lifted/Windows hosts use audio_sdl.rs (SDL3 playback
+   stream at 48 kHz stereo float on default device with 10 ms buffers). Tested on TotK, streaming smoothly with zero
+   underruns post-startup, while --headless and --audio=0 remain completely silent.
 7. Plugin mods: two-pass lifting, then the interpreter fallback.
 8. Windows arm64 on the native path.

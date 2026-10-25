@@ -1,21 +1,25 @@
 // The host side of sound output: 48 kHz stereo float frames from the audio renderer (horizon/audio/renderer.rs) go into a ring buffer
-// that an AudioQueue (AudioToolbox, macOS and iOS) plays. Playback starts with the first pushed frame, only in windowed
+// that the platform's output device plays: an AudioQueue (AudioToolbox, audio_queue.rs) on macOS and iOS, an SDL3 audio
+// stream (audio_sdl.rs) where guest code is lifted. Playback starts with the first pushed frame, only in windowed
 // runs (never with --headless) and not with --audio=0. --audio-wav=path also writes everything pushed to a
 // WAV file (works headless: how agent runs check the output without making sound).
 //
-// The renderer produces frames on the guest's schedule (wall-clock 5 ms frames), the queue consumes them on the
-// device's clock: the ring absorbs the difference and is trimmed back to TARGET_MS when it grows past MAX_MS, so latency
-// stays bounded; when it runs dry the queue plays silence.
+// The renderer produces frames on the guest's schedule (wall-clock 5 ms frames), the device consumes them on its own
+// clock: the ring absorbs the difference and is trimmed back to TARGET_MS when it grows past MAX_MS, so latency
+// stays bounded; when it runs dry the device plays silence.
 
 use std::collections::VecDeque;
-use std::ffi::c_void;
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 
-const RATE: f64 = 48000.0;
-/// Frames per AudioQueue buffer (10 ms) and buffers in flight.
-const QUEUE_FRAMES: usize = 480;
-const QUEUE_BUFFERS: usize = 3;
+#[cfg(target_vendor = "apple")]
+#[path = "audio_queue.rs"]
+mod device;
+#[cfg(not(target_vendor = "apple"))]
+#[path = "audio_sdl.rs"]
+mod device;
+
+const RATE: u32 = 48000;
 const TARGET_MS: usize = 60;
 const MAX_MS: usize = 150;
 
@@ -34,6 +38,14 @@ static RING: Mutex<Ring> = Mutex::new(Ring {
 });
 /// A second source mixed in at the device: nn::audio::AudioOut streams (horizon/audio/out.rs; Kirby's movie soundtracks).
 static RING2: Mutex<VecDeque<f32>> = Mutex::new(VecDeque::new());
+
+/// Prepares the output device on the process main thread, before any guest thread runs (SDL wants its subsystems
+/// initialised there); the AudioQueue needs nothing ahead of the first frame.
+pub fn init() {
+    if playback_enabled() {
+        device::init();
+    }
+}
 
 /// Appends 16-bit PCM from an AudioOut buffer (interleaved, `channels` per frame, 48 kHz) to the second ring: mono is
 /// duplicated, more than two channels keep the first two.
@@ -61,7 +73,7 @@ pub fn push_audio_out(pcm: &[i16], channels: usize) {
         !std::mem::replace(&mut RING.lock().unwrap().started, true)
     };
     if start {
-        unsafe { start_queue() };
+        device::start();
     }
 }
 
@@ -108,7 +120,30 @@ pub fn push(stereo: &[f32]) {
         !std::mem::replace(&mut r.started, true)
     };
     if start {
-        unsafe { start_queue() };
+        device::start();
+    }
+}
+
+/// Fills `out` (interleaved stereo) for the device: the renderer's ring (silence for what is missing), the AudioOut
+/// ring mixed over it.
+fn fill(out: &mut [f32]) {
+    {
+        let mut r = RING.lock().unwrap();
+        let n = r.samples.len().min(out.len());
+        for (o, s) in out.iter_mut().zip(r.samples.drain(..n)) {
+            *o = s;
+        }
+        if n < out.len() {
+            out[n..].fill(0.0);
+            r.underruns += 1;
+        }
+    }
+    {
+        let mut r2 = RING2.lock().unwrap();
+        let n = r2.len().min(out.len());
+        for (o, s) in out.iter_mut().zip(r2.drain(..n)) {
+            *o = (*o + s).clamp(-1.0, 1.0);
+        }
     }
 }
 
@@ -133,8 +168,8 @@ fn finish_wav(w: &mut Wav) {
     h.extend_from_slice(&16u32.to_le_bytes());
     h.extend_from_slice(&1u16.to_le_bytes()); // PCM
     h.extend_from_slice(&2u16.to_le_bytes());
-    h.extend_from_slice(&48000u32.to_le_bytes());
-    h.extend_from_slice(&(48000u32 * 4).to_le_bytes());
+    h.extend_from_slice(&RATE.to_le_bytes());
+    h.extend_from_slice(&(RATE * 4).to_le_bytes());
     h.extend_from_slice(&4u16.to_le_bytes());
     h.extend_from_slice(&16u16.to_le_bytes());
     h.extend_from_slice(b"data");
@@ -144,157 +179,6 @@ fn finish_wav(w: &mut Wav) {
         .seek(SeekFrom::Start(0))
         .and_then(|_| w.file.write_all(&h))
         .and_then(|_| w.file.seek(SeekFrom::End(0)));
-}
-
-// ---- AudioToolbox ----------------------------------------------------------------------------------------------------
-
-#[repr(C)]
-struct AudioStreamBasicDescription {
-    sample_rate: f64,
-    format_id: u32,
-    format_flags: u32,
-    bytes_per_packet: u32,
-    frames_per_packet: u32,
-    bytes_per_frame: u32,
-    channels_per_frame: u32,
-    bits_per_channel: u32,
-    reserved: u32,
-}
-
-#[repr(C)]
-struct AudioQueueBuffer {
-    capacity: u32,
-    data: *mut c_void,
-    byte_size: u32,
-    user_data: *mut c_void,
-    packet_description_capacity: u32,
-    packet_descriptions: *mut c_void,
-    packet_description_count: u32,
-}
-
-type AudioQueueRef = *mut c_void;
-type Callback = unsafe extern "C" fn(*mut c_void, AudioQueueRef, *mut AudioQueueBuffer);
-
-#[link(name = "AudioToolbox", kind = "framework")]
-extern "C" {
-    fn AudioQueueNewOutput(
-        format: *const AudioStreamBasicDescription,
-        callback: Callback,
-        user: *mut c_void,
-        run_loop: *const c_void,
-        run_loop_mode: *const c_void,
-        flags: u32,
-        out: *mut AudioQueueRef,
-    ) -> i32;
-    fn AudioQueueAllocateBuffer(
-        aq: AudioQueueRef,
-        size: u32,
-        out: *mut *mut AudioQueueBuffer,
-    ) -> i32;
-    fn AudioQueueEnqueueBuffer(
-        aq: AudioQueueRef,
-        buf: *mut AudioQueueBuffer,
-        n: u32,
-        descs: *const c_void,
-    ) -> i32;
-    fn AudioQueueStart(aq: AudioQueueRef, at: *const c_void) -> i32;
-}
-
-/// Fills one queue buffer from the ring (silence for what is missing) and hands it back to the queue.
-unsafe extern "C" fn refill(_user: *mut c_void, aq: AudioQueueRef, buf: *mut AudioQueueBuffer) {
-    let out = std::slice::from_raw_parts_mut((*buf).data as *mut f32, QUEUE_FRAMES * 2);
-    {
-        let mut r = RING.lock().unwrap();
-        let n = r.samples.len().min(out.len());
-        for (o, s) in out.iter_mut().zip(r.samples.drain(..n)) {
-            *o = s;
-        }
-        if n < out.len() {
-            out[n..].fill(0.0);
-            r.underruns += 1;
-        }
-    }
-    {
-        let mut r2 = RING2.lock().unwrap();
-        let n = r2.len().min(out.len());
-        for (o, s) in out.iter_mut().zip(r2.drain(..n)) {
-            *o = (*o + s).clamp(-1.0, 1.0);
-        }
-    }
-    (*buf).byte_size = (QUEUE_FRAMES * 8) as u32;
-    AudioQueueEnqueueBuffer(aq, buf, 0, std::ptr::null());
-}
-
-/// iOS: playback apps must say so, or the default (ambient) audio session category is muted by the ring / silent switch
-/// and by other apps. Playback category, then activate the session, before the queue starts.
-#[cfg(target_os = "ios")]
-unsafe fn activate_session() {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    #[link(name = "AVFAudio", kind = "framework")]
-    extern "C" {
-        static AVAudioSessionCategoryPlayback: *const AnyObject;
-    }
-    let session: *mut AnyObject = msg_send![class!(AVAudioSession), sharedInstance];
-    if session.is_null() {
-        return;
-    }
-    let mut err: *mut AnyObject = std::ptr::null_mut();
-    let ok: bool = msg_send![session, setCategory: AVAudioSessionCategoryPlayback, error: &mut err];
-    let active: bool = msg_send![session, setActive: true, error: &mut err];
-    println!(
-        "[+] host_audio: audio session category Playback {}, active {}",
-        ok, active
-    );
-}
-
-unsafe fn start_queue() {
-    #[cfg(target_os = "ios")]
-    activate_session();
-    let format = AudioStreamBasicDescription {
-        sample_rate: RATE,
-        format_id: u32::from_be_bytes(*b"lpcm"),
-        format_flags: 1 | 8, // float, packed
-        bytes_per_packet: 8,
-        frames_per_packet: 1,
-        bytes_per_frame: 8,
-        channels_per_frame: 2,
-        bits_per_channel: 32,
-        reserved: 0,
-    };
-    let mut aq: AudioQueueRef = std::ptr::null_mut();
-    // No run loop: the queue calls back on its own thread.
-    let err = AudioQueueNewOutput(
-        &format,
-        refill,
-        std::ptr::null_mut(),
-        std::ptr::null(),
-        std::ptr::null(),
-        0,
-        &mut aq,
-    );
-    if err != 0 {
-        println!(
-            "[!] host_audio: AudioQueueNewOutput failed ({}): no sound",
-            err
-        );
-        return;
-    }
-    for _ in 0..QUEUE_BUFFERS {
-        let mut buf: *mut AudioQueueBuffer = std::ptr::null_mut();
-        if AudioQueueAllocateBuffer(aq, (QUEUE_FRAMES * 8) as u32, &mut buf) == 0 {
-            refill(std::ptr::null_mut(), aq, buf);
-        }
-    }
-    let err = AudioQueueStart(aq, std::ptr::null());
-    println!(
-        "[+] host_audio: AudioQueue output started (48 kHz stereo){}",
-        if err != 0 {
-            format!(", start failed ({})", err)
-        } else {
-            String::new()
-        }
-    );
 }
 
 /// (trims of an overfull ring, underruns) since start, for logs.
