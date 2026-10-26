@@ -751,25 +751,6 @@ unsafe fn first_guest_fp(fp: usize) -> usize {
     }
 }
 
-/// Hang report: once presentation has started, a stretch of `secs` seconds without a presented frame prints the wait
-/// graph (which guest threads are blocked on what, from where) once per stall.
-pub fn start_hang_watch(secs: u64) {
-    let _ = std::thread::Builder::new().name("hang-watch".into()).spawn(move || {
-        let (mut last, mut since, mut reported) = (0, std::time::Instant::now(), false);
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let n = crate::nvn::api::presented_frames();
-            if n != last {
-                (last, since, reported) = (n, std::time::Instant::now(), false);
-            } else if n > 0 && !reported && since.elapsed().as_secs() >= secs {
-                reported = true;
-                println!("[hang] no frame presented for {secs} s (last was frame {n})");
-                dump_blocked_threads();
-            }
-        }
-    });
-}
-
 pub struct BlockGuard(u64);
 
 impl BlockGuard {
