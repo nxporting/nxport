@@ -420,10 +420,10 @@ fn resolved(r: &crate::nvn::cmd::TexRef) -> crate::nvn::cmd::TexRef {
 }
 
 impl super::Gfx {
-    /// ClearTexture of part of a level, some channels, or slices of a 3D texture: a triangle over the level, the region as
-    /// scissor and the channel mask as write mask, per slice.
+    /// A clear of part of a level, some channels, or slices of a 3D texture (ClearTexture, scissored or channel-masked
+    /// ClearColor): a triangle over the level, the region as scissor and the channel mask as write mask, per slice.
     #[allow(clippy::too_many_arguments)]
-    fn clear_region(
+    pub(super) fn clear_region(
         &self,
         st: &mut super::State,
         cb: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

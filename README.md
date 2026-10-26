@@ -9,8 +9,8 @@ Unfortunately, right now this only supports Apple Silicon. This will change in t
 People like to know if you're using AI to write something, which is understandable. Like many projects in this space, we are. However, since longevity is intended for this project, code quality is very important and will continually be iterated on.
 
 ## Getting Started
-1. Dump your game and extract it. You should have a folder that contains folder titled ExeFS, RomFS, and Logo. (It would be legally dubious to make this project support that extraction, so sorry.)
-2. Download nxport-builder from the releases tab. Run it, and give it the path to your extracted game. Choose a profile and build target and build!
+1. Dump your game and extract it. You should have a folder that contains folders titled ExeFS, RomFS, and Logo. (It would be legally dubious to make this project support that extraction, so sorry.)
+2. Download nxport-builder from the releases tab (okay there's no release yet, for now clone and build). Run it, and give it the path to your extracted game. Choose a profile and build target and build!
 3. If you're building for MacOS, you should now have an app you can play! If you're building for iOS, you'll have a .ipa that you can sideload with something like [Impactor](https://github.com/claration/Impactor).
 
 ## Screenshots
@@ -44,16 +44,32 @@ People like to know if you're using AI to write something, which is understandab
 
 ## Credits
 Greenlord/S41L0R - Started the project.  
-Retro - Is boutta help I hear!  
-Peiikai - LASRecomp code I'm going to reference. Also seems nice.  
+Retro - Contributor.  
+Peiikai - Offered LASRecomp code for referencing. Also seems nice.  
 Nintendo - For being awesome. I hope. Please don't take this down.  
 
 ## This project has been tested on:
 * Tears of the Kingdom, iOS, MacOS
-  * ~60-90 fps on MacBook Pro M4, almost 30 on iPhone 16e
-  * Two known visual bugs, both pretty rare tbh
+  * ~60-90 fps when unlocked on MacBook Pro M4, almost 30 on iPhone 16e
+  * Occasional flickering
+  * Terrain tile normal zeroing
   * Rauru is silent
 * Kirby and the Forgotten Land, iOS, MacOS
-  * Two known visual bugs 
-* Super Mario Wonder
-  * One known visual bug
+  * Invisible exhale
+  * Some sort of shadow rounding bug? Hard to describe
+* Super Mario Wonder, MacOS
+  * Button prompts are "?"
+* Mario Kart 8 Deluxe v3.0.4, MacOS
+  * Flickering behind press-LR-to-start prompt
+  * Miis facial features cull too eagerly
+  * Trophy flickering
+  * Some things are overly shiny
+  * Selecting time trials crashes game
+  * Selecting multiplayer crashes game
+  * Selecting online play crashes game
+  * Selecting wireless play crashes game
+* Super Mario Odyssey
+  * Rendering looks good so far
+  * Some saving-related bug, I think. For all I know I was out of storage space
+* Breath of the Wild
+  * Still in the weeds of making this playable

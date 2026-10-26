@@ -1821,6 +1821,23 @@ impl DrawPacket {
     }
 }
 
+/// Size of a storage buffer whose descriptor a shader reads from one of the game's own uniform buffers. Only the
+/// driver's descriptors in cbuf 0 carry a size; there the word after the address is whatever the game keeps next to it
+/// (TotK's Depths terrain: a texture handle, read as 258 MB, so the binding failed and the walls were drawn from zeros).
+/// The mapped size from the address instead, at most 1 MiB, as Ryujinx does.
+fn user_sb_size(addr: u64) -> u64 {
+    const MAX: usize = 0x100000;
+    if addr <= 0x10000 {
+        return 0;
+    }
+    let a = crate::nvn::api::translate_virtual(addr as usize);
+    match crate::nvn::api::containing_pool(a, 1) {
+        Some((base, size)) => (base + size).saturating_sub(a).min(MAX) as u64,
+        // Outside every pool (not GPU-mapped on the console): as much as the copy path takes.
+        None => (ARENA_CHUNK / 2) as u64,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DrawKind {
     Arrays {
@@ -1876,7 +1893,8 @@ unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) 
     }
     let (m, all_restart) = match index_type {
         0 => {
-            let v = std::slice::from_raw_parts(addr as *const u8, n);
+            let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u8, n));
             let r = restart.filter(|&r| r <= 0xFF).map(|r| r as u8);
             let m = lanes::<u8, 32>(v, r);
             (
@@ -1885,7 +1903,8 @@ unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) 
             )
         }
         1 => {
-            let v = std::slice::from_raw_parts(addr as *const u16, n);
+            let held = super::rt_guard::guest_copy::<u16>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u16, n));
             let r = restart.filter(|&r| r <= 0xFFFF).map(|r| r as u16);
             let m = lanes::<u16, 16>(v, r);
             (
@@ -1894,7 +1913,8 @@ unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) 
             )
         }
         _ => {
-            let v = std::slice::from_raw_parts(addr as *const u32, n);
+            let held = super::rt_guard::guest_copy::<u32>(addr as usize, n);
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u32, n));
             let m = lanes::<u32, 8>(v, restart);
             (
                 m as u64,
@@ -2374,15 +2394,15 @@ impl Gfx {
         // Metal refuses a no-copy buffer over inaccessible pages; buffers made before a page is protected keep working.
         // --tex-backing holds pages under copied textures, which share pools with buffers: open them first.
         unsafe { super::tex_backing::open_overlapping(wrap_base, wrap_end - wrap_base) };
-        let Some(buf) = self
-            .device
-            .newBufferWithBytesNoCopy_length_options_deallocator(
+        // Held render targets (metal/rt_guard.rs) likewise, for the moment of the wrap.
+        let Some(buf) = super::rt_guard::with_open(wrap_base, wrap_end - wrap_base, || {
+            self.device.newBufferWithBytesNoCopy_length_options_deallocator(
                 std::ptr::NonNull::new(wrap_base as *mut libc::c_void)?,
                 wrap_end - wrap_base,
                 MTLResourceOptions::empty(),
                 None,
             )
-        else {
+        }) else {
             static WARNED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
             let mut w = WARNED.lock().unwrap_or_else(|e| e.into_inner());
             if !w.contains(&wrap_base) {
@@ -3221,11 +3241,8 @@ impl Gfx {
                     .copied()
                     .and_then(|(ua, usz)| {
                         (ua > 0x10000 && byte + 12 <= usz).then(|| {
-                            let p = (ua as usize + byte) as *const u8;
-                            (
-                                std::ptr::read_unaligned(p as *const u64),
-                                std::ptr::read_unaligned(p.add(8) as *const u32) as u64,
-                            )
+                            let a = std::ptr::read_unaligned((ua as usize + byte) as *const u64);
+                            (a, user_sb_size(a))
                         })
                     })
             } else {
@@ -4423,6 +4440,8 @@ impl Gfx {
                 // Inline storage for the per-draw temporaries: heap allocations were ~6% of the encoding thread.
                 let mut color_texs: smallvec::SmallVec<[(usize, Tex, RtRef); 8]> =
                     smallvec::SmallVec::new();
+                let mut bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]> =
+                    smallvec::SmallVec::new();
                 let ncolors = st.colors.len().min(8);
                 for i in 0..ncolors {
                     let rt = &st.colors[i].clone();
@@ -4433,14 +4452,9 @@ impl Gfx {
                         // GPU texture compression: the game renders compressed blocks through an integer view of a BCn texture.
                         Some(t) if rt.view_format != 0 && self.bc_proxy(st, &t, rt).is_some() => {
                             let p = self.bc_proxy(st, &t, rt).unwrap();
-                            if !st
-                                .bc_pending
-                                .iter()
-                                .any(|(q, _, _)| Retained::as_ptr(q) == Retained::as_ptr(&p))
-                            {
-                                st.bc_pending
-                                    .push((p.clone(), t.clone(), rt.level as usize));
-                            }
+                            // Registered for resolve_bc_proxies when the pass opens: the previous pass ends after this
+                            // point and would copy the proxy before anything was drawn into it.
+                            bc.push((p.clone(), t.clone(), rt.level as usize));
                             // The proxy is that one level (single-mip texture; resolve_bc_proxies copies it into rt.level of the
                             // target): attach its level 0. Attaching rt.level was out of range (Metal validation abort; undefined
                             // without validation, so GPU-compressed mips above 0 were never rendered correctly).
@@ -4609,6 +4623,7 @@ impl Gfx {
                         samples,
                         enc_key,
                         target_size,
+                        bc,
                     }),
                     targetless,
                 )
@@ -4976,6 +4991,15 @@ impl Gfx {
                 .map(|(t, d)| (t.clone(), d.layer as usize, d.level as usize));
             st.enc_draws = 0;
             st.enc = Some(st.issuer.clone());
+            for (p, t, level) in &rts.bc {
+                if !st
+                    .bc_pending
+                    .iter()
+                    .any(|(q, _, _)| Retained::as_ptr(q) == Retained::as_ptr(p))
+                {
+                    st.bc_pending.push((p.clone(), t.clone(), *level));
+                }
+            }
             st.enc_fb_epoch = st.fb_epoch;
             st.cx.ec = EncCache::default();
             // --no-enc-cache: every draw sets all state (A/B).
@@ -5152,8 +5176,10 @@ impl Gfx {
                                     let key = (addr, n | pad << 32);
                                     let hit = st.plan_ubo.get(&key).cloned();
                                     let copy = hit.or_else(|| {
-                                        let bytes =
-                                            std::slice::from_raw_parts(addr as *const u8, n);
+                                        let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+                                        let bytes = held.as_deref().unwrap_or_else(|| {
+                                            std::slice::from_raw_parts(addr as *const u8, n)
+                                        });
                                         let f = st.plan_arena.alloc_with(
                                             &self.device,
                                             n + pad,
@@ -5198,11 +5224,8 @@ impl Gfx {
                 let byte = cb_off as usize * 4;
                 let desc = pkt.ubo(stage, cb_slot as i32 - 3).and_then(|(ua, usz)| {
                     (ua > 0x10000 && byte + 12 <= usz).then(|| {
-                        let q = (ua as usize + byte) as *const u8;
-                        (
-                            std::ptr::read_unaligned(q as *const u64),
-                            std::ptr::read_unaligned(q.add(8) as *const u32) as u64,
-                        )
+                        let a = std::ptr::read_unaligned((ua as usize + byte) as *const u64);
+                        (a, user_sb_size(a))
                     })
                 });
                 pkt.sb_desc.push((stage, binding, desc));
@@ -6822,8 +6845,10 @@ impl Gfx {
                     let ib = if let Some((b, o, _)) = memo_hit(env, 1) {
                         Some((b, o))
                     } else if index_type == 0 {
-                        let u8s =
-                            std::slice::from_raw_parts(index_addr as *const u8, count as usize);
+                        let held = super::rt_guard::guest_copy::<u8>(index_addr as usize, count as usize);
+                        let u8s = held.as_deref().unwrap_or_else(|| {
+                            std::slice::from_raw_parts(index_addr as *const u8, count as usize)
+                        });
                         let wide: Vec<u8> =
                             u8s.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect();
                         let x = env.cx.arena.alloc(&self.device, &wide);

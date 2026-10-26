@@ -142,6 +142,7 @@ unsafe fn set_prot(addr: *mut libc::c_void, len: usize, prot: i32) -> i32 {
     let r = libc::mprotect(addr, len, prot);
     super::report_guard::reprotect_held(addr as usize, len);
     super::tex_backing::disc_reprotect(addr as usize, len);
+    super::rt_guard::reprotect_held(addr as usize, len);
     r
 }
 
