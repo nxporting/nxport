@@ -1083,6 +1083,41 @@ pub unsafe extern "C" fn hle_nn_fs_EnsureSaveData(_uid: *const u8) -> i32 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_GetSaveDataSizeMax(size: *mut i64, journal: *mut i64) -> i32 {
+    if !size.is_null() {
+        *size = 256 << 20; // 256 MB data
+    }
+    if !journal.is_null() {
+        *journal = 256 << 20; // 256 MB journal
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_GetCacheStorageSize(size: *mut i64, journal: *mut i64, _index: i32) -> i32 {
+    if !size.is_null() {
+        *size = 256 << 20;
+    }
+    if !journal.is_null() {
+        *journal = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_GetFreeSpaceSize(out: *mut i64, _path: *const c_char) -> i32 {
+    if !out.is_null() {
+        *out = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_ExtendSaveData(_uid: *const (), _size: i64, _journal: i64) -> i32 {
+    0
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_RenameFile(
     old_path: *const c_char,
     new_path: *const c_char,
