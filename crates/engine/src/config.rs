@@ -76,6 +76,58 @@ pub fn app_log() {
     }
 }
 
+#[cfg(windows)]
+const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+#[cfg(windows)]
+const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+#[cfg(windows)]
+extern "system" {
+    fn GetStdHandle(which: u32) -> *mut std::ffi::c_void;
+    fn SetStdHandle(which: u32, handle: *mut std::ffi::c_void) -> i32;
+}
+
+/// Inside a Windows app folder, started without output handles: a GUI program (the builder marks the app's nxport.exe
+/// one) started from Explorer, with no console to print to. Decided on the first call, before app_log sets a log file.
+#[cfg(windows)]
+fn app_without_output() -> bool {
+    static NONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NONE.get_or_init(|| app_resources().is_some() && unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.is_null())
+}
+
+/// Inside a Windows app folder started from Explorer: the log goes to the game's data directory (log.txt, the previous
+/// session's kept as log.prev.txt), as from a macOS .app started from Finder. Started with its output going somewhere
+/// (a terminal's pipe, a file), it keeps that.
+#[cfg(windows)]
+pub fn app_log() {
+    use std::os::windows::io::IntoRawHandle;
+    if !app_without_output() {
+        return;
+    }
+    let Some(dir) = crate::profile::data_dir() else { return };
+    let _ = std::fs::create_dir_all(dir);
+    let log = dir.join("log.txt");
+    let _ = std::fs::rename(&log, dir.join("log.prev.txt"));
+    // Rust's standard output looks its handle up on every write, so setting it redirects println! and eprintln!.
+    if let Ok(f) = std::fs::File::create(&log) {
+        let h = f.into_raw_handle();
+        unsafe {
+            SetStdHandle(STD_OUTPUT_HANDLE, h);
+            SetStdHandle(STD_ERROR_HANDLE, h);
+        }
+    }
+}
+
+/// Why the game could not start, shown in a message box by a Windows app started from Explorer (nothing shows its
+/// output). Elsewhere nothing more: the error is printed.
+pub fn app_error(message: &str) {
+    #[cfg(windows)]
+    if app_without_output() {
+        let _ = sdl3::messagebox::show_simple_message_box(sdl3::messagebox::MessageBoxFlag::ERROR, "nxport", message, None);
+    }
+    #[cfg(not(windows))]
+    let _ = message;
+}
+
 /// Inside an app: the settings it was built with (settings.toml in its resources), a layer above the game's profile.
 pub fn app_bundle_settings() -> Option<crate::settings::SettingsPatch> {
     let file = app_resources()?.join("settings.toml");

@@ -7,6 +7,7 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
+            nxport::config::app_error(&e.to_string());
             std::process::ExitCode::FAILURE
         }
     }
