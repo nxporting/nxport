@@ -1,7 +1,6 @@
 // The engines the packaged apps run, built from the same source as the engine library linked here (whose code makes
 // the iOS guest image, which only matches code patched by that same source): target/engines/<target>/release/nxport
-// for macOS and iOS, passed to the packaging code as NXPORT_ENGINE_MACOS / NXPORT_ENGINE_IOS. The iOS shader
-// translator is built there too when it is missing (tools/build_native_sass2spv.sh ios; it needs .NET).
+// for macOS and iOS, passed to the packaging code as NXPORT_ENGINE_MACOS / NXPORT_ENGINE_IOS.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,13 +41,5 @@ fn main() {
         }
         let bin = target_dir.join(target).join("release/nxport");
         println!("cargo:rustc-env={var}={}", bin.display());
-    }
-    let translator = target_dir.join("aarch64-apple-ios/release/sass2spv.dylib");
-    if !translator.is_file() {
-        let script = root.join("tools/build_native_sass2spv.sh");
-        let ok = Command::new(&script).arg("ios").arg(translator.parent().unwrap()).status().is_ok_and(|s| s.success());
-        if !ok {
-            println!("cargo:warning=the iOS shader translator was not built (tools/build_native_sass2spv.sh ios needs .NET)");
-        }
     }
 }

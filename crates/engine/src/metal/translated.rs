@@ -704,7 +704,7 @@ unsafe fn control_const_bank(control: u64) -> Option<(usize, usize)> {
     Some((off, size))
 }
 
-/// Metal texture type a shader binding declares (manifest type strings from tools/sass2spv).
+/// Metal texture type a shader binding declares (manifest type strings from sass2spv).
 
 /// Where a 16-bit packed format's channels sit in the Metal format it is stored as, as swizzle codes for R, G, B, A
 /// (2..5 = Metal's red..alpha): NVN orders them from the low bits, Metal's layouts put blue there (metal_format).
