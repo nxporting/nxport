@@ -808,6 +808,135 @@ pub(crate) unsafe extern "C" fn friends_not_found() -> u32 {
     121 | (1 << 9) // a friends-module failure: there is no friend to have an image
 }
 
+// ── nn::ldn: local wireless / ad-hoc networking ──────────────────────────────
+static LDN_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0); // 0 = None
+static LDN_STATE_EVENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn ldn_set_state(new_state: u32) {
+    LDN_STATE.store(new_state, std::sync::atomic::Ordering::SeqCst);
+    let ev = LDN_STATE_EVENT.load(std::sync::atomic::Ordering::SeqCst);
+    if ev != 0 {
+        crate::horizon::hle::hle_system_event_signal_addr(ev);
+    }
+}
+
+pub(crate) unsafe extern "C" fn ldn_initialize() -> u32 {
+    ldn_set_state(1); // State::Initialized
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_finalize() -> u32 {
+    ldn_set_state(0); // State::None
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_get_state() -> u32 {
+    LDN_STATE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub(crate) unsafe extern "C" fn ldn_attach_state_change_event(event: *mut u8) {
+    if !event.is_null() {
+        LDN_STATE_EVENT.store(event as usize, std::sync::atomic::Ordering::SeqCst);
+        crate::horizon::hle::hle_system_event_register_signaled(event as usize);
+    }
+}
+
+pub(crate) unsafe extern "C" fn ldn_open_station() -> u32 {
+    ldn_set_state(4); // State::StationOpened
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_close_station() -> u32 {
+    ldn_set_state(1); // State::Initialized
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_open_access_point() -> u32 {
+    ldn_set_state(2); // State::AccessPointOpened
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_close_access_point() -> u32 {
+    ldn_set_state(1); // State::Initialized
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_create_network() -> u32 {
+    ldn_set_state(3); // State::AccessPointCreated
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_destroy_network() -> u32 {
+    ldn_set_state(2); // State::AccessPointOpened
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_scan(
+    _out_networks: *mut u8,
+    out_count: *mut i32,
+    _max_count: i32,
+    _filter: *const u8,
+    _channel: i32,
+) -> u32 {
+    if !out_count.is_null() {
+        *out_count = 0;
+    }
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_connect() -> u32 {
+    ldn_set_state(5); // State::StationConnected
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_disconnect() -> u32 {
+    ldn_set_state(4); // State::StationOpened
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_get_ipv4_address(out_ip: *mut u32, out_mask: *mut u32) -> u32 {
+    if !out_ip.is_null() {
+        *out_ip = 0x0A000002; // 10.0.0.2
+    }
+    if !out_mask.is_null() {
+        *out_mask = 0xFFFFFF00; // 255.255.255.0
+    }
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_zero_buffer_0x480(buf: *mut u8) -> u32 {
+    if !buf.is_null() {
+        std::ptr::write_bytes(buf, 0, 0x480);
+    }
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_zero_buffer_0x48(buf: *mut u8) -> u32 {
+    if !buf.is_null() {
+        std::ptr::write_bytes(buf, 0, 0x48);
+    }
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_zero_buffer_0x40(buf: *mut u8) -> u32 {
+    if !buf.is_null() {
+        std::ptr::write_bytes(buf, 0, 0x40);
+    }
+    RESULT_SUCCESS
+}
+
+pub(crate) unsafe extern "C" fn ldn_make_ipv4(a: u8, b: u8, c: u8, d: u8) -> u32 {
+    ((a as u32) << 24) | ((b as u32) << 16) | ((c as u32) << 8) | (d as u32)
+}
+
+pub(crate) unsafe extern "C" fn ldn_make_broadcast(ip: u32, mask: u32) -> u32 {
+    ip | !mask
+}
+
+pub(crate) unsafe extern "C" fn ldn_make_network(ip: u32, mask: u32) -> u32 {
+    ip & mask
+}
+
 // ── nn::account: one local user (the uid TryOpenPreselectedUser / GetUserId report, horizon/hle.rs), no network account ──────
 const USER_UID: [u64; 2] = [0x0123456789ABCDEF, 0xFEDCBA9876543210];
 pub(crate) unsafe extern "C" fn account_list_users(out_count: *mut i32, out: *mut [u64; 2], max: i32) -> u32 {
