@@ -4199,6 +4199,8 @@ pub unsafe extern "C" fn hle_nn_audio_AcquireAudioDeviceNotificationForOutput(ev
 // (horizon/audio/opus.rs), or silence with correct accounting;
 // nn::codec::GetOpusPacketSize is pure CPU and stays in the sdk module.
 static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new()); // (addr, rate, channels)
+// The SDK's own Opus functions are guest code: they run through guest::call (natively a call, lifted through the guest
+// library), never as host function pointers.
 /// Address of guest decoder -> (software decoder buffer address, is_multistream)
 static SOFT_OPUS_MAP: StdMutex<Option<std::collections::HashMap<usize, (usize, bool)>>> = StdMutex::new(None);
 
@@ -4210,9 +4212,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize(
 ) -> usize {
     record_hle_call("hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize");
     if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii") {
-        type SoftWorkSize = unsafe extern "C" fn(i32, i32) -> usize;
-        let f: SoftWorkSize = std::mem::transmute(sym);
-        return f(rate, channels);
+        return crate::guest::call(sym, &[rate as u64, channels as u64]) as usize;
     }
     audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
 }
@@ -4262,9 +4262,7 @@ pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusDecoder(
         if let Some((old_buf, _)) = map.insert(dec as usize, (soft_buf, false)) {
             drop(Box::from_raw(std::slice::from_raw_parts_mut(old_buf as *mut u8, 512)));
         }
-        type SoftInit = unsafe extern "C" fn(usize, i32, i32, usize, usize) -> u32;
-        let f: SoftInit = std::mem::transmute(init_sym);
-        let res = f(soft_buf, rate, channels, _work as usize, _work_size);
+        let res = crate::guest::call(init_sym, &[soft_buf as u64, rate as u64, channels as u64, _work as u64, _work_size as u64]) as u32;
         let mut t = HLE_OPUS_DECODERS.lock().unwrap();
         t.retain(|(a, _, _)| *a != dec as usize);
         t.push((dec as usize, rate, channels));
@@ -4286,9 +4284,7 @@ pub unsafe extern "C" fn hle_nn_codec_HardwareOpusDecoder_Finalize(this: *mut u8
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_HardwareOpusDecoder_Ctor(this: *mut u8, _option: i32) {
     if let Some(ctor) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec11OpusDecoderC1Ev") {
-        type SoftCtor = unsafe extern "C" fn(*mut u8);
-        let f: SoftCtor = std::mem::transmute(ctor);
-        f(this);
+        crate::guest::call(ctor, &[this as u64]);
     }
 }
 /// Stand-in for the decoder's service object (HardwareOpusDecoderType::_handle): code that releases it calls
@@ -4317,9 +4313,7 @@ pub unsafe extern "C" fn hle_nn_codec_FinalizeHardwareOpusDecoder(dec: *mut ()) 
     if let Some(map) = map_guard.as_mut() {
         if let Some((soft_buf, _)) = map.remove(&(dec as usize)) {
             if let Some(fini_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec19FinalizeOpusDecoderEPNS0_15OpusDecoderTypeE") {
-                type SoftFini = unsafe extern "C" fn(usize);
-                let f: SoftFini = std::mem::transmute(fini_sym);
-                f(soft_buf);
+                crate::guest::call(fini_sym, &[soft_buf as u64]);
             }
             drop(Box::from_raw(std::slice::from_raw_parts_mut(soft_buf as *mut u8, 512)));
         }
@@ -4347,9 +4341,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderSampleRate(dec: *con
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec24GetOpusDecoderSampleRateEPKNS0_15OpusDecoderTypeE") {
-            type SoftRate = unsafe extern "C" fn(usize) -> i32;
-            let f: SoftRate = std::mem::transmute(sym);
-            return f(*soft_buf);
+            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
         }
     }
     hle_opus_decoder(dec as usize).map(|(r, _)| r).unwrap_or(0)
@@ -4360,9 +4352,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderChannelCount(dec: *c
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec26GetOpusDecoderChannelCountEPKNS0_15OpusDecoderTypeE") {
-            type SoftCh = unsafe extern "C" fn(usize) -> i32;
-            let f: SoftCh = std::mem::transmute(sym);
-            return f(*soft_buf);
+            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
         }
     }
     hle_opus_decoder(dec as usize).map(|(_, c)| c).unwrap_or(0)
@@ -4373,9 +4363,7 @@ pub unsafe extern "C" fn hle_nn_codec_ResetHardwareOpusDecoder(dec: *mut ()) {
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec16ResetOpusDecoderEPNS0_15OpusDecoderTypeE") {
-            type SoftReset = unsafe extern "C" fn(usize);
-            let f: SoftReset = std::mem::transmute(sym);
-            f(*soft_buf);
+            crate::guest::call(sym, &[*soft_buf as u64]);
             return;
         }
     }
@@ -4414,9 +4402,7 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, false)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec21DecodeOpusInterleavedEPNS0_15OpusDecoderTypeEPmPiPsmPKvm") {
-            type SoftDecode = unsafe extern "C" fn(usize, *mut usize, *mut i32, *mut i16, usize, *const u8, usize) -> u32;
-            let f: SoftDecode = std::mem::transmute(sym);
-            return f(*soft_buf, out_consumed, out_samples, out_buf, out_buf_size, input, input_size);
+            return crate::guest::call(sym, &[*soft_buf as u64, out_consumed as u64, out_samples as u64, out_buf as u64, out_buf_size as u64, input as u64, input_size as u64]) as u32;
         }
     }
     drop(map_guard);
@@ -4472,9 +4458,7 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_HardwareOpusMultiStreamDecoder_Ctor(this: *mut u8, _option: i32) {
     if let Some(ctor) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec22OpusMultiStreamDecoderC1Ev") {
-        type SoftCtor = unsafe extern "C" fn(*mut u8);
-        let f: SoftCtor = std::mem::transmute(ctor);
-        f(this);
+        crate::guest::call(ctor, &[this as u64]);
     }
 }
 
@@ -4486,9 +4470,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBuffe
     stereo: i32,
 ) -> usize {
     if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec39GetOpusMultiStreamDecoderWorkBufferSizeEiiii") {
-        type SoftWorkSize = unsafe extern "C" fn(i32, i32, i32, i32) -> usize;
-        let f: SoftWorkSize = std::mem::transmute(sym);
-        return f(rate, channels, streams, stereo);
+        return crate::guest::call(sym, &[rate as u64, channels as u64, streams as u64, stereo as u64]) as usize;
     }
     audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
 }
@@ -4524,9 +4506,7 @@ pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusMultiStreamDecoder(
         if let Some((old_buf, _)) = map.insert(dec as usize, (soft_buf, true)) {
             drop(Box::from_raw(std::slice::from_raw_parts_mut(old_buf as *mut u8, 512)));
         }
-        type SoftInit = unsafe extern "C" fn(usize, i32, i32, i32, i32, *const u8, usize, usize) -> u32;
-        let f: SoftInit = std::mem::transmute(init_sym);
-        return f(soft_buf, rate, channels, streams, stereo, mapping, work as usize, work_size);
+        return crate::guest::call(init_sym, &[soft_buf as u64, rate as u64, channels as u64, streams as u64, stereo as u64, mapping as u64, work as usize as u64, work_size as u64]) as u32;
     }
     NN_RESULT_SUCCESS
 }
@@ -4538,9 +4518,7 @@ pub unsafe extern "C" fn hle_nn_codec_FinalizeHardwareOpusMultiStreamDecoder(dec
     if let Some(map) = map_guard.as_mut() {
         if let Some((soft_buf, _)) = map.remove(&(dec as usize)) {
             if let Some(fini_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec30FinalizeOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeE") {
-                type SoftFini = unsafe extern "C" fn(usize);
-                let f: SoftFini = std::mem::transmute(fini_sym);
-                f(soft_buf);
+                crate::guest::call(fini_sym, &[soft_buf as u64]);
             }
             drop(Box::from_raw(std::slice::from_raw_parts_mut(soft_buf as *mut u8, 512)));
         }
@@ -4552,9 +4530,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderSampleRat
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec35GetOpusMultiStreamDecoderSampleRateEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            type SoftRate = unsafe extern "C" fn(usize) -> i32;
-            let f: SoftRate = std::mem::transmute(sym);
-            return f(*soft_buf);
+            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
         }
     }
     0
@@ -4565,9 +4541,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderChannelCo
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec37GetOpusMultiStreamDecoderChannelCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            type SoftCh = unsafe extern "C" fn(usize) -> i32;
-            let f: SoftCh = std::mem::transmute(sym);
-            return f(*soft_buf);
+            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
         }
     }
     0
@@ -4578,9 +4552,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderTotalStre
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec41GetOpusMultiStreamDecoderTotalStreamCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            type SoftCount = unsafe extern "C" fn(usize) -> i32;
-            let f: SoftCount = std::mem::transmute(sym);
-            return f(*soft_buf);
+            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
         }
     }
     0
@@ -4591,9 +4563,7 @@ pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderStereoStr
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec42GetOpusMultiStreamDecoderStereoStreamCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            type SoftCount = unsafe extern "C" fn(usize) -> i32;
-            let f: SoftCount = std::mem::transmute(sym);
-            return f(*soft_buf);
+            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
         }
     }
     0
@@ -4605,9 +4575,7 @@ pub unsafe extern "C" fn hle_nn_codec_ResetHardwareOpusMultiStreamDecoder(dec: *
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec27ResetOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeE") {
-            type SoftReset = unsafe extern "C" fn(usize);
-            let f: SoftReset = std::mem::transmute(sym);
-            f(*soft_buf);
+            crate::guest::call(sym, &[*soft_buf as u64]);
         }
     }
 }
@@ -4626,9 +4594,7 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusMultiStreamInterleavedWithHardwa
     let map_guard = SOFT_OPUS_MAP.lock().unwrap();
     if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
         if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec32DecodeOpusMultiStreamInterleavedEPNS0_26OpusMultiStreamDecoderTypeEPmPiPsmPKvm") {
-            type SoftDecode = unsafe extern "C" fn(usize, *mut usize, *mut i32, *mut i16, usize, *const u8, usize) -> u32;
-            let f: SoftDecode = std::mem::transmute(sym);
-            return f(*soft_buf, out_consumed, out_samples, out_buf, out_buf_size, input, input_size);
+            return crate::guest::call(sym, &[*soft_buf as u64, out_consumed as u64, out_samples as u64, out_buf as u64, out_buf_size as u64, input as u64, input_size as u64]) as u32;
         }
     }
     0x4E
