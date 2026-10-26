@@ -6441,6 +6441,11 @@ pub unsafe extern "C" fn hle_nvnQueueResetMemoryUsageCounts(q: *mut NvnQueue) {
         (*q).compute_mem_used = 0;
     }
 }
+/// Frames the game has presented (nvnQueuePresentTexture calls).
+static PRESENTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub fn presented_frames() -> u64 {
+    PRESENTED.load(std::sync::atomic::Ordering::Relaxed)
+}
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
     _queue: *mut NvnQueue,
@@ -6452,8 +6457,7 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
     // acquires the next window texture (see hle_nvnWindowAcquireTexture). TotK's frame pacer measures its update +
     // draw time (excluding that wait) to pick the present interval, so a wait here locked it at 20 fps.
     {
-        static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let f = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let f = PRESENTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if f == 1 || f % 600 == 0 {
             println!("[+] NVN present: frame {} (buffer index {})", f, index);
         }
