@@ -73,7 +73,7 @@ impl Ctx {
             crate::guest::dirty_track::release_for_gpu(a, len);
             crate::vulkan::guard::note_write(a, len);
         }
-        if let Some(x) = self.imports.find(&self.dev, a, len).filter(|_| write || !crate::vulkan::guard::hot(a, len)) {
+        if let Some(x) = self.imports.find(&self.dev, a, len) {
             if !write {
                 crate::vulkan::guard::note_read(a, len);
             }
