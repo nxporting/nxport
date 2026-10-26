@@ -52,7 +52,6 @@ Nintendo - For being awesome. I hope. Please don't take this down.
 * Tears of the Kingdom, iOS, MacOS
   * ~60-90 fps when unlocked on MacBook Pro M4, almost 30 on iPhone 16e
   * Occasional flickering
-  * Rauru is silent
 * Kirby and the Forgotten Land, iOS, MacOS
   * Invisible exhale
   * Some sort of shadow rounding bug? Hard to describe
@@ -61,12 +60,6 @@ Nintendo - For being awesome. I hope. Please don't take this down.
 * Mario Kart 8 Deluxe v3.0.4, MacOS
   * Flickering behind press-LR-to-start prompt
   * Miis facial features cull too eagerly
-  * Trophy flickering
-  * Some things are overly shiny
-  * Selecting time trials crashes game
-  * Selecting multiplayer crashes game
-  * Selecting online play crashes game
-  * Selecting wireless play crashes game
 * Super Mario Odyssey
   * Rendering looks good so far
   * Some saving-related bug, I think. For all I know I was out of storage space
