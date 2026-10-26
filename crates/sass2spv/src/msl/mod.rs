@@ -414,7 +414,7 @@ pub fn generate(
     entry: &str,
 ) -> R<String> {
     let stage = d.stage;
-    if !matches!(stage, ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Compute) {
+    if !matches!(stage, ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Compute | ShaderStage::Geometry) {
         unsupported!("stage {stage}");
     }
     crate::codegen::adjust_io_definitions(info, stage);
@@ -795,7 +795,7 @@ fn io_declarations(c: &mut Ctx) -> R<IoDecls> {
                 } else if is_output {
                     out_members.insert(io.location, format!("    {tn} loc{0} [[user(locn{0})]];\n", io.location));
                 } else {
-                    let interp = match d.imap_types.as_ref().ok_or("msl: no pixel imap")?[io.location as usize].first_used_type() {
+                    let interp = match d.imap_types.as_ref().and_then(|m| m.get(io.location as usize)).map(|p| p.first_used_type()).unwrap_or(PixelImap::Perspective) {
                         PixelImap::Constant => ", flat",
                         PixelImap::ScreenLinear => ", center_no_perspective",
                         _ => "",
@@ -1095,7 +1095,7 @@ fn emit_function(c: &mut Ctx, f: usize, io: &IoDecls) -> R<()> {
     let is_main = f == 0;
     if is_main {
         let kind = match c.stage {
-            ShaderStage::Vertex => "vertex",
+            ShaderStage::Vertex | ShaderStage::Geometry => "vertex",
             ShaderStage::Fragment => "fragment",
             _ => "kernel",
         };

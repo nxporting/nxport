@@ -89,8 +89,8 @@ pub struct Ctx {
     failed_stages: HashSet<(u64, u64)>,
     pipelines: HashMap<u64, (vk::Pipeline, vk::PipelineLayout)>,
     layouts: HashMap<(vk::DescriptorSetLayout, vk::DescriptorSetLayout), vk::PipelineLayout>,
-    /// Vertex / fragment stage pairs: (set layout, pipeline layout, descriptors pushed).
-    graphics_layouts: HashMap<((u64, u64), Option<(u64, u64)>), (vk::DescriptorSetLayout, vk::PipelineLayout, bool)>,
+    /// Vertex / geometry / fragment stage combinations: (set layout, pipeline layout, descriptors pushed).
+    graphics_layouts: HashMap<((u64, u64), Option<(u64, u64)>, Option<(u64, u64)>), (vk::DescriptorSetLayout, vk::PipelineLayout, bool)>,
     empty_layout: vk::DescriptorSetLayout,
     desc_pools: Vec<vk::DescriptorPool>,
     st: Nvn,

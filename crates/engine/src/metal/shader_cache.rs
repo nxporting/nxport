@@ -594,6 +594,7 @@ pub unsafe fn lookup_or_translate_dynamic(
         sass2spv::ShaderStage::Compute => 3,
         sass2spv::ShaderStage::Fragment => 1,
         sass2spv::ShaderStage::Vertex => 2,
+        sass2spv::ShaderStage::Geometry => 4,
         _ => 0,
     };
 
@@ -704,6 +705,7 @@ pub unsafe fn lookup_or_translate_dynamic(
 
     let stage_kind = match stage {
         sass2spv::ShaderStage::Vertex => StageKind::Vertex,
+        sass2spv::ShaderStage::Geometry => StageKind::Geometry,
         sass2spv::ShaderStage::Fragment => StageKind::Fragment,
         sass2spv::ShaderStage::Compute => StageKind::Compute,
         _ => StageKind::Other,
