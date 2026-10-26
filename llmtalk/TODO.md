@@ -5,6 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
+- **Vulkan recording speed.** Great Sky Island records ~20 ms a frame on the Presentation thread and the GPU idles
+  waiting for recorded chunks (capture sky2203 replay: recording ~20.7 ms median). In progress.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
