@@ -179,6 +179,7 @@ pub unsafe fn desc(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) -> Option
         pipelines::normalize(&e.blends, e.color_state, Some(e.channel_mask), Some(n.depth_stencil), &colors, depth);
     Some(pipelines::Desc {
         vs: v.id,
+        gs: None,
         fs: f.map(|f| f.id),
         topology: topology.as_raw(),
         restart,
@@ -256,13 +257,13 @@ pub fn compile(entries: Vec<Entry>) {
                 let Some(e) = queue.lock().unwrap().pop() else { break };
                 let Some((v, f)) = stages(&dev, &e) else { continue };
                 let Some(d) = desc(&dev, &e, &v, f.as_ref()) else { continue };
-                let Some(lay) = pipelines::made_layout(v.id, f.as_ref().map(|f| f.id)).or_else(|| {
-                    let l = pipelines::layout(&dev, &v, f.as_ref())?;
-                    Some(pipelines::put_layout(v.id, f.as_ref().map(|f| f.id), l))
+                let Some(lay) = pipelines::made_layout(v.id, None, f.as_ref().map(|f| f.id)).or_else(|| {
+                    let l = pipelines::layout(&dev, &v, None, f.as_ref())?;
+                    Some(pipelines::put_layout(v.id, None, f.as_ref().map(|f| f.id), l))
                 }) else {
                     continue;
                 };
-                if let Ok(p) = pipelines::create(&dev, &d, &v, f.as_ref(), lay.1, cache) {
+                if let Ok(p) = pipelines::create(&dev, &d, &v, None, f.as_ref(), lay.1, cache) {
                     pipelines::put(super::exec::hash_of(&d), p, lay.1);
                     built.fetch_add(1, Ordering::Relaxed);
                 }
