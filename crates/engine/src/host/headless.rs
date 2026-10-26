@@ -40,9 +40,23 @@ pub mod input {
         Vec::new()
     }
 
+    pub const MAX_PLAYERS: usize = 8;
+
     /// (buttons, sticks): nothing pressed.
     pub fn npad_state() -> (u64, [i32; 4]) {
         (0, [0; 4])
+    }
+
+    pub fn player_npad_state(_player: usize) -> (u64, [i32; 4]) {
+        (0, [0; 4])
+    }
+
+    pub fn is_player_connected(player: usize) -> bool {
+        player == 0
+    }
+
+    pub fn connected_player_count() -> usize {
+        1
     }
 
     pub fn apply_script() {}

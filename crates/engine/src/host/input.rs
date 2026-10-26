@@ -421,8 +421,16 @@ fn save(b: &Bindings) -> std::io::Result<()> {
 
 // ---- live state (written on the main thread, read by nn::hid) ----
 
+pub const MAX_PLAYERS: usize = 8;
+
 static KEYS: [AtomicBool; 128] = [const { AtomicBool::new(false) }; 128];
-static PAD: [AtomicU32; 25] = [const { AtomicU32::new(0) }; 25];
+static PLAYER_PADS: [[AtomicU32; 25]; MAX_PLAYERS] =
+    [const { [const { AtomicU32::new(0) }; 25] }; MAX_PLAYERS];
+static PLAYER_CONNECTED: [AtomicBool; MAX_PLAYERS] = {
+    let mut arr = [const { AtomicBool::new(false) }; MAX_PLAYERS];
+    arr[0] = AtomicBool::new(true);
+    arr
+};
 /// While the Controls window captures a binding, the game sees no input.
 static SUSPENDED: AtomicBool = AtomicBool::new(false);
 /// Physical controllers only: A/B and X/Y by position (as on a Switch controller: the bottom button is B, the left one Y)
@@ -436,15 +444,41 @@ pub fn set_controller_swaps(ab: bool, xy: bool) {
     SWAP_XY.store(xy, Ordering::Relaxed);
 }
 
-static NPAD_BUTTONS: AtomicU64 = AtomicU64::new(0);
-static NPAD_STICKS: [AtomicI32; 4] = [const { AtomicI32::new(0) }; 4];
+static NPAD_BUTTONS: [AtomicU64; MAX_PLAYERS] = [const { AtomicU64::new(0) }; MAX_PLAYERS];
+static NPAD_STICKS: [[AtomicI32; 4]; MAX_PLAYERS] =
+    [const { [const { AtomicI32::new(0) }; 4] }; MAX_PLAYERS];
 
-/// The current Npad state: (NpadButtonSet bits, [left x, left y, right x, right y]) in hid units (±0x7fff).
+/// The current Npad state for player 0: (NpadButtonSet bits, [left x, left y, right x, right y]) in hid units (±0x7fff).
 pub fn npad_state() -> (u64, [i32; 4]) {
-    (
-        NPAD_BUTTONS.load(Ordering::Acquire),
-        std::array::from_fn(|i| NPAD_STICKS[i].load(Ordering::Acquire)),
-    )
+    player_npad_state(0)
+}
+
+/// The current Npad state for `player` (0..7): (NpadButtonSet bits, [left x, left y, right x, right y]).
+pub fn player_npad_state(player: usize) -> (u64, [i32; 4]) {
+    if player < MAX_PLAYERS {
+        (
+            NPAD_BUTTONS[player].load(Ordering::Acquire),
+            std::array::from_fn(|i| NPAD_STICKS[player][i].load(Ordering::Acquire)),
+        )
+    } else {
+        (0, [0; 4])
+    }
+}
+
+pub fn is_player_connected(player: usize) -> bool {
+    if player < MAX_PLAYERS {
+        PLAYER_CONNECTED[player].load(Ordering::Acquire)
+    } else {
+        false
+    }
+}
+
+pub fn connected_player_count() -> usize {
+    PLAYER_CONNECTED
+        .iter()
+        .filter(|c| c.load(Ordering::Acquire))
+        .count()
+        .max(1)
 }
 
 /// Touch screen (nn::hid TouchScreen): contacts from the game window (mouse on macOS, fingers on iOS) in the Switch
@@ -545,75 +579,91 @@ pub fn set_suspended(s: bool) {
 }
 
 pub fn pad_value(e: PadElem) -> f32 {
-    f32::from_bits(PAD[e.index()].load(Ordering::Relaxed))
+    player_pad_value(0, e)
 }
 
-/// Folds keyboard and controller state through the bindings into the Npad state.
+pub fn player_pad_value(player: usize, e: PadElem) -> f32 {
+    if player < MAX_PLAYERS {
+        f32::from_bits(PLAYER_PADS[player][e.index()].load(Ordering::Relaxed))
+    } else {
+        0.0
+    }
+}
+
+/// Folds keyboard and controller state through the bindings into each player's Npad state.
 pub fn update_npad() {
     if SUSPENDED.load(Ordering::Relaxed) {
-        NPAD_BUTTONS.store(0, Ordering::Release);
-        for s in &NPAD_STICKS {
-            s.store(0, Ordering::Release);
+        for p in 0..MAX_PLAYERS {
+            NPAD_BUTTONS[p].store(0, Ordering::Release);
+            for s in &NPAD_STICKS[p] {
+                s.store(0, Ordering::Release);
+            }
         }
         return;
     }
     let b = bindings();
-    let value = |s: SwitchInput| -> f32 {
-        let bd = b[s.index()];
-        let k = bd.key.is_some_and(|k| {
-            KEYS.get(k as usize)
-                .is_some_and(|a| a.load(Ordering::Relaxed))
-        });
-        let p = bd.pad.map_or(0.0, pad_value);
-        if k {
-            1.0
-        } else {
-            p
-        }
-    };
-    let mut buttons = 0u64;
-    for s in SWITCH_INPUTS {
-        if let Some(bit) = s.button_bit() {
-            if value(s) > 0.5 {
-                buttons |= 1 << bit;
+    for player in 0..MAX_PLAYERS {
+        let value = |s: SwitchInput| -> f32 {
+            let bd = b[s.index()];
+            let k = if player == 0 {
+                bd.key.is_some_and(|k| {
+                    KEYS.get(k as usize)
+                        .is_some_and(|a| a.load(Ordering::Relaxed))
+                })
+            } else {
+                false
+            };
+            let p = bd.pad.map_or(0.0, |elem| player_pad_value(player, elem));
+            if k {
+                1.0
+            } else {
+                p
+            }
+        };
+        let mut buttons = 0u64;
+        for s in SWITCH_INPUTS {
+            if let Some(bit) = s.button_bit() {
+                if value(s) > 0.5 {
+                    buttons |= 1 << bit;
+                }
             }
         }
+        use SwitchInput::*;
+        let stick = |up, down, left, right| {
+            let (mut x, mut y) = (value(right) - value(left), value(up) - value(down));
+            let m = (x * x + y * y).sqrt();
+            if m > 1.0 {
+                // Keyboard diagonals: keep the stick inside its circle.
+                x /= m;
+                y /= m;
+            }
+            (x, y)
+        };
+        let (lx, ly) = stick(LUp, LDown, LLeft, LRight);
+        let (rx, ry) = stick(RUp, RDown, RLeft, RRight);
+        // The HID service also reports each stick as four direction "buttons" (StickLLeft = bit 16 ... StickRDown = 23);
+        // menus navigate with them.
+        for (i, (x, y)) in [(lx, ly), (rx, ry)].into_iter().enumerate() {
+            let base = 16 + 4 * i;
+            if x < -0.5 {
+                buttons |= 1 << base;
+            }
+            if y > 0.5 {
+                buttons |= 1 << (base + 1);
+            }
+            if x > 0.5 {
+                buttons |= 1 << (base + 2);
+            }
+            if y < -0.5 {
+                buttons |= 1 << (base + 3);
+            }
+        }
+        let unit = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i32;
+        for (slot, v) in NPAD_STICKS[player].iter().zip([lx, ly, rx, ry]) {
+            slot.store(unit(v), Ordering::Release);
+        }
+        NPAD_BUTTONS[player].store(buttons, Ordering::Release);
     }
-    use SwitchInput::*;
-    let stick = |up, down, left, right| {
-        let (mut x, mut y) = (value(right) - value(left), value(up) - value(down));
-        let m = (x * x + y * y).sqrt();
-        if m > 1.0 {
-            // Keyboard diagonals: keep the stick inside its circle.
-            x /= m;
-            y /= m;
-        }
-        (x, y)
-    };
-    let (lx, ly) = stick(LUp, LDown, LLeft, LRight);
-    let (rx, ry) = stick(RUp, RDown, RLeft, RRight);
-    // The HID service also reports each stick as four direction "buttons" (StickLLeft = bit 16 ... StickRDown = 23);
-    // menus navigate with them.
-    for (i, (x, y)) in [(lx, ly), (rx, ry)].into_iter().enumerate() {
-        let base = 16 + 4 * i;
-        if x < -0.5 {
-            buttons |= 1 << base;
-        }
-        if y > 0.5 {
-            buttons |= 1 << (base + 1);
-        }
-        if x > 0.5 {
-            buttons |= 1 << (base + 2);
-        }
-        if y < -0.5 {
-            buttons |= 1 << (base + 3);
-        }
-    }
-    let unit = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i32;
-    for (slot, v) in NPAD_STICKS.iter().zip([lx, ly, rx, ry]) {
-        slot.store(unit(v), Ordering::Release);
-    }
-    NPAD_BUTTONS.store(buttons, Ordering::Release);
 }
 
 // ---- debug ----
@@ -677,10 +727,99 @@ pub fn log_hid(func: &str, id: u32, count: i32) {
 extern "C" {}
 
 /// Polls every connected extended gamepad (values combined by maximum) and refreshes the Npad state. Main thread only.
+/// Reads all elements from one controller (either physical or virtual).
+unsafe fn read_controller_elements(c: *mut objc2::runtime::AnyObject, physical: bool) -> [f32; 25] {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2::sel;
+    use PadElem as P;
+
+    let mut v = [0f32; 25];
+    let gp: *mut AnyObject = msg_send![c, extendedGamepad];
+    if gp.is_null() {
+        return v;
+    }
+    let button = |sel: objc2::runtime::Sel| -> f32 {
+        let b: *mut AnyObject = msg_send![gp, performSelector: sel];
+        if b.is_null() {
+            0.0
+        } else {
+            msg_send![b, value]
+        }
+    };
+    let dir = |pad: *mut AnyObject| -> [f32; 4] {
+        // up, down, left, right
+        if pad.is_null() {
+            return [0.0; 4];
+        }
+        let x: *mut AnyObject = msg_send![pad, xAxis];
+        let y: *mut AnyObject = msg_send![pad, yAxis];
+        let (x, y): (f32, f32) = (msg_send![x, value], msg_send![y, value]);
+        [y.max(0.0), (-y).max(0.0), (-x).max(0.0), x.max(0.0)]
+    };
+    let mut put = |e: PadElem, val: f32| v[e.index()] = v[e.index()].max(val);
+    let (a_elem, b_elem) = if physical && SWAP_AB.load(Ordering::Relaxed) {
+        (P::South, P::East)
+    } else {
+        (P::East, P::South)
+    };
+    let (x_elem, y_elem) = if physical && SWAP_XY.load(Ordering::Relaxed) {
+        (P::West, P::North)
+    } else {
+        (P::North, P::West)
+    };
+    put(a_elem, button(sel!(buttonA)));
+    put(b_elem, button(sel!(buttonB)));
+    put(x_elem, button(sel!(buttonX)));
+    put(y_elem, button(sel!(buttonY)));
+    put(P::LeftShoulder, button(sel!(leftShoulder)));
+    put(P::RightShoulder, button(sel!(rightShoulder)));
+    put(P::LeftTrigger, button(sel!(leftTrigger)));
+    put(P::RightTrigger, button(sel!(rightTrigger)));
+    put(P::Menu, button(sel!(buttonMenu)));
+    put(P::Options, button(sel!(buttonOptions)));
+    put(P::Home, button(sel!(buttonHome)));
+    put(P::LeftStickButton, button(sel!(leftThumbstickButton)));
+    put(P::RightStickButton, button(sel!(rightThumbstickButton)));
+    let dpad: *mut AnyObject = msg_send![gp, dpad];
+    let ls: *mut AnyObject = msg_send![gp, leftThumbstick];
+    let rs: *mut AnyObject = msg_send![gp, rightThumbstick];
+    for (elems, vals) in [
+        (
+            [P::DpadUp, P::DpadDown, P::DpadLeft, P::DpadRight],
+            dir(dpad),
+        ),
+        (
+            [
+                P::LeftStickUp,
+                P::LeftStickDown,
+                P::LeftStickLeft,
+                P::LeftStickRight,
+            ],
+            dir(ls),
+        ),
+        (
+            [
+                P::RightStickUp,
+                P::RightStickDown,
+                P::RightStickLeft,
+                P::RightStickRight,
+            ],
+            dir(rs),
+        ),
+    ] {
+        for (e, val) in elems.into_iter().zip(vals) {
+            put(e, val);
+        }
+    }
+    v
+}
+
+/// Polls connected gamepads, assigning distinct controllers to players 0..7 (player 0 combines keyboard + controller 0),
+/// and refreshes the Npad state. Main thread only.
 pub fn poll_controllers(_mtm: objc2::MainThreadMarker) {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};
-    let mut v = [0f32; 25];
     unsafe {
         let Some(cls) = AnyClass::get(c"GCController") else {
             return;
@@ -698,99 +837,58 @@ pub fn poll_controllers(_mtm: objc2::MainThreadMarker) {
         let all: Vec<*mut AnyObject> = (0..n).map(|i| msg_send![list, objectAtIndex: i]).collect();
         // The game's rumble to controllers with haptics (or the phone itself).
         crate::host::rumble::update(&all);
+
+        #[cfg(target_os = "ios")]
+        let virtual_pad = crate::host::display::virtual_gamepad();
+        #[cfg(not(target_os = "ios"))]
+        let virtual_pad: *mut AnyObject = std::ptr::null_mut();
+
+        // Separate virtual on-screen controller from physical controllers
+        let mut physical = Vec::new();
         for &c in &all {
-            let gp: *mut AnyObject = msg_send![c, extendedGamepad];
-            if gp.is_null() {
-                continue;
-            }
-            let button = |sel: objc2::runtime::Sel| -> f32 {
-                let b: *mut AnyObject = msg_send![gp, performSelector: sel];
-                if b.is_null() {
-                    0.0
-                } else {
-                    msg_send![b, value]
-                }
-            };
-            let dir = |pad: *mut AnyObject| -> [f32; 4] {
-                // up, down, left, right
-                if pad.is_null() {
-                    return [0.0; 4];
-                }
-                let x: *mut AnyObject = msg_send![pad, xAxis];
-                let y: *mut AnyObject = msg_send![pad, yAxis];
-                let (x, y): (f32, f32) = (msg_send![x, value], msg_send![y, value]);
-                [y.max(0.0), (-y).max(0.0), (-x).max(0.0), x.max(0.0)]
-            };
-            use objc2::sel;
-            use PadElem as P;
-            let mut put = |e: PadElem, val: f32| v[e.index()] = v[e.index()].max(val);
-            // By label: the button labeled A feeds the element bound to the Switch's A (East), and so on.
-            #[cfg(target_os = "ios")]
-            let physical = c != crate::host::display::virtual_gamepad();
-            #[cfg(not(target_os = "ios"))]
-            let physical = true;
-            let (a_elem, b_elem) = if physical && SWAP_AB.load(Ordering::Relaxed) {
-                (P::South, P::East)
-            } else {
-                (P::East, P::South)
-            };
-            let (x_elem, y_elem) = if physical && SWAP_XY.load(Ordering::Relaxed) {
-                (P::West, P::North)
-            } else {
-                (P::North, P::West)
-            };
-            put(a_elem, button(sel!(buttonA)));
-            put(b_elem, button(sel!(buttonB)));
-            put(x_elem, button(sel!(buttonX)));
-            put(y_elem, button(sel!(buttonY)));
-            put(P::LeftShoulder, button(sel!(leftShoulder)));
-            put(P::RightShoulder, button(sel!(rightShoulder)));
-            put(P::LeftTrigger, button(sel!(leftTrigger)));
-            put(P::RightTrigger, button(sel!(rightTrigger)));
-            put(P::Menu, button(sel!(buttonMenu)));
-            put(P::Options, button(sel!(buttonOptions)));
-            put(P::Home, button(sel!(buttonHome)));
-            put(P::LeftStickButton, button(sel!(leftThumbstickButton)));
-            put(P::RightStickButton, button(sel!(rightThumbstickButton)));
-            let dpad: *mut AnyObject = msg_send![gp, dpad];
-            let ls: *mut AnyObject = msg_send![gp, leftThumbstick];
-            let rs: *mut AnyObject = msg_send![gp, rightThumbstick];
-            for (elems, vals) in [
-                (
-                    [P::DpadUp, P::DpadDown, P::DpadLeft, P::DpadRight],
-                    dir(dpad),
-                ),
-                (
-                    [
-                        P::LeftStickUp,
-                        P::LeftStickDown,
-                        P::LeftStickLeft,
-                        P::LeftStickRight,
-                    ],
-                    dir(ls),
-                ),
-                (
-                    [
-                        P::RightStickUp,
-                        P::RightStickDown,
-                        P::RightStickLeft,
-                        P::RightStickRight,
-                    ],
-                    dir(rs),
-                ),
-            ] {
-                for (e, val) in elems.into_iter().zip(vals) {
-                    put(e, val);
-                }
+            if c != virtual_pad {
+                physical.push(c);
             }
         }
-    }
-    let mut changed = false;
-    for (slot, val) in PAD.iter().zip(v) {
-        changed |= slot.swap(val.to_bits(), Ordering::Relaxed) != val.to_bits();
-    }
-    if changed {
-        update_npad();
+
+        let mut changed = false;
+
+        // Player 0: virtual gamepad (if present) combined with first physical controller (if present)
+        let mut p0 = [0f32; 25];
+        if !virtual_pad.is_null() {
+            let v = read_controller_elements(virtual_pad, false);
+            for i in 0..25 {
+                p0[i] = p0[i].max(v[i]);
+            }
+        }
+        if let Some(&c0) = physical.first() {
+            let v = read_controller_elements(c0, true);
+            for i in 0..25 {
+                p0[i] = p0[i].max(v[i]);
+            }
+        }
+        for (slot, &val) in PLAYER_PADS[0].iter().zip(&p0) {
+            changed |= slot.swap(val.to_bits(), Ordering::Relaxed) != val.to_bits();
+        }
+        // Player 0 is always connected
+        changed |= !PLAYER_CONNECTED[0].swap(true, Ordering::Relaxed);
+
+        // Players 1..7: physical controllers 1..7
+        for p in 1..MAX_PLAYERS {
+            let mut pv = [0f32; 25];
+            let is_connected = p < physical.len();
+            if is_connected {
+                pv = read_controller_elements(physical[p], true);
+            }
+            for (slot, &val) in PLAYER_PADS[p].iter().zip(&pv) {
+                changed |= slot.swap(val.to_bits(), Ordering::Relaxed) != val.to_bits();
+            }
+            changed |= PLAYER_CONNECTED[p].swap(is_connected, Ordering::Relaxed) != is_connected;
+        }
+
+        if changed {
+            update_npad();
+        }
     }
 }
 
@@ -928,4 +1026,31 @@ pub fn modifier_down(code: u16, flags: usize) -> Option<bool> {
         _ => return None,
     };
     Some(flags & bit != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_multiplayer_player_slots() {
+        assert_eq!(MAX_PLAYERS, 8);
+        assert!(is_player_connected(0));
+        assert!(!is_player_connected(1));
+        assert!(!is_player_connected(7));
+        assert!(!is_player_connected(8));
+        assert_eq!(connected_player_count(), 1);
+
+        PLAYER_CONNECTED[1].store(true, Ordering::SeqCst);
+        assert!(is_player_connected(1));
+        assert_eq!(connected_player_count(), 2);
+        PLAYER_CONNECTED[1].store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_player_npad_state_out_of_bounds() {
+        let (buttons, sticks) = player_npad_state(MAX_PLAYERS);
+        assert_eq!(buttons, 0);
+        assert_eq!(sticks, [0; 4]);
+    }
 }

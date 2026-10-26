@@ -1621,10 +1621,10 @@ pub unsafe extern "C" fn hle_nn_hid_GetNpadStyleSet(_npad_id: *const u32) -> u32
         *_npad_id
     };
     crate::host::input::log_hid("GetNpadStyleSet", id, 0);
-    // Like a docked Switch with one Pro Controller: Npad No1 in the FullKey style, nothing else connected. Reporting
-    // every id as FullKey | Handheld | JoyDual made the game read JoyDual states (without the Joy-Con connection
-    // attributes), and the left stick never moved Link.
-    if id == NPAD_NO1 {
+    // NpadId: No1..No8 (0..7), Handheld (0x20).
+    // In docked/standard setup, players 0..7 report FullKey (bit 0 = 1) if their controller is connected.
+    // Handheld (0x20) reports 0 to preserve docked Pro Controller behavior for games like TotK / MK8D.
+    if id < 8 && crate::host::input::is_player_connected(id as usize) {
         1
     } else {
         0
@@ -1649,25 +1649,36 @@ pub unsafe extern "C" fn hle_nn_hid_GetNpadStates(
     npad_states(states, count, _npad_id, 0)
 }
 
-/// NpadId::No1.
-const NPAD_NO1: u32 = 0;
-
-/// The shared body of the GetNpadStates overloads (all state structs have the NpadFullKeyState layout). Only No1 is
-/// connected; `extra_attributes` adds style-specific attribute bits (JoyDual: IsLeftConnected | IsRightConnected).
+/// The shared body of the GetNpadStates overloads (all state structs have the NpadFullKeyState layout).
+/// Supports up to 8 players (NpadId No1..No8, plus Handheld mapped to player 0);
+/// `extra_attributes` adds style-specific attribute bits (JoyDual: IsLeftConnected | IsRightConnected).
 unsafe fn npad_states(
     states: *mut NpadFullKeyState,
     count: i32,
     _npad_id: *const u32,
     extra_attributes: u32,
 ) -> i32 {
-    let connected = !_npad_id.is_null() && *_npad_id == NPAD_NO1;
+    let id = if _npad_id.is_null() {
+        u32::MAX
+    } else {
+        *_npad_id
+    };
+    let player = match id {
+        0..=7 => id as usize,
+        0x20 => 0, // Handheld maps to player 0
+        _ => usize::MAX,
+    };
+    let connected = player < crate::host::input::MAX_PLAYERS
+        && crate::host::input::is_player_connected(player);
     if states.is_null() || count <= 0 {
         return 0;
     }
-    crate::host::input::apply_script();
+    if player == 0 {
+        crate::host::input::apply_script();
+    }
     // Keyboard / controller state mapped by the user's bindings (host/input.rs).
     let (buttons, sticks) = if connected {
-        crate::host::input::npad_state()
+        crate::host::input::player_npad_state(player)
     } else {
         (0, [0; 4])
     };
@@ -1682,9 +1693,10 @@ unsafe fn npad_states(
         };
         let _ = lr;
         println!(
-            "[hid-buttons] frame {} id {:#x} buttons {:#x} attrs {:#x} callers: {}",
+            "[hid-buttons] frame {} id {:#x} player {} buttons {:#x} attrs {:#x} callers: {}",
             crate::gpu::backend().presented_frames(),
-            *_npad_id,
+            id,
+            player,
             buttons,
             1 | extra_attributes,
             guest_chain(fp)
@@ -1985,8 +1997,11 @@ pub unsafe extern "C" fn hle_nn_hid_ShowControllerSupport(
     // A real session ends with the requested player count and Npad No1 selected.
     if !result_info.is_null() {
         std::ptr::write_bytes(result_info, 0, 0x40);
-        let min_players = if arg.is_null() { 1 } else { (*arg).max(1) };
-        *(result_info as *mut i8) = min_players as i8;
+        let min_players = if arg.is_null() { 1 } else { (*arg).max(1) as i8 };
+        let max_players = if arg.is_null() { 8 } else { (*arg.add(1)).max(min_players as u8) as i8 };
+        let connected = crate::host::input::connected_player_count() as i8;
+        let player_count = connected.clamp(min_players, max_players);
+        *(result_info as *mut i8) = player_count;
         *(result_info.add(4) as *mut u32) = 0; // NpadId::No1
     }
     0
