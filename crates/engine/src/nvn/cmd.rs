@@ -15,7 +15,7 @@ use std::os::raw::c_int;
 use crate::nvn::api::record_typed;
 
 /// A render target reference: NVNtexture address plus the view's level/layer (0 if no view).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct RtRef {
     pub texture: usize,
     /// The object's snapshot generation when the command was recorded, low 32 bits (nvn::api::resolve_texture_ref).
@@ -28,7 +28,7 @@ pub struct RtRef {
 }
 
 /// A texture subresource reference for copies: NVNtexture address plus the view's first level / layer.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TexRef {
     pub texture: usize,
     /// The object's snapshot generation when the command was recorded, low 32 bits (nvn::api::resolve_texture_ref).
@@ -38,7 +38,7 @@ pub struct TexRef {
 }
 
 /// NVNcopyRegion: offsets and sizes in texels (layers for array targets via z / depth).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Region {
     pub x: i32,
     pub y: i32,
@@ -50,7 +50,7 @@ pub struct Region {
 
 /// Bound vertex attribute states, inline (Cmd stays 72 bytes): the executor used to copy them out of a separate heap
 /// allocation for every bind, a cache miss each.
-#[derive(Clone, Copy, Default, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AttribState {
     pub n: u8,
     pub v: [u32; 16],
@@ -72,7 +72,7 @@ impl std::fmt::Debug for AttribState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Cmd {
     SetRenderTargets {
         colors: Vec<RtRef>,
@@ -280,7 +280,7 @@ pub enum Cmd {
     ClearTexture(Box<ClearTextureParams>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CopyTextureToTextureParams {
     pub src: TexRef,
     pub src_region: Region,
@@ -288,7 +288,7 @@ pub struct CopyTextureToTextureParams {
     pub dst_region: Region,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClearTextureParams {
     pub dst: TexRef,
     pub region: Region,
@@ -349,8 +349,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
     depth: usize,
     depth_view: *const u8,
 ) {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr, options(nomem, nostack));
+    let lr = crate::guest_reg!(x30);
     // --log-rt-callers: each distinct (caller, target count, which targets are null, depth null) once, with the
     // caller as a main-module offset (UltraCam diagnosis: it replaces the game's render targets).
     // --log-rt-caller-size=WxH: the guest call chain of the first 12 binds whose color target 0 has that size.
@@ -365,9 +364,8 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
             if size.is(t.width, t.height)
                 && N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 12
             {
-                let base = crate::cpu::crash_handler::get_guest_base();
-                let mut fp: usize;
-                std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+                let base = crate::guest::loader::main_base();
+                let mut fp = crate::guest_reg!(x29);
                 let mut chain = vec![format!("{:#x}", lr.wrapping_sub(base))];
                 for _ in 0..16 {
                     if fp < 0x1000 || fp & 7 != 0 {
@@ -411,7 +409,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
         let key = (lr, num, nulls, depth == 0);
         let mut g = SEEN.lock().unwrap();
         if g.get_or_insert_with(Default::default).insert(key) {
-            let base = crate::cpu::crash_handler::get_guest_base();
+            let base = crate::guest::loader::main_base();
             println!(
                 "[rt-caller] lr {:#x} (base+{:#x}) num {} colors@{:#x} {:x?} depth {:#x}",
                 lr,
@@ -422,8 +420,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
                 depth
             );
             // Guest call chain from the frame-pointer records (ours first, then the guest's).
-            let mut fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+            let mut fp = crate::guest_reg!(x29);
             let mut chain = Vec::new();
             for _ in 0..14 {
                 if fp < 0x1000 || fp & 7 != 0 {
@@ -1111,7 +1108,7 @@ pub fn drawable_cmd_stats(func: usize, cmd: Option<&'static str>) {
         cmds: Default::default(),
         last: 0,
     });
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let k = func.wrapping_sub(base);
     match cmd {
         None => *s.calls.entry(k).or_default() += 1,
@@ -1213,7 +1210,7 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
                 set.clear();
                 *f = frame;
             }
-            let base = crate::cpu::crash_handler::get_guest_base();
+            let base = crate::guest::loader::main_base();
             let k = func.wrapping_sub(base);
             let e = per.entry(k).or_default();
             e.0 += 1;
@@ -1312,9 +1309,8 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
         }
         return 0;
     }
-    let base = crate::cpu::crash_handler::get_guest_base();
-    let mut fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+    let base = crate::guest::loader::main_base();
+    let mut fp = crate::guest_reg!(x29);
     let mut key = [0u32; 8];
     let mut n = 0;
     for _ in 0..32 {
@@ -1348,7 +1344,7 @@ fn note_drawable_class(func: usize, count: c_int) {
         std::sync::Mutex::new(None);
     let mut g = M.lock().unwrap();
     let (m, last) = g.get_or_insert_with(|| (Default::default(), 0));
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let k = if func >= base && func < base + (256 << 20) {
         func - base
     } else {
@@ -1801,72 +1797,72 @@ pub unsafe extern "C" fn hle_typed_cb_ClearTextureui(
 /// Names (and addresses) of the typed recorders; used by the proc-address table.
 pub fn lookup(name: &str) -> Option<usize> {
     macro_rules! f {
-        ($f:expr) => {
-            Some($f as *const () as usize)
+        ($f:ident($($a:tt),*)) => {
+            Some(crate::hle!($f($($a),*)) as usize)
         };
     }
     match name {
-        "nvnCommandBufferSetRenderTargets" => f!(hle_nvnCommandBufferSetRenderTargets),
-        "nvnCommandBufferClearColor" => f!(hle_nvnCommandBufferClearColor),
-        "nvnCommandBufferClearDepthStencil" => f!(hle_nvnCommandBufferClearDepthStencil),
-        "nvnCommandBufferSetViewport" => f!(hle_nvnCommandBufferSetViewport),
-        "nvnCommandBufferSetViewports" => f!(hle_nvnCommandBufferSetViewports),
-        "nvnCommandBufferSetScissor" => f!(hle_nvnCommandBufferSetScissor),
-        "nvnCommandBufferSetScissors" => f!(hle_nvnCommandBufferSetScissors),
-        "nvnCommandBufferSetDepthRange" => f!(hle_nvnCommandBufferSetDepthRange),
-        "nvnCommandBufferSetDepthRanges" => f!(hle_nvnCommandBufferSetDepthRanges),
-        "nvnCommandBufferSetDepthBounds" => f!(hle_typed_cb_SetDepthBounds),
-        "nvnCommandBufferSetStencilRef" => f!(hle_typed_cb_SetStencilRef),
-        "nvnCommandBufferSetStencilValueMask" => f!(hle_typed_cb_SetStencilValueMask),
-        "nvnCommandBufferSetStencilMask" => f!(hle_typed_cb_SetStencilMask),
-        "nvnCommandBufferBindImage" => f!(hle_typed_cb_BindImage),
-        "nvnCommandBufferBindImages" => f!(hle_typed_cb_BindImages),
-        "nvnCommandBufferSetDepthClamp" => f!(hle_nvnCommandBufferSetDepthClamp),
-        "nvnCommandBufferSetPrimitiveRestart" => f!(hle_nvnCommandBufferSetPrimitiveRestart),
-        "nvnCommandBufferSetPolygonOffsetClamp" => f!(hle_typed_cb_SetPolygonOffsetClamp),
-        "nvnCommandBufferSetBlendColor" => f!(hle_nvnCommandBufferSetBlendColor),
-        "nvnCommandBufferBindProgram" => f!(hle_nvnCommandBufferBindProgram),
-        "nvnCommandBufferBindVertexBuffer" => f!(hle_nvnCommandBufferBindVertexBuffer),
-        "nvnCommandBufferBindVertexAttribState" => f!(hle_nvnCommandBufferBindVertexAttribState),
-        "nvnCommandBufferBindVertexStreamState" => f!(hle_nvnCommandBufferBindVertexStreamState),
-        "nvnCommandBufferBindBlendState" => f!(hle_nvnCommandBufferBindBlendState),
-        "nvnCommandBufferBindColorState" => f!(hle_nvnCommandBufferBindColorState),
-        "nvnCommandBufferBindChannelMaskState" => f!(hle_nvnCommandBufferBindChannelMaskState),
-        "nvnCommandBufferBindDepthStencilState" => f!(hle_nvnCommandBufferBindDepthStencilState),
-        "nvnCommandBufferBindMultisampleState" => f!(hle_nvnCommandBufferBindMultisampleState),
-        "nvnCommandBufferBarrier" => f!(hle_typed_cb_Barrier),
-        "nvnCommandBufferBindPolygonState" => f!(hle_nvnCommandBufferBindPolygonState),
-        "nvnCommandBufferBindTexture" => f!(hle_nvnCommandBufferBindTexture),
-        "nvnCommandBufferBindTextures" => f!(hle_typed_cb_BindTextures),
-        "nvnCommandBufferBindTexturesDeferred" => f!(hle_typed_cb_BindTexturesDeferred),
-        "nvnCommandBufferSetRenderEnable" => f!(hle_typed_cb_SetRenderEnable),
-        "nvnCommandBufferDispatchCompute" => f!(hle_typed_cb_DispatchCompute),
-        "nvnCommandBufferSetPointSize" => f!(hle_typed_cb_SetPointSize),
-        "nvnCommandBufferSetRenderEnableConditional" => f!(hle_typed_cb_SetRenderEnableConditional),
-        "nvnCommandBufferBindUniformBuffer" => f!(hle_nvnCommandBufferBindUniformBuffer),
-        "nvnCommandBufferUpdateUniformBuffer" => f!(hle_nvnCommandBufferUpdateUniformBuffer),
-        "nvnCommandBufferBindUniformBuffers" => f!(hle_typed_cb_BindUniformBuffers),
-        "nvnCommandBufferBindStorageBuffer" => f!(hle_typed_cb_BindStorageBuffer),
-        "nvnCommandBufferBindStorageBuffers" => f!(hle_typed_cb_BindStorageBuffers),
-        "nvnCommandBufferDrawArrays" => f!(hle_nvnCommandBufferDrawArrays),
-        "nvnCommandBufferDrawElements" => f!(hle_nvnCommandBufferDrawElements),
-        "nvnCommandBufferDrawElementsBaseVertex" => f!(hle_nvnCommandBufferDrawElementsBaseVertex),
-        "nvnCommandBufferCallCommands" => f!(hle_nvnCommandBufferCallCommands),
-        "nvnCommandBufferDrawArraysInstanced" => f!(hle_typed_cb_DrawArraysInstanced),
-        "nvnCommandBufferDrawElementsInstanced" => f!(hle_typed_cb_DrawElementsInstanced),
-        "nvnCommandBufferResetCounter" => f!(hle_typed_cb_ResetCounter),
-        "nvnCommandBufferReportCounter" => f!(hle_typed_cb_ReportCounter),
-        "nvnCommandBufferReportValue" => f!(hle_typed_cb_ReportValue),
-        "nvnCommandBufferSetCopyRowStride" => f!(hle_typed_cb_SetCopyRowStride),
-        "nvnCommandBufferSetCopyImageStride" => f!(hle_typed_cb_SetCopyImageStride),
-        "nvnCommandBufferCopyBufferToTexture" => f!(hle_typed_cb_CopyBufferToTexture),
-        "nvnCommandBufferCopyTextureToBuffer" => f!(hle_typed_cb_CopyTextureToBuffer),
-        "nvnCommandBufferCopyTextureToTexture" => f!(hle_typed_cb_CopyTextureToTexture),
-        "nvnCommandBufferCopyBufferToBuffer" => f!(hle_typed_cb_CopyBufferToBuffer),
-        "nvnCommandBufferClearBuffer" => f!(hle_typed_cb_ClearBuffer),
-        "nvnCommandBufferClearTexture" => f!(hle_typed_cb_ClearTexture),
-        "nvnCommandBufferClearTexturei" => f!(hle_typed_cb_ClearTexturei),
-        "nvnCommandBufferClearTextureui" => f!(hle_typed_cb_ClearTextureui),
+        "nvnCommandBufferSetRenderTargets" => f!(hle_nvnCommandBufferSetRenderTargets(_, _, _, _, _, _)),
+        "nvnCommandBufferClearColor" => f!(hle_nvnCommandBufferClearColor(_, _, _, _)),
+        "nvnCommandBufferClearDepthStencil" => f!(hle_nvnCommandBufferClearDepthStencil(_, _, _, _, _)),
+        "nvnCommandBufferSetViewport" => f!(hle_nvnCommandBufferSetViewport(_, _, _, _, _)),
+        "nvnCommandBufferSetViewports" => f!(hle_nvnCommandBufferSetViewports(_, _, _, _)),
+        "nvnCommandBufferSetScissor" => f!(hle_nvnCommandBufferSetScissor(_, _, _, _, _)),
+        "nvnCommandBufferSetScissors" => f!(hle_nvnCommandBufferSetScissors(_, _, _, _)),
+        "nvnCommandBufferSetDepthRange" => f!(hle_nvnCommandBufferSetDepthRange(_, _, _)),
+        "nvnCommandBufferSetDepthRanges" => f!(hle_nvnCommandBufferSetDepthRanges(_, _, _, _)),
+        "nvnCommandBufferSetDepthBounds" => f!(hle_typed_cb_SetDepthBounds(_, _, _, _)),
+        "nvnCommandBufferSetStencilRef" => f!(hle_typed_cb_SetStencilRef(_, _, _)),
+        "nvnCommandBufferSetStencilValueMask" => f!(hle_typed_cb_SetStencilValueMask(_, _, _)),
+        "nvnCommandBufferSetStencilMask" => f!(hle_typed_cb_SetStencilMask(_, _, _)),
+        "nvnCommandBufferBindImage" => f!(hle_typed_cb_BindImage(_, _, _, _)),
+        "nvnCommandBufferBindImages" => f!(hle_typed_cb_BindImages(_, _, _, _, _)),
+        "nvnCommandBufferSetDepthClamp" => f!(hle_nvnCommandBufferSetDepthClamp(_, _)),
+        "nvnCommandBufferSetPrimitiveRestart" => f!(hle_nvnCommandBufferSetPrimitiveRestart(_, _, _)),
+        "nvnCommandBufferSetPolygonOffsetClamp" => f!(hle_typed_cb_SetPolygonOffsetClamp(_, _, _, _)),
+        "nvnCommandBufferSetBlendColor" => f!(hle_nvnCommandBufferSetBlendColor(_, _)),
+        "nvnCommandBufferBindProgram" => f!(hle_nvnCommandBufferBindProgram(_, _, _)),
+        "nvnCommandBufferBindVertexBuffer" => f!(hle_nvnCommandBufferBindVertexBuffer(_, _, _, _)),
+        "nvnCommandBufferBindVertexAttribState" => f!(hle_nvnCommandBufferBindVertexAttribState(_, _, _)),
+        "nvnCommandBufferBindVertexStreamState" => f!(hle_nvnCommandBufferBindVertexStreamState(_, _, _)),
+        "nvnCommandBufferBindBlendState" => f!(hle_nvnCommandBufferBindBlendState(_, _)),
+        "nvnCommandBufferBindColorState" => f!(hle_nvnCommandBufferBindColorState(_, _)),
+        "nvnCommandBufferBindChannelMaskState" => f!(hle_nvnCommandBufferBindChannelMaskState(_, _)),
+        "nvnCommandBufferBindDepthStencilState" => f!(hle_nvnCommandBufferBindDepthStencilState(_, _)),
+        "nvnCommandBufferBindMultisampleState" => f!(hle_nvnCommandBufferBindMultisampleState(_, _)),
+        "nvnCommandBufferBarrier" => f!(hle_typed_cb_Barrier(_, _)),
+        "nvnCommandBufferBindPolygonState" => f!(hle_nvnCommandBufferBindPolygonState(_, _)),
+        "nvnCommandBufferBindTexture" => f!(hle_nvnCommandBufferBindTexture(_, _, _, _)),
+        "nvnCommandBufferBindTextures" => f!(hle_typed_cb_BindTextures(_, _, _, _, _)),
+        "nvnCommandBufferBindTexturesDeferred" => f!(hle_typed_cb_BindTexturesDeferred(_, _, _, _, _)),
+        "nvnCommandBufferSetRenderEnable" => f!(hle_typed_cb_SetRenderEnable(_, _)),
+        "nvnCommandBufferDispatchCompute" => f!(hle_typed_cb_DispatchCompute(_, _, _, _)),
+        "nvnCommandBufferSetPointSize" => f!(hle_typed_cb_SetPointSize(_, _)),
+        "nvnCommandBufferSetRenderEnableConditional" => f!(hle_typed_cb_SetRenderEnableConditional(_, _, _)),
+        "nvnCommandBufferBindUniformBuffer" => f!(hle_nvnCommandBufferBindUniformBuffer(_, _, _, _, _)),
+        "nvnCommandBufferUpdateUniformBuffer" => f!(hle_nvnCommandBufferUpdateUniformBuffer(_, _, _, _, _, _)),
+        "nvnCommandBufferBindUniformBuffers" => f!(hle_typed_cb_BindUniformBuffers(_, _, _, _, _)),
+        "nvnCommandBufferBindStorageBuffer" => f!(hle_typed_cb_BindStorageBuffer(_, _, _, _, _)),
+        "nvnCommandBufferBindStorageBuffers" => f!(hle_typed_cb_BindStorageBuffers(_, _, _, _, _)),
+        "nvnCommandBufferDrawArrays" => f!(hle_nvnCommandBufferDrawArrays(_, _, _, _)),
+        "nvnCommandBufferDrawElements" => f!(hle_nvnCommandBufferDrawElements(_, _, _, _, _)),
+        "nvnCommandBufferDrawElementsBaseVertex" => f!(hle_nvnCommandBufferDrawElementsBaseVertex(_, _, _, _, _, _)),
+        "nvnCommandBufferCallCommands" => f!(hle_nvnCommandBufferCallCommands(_, _, _)),
+        "nvnCommandBufferDrawArraysInstanced" => f!(hle_typed_cb_DrawArraysInstanced(_, _, _, _, _, _)),
+        "nvnCommandBufferDrawElementsInstanced" => f!(hle_typed_cb_DrawElementsInstanced(_, _, _, _, _, _, _, _)),
+        "nvnCommandBufferResetCounter" => f!(hle_typed_cb_ResetCounter(_, _)),
+        "nvnCommandBufferReportCounter" => f!(hle_typed_cb_ReportCounter(_, _, _)),
+        "nvnCommandBufferReportValue" => f!(hle_typed_cb_ReportValue(_, _, _)),
+        "nvnCommandBufferSetCopyRowStride" => f!(hle_typed_cb_SetCopyRowStride(_, _)),
+        "nvnCommandBufferSetCopyImageStride" => f!(hle_typed_cb_SetCopyImageStride(_, _)),
+        "nvnCommandBufferCopyBufferToTexture" => f!(hle_typed_cb_CopyBufferToTexture(_, _, _, _, _, _)),
+        "nvnCommandBufferCopyTextureToBuffer" => f!(hle_typed_cb_CopyTextureToBuffer(_, _, _, _, _, _)),
+        "nvnCommandBufferCopyTextureToTexture" => f!(hle_typed_cb_CopyTextureToTexture(_, _, _, _, _, _, _, _)),
+        "nvnCommandBufferCopyBufferToBuffer" => f!(hle_typed_cb_CopyBufferToBuffer(_, _, _, _, _)),
+        "nvnCommandBufferClearBuffer" => f!(hle_typed_cb_ClearBuffer(_, _, _, _)),
+        "nvnCommandBufferClearTexture" => f!(hle_typed_cb_ClearTexture(_, _, _, _, _, _)),
+        "nvnCommandBufferClearTexturei" => f!(hle_typed_cb_ClearTexturei(_, _, _, _, _, _)),
+        "nvnCommandBufferClearTextureui" => f!(hle_typed_cb_ClearTextureui(_, _, _, _, _, _)),
         _ => None,
     }
 }

@@ -2,8 +2,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-static GUEST_BASE: AtomicUsize = AtomicUsize::new(0);
-
 // Watchpoint: mprotect a page PROT_READ, catch writes, log PC, re-allow and remove.
 // Up to 4 simultaneous watched pages.
 const MAX_WATCHPOINTS: usize = 4;
@@ -35,9 +33,9 @@ pub fn add_watchpoint(addr: usize) -> bool {
             .compare_exchange(0, page, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            let ret = unsafe { libc::mprotect(page as *mut libc::c_void, 0x4000, libc::PROT_READ) };
+            let ret = unsafe { crate::os::protect(page, 0x4000, crate::os::Prot::Read) };
             eprintln!(
-                "[WATCH] Watchpoint set on page 0x{:x} (addr=0x{:x}, mprotect ret={})",
+                "[WATCH] Watchpoint set on page 0x{:x} (addr=0x{:x}, protect: {:?})",
                 page, addr, ret
             );
             return true;
@@ -70,21 +68,10 @@ unsafe fn trace_write_insn(pc: usize, insn: u32) {
     // thread executing inside this 16KB page during that window would fault; acceptable for a
     // debug-only tool.
     let page = pc & !0x3fff;
-    libc::mprotect(
-        page as *mut libc::c_void,
-        0x4000,
-        libc::PROT_READ | libc::PROT_WRITE,
-    );
+    let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
     *(pc as *mut u32) = insn;
-    libc::mprotect(
-        page as *mut libc::c_void,
-        0x4000,
-        libc::PROT_READ | libc::PROT_EXEC,
-    );
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
-    sys_icache_invalidate(pc as *mut libc::c_void, 4);
+    let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadExec);
+    crate::os::flush_icache(pc as usize, 4);
 }
 
 /// Install a trace point at guest address `pc` (must be in writable text).
@@ -112,10 +99,7 @@ pub unsafe fn install_trace_point(
     // Startup: guest text is still writable, so no mprotect (it would break later startup hooks
     // that patch other words in the same page).
     *(pc as *mut u32) = BRK_TRACE;
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
-    sys_icache_invalidate(pc as *mut libc::c_void, 4);
+    crate::os::flush_icache(pc as usize, 4);
     TRACE_PCS[slot].store(pc, Ordering::SeqCst);
     true
 }
@@ -209,10 +193,6 @@ unsafe fn page_accessible(addr: usize, write: bool) -> bool {
     }
 }
 
-pub fn set_guest_base(base: usize) {
-    GUEST_BASE.store(base, Ordering::SeqCst);
-}
-
 static MAIN_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// The size of main's image (text through bss) once it is loaded, for crash reports.
@@ -222,12 +202,12 @@ pub fn set_main_size(size: usize) {
 
 /// Whether `addr` lies in main's image.
 fn in_main(addr: usize) -> bool {
-    let base = GUEST_BASE.load(Ordering::Relaxed);
+    let base = crate::guest::loader::main_base();
     base != 0 && addr >= base && addr - base < MAIN_SIZE.load(Ordering::Relaxed)
 }
 
 pub fn get_guest_base() -> usize {
-    GUEST_BASE.load(Ordering::SeqCst)
+    crate::guest::loader::main_base()
 }
 
 pub unsafe fn install_signal_handlers() {
@@ -346,7 +326,7 @@ unsafe extern "C" fn handle_signal(
     ucontext: *mut libc::c_void,
 ) {
     let fault_addr = (*info).si_addr as usize;
-    let base = GUEST_BASE.load(Ordering::SeqCst);
+    let base = crate::guest::loader::main_base();
 
     // Pages the GPU backend protects to keep guest memory coherent with GPU work (before write tracking, which would
     // claim and unprotect pages it once tracked).
@@ -390,11 +370,7 @@ unsafe extern "C" fn handle_signal(
             WRITER_RING[i]
                 .2
                 .store((*mc).__ss.__lr as u64, Ordering::Relaxed);
-            libc::mprotect(
-                (pg << 14) as *mut libc::c_void,
-                1 << 14,
-                libc::PROT_READ | libc::PROT_WRITE,
-            );
+            let _ = crate::os::protect(((pg << 14)) as usize, 1 << 14, crate::os::Prot::ReadWrite);
             return;
         }
         // Another thread's fault on the same page unprotected it first: retry the access.
@@ -583,11 +559,7 @@ unsafe extern "C" fn handle_signal(
                 }
 
                 // Re-enable writes so the faulting instruction can complete.
-                libc::mprotect(
-                    fault_page as *mut libc::c_void,
-                    0x4000,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                );
+                let _ = crate::os::protect(fault_page as usize, 0x4000, crate::os::Prot::ReadWrite);
                 if hit < MAX_WATCH_HITS {
                     // Arm the single-step bit so we re-protect after one instruction.
                     // ARM64 CPSR bit 21 = SS (Software Step).
@@ -626,7 +598,7 @@ unsafe extern "C" fn handle_signal(
         let pending = PENDING_REPROTECT.load(Ordering::SeqCst);
         if pending != 0 {
             PENDING_REPROTECT.store(0, Ordering::SeqCst);
-            libc::mprotect(pending as *mut libc::c_void, 0x4000, libc::PROT_READ);
+            let _ = crate::os::protect(pending as usize, 0x4000, crate::os::Prot::Read);
             // Clear the SS bit so execution continues normally.
             if !ucontext.is_null() {
                 let uc = ucontext as *mut libc::ucontext_t;

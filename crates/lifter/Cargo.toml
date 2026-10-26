@@ -1,0 +1,13 @@
+[package]
+name = "nxport-lifter"
+version = "0.1.0"
+edition = "2021"
+# AArch64 -> C static recompiler for hosts that cannot run guest code natively (docs/windows-port.md). Instruction
+# semantics follow LAS Recomp's tools/lifter.py; its licence applies to those parts, see LICENSE-LASRecomp.
+license = "MIT"
+
+[lib]
+name = "nxport_lifter"
+path = "src/lib.rs"
+
+[dependencies]

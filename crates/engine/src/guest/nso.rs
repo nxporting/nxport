@@ -30,6 +30,22 @@ pub struct Dynamic {
     pub init_arraysz: usize,
 }
 
+/// The build id (32 bytes) of an NSO file, as uppercase hex.
+pub fn nso_build_id(nso_path: &str) -> Option<String> {
+    let mut f = std::fs::File::open(nso_path).ok()?;
+    let mut head = [0u8; 0x60];
+    std::io::Read::read_exact(&mut f, &mut head).ok()?;
+    if &head[..4] != b"NSO0" {
+        return None;
+    }
+    Some(
+        head[0x40..0x60]
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect(),
+    )
+}
+
 fn u32_at(d: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(d[off..off + 4].try_into().unwrap())
 }
@@ -93,40 +109,51 @@ impl Nso {
     /// The dynamic tables. MOD0's location is the u32 at text+4; its fields are offsets from the MOD0 header itself
     /// (magic at +0, .dynamic offset at +4).
     pub fn dynamic(&self) -> Result<Dynamic, Box<dyn std::error::Error>> {
-        let t = &self.text.data;
-        let mod0 = self.text.mem_off + u32_at(t, 4) as usize;
-        if self.bytes_at(mod0, 4) != Some(b"MOD0".as_slice()) {
-            return Err("MOD0 header not found".into());
-        }
-        let rel = i32::from_le_bytes(self.bytes_at(mod0 + 4, 4).unwrap().try_into().unwrap());
-        let dyn_off = (mod0 as i64 + rel as i64) as usize;
-        let mut d = Dynamic::default();
-        for i in 0..4096 {
-            let Some(e) = self.bytes_at(dyn_off + i * 16, 16) else {
-                break;
-            };
-            let tag = i64::from_le_bytes(e[0..8].try_into().unwrap());
-            let val = u64::from_le_bytes(e[8..16].try_into().unwrap()) as usize;
-            match tag {
-                0 => break,
-                2 => d.pltrelsz = val,
-                5 => d.strtab = val,
-                6 => d.symtab = val,
-                7 => d.rela = val,
-                8 => d.relasz = val,
-                10 => d.strsz = val,
-                12 => d.init = val,
-                23 => d.jmprel = val,
-                25 => d.init_array = val,
-                27 => d.init_arraysz = val,
-                _ => {}
-            }
-        }
-        if d.symtab == 0 || d.strtab == 0 {
-            return Err("no DT_SYMTAB / DT_STRTAB".into());
-        }
-        Ok(d)
+        parse_dynamic(self.text.mem_off, |off, len| self.bytes_at(off, len))
     }
+}
+
+/// The dynamic tables of a module image as it is loaded (text at offset 0), as `Nso::dynamic` reads them from a file.
+pub fn image_dynamic(image: &[u8]) -> Result<Dynamic, Box<dyn std::error::Error>> {
+    parse_dynamic(0, |off, len| image.get(off..off.checked_add(len)?))
+}
+
+fn parse_dynamic<'a>(
+    text_off: usize,
+    bytes_at: impl Fn(usize, usize) -> Option<&'a [u8]>,
+) -> Result<Dynamic, Box<dyn std::error::Error>> {
+    let mod0 = text_off + u32_at(bytes_at(text_off, 8).ok_or("no text")?, 4) as usize;
+    if bytes_at(mod0, 4) != Some(b"MOD0".as_slice()) {
+        return Err("MOD0 header not found".into());
+    }
+    let rel = i32::from_le_bytes(bytes_at(mod0 + 4, 4).ok_or("truncated MOD0")?.try_into().unwrap());
+    let dyn_off = (mod0 as i64 + rel as i64) as usize;
+    let mut d = Dynamic::default();
+    for i in 0..4096 {
+        let Some(e) = bytes_at(dyn_off + i * 16, 16) else {
+            break;
+        };
+        let tag = i64::from_le_bytes(e[0..8].try_into().unwrap());
+        let val = u64::from_le_bytes(e[8..16].try_into().unwrap()) as usize;
+        match tag {
+            0 => break,
+            2 => d.pltrelsz = val,
+            5 => d.strtab = val,
+            6 => d.symtab = val,
+            7 => d.rela = val,
+            8 => d.relasz = val,
+            10 => d.strsz = val,
+            12 => d.init = val,
+            23 => d.jmprel = val,
+            25 => d.init_array = val,
+            27 => d.init_arraysz = val,
+            _ => {}
+        }
+    }
+    if d.symtab == 0 || d.strtab == 0 {
+        return Err("no DT_SYMTAB / DT_STRTAB".into());
+    }
+    Ok(d)
 }
 
 #[cfg(test)]

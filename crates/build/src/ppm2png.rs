@@ -6,16 +6,6 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
-#[link(name = "z")]
-extern "C" {
-    fn compress(
-        dest: *mut u8,
-        dest_len: *mut usize,
-        source: *const u8,
-        source_len: usize,
-    ) -> std::os::raw::c_int;
-}
-
 pub fn convert_ppm_to_png(ppm_path: &Path, png_path: &Path, downscale: usize) -> Result<(), Box<dyn std::error::Error>> {
     let mut f = File::open(ppm_path)?;
     let mut data = Vec::new();
@@ -105,21 +95,10 @@ pub fn write_bgra_to_png(w: usize, h: usize, bgra: &[u8], png_path: &Path) -> Re
 }
 
 fn encode_scanlines_to_png(out_w: usize, out_h: usize, raw_scanlines: &[u8], png_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Compress scanlines with native zlib
-    let mut comp_buf = vec![0u8; raw_scanlines.len() + 1024];
-    let mut comp_len = comp_buf.len();
-    unsafe {
-        let ret = compress(
-            comp_buf.as_mut_ptr(),
-            &mut comp_len,
-            raw_scanlines.as_ptr(),
-            raw_scanlines.len(),
-        );
-        if ret != 0 {
-            return Err(format!("zlib compress failed with code {}", ret).into());
-        }
-    }
-    comp_buf.truncate(comp_len);
+    // Compress scanlines (zlib stream, the default level as zlib's compress())
+    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(raw_scanlines)?;
+    let comp_buf = enc.finish()?;
 
     // Write PNG
     let mut out = File::create(png_path)?;

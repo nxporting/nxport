@@ -552,8 +552,43 @@ fn load_or_store(c: &mut CodeGenContext, op: &Op, is_store: bool) -> Res {
         Ok(INVALID)
     } else {
         let t = c.get_type(var_type, 1)?;
-        Ok((var_type, Some(c.m.load(&t, &pointer, None))))
+        let v = c.m.load(&t, &pointer, None);
+        Ok((var_type, Some(bounded_cbuf_read(c, op, var_type, v)?)))
     }
+}
+
+/// HostCapabilities::cbuf_limits: a constant buffer read whose vec4 index is not below the binding's bound size (in the
+/// support buffer) reads zero.
+fn bounded_cbuf_read(c: &mut CodeGenContext, op: &Op, var_type: A, value: Inst) -> R<Inst> {
+    use crate::translation::properties::{SUPPORT_BUFFER_BINDING, SUPPORT_CBUF_LIMITS_COUNT, SUPPORT_CBUF_LIMITS_FIELD};
+    if !c.host.cbuf_limits || op.storage_kind != StorageKind::ConstantBuffer || op.sources.len() < 3 {
+        return Ok(value);
+    }
+    let Some(binding) = constant_operand(c, op.src(0)?) else { return Ok(value) };
+    if binding == SUPPORT_BUFFER_BINDING || !(0..SUPPORT_CBUF_LIMITS_COUNT).contains(&binding) {
+        return Ok(value);
+    }
+    let Some(support) = c.constant_buffers.get(&SUPPORT_BUFFER_BINDING).cloned() else { return Ok(value) };
+    let index = c.get(A::S32, op.src(2)?)?;
+    let u = c.type_u32();
+    let s = c.type_s32();
+    let field = c.m.constant(&s, Lit::i32(SUPPORT_CBUF_LIMITS_FIELD));
+    let element = c.m.constant(&s, Lit::i32(binding));
+    let pt = c.m.type_pointer(StorageClass::UNIFORM, &u, false);
+    let limit_ptr = c.m.access_chain(&pt, &support, &[field, element]);
+    let limit = c.m.load(&u, &limit_ptr, None);
+    let index_u = c.m.bitcast(&u, &index);
+    let b = c.type_bool();
+    let in_range = c.m.u_less_than(&b, &index_u, &limit);
+    let t = c.get_type(var_type, 1)?;
+    let zero = match var_type {
+        A::FP32 => {
+            let f = c.type_fp32();
+            c.m.constant(&f, Lit::f32(0.0))
+        }
+        _ => c.m.constant(&t, Lit::i32(0)),
+    };
+    Ok(c.m.select(&t, &in_range, &value, &zero))
 }
 
 fn constant_operand(c: &CodeGenContext, node: Option<AstId>) -> Option<i32> {
@@ -578,6 +613,15 @@ fn storage_pointer(c: &mut CodeGenContext, op: &Op) -> R<(Inst, A)> {
             let base = if sk == StorageKind::ConstantBuffer { c.constant_buffers.get(&binding) } else { c.storage_buffers.get(&binding) }
                 .cloned()
                 .ok_or("System.Collections.Generic.KeyNotFoundException")?;
+            if sk == StorageKind::ConstantBuffer {
+                // The vec4 index follows the field.
+                let extent = match op.sources.get(src_index + 1).and_then(|&n| constant_operand(c, n)) {
+                    Some(v) if v >= 0 => (v + 1) * 16,
+                    _ => -1,
+                };
+                let e = c.cbuf_extents.entry(binding).or_insert(0);
+                *e = if *e < 0 || extent < 0 { -1 } else { (*e).max(extent) };
+            }
             (StorageClass::UNIFORM, field.ty.element(), base)
         }
         StorageKind::LocalMemory | StorageKind::SharedMemory => {
@@ -872,12 +916,39 @@ fn lod(c: &mut CodeGenContext, op: &Op) -> Res {
 fn sampled_image_load(c: &mut CodeGenContext, tex: &AstTexture, declaration: &super::SamplerDeclaration, srcs: &mut Srcs) -> R<Inst> {
     let mut image = declaration.image.clone();
     let image_indexed = declaration.is_indexed;
+    let mut element = None;
     if image_indexed {
         let texture_index = srcs.next(c, A::S32)?;
+        element = Some(texture_index.clone());
         image = c.m.access_chain(&declaration.sampled_image_pointer_type, &image, &[texture_index]);
         mark_non_uniform(c, &image);
     }
-    if tex.is_separate() {
+    if let Some(first_slot) = declaration.table_slot {
+        // Separate image, sampler from the table at the index the host wrote for this texture slot.
+        image = c.m.load(&declaration.image_type, &image, None);
+        if image_indexed {
+            mark_non_uniform(c, &image);
+        }
+        use crate::translation::properties::{SUPPORT_BUFFER_BINDING, SUPPORT_SAMPLER_SLOTS_FIELD};
+        let (table, sampler_type, sampler_pointer) = c.sampler_table.clone().ok_or("sampler table")?;
+        let support = c.constant_buffers.get(&SUPPORT_BUFFER_BINDING).cloned().ok_or("support buffer")?;
+        let s = c.type_s32();
+        let u = c.type_u32();
+        let mut slot = c.m.constant(&s, Lit::i32(first_slot));
+        if let Some(element) = &element {
+            slot = c.m.i_add(&s, &slot, element);
+        }
+        let field = c.m.constant(&s, Lit::i32(SUPPORT_SAMPLER_SLOTS_FIELD));
+        let pt = c.m.type_pointer(StorageClass::UNIFORM, &u, false);
+        let p = c.m.access_chain(&pt, &support, &[field, slot]);
+        let index = c.m.load(&u, &p, None);
+        let sp = c.m.access_chain(&sampler_pointer, &table, &[index]);
+        let sampler = c.m.load(&sampler_type, &sp, None);
+        image = c.m.sampled_image(&declaration.sampled_image_type, &image, &sampler);
+        if image_indexed {
+            mark_non_uniform(c, &image);
+        }
+    } else if tex.is_separate() {
         image = c.m.load(&declaration.image_type, &image, None);
         if image_indexed {
             mark_non_uniform(c, &image);
@@ -980,7 +1051,12 @@ fn texture_sample(c: &mut CodeGenContext, op: &Op) -> Res {
             }
             let s = c.type_s32();
             let vt = c.m.type_vector(&s, Lit::i32(count), false);
-            Ok(c.m.constant_composite(&vt, &elems))
+            let all_const = elems.iter().all(|e| matches!(e.opcode, crate::spv::Op::CONSTANT | crate::spv::Op::CONSTANT_COMPOSITE | crate::spv::Op::CONSTANT_NULL));
+            if all_const {
+                Ok(c.m.constant_composite(&vt, &elems))
+            } else {
+                Ok(c.m.composite_construct(&vt, &elems))
+            }
         } else {
             srcs.next(c, A::S32)
         }
@@ -1029,15 +1105,26 @@ fn texture_sample(c: &mut CodeGenContext, op: &Op) -> Res {
         operands.push(dy.clone());
     }
     if has_offset {
-        mask |= ImageOperandsMask::CONST_OFFSET.0;
+        let is_const = matches!(offsets[0].opcode, crate::spv::Op::CONSTANT | crate::spv::Op::CONSTANT_COMPOSITE | crate::spv::Op::CONSTANT_NULL);
+        if is_const {
+            mask |= ImageOperandsMask::CONST_OFFSET.0;
+        } else {
+            mask |= ImageOperandsMask::OFFSET.0;
+        }
         operands.push(offsets[0].clone());
     } else if has_offsets {
-        mask |= ImageOperandsMask::CONST_OFFSETS.0;
+        let all_const = offsets.iter().all(|o| matches!(o.opcode, crate::spv::Op::CONSTANT | crate::spv::Op::CONSTANT_COMPOSITE | crate::spv::Op::CONSTANT_NULL));
         let s = c.type_s32();
         let v2 = c.m.type_vector(&s, Lit::i32(2), false);
         let len = c.const_u32_i(4);
         let arrayv2 = c.m.type_array(&v2, &len, false);
-        operands.push(c.m.constant_composite(&arrayv2, &offsets));
+        if all_const {
+            mask |= ImageOperandsMask::CONST_OFFSETS.0;
+            operands.push(c.m.constant_composite(&arrayv2, &offsets));
+        } else {
+            mask |= ImageOperandsMask::OFFSETS.0;
+            operands.push(c.m.composite_construct(&arrayv2, &offsets));
+        }
     }
     if is_multisample {
         mask |= ImageOperandsMask::SAMPLE.0;

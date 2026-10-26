@@ -3,6 +3,12 @@
 // also keeps guest memory coherent with the GPU's view of it, through page guards consulted by the fault handler and
 // by write tracking.
 
+// Lifted hosts until they have a GPU backend, and frame capture scenarios (which record commands without running them).
+pub mod history;
+pub mod null;
+pub mod pipeline_list;
+pub mod restart;
+
 use std::sync::OnceLock;
 
 /// A guest memory access that faulted on a protected page.
@@ -20,6 +26,26 @@ pub struct Fault {
 pub struct ShaderStage {
     pub data: u64,
     pub control: u64,
+}
+
+/// One level / layer of a texture in the guest's texel encoding (its NVN format), rows tightly packed.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Texels {
+    pub width: u32,
+    pub height: u32,
+    pub format: i32,
+    pub data: Vec<u8>,
+}
+
+/// A texture level / layer whose contents only the backend holds: GPU work wrote it and guest memory does not have it.
+pub struct GpuOnlyTexture {
+    pub storage: usize,
+    pub params: crate::nvn::layout::TextureParams,
+    pub level: u32,
+    pub layer: u32,
+    pub texels: Texels,
+    /// Frame it was last rendered in (0: unknown); of textures sharing memory, the latest one is what memory holds.
+    pub last_written: u64,
 }
 
 pub trait Backend: Send + Sync {
@@ -58,6 +84,32 @@ pub trait Backend: Send + Sync {
     fn before_host_write(&self, _addr: usize, _len: usize) {}
     /// GPU work will write this range: guards that hold it must let go.
     fn release_for_gpu(&self, _addr: usize, _len: usize) {}
+
+    /// Level `level`, layer `layer` of the texture a recorded reference names (`texture` with its snapshot generation
+    /// `gen`, as RtRef / TexRef hold them), after all submitted work has completed. None when the backend cannot read
+    /// that texture or format back.
+    fn read_texture(&self, _texture: usize, _gen: u32, _level: u32, _layer: u32) -> Option<Texels> {
+        None
+    }
+    /// Every texture level / layer whose contents only the backend holds, after all submitted work has completed. A
+    /// frame capture writes them into its copy of guest memory, where the Switch's GPU would have left them. Returns
+    /// how many it skipped (formats or kinds it cannot read back).
+    fn gpu_only_textures(&self, _f: &mut dyn FnMut(GpuOnlyTexture)) -> usize {
+        0
+    }
+    /// The GPU's own time for the last completed submit, in ns, where the backend measures it.
+    fn last_submit_gpu_ns(&self) -> Option<u64> {
+        None
+    }
+    /// Turns per-pass GPU timing of whole submits on or off; returns the last profiled submit's passes (GPU ns,
+    /// description), for backends that measure it.
+    fn profile_passes(&self, _on: bool) -> Option<Vec<(u64, String)>> {
+        None
+    }
+    /// CPU time of the last submit, in ns: recording it, then waiting for the GPU (backends that measure it).
+    fn last_submit_cpu_ns(&self) -> Option<(u64, u64)> {
+        None
+    }
 }
 
 static BACKEND: OnceLock<&'static dyn Backend> = OnceLock::new();

@@ -13,6 +13,71 @@ pub const IMAGE_BASE: i32 = 96;
 /// Binding 0 is the translator's support buffer; the game's driver constant buffer 0 moves to the unused 17.
 pub const DRIVER_CBUF_BINDING: i32 = 17;
 
+/// What the translation targets, where its output depends on it. The default is the engine's Metal path (MSL, and the
+/// SPIR-V it was checked against).
+#[derive(Clone, Debug)]
+pub struct Host {
+    /// The host maps NVN's -1..1 depth range itself; without it a GL depth mode is converted in the vertex stage.
+    pub depth_clip_control: bool,
+    pub shader_float64: bool,
+    pub fragment_shader_interlock: bool,
+    /// Vertex fetches convert *_UI2F / *_I2F data to float; without them the vertex stage does.
+    pub scaled_vertex_formats: bool,
+    pub image_gather_extended: bool,
+    /// gl_BaseVertex and friends (DrawParameters): unused while draw parameters come from the driver constant buffer.
+    pub draw_parameters: bool,
+    /// A fragment stage that can discard writes its depth (FragCoord.z, a promise of depth greater or equal) when the
+    /// pipeline has a depth target: on Apple GPUs the depth such a shader leaves is not always bit-identical to the depth
+    /// a later draw of the same triangle is tested with (the Metal path's msl_specialize does the same).
+    pub discard_writes_depth: bool,
+    /// Constant buffer reads beyond the bound size return zero (as on the GPU) by a check in the shader, against sizes the
+    /// host writes into the support buffer (properties::SUPPORT_CBUF_LIMITS_OFFSET): for hosts whose bounds checking does
+    /// not cover uniform buffers (MoltenVK). SPIR-V only; the Metal path's msl_specialize does its own.
+    pub cbuf_limits: bool,
+    /// No NoContraction on floating-point results except those a position output depends on (transforms::
+    /// position_precise), invariant positions: for hosts whose shader compiler turns NoContraction into unoptimized calls
+    /// (MoltenVK's SPIRV-Cross, one call per add or multiply: about 3x the GPU time in TotK's Hateno).
+    pub reduced_precision: bool,
+    /// Every resource of the stage in this descriptor set, textures numbered from TEXTURE_BASE_ONE_SET (Vulkan, one set
+    /// per stage). None: Ryujinx's sets (uniform buffers 0, images 1, storage buffers 2, textures 3).
+    pub stage_set: Option<i32>,
+    /// Added to every binding the module declares (the manifest keeps the unshifted numbers): stages sharing one
+    /// descriptor set keep their bindings apart.
+    pub binding_base: i32,
+    /// Fragment stages: the user locations the vertex stage paired with it writes (bit N = location N). Inputs at other
+    /// locations read zero (the Metal path's function constants 48 + N do the same): Metal refuses to link a fragment
+    /// function reading a varying its vertex function does not write, while the Switch GPU leaves it undefined. None:
+    /// every input is linked.
+    pub fragment_inputs: Option<u32>,
+    /// Samplers a stage may bind (0: no limit). A stage needing more samples its textures through a sampler table
+    /// (properties::sampler_table_plan): Metal without argument buffers (MoltenVK) has 16 per stage.
+    pub sampler_slots: u32,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Host {
+            depth_clip_control: true,
+            shader_float64: true,
+            fragment_shader_interlock: true,
+            scaled_vertex_formats: true,
+            image_gather_extended: true,
+            draw_parameters: true,
+            discard_writes_depth: false,
+            cbuf_limits: false,
+            reduced_precision: false,
+            stage_set: None,
+            binding_base: 0,
+            fragment_inputs: None,
+            sampler_slots: 0,
+        }
+    }
+}
+
+/// Textures' first binding when a stage has one set (Host::stage_set): above uniform (0..=17), storage (18..) and image
+/// (96..) bindings.
+pub const TEXTURE_BASE_ONE_SET: i32 = 128;
+
 /// Draw-time state the translator assumes (GpuGraphicsState).
 #[derive(Clone, Debug)]
 pub struct GraphicsState {
@@ -91,6 +156,9 @@ pub struct GpuAccessor {
     pub shared_memory_size: i32,
     pub local_memory_size: i32,
     pub log: bool,
+    /// Draw-time state to translate for (a backend that specializes per pipeline); None: GraphicsState::engine().
+    pub state: Option<GraphicsState>,
+    pub host: Host,
 }
 
 impl GpuAccessor {
@@ -110,6 +178,8 @@ impl GpuAccessor {
             shared_memory_size: 0,
             local_memory_size: 0,
             log: false,
+            state: None,
+            host: Host::default(),
         }
     }
 
@@ -167,30 +237,36 @@ impl GpuAccessor {
         v
     }
 
+    /// The descriptor set for resources of Ryujinx's set `set`.
+    pub fn set_for(&self, set: i32) -> i32 {
+        self.host.stage_set.unwrap_or(set)
+    }
+
     pub fn create_constant_buffer_binding(&self, index: i32) -> SetBindingPair {
         if self.is_compute {
-            SetBindingPair::new(0, Self::next(&self.next_compute_buffer, 1))
+            SetBindingPair::new(self.set_for(0), Self::next(&self.next_compute_buffer, 1))
         } else {
-            SetBindingPair::new(0, if index == 0 { DRIVER_CBUF_BINDING } else { index })
+            SetBindingPair::new(self.set_for(0), if index == 0 { DRIVER_CBUF_BINDING } else { index })
         }
     }
 
     pub fn create_image_binding(&self, count: i32, _is_buffer: bool) -> SetBindingPair {
-        SetBindingPair::new(1, IMAGE_BASE + Self::next(&self.next_image, count))
+        SetBindingPair::new(self.set_for(1), IMAGE_BASE + Self::next(&self.next_image, count))
     }
 
     /// Compute kernels have no vertex buffers and may use up to 16 storage buffers: their constant and storage
     /// buffers are numbered compactly from 1 (0 is the support buffer) so they fit Metal's 31 buffer slots.
     pub fn create_storage_buffer_binding(&self, index: i32) -> SetBindingPair {
         if self.is_compute {
-            SetBindingPair::new(2, Self::next(&self.next_compute_buffer, 1))
+            SetBindingPair::new(self.set_for(2), Self::next(&self.next_compute_buffer, 1))
         } else {
-            SetBindingPair::new(2, STORAGE_BUFFER_BASE + index)
+            SetBindingPair::new(self.set_for(2), STORAGE_BUFFER_BASE + index)
         }
     }
 
     pub fn create_texture_binding(&self, count: i32, _is_buffer: bool) -> SetBindingPair {
-        SetBindingPair::new(3, Self::next(&self.next_texture, count))
+        let base = if self.host.stage_set.is_some() { TEXTURE_BASE_ONE_SET } else { 0 };
+        SetBindingPair::new(self.set_for(3), base + Self::next(&self.next_texture, count))
     }
 
     pub fn create_extra_set(&self) -> i32 {
@@ -198,7 +274,7 @@ impl GpuAccessor {
     }
 
     pub fn graphics_state(&self) -> GraphicsState {
-        GraphicsState::engine()
+        self.state.clone().unwrap_or_else(GraphicsState::engine)
     }
 
     pub fn log_msg(&self, message: &str) {
@@ -218,7 +294,7 @@ impl GpuAccessor {
         0
     }
     pub fn host_reduced_precision(&self) -> bool {
-        false
+        self.host.reduced_precision
     }
     pub fn host_has_front_facing_bug(&self) -> bool {
         false
@@ -237,7 +313,7 @@ impl GpuAccessor {
         true
     }
     pub fn host_supports_fragment_shader_interlock(&self) -> bool {
-        true
+        self.host.fragment_shader_interlock
     }
     pub fn host_supports_fragment_shader_ordering_intel(&self) -> bool {
         false
@@ -258,7 +334,7 @@ impl GpuAccessor {
         true
     }
     pub fn host_supports_scaled_vertex_formats(&self) -> bool {
-        true
+        self.host.scaled_vertex_formats
     }
     pub fn host_supports_separate_sampler(&self) -> bool {
         true
@@ -270,7 +346,7 @@ impl GpuAccessor {
         true
     }
     pub fn host_supports_shader_float64(&self) -> bool {
-        true
+        self.host.shader_float64
     }
     /// The interface's default (the engine's accessor does not override it).
     pub fn host_supports_shader_non_uniform_indexing(&self) -> bool {
@@ -295,7 +371,7 @@ impl GpuAccessor {
         false
     }
     pub fn host_supports_depth_clip_control(&self) -> bool {
-        true
+        self.host.depth_clip_control
     }
     pub fn sampler_array_length_from_pool(&self) -> i32 {
         0

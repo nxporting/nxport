@@ -1,0 +1,68 @@
+// The host platform where guest code is lifted, until SDL3 gives it a window, input and audio (docs/windows-port.md,
+// step 6): no window, no input, audio discarded. The functions the runtime calls, with the native host modules'
+// signatures.
+
+pub mod audio {
+    pub fn push_audio_out(_pcm: &[i16], _channels: usize) {}
+
+    pub fn push(_stereo: &[f32]) {}
+
+    /// (samples trimmed, underruns).
+    pub fn stats() -> (u64, u64) {
+        (0, 0)
+    }
+}
+
+pub mod display {
+    pub fn window_up() -> bool {
+        false
+    }
+
+    pub fn headless() -> bool {
+        true
+    }
+
+    pub fn update_handheld_drawable(_handheld: bool) {}
+}
+
+pub mod input {
+    /// A contact on the touch screen (host::input::Touch).
+    pub struct Touch {
+        pub key: usize,
+        pub finger_id: i32,
+        pub x: i32,
+        pub y: i32,
+        pub began: std::time::Instant,
+        pub ended: Option<std::time::Instant>,
+    }
+
+    pub fn touches() -> Vec<Touch> {
+        Vec::new()
+    }
+
+    /// (buttons, sticks): nothing pressed.
+    pub fn npad_state() -> (u64, [i32; 4]) {
+        (0, [0; 4])
+    }
+
+    pub fn apply_script() {}
+
+    pub fn log_hid(_func: &str, _id: u32, _count: i32) {}
+}
+
+pub mod rumble {
+    pub fn set(_handle: u32, _v: [f32; 4]) {}
+}
+
+pub mod overlay {
+    use crate::settings::FpsMode;
+
+    /// The settings' values: there is no overlay to change them.
+    pub fn fps_mode() -> FpsMode {
+        crate::settings::get().system.fps
+    }
+
+    pub fn is_vsync() -> bool {
+        !crate::settings::get().display.no_vsync
+    }
+}

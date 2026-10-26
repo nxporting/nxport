@@ -8,6 +8,8 @@
 // Every read site is redirected to a stub in a code island next to the guest modules:
 //     mrs Xt, tpidrro_el0 ; ldr Xt, [Xt, #slot] ; b <site + 4>
 
+use crate::cpu::aot::encode_b;
+
 const MRS_TPIDR_MASK: u32 = 0xFFFF_FFE0;
 const MRS_TPIDR: u32 = 0xD53B_D040;
 const MRS_TPIDRRO: u32 = 0xD53B_D060;
@@ -17,14 +19,6 @@ extern "C" {
     static mach_task_self_: u32;
     fn mach_vm_allocate(task: u32, addr: *mut u64, size: u64, flags: i32) -> i32;
     fn mach_vm_deallocate(task: u32, addr: u64, size: u64) -> i32;
-}
-
-pub(crate) fn encode_b(from: usize, to: usize) -> Option<u32> {
-    let delta = to as isize - from as isize;
-    if delta % 4 != 0 || delta <= -BRANCH_RANGE || delta >= BRANCH_RANGE {
-        return None;
-    }
-    Some(0x1400_0000 | (((delta >> 2) as u32) & 0x03FF_FFFF))
 }
 
 fn find_sites(start: usize, len: usize) -> Vec<usize> {
@@ -132,11 +126,7 @@ pub unsafe fn rewrite(
         *s.add(2) = back;
         let page = site & !0x3fff;
         if executable {
-            libc::mprotect(
-                page as *mut libc::c_void,
-                0x4000,
-                libc::PROT_READ | libc::PROT_WRITE,
-            );
+            let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
         }
         *(site as *mut u32) = to_stub;
         if executable {
@@ -145,12 +135,9 @@ pub unsafe fn rewrite(
         written += 1;
     }
     crate::cpu::aot::make_exec("tpidr.island", island, island_len);
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
-    sys_icache_invalidate(island as *mut libc::c_void, island_len);
+    crate::os::flush_icache(island as usize, island_len);
     for &(s, l, _) in ranges {
-        sys_icache_invalidate(s as *mut libc::c_void, l);
+        crate::os::flush_icache(s as usize, l);
     }
     println!("[+] tpidr_el0 rewrite: {} of {} guest read sites now load the TLS pointer from TSD (island at {:#x})", written, sites.len(), island);
     Ok(written)

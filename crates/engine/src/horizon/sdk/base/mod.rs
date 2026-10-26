@@ -16,6 +16,7 @@ mod friends;
 mod fs;
 mod hid;
 mod libc;
+mod ldn;
 mod mii;
 mod nfp;
 mod ngc;
@@ -55,6 +56,7 @@ pub(super) static TABLES: &[&[Entry]] = &[
     fs::TABLE,
     hid::TABLE,
     libc::TABLE,
+    ldn::TABLE,
     mii::TABLE,
     nfp::TABLE,
     ngc::TABLE,

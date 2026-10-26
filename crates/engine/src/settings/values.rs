@@ -431,6 +431,15 @@ macro_rules! choice {
 }
 
 choice!(
+    /// The GPU backend.
+    GpuBackend {
+        Metal,
+        /// Vulkan (headless where there is no window support for it yet).
+        Vulkan,
+    }
+);
+
+choice!(
     /// Which work the GPU executor does (bisection aid).
     GfxMode {
         /// Encode everything but submit nothing (no GPU work).

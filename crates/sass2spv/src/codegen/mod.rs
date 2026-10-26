@@ -27,6 +27,12 @@ pub struct HostCapabilities {
     pub supports_shader_barrier_divergence: bool,
     pub supports_shader_float64: bool,
     pub supports_shader_non_uniform_indexing: bool,
+    pub supports_image_gather_extended: bool,
+    pub supports_draw_parameters: bool,
+    pub cbuf_limits: bool,
+    pub binding_base: i32,
+    pub fragment_inputs: Option<u32>,
+    pub sampler_slots: u32,
 }
 
 #[derive(Clone)]
@@ -36,6 +42,9 @@ pub struct SamplerDeclaration {
     pub sampled_image_pointer_type: Inst,
     pub image: Inst,
     pub is_indexed: bool,
+    /// Sampled through the sampler table (HostCapabilities::sampler_slots): its first texture slot. `image` is then a
+    /// separate image and `sampled_image_pointer_type` points to `image_type`.
+    pub table_slot: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -65,6 +74,10 @@ pub struct CodeGenContext<'a> {
     pub shared_memories: HashMap<i32, Inst>,
     pub samplers_types: HashMap<SetBindingPair, SamplerType>,
     pub samplers: HashMap<SetBindingPair, SamplerDeclaration>,
+    /// The sampler table (HostCapabilities::sampler_slots): its variable, the sampler type and a pointer to one sampler.
+    pub sampler_table: Option<(Inst, Inst, Inst)>,
+    /// Bytes of each constant buffer binding the stage reads (literal offsets), -1 when it indexes one at run time.
+    pub cbuf_extents: std::collections::BTreeMap<i32, i32>,
     pub images: HashMap<SetBindingPair, ImageDeclaration>,
     pub inputs: NetMap<IoDefinition, Inst>,
     pub outputs: NetMap<IoDefinition, Inst>,
@@ -128,11 +141,20 @@ impl CodeGenContext<'_> {
     }
 
     pub fn main_interface(&self) -> Vec<Inst> {
-        let mut v: Vec<Inst> = self.inputs.values().cloned().collect();
+        let mut v: Vec<Inst> = self.inputs.iter().filter(|(io, _)| !self.unlinked_input(io)).map(|(_, v)| v.clone()).collect();
         v.extend(self.outputs.values().cloned());
         v.extend(self.inputs_per_patch.values().cloned());
         v.extend(self.outputs_per_patch.values().cloned());
         v
+    }
+
+    /// A fragment input at a location the vertex stage does not write (HostCapabilities::fragment_inputs): a private
+    /// variable holding zero.
+    pub fn unlinked_input(&self, io: &IoDefinition) -> bool {
+        self.definitions.stage == ShaderStage::Fragment
+            && io.io_variable == IoVariable::UserDefined
+            && !io.storage_kind.is_output()
+            && self.host.fragment_inputs.is_some_and(|m| io.location >= 32 || m & (1 << io.location) == 0)
     }
 
     pub fn declare_local(&mut self, local: AstId, spv_local: Inst) -> R<()> {
@@ -412,7 +434,7 @@ pub fn generate(
     definitions: &ShaderDefinitions,
     properties: &ShaderProperties,
     host: &HostCapabilities,
-) -> R<Vec<u8>> {
+) -> R<(Vec<u8>, std::collections::BTreeMap<i32, i32>)> {
     let mut m = Module::new(SPIRV_VERSION_PACKED);
     m.add_capability(Capability::SHADER);
     m.set_memory_model(AddressingModel::LOGICAL, MemoryModel::GLSL450);
@@ -420,7 +442,9 @@ pub fn generate(
     m.add_capability(Capability::GROUP_NON_UNIFORM_SHUFFLE);
     m.add_capability(Capability::GROUP_NON_UNIFORM_VOTE);
     m.add_capability(Capability::IMAGE_BUFFER);
-    m.add_capability(Capability::IMAGE_GATHER_EXTENDED);
+    if host.supports_image_gather_extended {
+        m.add_capability(Capability::IMAGE_GATHER_EXTENDED);
+    }
     m.add_capability(Capability::IMAGE_QUERY);
     m.add_capability(Capability::SAMPLED_BUFFER);
     if host.supports_shader_float64 {
@@ -447,7 +471,8 @@ pub fn generate(
             }
         }
         ShaderStage::TessellationControl | ShaderStage::TessellationEvaluation => m.add_capability(Capability::TESSELLATION),
-        ShaderStage::Vertex => m.add_capability(Capability::DRAW_PARAMETERS),
+        ShaderStage::Vertex if host.supports_draw_parameters => m.add_capability(Capability::DRAW_PARAMETERS),
+        ShaderStage::Vertex => {}
         ShaderStage::Compute => {}
     }
     if !matches!(stage, ShaderStage::Fragment | ShaderStage::Geometry | ShaderStage::Compute)
@@ -475,6 +500,8 @@ pub fn generate(
         shared_memories: HashMap::new(),
         samplers_types: HashMap::new(),
         samplers: HashMap::new(),
+        sampler_table: None,
+        cbuf_extents: Default::default(),
         images: HashMap::new(),
         inputs: NetMap::new(),
         outputs: NetMap::new(),
@@ -508,7 +535,8 @@ pub fn generate(
     for func_index in 0..info.functions.len() {
         generate_function(&mut c, func_index)?;
     }
-    Ok(c.m.generate())
+    let extents = std::mem::take(&mut c.cbuf_extents);
+    Ok((c.m.generate(), extents))
 }
 
 fn generate_function(c: &mut CodeGenContext, func_index: usize) -> R<()> {
@@ -580,6 +608,11 @@ fn generate_function(c: &mut CodeGenContext, func_index: usize) -> R<()> {
                 c.m.add_execution_mode(&spv_func, if d.origin_upper_left() { ExecutionMode::ORIGIN_UPPER_LEFT } else { ExecutionMode::ORIGIN_LOWER_LEFT }, &[]);
                 if c.info.io_definitions.contains(&io(StorageKind::Output, IoVariable::FragmentOutputDepth)) {
                     c.m.add_execution_mode(&spv_func, ExecutionMode::DEPTH_REPLACING, &[]);
+                    // The depth a discarding stage writes for the host (Host::discard_writes_depth) is its own: a true
+                    // promise that keeps early rejection for LESS tests.
+                    if !d.omap_depth {
+                        c.m.add_execution_mode(&spv_func, ExecutionMode::DEPTH_GREATER, &[]);
+                    }
                 }
                 if d.early_z_force() {
                     c.m.add_execution_mode(&spv_func, ExecutionMode::EARLY_FRAGMENT_TESTS, &[]);
