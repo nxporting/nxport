@@ -745,6 +745,9 @@ fn load_shared_font(ty: usize) -> Vec<u8> {
             font_dirs.push(nxport_dir.join("system_data/0100000000000811"));
         }
     }
+    if let Some(sys_font_dir) = crate::horizon::fs::system_data_dir(0x0100000000000811) {
+        font_dirs.push(sys_font_dir);
+    }
     if let Some(home) = std::env::var_os("HOME") {
         let p = std::path::PathBuf::from(home);
         font_dirs.push(p.join("Library/Application Support/nxport/fonts"));
