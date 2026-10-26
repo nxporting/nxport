@@ -40,6 +40,13 @@ fn main() {
             Err(e) => panic!("cannot run cargo to build the engine for {target}: {e}"),
         }
         let bin = target_dir.join(target).join("release/nxport");
+        if target.ends_with("-ios") {
+            let shim_src = root.join("tools/ios/movie_shim.dylib");
+            let shim_dest = target_dir.join(target).join("release/movie_shim.dylib");
+            if shim_src.is_file() && !shim_dest.is_file() {
+                let _ = std::fs::copy(&shim_src, &shim_dest);
+            }
+        }
         println!("cargo:rustc-env={var}={}", bin.display());
     }
 }

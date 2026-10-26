@@ -93,4 +93,9 @@ $CC -target arm64-apple-ios16.0 -isysroot "$SDK_PATH" -O2 -dynamiclib -fPIC \
 
 codesign -f -s - "$OUT"
 
+ENGINES_OUT="$ROOT/target/engines/aarch64-apple-ios/release/movie_shim.dylib"
+mkdir -p "$(dirname "$ENGINES_OUT")"
+cp -f "$OUT" "$ENGINES_OUT"
+cp -f "$OUT" "$ROOT/tools/ios/movie_shim.dylib"
+
 echo "[+] Built iOS movie shim: $OUT ($(stat -f %z "$OUT" | awk '{printf "%.1f MB", $1/1048576}'))"
