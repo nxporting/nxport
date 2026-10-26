@@ -1,4 +1,5 @@
-// From LAS Recomp's runtime/simd_fp.h (MIT, Copyright (c) 2026 Peiikai; see LICENSE-LASRecomp), unchanged but for this line.
+// From LAS Recomp's runtime/simd_fp.h (MIT, Copyright (c) 2026 Peiikai; see LICENSE-LASRecomp), unchanged but for this line
+// and the FPCR.FZ path without rounding-mode switches (FN(fzop), FN(vfzop)).
 // FP helpers for one precision; included twice by simd.h (F = s/float, d/double). No include guard.
 // Scalar entry points take/return T, vector ones VT (all lanes; callers zero the unused half for Q=0).
 
@@ -146,9 +147,24 @@ SN T FN(slow)(Cpu *c, int op, T a, T b, T d) {
     return r;
 }
 
+// FN(op) under FPCR.FZ or RMode, out of line (one call at each FP instruction, as before). A rounding mode other than
+// nearest takes FN(slow). FZ alone, which is how games run (FZ | DN), is FN(slow) without its rounding-mode switches,
+// which cost far more than the arithmetic (a CRT call each way that translates MXCSR). Only a result of exactly the
+// smallest normal can have been tiny before rounding; FN(slow) recomputes that one toward zero.
+SN T FN(fzop)(Cpu *c, int op, T a, T b, T d) {
+    if (c->fpcr & FPCR_RM) return FN(slow)(c, op, a, b, d);
+    a = FN(flush)(a), b = FN(flush)(b), d = FN(flush)(d);
+    if (FMINMAX(op)) return FN(minmax)(c, op, a, b);
+    T r = op == FOP_RSQRTS ? FN(rsqrts)(a, b) : FCALC(op, a, b, d, K);
+    if (__builtin_expect(FBAD(op, r), 0)) r = FN(fix)(c, op, a, b, d);
+    U m = FN(fb)(r) & ~SGN;
+    if (__builtin_expect(m <= MINN && m, 0)) return m == MINN ? FN(slow)(c, op, a, b, d) : FN(fv)(FN(fb)(r) & SGN);
+    return r;
+}
+
 // Scalar FP op (constant op folds the selection).
 SI T FN(op)(Cpu *c, int op, T a, T b, T d) {
-    if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) return FN(slow)(c, op, a, b, d);
+    if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) return FN(fzop)(c, op, a, b, d);
     if (FMINMAX(op)) return FN(minmax)(c, op, a, b);
     T r = FCALC(op, a, b, d, K);
     if (__builtin_expect(FBAD(op, r), 0)) r = FN(fix)(c, op, a, b, d);
@@ -163,9 +179,14 @@ SN VT FN(vslow)(Cpu *c, int op, VT a, VT b, VT d) {
 
 SI VTU FN(vsel)(VTS m, VTU x, VTU y) { return (x & (VTU)m) | (y & ~(VTU)m); }
 
-// Vector FP op: native lanes, any NaN (or FPCR.FZ/RMode) reruns all lanes through the scalar path.
-SI VT FN(vop)(Cpu *c, int op, VT a, VT b, VT d) {
-    if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) return FN(vslow)(c, op, a, b, d);
+SI VT FN(vflush)(VT a) {
+    VTU u = (VTU)a, mag = u & ~((VTU){} + SGN);
+    VTS den = (mag != 0) & ((u & EXPM) == 0);
+    return (VT)FN(vsel)(den, u & SGN, u);
+}
+
+// Native lanes for FN(vop); with fz (operands already flushed) a lane with a tiny result goes the scalar way too.
+SI VT FN(vcalc)(Cpu *c, int op, VT a, VT b, VT d, int fz) {
     VT r;
     if (FMINMAX(op)) {
         if (__builtin_expect(__builtin_reduce_or((a != a) | (b != b)) != 0, 0)) return FN(vslow)(c, op, a, b, d);
@@ -177,16 +198,30 @@ SI VT FN(vop)(Cpu *c, int op, VT a, VT b, VT d) {
         return r;
     }
     r = FCALC(op, a, b, d, VK);
-    if (__builtin_expect(__builtin_reduce_or(FBAD(op, r)) != 0, 0)) return FN(vslow)(c, op, a, b, d);
+    VTS bad = FBAD(op, r);
+    if (fz) {
+        VTU m = (VTU)r & ~((VTU){} + SGN);
+        bad |= (m <= MINN) & (m != 0);
+    }
+    if (__builtin_expect(__builtin_reduce_or(bad) != 0, 0)) return FN(vslow)(c, op, a, b, d);
     return r;
 }
 
+// FN(vop) under FPCR.FZ or RMode, out of line like FN(fzop): RMode reruns all lanes through the scalar path, FZ alone
+// flushes the lanes and reruns only for a NaN or a tiny result.
+SN VT FN(vfzop)(Cpu *c, int op, VT a, VT b, VT d) {
+    if (c->fpcr & FPCR_RM) return FN(vslow)(c, op, a, b, d);
+    return FN(vcalc)(c, op, FN(vflush)(a), FN(vflush)(b), FN(vflush)(d), 1);
+}
+
+// Vector FP op: native lanes, any NaN reruns all lanes through the scalar path (FPCR.FZ / RMode: FN(vfzop)).
+SI VT FN(vop)(Cpu *c, int op, VT a, VT b, VT d) {
+    if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) return FN(vfzop)(c, op, a, b, d);
+    return FN(vcalc)(c, op, a, b, d, 0);
+}
+
 SI VT FN(vfz)(Cpu *c, VT a) {
-    if (__builtin_expect(c->fpcr & FPCR_FZ, 0)) {
-        VTU u = (VTU)a, mag = u & ~((VTU){} + SGN);
-        VTS den = (mag != 0) & ((u & EXPM) == 0);
-        a = (VT)FN(vsel)(den, u & SGN, u);
-    }
+    if (__builtin_expect(c->fpcr & FPCR_FZ, 0)) a = FN(vflush)(a);
     return a;
 }
 

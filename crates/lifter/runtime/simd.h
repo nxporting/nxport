@@ -1,4 +1,5 @@
-// From LAS Recomp's runtime/simd.h (MIT, Copyright (c) 2026 Peiikai; see LICENSE-LASRecomp), unchanged but for this line.
+// From LAS Recomp's runtime/simd.h (MIT, Copyright (c) 2026 Peiikai; see LICENSE-LASRecomp), unchanged but for this line
+// and simd_d2s staying in the host's rounding mode under FPCR.FZ alone.
 // Portable C lowering of AArch64 FP / AdvSIMD / crypto / CRC32 (tools/simd_c.py emits calls with constant
 // fields; everything is always_inline so the size/lane/op switches fold at -O1).
 // Semantics follow the ARM pseudocode, not the host: NaN propagation (first signalling NaN quietened, then
@@ -280,7 +281,8 @@ SI float simd_d2s(Cpu *c, double x) {
     x = fv_d(u);
     if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) {
         if ((c->fpcr & FPCR_FZ) && __builtin_fabs(x) < 0x1p-126 && x != 0) return fv_s((uint32_t)(u >> 63) << 31);
-        return simd_d2s_slow(c, x);
+        // FZ alone rounds as the host does (simd_fp.h, FN(fzop)).
+        if (c->fpcr & FPCR_RM) return simd_d2s_slow(c, x);
     }
     return (float)x;
 }
