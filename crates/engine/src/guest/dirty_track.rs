@@ -16,10 +16,35 @@ use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 const PAGE: usize = 0x4000;
 const DOMAINS: usize = 8;
+
+/// Page states in the lower 2 bits.
+pub const STATE_MASK: u8 = 3;
+pub const PG_NONE: u8 = 0; // Writable
+pub const PG_PROT: u8 = 1; // Read-only
+pub const PG_BUSY: u8 = 2; // Transitioning (mprotect in flight)
+
 /// Page flags.
-const PROTECTED: u8 = 1; // read-only by us now
-const GPU: u8 = 2; // accessed by GPU buffers: never protect
-const EVER: u8 = 4; // protected by us at some point since the last release (faults here are ours)
+pub const GPU: u8 = 4; // accessed by GPU buffers: never protect
+pub const EVER: u8 = 8; // protected by us at some point since the last release (faults here are ours)
+
+/// Maximum wait time for a page to leave PG_BUSY before giving up (signal-safe).
+fn busy_wait(f: &AtomicU8) -> bool {
+    let t0 = std::time::Instant::now();
+    let mut spins = 0u32;
+    while f.load(Ordering::Acquire) & STATE_MASK == PG_BUSY {
+        if spins < 64 {
+            std::hint::spin_loop();
+            spins += 1;
+            continue;
+        }
+        std::thread::yield_now();
+        if t0.elapsed().as_millis() >= 2000 {
+            eprintln!("[!] dirty-page tracking: page stuck BUSY for over 2000 ms");
+            return false;
+        }
+    }
+    true
+}
 
 // Generations only increase, so the sum over a texture's pages changes whenever any page is written. Ordering makes a
 // skipped check safe: a consumer reads the generations *before* re-protecting, and the fault handler bumps them
@@ -128,7 +153,10 @@ pub fn tracking(addr: usize) -> bool {
     if ANY.load(Ordering::Relaxed) == 0 {
         return false;
     }
-    locate(addr, 1).is_some_and(|(_, f, p, _)| f[p].load(Ordering::Acquire) & PROTECTED != 0)
+    locate(addr, 1).is_some_and(|(_, f, p, _)| {
+        let st = f[p].load(Ordering::Acquire) & STATE_MASK;
+        st == PG_PROT || st == PG_BUSY
+    })
 }
 
 /// Whether [start, start+len) can be tracked.
@@ -141,7 +169,8 @@ pub fn generation(start: usize, len: usize) -> Option<u64> {
     let (g, f, first, last) = locate(start, len)?;
     let mut sum = 0u64;
     for p in first..=last {
-        if f[p].load(Ordering::Acquire) & (PROTECTED | GPU) != PROTECTED {
+        let fl = f[p].load(Ordering::Acquire);
+        if fl & GPU != 0 || (fl & STATE_MASK) != PG_PROT {
             return None;
         }
         sum = sum.wrapping_add(g[p].load(Ordering::Acquire) as u64);
@@ -163,19 +192,62 @@ pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
     }
     let page0 = start & !(PAGE - 1);
     let end = (start + len + PAGE - 1) & !(PAGE - 1);
+
+    // Order of page state and mprotect: NONE -> BUSY -> mprotect(Read) -> PROT.
     for p in first..=last {
-        if f[p].fetch_or(PROTECTED | EVER, Ordering::AcqRel) & EVER == 0 {
-            ANY.fetch_add(1, Ordering::Relaxed);
+        loop {
+            let cur = f[p].load(Ordering::Acquire);
+            if cur & GPU != 0 {
+                // Revert any pages we set to BUSY back to NONE
+                for q in first..p {
+                    let c = f[q].load(Ordering::Acquire);
+                    if c & STATE_MASK == PG_BUSY {
+                        f[q].store((c & !STATE_MASK) | PG_NONE, Ordering::Release);
+                    }
+                }
+                return None;
+            }
+            let st = cur & STATE_MASK;
+            if st == PG_PROT {
+                break;
+            }
+            if st == PG_BUSY {
+                if !busy_wait(&f[p]) {
+                    return None;
+                }
+                continue;
+            }
+            // PG_NONE -> PG_BUSY
+            let next = (cur & !STATE_MASK) | PG_BUSY | EVER;
+            if f[p].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                if cur & EVER == 0 {
+                    ANY.fetch_add(1, Ordering::Relaxed);
+                }
+                break;
+            }
         }
     }
+
     let r = crate::os::protect(page0, end - page0, crate::os::Prot::Read);
     crate::gpu::backend().pages_reprotected(page0, end - page0);
     if r.is_err() {
         for p in first..=last {
-            f[p].fetch_and(!PROTECTED, Ordering::AcqRel);
+            let cur = f[p].load(Ordering::Acquire);
+            if cur & STATE_MASK == PG_BUSY {
+                f[p].store((cur & !STATE_MASK) | PG_NONE, Ordering::Release);
+            }
         }
         return None;
     }
+
+    // mprotect completed: transition PG_BUSY -> PG_PROT
+    for p in first..=last {
+        let cur = f[p].load(Ordering::Acquire);
+        if cur & STATE_MASK == PG_BUSY {
+            f[p].store((cur & !STATE_MASK) | PG_PROT, Ordering::Release);
+        }
+    }
+
     if log() {
         static N: AtomicUsize = AtomicUsize::new(0);
         if N.fetch_add(1, Ordering::Relaxed) % 2000 == 0 {
@@ -199,17 +271,35 @@ pub unsafe fn handle_fault(addr: usize) -> bool {
     let Some((g, f, p, _)) = locate(addr, 1) else {
         return false;
     };
-    if f[p].load(Ordering::Acquire) & EVER == 0 {
-        return false;
+    loop {
+        let cur = f[p].load(Ordering::Acquire);
+        if cur & EVER == 0 {
+            return false;
+        }
+        let st = cur & STATE_MASK;
+        if st == PG_NONE {
+            // Already made writable by another thread: retry instruction directly
+            return true;
+        }
+        if st == PG_BUSY {
+            if !busy_wait(&f[p]) {
+                return false;
+            }
+            continue;
+        }
+        // Transition PG_PROT -> PG_BUSY before calling mprotect
+        let next = (cur & !STATE_MASK) | PG_BUSY;
+        if f[p].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            let page_addr = addr & !(PAGE - 1);
+            let _ = crate::os::protect(page_addr, PAGE, crate::os::Prot::ReadWrite);
+            crate::gpu::backend().pages_reprotected(page_addr, PAGE);
+            g[p].fetch_add(1, Ordering::AcqRel);
+            FAULTS.fetch_add(1, Ordering::Relaxed);
+            let final_val = (f[p].load(Ordering::Acquire) & !STATE_MASK) | PG_NONE;
+            f[p].store(final_val, Ordering::Release);
+            return true;
+        }
     }
-    // Clear the flag, unprotect, then bump (see the comment on `Domain`). The flag goes first: a check that still saw
-    // it set while the page was already writable could skip a texture the write is about to change.
-    f[p].fetch_and(!PROTECTED, Ordering::AcqRel);
-    let _ = crate::os::protect(((addr & !(PAGE - 1))) as usize, PAGE, crate::os::Prot::ReadWrite);
-    crate::gpu::backend().pages_reprotected(addr & !(PAGE - 1), PAGE);
-    g[p].fetch_add(1, Ordering::AcqRel);
-    FAULTS.fetch_add(1, Ordering::Relaxed);
-    true
 }
 
 /// Another page guard made [start, start+len) writable: the pages tracked here are made read-only again (signal-safe:
@@ -218,12 +308,12 @@ pub unsafe fn reprotect_held(start: usize, len: usize) {
     let Some((_, f, first, last)) = locate(start, len) else { return };
     let mut p = first;
     while p <= last {
-        if f[p].load(Ordering::Acquire) & PROTECTED == 0 {
+        if f[p].load(Ordering::Acquire) & STATE_MASK != PG_PROT {
             p += 1;
             continue;
         }
         let run = p;
-        while p <= last && f[p].load(Ordering::Acquire) & PROTECTED != 0 {
+        while p <= last && f[p].load(Ordering::Acquire) & STATE_MASK == PG_PROT {
             p += 1;
         }
         let at = (start & !(PAGE - 1)) + (run - first) * PAGE;
@@ -242,24 +332,45 @@ unsafe fn unprotect_pages(
 ) {
     let mut p = first;
     while p <= last {
-        if f[p].load(Ordering::Acquire) & PROTECTED == 0 {
-            f[p].fetch_or(extra, Ordering::AcqRel);
-            p += 1;
-            continue;
-        }
-        // A run of protected pages: one mprotect.
-        let run = p;
-        while p <= last && f[p].load(Ordering::Acquire) & PROTECTED != 0 {
-            p += 1;
-        }
-        for q in run..p {
-            f[q].fetch_and(!PROTECTED, Ordering::AcqRel);
-            f[q].fetch_or(extra, Ordering::AcqRel);
-        }
-        let _ = crate::os::protect(((base + run * PAGE)) as usize, (p - run) * PAGE, crate::os::Prot::ReadWrite);
-        crate::gpu::backend().pages_reprotected(base + run * PAGE, (p - run) * PAGE);
-        for q in run..p {
-            g[q].fetch_add(1, Ordering::AcqRel);
+        loop {
+            let cur = f[p].load(Ordering::Acquire);
+            let st = cur & STATE_MASK;
+            if st == PG_BUSY {
+                if !busy_wait(&f[p]) { break; }
+                continue;
+            }
+            if st != PG_PROT {
+                f[p].fetch_or(extra, Ordering::AcqRel);
+                p += 1;
+                break;
+            }
+            // Page is PG_PROT: transition contiguous run to PG_BUSY
+            let mut run_end = p;
+            while run_end <= last {
+                let c = f[run_end].load(Ordering::Acquire);
+                if c & STATE_MASK == PG_PROT {
+                    let next = (c & !STATE_MASK) | PG_BUSY;
+                    if f[run_end].compare_exchange_weak(c, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                        run_end += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+            if run_end > p {
+                let at = base + p * PAGE;
+                let count = run_end - p;
+                let _ = crate::os::protect(at, count * PAGE, crate::os::Prot::ReadWrite);
+                crate::gpu::backend().pages_reprotected(at, count * PAGE);
+                for q in p..run_end {
+                    g[q].fetch_add(1, Ordering::AcqRel);
+                    let c = f[q].load(Ordering::Acquire);
+                    let final_val = (c & !STATE_MASK) | PG_NONE | extra;
+                    f[q].store(final_val, Ordering::Release);
+                }
+                p = run_end;
+            }
+            break;
         }
     }
 }
