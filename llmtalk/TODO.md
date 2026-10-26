@@ -5,8 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- **Unlocked frame rate (TotK).** Bringing windows-support-2's three commits to main (geometry shaders, TotK 1.1.2
-  dynamic FPS hooks, parity ports), then the hooks for the Windows test dump's version and a re-lifted guest. In progress.
+- **Unlocked frame rate (TotK).** Hooks for the Windows test dump's version and a re-lifted guest
+  (windows-support-2's three commits are now merged to main). In progress.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
@@ -21,9 +21,7 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
-- `windows-support-2` holds three commits not on main: 9b16122 geometry shaders (Vulkan, Metal, sass2spv),
-  504f09b TotK 1.1.2 dynamic FPS / delta-time hooks, a582bb2 parity ports (AddressRegionManager, KTGL 1D wrap, Metal
-  UBO invalidation). Bring them to main before deleting that branch. `retro-work` also has commits not on main.
+- `retro-work` has commits not on main.
 - With `--no-vsync`, TotK starts no sounds (title runs ~600 fps; its idle voices are never routed to splitters).
 - Rare Vulkan device loss at startup (about 1 in 10, empty fault report); lost-device reports and checkpoints are on.
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
@@ -31,10 +29,39 @@ and update this file when you finish or drop it.
 - CPU side on lifted hosts: null-GPU gameplay ~69 fps; threads wait on each other's jobs (see the CPU notes in
   docs/windows-port.md, kept local). Tried without effect: timer resolution, thread priorities, restrict + noescape,
   spinning before parking.
+- **TotK freefall flickers**:
+  - Terrain-detail squares under Link while skydiving: fixed by guarding storage-buffer results until their GPU work
+    completed (uncommitted in ../nxport-totk, `metal/fence_guard.rs`); measure its cost on a quiet machine, then commit.
+    Captures / save: `work/captures/totk_20261025_freefall*`, `work/saves/totk-freefall` (slot 01: press A, hold right stick down).
+  - Second flicker while falling: a sky island vanishes for one frame while a white tile appears on the ground below.
+    Captured (`work/captures/totk_20261025_freefall_fix`, frames before 2153 / 4233) but not located in the frames yet.
+- **Breath of the Wild**:
+  - Water: Link stands on the pond floor instead of swimming (`work/saves/botw-pool`).
+  - One-frame black foliage (~130 per 600 frames at `work/saves/botw-sunk`); blue-grey haze over the image.
+- **Uncommitted work in ../nxport-nxnative (reviewed 2026-10-25)**:
+  - Guest image cache (`lib.rs`, `aot.rs`): returns cached image even when settings differ (mods, x18 mode) and ignores
+    failed settings install. Key cache on settings and keep error.
+  - Shared-font fallback (`nn.rs`, `ios_env.rs`, `ipa.rs`, cli `--shared-fonts`): iOS font paths and fonts folder in
+    the app are right; drop cwd/Documents searches and embedded dummy_font.ttf; provide console shared font from
+    system data like Mii data.
+  - Pipeline-archive function dedupe (`metal/pipeline_archive.rs`): keep, after iOS build test.
+- **Ultrawide support for more games and versions**:
+  - Other TotK versions: find aspect and HUD calculate sites (layouts may match, offsets move).
+  - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
-## Done recently (S41L0R Windows Machine)
+## Done recently
 
+- **`windows-support-2` brought to main** (`3f46f2b`, `cf17023`, `76430c3`):
+  - **Geometry shaders for Vulkan, Metal, and sass2spv** (`76430c3`): Maxwell geometry shader stage (SPH/hint 4) with
+    dedicated `GEOMETRY_BINDING_BASE = 128`, integrated into Vulkan graphics pipeline layout, creation, async compilation,
+    and MSL codegen.
+  - **TotK 1.1.2 Native Dynamic FPS Core Hooks** (`cf17023`): Dynamic delta-time scaling in
+    `profile/totk/v1_1_2/dynamic_fps.rs` (`hle_nn_os_GetSystemTick`), frame pacer patch at `main+0x008f6670`, and interval
+    patch at `main+0x021bd514` for variable 60+ FPS without game speedups.
+  - **Parity Ports from `nxnative-parity`** (`3f46f2b`): AddressRegionManager constructor patch (1 GB -> 62 MB reclaiming
+    ~960 MB address space without scanning .text), KTGL 1D texture wrap restricted to integer fetches (TLD/TLDS), and Metal
+    UBO copy invalidation via `GUEST_WRITES` atomic epoch increments.
 - Movies decoded in the program (crates/media: WebM/MP4, VP9, H.264, AAC, Vorbis, Opus); the ffmpeg shim, its build
-  scripts and packaging are gone. Fixes the TotK crash when its first movie opened with no tracks.
-- Windows short sleeps end on time (clock::sleep_ns yields for the last 0.7 ms).
-- docs/ is local only (ignored).
+  scripts and packaging are gone. Fixes the TotK crash when its first movie opened with no tracks. (S41L0R)
+- Windows short sleeps end on time (clock::sleep_ns yields for the last 0.7 ms). (S41L0R)
+- docs/ is local only (ignored). (S41L0R)
