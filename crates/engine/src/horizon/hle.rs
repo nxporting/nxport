@@ -3937,6 +3937,11 @@ static HLE_SYSTEM_EVENTS: StdMutex<Vec<(usize, std::sync::Arc<HleSystemEvent>)>>
 pub fn hle_system_event_register_addr(addr: usize) {
     hle_system_event_register(addr);
 }
+pub fn hle_system_event_signal_addr(addr: usize) {
+    if let Some(ev) = hle_system_event_lookup(addr) {
+        hle_system_event_signal(&ev);
+    }
+}
 /// Registers an HLE system event at `addr` that is already signaled (an operation that completed at once).
 pub fn hle_system_event_register_signaled(addr: usize) {
     let ev = hle_system_event_register(addr);
