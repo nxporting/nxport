@@ -1119,6 +1119,10 @@ impl Ctx {
                     self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
                     continue;
                 }
+                if let Some(b) = self.cached(a, size) {
+                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    continue;
+                }
                 let b = match self.imports.find(&self.dev, a, size) {
                     Some(x) => {
                         crate::vulkan::guard::note_read(a, size);
@@ -1306,6 +1310,9 @@ impl Ctx {
                 if let Some((b, o)) = self.shadow(a, n * 2, false).filter(|(_, o)| o % 4 == 0) {
                     return Some((b, o, vk::IndexType::UINT16));
                 }
+                if let Some((b, o)) = self.cached(a, n * 2) {
+                    return Some((b, o, vk::IndexType::UINT16));
+                }
                 let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
                     crate::vulkan::guard::note_read(a, n * 2);
@@ -1321,6 +1328,9 @@ impl Ctx {
             }
             _ => {
                 if let Some((b, o)) = self.shadow(a, n * 4, false).filter(|(_, o)| o % 4 == 0) {
+                    return Some((b, o, vk::IndexType::UINT32));
+                }
+                if let Some((b, o)) = self.cached(a, n * 4) {
                     return Some((b, o, vk::IndexType::UINT32));
                 }
                 let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0);

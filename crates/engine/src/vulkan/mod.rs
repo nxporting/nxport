@@ -19,6 +19,7 @@ pub mod listed;
 pub mod pipelines;
 pub mod shader;
 mod shadow;
+mod vcache;
 pub mod stage_cache;
 pub mod state;
 pub mod texture;
