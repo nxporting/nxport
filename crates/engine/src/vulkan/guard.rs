@@ -1,19 +1,22 @@
 // Frame overlap (--early-fence): guest-main's frame fence returns once the frame is queued, so the game prepares the
-// next frame while the GPU runs this one. Draws read vertex, index and some uniform data from guest memory in place
-// (imported pools), and the game writes the next frame's data into memory the running frame still reads (the fence
-// would have held it back on the Switch). So from each submit on (not only once guest-main waits for the frame: other
-// game threads write the next frame's data meanwhile; TotK's HUD drew a digit of another string over the "L" key icon
-// while the inventory opened), the pages that still-running submits read in place are read-only; a write to one
-// faults, waits for the submit that reads it and makes the range writable again, and the write is retried (as the
-// Metal backend's write guard does).
+// next frame while the GPU runs this one. Draws read vertex, index and buffer data (and uniforms GPU work writes) from
+// guest memory in place (imported pools), and the game writes the next frame's data into memory the running frame still reads (the fence
+// would have held it back on the Switch). So once guest-main waits for the frame, the pages still-running submits read
+// in place are read-only; a write to one faults, waits for the submit that reads it and makes the range writable again,
+// and the write is retried (as the Metal backend's write guard does). Not earlier: TotK's other threads finish the
+// frame's HUD and text after the submit, and the GPU must see that.
 //
-// A page the game wrote that way is hot: later submits copy what they read there when they are recorded instead of
-// reading it in place, so the game stops waiting for whole frames. Those copies must hold what the pages held when the
-// submit was made, but recording takes milliseconds and the game's other threads go on writing the next frame
-// meanwhile (TotK swimming: per-frame constants copied half rewritten blended whole frames to cyan). So hot pages are
-// read-only while a submit is recorded: the first write to one saves the page's contents (still the submit's) and
-// goes ahead, and the recording's copies of guest memory take the saved pages (patch). The backend's own writes
-// (reports, inline updates) are not saved.
+// Uniform data is copied when recorded (only the extent each stage reads), never read in place, as on Metal: in place,
+// the game's next-frame writes to those pages waited for the GPU for milliseconds per frame. Vertex, index and buffer
+// data stay in place. Copies of all of them (pages the game had written while GPU work read them, "hot") drew HUD and
+// inventory text from other strings (the "L" key icon as a digit, wrong item counts), and holding every submit's pages
+// from the submit on drew UI elements scaled up (a screen-sized apple icon) when the inventory opened.
+//
+// A page the game wrote while GPU work read it is hot. The recording's copies must hold what such pages held when the
+// submit was made, but recording takes milliseconds and the game's other threads go on writing meanwhile (TotK swimming:
+// per-frame constants copied half rewritten blended whole frames to cyan). So hot pages are read-only while a submit is
+// recorded: the first write to one saves the page's contents (still the submit's) and goes ahead, and the recording's
+// copies of guest memory take the saved pages (patch). The backend's own writes (reports, inline updates) are not saved.
 //
 // Pages GPU work writes (storage buffers, copy destinations, report slots) are never protected: GPU writes cannot
 // fault, and the watcher writes reports and copied buffers into them. The game reads such results a frame late.
