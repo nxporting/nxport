@@ -1239,14 +1239,22 @@ impl Ctx {
         let n = count as usize;
         let restart = self.st.prim_restart;
         match index_type {
-            // 8-bit indices: widened to 16 bits.
+            // 8-bit indices: widened to 16 bits (vectorized fast expansion).
             0 => {
                 let src = std::slice::from_raw_parts(a as *const u8, n);
-                let wide: Vec<u8> = src
-                    .iter()
-                    .flat_map(|&i| if restart == Some(i as u32) { 0xFFFFu16 } else { i as u16 }.to_le_bytes())
-                    .collect();
-                self.arena.copy(&self.dev, &wide).map(|(b, o)| (b, o, vk::IndexType::UINT16))
+                let mut wide = vec![0u16; n];
+                if let Some(r) = restart {
+                    let r = r as u8;
+                    for (dst, &i) in wide.iter_mut().zip(src) {
+                        *dst = if i == r { 0xFFFF } else { i as u16 };
+                    }
+                } else {
+                    for (dst, &i) in wide.iter_mut().zip(src) {
+                        *dst = i as u16;
+                    }
+                }
+                let bytes = std::slice::from_raw_parts(wide.as_ptr() as *const u8, n * 2);
+                self.arena.copy(&self.dev, bytes).map(|(b, o)| (b, o, vk::IndexType::UINT16))
             }
             1 if restart.is_some_and(|r| r != 0xFFFF) => {
                 let r = restart.unwrap();
