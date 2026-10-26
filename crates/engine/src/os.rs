@@ -185,6 +185,12 @@ pub fn readable_len(addr: usize, max: usize) -> usize {
     imp::readable_len(addr, max)
 }
 
+/// The committed parts of [addr, addr + len) that are not writable, in one pass over the memory regions.
+#[cfg(windows)]
+pub fn read_only_ranges(addr: usize, len: usize) -> Vec<(usize, usize)> {
+    imp::read_only_ranges(addr, len)
+}
+
 /// How many bytes from `addr` (up to `max`) can be written without faulting.
 #[cfg(windows)]
 pub fn writable_len(addr: usize, max: usize) -> usize {
@@ -739,6 +745,24 @@ mod imp {
             at = info.base_address as usize + info.region_size;
         }
         at.min(end) - addr
+    }
+
+    pub fn read_only_ranges(addr: usize, len: usize) -> Vec<(usize, usize)> {
+        const WRITABLE: u32 = 0x04 | 0x08 | 0x40 | 0x80;
+        let (end, mut at, mut out) = (addr + len, addr, Vec::new());
+        while at < end {
+            let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
+            let n = unsafe { VirtualQuery(at as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
+            if n == 0 {
+                break;
+            }
+            let next = (info.base_address as usize + info.region_size).min(end);
+            if info.state == MEM_COMMIT && info.protect & WRITABLE == 0 {
+                out.push((at, next));
+            }
+            at = next;
+        }
+        out
     }
 
     pub fn writable_len(addr: usize, max: usize) -> usize {

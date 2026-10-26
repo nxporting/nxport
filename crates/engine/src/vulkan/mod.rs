@@ -437,8 +437,16 @@ impl Imports {
     unsafe fn find(&mut self, dev: &device::Dev, addr: usize, len: usize) -> Option<(vk::Buffer, u64)> {
         let gen = crate::nvn::api::pools_gen();
         if gen != self.gen {
-            // Pools changed (registered, finalized, released): imports over released memory must go.
-            self.retired.extend(std::mem::take(&mut self.by_start).into_values().map(|(_, b, m)| (b, m)));
+            // Pools changed (registered, finalized, released): imports over memory released since must go. The others
+            // stay: their pages are the same (this backend never unmaps freed address regions), and making every import
+            // again at each change, which TotK's streaming makes many times a second, was a large part of recording.
+            for (a, s, _) in crate::nvn::api::take_released_ranges() {
+                let gone: Vec<usize> = self.by_start.range(..a + s).filter(|(&st, v)| st + v.0 > a).map(|(&st, _)| st).collect();
+                for st in gone {
+                    let (_, b, m) = self.by_start.remove(&st).unwrap();
+                    self.retired.push((b, m));
+                }
+            }
             self.failed.clear();
             self.gen = gen;
         }
@@ -459,22 +467,20 @@ impl Imports {
         // They are made writable first, as a host write would: the guard waits for the GPU work reading them, and the
         // tracking counts its pages as written (their textures are checked again).
         #[cfg(windows)]
-        if crate::os::writable_len(start, end - start) < end - start {
-            guard::before_host_write(start, end - start);
-            let mut at = start;
-            while at < end {
-                let w = crate::os::writable_len(at, end - at);
-                if w == end - at {
-                    break;
+        {
+            let read_only = crate::os::read_only_ranges(start, end - start);
+            if !read_only.is_empty() {
+                guard::before_host_write(start, end - start);
+                for (a, b) in read_only {
+                    for page in (a & !0x3FFF..b).step_by(0x4000) {
+                        crate::guest::dirty_track::handle_fault(page.max(a));
+                    }
                 }
-                let page = at + w;
-                crate::guest::dirty_track::handle_fault(page);
-                at = (page | 0xFFF) + 1;
-            }
-            // Still read-only (protected by something else): copies for now, imported once a later lookup finds it
-            // writable.
-            if crate::os::writable_len(start, end - start) < end - start {
-                return None;
+                // Still read-only (protected by something else): copies until the pools change, then tried again.
+                if !crate::os::read_only_ranges(start, end - start).is_empty() {
+                    self.failed.insert((start, end));
+                    return None;
+                }
             }
         }
         match dev.import(start, end - start) {
