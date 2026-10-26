@@ -124,14 +124,24 @@ pub fn sleep_ns(ns: u64) {
                 )
             };
         }
-        let timer = TIMER.with(|t| *t);
-        // A negative due time is relative, in 100 ns units.
-        let due = -((ns / 100).max(1) as i64);
-        if timer.is_null() || unsafe { SetWaitableTimer(timer, &due, 0, std::ptr::null_mut(), std::ptr::null_mut(), 0) } == 0 {
-            std::thread::sleep(std::time::Duration::from_nanos(ns));
-            return;
+        // The timer wakes up to about half a millisecond late, so it covers all but the last TIMER_SLACK and the thread
+        // yields its core until the deadline. Games sleep tens of microseconds while polling for other threads' work
+        // (TotK's main thread a few times a frame), which the timer alone turned into half a millisecond each.
+        const TIMER_SLACK: u64 = 700_000;
+        let deadline = ticks().saturating_add(ns_to_ticks(ns));
+        if ns > TIMER_SLACK {
+            let timer = TIMER.with(|t| *t);
+            // A negative due time is relative, in 100 ns units.
+            let due = -(((ns - TIMER_SLACK) / 100).max(1) as i64);
+            if timer.is_null() || unsafe { SetWaitableTimer(timer, &due, 0, std::ptr::null_mut(), std::ptr::null_mut(), 0) } == 0 {
+                std::thread::sleep(std::time::Duration::from_nanos(ns));
+                return;
+            }
+            unsafe { WaitForSingleObject(timer, INFINITE) };
         }
-        unsafe { WaitForSingleObject(timer, INFINITE) };
+        while ticks() < deadline {
+            std::thread::yield_now();
+        }
     }
 }
 
