@@ -185,6 +185,13 @@ pub fn readable_len(addr: usize, max: usize) -> usize {
     imp::readable_len(addr, max)
 }
 
+/// Prints what an exception nothing handled was, where (module and offset) and the thread's stack, before the process
+/// ends (native hosts report crashes in cpu::crash_handler).
+#[cfg(windows)]
+pub fn report_crashes() {
+    imp::report_crashes()
+}
+
 /// The committed parts of [addr, addr + len) that are not writable, in one pass over the memory regions.
 #[cfg(windows)]
 pub fn read_only_ranges(addr: usize, len: usize) -> Vec<(usize, usize)> {
@@ -779,6 +786,46 @@ mod imp {
             at = info.base_address as usize + info.region_size;
         }
         at.min(end) - addr
+    }
+
+    extern "system" {
+        fn SetUnhandledExceptionFilter(filter: Option<VectoredHandler>) -> Option<VectoredHandler>;
+        fn GetModuleHandleExW(flags: u32, addr: *const c_void, module: *mut *mut c_void) -> i32;
+    }
+
+    // An exception nothing handled (the process ends after this): what and where, the module and offset of the faulting
+    // instruction, and the thread's stack.
+    unsafe extern "system" fn unhandled(p: *mut ExceptionPointers) -> i32 {
+        let r = &*(*p).record;
+        let pc = r.address as usize;
+        let (module, symbol) = address_owner(pc);
+        let base = {
+            let mut m = std::ptr::null_mut();
+            // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+            if GetModuleHandleExW(0x4 | 0x2, pc as *const c_void, &mut m) != 0 { m as usize } else { 0 }
+        };
+        eprintln!(
+            "[crash] exception {:#010x} at {pc:#x} ({}+{:#x}{}), thread {:?}",
+            r.code,
+            module.as_deref().unwrap_or("?"),
+            pc.wrapping_sub(base),
+            symbol.map(|s| format!(", {s}")).unwrap_or_default(),
+            std::thread::current().name().unwrap_or("?"),
+        );
+        if r.code == EXCEPTION_ACCESS_VIOLATION && r.parameters >= 2 {
+            let what = match r.information[0] {
+                0 => "read",
+                1 => "write",
+                _ => "execute",
+            };
+            eprintln!("[crash] {what} of {:#x}", r.information[1]);
+        }
+        eprintln!("[crash] stack:\n{}", std::backtrace::Backtrace::force_capture());
+        EXCEPTION_CONTINUE_SEARCH
+    }
+
+    pub fn report_crashes() {
+        unsafe { SetUnhandledExceptionFilter(Some(unhandled)) };
     }
 
     pub fn on_access_fault(handler: FaultHandler) {
