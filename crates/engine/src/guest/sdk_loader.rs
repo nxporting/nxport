@@ -480,6 +480,57 @@ pub fn load_sdk(
     // x18 uses stay as they are here: macOS preserves x18 for this process, elsewhere main.rs rewrites them
     // (cpu/trampoline.rs).
 
+    // ── Patch AddressRegionManager node area ─────────────────────────────────
+    // In newer Nintendo SDKs (e.g. SDK 15+ used by TotK), AddressRegionManager reserves
+    // 0x3fe00000 (~1 GB) as its node area. In games with tight address space (especially on iOS),
+    // this causes virtual address exhaustion or AllocateAddressRegion failure (0x1803).
+    // Cutting this to 0x3e00000 (62 MB) reclaims ~960 MB of address space.
+    // We restrict the patch strictly to the AddressRegionManager constructor function(s),
+    // rather than scanning the entire SDK .text.
+    let mut patched_arm_nodes = 0;
+    let mut ctor_addrs = std::collections::HashSet::new();
+    for &sym_name in &[
+        "_ZN2nn2os6detail20AddressRegionManagerC1Emm",
+        "_ZN2nn2os6detail20AddressRegionManagerC2Emm",
+    ] {
+        if let Some(&fn_addr) = symbols.get(sym_name) {
+            ctor_addrs.insert(fn_addr);
+        }
+    }
+    for fn_addr in ctor_addrs {
+        let fn_len = sizes.get(&fn_addr).copied().unwrap_or(0x100).clamp(16, 0x400);
+        unsafe {
+            let slice = std::slice::from_raw_parts_mut(fn_addr as *mut u32, fn_len / 4);
+            for insn in slice.iter_mut() {
+                match *insn {
+                    0x52a7fc08 => {
+                        *insn = 0x52a07c08;
+                        patched_arm_nodes += 1;
+                    }
+                    0x52a7fc09 => {
+                        *insn = 0x52a07c09;
+                        patched_arm_nodes += 1;
+                    }
+                    0x320b23e8 => {
+                        *insn = 0x52a07c08;
+                        patched_arm_nodes += 1;
+                    }
+                    0x320b23e9 => {
+                        *insn = 0x52a07c09;
+                        patched_arm_nodes += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if patched_arm_nodes > 0 {
+        println!(
+            "[+] SDK: patched AddressRegionManager node area from 1 GB to 62 MB ({} instructions patched in constructor)",
+            patched_arm_nodes
+        );
+    }
+
     // ── mprotect SDK .text ──────────────────────────────────────────────────
     let text_pages = (text_ds + 0x3FFF) & !0x3FFF;
     let rc = unsafe { crate::cpu::aot::make_exec("sdk.text", base + text_mo, text_pages) };
