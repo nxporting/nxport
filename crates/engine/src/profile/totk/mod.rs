@@ -1,6 +1,7 @@
 // Profile definition for The Legend of Zelda: Tears of the Kingdom.
 
 pub mod options;
+pub mod v1_0_0;
 pub mod v1_1_2;
 
 pub use options::{Options, OptionsPatch};
@@ -14,7 +15,7 @@ pub static PROFILE: GameProfile = GameProfile {
     title_id: TOTK_TITLE_ID,
     lower_left_window_origin: false,
     compute_has_preamble: true,
-    versions: &[v1_1_2::PROFILE],
+    versions: &[v1_0_0::PROFILE, v1_1_2::PROFILE],
     shader_dirs: &["Shader", "Effect", "UI", "Lib"],
     options: None,
     platform_options: None,
