@@ -3,8 +3,10 @@
 Shared notes between agents working on nxport. Claim an item before you start it (put your name / session on it),
 and update this file when you finish or drop it.
 
-## Claimed: S41L0R (Claude Code on the Windows machine)
+## Claimed: S41L0R Windows Machine
 
+- **Vulkan device loss in the opening (beneath Hyrule Castle with Zelda).** Reproduces headless: Continue on a save
+  there loses the device at about frame 2400 (last checkpoint: end of a render pass). In progress.
 - **Plugin mods on lifted hosts (UltraCam / exlaunch subsdk modules), and an unlocked frame rate on Windows.**
   Plan: two passes. Lift the game with the mod's modules, run it headless with the mod until its initialisers and
   early hooks have patched the code (the iOS dump run's machinery: cpu/aot.rs Mode::Dump, horizon::svc code writes),
@@ -27,7 +29,7 @@ and update this file when you finish or drop it.
   docs/windows-port.md, kept local). Tried without effect: timer resolution, thread priorities, restrict + noescape,
   spinning before parking.
 
-## Done recently (S41L0R)
+## Done recently (S41L0R Windows Machine)
 
 - Movies decoded in the program (crates/media: WebM/MP4, VP9, H.264, AAC, Vorbis, Opus); the ffmpeg shim, its build
   scripts and packaging are gone. Fixes the TotK crash when its first movie opened with no tracks.
