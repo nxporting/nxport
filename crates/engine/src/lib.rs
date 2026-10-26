@@ -134,6 +134,9 @@ pub fn guest_modules(s: settings::Settings) -> Result<Vec<GuestModule>, String> 
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
     let mut s = resolve_settings(layers);
+    if s.graphics.gpu == settings::GpuBackend::Null {
+        return Err("--gpu=null: only where guest code is lifted".into());
+    }
     let vulkan = s.graphics.gpu == settings::GpuBackend::Vulkan;
     if vulkan {
         gpu::install(&vulkan::VULKAN);
@@ -1171,10 +1174,17 @@ pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::err
 #[cfg(all(nx_runtime, not(nx_native)))]
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
     let s = resolve_settings(layers);
-    if s.graphics.gpu != settings::GpuBackend::Vulkan {
-        return Err(format!("no {:?} backend here: --gpu=vulkan", s.graphics.gpu).into());
+    let null = match s.graphics.gpu {
+        settings::GpuBackend::Vulkan => false,
+        // Without a window: what it would show comes from the Vulkan backend.
+        settings::GpuBackend::Null if s.display.headless => true,
+        _ => return Err(format!("no {:?} backend here: --gpu=vulkan, or --gpu=null --headless", s.graphics.gpu).into()),
+    };
+    if null {
+        gpu::install(&gpu::null::NULL);
+    } else {
+        gpu::install(&vulkan::VULKAN);
     }
-    gpu::install(&vulkan::VULKAN);
     let s = settings::install(s);
     #[cfg(windows)]
     config::app_log();
@@ -1183,7 +1193,9 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     os::on_access_fault(lifted_access_fault);
     #[cfg(windows)]
     os::report_crashes();
-    vulkan::init(s.debug.validate)?;
+    if !null {
+        vulkan::init(s.debug.validate)?;
+    }
     // On this thread, before any guest thread: SDL's subsystems belong to the main thread.
     host::audio::init();
     let lib = s.files.guest_library.clone().ok_or("no guest library: --guest-library=<the library compile-guest made>")?;

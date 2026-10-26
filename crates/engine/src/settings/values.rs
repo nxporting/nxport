@@ -436,6 +436,8 @@ choice!(
         Metal,
         /// Vulkan (headless where there is no window support for it yet).
         Vulkan,
+        /// Nothing drawn, work completes at once (gpu::null; lifted hosts, headless): measures the CPU side alone.
+        Null,
     }
 );
 
