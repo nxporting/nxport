@@ -401,6 +401,27 @@ impl std::fmt::Display for ShaderExtractPhase {
     }
 }
 
+fn has_existing_stages(dir: &Path) -> bool {
+    if dir.join(".extracted").is_file() {
+        return true;
+    }
+    // Backward compatibility for existing stages directories:
+    // If the directory exists and has at least 50 .code files, consider it already extracted.
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut count = 0;
+        for entry in entries.flatten() {
+            if entry.path().extension().map_or(false, |ext| ext == "code") {
+                count += 1;
+                if count >= 50 {
+                    let _ = std::fs::write(dir.join(".extracted"), format!("count: {count}\n"));
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn extract_all(
     romfs: &Path,
     out_dir: &Path,
@@ -408,6 +429,15 @@ pub fn extract_all(
     ctrl_out: Option<&Path>,
     on_progress: Option<&(dyn Fn(ShaderExtractPhase, usize, usize) + Sync)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let force = std::env::var("NXPORT_FORCE_EXTRACT").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"));
+    if !force && has_existing_stages(out_dir) {
+        println!("[+] Shader stages already extracted in {}. Skipping RomFS scan.", out_dir.display());
+        if let Some(cb) = on_progress {
+            cb(ShaderExtractPhase::ExtractingStages, 1, 1);
+        }
+        return Ok(());
+    }
+
     println!("[+] Extracting shaders from RomFS: {}", romfs.display());
     println!("    Output directory: {}", out_dir.display());
 
@@ -559,6 +589,13 @@ pub fn extract_all(
             println!("    - {:15}: {:5}", stage.snake_name(), count);
         }
     }
+
+    let marker_content = format!(
+        "romfs: {}\ntotal_stages: {}\n",
+        romfs.display(),
+        st.total_stages
+    );
+    let _ = std::fs::write(out_dir.join(".extracted"), marker_content);
 
     Ok(())
 }
