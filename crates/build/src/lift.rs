@@ -103,6 +103,13 @@ pub fn compile(
     // Largest first, so the long compiles do not all start last.
     sources.sort_by_key(|p| std::cmp::Reverse(p.metadata().map_or(0, |m| m.len())));
     let objects: Vec<_> = sources.iter().map(|s| obj_dir.join(s.file_name().unwrap()).with_extension("o")).collect();
+    // Every C file includes the runtime's headers (lift_game rewrites them only when they change): an object older than
+    // the newest of them is compiled again too.
+    let headers = std::fs::read_dir(c_dir)?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "h"))
+        .filter_map(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .max();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let finished = || on_file(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, sources.len());
@@ -118,7 +125,11 @@ pub fn compile(
                         _ => true,
                     }
                 };
-                if obj.is_file() && !newer(src, obj) {
+                let stale_headers = match (headers, obj.metadata().and_then(|m| m.modified())) {
+                    (Some(h), Ok(o)) => h > o,
+                    _ => false,
+                };
+                if obj.is_file() && !newer(src, obj) && !stale_headers {
                     finished();
                     continue;
                 }
