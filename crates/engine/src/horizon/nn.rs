@@ -770,6 +770,12 @@ pub(crate) unsafe extern "C" fn friends_void() {}
 pub(crate) unsafe extern "C" fn friends_ok() -> u32 {
     RESULT_SUCCESS
 }
+pub(crate) unsafe extern "C" fn friends_get_system_event(event: *mut ()) -> u32 {
+    if !event.is_null() {
+        crate::horizon::hle::hle_system_event_register_signaled(event as usize);
+    }
+    RESULT_SUCCESS
+}
 pub(crate) unsafe extern "C" fn friends_out_true(out: *mut bool) -> u32 {
     if !out.is_null() {
         *out = true;
