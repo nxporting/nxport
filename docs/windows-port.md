@@ -191,6 +191,22 @@ conformance captures (Testing), on this Mac through MoltenVK.
 - Status on MoltenVK: the synthetic scenarios match their Metal references exactly; the TotK Hateno capture matches
   visually, all 252 targets within the capture's `[vulkan]` tolerance (max difference 0.1, one-pixel neighbourhood,
   0.2% of pixels: the two shader compilers round differently along edges and in normals).
+- Desktop GPUs (Windows, checked on an RTX 4080 with TotK 1.0.0):
+  - ASTC, which desktop GPUs lack, is decoded on upload by a compute shader (vulkan/astc.comp, compiled to SPIR-V by
+    naga at build time) into RGBA8 images sampled through an sRGB view where the format is sRGB; checked against the
+    astc-decode crate on random blocks of every 2D footprint (no differences in legal blocks).
+  - The driver maps imported host memory with the protection its pages have at import time: a pool imported while
+    the write guard or the write tracking held some of its pages read-only was read-only for the GPU, and its first
+    GPU write lost the device. Imports make such pages writable first (Imports::find), and survive pool changes:
+    only imports over memory released since go.
+  - Imported memory is HOST_CACHED (snooped) memory, slow for GPU writes and atomics: small ranges GPU work writes
+    (counters, histograms, up to 64 KiB) get a slot in the mapped device memory window, copied back after the submit
+    (shadow.rs); vertex and index data are copied into device-local memory once and kept while unchanged (vcache.rs).
+    TotK beneath Hyrule Castle: GPU time per frame 120 -> 10-16 ms live, the geometry pass 8.2 -> 0.75 ms.
+  - Diagnostics on by default: a lost device prints VK_EXT_device_fault's report, writes the vendor's crash data to
+    the game's data directory (gpu-faults/) and names the work the GPU had begun from checkpoints around passes,
+    uploads and copies (VK_NV_device_diagnostic_checkpoints; --gpu-checkpoints-each marks every command and draw).
+    --no-host-import binds copies of guest memory instead of imports (bisection).
 - Not yet: occlusion queries (SAMPLES_PASSED reads as every sample passing), buffer textures, quads and line loops,
   aliases of one texture's memory (separate images per description), the render-target write-back to guest memory the
   Metal backend does for CPU readers, presentation to a window, partial texture clears, depth formats in captures.
@@ -249,9 +265,14 @@ vendor/SDL3 (the engine links its import library; build.rs copies the DLL beside
   changed takes 3. The app started without arguments from another directory finds its settings, dump, guest library
   and shader cache, logs to `%APPDATA%\nxport\games\0100f2c0115b6000\log.txt`, opens its window and plays audio
   through SDL; the title menu is up at frame 900.
-- Not yet: libopus does not ship (no opus.dll: the game's Opus streams, TotK's music, are silent); the engine's
-  shared pipeline list download at startup has no HTTP client on Windows (the app uses the list it was built with);
-  controllers are mapped but were not tried with the packaged app.
+- Not yet: TotK's music is silent on lifted runs, before and after main's software Opus. The game decodes and mixes
+  it on the CPU (its OpusDecoder thread, no nn::codec HLE calls) and hands the mix to the renderer through Aux return
+  rings, which it fills with zeros: the cause is in the lifted game's audio code, still to be found (macOS plays it).
+  The engine's shared pipeline list download at startup has no HTTP client on Windows (the app uses the list it was
+  built with), and the shared list is per title, not per version: TotK 1.0.0 matches 9 of its 1,825 stages (it was
+  recorded on 1.1.2), so most of a 1.0.0 game's pipelines compile as they are first drawn. Controllers are mapped but
+  were not tried with the packaged app.
+
 ## Windows on arm64
 
 Windows on arm64 can use the native path, with differences from Darwin: x18 is the TEB pointer there (always use
