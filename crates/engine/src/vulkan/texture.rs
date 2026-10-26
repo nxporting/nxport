@@ -815,6 +815,17 @@ impl Textures {
     }
 
     /// Records `f` into the batch when a submit is being recorded, else submits it alone and waits.
+    /// A buffer copy, in the command buffer queued ahead of what is being recorded (shadow.rs: filling a slot from one
+    /// a running submit writes).
+    pub(super) unsafe fn record_copy(&mut self, dev: &Dev, src: vk::Buffer, src_off: u64, dst: vk::Buffer, dst_off: u64, n: u64) {
+        self.record(dev, |cb| {
+            dev.full_barrier(cb);
+            let region = vk::BufferCopy { src_offset: src_off, dst_offset: dst_off, size: n };
+            dev.device.cmd_copy_buffer(cb, src, dst, &[region]);
+            dev.full_barrier(cb);
+        });
+    }
+
     unsafe fn record(&mut self, dev: &Dev, f: impl FnOnce(vk::CommandBuffer)) {
         let Some(b) = self.batch.as_mut() else {
             let _ = dev.one_shot(f);

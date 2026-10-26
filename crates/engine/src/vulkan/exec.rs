@@ -101,6 +101,8 @@ pub struct Ctx {
     /// Storage buffers bound as copies (the device could not use guest memory in place): (guest address, copy, length),
     /// copied back once the submit completed.
     writebacks: Vec<(usize, *const u8, usize)>,
+    /// Guest memory GPU work writes, in GPU memory while submits use it (shadow.rs).
+    pub(super) shadows: super::shadow::Shadows,
     /// Guest memory GPU work of this submit writes (copy and clear destinations, storage buffers): [start, end). A uniform
     /// buffer there is bound in place, so it sees those writes in GPU order (a copy taken while recording would not).
     gpu_dirty: Ranges,
@@ -266,6 +268,20 @@ impl Ctx {
         }
         let done = super::inflight::completed();
         self.inflight_dirty.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
+    }
+
+    /// The shadow of guest memory [a, a + len) (shadow.rs) for GPU work that writes it (`write`) or reads what GPU work
+    /// wrote there; None where it cannot have one (guest memory is bound instead).
+    pub(super) unsafe fn shadow(&mut self, a: usize, len: usize, write: bool) -> Option<(vk::Buffer, u64)> {
+        let done = super::inflight::completed();
+        if !write && !self.shadows.shadowed(a, len, done) {
+            return None;
+        }
+        let serial = super::guard::RECORDING.load(std::sync::atomic::Ordering::Relaxed);
+        let (dev, tex) = (&self.dev, &mut self.tex);
+        self.shadows.get(dev, a, len, write, serial, done, &mut |src, src_off, dst, dst_off, n| {
+            tex.record_copy(dev, src, src_off, dst, dst_off, n)
+        })
     }
 }
 
@@ -438,6 +454,7 @@ impl Ctx {
             pass: None,
             lost: false,
             writebacks: Vec::new(),
+            shadows: Default::default(),
             gpu_dirty: Ranges::default(),
             inflight_dirty: Vec::new(),
             fb_snaps: Default::default(),
@@ -628,7 +645,11 @@ impl Ctx {
             occl_pool,
             queries: self.occl.next,
             occl: std::mem::take(&mut self.occl.events),
-            writebacks: std::mem::take(&mut self.writebacks).into_iter().map(|(a, p, n)| (a, p as usize, n)).collect(),
+            writebacks: std::mem::take(&mut self.writebacks)
+                .into_iter()
+                .chain(self.shadows.end_submit(serial))
+                .map(|(a, p, n)| (a, p as usize, n))
+                .collect(),
             timestamps,
             pass_labels: if self.profile_passes { std::mem::take(&mut self.pass_labels) } else { Vec::new() },
             rt_writebacks: std::mem::take(&mut self.rt_reads),
@@ -697,6 +718,7 @@ impl Ctx {
             });
         }
         let done = super::inflight::completed();
+        self.shadows.collect(done);
         while self.inflight.front().is_some_and(|f| f.serial <= done) {
             let f = self.inflight.pop_front().unwrap();
             let d = &self.dev.device;
