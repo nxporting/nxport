@@ -5,6 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
+- **Unlocked frame rate (TotK).** Bringing windows-support-2's three commits to main (geometry shaders, TotK 1.1.2
+  dynamic FPS hooks, parity ports), then the hooks for the Windows test dump's version and a re-lifted guest. In progress.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
