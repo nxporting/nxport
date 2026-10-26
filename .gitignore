@@ -19,3 +19,6 @@ __pycache__/
 guest*.lib
 *.ppm
 /captures/
+
+# Design notes stay local.
+/docs/
