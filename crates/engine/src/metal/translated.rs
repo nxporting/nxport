@@ -5149,10 +5149,22 @@ impl Gfx {
                                 .and_then(|a| a.get(slot_i))
                                 .and_then(|d| d.as_ref())
                                 .filter(|d| {
-                                    d.addr == addr
-                                        && d.size == size
-                                        && d.len == n
-                                        && d.epoch == st.ubo_plan_epoch
+                                    if d.addr != addr || d.size != size || d.len != n || d.epoch != st.ubo_plan_epoch {
+                                        return false;
+                                    }
+                                    if let UboPre::Snapshot(b, off) = &d.pre {
+                                        unsafe {
+                                            let existing = std::slice::from_raw_parts((b.contents().as_ptr() as *const u8).add(*off), n);
+                                            let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+                                            let current = held.as_deref().unwrap_or_else(|| {
+                                                std::slice::from_raw_parts(addr as *const u8, n)
+                                            });
+                                            if existing != current {
+                                                return false;
+                                            }
+                                        }
+                                    }
+                                    true
                                 })
                                 .map(|d| d.pre.clone())
                         };
@@ -5174,7 +5186,14 @@ impl Gfx {
                                 } else if super::ubo_updated(&st.ubo_updated, addr as u64, n as u64)
                                 {
                                     let key = (addr, n | pad << 32);
-                                    let hit = st.plan_ubo.get(&key).cloned();
+                                    let hit = st.plan_ubo.get(&key).cloned().filter(|(b, off)| unsafe {
+                                        let existing = std::slice::from_raw_parts((b.contents().as_ptr() as *const u8).add(*off), n);
+                                        let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+                                        let current = held.as_deref().unwrap_or_else(|| {
+                                            std::slice::from_raw_parts(addr as *const u8, n)
+                                        });
+                                        existing == current
+                                    });
                                     let copy = hit.or_else(|| {
                                         let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
                                         let bytes = held.as_deref().unwrap_or_else(|| {
@@ -6324,7 +6343,10 @@ impl Gfx {
                                         env.cx.ubo_epoch = epoch;
                                     }
                                     let key = (addr, bytes.len() | pad << 32);
-                                    let cached = env.cx.ubo_copies.get(&key).cloned();
+                                    let cached = env.cx.ubo_copies.get(&key).cloned().filter(|(b, off)| unsafe {
+                                        let existing = std::slice::from_raw_parts((b.contents().as_ptr() as *const u8).add(*off), bytes.len());
+                                        existing == bytes
+                                    });
                                     UBO_STATS[if cached.is_some() { 1 } else { 0 }]
                                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     if cached.is_none() {
@@ -6343,16 +6365,15 @@ impl Gfx {
                                             &self.device,
                                             bytes.len() + pad,
                                             |b| {
-                                                b[..bytes.len()].copy_from_slice(bytes);
-                                                b[bytes.len()..].fill(0);
+                                                 b[..bytes.len()].copy_from_slice(bytes);
+                                                 b[bytes.len()..].fill(0);
                                             },
                                         )
                                     } else {
                                         env.cx.arena.alloc(&self.device, bytes)
                                     };
                                     if let Some(f) = &fresh {
-                                        // Only ranges no executor write of this submit touches get here (plan_uniforms): never invalidated.
-                                        env.cx.ubo_copies.insert(key, f.clone(), false);
+                                        env.cx.ubo_copies.insert(key, f.clone(), true);
                                     }
                                     match cached.or(fresh) {
                                         Some(x) => x,
