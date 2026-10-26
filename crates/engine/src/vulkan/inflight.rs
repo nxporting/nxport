@@ -97,10 +97,12 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
     }
     for &(addr, src, len) in &d.writebacks {
         std::ptr::copy_nonoverlapping(src as *const u8, addr as *mut u8, len);
+        super::texture::note_wb_landed(addr);
     }
     if ok {
         for (t, level, src, len) in &d.rt_writebacks {
             crate::nvn::api::guest_write_level(t, *level as usize, std::slice::from_raw_parts(*src as *const u8, *len));
+            super::texture::note_wb_landed(t.storage);
         }
     }
     if ok && d.timestamps != vk::QueryPool::null() {

@@ -67,6 +67,8 @@ pub struct Image {
     /// Bytes of guest memory its description covers; whether that memory's pool is CPU-writable, at a pool generation.
     guest_len: usize,
     cpu_writable: (u64, bool),
+    /// Write-back generation when this image was last uploaded from guest memory.
+    pub wb_gen: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -164,6 +166,25 @@ static SUBMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 static GPU_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Images written to guest memory by flush_overlaps (reported with the fps line).
 pub static FLUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+static WB_LANDED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WB_LANDED_AT: std::sync::Mutex<Option<rustc_hash::FxHashMap<usize, u64>>> = std::sync::Mutex::new(None);
+
+/// Notes that GPU render-target write-back landed at guest address `addr`.
+pub fn note_wb_landed(addr: usize) {
+    let g = WB_LANDED_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let mut map = WB_LANDED_AT.lock().unwrap();
+    map.get_or_insert_with(rustc_hash::FxHashMap::default).insert(addr, g);
+}
+
+/// True if GPU write-back landed at `addr` after `gen`.
+pub fn is_wb_newer(addr: usize, gen: u64) -> bool {
+    if WB_LANDED_GEN.load(std::sync::atomic::Ordering::Relaxed) <= gen {
+        return false;
+    }
+    let map = WB_LANDED_AT.lock().unwrap();
+    map.as_ref().and_then(|m| m.get(&addr)).copied().unwrap_or(0) > gen
+}
 
 impl Image {
     /// GPU work of the submit being recorded writes this image.
@@ -330,7 +351,8 @@ impl Textures {
             return;
         }
         use crate::guest::dirty_track;
-        if !first && img.token.is_some() && dirty_track::generation(d.storage, len) == img.token {
+        let wb_stale = is_wb_newer(d.storage, img.wb_gen);
+        if !first && !wb_stale && img.token.is_some() && dirty_track::generation(d.storage, len) == img.token {
             return;
         }
         // GPU contents of other images over this memory reach it first.
@@ -339,13 +361,14 @@ impl Textures {
         // Protect before hashing: writes during the hash change the token.
         img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
         let h = hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len));
-        if !first && h == img.hash {
+        if !first && !wb_stale && h == img.hash {
             return;
         }
         img.hash = h;
         img.gpu_written = false;
         img.settled = false;
         img.unflushed = false;
+        img.wb_gen = WB_LANDED_GEN.load(std::sync::atomic::Ordering::Relaxed);
         self.upload(dev, d);
     }
 
@@ -598,6 +621,7 @@ impl Textures {
             gpu_submit: 0,
             guest_len: layout::compute_layout(&d.params).total as usize,
             cpu_writable: (u64::MAX, false),
+            wb_gen: 0,
         })
     }
 
