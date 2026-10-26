@@ -2464,10 +2464,10 @@ fn address_regions() -> &'static StdMutex<rustc_hash::FxHashMap<usize, usize>> {
 }
 
 /// Horizon hands out address regions from a dedicated part of the address space, never interleaved with the
-/// memory heap. TotK's page-allocator heap (vtable main+0x45b43c8) depends on that: its isInclude() is just
+/// memory heap. TotK's page-allocator heap (TotK 1.1.2 vtable main+0x45b43c8) depends on that: its isInclude() is just
 /// [lowest chunk, highest chunk end), so with regions from plain mmap() one chunk could land below the memory heap
 /// and another above it, the heap then claimed ordinary heap pointers, and sead::HeapMgr::findContainHeap routed
-/// their frees to it (the intermittent crash at main+0xAFCEB4). All regions now come from one reserved arena.
+/// their frees to it (the intermittent crash at TotK 1.1.2 main+0xAFCEB4). All regions now come from one reserved arena.
 /// Largest arena tried first; smaller ones after it (iOS apps without the extended-virtual-addressing entitlement get
 /// far less address space than macOS processes).
 #[cfg(not(target_os = "ios"))]

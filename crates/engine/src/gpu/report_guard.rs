@@ -479,7 +479,7 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
     let page = addr & !(PAGE - 1);
     // No slot (none in use at all, or this page's was freed): the fault may still be from before its page was opened.
     // Bailing out on "no slots in use" before the freed-pages check below turned such a late fault into a crash on the
-    // iPhone (the occlusion reader, main+0x10c4ec8, with the page already read-write when the crash report looked).
+    // iPhone (the occlusion reader, TotK 1.1.2 main+0x10c4ec8, with the page already read-write when the crash report looked).
     let Some(i) = (if HIGH.load(Ordering::Acquire) == 0 {
         None
     } else {

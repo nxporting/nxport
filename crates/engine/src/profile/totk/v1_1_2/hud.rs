@@ -4,8 +4,8 @@
 // narrowed by 1 / F (F = screen aspect / 16:9) so the HUD keeps its proportions, except full-screen layouts, which
 // should fill the screen. Elements at the screen edges then move outward by k * (F - 1) layout units (k = 960 keeps
 // their distance to the edge), and some panes are scaled by F^e (backgrounds widened back to the full screen). The
-// tables come from a 19.5:9 widescreen mod's edited layouts. The layout library calculates every layout once per frame (main+0x79d804, and
-// main+0x40e24 for the game's own layout class); a hook there calls `calculate` first, which writes the panes' scale
+// tables come from a 19.5:9 widescreen mod's edited layouts. The layout library calculates every layout once per frame (TotK 1.1.2 main+0x79d804, and
+// TotK 1.1.2 main+0x40e24 for the game's own layout class); a hook there calls `calculate` first, which writes the panes' scale
 // and position and marks them for recalculation. A value the game or an animation wrote since becomes the new base.
 // Narrower than 16:9 the picture is squeezed horizontally instead: the same panes are scaled vertically by f^-e
 // (f = screen aspect / 16:9 < 1), so the HUD keeps its proportions, and elements at the top and bottom edges move
