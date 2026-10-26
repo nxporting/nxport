@@ -483,9 +483,12 @@ group! {
         /// Metal shader validation (invalid GPU memory accesses are reported instead of faulting); the Vulkan backend's
         /// validation layer
         validate: bool = false,
-        /// Vulkan backend: a checkpoint before every command (VK_NV_device_diagnostic_checkpoints), so a lost device
-        /// reports the command the GPU was running
-        gpu_checkpoints: bool = false,
+        /// Vulkan backend: checkpoints around render passes, uploads and copies (VK_NV_device_diagnostic_checkpoints,
+        /// where the device has it), so a lost device reports the work the GPU was running
+        gpu_checkpoints: bool = true,
+        /// Vulkan backend: also a checkpoint before every command and draw (costs GPU time: the driver orders work
+        /// around each)
+        gpu_checkpoints_each: bool = false,
         /// Vulkan backend: no guest memory imported as GPU buffers (VK_EXT_external_memory_host); everything the GPU
         /// reads or writes of guest memory is a copy (bisection aid)
         no_host_import: bool = false,

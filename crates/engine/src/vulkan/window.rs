@@ -237,8 +237,12 @@ impl Window {
         }
         let (chains, indices) = ([self.swapchain], [index]);
         let present = vk::PresentInfoKHR::default().wait_semaphores(&signals).swapchains(&chains).image_indices(&indices);
-        if let Err(vk::Result::ERROR_OUT_OF_DATE_KHR) = s.swapchain.queue_present(dev.queue, &present) {
-            let _ = self.recreate(dev);
+        match s.swapchain.queue_present(dev.queue, &present) {
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                let _ = self.recreate(dev);
+            }
+            Err(vk::Result::ERROR_DEVICE_LOST) => super::device::report_lost("presenting to the window"),
+            _ => {}
         }
     }
 }
