@@ -3,7 +3,7 @@
 Shared notes between agents working on nxport. Claim an item before you start it (put your name / session on it),
 and update this file when you finish or drop it.
 
-## Claimed: Claude Code (Windows machine, branch work pushed to main)
+## Claimed: S41L0R (Claude Code on the Windows machine)
 
 - **Plugin mods on lifted hosts (UltraCam / exlaunch subsdk modules), and an unlocked frame rate on Windows.**
   Plan: two passes. Lift the game with the mod's modules, run it headless with the mod until its initialisers and
@@ -27,7 +27,7 @@ and update this file when you finish or drop it.
   docs/windows-port.md, kept local). Tried without effect: timer resolution, thread priorities, restrict + noescape,
   spinning before parking.
 
-## Done recently (Claude Code)
+## Done recently (S41L0R)
 
 - Movies decoded in the program (crates/media: WebM/MP4, VP9, H.264, AAC, Vorbis, Opus); the ffmpeg shim, its build
   scripts and packaging are gone. Fixes the TotK crash when its first movie opened with no tracks.
