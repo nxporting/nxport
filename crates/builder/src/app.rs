@@ -1,7 +1,8 @@
 // The builder: a window that turns a game dump into a native app. It identifies the game, edits the settings the app
 // starts with (on top of the platform's and the game's profiles, with presets), and runs the build on a worker thread:
 // the steps of the target (apple.rs: shader stages from RomFS, the shader cache, then the macOS app or the iOS app;
-// windows.rs: the game's code lifted and compiled, then the Windows app). Everything the steps print goes to the log.
+// windows.rs: the Vulkan shader cache, the Windows app, then the game's code lifted and compiled into it). Everything
+// the steps print goes to the log. --build runs the same steps without the window.
 // The same screens run in the macOS window (AppKit) and the Windows one (SDL3, window_sdl.rs).
 
 use std::path::{Path, PathBuf};
@@ -165,13 +166,11 @@ impl Target {
         }
     }
 
-    #[allow(dead_code)]
     pub fn offered(self) -> bool {
         Self::ALL.contains(&self)
     }
 
-    /// Whether the app's shaders can be translated when it is built (Windows: not until the Vulkan backend can
-    /// precompile offline, windows::PRECOMPILES_SHADERS).
+    /// Whether the app's shaders can be translated when it is built (Windows: windows::PRECOMPILES_SHADERS).
     pub fn prebuilds_shaders(self) -> bool {
         match self {
             Target::MacApp | Target::Ipa => true,
@@ -670,7 +669,9 @@ impl Builder {
     fn apply_preset(&mut self, path: &Path) -> Result<(), String> {
         let (build, patch) = load_builder_preset(path)?;
         if let Some(b) = build {
-            if let Some(t) = b.target.filter(|&t| t != self.target) {
+            // A preset for a target this host does not build (the game's macOS and iOS presets on Windows) still sets
+            // its settings.
+            if let Some(t) = b.target.filter(|&t| t != self.target && t.offered()) {
                 let _ = self.remember();
                 let prev_target = self.target;
                 self.target = t;
@@ -1062,12 +1063,86 @@ struct Args {
     /// Snapshot height in points
     #[arg(long, default_value_t = 760.0)]
     height: f64,
+    /// Build the dump's app without opening the window, as the Build button does: with the settings last used for the
+    /// game (or --preset's), printing the progress
+    #[arg(long, requires = "dump")]
+    build: bool,
+    /// With --build: one of the game's presets
+    #[arg(long, requires = "build")]
+    preset: Option<String>,
+    /// With --build: the folder the app goes in
+    #[arg(long, requires = "build")]
+    out: Option<PathBuf>,
+    /// A build step's worker process (windows.rs)
+    #[arg(long, hide = true)]
+    worker: Option<PathBuf>,
+}
+
+impl Builder {
+    /// Runs a build as the Build button starts it, waiting for it and printing where it is.
+    fn build_now(&mut self, preset: Option<&str>, out: Option<PathBuf>) -> Result<PathBuf, String> {
+        if let Some(name) = preset {
+            let p = self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(name)).cloned();
+            let p = p.ok_or_else(|| format!("no preset {name} for this game"))?;
+            self.select_preset(&p.name, &p.path);
+            if let Some(e) = self.message.take() {
+                return Err(e);
+            }
+        }
+        if let Some(o) = out {
+            self.out_dir = o.display().to_string();
+        }
+        match &self.game {
+            None => return Err(format!("{}: not a game dump (needs ExeFS/main.npdm and RomFS/)", self.dump)),
+            Some(g) if g.is_32bit => return Err("a 32-bit game: not supported".into()),
+            Some(_) => {}
+        }
+        self.start();
+        let job = self.job.clone().ok_or("the build did not start")?;
+        let mut shown = String::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let j = job.lock().unwrap();
+            if let Some(r) = &j.result {
+                return r.clone();
+            }
+            let status = j.status();
+            if status != shown {
+                println!("-- {status}");
+                shown = status;
+            }
+        }
+    }
+}
+
+/// The builder is a GUI program on Windows (no console window opens with it from Explorer); started from a console, it
+/// prints there (--build's progress, errors).
+#[cfg(windows)]
+fn attach_console() {
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    extern "system" {
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let Args { dump, snapshot, expand, height } = clap::Parser::parse();
+    let Args { dump, snapshot, expand, height, build, preset, out, worker } = clap::Parser::parse();
+    #[cfg(windows)]
+    if let Some(file) = worker {
+        return crate::windows::worker(&file).map_err(Into::into);
+    }
+    #[cfg(not(windows))]
+    let _ = worker;
+    #[cfg(windows)]
+    attach_console();
     let mut b = Builder::new(dump);
     b.expand_all = expand;
+    if build {
+        let app = b.build_now(preset.as_deref(), out)?;
+        println!("Built {}", app.display());
+        return Ok(());
+    }
     match snapshot {
         Some(png) => {
             let (w, h, bgra) = window::snapshot(900.0, height, 2.0, 3, Box::new(move |ui| b.frame(ui)))?;
@@ -1136,12 +1211,18 @@ mod tests {
         assert!(!game_presets_dir(WITHOUT).exists(), "nothing written for a game without presets");
     }
 
+    /// The target after selecting a preset for `t` in a builder on the macOS target (with_game): `t` where this host
+    /// builds it, else unchanged.
+    fn switched(t: Target) -> Target {
+        if t.offered() { t } else { Target::MacApp }
+    }
+
     #[test]
     fn presets_apply() {
         let mut b = with_game(WITH);
         b.apply_preset_by_name("iPad").unwrap();
-        assert_eq!(b.target, Target::Ipa);
-        assert_eq!(b.out_dir, default_out_dir(Target::Ipa));
+        assert_eq!(b.target, switched(Target::Ipa));
+        assert_eq!(b.out_dir, default_out_dir(switched(Target::Ipa)));
         assert_eq!(b.settings.system.fps, nxport::settings::FpsMode::Stock30);
         assert!(b.settings.system.handheld);
         assert_eq!(b.settings.display.launch_aspect.map(|a| a.to_string()), Some("23:16".into()));
@@ -1255,7 +1336,7 @@ mod tests {
         let mut b = with_game(WITH);
         assert_eq!(b.target, Target::MacApp);
         b.apply_preset_by_name("iPhone SE").unwrap();
-        assert_eq!(b.target, Target::Ipa);
+        assert_eq!(b.target, switched(Target::Ipa));
         assert_eq!(b.preset_name, "iPhone SE");
         b.apply_preset_by_name("Mac").unwrap();
         assert_eq!(b.target, Target::MacApp);

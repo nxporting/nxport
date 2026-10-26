@@ -17,10 +17,9 @@ libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
 
-# The window on Windows: Dear ImGui over SDL3 (the engine's settings editor draws into it), SDL built from source and
-# linked in, so the builder is one program.
+# The window on Windows: Dear ImGui over SDL3 (the engine's settings editor draws into it), on the SDL3.dll the engine
+# links against (vendor/SDL3), so nothing is built with CMake (window_sdl.rs).
 [target.'cfg(windows)'.dependencies]
 dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
-dear-imgui-sdl3 = { version = "0.21", features = ["sdlrenderer3-renderer"] }
-sdl3 = { version = "0.20", features = ["build-from-source-static"] }
+sdl3 = { version = "0.20", default-features = false }
 

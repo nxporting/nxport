@@ -197,7 +197,8 @@ conformance captures (Testing), on this Mac through MoltenVK.
 
 ## Host I/O and the builder
 
-SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same):
+SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same), the official 3.4.18 SDL3.dll in
+vendor/SDL3 (the engine links its import library; build.rs copies the DLL beside the programs):
 - Audio: **done**. host/audio.rs is shared by all hosts: the ring the audio renderer and AudioOut push into, the trim
   and underrun accounting, `--audio-wav`, and the rule that `--headless` and `--audio=0` stay silent. Only the device
   differs: an AudioQueue on Apple (audio_queue.rs), an SDL3 audio stream elsewhere (audio_sdl.rs: 48 kHz stereo
@@ -219,12 +220,38 @@ SDL3 for window, input, controllers, rumble and audio (LAS Recomp does the same)
 - **Rumble (`host/rumble_sdl.rs`):** Translates Switch HD Rumble vibration values (`nn::hid::SendVibrationValue[s]`) to
   SDL dual-motor gamepad rumble (low frequency on left, high frequency on right), with safety decay and periodic renewal.
 - Paths under `~/Library/Application Support/nxport` become `%APPDATA%\nxport`.
-- The builder's window is AppKit + imgui on macOS; on Windows it runs Dear ImGui over SDL3, sharing UI state and build
-  coordination with `crates/builder/src/app.rs`. On Windows it targets a standalone "Windows app": a directory
-  containing `nxport.exe`, the lifted `guest.dll`, `modules.txt`, and default `settings.toml`. The build pipeline
-  provisions a bundled Zig 0.13 toolchain, reports per-file lifting and compilation progress, and supports headless
-  snapshot rendering (`--snapshot`) for automated UI testing.
-
+- The builder's window is AppKit + imgui on macOS; on Windows it is Dear ImGui drawn through SDL_Renderer on the same
+  SDL3.dll (builder/src/window_sdl.rs: the renderer and input translation are the builder's own, since the backend
+  crates build SDL from source with CMake). The screens and the build are app.rs's on both hosts. On Windows the builder
+  is a GUI program (no console window from Explorer); `nxport-builder <dump> --build [--preset P] [--out DIR]` runs
+  the Build button's steps without the window, in a console, printing their progress.
+- The Windows target (builder/src/windows.rs) makes an app folder (crates/build/src/winapp.rs): `nxport.exe` (marked a
+  GUI program in the copy), `SDL3.dll` (and `opus.dll` when one ships with the builder), `settings.toml` (the
+  settings above the game's profile; it marks the folder as an app), `guest.dll` and `modules.txt`, `Mods/`, the game
+  files in `Dump/` or the dump's path in the settings, and `shader_cache/` (the Vulkan cache and the pipeline list).
+  Steps: zig cc (crates/build/src/zig.rs: a zig beside the builder, else 0.13.0 downloaded once into
+  `%APPDATA%\nxport\toolchains`, checked against its published size and SHA-256), the shared pipeline list, the shader
+  stages and the Vulkan shader cache (`vulkan_precompile`, when "Translate shaders ahead of time" is on), the app
+  folder, the lift (with the app's mods: those for other programs are left out) and the compile (objects reused while
+  their C file is unchanged). The work files (stages, caches, lifted C and objects) are in
+  `%APPDATA%\nxport\builds\<title id>`.
+- The app started without arguments finds what it carries (nxport::config::app_bundle_layer: the folder of nxport.exe
+  holds settings.toml); saves, caches and the log (log.txt, as a macOS .app started from Finder) go to
+  `%APPDATA%\nxport\games\<title id>`. Started from a terminal with its output going somewhere, it prints there instead;
+  started from Explorer, an error that stops it is shown in a message box.
+- The lift and the Vulkan cache run in a worker process (`nxport-builder --worker <file>`, the step's options in a
+  file in the work directory, progress reported in `@ ` lines): both set up engine state that exists once per process
+  (installed settings, guest memory at its fixed address, the stage cache's directory), so a second build from the
+  same window could not run them in the builder's own process.
+- Measured on TotK 1.0.0 (16 threads, RTX 4080), `--build` with a fresh data directory: zig downloaded (75 MB) and
+  checked; 26,093 stages extracted and translated without failure, 513 of the shared list's 4,423 pipelines compiled
+  (13.4 MB `pipelines.vkcache`); the lift; 322 C files compiled. About 25 minutes in all; a rebuild with nothing
+  changed takes 3. The app started without arguments from another directory finds its settings, dump, guest library
+  and shader cache, logs to `%APPDATA%\nxport\games\0100f2c0115b6000\log.txt`, opens its window and plays audio
+  through SDL; the title menu is up at frame 900.
+- Not yet: libopus does not ship (no opus.dll: the game's Opus streams, TotK's music, are silent); the engine's
+  shared pipeline list download at startup has no HTTP client on Windows (the app uses the list it was built with);
+  controllers are mapped but were not tried with the packaged app.
 ## Windows on arm64
 
 Windows on arm64 can use the native path, with differences from Darwin: x18 is the TEB pointer there (always use
@@ -319,7 +346,7 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    Dm_OP_0017 to 0034, voice and music streaming) for 10 minutes without a fault, presenting about 7 frames a second
    to the null backend.
    Vulkan: **done**, running lifted games with page guards via vectored exception handling.
-   SDL3 host layer (window, Vulkan swapchain, input, rumble): **done**. SDL3 statically linked from source provides
+   SDL3 host layer (window, Vulkan swapchain, input, rumble): **done**. SDL3 (the vendored SDL3.dll) provides
    the window and event pump on the process main thread (`host/display_sdl.rs`), presenting via `VK_KHR_win32_surface`
    into the HWND (`vulkan/window.rs`, `device.rs`) with letterboxing, vsync, dynamic resizing, and fullscreen toggles.
    Keyboard and gamepads map to Switch HID (`host/input.rs`) and HD rumble drives dual-motor rumble (`host/rumble_sdl.rs`).
@@ -327,10 +354,11 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    accounting; Apple uses audio_queue.rs (AudioToolbox) and lifted/Windows hosts use audio_sdl.rs (SDL3 playback
    stream at 48 kHz stereo float on default device with 10 ms buffers). Tested on TotK, streaming smoothly with zero
    underruns post-startup, while --headless and --audio=0 remain completely silent.
-   Builder and app target: **done**. ImGui over SDL3 builder UI (`crates/builder/src/window.rs`), platform-split
-   build steps (`crates/builder/src/apple.rs` and `crates/builder/src/windows.rs`), bundled Zig 0.13 acquisition and
-   caching (`crates/build/src/zig.rs`), Windows standalone app packaging (`crates/build/src/winapp.rs`), per-file
-   progress reporting during lifting (`crates/build/src/lift.rs`), and headless snapshot verification.
+   Builder and app target: **done**, checked end to end on TotK (Host I/O and the builder): the builder's window on
+   the vendored SDL3.dll (`crates/builder/src/window_sdl.rs`), the Windows steps (`crates/builder/src/windows.rs`:
+   zig, the Vulkan shader cache, the app folder, the lift and compile, the last two in worker processes), zig 0.13
+   downloaded on first use (`crates/build/src/zig.rs`), the app folder (`crates/build/src/winapp.rs`), and
+   `nxport-builder --build` for builds without the window.
    Vulkan shader precompilation: **done**. `nxport_build::vulkan_precompile` and `nxport-cli shaders precompile-vulkan`
    provide offline extraction, SASS-to-SPIR-V translation, pipeline synthesis from shared lists (with `p1` to `p2` conversion)
    and `pipelines.vkcache` generation on the Vulkan driver.
