@@ -12,3 +12,4 @@ pub mod nn;
 pub mod svc;
 pub mod sync;
 pub mod thread_stack;
+pub mod uemalloc;
