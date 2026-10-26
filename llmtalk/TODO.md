@@ -5,8 +5,6 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- **Unlocked frame rate (TotK).** Hooks for the Windows test dump's version and a re-lifted guest
-  (windows-support-2's three commits are now merged to main). In progress.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
@@ -21,6 +19,11 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- TotK 1.1.2 `dynamic_fps` (on by default, from windows-support-2) rewrites a time struct from real elapsed time at
+  main+0x7f7a58 and forces the pacer; nobody has checked it against a 1.1.2 binary. In 1.0.0 the game steps its time by
+  present interval / 2 itself (main+0x8f68b8), so the 1.1.2 counterpart of the 1.0.0 unlock (lowest interval 1 + no
+  veto) may be all 1.1.2 needs: verify on a Mac before relying on dynamic_fps.
+- Lifted TotK with `--no-vsync` runs faster than real time above 60 fps (the time step stays half a 30 fps frame).
 - `retro-work` has commits not on main.
 - With `--no-vsync`, TotK starts no sounds (title runs ~600 fps; its idle voices are never routed to splitters).
 - Rare Vulkan device loss at startup (about 1 in 10, empty fault report); lost-device reports and checkpoints are on.
@@ -51,6 +54,9 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **TotK 1.0.0 frame rate unlocked** (S41L0R Windows Machine): lowest present interval 1 and no veto on drops
+  (profile/totk/v1_0_0.rs); applies natively and to lifted images (re-lift to pick it up). Title menu 60 fps with
+  vsync, ~80 without. Great Sky Island is held at 20-30 fps by Vulkan recording (~29 ms a frame), not pacing.
 - **`windows-support-2` brought to main** (`3f46f2b`, `cf17023`, `76430c3`):
   - **Geometry shaders for Vulkan, Metal, and sass2spv** (`76430c3`): Maxwell geometry shader stage (SPH/hint 4) with
     dedicated `GEOMETRY_BINDING_BASE = 128`, integrated into Vulkan graphics pipeline layout, creation, async compilation,
