@@ -3133,14 +3133,12 @@ impl Gfx {
                         }
                     }
                     st.plan_ubo.invalidate(*addr, *addr + 16);
-                    st.cx.ubo_copies.invalidate(*addr, *addr + 16);
                     st.ubo_plan_epoch += 1;
                 }
                 Cmd::ReportValue { value, addr } => {
                     rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     write_counter(0, *addr, Some(*value as u64));
                     st.plan_ubo.invalidate(*addr, *addr + 16);
-                    st.cx.ubo_copies.invalidate(*addr, *addr + 16);
                     st.ubo_plan_epoch += 1;
                 }
                 Cmd::BindBlendState(s) => {
@@ -3190,12 +3188,11 @@ impl Gfx {
                     if *addr > 0x10000 && !data.is_empty() {
                         let dest = (*addr as isize + *offset) as *mut u8;
                         std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
-                        // Plan-side copies and encode-side copies overlapping the written range are stale now.
+                        // Plan-side copies of uniform buffers overlapping the written range are stale now (only those
+                        // overlap: the encode side copies only ranges no executor write of this submit touches).
                         let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
                         st.plan_ubo.invalidate(lo, hi);
-                        st.cx.ubo_copies.invalidate(lo, hi);
                         st.ubo_plan_epoch += 1;
-                        GUEST_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 Cmd::BindVertexAttribState(attribs) => {
