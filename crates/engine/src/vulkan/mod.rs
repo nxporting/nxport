@@ -105,9 +105,6 @@ impl Backend for Vulkan {
                 guard::hold_hot();
                 c.submit(lists, serial);
                 guard::release_hot();
-                // GPU work reads guest memory in place from its submit on: the write guard holds those pages from here,
-                // not only once guest-main waits for the frame.
-                guard::protect(serial);
             },
             None => inflight::watch(inflight::Done {
                 serial,
