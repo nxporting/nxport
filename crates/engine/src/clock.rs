@@ -86,7 +86,7 @@ pub fn ns_to_ticks(ns: u64) -> u64 {
 
 /// Sleeps `ns` nanoseconds of this clock, precisely (a frame's pacing depends on it). On Darwin a bare kernel trap,
 /// which guest threads need (horizon::hle::hle_sleep_ns); on Windows a high-resolution waitable timer, as Sleep rounds
-/// up to the 15.6 ms system tick.
+/// up to the 15.6 ms system tick, then a yield loop for its last part.
 pub fn sleep_ns(ns: u64) {
     #[cfg(target_vendor = "apple")]
     {
