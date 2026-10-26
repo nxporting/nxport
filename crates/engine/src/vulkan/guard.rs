@@ -423,6 +423,27 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
     }
 }
 
+/// Copies GPU results back to guest memory (writebacks, on the in-flight watcher thread) without waiting on the pages
+/// this guard holds: a held page is made writable around the copy. The bytes written are what GPU work wrote, which no
+/// running submit reads in place (they read the shadow, shadow.rs); a write that faulted would wait for submits only
+/// this thread sees complete.
+pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
+    let mut at = addr;
+    while at < addr + len {
+        let page = at & !(PAGE - 1);
+        let n = (page + PAGE).min(addr + len) - at;
+        let held = enabled() && holds(at);
+        if held {
+            let _ = crate::os::protect(page, PAGE, crate::os::Prot::ReadWrite);
+        }
+        std::ptr::copy_nonoverlapping(src.add(at - addr), at as *mut u8, n);
+        if held {
+            let _ = crate::os::protect(page, PAGE, crate::os::Prot::Read);
+        }
+        at += n;
+    }
+}
+
 /// Whether a page is held now (crash reports).
 pub(super) fn holds(addr: usize) -> bool {
     let t = &TABLES[ACTIVE.load(Ordering::Acquire) & 1];

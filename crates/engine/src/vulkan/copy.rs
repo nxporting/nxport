@@ -73,6 +73,14 @@ impl Ctx {
             crate::guest::dirty_track::release_for_gpu(a, len);
             crate::vulkan::guard::note_write(a, len);
         }
+        // Memory with a shadow (GPU work wrote it): the copy reads or writes the shadow, in GPU order with those writes.
+        // Other copy destinations stay in place (copies write host memory fast enough; a shadow each would fill the
+        // mapped device memory with readbacks).
+        if self.shadows.shadowed(a, len, crate::vulkan::inflight::completed()) {
+            if let Some(x) = self.shadow(a, len, write) {
+                return Some(x);
+            }
+        }
         if let Some(x) = self.imports.find(&self.dev, a, len) {
             if !write {
                 crate::vulkan::guard::note_read(a, len);

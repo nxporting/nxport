@@ -612,7 +612,11 @@ impl Ctx {
                             let a = crate::nvn::api::translate_virtual(addr as usize);
                             let len = size.min(0x10000);
                             if a > 0x10000 && self.gpu_writes(a, a + len) {
-                                if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
+                                let x = match self.shadow(a, len, false) {
+                                    Some(x) => Some(x),
+                                    None => self.imports.find(&self.dev, a, len),
+                                };
+                                if let Some((buf, off)) = x {
                                     if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
                                         limits.push((b.binding - base, len));
                                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len as u64 }));
@@ -872,6 +876,9 @@ impl Ctx {
         // 1 MiB for bindings from the game's own buffers), and holding all of it made the game fault on every
         // neighbouring write (walking in Hateno: 49 -> 29 fps).
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
+        if let Some((buf, off)) = self.shadow(a, size, write).filter(|(_, o)| o % align == 0) {
+            return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
+        }
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
                 return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
@@ -1107,6 +1114,11 @@ impl Ctx {
                     self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
                     continue;
                 }
+                // What GPU work wrote: its shadow.
+                if let Some(b) = self.shadow(a, size, false) {
+                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    continue;
+                }
                 let b = match self.imports.find(&self.dev, a, size) {
                     Some(x) => {
                         crate::vulkan::guard::note_read(a, size);
@@ -1291,6 +1303,9 @@ impl Ctx {
             1 => {
                 // In place only at 4-byte aligned offsets: Metal (under MoltenVK) needs them for 16-bit indices too, and
                 // passed 2-mod-4 offsets through (Super Mario Odyssey's Cap Kingdom ground: draws with garbage indices).
+                if let Some((b, o)) = self.shadow(a, n * 2, false).filter(|(_, o)| o % 4 == 0) {
+                    return Some((b, o, vk::IndexType::UINT16));
+                }
                 let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
                     crate::vulkan::guard::note_read(a, n * 2);
@@ -1305,6 +1320,9 @@ impl Ctx {
                 self.arena.copy(&self.dev, &v).map(|(b, o)| (b, o, vk::IndexType::UINT32))
             }
             _ => {
+                if let Some((b, o)) = self.shadow(a, n * 4, false).filter(|(_, o)| o % 4 == 0) {
+                    return Some((b, o, vk::IndexType::UINT32));
+                }
                 let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
                     crate::vulkan::guard::note_read(a, n * 4);

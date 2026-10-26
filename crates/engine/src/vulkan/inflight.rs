@@ -98,7 +98,7 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
         }
     }
     for &(addr, src, len) in &d.writebacks {
-        std::ptr::copy_nonoverlapping(src as *const u8, addr as *mut u8, len);
+        super::guard::write_back(addr, src as *const u8, len);
         super::texture::note_wb_landed(addr);
     }
     if ok {
