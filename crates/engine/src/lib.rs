@@ -1193,6 +1193,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     os::on_access_fault(lifted_access_fault);
     #[cfg(windows)]
     os::report_crashes();
+    horizon::hle::start_hang_watch(10);
     if !null {
         vulkan::init(s.debug.validate)?;
     }

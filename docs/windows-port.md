@@ -149,6 +149,8 @@ pthreads, dlopen). An `os` module takes over, its interface modelled on LAS Reco
   and a register context it can modify.
 - threads: host TLS, names, realtime timing threads; time: monotonic ns, precise sleep.
 - dynamic libraries: open / symbol (the lifted guest library, opus, the movie shim).
+- reports on lifted hosts: an unhandled exception prints its code, module and offset and a backtrace; ten seconds
+  without a presented frame print the wait graph once (each blocked guest thread by name, what it waits on, from where).
 
 Pages: the runtime assumes 16 KiB pages (~56 places). LAS Recomp keeps a 16 KiB logical page as a multiple of the
 host page (4 KiB on Windows, with 64 KiB allocation granularity), and so can nxport.
@@ -265,10 +267,11 @@ vendor/SDL3 (the engine links its import library; build.rs copies the DLL beside
   changed takes 3. The app started without arguments from another directory finds its settings, dump, guest library
   and shader cache, logs to `%APPDATA%\nxport\games\0100f2c0115b6000\log.txt`, opens its window and plays audio
   through SDL; the title menu is up at frame 900.
-- Not yet: TotK's music is silent on lifted runs, before and after main's software Opus. The game decodes and mixes
-  it on the CPU (its OpusDecoder thread, no nn::codec HLE calls) and hands the mix to the renderer through Aux return
-  rings, which it fills with zeros: the cause is in the lifted game's audio code, still to be found (macOS plays it).
-  The engine's shared pipeline list download at startup has no HTTP client on Windows (the app uses the list it was
+- TotK's sound on lifted runs (`--audio-wav`, one-second RMS): a new game's opening streams its music
+  (BGM_Prologue_Depth0/1) and cutscene audio at -20 to -40 dB; a loaded save's sound effects play. The title menu has
+  no music of its own (the BGM table's only title entry is the opening's), and its wind loop plays at volume 0.
+- Not yet: with `--no-vsync`, TotK starts no sounds at all (the title menu runs at about 600 fps; its two idle voices
+  are never routed to their splitters, as they are 10 s in with vsync). The engine's shared pipeline list download at startup has no HTTP client on Windows (the app uses the list it was
   built with), and the shared list is per title, not per version: TotK 1.0.0 matches 9 of its 1,825 stages (it was
   recorded on 1.1.2), so most of a 1.0.0 game's pipelines compile as they are first drawn. Controllers are mapped but
   were not tried with the packaged app.

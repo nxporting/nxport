@@ -733,11 +733,41 @@ fn hle_call_history() -> Vec<(u64, std::borrow::Cow<'static, str>)> {
 
 // Wait graph: which guest thread is currently blocked on which sync object, and from where. Dumped by
 // summarize_hle_call_history() to tell a deadlocked worker apart from an idle one.
-type BlockedEntry = (&'static str, usize, [usize; 4], std::time::Instant);
+type BlockedEntry = (&'static str, usize, [usize; 4], std::time::Instant, std::thread::Thread);
 static BLOCKED: OnceLock<StdMutex<rustc_hash::FxHashMap<u64, BlockedEntry>>> = OnceLock::new();
 
 fn blocked_table() -> &'static StdMutex<rustc_hash::FxHashMap<u64, BlockedEntry>> {
     BLOCKED.get_or_init(|| StdMutex::new(rustc_hash::FxHashMap::default()))
+}
+
+/// The guest frame pointer of the function that called an HLE function, from `fp` = x29 as the HLE function sees it:
+/// natively its own frame record, which saved the guest's; lifted, the guest's x29 itself (HLE functions are host
+/// calls that leave the guest registers as they were).
+unsafe fn first_guest_fp(fp: usize) -> usize {
+    if cfg!(nx_native) {
+        *(fp as *const usize)
+    } else {
+        fp
+    }
+}
+
+/// Hang report: once presentation has started, a stretch of `secs` seconds without a presented frame prints the wait
+/// graph (which guest threads are blocked on what, from where) once per stall.
+pub fn start_hang_watch(secs: u64) {
+    let _ = std::thread::Builder::new().name("hang-watch".into()).spawn(move || {
+        let (mut last, mut since, mut reported) = (0, std::time::Instant::now(), false);
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let n = crate::nvn::api::presented_frames();
+            if n != last {
+                (last, since, reported) = (n, std::time::Instant::now(), false);
+            } else if n > 0 && !reported && since.elapsed().as_secs() >= secs {
+                reported = true;
+                println!("[hang] no frame presented for {secs} s (last was frame {n})");
+                dump_blocked_threads();
+            }
+        }
+    });
 }
 
 pub struct BlockGuard(u64);
@@ -746,7 +776,7 @@ impl BlockGuard {
     /// `fp` is x29 inside the HLE function (see report_long_wait); records the guest return-address chain.
     pub unsafe fn new(kind: &'static str, obj: usize, fp: usize) -> Self {
         let mut chain = [0usize; 4];
-        let mut gfp = *(fp as *const usize);
+        let mut gfp = first_guest_fp(fp);
         for slot in chain.iter_mut() {
             if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
                 break;
@@ -758,7 +788,7 @@ impl BlockGuard {
         blocked_table()
             .lock()
             .unwrap()
-            .insert(key, (kind, obj, chain, std::time::Instant::now()));
+            .insert(key, (kind, obj, chain, std::time::Instant::now(), std::thread::current()));
         BlockGuard(key)
     }
 }
@@ -787,15 +817,16 @@ pub fn dump_blocked_threads() {
         "[wait-graph] {} threads currently blocked in HLE waits:",
         rows.len()
     );
-    for (kind, obj, chain, since) in rows {
+    for (kind, obj, chain, since, thread) in rows {
         let c: Vec<String> = chain
             .iter()
             .map(|a| fmt(*a))
             .filter(|s| !s.is_empty())
             .collect();
         println!(
-            "[wait-graph]   {:>6.1}s {} on {:#x} <- {}",
+            "[wait-graph]   {:>6.1}s {:<28} {} on {:#x} <- {}",
             since.elapsed().as_secs_f32(),
+            thread.name().unwrap_or("?"),
             kind,
             obj,
             c.join(" <- ")
@@ -3290,7 +3321,7 @@ pub(crate) fn guest_chain(fp: usize) -> String {
     };
     let mut chain = Vec::new();
     unsafe {
-        let mut gfp = *(fp as *const usize);
+        let mut gfp = first_guest_fp(fp);
         for _ in 0..6 {
             if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
                 break;
@@ -3316,8 +3347,7 @@ pub fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Du
     };
     let mut chain = Vec::new();
     unsafe {
-        let rec = fp as *const usize;
-        let mut gfp = *rec;
+        let mut gfp = first_guest_fp(fp);
         for _ in 0..6 {
             if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
                 break;
