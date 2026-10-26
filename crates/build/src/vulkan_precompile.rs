@@ -389,13 +389,14 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
 
                         if let Some((v, f)) = nxport::vulkan::listed::stages(&dev, &e) {
                             if let Some(d) = nxport::vulkan::listed::desc(&dev, &e, &v, f.as_ref()) {
-                                if let Some(lay) = nxport::vulkan::pipelines::layout(&dev, &v, f.as_ref()) {
+                                if let Some(lay) = nxport::vulkan::pipelines::layout(&dev, &v, None, f.as_ref()) {
                                     let ok = {
                                         let _guard = cache_mutex.lock().unwrap();
                                         nxport::vulkan::pipelines::create(
                                             &dev,
                                             &d,
                                             &v,
+                                            None,
                                             f.as_ref(),
                                             lay.1,
                                             vk_cache,
