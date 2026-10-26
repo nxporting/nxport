@@ -121,8 +121,6 @@ group! {
         /// Render pipelines to compile when the game starts drawing, and where new ones are added (default: the game's
         /// data directory's pipelines.txt)
         pipeline_list: Option<PathBuf> = None,
-        /// Library that plays the game's movies (ffmpeg shim)
-        movie_shim: Option<PathBuf> = None,
         /// libopus, for the hardware Opus decoder
         libopus: Option<PathBuf> = None,
         /// The game's lifted code, where guest code does not run natively (nxport-cli lift-game, then compile-guest

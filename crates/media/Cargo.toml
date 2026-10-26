@@ -1,0 +1,13 @@
+[package]
+name = "nxport-media"
+version = "0.1.0"
+edition = "2021"
+
+# Movie files for the engine's movie:: HLE: containers and decoders built into the program, nothing loaded at run time.
+[dependencies]
+matroska-demuxer = "0.8.1"
+mp4 = "0.14"
+vp9-mt = "0.1.1"
+openh264 = "0.9.9"
+opus-decoder = "0.1.1"
+symphonia = { version = "0.5", default-features = false, features = ["aac", "vorbis"] }
