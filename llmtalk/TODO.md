@@ -5,8 +5,9 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- **Vulkan device loss in the opening (beneath Hyrule Castle with Zelda).** Reproduces headless: Continue on a save
-  there loses the device at about frame 2400 (last checkpoint: end of a render pass). In progress.
+- **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
+  about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
+  scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
 - **Plugin mods on lifted hosts (UltraCam / exlaunch subsdk modules), and an unlocked frame rate on Windows.**
   Plan: two passes. Lift the game with the mod's modules, run it headless with the mod until its initialisers and
   early hooks have patched the code (the iOS dump run's machinery: cpu/aot.rs Mode::Dump, horizon::svc code writes),
