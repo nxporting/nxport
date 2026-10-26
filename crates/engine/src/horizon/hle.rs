@@ -688,18 +688,42 @@ pub unsafe extern "C" fn hle_nn_vi_GetNativeWindow(
 // problem, just found from two different angles this session.
 const HLE_CALL_HISTORY_SIZE: usize = 4096;
 // Names are mostly literals: Cow keeps recording allocation-free (a String per call was ~9% of guest-main).
-static HLE_CALL_HISTORY: std::sync::Mutex<
-    std::collections::VecDeque<(u64, std::borrow::Cow<'static, str>)>,
-> = std::sync::Mutex::new(std::collections::VecDeque::new());
+type HleCallRing = StdMutex<std::collections::VecDeque<(u64, std::borrow::Cow<'static, str>)>>;
+// Each thread records into a ring of its own, whose lock only readers share: one ring for all threads had its lock
+// contended by every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime).
+// Readers merge the rings by sequence number.
+static HLE_CALL_RINGS: StdMutex<Vec<Arc<HleCallRing>>> = StdMutex::new(Vec::new());
 static HLE_CALL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static HLE_CALL_RING: Arc<HleCallRing> = {
+        let ring = Arc::new(HleCallRing::default());
+        HLE_CALL_RINGS.lock().unwrap().push(ring.clone());
+        ring
+    };
+}
 
 pub fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
     let seq = HLE_CALL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut hist = HLE_CALL_HISTORY.lock().unwrap();
-    if hist.len() >= HLE_CALL_HISTORY_SIZE {
-        hist.pop_front();
+    let name = name.into();
+    // Not once the thread's locals are gone (an HLE call from a TLS destructor).
+    let _ = HLE_CALL_RING.try_with(|ring| {
+        let mut hist = ring.lock().unwrap();
+        if hist.len() >= HLE_CALL_HISTORY_SIZE {
+            hist.pop_front();
+        }
+        hist.push_back((seq, name));
+    });
+}
+
+/// The last HLE_CALL_HISTORY_SIZE recorded calls of all threads, oldest first.
+fn hle_call_history() -> Vec<(u64, std::borrow::Cow<'static, str>)> {
+    let mut all = Vec::new();
+    for ring in HLE_CALL_RINGS.lock().unwrap().iter() {
+        all.extend(ring.lock().unwrap().iter().cloned());
     }
-    hist.push_back((seq, name.into()));
+    all.sort_unstable_by_key(|e| e.0);
+    all.drain(..all.len().saturating_sub(HLE_CALL_HISTORY_SIZE));
+    all
 }
 
 /// Called from the crash handler. Prints the most recent HLE calls in order,
@@ -781,7 +805,7 @@ pub fn dump_blocked_threads() {
 
 pub fn summarize_hle_call_history() {
     dump_blocked_threads();
-    let hist = HLE_CALL_HISTORY.lock().unwrap();
+    let hist = hle_call_history();
     // Command recording and texture/buffer plumbing outnumber everything else; the wait condition is among the rest.
     let interesting = |n: &str| {
         !(n.starts_with("nvnCommandBuffer")
@@ -807,7 +831,7 @@ pub fn summarize_hle_call_history() {
 }
 
 pub fn dump_hle_call_history() {
-    let hist = HLE_CALL_HISTORY.lock().unwrap();
+    let hist = hle_call_history();
     eprintln!(
         "    HLE Call History (last {} calls, oldest first):",
         hist.len()
