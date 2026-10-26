@@ -101,6 +101,7 @@ pub fn prep(code: &[u8], ctrl: Option<&[u8]>, index: usize) -> Prep {
     Prep { hint, cb1, code_len, compute, compute_fields }
 }
 
+#[derive(Clone)]
 pub struct Stage {
     pub id: StageId,
     /// Its shader cache name and input locations.

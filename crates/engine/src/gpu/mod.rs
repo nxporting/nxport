@@ -7,6 +7,7 @@
 pub mod history;
 pub mod null;
 pub mod pipeline_list;
+pub mod report_guard;
 pub mod restart;
 
 use std::sync::OnceLock;
@@ -64,6 +65,12 @@ pub trait Backend: Send + Sync {
     fn wait_fence(&self, serial: u64, timeout_ns: u64) -> bool;
     /// Frames presented so far.
     fn presented_frames(&self) -> u64;
+    /// Whether an early-fence guard holds `page` read-only now.
+    fn early_fence_holds(&self, _page: usize) -> bool {
+        false
+    }
+    /// Reprotects backing for discrete textures when a held page is reopened.
+    fn disc_reprotect(&self, _addr: usize, _len: usize) {}
 
     /// A fault on a page the backend protects for GPU coherence, consulted before write tracking. True if handled:
     /// the access is retried.

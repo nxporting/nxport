@@ -400,17 +400,44 @@ impl Ctx {
         let pipe = match made {
             Some((p, _)) => p,
             None => {
-                crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                match pipelines::create(&self.dev, &desc, vstage, fstage, layout, cache) {
-                    Ok(p) => {
-                        self.record_pipeline(mode, vstage, fstage, &desc);
-                        p
+                if crate::vulkan::async_pipe::is_async() {
+                    let job = crate::vulkan::async_pipe::PipeJob {
+                        dev: self.dev.clone(),
+                        desc: desc.clone(),
+                        vstage: vstage.clone(),
+                        fstage: fstage.cloned(),
+                        layout,
+                        cache,
+                    };
+                    match crate::vulkan::async_pipe::query_async_pipeline(hash(&desc), job) {
+                        crate::vulkan::async_pipe::AsyncPipe::Ready(p) => {
+                            crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            self.record_pipeline(mode, vstage, fstage, &desc);
+                            p
+                        }
+                        crate::vulkan::async_pipe::AsyncPipe::Pending => {
+                            return None;
+                        }
+                        crate::vulkan::async_pipe::AsyncPipe::Failed => {
+                            let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
+                            self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): async compile failed", vs.0, fs.map(|f| f.0)));
+                            return None;
+                        }
                     }
-                    Err(e) => {
-                        let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
-                        self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
-                        return None;
+                } else {
+                    crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    match pipelines::create(&self.dev, &desc, vstage, fstage, layout, cache) {
+                        Ok(p) => {
+                            self.record_pipeline(mode, vstage, fstage, &desc);
+                            p
+                        }
+                        Err(e) => {
+                            let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
+                            self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
+                            return None;
+                        }
                     }
                 }
             }

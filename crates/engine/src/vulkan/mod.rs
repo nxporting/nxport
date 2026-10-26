@@ -7,6 +7,7 @@
 // them inline in the command stream). The Metal backend (crate::metal) is the reference this one is checked against
 // with frame captures (crate::capture).
 
+mod async_pipe;
 mod device;
 mod exec;
 mod format;
@@ -98,6 +99,20 @@ impl Backend for Vulkan {
     }
 
     fn submit(&self, lists: &[u64]) {
+        let guard_on = crate::gpu::report_guard::mode() != crate::settings::ReportGuard::Off;
+        if guard_on {
+            let mut stack = Vec::new();
+            let mut submit_lists = rustc_hash::FxHashMap::default();
+            let mut samples: Vec<usize> = Vec::new();
+            crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
+                let s = l.summary();
+                samples.extend(
+                    s.2.iter()
+                        .map(|&a| crate::nvn::api::translate_virtual(a as usize)),
+                );
+            });
+            crate::gpu::report_guard::begin_submit(&samples);
+        }
         let mut g = self.ctx.lock().unwrap();
         let serial = self.serial.load(Ordering::Acquire) + 1;
         match g.as_mut() {
@@ -131,6 +146,9 @@ impl Backend for Vulkan {
             }
         }
         self.frames.fetch_add(1, Ordering::AcqRel);
+        crate::gpu::report_guard::frame_end(n);
+        async_pipe::ASYNC_WAITED_US.store(0, Ordering::Relaxed);
+        log_hitch(n);
         if n % 50 == 0 {
             let now = std::time::Instant::now();
             let mut start = self.interval.lock().unwrap();
@@ -201,20 +219,34 @@ impl Backend for Vulkan {
         true
     }
 
+    fn early_fence_holds(&self, page: usize) -> bool {
+        guard::holds(page)
+    }
+
     fn access_fault(&self, f: &crate::gpu::Fault) -> bool {
-        unsafe { guard::fault(f.addr) }
+        unsafe {
+            crate::gpu::report_guard::fault(f.addr, f.pc, f.lr, f.write) || guard::fault(f.addr)
+        }
     }
 
     fn describe_page(&self, addr: usize) -> String {
+        let rep = crate::gpu::report_guard::describe(addr);
         if guard::holds(addr) {
-            "held by the Vulkan write guard (GPU work in flight reads it)".into()
+            if rep.is_empty() {
+                "held by the Vulkan write guard (GPU work in flight reads it)".into()
+            } else {
+                format!("{rep}; held by the Vulkan write guard (GPU work in flight reads it)")
+            }
         } else {
-            String::new()
+            rep
         }
     }
 
     fn pages_reprotected(&self, addr: usize, len: usize) {
-        unsafe { guard::reprotect_held(addr, len) }
+        unsafe {
+            crate::gpu::report_guard::reprotect_held(addr, len);
+            guard::reprotect_held(addr, len);
+        }
     }
 
     fn before_host_write(&self, addr: usize, len: usize) {
@@ -258,6 +290,27 @@ fn on_guest_main() -> bool {
         static MAIN: bool = std::thread::current().name() == Some("guest-main");
     }
     MAIN.with(|m| *m)
+}
+
+fn log_hitch(frame: u64) {
+    static HITCH_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    let Some(thr) = *HITCH_MS.get_or_init(|| crate::settings::get().log.log_hitch) else {
+        return;
+    };
+    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let now = std::time::Instant::now();
+    let prev = LAST.lock().unwrap().replace(now);
+    let async_started = async_pipe::ASYNC_STARTED.swap(0, Ordering::Relaxed);
+    let async_skips = async_pipe::ASYNC_SKIPS.swap(0, Ordering::Relaxed);
+    if let Some(p) = prev {
+        let ms = (now - p).as_secs_f64() * 1e3;
+        if ms > thr {
+            println!("[hitch] frame {frame} {ms:.1} ms");
+            if async_started + async_skips > 0 {
+                println!("[hitch]   async pipelines: {async_started} compiles started, {async_skips} draws skipped while compiling");
+            }
+        }
+    }
 }
 
 /// A content hash of a guest shader stage (its header and first code, and its control section): translations are cached

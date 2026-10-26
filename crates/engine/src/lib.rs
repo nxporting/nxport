@@ -656,8 +656,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     let (stubs, stubs_len) = mem_space.trampoline_range();
     metal::set_hle_stub_range(stubs, stubs + stubs_len);
     // Guest code: main, the mod modules mapped after it, the SDK (--report-guard waits only for faults from there).
-    #[cfg(nx_native)]
-    metal::set_guest_code_range(
+    gpu::report_guard::set_guest_code_range(
         mem_space.base_ptr as usize,
         sdk.as_ref()
             .map_or(mem_space.base_ptr as usize + mem_space.total_size, |m| {
