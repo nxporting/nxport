@@ -103,6 +103,8 @@ pub struct Ctx {
     writebacks: Vec<(usize, *const u8, usize)>,
     /// Guest memory GPU work writes, in GPU memory while submits use it (shadow.rs).
     pub(super) shadows: super::shadow::Shadows,
+    /// Vertex and index data in device memory (vcache.rs).
+    vcache: super::vcache::VCache,
     /// Guest memory GPU work of this submit writes (copy and clear destinations, storage buffers): [start, end). A uniform
     /// buffer there is bound in place, so it sees those writes in GPU order (a copy taken while recording would not).
     gpu_dirty: Ranges,
@@ -283,6 +285,23 @@ impl Ctx {
             tex.record_copy(dev, src, src_off, dst, dst_off, n)
         })
     }
+
+    /// The device copy of vertex or index data at guest [a, a + len) (vcache.rs); None for memory GPU work writes (its
+    /// shadow or guest memory is bound) or where it is not cached.
+    pub(super) unsafe fn cached(&mut self, a: usize, len: usize) -> Option<(vk::Buffer, u64)> {
+        if self.gpu_writes(a, a + len) {
+            return None;
+        }
+        let serial = super::guard::RECORDING.load(std::sync::atomic::Ordering::Relaxed);
+        let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+        let (dev, tex, arena) = (&self.dev, &mut self.tex, &mut self.arena);
+        self.vcache.get(dev, a, len, serial, frame, &mut |dst, dst_off, src, n| {
+            let Some((b, o, p)) = arena.alloc(dev, n) else { return false };
+            std::ptr::copy_nonoverlapping(src, p, n);
+            tex.record_copy(dev, b, o, dst, dst_off, n as u64);
+            true
+        })
+    }
 }
 
 /// Pass-end timestamps per submit when profiling passes.
@@ -455,6 +474,7 @@ impl Ctx {
             lost: false,
             writebacks: Vec::new(),
             shadows: Default::default(),
+            vcache: Default::default(),
             gpu_dirty: Ranges::default(),
             inflight_dirty: Vec::new(),
             fb_snaps: Default::default(),
@@ -719,6 +739,7 @@ impl Ctx {
         }
         let done = super::inflight::completed();
         self.shadows.collect(done);
+        self.vcache.collect(done, super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed));
         while self.inflight.front().is_some_and(|f| f.serial <= done) {
             let f = self.inflight.pop_front().unwrap();
             let d = &self.dev.device;
