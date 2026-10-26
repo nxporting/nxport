@@ -189,24 +189,33 @@ pub unsafe fn load(
     let bss = r_u32(&file, 0x3C) as usize;
     let image_size = segs[2].0 + segs[2].1.len() + bss;
     let image_aligned = (image_size + 0x3fff) & !0x3fff;
+    // For modules with gigantic bss (> 96 MB, e.g. Metroid Dread or Unreal Engine games),
+    // placing stubs after image_aligned exceeds the ARM64 ±128 MB branch range.
+    // Instead, place the stub area immediately BEFORE the module base.
+    let front_stubs = image_aligned > 0x600_0000;
     let total = image_aligned + STUB_AREA;
 
     // Inside the reserved gap after main the spot is ours: commit it, so the layout is the same in every run. Elsewhere
     // only a hint is possible.
     let (gap, gap_end) = crate::guest::loader::mod_gap();
     let fixed = gap != 0 && hint >= gap && hint + total <= gap_end;
-    let base = if fixed {
+    let alloc_base = if fixed {
         hint
     } else {
         crate::os::reserve(crate::os::At::Near(hint), total).map_err(|e| format!("reserve: {e}"))?
     };
-    crate::os::commit(base, total, crate::os::Prot::ReadWrite).map_err(|e| format!("commit: {e}"))?;
+    crate::os::commit(alloc_base, total, crate::os::Prot::ReadWrite).map_err(|e| format!("commit: {e}"))?;
     if !fixed {
         println!(
             "[!] Mods: {} does not fit the reserved module gap; mapped at {:#x} (hint {:#x})",
-            name, base, hint
+            name, alloc_base, hint
         );
     }
+    let (base, stubs) = if front_stubs {
+        (alloc_base + STUB_AREA, alloc_base)
+    } else {
+        (alloc_base, alloc_base + image_aligned)
+    };
     for (mo, data) in &segs {
         ptr::copy_nonoverlapping(data.as_ptr(), (base + mo) as *mut u8, data.len());
     }
@@ -321,7 +330,6 @@ pub unsafe fn load(
     }
 
     // ── make the code runnable here ──
-    let stubs = base + image_aligned;
     #[cfg(nx_native)]
     let rewritten = native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?;
     // Lifted code handles svc, the system registers and exclusives itself.
