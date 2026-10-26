@@ -730,7 +730,7 @@ impl Textures {
         self.record(dev, |cb| {
             // Submits still in flight may read the old contents.
             dev.full_barrier(cb);
-            dev.checkpoint(cb, || format!("upload {}x{} fmt {} from {:#x}", p.width, p.height, p.format, d.storage));
+            dev.checkpoint(cb, "texture upload (W, H, format, guest address)", [p.width as u64, p.height as u64, p.format as u64, d.storage as u64]);
             dev.device.cmd_copy_buffer_to_image(cb, staging.buffer, image, vk::ImageLayout::GENERAL, &regions);
         });
         match &mut self.batch {
@@ -780,7 +780,7 @@ impl Textures {
         self.record(dev, |cb| {
             // Submits still in flight may read the old contents.
             dev.full_barrier(cb);
-            dev.checkpoint(cb, || format!("ASTC decode {}x{} from {:#x}", d.params.width, d.params.height, d.storage));
+            dev.checkpoint(cb, "ASTC decode (W, H, format, guest address)", [d.params.width as u64, d.params.height as u64, d.params.format as u64, d.storage as u64]);
             for (view, p) in &jobs {
                 decoder.record(dev, cb, staging.buffer, *view, *p);
             }
@@ -820,6 +820,7 @@ impl Textures {
     pub(super) unsafe fn record_copy(&mut self, dev: &Dev, src: vk::Buffer, src_off: u64, dst: vk::Buffer, dst_off: u64, n: u64) {
         self.record(dev, |cb| {
             dev.full_barrier(cb);
+            dev.checkpoint(cb, "buffer copy (source offset, destination offset, bytes)", [src_off, dst_off, n, 0]);
             let region = vk::BufferCopy { src_offset: src_off, dst_offset: dst_off, size: n };
             dev.device.cmd_copy_buffer(cb, src, dst, &[region]);
             dev.full_barrier(cb);

@@ -47,15 +47,97 @@ pub struct Dev {
     /// VK_KHR_push_descriptor where the device has it, whether or not draws use it: the backend's own compute work
     /// (vulkan/astc.rs) binds with it.
     pub push_ext: Option<ash::khr::push_descriptor::Device>,
-    /// VK_EXT_device_fault: what the driver knows about a lost device (report_fault).
+    /// VK_EXT_device_fault: what the driver knows about a lost device (report_lost).
     pub fault: Option<ash::ext::device_fault::Device>,
     /// VK_NV_device_diagnostic_checkpoints, with --gpu-checkpoints: markers before each command (checkpoint).
     pub checkpoints: Option<ash::nv::device_diagnostic_checkpoints::Device>,
+    /// --gpu-checkpoints-each: checkpoint_each marks every command and draw too.
+    pub checkpoints_each: bool,
 }
 
-/// The most recent checkpoints (Dev::checkpoint): marker and what follows it.
-static CHECKPOINTS: std::sync::Mutex<std::collections::VecDeque<(u64, String)>> =
+/// The most recent checkpoints (Dev::checkpoint): marker, what follows it and its numbers.
+static CHECKPOINTS: std::sync::Mutex<std::collections::VecDeque<(u64, &str, [u64; 4])>> =
     std::sync::Mutex::new(std::collections::VecDeque::new());
+const CHECKPOINTS_KEPT: usize = 1 << 16;
+
+/// What report_lost asks the driver: the device's fault and checkpoint functions and its queue (kept apart from Dev, so
+/// any thread that sees the device lost can report it).
+struct Reporter {
+    fault: Option<ash::ext::device_fault::Device>,
+    checkpoints: Option<ash::nv::device_diagnostic_checkpoints::Device>,
+    queue: vk::Queue,
+}
+static REPORTER: std::sync::OnceLock<Reporter> = std::sync::OnceLock::new();
+
+/// Reports a lost device, once, from whichever thread saw it first: the driver's fault report (VK_EXT_device_fault:
+/// the faulting GPU addresses and the vendor's codes), the work the GPU had begun but not finished (from the
+/// checkpoints), and the vendor's binary crash data, written to the game's data directory (gpu-faults/) for the
+/// vendor's tools. `what` says where the loss was seen.
+pub(super) fn report_lost(what: &str) {
+    static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if REPORTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+    println!("[vulkan] DEVICE LOST at presented frame {frame} ({what})");
+    let Some(r) = REPORTER.get() else { return };
+    unsafe {
+        if let Some(f) = &r.fault {
+            let get = f.fp().get_device_fault_info_ext;
+            let mut counts = vk::DeviceFaultCountsEXT::default();
+            if get(f.device(), &mut counts, std::ptr::null_mut()) == vk::Result::SUCCESS {
+                let mut addresses = vec![vk::DeviceFaultAddressInfoEXT::default(); counts.address_info_count as usize];
+                let mut vendor = vec![vk::DeviceFaultVendorInfoEXT::default(); counts.vendor_info_count as usize];
+                let mut binary = vec![0u8; counts.vendor_binary_size as usize];
+                let mut info = vk::DeviceFaultInfoEXT {
+                    p_address_infos: addresses.as_mut_ptr(),
+                    p_vendor_infos: vendor.as_mut_ptr(),
+                    p_vendor_binary_data: if binary.is_empty() { std::ptr::null_mut() } else { binary.as_mut_ptr().cast() },
+                    ..Default::default()
+                };
+                let res = get(f.device(), &mut counts, &mut info);
+                let text = |c: &[std::ffi::c_char]| CStr::from_ptr(c.as_ptr()).to_string_lossy().into_owned();
+                println!("[vulkan] device fault ({res:?}): {}", text(&info.description));
+                for a in &addresses[..(counts.address_info_count as usize).min(addresses.len())] {
+                    println!("[vulkan]   {:?} at {:#x} (within {:#x})", a.address_type, a.reported_address, a.address_precision);
+                }
+                for v in &vendor[..(counts.vendor_info_count as usize).min(vendor.len())] {
+                    println!("[vulkan]   {}: code {:#x}, data {:#x}", text(&v.description), v.vendor_fault_code, v.vendor_fault_data);
+                }
+                binary.truncate(counts.vendor_binary_size as usize);
+                if !binary.is_empty() {
+                    if let Some(dir) = crate::profile::data_subdir("gpu-faults") {
+                        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                        let path = dir.join(format!("fault_{secs}_frame{frame}.bin"));
+                        match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &binary)) {
+                            Ok(()) => println!("[vulkan]   vendor crash data ({} bytes) written to {}", binary.len(), path.display()),
+                            Err(e) => println!("[vulkan]   vendor crash data not written: {e}"),
+                        }
+                    }
+                }
+            } else {
+                println!("[vulkan] device fault: the driver gives no report");
+            }
+        }
+        if let Some(c) = &r.checkpoints {
+            let get = c.fp().get_queue_checkpoint_data_nv;
+            let mut n = 0u32;
+            get(r.queue, &mut n, std::ptr::null_mut());
+            let mut data = vec![vk::CheckpointDataNV::default(); n as usize];
+            get(r.queue, &mut n, data.as_mut_ptr());
+            let markers: Vec<u64> = data[..n as usize].iter().map(|d| d.p_checkpoint_marker as u64).collect();
+            for (d, marker) in data.iter().zip(&markers) {
+                println!("[vulkan]   last checkpoint at {:?}: {marker:#x}", d.stage);
+            }
+            // What the GPU had begun but not finished: from the oldest stage's checkpoint to the newest's.
+            if let (Some(&lo), Some(&hi)) = (markers.iter().min(), markers.iter().max()) {
+                for (m, what, args) in CHECKPOINTS.lock().unwrap().iter().filter(|(m, ..)| (lo..=hi).contains(m)) {
+                    println!("[vulkan]     {m:#x} {what} {:#x} {:#x} {:#x} {:#x}", args[0], args[1], args[2], args[3]);
+                }
+            }
+        }
+    }
+}
 
 pub struct Surfaces {
     pub surface: ash::khr::surface::Instance,
@@ -395,6 +477,7 @@ impl Dev {
             let push_ext = push_descriptor.then(|| ash::khr::push_descriptor::Device::new(&instance, &device));
             let fault = device_fault.then(|| ash::ext::device_fault::Device::new(&instance, &device));
             let checkpoints = checkpoints.then(|| ash::nv::device_diagnostic_checkpoints::Device::new(&instance, &device));
+            let _ = REPORTER.set(Reporter { fault: fault.clone(), checkpoints: checkpoints.clone(), queue });
             let cmd_pool = device
                 .create_command_pool(
                     &vk::CommandPoolCreateInfo::default()
@@ -458,6 +541,7 @@ impl Dev {
                 push_ext,
                 fault,
                 checkpoints,
+                checkpoints_each: crate::settings::get().debug.gpu_checkpoints_each,
             })
         }
     }
@@ -603,79 +687,38 @@ impl Dev {
             .map_err(|e| format!("vkQueueSubmit: {e}"))
             .and_then(|_| self.device.wait_for_fences(&[fence], true, u64::MAX).map_err(|e| format!("GPU: {e}")));
         self.device.destroy_fence(fence, None);
+        if r.as_ref().is_err_and(|e| e.contains("DEVICE_LOST")) {
+            report_lost("a one-time submit");
+        }
         r
     }
 
-    /// A barrier between everything before and everything after (all stages, all memory).
-    /// Prints what the driver reports about the device having been lost (VK_EXT_device_fault): the faulting GPU
-    /// addresses and the vendor's codes. Once, from whichever path saw the loss first.
-    pub unsafe fn report_fault(&self) {
-        static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        let Some(f) = &self.fault else { return };
-        if REPORTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
-            return;
-        }
-        let get = f.fp().get_device_fault_info_ext;
-        let mut counts = vk::DeviceFaultCountsEXT::default();
-        if get(f.device(), &mut counts, std::ptr::null_mut()) != vk::Result::SUCCESS {
-            println!("[vulkan] device fault: no report");
-            return;
-        }
-        let mut addresses = vec![vk::DeviceFaultAddressInfoEXT::default(); counts.address_info_count as usize];
-        let mut vendor = vec![vk::DeviceFaultVendorInfoEXT::default(); counts.vendor_info_count as usize];
-        counts.vendor_binary_size = 0;
-        let mut info = vk::DeviceFaultInfoEXT {
-            p_address_infos: addresses.as_mut_ptr(),
-            p_vendor_infos: vendor.as_mut_ptr(),
-            ..Default::default()
-        };
-        let r = get(f.device(), &mut counts, &mut info);
-        let text = |c: &[std::ffi::c_char]| CStr::from_ptr(c.as_ptr()).to_string_lossy().into_owned();
-        println!("[vulkan] device fault ({r:?}): {}", text(&info.description));
-        for a in &addresses[..counts.address_info_count as usize] {
-            println!(
-                "[vulkan]   {:?} at {:#x} (within {:#x})",
-                a.address_type, a.reported_address, a.address_precision
-            );
-        }
-        for v in &vendor[..counts.vendor_info_count as usize] {
-            println!("[vulkan]   {}: code {:#x}, data {:#x}", text(&v.description), v.vendor_fault_code, v.vendor_fault_data);
-        }
-        if let Some(c) = &self.checkpoints {
-            let get = c.fp().get_queue_checkpoint_data_nv;
-            let mut n = 0u32;
-            get(self.queue, &mut n, std::ptr::null_mut());
-            let mut data = vec![vk::CheckpointDataNV::default(); n as usize];
-            get(self.queue, &mut n, data.as_mut_ptr());
-            let log = CHECKPOINTS.lock().unwrap();
-            let markers: Vec<u64> = data[..n as usize].iter().map(|d| d.p_checkpoint_marker as u64).collect();
-            for (d, marker) in data.iter().zip(&markers) {
-                println!("[vulkan]   last checkpoint at {:?}: {marker:#x}", d.stage);
-            }
-            // What the GPU had begun but not finished: from the oldest stage's checkpoint to the newest's.
-            let (Some(&lo), Some(&hi)) = (markers.iter().min(), markers.iter().max()) else { return };
-            for (m, what) in log.iter().filter(|(m, _)| (lo..=hi).contains(m)) {
-                println!("[vulkan]     {m:#x} {what}");
-            }
-        }
-    }
-
-    /// With --gpu-checkpoints: a marker the GPU passes before what `cb` records next, logged with `what` so a lost
-    /// device's report (report_fault) can name the command the GPU had reached.
-    pub unsafe fn checkpoint(&self, cb: vk::CommandBuffer, what: impl FnOnce() -> String) {
+    /// A marker the GPU passes before what `cb` records next (VK_NV_device_diagnostic_checkpoints, on unless
+    /// --gpu-checkpoints=false): `what` and `args` are kept with it, and formatted only if the device is lost, when
+    /// report_lost names the work the GPU had begun but not finished. Cheap enough for every command.
+    pub unsafe fn checkpoint(&self, cb: vk::CommandBuffer, what: &'static str, args: [u64; 4]) {
         let Some(c) = &self.checkpoints else { return };
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let marker = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
             let mut log = CHECKPOINTS.lock().unwrap();
-            if log.len() == 1 << 16 {
+            if log.len() == CHECKPOINTS_KEPT {
                 log.pop_front();
             }
-            log.push_back((marker, what()));
+            log.push_back((marker, what, args));
         }
         (c.fp().cmd_set_checkpoint_nv)(cb, marker as *const std::ffi::c_void);
     }
 
+    /// A checkpoint for each command or draw: only with --gpu-checkpoints-each (a marker before every one of thousands of
+    /// draws doubled TotK's GPU time).
+    pub unsafe fn checkpoint_each(&self, cb: vk::CommandBuffer, what: &'static str, args: [u64; 4]) {
+        if self.checkpoints_each {
+            self.checkpoint(cb, what, args);
+        }
+    }
+
+    /// A barrier between everything before and everything after (all stages, all memory).
     pub unsafe fn full_barrier(&self, cb: vk::CommandBuffer) {
         let mb = [vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::MEMORY_READ)

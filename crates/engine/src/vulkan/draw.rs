@@ -228,23 +228,10 @@ impl Ctx {
                 }
             }
         }
-        self.dev.checkpoint(self.cb, || {
-            let mut s = format!("draw: vertex {vd:#x}, fragment {:#x}", fs.map_or(0, |f| f.0));
-            for (binding, ty, b) in &w.buffers {
-                if *ty == vk::DescriptorType::STORAGE_BUFFER {
-                    s += &format!("; storage {binding}: {:?} +{:#x} {:#x}", b.buffer, b.offset, b.range);
-                }
-            }
-            for (binding, ty, i) in &w.images {
-                if *ty == vk::DescriptorType::STORAGE_IMAGE {
-                    s += &format!("; image {binding}: {:?}", i.first().map(|i| i.image_view));
-                }
-            }
-            if let Some(p) = &self.pass {
-                s += &format!("; targets {:?} depth {:?} {}x{}", p.colors, p.depth, p.extent.0, p.extent.1);
-            }
-            s
-        });
+        // The stages, the target size and how many storage buffers it binds (writes there are what lost devices so far).
+        let storage = w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::STORAGE_BUFFER).count() as u64;
+        let extent = self.pass.as_ref().map_or(0, |p| (p.extent.0 as u64) << 32 | p.extent.1 as u64);
+        self.dev.checkpoint_each(self.cb, "draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
         match call {
             Draw::Arrays { first, count } => {
                 self.dev.device.cmd_draw(self.cb, count.max(0) as u32, instances as u32, first.max(0) as u32, base_instance.max(0) as u32);

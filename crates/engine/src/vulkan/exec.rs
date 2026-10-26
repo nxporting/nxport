@@ -644,7 +644,7 @@ impl Ctx {
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
             println!("[vulkan] submit of {} lists at presented frame {frame}: vkQueueSubmit: {e}; no more GPU work", lists.len());
-            self.dev.report_fault();
+            super::device::report_lost("vkQueueSubmit");
             self.lost = true;
         }
         super::SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -968,7 +968,10 @@ impl Ctx {
                     }
                     continue;
                 }
-                Some(c) => self.exec(c),
+                Some(c) => {
+                    self.dev.checkpoint_each(self.cb, op.name, [self.op_index, handle, 0, 0]);
+                    self.exec(c)
+                }
                 None => {
                     let name = op.name;
                     if self.unimplemented.insert(name) {
@@ -981,12 +984,6 @@ impl Ctx {
     }
 
     unsafe fn exec(&mut self, c: &Cmd) {
-        let op = self.op_index;
-        self.dev.checkpoint(self.cb, || {
-            let mut s = format!("op {op}: {c:?}");
-            s.truncate(400);
-            s
-        });
         match c {
             Cmd::SetRenderTargets { colors, depth } => {
                 self.end_pass();
@@ -1375,6 +1372,8 @@ impl Ctx {
             }
         }
         self.dev.full_barrier(self.cb);
+        let (w, h) = self.pass.as_ref().map_or((0, 0), |p| p.extent);
+        self.dev.checkpoint(self.cb, "begin pass (op, W, H)", [self.op_index, w as u64, h as u64, 0]);
         self.dev.device.cmd_begin_rendering(self.cb, &info);
         self.begin_query();
     }
@@ -1385,7 +1384,7 @@ impl Ctx {
         self.end_query();
         if let Some(p) = self.pass.take() {
             self.dev.device.cmd_end_rendering(self.cb);
-            self.dev.checkpoint(self.cb, || format!("end pass {}x{} {:?} depth {:?}", p.extent.0, p.extent.1, p.colors, p.depth));
+            self.dev.checkpoint(self.cb, "end pass (W, H, color targets)", [p.extent.0 as u64, p.extent.1 as u64, p.colors.len() as u64, 0]);
             if crate::gpu::history::journal_on() {
                 let clears = p.color_clears.iter().filter(|c| c.is_some()).count() + p.depth_clear.is_some() as usize;
                 crate::gpu::history::journal(|| format!("  end draws {} cleared {clears}", p.draws));
@@ -1431,6 +1430,9 @@ impl Ctx {
         let d = &self.dev.device;
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()) {
             println!("[vulkan] vkQueueSubmit: {e}");
+            if e == vk::Result::ERROR_DEVICE_LOST {
+                super::device::report_lost("vkQueueSubmit of a chunk");
+            }
             self.lost = true;
         }
         self.chunks.extend_from_slice(&cbs);
@@ -1503,7 +1505,7 @@ impl Ctx {
                 .buffer_offset(off)
                 .image_subresource(sub(0))
                 .image_extent(vk::Extent3D { width: bw, height: bh, depth });
-            self.dev.checkpoint(self.cb, || format!("BC proxy {bw}x{bh}x{depth}x{layers} out to {bytes:#x} bytes"));
+            self.dev.checkpoint(self.cb, "BC proxy out (blocks W, H, depth, bytes)", [bw as u64, bh as u64, depth as u64, bytes as u64]);
             self.dev.device.cmd_copy_image_to_buffer(self.cb, pimg, vk::ImageLayout::GENERAL, buf, &[out]);
             self.dev.full_barrier(self.cb);
             let back = vk::BufferImageCopy::default()
@@ -1512,7 +1514,7 @@ impl Ctx {
                 .buffer_image_height(bh * info.block_h)
                 .image_subresource(sub(level))
                 .image_extent(vk::Extent3D { width: tw, height: th, depth: td.min(depth) });
-            self.dev.checkpoint(self.cb, || format!("BC proxy back into fmt {} level {level} {tw}x{th}x{td} (target {:?})", d.params.format, target.format));
+            self.dev.checkpoint(self.cb, "BC proxy back (format, level, W, H)", [d.params.format as u64, level as u64, tw as u64, th as u64]);
             self.dev.device.cmd_copy_buffer_to_image(self.cb, buf, timg, vk::ImageLayout::GENERAL, &[back]);
             self.dev.full_barrier(self.cb);
         }

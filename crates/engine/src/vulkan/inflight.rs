@@ -73,6 +73,7 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
         if let Err(e) = device.wait_for_fences(&[d.fence], true, u64::MAX) {
             let frame = super::VULKAN.frames.load(Ordering::Relaxed);
             println!("[vulkan] submit {} at presented frame {frame} failed: {e}; no more GPU work", d.serial);
+            super::device::report_lost("waiting for a submit");
             LOST.store(true, Ordering::Release);
             ok = false;
         }
