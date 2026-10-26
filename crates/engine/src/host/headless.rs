@@ -26,4 +26,8 @@ pub mod overlay {
     pub fn is_vsync() -> bool {
         !crate::settings::get().display.no_vsync
     }
+
+    pub fn is_async_shaders() -> bool {
+        crate::settings::get().graphics.async_pipelines
+    }
 }

@@ -654,8 +654,11 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     horizon::hle::set_program_size(
         mem_space.bss_off + mem_space.bss_size + sdk.as_ref().map_or(0, |m| m.total_size),
     );
-    let (stubs, stubs_len) = mem_space.trampoline_range();
-    metal::set_hle_stub_range(stubs, stubs + stubs_len);
+    #[cfg(nx_native)]
+    {
+        let (stubs, stubs_len) = mem_space.trampoline_range();
+        metal::set_hle_stub_range(stubs, stubs + stubs_len);
+    }
     // Guest code: main, the mod modules mapped after it, the SDK (--report-guard waits only for faults from there).
     gpu::report_guard::set_guest_code_range(
         mem_space.base_ptr as usize,
