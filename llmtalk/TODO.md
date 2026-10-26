@@ -8,12 +8,6 @@ and update this file when you finish or drop it.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
-- **Plugin mods on lifted hosts (UltraCam / exlaunch subsdk modules).** In progress (plugin-mods agent). Two passes:
-  `nxport-cli lift-game --mods DIR` lifts the game with the mods' modules (unpatched); a lifted run with
-  `--aot-dump=FILE` writes the code as the mods patched it at `--aot-dump-frame`; `lift-game --mods DIR
-  --patched-image FILE` lifts that, with function starts seeded across modules (hooks, trampolines). Builder
-  automation next. Test mod: "TOTK Optimizer" (UltraCam 2.7.1, exefs/subsdk3), which supports TotK 1.1.0 - 1.2.1;
-  the Windows test dump is 1.0.0 (main build id 082CE09B06E33A123CB1E2770F5F9147).
 - **SDL controllers per player.** main's 8-player input (host/input.rs PLAYER_PADS) is wired for GameController.framework;
   on Windows every SDL controller still feeds player 0 (input::set_pad). Give each SDL gamepad its own player.
 
@@ -53,6 +47,14 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **Plugin mods on lifted hosts** (S41L0R Windows Machine, `e1cd615`): two passes. `nxport-cli lift-game --mods
+  DIR` lifts the game with the mods' modules; a lifted run with `--aot-dump=FILE` writes the code as the mods
+  patched it at `--aot-dump-frame`; `lift-game --mods DIR --patched-image FILE` lifts that (function starts seeded
+  across modules: hooks, trampolines, ADR/ADRP targets, DT_INIT). The builder does it all when the app's mods include
+  exefs/subsdkN modules (`nxport-builder DUMP --build --mods DIR`, checked end to end). Still open: UltraCam itself
+  on Windows needs a supported TotK version (2.7.1: 1.1.0 - 1.2.1). On the 1.0.0 test dump it patches 113 bytes,
+  the patched lift runs into its hooks, and they fault (hooks at 1.1.x addresses).
 
 - **TotK 1.0.0 frame rate unlocked** (S41L0R Windows Machine): lowest present interval 1 and no veto on drops
   (profile/totk/v1_0_0.rs); applies natively and to lifted images (re-lift to pick it up). Title menu 60 fps with
