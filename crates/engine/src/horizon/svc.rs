@@ -335,7 +335,19 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
         14 => 0, // stack region: none reserved
         15 => 0,
         18 => 0x0100_F2C0_115B_6000, // program id
+        20 => {
+            // User exception context area (newer SDKs' SetDyingMessageRegion writes to +0x1c0).
+            static CTX: std::sync::OnceLock<Box<[u8; 0x1000]>> = std::sync::OnceLock::new();
+            CTX.get_or_init(|| Box::new([0u8; 0x1000])).as_ptr() as u64
+        }
+        21 => 0x1_0000_0000,          // total non-system memory
+        22 => 0x8000_0000,            // used non-system memory
         23 => 1,                     // is application
+        24 => {
+            // Free thread count (SDK 11+, Unity 2022+ JobSystem checks >= 1). Limit is 96 threads.
+            let active = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
+            (96usize.saturating_sub(active).max(1)) as u64
+        }
         // 65000+ are Mesosphere (Atmosphere kernel) extensions; Nintendo's kernel rejects them, as we do.
         65000.. => return 0xF001 | (0 << 9),
         _ => {
