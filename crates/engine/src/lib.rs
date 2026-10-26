@@ -682,6 +682,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 (base, mem_space.text_size),
                 os::Prot::ReadWrite,
             );
+            horizon::uemalloc::install(base, &id);
         }
         if let (Some(id), Some(sdk_mod)) =
             (guest::mod_patches::nso_build_id(sdk_path), sdk.as_ref())
