@@ -359,9 +359,9 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    then SDL3 host I/O, then the builder's Windows target.
    Headless: **done**. `nxport-cli lift-game <dump> -o <dir>` lifts the game as the runtime loads and patches it
    (nxport::guest_modules: main, the SDK, the code islands) and writes `modules.txt`; `nxport-cli compile-guest
-   <dir> -o guest.dll --cc "zig cc"` compiles the C files in parallel (objects are reused while their C file is
-   unchanged, and lift-game leaves unchanged files alone) and links the library; `nxport <dump>
-   --guest-library=guest.dll` runs it with `gpu::null`. On TotK 1.0.0 the lift takes 20 s (12.7 M instructions,
+   <dir> -o guest.dll --cc "zig cc"` compiles the C files in parallel (objects are reused while they are newer than
+   their C file and the runtime's headers, and lift-game leaves unchanged files alone) and links the library; `nxport
+   <dump> --guest-library=guest.dll --gpu=null --headless` runs it with `gpu::null`. On TotK 1.0.0 the lift takes 20 s (12.7 M instructions,
    about 630,000 functions, many of them pieces of functions split at computed branches) and the compile about 5
    minutes on 16 threads with zig cc 0.13; the game boots, loads its resources, and plays its opening (event flows
    Dm_OP_0017 to 0034, voice and music streaming) for 10 minutes without a fault, presenting about 7 frames a second
@@ -383,5 +383,28 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    Vulkan shader precompilation: **done**. `nxport_build::vulkan_precompile` and `nxport-cli shaders precompile-vulkan`
    provide offline extraction, SASS-to-SPIR-V translation, pipeline synthesis from shared lists (with `p1` to `p2` conversion)
    and `pipelines.vkcache` generation on the Vulkan driver.
+   CPU performance: measured with `--gpu=null --headless --no-vsync` (the frame rate is then the CPU side's
+   throughput; with vsync TotK paces itself to 30, 20 or 15 fps by its present interval, which hides changes between
+   those steps) and with a sampling profiler outside the repository (threads suspended every 2 ms, stacks walked with
+   dbghelp, guest.dll addresses mapped to lifted functions through its exported tables). On TotK 1.0.0 (16 threads,
+   RTX 4080) the first profile had 45% of all running samples in two MinGW CRT functions: the game runs with FPCR.FZ |
+   DN, and every FP instruction under FZ took simd_fp.h's slow path, which switched the host's rounding mode twice
+   (fegetround / fesetround, each translating MXCSR). FZ in round-to-nearest now has its own out-of-line path that
+   flushes operands and tiny results without touching the rounding mode (bit-exact with the slow path). Then HLE
+   entries: host_call found an HLE function's adapter through two shared tables behind two mutexes on every call, now
+   once per thread and address; and the HLE call history, one ring behind one mutex for all threads, is a ring per
+   thread. Title menu, null GPU, no vsync: 26 fps -> 100 fps (FZ) -> 117 fps (HLE entries). On Vulkan with vsync:
+   title menu 20 -> 30 fps, gameplay beneath Hyrule Castle 7.7 -> 30 fps, the game's own cap. Without vsync gameplay
+   ran at 7.8 fps before and now runs at 62 fps on Vulkan and 67 fps on the null backend, the title menu at 134 fps on
+   the null backend (October 2026, with main's changes merged). What is left is spread out: lifted code is a third of
+   the guest threads' samples, no function over 4%, and the threads spend most of their time waiting for each other
+   (light events and message queues); on Vulkan the Presentation Thread's recording (about 9 ms a frame) and the fence
+   thread's write-back copies are the busiest host work. Tried without effect: a 1 ms system timer resolution
+   (timeBeginPeriod; the precise sleeps already use a high-resolution waitable timer), higher thread priority for
+   guest-main and the Presentation Thread, `restrict` on the lifted functions' Cpu pointer (clang generates the same
+   code: the pointer escapes into every call). Compile flags: zig cc builds every -O1 to -O3 as clang -O2 (its
+   ReleaseFast), for the build machine's CPU, so the -O1 compile-guest passes is -O2 there; a compile from scratch
+   takes 8 to 13 minutes on 16 threads (the FZ path's out-of-line functions, specialised per operation, make guest.dll
+   about 6% larger).
 7. Plugin mods: two-pass lifting, then the interpreter fallback.
 8. Windows arm64 on the native path.

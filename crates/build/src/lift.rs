@@ -86,7 +86,7 @@ pub fn compile(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
     // The x86-64-v3 features, spelled out (zig cc 0.13 misreads -march=x86-64-v3): above all hardware FMA, which the
-    // lifted floating-point code needs to round like the guest's.
+    // lifted floating-point code needs to round like the guest's. zig cc builds any of -O1 to -O3 as clang -O2.
     let flags = [
         "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c",
         "-mpopcnt", "-msse4.2", "-mcx16",
