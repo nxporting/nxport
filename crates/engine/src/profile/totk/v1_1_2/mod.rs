@@ -5,6 +5,8 @@
 #[cfg(nx_native)]
 pub mod aspect;
 #[cfg(nx_native)]
+pub mod dynamic_fps;
+#[cfg(nx_native)]
 pub mod hud;
 
 use crate::profile::VersionProfile;
@@ -77,6 +79,9 @@ pub unsafe fn install_v1_1_2_hooks(
             }
         } else {
             println!("[+] Frame pacer: stock 30 fps cap active (minimum present interval 2)");
+        }
+        if fps_unlocked && crate::settings::get().totk.v1_1_2.dynamic_fps {
+            dynamic_fps::install(base, mem_space);
         }
     }
 
