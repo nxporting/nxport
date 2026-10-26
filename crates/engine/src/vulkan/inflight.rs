@@ -89,6 +89,8 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
             Occl::Reset => *carried = 0,
             Occl::Report(addr) => {
                 super::exec::write_report(addr, *carried, true);
+                let host = crate::nvn::api::translate_virtual(addr as usize);
+                crate::gpu::report_guard::close(host);
                 let frame = super::VULKAN.frames.load(Ordering::Relaxed) + 1;
                 let count = *carried;
                 crate::gpu::history::journal(|| format!("occl f{frame} #0 pos [] draws 0 = {count} @{addr:#x} submit {}", d.serial));

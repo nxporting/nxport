@@ -777,12 +777,12 @@ pub(crate) unsafe fn with_open<R>(addr: usize, len: usize, f: impl FnOnce() -> R
 }
 
 /// Whether any hold exists (fast path of report_guard::engine_copy).
-pub(super) fn any_held() -> bool {
+pub(crate) fn any_held() -> bool {
     LIVE.load(Ordering::Acquire) != 0
 }
 
 /// Where the engine accesses host address `a`: through the hold's alias while its page is held, else `a` itself.
-pub(super) fn engine_ptr(a: usize) -> Option<usize> {
+pub(crate) fn engine_ptr(a: usize) -> Option<usize> {
     if LIVE.load(Ordering::Acquire) == 0 || a >= HI.load(Ordering::Relaxed) || a < LO.load(Ordering::Relaxed) {
         return None;
     }

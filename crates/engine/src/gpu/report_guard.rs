@@ -54,7 +54,7 @@ pub(crate) fn engine_scope() -> impl Drop {
 static CODE_START: AtomicUsize = AtomicUsize::new(0);
 static CODE_END: AtomicUsize = AtomicUsize::new(0);
 
-pub(super) fn set_guest_code_range(start: usize, end: usize) {
+pub(crate) fn set_guest_code_range(start: usize, end: usize) {
     CODE_START.store(start, Ordering::Release);
     CODE_END.store(end, Ordering::Release);
 }
@@ -63,7 +63,7 @@ pub(super) fn set_guest_code_range(start: usize, end: usize) {
 static STUBS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
 static ENGINE_TEXT: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
 
-pub(super) fn set_hle_stub_range(start: usize, end: usize) {
+pub(crate) fn set_hle_stub_range(start: usize, end: usize) {
     STUBS[0].store(start, Ordering::Release);
     STUBS[1].store(end, Ordering::Release);
     unsafe {
@@ -91,7 +91,7 @@ fn within(r: &[AtomicUsize; 2], a: usize) -> bool {
 /// them before the write-back gave the copies zeros). Our own code never waits: a game thread inside it may hold a lock
 /// the submit producing the reports needs (the gfx state lock), which deadlocked until the timeout at gameplay start
 /// (2026-10-15).
-pub(super) fn may_wait(pc: usize, lr: usize) -> bool {
+pub(crate) fn may_wait(pc: usize, lr: usize) -> bool {
     crate::cpu::tls::is_guest_thread()
         && !IN_ENGINE.with(|e| e.get())
         && ((pc >= CODE_START.load(Ordering::Acquire) && pc < CODE_END.load(Ordering::Acquire))
@@ -147,7 +147,7 @@ fn find(page: usize) -> Option<usize> {
 }
 
 /// A shared second mapping of `page` (same physical memory, its own protection).
-pub(super) unsafe fn make_alias(page: usize) -> usize {
+pub(crate) unsafe fn make_alias(page: usize) -> usize {
     let (mut target, mut cur, mut max) = (0u64, 0i32, 0i32);
     // VM_FLAGS_ANYWHERE, copy = false (shared), VM_INHERIT_NONE.
     let kr = mach_vm_remap(
@@ -170,10 +170,9 @@ pub(super) unsafe fn make_alias(page: usize) -> usize {
     }
 }
 
-/// The protection of a page that is not held here: read-only while the early-fence write guard holds it
-/// (metal/fence_guard.rs), else read-write.
+/// The protection of a page that is not held here: read-only while the early-fence write guard holds it, else read-write.
 fn open_prot(page: usize) -> i32 {
-    if super::fence_guard::holds(page) {
+    if crate::gpu::backend().early_fence_holds(page) {
         libc::PROT_READ
     } else {
         libc::PROT_READ | libc::PROT_WRITE
@@ -201,7 +200,7 @@ unsafe fn open_page(i: usize, page: usize) {
     lock_slot(i);
     if PROTECTED[i].load(Ordering::Acquire) != 0 {
         libc::mprotect(page as *mut libc::c_void, PAGE, open_prot(page));
-        super::tex_backing::disc_reprotect(page, PAGE);
+        crate::gpu::backend().disc_reprotect(page, PAGE);
         PROTECTED[i].store(0, Ordering::Release);
     }
     unlock_slot(i);
@@ -221,7 +220,7 @@ unsafe fn close_page(i: usize, page: usize, again: bool) {
 }
 
 /// After another module changed the protection of [addr, addr+len): pages held here stay inaccessible (signal-safe).
-pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
+pub(crate) unsafe fn reprotect_held(addr: usize, len: usize) {
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
     for i in 0..n {
         let page = PAGE_ADDR[i].load(Ordering::Acquire);
@@ -261,7 +260,7 @@ unsafe fn free_slot(i: usize) {
         RETIRED
             .lock()
             .unwrap()
-            .push((alias, super::presented_frames()));
+            .push((alias, crate::gpu::backend().presented_frames()));
     }
     let mut n = HIGH.load(Ordering::Acquire);
     while n > 0 && PAGE_ADDR[n - 1].load(Ordering::Acquire) == 0 {
@@ -271,7 +270,7 @@ unsafe fn free_slot(i: usize) {
 }
 
 /// A submit starts: `addrs` are the host addresses of its SAMPLES_PASSED reports.
-pub(super) fn begin_submit(addrs: &[usize]) {
+pub(crate) fn begin_submit(addrs: &[usize]) {
     if mode() == crate::settings::ReportGuard::Off || addrs.is_empty() {
         return;
     }
@@ -333,7 +332,7 @@ pub(super) fn begin_submit(addrs: &[usize]) {
 }
 
 /// Crash reports: this page's slot state.
-pub(super) fn describe(addr: usize) -> String {
+pub(crate) fn describe(addr: usize) -> String {
     let page = addr & !(PAGE - 1);
     match find(page) {
         Some(i) => format!(
@@ -351,22 +350,35 @@ pub(super) fn describe(addr: usize) -> String {
 }
 
 /// Where the engine accesses host address `a`: through the alias while its page is guarded, else `a` itself.
-pub(super) fn engine_ptr(a: usize) -> usize {
+pub(crate) fn engine_ptr(a: usize) -> usize {
+    #[inline]
+    fn fallback(a: usize) -> usize {
+        #[cfg(target_os = "macos")]
+        return crate::metal::rt_guard::engine_ptr(a).unwrap_or(a);
+        #[cfg(not(target_os = "macos"))]
+        return a;
+    }
+
     if HIGH.load(Ordering::Acquire) == 0 {
-        return super::rt_guard::engine_ptr(a).unwrap_or(a);
+        return fallback(a);
     }
     match find(a & !(PAGE - 1)) {
         Some(i) => match ALIAS[i].load(Ordering::Acquire) {
-            0 => a,
+            0 => fallback(a),
             alias => alias + (a & (PAGE - 1)),
         },
-        None => a,
+        None => fallback(a),
     }
 }
 
 /// Copies guest memory at `src` into `dst` (engine side: guarded pages are read through their aliases).
-pub(super) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
-    if HIGH.load(Ordering::Acquire) == 0 && !super::rt_guard::any_held() {
+pub(crate) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
+    #[cfg(target_os = "macos")]
+    let no_rt = !crate::metal::rt_guard::any_held();
+    #[cfg(not(target_os = "macos"))]
+    let no_rt = true;
+
+    if HIGH.load(Ordering::Acquire) == 0 && no_rt {
         std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), dst.len());
         return;
     }
@@ -380,7 +392,7 @@ pub(super) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
 }
 
 /// The report at host address `a` was written (or will never be): one less pending on its page; the last one opens it.
-pub(super) fn close(a: usize) {
+pub(crate) fn close(a: usize) {
     if mode() == crate::settings::ReportGuard::Off || HIGH.load(Ordering::Acquire) == 0 {
         return;
     }
@@ -460,7 +472,7 @@ unsafe fn record_hit(pc: usize, lr: usize, addr: usize, guest: bool, write: bool
 }
 
 /// Signal-handler hook: true if `addr` is on a page held here (the access is then retried).
-pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bool {
+pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bool {
     if mode() == crate::settings::ReportGuard::Off {
         return false;
     }
@@ -545,7 +557,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
 }
 
 /// Called once per presented frame: prints the faults seen (log mode) and statistics every 300 frames.
-pub(super) fn frame_end(frame: u64) {
+pub(crate) fn frame_end(frame: u64) {
     if mode() == crate::settings::ReportGuard::Off {
         return;
     }

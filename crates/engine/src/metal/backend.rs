@@ -53,6 +53,14 @@ impl Backend for Metal {
         super::presented_frames()
     }
 
+    fn early_fence_holds(&self, page: usize) -> bool {
+        super::fence_guard::holds(page)
+    }
+
+    fn disc_reprotect(&self, addr: usize, len: usize) {
+        unsafe { super::tex_backing::disc_reprotect(addr, len) };
+    }
+
     fn access_fault(&self, f: &Fault) -> bool {
         unsafe {
             super::report_guard::fault(f.addr, f.pc, f.lr, f.write)

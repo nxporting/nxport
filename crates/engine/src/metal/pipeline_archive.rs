@@ -415,6 +415,7 @@ pub fn build(out: &Path, script: bool) -> Result<(), String> {
                             }
                         };
                         let mut lines = Vec::new();
+                        let mut added_functions = std::collections::HashSet::new();
                         for &i in group {
                             let p = &planned[i];
                             BUILDING.with(|b| *b.borrow_mut() = Some(Vec::new()));
@@ -424,17 +425,20 @@ pub fn build(out: &Path, script: bool) -> Result<(), String> {
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             };
-                            // (Not for the script: the function would join the archive under its name next to the
-                            // pipeline's own specialisation, which then gets another name.)
-                            for (fd, flib) in functions.iter().filter(|_| !script) {
-                                if let Err(e) = archive.addFunctionWithDescriptor_library_error(fd, flib) {
-                                    println!("[!] Pipelines: function: {}", e.localizedDescription());
+                            for (fd, flib) in &functions {
+                                let name = fd.name().map(|n| n.to_string()).unwrap_or_default();
+                                if added_functions.insert(name) {
+                                    if let Err(e) = archive.addFunctionWithDescriptor_library_error(fd, flib) {
+                                        println!("[!] Pipelines: function: {}", e.localizedDescription());
+                                    }
                                 }
                             }
-                            if let Err(e) = archive.addRenderPipelineFunctionsWithDescriptor_error(&desc) {
-                                println!("[!] Pipelines: {} / {}: {}", p.entry.vs, p.entry.fs.as_deref().unwrap_or("-"), e.localizedDescription());
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                continue;
+                            if !script {
+                                if let Err(e) = archive.addRenderPipelineFunctionsWithDescriptor_error(&desc) {
+                                    println!("[!] Pipelines: {} / {}: {}", p.entry.vs, p.entry.fs.as_deref().unwrap_or("-"), e.localizedDescription());
+                                    failed.fetch_add(1, Ordering::Relaxed);
+                                    continue;
+                                }
                             }
                             if script {
                                 lines.push(script_entry(&desc, &format!("g{g}")));

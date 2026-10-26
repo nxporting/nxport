@@ -219,8 +219,9 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
         return;
     }
     super::guard::note_write(a, 16);
-    std::ptr::write_unaligned(a as *mut u64, value);
-    std::ptr::write_unaligned((a + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
+    let p = crate::gpu::report_guard::engine_ptr(a);
+    std::ptr::write_unaligned(p as *mut u64, value);
+    std::ptr::write_unaligned((p + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
 }
 
 /// Disjoint address ranges [start, end), merged as they are added.
