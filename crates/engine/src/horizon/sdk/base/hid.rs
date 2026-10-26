@@ -50,11 +50,12 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", adapt!(fn(arg: *const u8) -> i32 {
         crate::horizon::hle::hle_nn_hid_ShowControllerSupport(std::ptr::null_mut(), arg)
     })),
-    // Motion sensor drift compensation: nothing to configure (six-axis states are synthesized).
+    // Motion sensor drift compensation: standard mode (1).
+    Entry("_ZN2nn3hid25GetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleE", adapt!(fn(_handle: *const u32) -> i32 { 1 })),
     Entry("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE", func!(crate::horizon::nn::noop_void())),
     Entry("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE", func!(crate::horizon::hle::hle_nn_hid_ShowControllerSupport(_, _))),
     Entry("_ZN2nn3hid21StartLrAssignmentModeEv", func!(crate::horizon::hle::hle_nn_hid_assignment_noop())),
-    Entry("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", func!(crate::horizon::nn::hid_get_states_zero(_, _, _))),
+    Entry("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", func!(crate::horizon::hle::hle_nn_hid_GetSixAxisSensorStates(_, _, _))),
     Entry("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE", func!(crate::horizon::hle::hle_nn_hid_GetVibrationDeviceInfo(_, _))),
     Entry("_ZN2nn3hid22SetSupportedNpadIdTypeEPKjm", func!(crate::horizon::hle::hle_nn_hid_SetSupportedNpadIdType(_, _))),
     Entry("_ZN2nn3hid22StopSevenSixAxisSensorEv", func!(crate::horizon::hle::hle_nn_hid_StopSevenSixAxisSensor())),

@@ -1544,19 +1544,70 @@ unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
         *(p.add(28) as *mut i32) = 15;
     }
 }
-/// GetSixAxisSensorState (96 bytes): no motion, identity orientation.
+/// SixAxisSensorState (96 bytes): 200 Hz accelerometer + gyroscope samples.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct SixAxisSensorState {
+    pub delta_ns: i64,
+    pub sampling_number: i64,
+    pub acceleration: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub angle: [f32; 3],
+    pub direction: [f32; 9],
+    pub attributes: u32,
+    pub _pad: u32,
+}
+
+impl Default for SixAxisSensorState {
+    fn default() -> Self {
+        Self {
+            delta_ns: 5_000_000, // 5 ms (200 Hz)
+            sampling_number: 0,
+            acceleration: [0.0, 0.0, -1.0], // Gravity vector: 1G downwards
+            angular_velocity: [0.0, 0.0, 0.0],
+            angle: [0.0, 0.0, 0.0],
+            direction: [
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0,
+            ],
+            attributes: 1, // SixAxisSensorAttribute_IsConnected
+            _pad: 0,
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorState(out: *mut u8, _handle: *const u32) {
     if out.is_null() {
         return;
     }
-    std::ptr::write_bytes(out, 0, 96);
-    // direction (DirectionState: Float3 x, y, z) starts after deltaTime, samplingNumber and three Float3s: 16 + 36.
-    let dir = out.add(52) as *mut f32;
-    *dir.add(0) = 1.0;
-    *dir.add(4) = 1.0;
-    *dir.add(8) = 1.0;
+    let samp = (hle_nn_os_GetSystemTick() / 96_000) as i64; // ~5ms ticks at 19.2MHz
+    let mut state = SixAxisSensorState::default();
+    state.sampling_number = samp;
+    std::ptr::copy_nonoverlapping(&state, out as *mut SixAxisSensorState, 1);
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorStates(
+    out: *mut u8,
+    count: i32,
+    _handle: *const u32,
+) -> i32 {
+    if out.is_null() || count <= 0 {
+        return 0;
+    }
+    let n = count.min(16) as usize;
+    let samp = (hle_nn_os_GetSystemTick() / 96_000) as i64;
+    let states_ptr = out as *mut SixAxisSensorState;
+    for i in 0..n {
+        let mut state = SixAxisSensorState::default();
+        state.sampling_number = samp - i as i64;
+        std::ptr::copy_nonoverlapping(&state, states_ptr.add(i), 1);
+    }
+    n as i32
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_IsSixAxisSensorAtRest(_handle: *const u32) -> bool {
     true
