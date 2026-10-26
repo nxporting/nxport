@@ -174,6 +174,10 @@ impl Backend for Vulkan {
             }
             *start = Some(now);
         }
+        // --hle-history-at=N: the recent HLE calls and the guest threads' waits, as the Metal backend prints them.
+        if crate::settings::get().log.hle_history_at == Some(n) {
+            crate::horizon::hle::summarize_hle_call_history();
+        }
         // --dump-frame=N,..: the presented image as /tmp/nxport_frame_N.ppm (as the Metal backend writes it).
         let dump = &crate::settings::get().dump;
         if dump.dump_frame.contains(&n) {
