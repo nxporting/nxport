@@ -579,26 +579,8 @@ impl Ctx {
                             }
                         }
                     }
-                    // In place unless this submit's commands write that memory: the write guard holds the pages while the
-                    // GPU reads them, and the shader checks the bound size. TotK finishes some of a frame's constants
-                    // (HUD and dialogue text) after it submits the frame; copies taken while recording, or frozen at the
-                    // submit, drew other glyphs (the "L" key icon as a digit, dialogue text flickering).
-                    if *slot >= 3 {
-                        if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
-                            let a = crate::nvn::api::translate_virtual(addr as usize);
-                            let len = size.min(0x10000);
-                            if a > 0x10000 && len > 0 && !self.cmd_writes.overlaps(a, a + len) && !crate::vulkan::guard::hot(a, len) {
-                                if let Some((buf, off)) = self.imports.find(&self.dev, a, len) {
-                                    if off % self.dev.limits.min_uniform_buffer_offset_alignment.max(1) == 0 {
-                                        crate::vulkan::guard::note_read(a, len);
-                                        limits.push((b.binding - base, len));
-                                        buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len as u64 }));
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // Others are copied (only the extent the stage reads), as on Metal: in place, the game's writes to their
+                    // pages for the next frame waited for the GPU (the write guard), several milliseconds per frame.
                     let bytes = cbuf(self, *slot);
                     let x = match &bytes {
                         // The driver buffer changes per draw; others are copied once per contents (the same memory
@@ -1081,7 +1063,7 @@ impl Ctx {
                     self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
                     continue;
                 }
-                let b = match self.imports.find(&self.dev, a, size).filter(|_| !crate::vulkan::guard::hot(a, size)) {
+                let b = match self.imports.find(&self.dev, a, size) {
                     Some(x) => {
                         crate::vulkan::guard::note_read(a, size);
                         Some(x)
@@ -1257,7 +1239,7 @@ impl Ctx {
             1 => {
                 // In place only at 4-byte aligned offsets: Metal (under MoltenVK) needs them for 16-bit indices too, and
                 // passed 2-mod-4 offsets through (Super Mario Odyssey's Cap Kingdom ground: draws with garbage indices).
-                let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0 && !crate::vulkan::guard::hot(a, n * 2));
+                let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
                     crate::vulkan::guard::note_read(a, n * 2);
                 }
@@ -1271,7 +1253,7 @@ impl Ctx {
                 self.arena.copy(&self.dev, &v).map(|(b, o)| (b, o, vk::IndexType::UINT32))
             }
             _ => {
-                let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0 && !crate::vulkan::guard::hot(a, n * 4));
+                let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
                     crate::vulkan::guard::note_read(a, n * 4);
                 }
