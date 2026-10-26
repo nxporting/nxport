@@ -167,6 +167,8 @@ group! {
         no_rumble: bool = false,
         /// Rumble strength factor
         rumble_scale: f32 = 1.0,
+        /// Text the software keyboard returns (default: the game's initial text, else "Player"; "<cancel>" cancels)
+        keyboard_text: Option<String> = None,
     }
 }
 
