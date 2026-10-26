@@ -6351,8 +6351,7 @@ impl Gfx {
                                         env.cx.arena.alloc(&self.device, bytes)
                                     };
                                     if let Some(f) = &fresh {
-                                        // Only ranges no executor write of this submit touches get here (plan_uniforms): never invalidated.
-                                        env.cx.ubo_copies.insert(key, f.clone(), false);
+                                        env.cx.ubo_copies.insert(key, f.clone(), true);
                                     }
                                     match cached.or(fresh) {
                                         Some(x) => x,
