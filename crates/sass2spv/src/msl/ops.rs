@@ -174,7 +174,7 @@ pub fn operation(c: &mut Ctx, node: AstId) -> Res {
         I::LOGARITHM_B2 => unary_func(c, &op, "log2", ""),
         I::SINE => unary_func(c, &op, "sin", ""),
         I::COSINE => unary_func(c, &op, "cos", ""),
-        I::CLAMP => ternary_func(c, &op, "fast::clamp", "clamp"),
+        I::CLAMP => ternary_func(c, &op, "precise::clamp", "clamp"),
         I::CLAMP_U32 => {
             let a = c.expr(A::U32, s(0)?)?;
             let b = c.expr(A::U32, s(1)?)?;
@@ -182,8 +182,8 @@ pub fn operation(c: &mut Ctx, node: AstId) -> Res {
             vcall(c, A::U32, "clamp", vec![a, b, d])
         }
         I::FUSED_MULTIPLY_ADD => ternary_func(c, &op, "fma", ""),
-        I::MAXIMUM => binary_func(c, &op, "fast::max", "max"),
-        I::MINIMUM => binary_func(c, &op, "fast::min", "min"),
+        I::MAXIMUM => binary_func(c, &op, "precise::max", "max"),
+        I::MINIMUM => binary_func(c, &op, "precise::min", "min"),
         I::MAXIMUM_U32 => {
             let a = c.expr(A::U32, s(0)?)?;
             let b = c.expr(A::U32, s(1)?)?;

@@ -1051,7 +1051,12 @@ fn texture_sample(c: &mut CodeGenContext, op: &Op) -> Res {
             }
             let s = c.type_s32();
             let vt = c.m.type_vector(&s, Lit::i32(count), false);
-            Ok(c.m.constant_composite(&vt, &elems))
+            let all_const = elems.iter().all(|e| matches!(e.opcode, crate::spv::Op::CONSTANT | crate::spv::Op::CONSTANT_COMPOSITE | crate::spv::Op::CONSTANT_NULL));
+            if all_const {
+                Ok(c.m.constant_composite(&vt, &elems))
+            } else {
+                Ok(c.m.composite_construct(&vt, &elems))
+            }
         } else {
             srcs.next(c, A::S32)
         }
@@ -1100,15 +1105,26 @@ fn texture_sample(c: &mut CodeGenContext, op: &Op) -> Res {
         operands.push(dy.clone());
     }
     if has_offset {
-        mask |= ImageOperandsMask::CONST_OFFSET.0;
+        let is_const = matches!(offsets[0].opcode, crate::spv::Op::CONSTANT | crate::spv::Op::CONSTANT_COMPOSITE | crate::spv::Op::CONSTANT_NULL);
+        if is_const {
+            mask |= ImageOperandsMask::CONST_OFFSET.0;
+        } else {
+            mask |= ImageOperandsMask::OFFSET.0;
+        }
         operands.push(offsets[0].clone());
     } else if has_offsets {
-        mask |= ImageOperandsMask::CONST_OFFSETS.0;
+        let all_const = offsets.iter().all(|o| matches!(o.opcode, crate::spv::Op::CONSTANT | crate::spv::Op::CONSTANT_COMPOSITE | crate::spv::Op::CONSTANT_NULL));
         let s = c.type_s32();
         let v2 = c.m.type_vector(&s, Lit::i32(2), false);
         let len = c.const_u32_i(4);
         let arrayv2 = c.m.type_array(&v2, &len, false);
-        operands.push(c.m.constant_composite(&arrayv2, &offsets));
+        if all_const {
+            mask |= ImageOperandsMask::CONST_OFFSETS.0;
+            operands.push(c.m.constant_composite(&arrayv2, &offsets));
+        } else {
+            mask |= ImageOperandsMask::OFFSETS.0;
+            operands.push(c.m.composite_construct(&arrayv2, &offsets));
+        }
     }
     if is_multisample {
         mask |= ImageOperandsMask::SAMPLE.0;
