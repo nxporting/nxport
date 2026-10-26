@@ -146,6 +146,7 @@ unsafe fn open_pages(s: usize, e: usize) {
         p += PAGE;
     }
     super::report_guard::reprotect_held(s, e - s);
+    super::rt_guard::reprotect_held(s, e - s);
     disc_reprotect(s, e - s);
 }
 

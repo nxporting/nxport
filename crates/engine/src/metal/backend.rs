@@ -56,6 +56,7 @@ impl Backend for Metal {
     fn access_fault(&self, f: &Fault) -> bool {
         unsafe {
             super::report_guard::fault(f.addr, f.pc, f.lr, f.write)
+                || super::rt_guard::fault(f.addr, f.pc, f.lr, super::report_guard::may_wait(f.pc, f.lr), f.write)
                 || super::tex_backing::fault(f.addr, f.pc, f.lr, f.write)
                 // dirty_track would claim pages it once tracked and unprotect them without waiting: this goes first.
                 || super::fence_guard::fault(f.addr)
@@ -75,6 +76,7 @@ impl Backend for Metal {
         unsafe {
             super::report_guard::reprotect_held(addr, len);
             super::tex_backing::disc_reprotect(addr, len);
+            super::rt_guard::reprotect_held(addr, len);
         }
     }
 
@@ -83,10 +85,12 @@ impl Backend for Metal {
             super::fence_guard::before_host_write(addr, len);
             super::tex_backing::open_overlapping(addr, len);
         }
+        super::rt_guard::superseded(addr, len);
     }
 
     fn release_for_gpu(&self, addr: usize, len: usize) {
         unsafe { super::tex_backing::open_overlapping(addr, len) };
+        super::rt_guard::superseded(addr, len);
     }
 
     fn read_texture(&self, texture: usize, gen: u32, level: u32, layer: u32) -> Option<crate::gpu::Texels> {

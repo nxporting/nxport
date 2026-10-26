@@ -262,6 +262,8 @@ group! {
         split_ms: f64 = 1.0,
         /// Run tiny render passes as compute kernels
         tiny_compute: bool = true,
+        /// Unlocked frame rates (present interval 0): start frames on the display's refresh (F6 toggles)
+        display_pacing: bool = true,
         /// Largest tiny-pass rectangle, in pixels
         tiny_max_px: u64 = 640 * 360,
         /// Draw runs that differ only in their uniforms as one instanced draw
@@ -283,6 +285,9 @@ group! {
         /// Do not copy rarely drawn render targets back into guest memory (a workaround: the CPU reads of
         /// GPU-written memory are not trapped)
         no_rt_writeback: bool = false,
+        /// Render targets in CPU-visible memory pools are copied into guest memory when the CPU touches them (off: the
+        /// older copy of rarely drawn targets one frame later)
+        rt_guard: bool = true,
     }
 }
 
@@ -433,6 +438,8 @@ group! {
         log_movie: bool = false,
         log_occl: bool = false,
         log_pacing: bool = false,
+        /// Per frame: start, present and on-screen times, and whether display pacing was on
+        log_frame_pacing: bool = false,
         log_phases: bool = false,
         log_pool_reg: bool = false,
         log_refresh_hash: bool = false,

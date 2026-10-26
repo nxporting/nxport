@@ -40,6 +40,7 @@ pub(crate) mod pipeline_archive;
 mod programs;
 mod readback;
 mod report_guard;
+pub(crate) mod rt_guard;
 pub mod shader_cache;
 mod tex_backing;
 mod translated;
@@ -78,6 +79,8 @@ pub(super) struct CachedPassRts {
     pub(super) samples: u32,
     pub(super) enc_key: smallvec::SmallVec<[u64; 36]>,
     pub(super) target_size: (f64, f64),
+    /// Block-compressed targets rendered through proxies: (proxy, target, level), see `bc_proxy`.
+    pub(super) bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]>,
 }
 
 pub(crate) struct State {
@@ -1277,6 +1280,7 @@ impl Gfx {
                 .or_insert(0) += 1;
         }
         if let Some(e) = st.enc.take() {
+            rt_guard::pass_end();
             st.rts_dirty = true;
             st.cached_rts = None;
             journal(|| format!("  end {} draws {}", st.enc_name, st.enc_draws));
@@ -1727,6 +1731,23 @@ impl Gfx {
                 t.storage
             )
         });
+        if watch_texture(&t) {
+            let len = layout_of(&t).total as usize;
+            println!(
+                "[watch-size] f{} new metal {:x} for {:#x}: {}x{} fmt {} lv {} flags {:#x} storage {:#x}+{:#x} held {}",
+                presented_frames() + 1,
+                tex_id(&tex),
+                nvn_tex,
+                t.width,
+                t.height,
+                t.format,
+                levels,
+                t.flags,
+                t.storage,
+                len,
+                rt_guard::overlaps_held(t.storage, len)
+            );
+        }
         if watched {
             println!(
                 "[watch] f{} texture 0x{:x} ({}x{} fmt {} flags {:x}) -> new, storage id {:x}",
@@ -1950,6 +1971,12 @@ impl Gfx {
                 }
             }
             tc.tex_checked.insert(key, frame);
+            return;
+        }
+        // GPU output not written back yet: the CPU has not written it since (that would have ended the hold).
+        if rt_guard::overlaps_held(snap.storage as usize, len) {
+            journal(|| format!("  refresh skipped: tex {:#x} storage {:#x}+{:#x} under a held render target", nvn_tex, snap.storage, len));
+            why("held render target");
             return;
         }
         if tc.tex_check_budget_used + len > BUDGET {
@@ -2312,6 +2339,19 @@ impl Gfx {
         });
         if t.storage <= 0x10000 {
             return;
+        }
+        if watch_texture(t) {
+            let len = layout_of(t).total as usize;
+            println!(
+                "[watch-size] f{} upload metal {:x} from {:#x}+{:#x}: {} of {} bytes non-zero, held {}",
+                presented_frames() + 1,
+                tex_id(tex),
+                t.storage,
+                len,
+                watch_nonzero(t.storage, len),
+                len,
+                rt_guard::overlaps_held(t.storage, len)
+            );
         }
         if verify_tex_enabled() {
             UPLOADS
@@ -2866,12 +2906,26 @@ impl Gfx {
                             }
                         }
                     }
+                    // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
+                    // Every target (depth too) ends older holds on its memory.
+                    if rt_guard::enabled() {
+                        for c in colors.iter().chain(depth.iter()) {
+                            let Some((_, t)) = tex_info(c.texture) else { continue };
+                            if let Some(tex) = self.texture(&mut st.tc, c.texture) {
+                                rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
+                            }
+                        }
+                    }
                     if rt_writeback_enabled() {
                         let f = presented_frames() + 1;
                         for c in colors.iter() {
                             let Some((_, t)) = tex_info(c.texture) else {
                                 continue;
                             };
+                            // The guard covers targets in CPU-visible pools (rt_guard::hold); the rest keep this.
+                            if rt_guard::enabled() && crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+                                continue;
+                            }
                             // Only targets not rendered in the previous 4 frames: per-frame targets, swapchain images and
                             // ping-pong pairs are skipped after their first use, textures rendered once (generated maps)
                             // are written back.
@@ -3063,6 +3117,8 @@ impl Gfx {
                     }
                 }
                 Cmd::ReportCounter { counter, addr } => {
+                    // Reports are written into guest memory by the engine: older render-target holds there end.
+                    rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     if *counter == 1 && self.real_samples() {
                         self.occl_report(st, *addr);
                     } else {
@@ -3080,6 +3136,7 @@ impl Gfx {
                     st.ubo_plan_epoch += 1;
                 }
                 Cmd::ReportValue { value, addr } => {
+                    rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     write_counter(0, *addr, Some(*value as u64));
                     st.plan_ubo.invalidate(*addr, *addr + 16);
                     st.ubo_plan_epoch += 1;
@@ -3377,15 +3434,8 @@ impl Gfx {
         rgba: [f32; 4],
         mask: i32,
     ) {
-        if mask != 0xF || index < 0 || index as usize >= st.colors.len() {
-            static WARNED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-            if mask != 0xF && WARNED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
-                println!(
-                    "[!] Gfx: partial-channel clear dropped: c{} mask {:#x} rgba {:?}",
-                    index, mask, rgba
-                );
-            }
-            return; // partial-channel clears need a draw; not needed yet
+        if index < 0 || index as usize >= st.colors.len() {
+            return;
         }
         let rt = st.colors[index as usize];
         let Some(tex) = self.texture(&mut st.tc, rt.texture) else {
@@ -3410,7 +3460,31 @@ impl Gfx {
         if !is_color_renderable(&tex) {
             return; // e.g. a compressed or depth texture named as a color target; Metal would abort
         }
-        let _ = cb;
+        // Clears are scissored (TotK clears its Depths lit-area mask in 50x50 tiles, each followed by that tile's
+        // drawing) and channel-masked: those are drawn over the scissor rectangle, in order with everything else.
+        // Whole-level clears of all channels stay deferred, to be folded into the next pass.
+        let level = rt.level as usize;
+        let (lw, lh) = ((tex.width() >> level).max(1), (tex.height() >> level).max(1));
+        let (sx, sy, sw, sh) = st.scissor.unwrap_or((0, 0, lw as i32, lh as i32));
+        let scissored = sx > 0 || sy > 0 || (sx + sw) < lw as i32 || (sy + sh) < lh as i32;
+        if scissored || mask & 0xF != 0xF {
+            if mask & 0xF == 0 || sw <= 0 || sh <= 0 || sx >= lw as i32 || sy >= lh as i32 {
+                return;
+            }
+            self.end_encoder(st);
+            let (x0, y0) = (sx.max(0), sy.max(0));
+            let region = crate::nvn::cmd::Region {
+                x: x0,
+                y: y0,
+                z: rt.layer as i32,
+                w: (sx + sw).min(lw as i32) - x0,
+                h: (sy + sh).min(lh as i32) - y0,
+                d: 1,
+            };
+            let dst = crate::nvn::cmd::TexRef { texture: rt.texture, gen: rt.gen, level: rt.level, layer: rt.layer };
+            self.clear_region(st, cb, &tex, &dst, &region, &rgba.map(f32::to_bits), mask, level, (lw, lh));
+            return;
+        }
         let root = cached_root_id(st, &tex);
         if st
             .enc_targets
@@ -4194,6 +4268,7 @@ fn split_encoders() -> usize {
 /// encoded into it.
 fn push_inflight(st: &mut State, cb: Retained<ProtocolObject<dyn MTLCommandBuffer>>) -> u64 {
     let serial = SUBMITTED_SERIAL.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+    rt_guard::committed(serial, &cb);
     // Occlusion reports are written as soon as the command buffer completes (on the fence watcher thread) instead of
     // when the executor later retires it: with --early-fence the game reads them before its next submit, and a
     // report still unwritten then read as stale memory (an object that just came into range or switched LOD was culled
@@ -4295,6 +4370,10 @@ pub(super) enum GuestWrite {
 /// falls back to a full wait while any is pending: correct, but in Hateno play every frame has some (one buffer copy,
 /// ~77 occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
 pub(super) fn note_gpu_guest_write(kind: GuestWrite, addr: u64, len: usize) {
+    if !matches!(kind, GuestWrite::Occlusion) {
+        // (Reports end holds where they are recorded, Cmd::ReportCounter / ReportValue.)
+        rt_guard::superseded(crate::nvn::api::translate_virtual(addr as usize), len);
+    }
     if !early_fence() {
         return;
     }
@@ -4578,6 +4657,10 @@ pub(super) fn describe_fault_page(addr: usize) -> String {
 }
 
 /// The address range of guest code (--report-guard: only accesses made by guest code wait for reports).
+pub(crate) fn set_hle_stub_range(start: usize, end: usize) {
+    report_guard::set_hle_stub_range(start, end);
+}
+
 pub(crate) fn set_guest_code_range(start: usize, end: usize) {
     report_guard::set_guest_code_range(start, end);
 }
@@ -4728,6 +4811,83 @@ static TAIL_PREV: Mutex<Option<(u64, TailCbs)>> = Mutex::new(None);
 
 fn host_secs() -> f64 {
     crate::clock::now_secs()
+}
+
+/// Unlocked frame rates (present interval 0): the game measures each frame's time step from one frame start to the
+/// next. Started whenever the previous frame was done, a frame that just missed a display refresh stayed on screen a
+/// whole extra refresh the game had not counted, so motion ran ahead and fell behind in a slow wave (frame times
+/// drifting around the 8.3 ms of a 120 Hz display). Frames now start on the refresh grid, learned from when drawables
+/// actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen.
+/// Measured in windowed play (--log-frame-pacing, 2026-10-24, walking in Hateno at 65-70 fps): the spread of the time
+/// from a frame's start to its appearance on screen went from 10.7 to 4.6 ms (frames shown 4 or 5 refreshes after their
+/// start). A 60 fps cap (8.3 ms) and presenting each frame a fixed time after its start (11.9 ms: Metal did not keep the
+/// times, and frames held back stalled the drawable queue) were worse. --display-pacing (default on), F6 toggles.
+static DISPLAY_PACING: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+/// Host time (seconds, f64 bits) of the latest frame shown, and the display's refresh period.
+static SHOWN_LAST: AtomicU64 = AtomicU64::new(0);
+static SHOWN_PERIOD: AtomicU64 = AtomicU64::new(0);
+/// Host time the current frame started (left nvnWindowAcquireTexture), for --log-frame-pacing.
+static FRAME_START: AtomicU64 = AtomicU64::new(0);
+
+fn display_pacing_flag() -> &'static std::sync::atomic::AtomicBool {
+    DISPLAY_PACING.get_or_init(|| std::sync::atomic::AtomicBool::new(crate::settings::get().graphics.display_pacing))
+}
+
+pub fn display_pacing() -> bool {
+    display_pacing_flag().load(Ordering::Relaxed)
+}
+
+pub fn toggle_display_pacing() {
+    let on = !display_pacing_flag().fetch_xor(true, Ordering::Relaxed);
+    println!("[+] Gfx: display pacing {}", if on { "on" } else { "off" });
+}
+
+/// How long to wait before starting the next frame so that it starts on the display's refresh grid (None: grid not known
+/// yet, or the last frame shown is too long ago to extrapolate from).
+pub fn display_pacing_wait() -> Option<std::time::Duration> {
+    let (last, period) = (
+        f64::from_bits(SHOWN_LAST.load(Ordering::Acquire)),
+        f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire)),
+    );
+    let now = host_secs();
+    if period <= 0.0 || last <= 0.0 || now < last || now - last > 0.25 {
+        return None;
+    }
+    let next = last + ((now - last) / period).ceil() * period;
+    Some(std::time::Duration::from_secs_f64((next - now).max(0.0)))
+}
+
+/// The frame starts now (nvnWindowAcquireTexture returns).
+pub fn frame_started() {
+    FRAME_START.store(host_secs().to_bits(), Ordering::Release);
+}
+
+/// Called when `drawable` reached the screen: learns the refresh grid; --log-frame-pacing prints the frame's times.
+fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, n: u64, start: f64, presented: f64, paced: bool) {
+    let shown: f64 = unsafe { objc2::msg_send![drawable, presentedTime] };
+    if shown <= 0.0 {
+        return; // dropped (never shown)
+    }
+    let prev = f64::from_bits(SHOWN_LAST.swap(shown.to_bits(), Ordering::AcqRel));
+    let dt = shown - prev;
+    if prev > 0.0 && dt > 1.0 / 500.0 && dt < 0.1 {
+        // Shown times are whole refreshes apart: the smallest gap seen is the period.
+        let p = f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire));
+        if p <= 0.0 || dt < p * 0.9 {
+            SHOWN_PERIOD.store(dt.to_bits(), Ordering::Release);
+        }
+    }
+    if crate::settings::get().log.log_frame_pacing {
+        println!(
+            "[frame-pacing] #{} start {:.3} present +{:.2} ms shown +{:.2} ms (gap {:.2} ms) paced {}",
+            n,
+            start * 1e3,
+            (presented - start) * 1e3,
+            (shown - start) * 1e3,
+            if prev > 0.0 { dt * 1e3 } else { 0.0 },
+            paced
+        );
+    }
 }
 
 /// Names a command buffer after the encoders it holds (--log-tail).
@@ -5308,6 +5468,8 @@ fn submit_inner(handles: &[u64]) {
         let mut st = g.state.lock().unwrap();
         let Some(cb) = st.cur_cb.take() else { return };
         tail_log_label(&st, &cb);
+        // Targets written only by tiny-pass kernels end no render pass: everything of the submit is in this one.
+        rt_guard::pass_end();
         let serial = push_inflight(&mut st, cb.clone());
         st.issuer.commit_serial(cb, Some(serial)); // after the queued encoder ops, on the issuer thread (metal/issuer.rs)
     });
@@ -5871,6 +6033,20 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 enc.endEncoding();
             }
             crate::host::overlay::render(&g.device, &cb, &drawable.texture());
+            {
+                let (n, start, presented, paced) = (
+                    presented_frames() + 1,
+                    f64::from_bits(FRAME_START.load(Ordering::Acquire)),
+                    host_secs(),
+                    display_pacing(),
+                );
+                let handler = block2::RcBlock::new(
+                    move |d: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLDrawable>>| {
+                        on_shown(unsafe { d.as_ref() }, n, start, presented, paced)
+                    },
+                );
+                unsafe { objc2_metal::MTLDrawable::addPresentedHandler(&*drawable, block2::RcBlock::as_ptr(&handler)) };
+            }
             cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
             cb.commit();
             // Remember it: it is never waited on, so check how it ended when the next frame is presented. A failure here
@@ -6028,6 +6204,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
         }
         glitch_scan(g, pn, &src);
         report_guard::frame_end(pn);
+        rt_guard::frame_end(pn);
         tex_mem_report(g, pn);
         tex_backing_frame(g, pn);
         frame_history(g, pn, &src);
@@ -6647,6 +6824,17 @@ fn sweep_shared_storage(tc: &mut TexCache, colors: &[RtRef], depth: Option<&RtRe
         if tc.tex_by_desc.remove(&k).is_none() {
             continue;
         }
+        watch_log(k.storage, k.storage + 1, || {
+            format!(
+                "sweep evicted metal {:x} storage {:#x} ({}x{} fmt {}, gpu-written {})",
+                id,
+                k.storage,
+                k.width,
+                k.height,
+                k.format,
+                tc.gpu_written.contains(&id)
+            )
+        });
         tc.desc_used.remove(&k);
         tc.gpu_written.remove(&id);
         tc.tex_checked.remove(&k);
@@ -6806,6 +6994,44 @@ pub(crate) fn storage_id(t: &Tex) -> u64 {
 /// finds the writer of a texture whose storage address changes from run to run.
 fn watch_size() -> Option<(u32, u32)> {
     crate::settings::get().trace.watch_size.map(|s| (s.w, s.h))
+}
+
+/// Guest memory of the textures --watch-size has seen; watch_log reports everything else that touches it (holds,
+/// write-backs, ended holds, engine reads of held pages, cache evictions), so a texture's whole history is in the log.
+static WATCH_MEM: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Remembers `t`'s memory when it has the --watch-size size; true if it does.
+pub(crate) fn watch_texture(t: &NvnTexture) -> bool {
+    let Some((w, h)) = watch_size() else {
+        return false;
+    };
+    if t.width as u32 != w || t.height as u32 != h || t.storage <= 0x10000 {
+        return false;
+    }
+    let range = (t.storage, t.storage + layout_of(t).total as usize);
+    let mut m = WATCH_MEM.lock().unwrap();
+    if !m.contains(&range) {
+        if m.len() >= 8192 {
+            m.remove(0);
+        }
+        m.push(range);
+    }
+    true
+}
+
+pub(crate) fn watch_log(start: usize, end: usize, what: impl FnOnce() -> String) {
+    if watch_size().is_none() || !WATCH_MEM.lock().unwrap().iter().any(|&(s, e)| s < end && e > start) {
+        return;
+    }
+    println!("[watch-size] f{} {}", presented_frames() + 1, what());
+}
+
+/// Non-zero bytes of [addr, addr+len) read without disturbing holds (through their second mappings).
+unsafe fn watch_nonzero(addr: usize, len: usize) -> usize {
+    match rt_guard::guest_copy::<u8>(addr, len) {
+        Some(v) => v.iter().filter(|&&b| b != 0).count(),
+        None => std::slice::from_raw_parts(addr as *const u8, len).iter().filter(|&&b| b != 0).count(),
+    }
 }
 
 /// GPU-rendered textures in guest memory. On the Switch the GPU writes render targets into memory the CPU shares, and

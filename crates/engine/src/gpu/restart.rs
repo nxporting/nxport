@@ -43,21 +43,33 @@ pub unsafe fn restart_rewrite(
     // Checked before anything is allocated: most indexed draws contain no restart index.
     let values: Vec<u32> = match index_type {
         0 => {
-            let v = std::slice::from_raw_parts(addr as *const u8, n);
+            #[cfg(target_os = "macos")]
+            let held = crate::metal::rt_guard::guest_copy::<u8>(addr as usize, n);
+            #[cfg(not(target_os = "macos"))]
+            let held: Option<Vec<u8>> = None;
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u8, n));
             if restart > 0xFF || !v.contains(&(restart as u8)) {
                 return None;
             }
             v.iter().map(|&x| x as u32).collect()
         }
         1 => {
-            let v = std::slice::from_raw_parts(addr as *const u16, n);
+            #[cfg(target_os = "macos")]
+            let held = crate::metal::rt_guard::guest_copy::<u16>(addr as usize, n);
+            #[cfg(not(target_os = "macos"))]
+            let held: Option<Vec<u16>> = None;
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u16, n));
             if restart > 0xFFFF || !contains_u16(v, restart as u16) {
                 return None;
             }
             v.iter().map(|&x| x as u32).collect()
         }
         2 => {
-            let v = std::slice::from_raw_parts(addr as *const u32, n);
+            #[cfg(target_os = "macos")]
+            let held = crate::metal::rt_guard::guest_copy::<u32>(addr as usize, n);
+            #[cfg(not(target_os = "macos"))]
+            let held: Option<Vec<u32>> = None;
+            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u32, n));
             if !v.contains(&restart) {
                 return None;
             }
