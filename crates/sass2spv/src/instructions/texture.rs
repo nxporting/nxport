@@ -162,6 +162,7 @@ fn emit_tex(
         sources.push(next_reg(c, &mut rb_index));
     }
     let has_lod = lod_mode.0 > Lod::LZ.0;
+    let mut wrap_1d = false;
     if ty == SamplerType::TEXTURE_1D
         && (flags & !TextureFlags::BINDLESS) == TextureFlags::INT_COORDS
         && !(has_lod || has_depth_compare || has_offset || is_array || is_multisample)
@@ -170,6 +171,8 @@ fn emit_tex(
         let is_type_buffer = is_bindless || c.tc.gpu.sampler_type(imm, DEFAULT_CBUF_SLOT) == SamplerType::TEXTURE_BUFFER;
         if is_type_buffer {
             ty = SamplerType::TEXTURE_BUFFER;
+        } else {
+            wrap_1d = SAMPLE_1D_AS_2D;
         }
     }
     let coords_count = ty.dimensions();
@@ -178,7 +181,16 @@ fn emit_tex(
     }
     let mut is_1d_to_2d = false;
     if SAMPLE_1D_AS_2D && ty.base() == SamplerType::TEXTURE_1D {
-        sources.push(c.const_f(0.0));
+        if wrap_1d {
+            let last_idx = sources.len() - 1;
+            let x = sources[last_idx];
+            let mask = c.const_i(0x3FFF);
+            sources[last_idx] = c.bitwise_and(x, mask);
+            let shift = c.const_i(14);
+            sources.push(c.shift_right_u32(x, shift));
+        } else {
+            sources.push(c.const_f(0.0));
+        }
         ty = SamplerType::TEXTURE_2D | (ty & SamplerType::ARRAY);
         is_1d_to_2d = true;
     }
@@ -269,10 +281,17 @@ fn emit_texs(
             } else {
                 match op.target() {
                     TexsTarget::TEXTURE1_D_LOD_ZERO => {
-                        sources.push(next_reg(c, &mut src_a));
+                        let x = next_reg(c, &mut src_a);
                         if SAMPLE_1D_AS_2D {
-                            sources.push(c.const_f(0.0));
+                            let mask = c.const_i(0x3FFF);
+                            let x_coord = c.bitwise_and(x, mask);
+                            let shift = c.const_i(14);
+                            let y_coord = c.shift_right_u32(x, shift);
+                            sources.push(x_coord);
+                            sources.push(y_coord);
                             ty = (ty & !SamplerType::MASK) | SamplerType::TEXTURE_2D;
+                        } else {
+                            sources.push(x);
                         }
                         sources.push(c.const_f(0.0));
                     }
@@ -325,13 +344,22 @@ fn emit_texs(
             }
             match op.target() {
                 TldsTarget::TEXTURE1_D_LOD_ZERO => {
-                    sources.push(next_reg(c, &mut src_a));
+                    let x = next_reg(c, &mut src_a);
                     if ty != SamplerType::TEXTURE_BUFFER {
                         if SAMPLE_1D_AS_2D {
-                            sources.push(c.const_f(0.0));
+                            let mask = c.const_i(0x3FFF);
+                            let x_coord = c.bitwise_and(x, mask);
+                            let shift = c.const_i(14);
+                            let y_coord = c.shift_right_u32(x, shift);
+                            sources.push(x_coord);
+                            sources.push(y_coord);
                             ty = (ty & !SamplerType::MASK) | SamplerType::TEXTURE_2D;
+                        } else {
+                            sources.push(x);
                         }
                         sources.push(c.const_f(0.0));
+                    } else {
+                        sources.push(x);
                     }
                 }
                 TldsTarget::TEXTURE1_D_LOD_LEVEL => {
