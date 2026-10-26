@@ -693,26 +693,83 @@ const SHARED_FONT_FILES: [&str; 6] = [
     "FontKorean.ttf",
     "FontNintendoExtended.ttf",
 ];
-const HOST_FONT: &str = "/System/Library/Fonts/Supplemental/Arial.ttf";
+const HOST_FONT_CANDIDATES: &[&str] = &[
+    // macOS font paths
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Helvetica.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+    // iOS font paths
+    "/System/Library/Fonts/Core/Arial.ttf",
+    "/System/Library/Fonts/CoreAddition/Arial.ttf",
+    "/System/Library/Fonts/Core/Helvetica.ttc",
+    "/System/Library/Fonts/CoreAddition/Helvetica.ttc",
+    "/System/Library/Fonts/Core/HelveticaNeue.ttc",
+    "/System/Library/Fonts/CoreAddition/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Core/TimesNewRoman.ttf",
+    "/System/Library/Fonts/CoreAddition/TimesNewRoman.ttf",
+    "/System/Library/Fonts/Core/CourierNew.ttf",
+    "/System/Library/Fonts/CoreAddition/CourierNew.ttf",
+    "/System/Library/Fonts/Core/PingFang.ttc",
+    "/System/Library/Fonts/CoreAddition/PingFang.ttc",
+    "/System/Library/Fonts/Core/AppleSDGothicNeo.ttc",
+    "/System/Library/Fonts/CoreAddition/AppleSDGothicNeo.ttc",
+];
+static DUMMY_SHARED_FONT: &[u8] = include_bytes!("dummy_font.ttf");
 static SHARED_FONTS: [std::sync::OnceLock<Vec<u8>>; 6] = [const { std::sync::OnceLock::new() }; 6];
-static EMPTY_SHARED_FONT: [u8; 16] = [0; 16];
 
 fn load_shared_font(ty: usize) -> Vec<u8> {
     let dir = crate::settings::get().files.shared_fonts.clone();
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut font_dirs: Vec<std::path::PathBuf> = Vec::new();
     if let Some(d) = &dir {
+        font_dirs.push(d.clone());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            font_dirs.push(parent.join("fonts"));
+            font_dirs.push(parent.join("Resources/fonts"));
+            if let Some(grandparent) = parent.parent() {
+                font_dirs.push(grandparent.join("Resources/fonts"));
+                font_dirs.push(grandparent.join("fonts"));
+            }
+        }
+    }
+    if let Some(game_dir) = &crate::settings::get().files.game_dir {
+        font_dirs.push(game_dir.join("fonts"));
+        font_dirs.push(game_dir.join("RomFS/fonts"));
+    }
+    if let Some(app_data) = crate::profile::data_dir() {
+        if let Some(nxport_dir) = app_data.parent().and_then(|p| p.parent()) {
+            font_dirs.push(nxport_dir.join("fonts"));
+            font_dirs.push(nxport_dir.join("system_data/0100000000000811"));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = std::path::PathBuf::from(home);
+        font_dirs.push(p.join("Library/Application Support/nxport/fonts"));
+        font_dirs.push(p.join("Documents/fonts"));
+        font_dirs.push(p.join("Documents/Game/fonts"));
+    }
+    font_dirs.push(std::path::PathBuf::from("fonts"));
+
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for d in &font_dirs {
         paths.push(d.join(SHARED_FONT_FILES[ty]));
         paths.push(d.join(SHARED_FONT_FILES[0]));
     }
-    paths.push(HOST_FONT.into());
+    for candidate in HOST_FONT_CANDIDATES {
+        paths.push((*candidate).into());
+    }
+
     for p in &paths {
         if let Ok(bytes) = std::fs::read(p) {
             println!("[+] nn::pl: shared font {} from {} ({} bytes)", ty, p.display(), bytes.len());
             return bytes;
         }
     }
-    eprintln!("[!] nn::pl: no shared font {} (--shared-fonts)", SHARED_FONT_FILES[ty]);
-    Vec::new()
+    eprintln!("[!] nn::pl: no shared font {} (--shared-fonts), falling back to embedded dummy font", SHARED_FONT_FILES[ty]);
+    DUMMY_SHARED_FONT.to_vec()
 }
 
 fn shared_font(ty: i32) -> &'static [u8] {
@@ -730,12 +787,17 @@ pub(crate) unsafe extern "C" fn pl_get_shared_font(out_count: *mut i32, out: *mu
     let mut all = true;
     for ty in 0..n {
         let font = shared_font(ty as i32);
-        all &= !font.is_empty();
+        let (addr, len) = if font.is_empty() {
+            (DUMMY_SHARED_FONT.as_ptr(), DUMMY_SHARED_FONT.len())
+        } else {
+            (font.as_ptr(), font.len())
+        };
+        all &= len > 0;
         if !out.is_null() {
             let e = out.add(ty * 24);
             (e as *mut u32).write_unaligned(ty as u32);
-            (e.add(8) as *mut usize).write_unaligned(pl_get_shared_font_address(ty as i32) as usize);
-            (e.add(16) as *mut usize).write_unaligned(font.len());
+            (e.add(8) as *mut usize).write_unaligned(addr as usize);
+            (e.add(16) as *mut usize).write_unaligned(len);
         }
     }
     if !out_count.is_null() {
@@ -747,12 +809,17 @@ pub(crate) unsafe extern "C" fn pl_get_shared_font_load_state(_ty: i32) -> i32 {
     1
 }
 pub(crate) unsafe extern "C" fn pl_get_shared_font_size(ty: i32) -> usize {
-    shared_font(ty).len()
+    let len = shared_font(ty).len();
+    if len == 0 {
+        DUMMY_SHARED_FONT.len()
+    } else {
+        len
+    }
 }
 pub(crate) unsafe extern "C" fn pl_get_shared_font_address(ty: i32) -> *const u8 {
     let font = shared_font(ty);
     if font.is_empty() {
-        EMPTY_SHARED_FONT.as_ptr()
+        DUMMY_SHARED_FONT.as_ptr()
     } else {
         font.as_ptr()
     }

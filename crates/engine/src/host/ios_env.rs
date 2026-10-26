@@ -60,6 +60,13 @@ pub fn setup() -> (
     } else {
         env.files.no_mods = Some(true);
     }
+    if b.join("fonts").is_dir() {
+        env.files.shared_fonts = Some(b.join("fonts"));
+    } else if docs.join("fonts").is_dir() {
+        env.files.shared_fonts = Some(docs.join("fonts"));
+    } else if game.join("fonts").is_dir() {
+        env.files.shared_fonts = Some(game.join("fonts"));
+    }
     // Texture backing (metal/tex_backing.rs) stays off for now: the first phone session with it crashed on an unclaimed
     // fault in the occlusion reader (2026-10-16), with 2.4 GB of memory still available.
     let image = b.join("Frameworks/NxportGuest.framework/NxportGuest");
