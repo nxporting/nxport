@@ -25,8 +25,12 @@ const RESULT_NOT_IMPLEMENTED: u64 = 0xF001;
 const RESULT_INVALID_ADDRESS: u64 = 0xCC01;
 const RESULT_SESSION_CLOSED: u64 = 0xF601;
 const RESULT_INVALID_STATE: u64 = 0xFA01;
+const RESULT_OUT_OF_MEMORY: u64 = 0xD401;
+const RESULT_LIMIT_REACHED: u64 = 0x10801;
 
 const WAITERS_BIT: u32 = 0x4000_0000;
+const APP_POOL: usize = 0xCD50_0000;
+const HEAP_CAPACITY: usize = 0x1_0000_0000;
 
 const PSEUDO_CURRENT_THREAD: u32 = 0xFFFF_8000;
 const PSEUDO_CURRENT_PROCESS: u32 = 0xFFFF_8001;
@@ -35,6 +39,7 @@ const PSEUDO_CURRENT_PROCESS: u32 = 0xFFFF_8001;
 pub const MEM_FREE: u32 = 0;
 pub const MEM_CODE_STATIC: u32 = 3;
 pub const MEM_CODE_MUTABLE: u32 = 4;
+pub const MEM_HEAP: u32 = 5;
 const MEM_ALIAS_CODE: u32 = 0x15;
 const MEM_INACCESSIBLE: u32 = 0x10;
 pub const PERM_R: u32 = 1;
@@ -222,6 +227,9 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         );
     }
     let result = match n {
+        0x01 => set_heap_size(r),
+        0x02 => RESULT_OK, // SetMemoryPermission
+        0x03 => RESULT_OK, // SetMemoryAttribute
         0x06 => query_memory(r),
         0x29 => get_info(r),
         0x74 => map_process_memory(r),
@@ -288,6 +296,61 @@ struct MemoryInfo {
     ipc_refcount: u32,
     device_refcount: u32,
     pad: u32,
+}
+
+/// svcSetHeapSize(u64* out_addr, u64 size) -> x1 heap base.
+unsafe fn set_heap_size(r: &mut [u64; 8]) -> u64 {
+    let size = (r[1] as usize + 0x3fff) & !0x3fff; // 16K host page aligned
+    let mut g = HEAP.lock().unwrap();
+    let (mut base, cur_size) = *g;
+    if base == 0 {
+        match crate::os::reserve(crate::os::At::Anywhere, HEAP_CAPACITY) {
+            Ok(p) => {
+                base = p;
+                *g = (base, 0);
+            }
+            Err(e) => {
+                eprintln!("[-] SetHeapSize: failed to reserve heap arena: {e}");
+                return RESULT_OUT_OF_MEMORY;
+            }
+        }
+    }
+    if size > HEAP_CAPACITY {
+        eprintln!(
+            "[!] SetHeapSize OOM: requested {:#x} > capacity {:#x}",
+            size, HEAP_CAPACITY
+        );
+        return RESULT_OUT_OF_MEMORY;
+    }
+    if size + 0x400_0000 > APP_POOL {
+        eprintln!(
+            "[!] SetHeapSize limit reached: requested {:#x} + modules > pool {:#x}",
+            size, APP_POOL
+        );
+        return RESULT_LIMIT_REACHED;
+    }
+    if size > cur_size {
+        if let Err(e) =
+            crate::os::commit(base + cur_size, size - cur_size, crate::os::Prot::ReadWrite)
+        {
+            eprintln!("[-] SetHeapSize: commit failed: {e}");
+            return RESULT_OUT_OF_MEMORY;
+        }
+    } else if size < cur_size {
+        crate::os::decommit(base + size, cur_size - size);
+    }
+    *g = (base, size);
+    drop(g);
+
+    add_region(Region {
+        start: base,
+        size,
+        mem_type: MEM_HEAP,
+        perm: PERM_RW,
+    });
+
+    r[1] = base as u64;
+    RESULT_OK
 }
 
 /// svcQueryMemory(MemoryInfo* out, u32* page_info, u64 addr) -> w1 page_info.
@@ -360,8 +423,8 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
         3 => small_alias_region().1 as u64,
         4 => heap_start as u64,
         5 => heap_size as u64,
-        6 => 0x1_0000_0000,          // total memory
-        7 => 0x8000_0000,            // used memory
+        6 => APP_POOL as u64,        // total memory (application pool)
+        7 => (heap_size + 0x400_0000).min(APP_POOL) as u64, // used memory
         8 => 0,                      // debugger attached
         11 => 0x1234_5678_9abc_def0, // random entropy
         12 => alias_start as u64, // ASLR region: our reservation, the only space a mod may map into
@@ -374,8 +437,8 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
             static CTX: std::sync::OnceLock<Box<[u8; 0x1000]>> = std::sync::OnceLock::new();
             CTX.get_or_init(|| Box::new([0u8; 0x1000])).as_ptr() as u64
         }
-        21 => 0x1_0000_0000,          // total non-system memory
-        22 => 0x8000_0000,            // used non-system memory
+        21 => APP_POOL as u64,       // total non-system memory
+        22 => (heap_size + 0x400_0000).min(APP_POOL) as u64, // used non-system memory
         23 => 1,                     // is application
         24 => {
             // Free thread count (SDK 11+, Unity 2022+ JobSystem checks >= 1). Limit is 96 threads.
