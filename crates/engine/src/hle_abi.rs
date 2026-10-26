@@ -309,8 +309,19 @@ pub fn bind_entry(entry: u64, f: *const ()) {
 /// The HLE function guest code reaches by branching to `addr`: through a trampoline (`bind_entry`), or the function's
 /// own address.
 pub fn entry(addr: u64) -> Option<Hle> {
+    // Lifted code asks on every HLE call, from every guest thread at once: each thread keeps what it found, so the
+    // shared tables (two locks) are consulted once per thread and address. A binding never changes once guest code
+    // can reach it; an address without one stops the run (lifted::Handlers::unknown), so misses are not kept.
+    thread_local! {
+        static FOUND: std::cell::RefCell<rustc_hash::FxHashMap<u64, Hle>> = Default::default();
+    }
+    if let Some(h) = FOUND.with(|f| f.borrow().get(&addr).copied()) {
+        return Some(h);
+    }
     let f = entries().lock().unwrap().get(&addr).copied().unwrap_or(addr as usize);
-    adapter(f as *const ())
+    let h = adapter(f as *const ())?;
+    FOUND.with(|found| found.borrow_mut().insert(addr, h));
+    Some(h)
 }
 
 /// `hle!(f(_, _))`: the address of HLE function `f` (two parameters), its adapter recorded; the same as
