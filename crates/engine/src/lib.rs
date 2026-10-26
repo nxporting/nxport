@@ -84,16 +84,32 @@ pub struct GuestModule {
     pub dynamic: bool,
 }
 
-/// The game's code loaded and patched with `settings` (as guest_image), as modules to lift: main, the sdk module, then
-/// every other code region the load made (islands, stubs), except the HLE trampolines, which lifted code reaches
-/// through the host (lifted::host_call). The guest sits at its fixed base, so the addresses hold in the run that uses
-/// the lifted code. Once per process.
+/// `s` as a C identifier (lifted modules' tables are named after them).
 #[cfg(nx_runtime)]
-pub fn guest_modules(s: settings::Settings) -> Result<Vec<GuestModule>, String> {
+fn c_ident(s: &str) -> String {
+    s.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
+
+/// The lifted module name of a mod's module (its label: "mod folder/subsdkN").
+#[cfg(nx_runtime)]
+fn mod_module_name(label: &str) -> String {
+    format!("mod_{}", c_ident(label))
+}
+
+/// The game's code loaded and patched with `settings` (as guest_image), as modules to lift: main, the sdk module, the
+/// plugin mods' modules, then every other code region the load made (islands, stubs), except the HLE trampolines,
+/// which lifted code reaches through the host (lifted::host_call). The guest sits at its fixed base, so the addresses
+/// hold in the run that uses the lifted code. Once per process.
+///
+/// Plugin mods patch the game's code from their initialisers and early hooks, so a load does not hold their patches: a
+/// first lift without them runs the game to an image (`--aot-dump` on a lifted run), and `patched` (that image) then
+/// replaces the code of every region it holds.
+#[cfg(nx_runtime)]
+pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Vec<GuestModule>, String> {
     settings::try_install(s)?;
     let l = load().map_err(|e| e.to_string())?;
-    if let Some((label, _)) = l.mod_inits.first() {
-        return Err(format!("{label} is a plugin mod: its initialiser patches the game's code, so lifting needs it run"));
+    if let (Some((label, _)), None) = (l.mod_inits.first(), patched) {
+        println!("[!] {label} is a plugin mod: lifted without its patches (they need a run: --aot-dump, then a lift with that image)");
     }
     let copy = |start: usize, len: usize| unsafe { std::slice::from_raw_parts(start as *const u8, len) }.to_vec();
     let main = l.mem_space.base_ptr as usize;
@@ -113,19 +129,56 @@ pub fn guest_modules(s: settings::Settings) -> Result<Vec<GuestModule>, String> 
             dynamic: true,
         });
     }
+    for (label, base, size, text) in &l.mod_modules {
+        modules.push(GuestModule {
+            name: mod_module_name(label),
+            base: *base as u64,
+            image: copy(*base, *size),
+            text: text.start as u64..text.end as u64,
+            dynamic: true,
+        });
+    }
     let covered = |a: usize| modules.iter().any(|m| m.text.contains(&(a as u64)));
-    let extra: Vec<GuestModule> = cpu::aot::regions()
-        .into_iter()
+    let regions = cpu::aot::regions();
+    let extra: Vec<GuestModule> = regions
+        .iter()
         .filter(|(name, start, _)| name != "hle.trampolines" && !covered(*start))
         .map(|(name, start, len)| GuestModule {
-            name: name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect(),
-            base: start as u64,
-            image: copy(start, len),
-            text: start as u64..(start + len) as u64,
+            name: c_ident(name),
+            base: *start as u64,
+            image: copy(*start, *len),
+            text: *start as u64..(*start + *len) as u64,
             dynamic: false,
         })
         .collect();
     modules.extend(extra);
+    if let Some(img) = patched {
+        // The image's regions carry the names this load registered (the same modules at the same fixed addresses).
+        let mut changed = 0;
+        for (name, bytes) in cpu::aot::image_regions(img)? {
+            let Some(&(_, start, len)) = regions.iter().find(|(n, ..)| *n == name) else {
+                println!("[!] patched image: region {name} is not in this load; skipped");
+                continue;
+            };
+            if bytes.len() != len {
+                return Err(format!("patched image: region {name} is {:#x} bytes, this load's {len:#x}", bytes.len()));
+            }
+            for m in &mut modules {
+                let (b, e) = (m.base as usize, m.base as usize + m.image.len());
+                let (lo, hi) = (start.max(b), (start + len).min(e));
+                if lo < hi {
+                    let (src, dst) = (&bytes[lo - start..hi - start], &mut m.image[lo - b..hi - b]);
+                    let differ: Vec<usize> = (0..src.len()).filter(|&i| src[i] != dst[i]).collect();
+                    if let (Some(&f), Some(&l)) = (differ.first(), differ.last()) {
+                        println!("[+] patched image: {name}: {} bytes differ in {}, {:#x}..{:#x}", differ.len(), m.name, lo + f, lo + l + 1);
+                    }
+                    changed += differ.len();
+                    dst.copy_from_slice(src);
+                }
+            }
+        }
+        println!("[+] patched image: {changed} bytes of code differ from the load (the mods' patches)");
+    }
     Ok(modules)
 }
 
@@ -177,6 +230,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         sdk: _sdk,
         mod_inits,
         game_subsdk_inits,
+        ..
     } = load()?;
 
     // 5'. AOT images (cpu/aot.rs): write the patched code out (--aot-dump), or swap in a signed copy (--aot-image).
@@ -574,6 +628,8 @@ struct Loaded {
     sdk: Option<guest::sdk_loader::SdkModule>,
     /// The mods' module initialisers (label, address), run before main's.
     mod_inits: Vec<(String, usize)>,
+    /// The mods' modules (label, base, image size, text), for the lifter.
+    mod_modules: Vec<(String, usize, usize, std::ops::Range<usize>)>,
     /// The game's own subsdk modules' initialisers (--run-game-subsdk): label, DT_INIT, init array.
     game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
 }
@@ -836,6 +892,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //       what horizon::sdk binds. QueryMemory (horizon_svc) presents the guest
     //       modules in rtld/main/mods/sdk order, as exlaunch expects when it locates the game's code.
     let mut mod_inits: Vec<(String, usize)> = Vec::new();
+    let mut mod_modules: Vec<(String, usize, usize, std::ops::Range<usize>)> = Vec::new();
     // --run-game-subsdk (experiment): bind main's imports to the game's own subsdk libraries and run their
     // initialisers, like rtld (Kirby: subsdk0 = the movie library). Off by default: the real movie library calls into
     // the SDK's multimedia stack, which needs the SDK's static constructors (--sdk-ctors) and, past those, the
@@ -1069,6 +1126,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 } {
                     Ok(m) => {
                         hint = (m.base + m.image_size + 0x20_0000) & !0x3fff;
+                        mod_modules.push((label.clone(), m.base, m.image_size, m.text.clone()));
                         if let Some(init) = m.init {
                             mod_inits.push((label, init));
                         }
@@ -1157,6 +1215,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         mem_space,
         sdk,
         mod_inits,
+        mod_modules,
         game_subsdk_inits,
     })
 }
@@ -1205,16 +1264,37 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         mem_space,
         sdk: _sdk,
         mod_inits,
+        mod_modules,
         game_subsdk_inits,
     } = load()?;
     let modules: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+    // A plugin mod's code runs only if the library was lifted with it (and with its patches: nxport-cli lift-game
+    // --patched-image, or the builder).
+    if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.contains(&mod_module_name(label).as_str())) {
+        return Err(format!(
+            "{label} is a plugin mod, and {} was lifted without it: lift and compile the game again with its mods (the builder does)",
+            lib.display()
+        )
+        .into());
+    }
     lifted::install(&lib, &modules, lifted_handlers())?;
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
+    // --aot-dump: the code as plugin mods patch it, for the lift that holds their patches (guest_modules). Their
+    // initialisers and early hooks write it while the game runs; the image is written at --aot-dump-frame.
+    let dump_after_mods = matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !mod_inits.is_empty();
+    if dump_after_mods {
+        cpu::aot::defer_dump();
+    }
+    unsafe { cpu::aot::finalize() }?;
+    if matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !dump_after_mods {
+        println!("[+] AOT: image written; exiting (--aot-dump, no plugin mods)");
+        std::process::exit(0);
+    }
     let guest_main = std::thread::Builder::new()
         .name("guest-main".into())
         .stack_size(256 << 20)
         .spawn({
-            let chain = AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, false));
+            let chain = AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, dump_after_mods));
             move || {
                 guest::tls::mark_guest_thread();
                 chain.run().map_err(|e| e.to_string())

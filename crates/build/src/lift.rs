@@ -22,7 +22,7 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
         img[s.mem_off..s.mem_off + s.data.len()].copy_from_slice(&s.data);
     }
     let text = base + n.text.mem_off as u64..base + (n.text.mem_off + n.text.data.len()) as u64;
-    let out = lift_image(name, base, &img, text, n.dynamic().ok());
+    let out = lift_image(name, base, &img, text, n.dynamic().ok(), BTreeSet::new());
     write_files(out_dir, &[&out])?;
     Ok(out)
 }
@@ -30,19 +30,23 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
 /// Lifts the game in `s.files.game_dir`, loaded and patched as the runtime loads it, into `out_dir`: the C files of each
 /// module and the runtime files. Returns each module's name and what was lifted, in the order the runtime registers
 /// them (lifted::GuestLibrary::load). `on_module(i, n, name)` is told before each of the n modules is lifted.
+/// `patched`: the image a run with plugin mods dumped (`--aot-dump`), whose code replaces the load's (nxport::guest_modules).
 #[cfg(any(target_vendor = "apple", windows))]
 pub fn lift_game(
     s: nxport::settings::Settings,
+    patched: Option<&Path>,
     out_dir: &Path,
     on_module: &dyn Fn(usize, usize, &str),
 ) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
     let mut lifted = Vec::new();
-    let modules = nxport::guest_modules(s)?;
+    let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
+    let modules = nxport::guest_modules(s, image.as_deref())?;
+    let seeds = cross_module_seeds(&modules);
     let n = modules.len();
-    for (i, m) in modules.into_iter().enumerate() {
+    for ((i, m), seeds) in modules.into_iter().enumerate().zip(seeds) {
         on_module(i, n, &m.name);
         let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
-        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic);
+        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds);
         lifted.push((m.name, out));
     }
     write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
@@ -253,20 +257,104 @@ fn write_files(out_dir: &Path, outputs: &[&Output]) -> std::io::Result<()> {
 
 /// Lifts module `name`: `img` is its memory from guest address `base`, `text` its code; `dynamic` its dynamic tables,
 /// when it has them, which name its functions.
+/// Function starts each module needs for the others (in `modules` order). Lifted code enters another module's code only
+/// at its function starts (the runtime looks branches up by address), and plugin mods connect to the game by jumping
+/// between modules: hooks patched over a game function branch into the mod, and the mod's trampolines run a hooked
+/// function's first instructions and jump back into its middle. So: every direct branch (B / BL) into another module,
+/// and, in the mods' modules and the code regions (where trampolines keep their targets as literals), every 8-byte
+/// value that points at code.
+#[cfg(any(target_vendor = "apple", windows))]
+fn cross_module_seeds(modules: &[nxport::GuestModule]) -> Vec<BTreeSet<u64>> {
+    let mut seeds = vec![BTreeSet::new(); modules.len()];
+    let owner = |a: u64| modules.iter().position(|m| m.text.contains(&a));
+    for (i, m) in modules.iter().enumerate() {
+        let word = |a: u64| {
+            let o = (a - m.base) as usize;
+            m.image.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        };
+        let mut a = m.text.start & !3;
+        while a + 4 <= m.text.end {
+            if let Some(w) = word(a) {
+                // B / BL: imm26 words from the branch.
+                if w & 0x7c00_0000 == 0x1400_0000 {
+                    let t = a.wrapping_add(((((w & 0x03ff_ffff) << 6) as i32 >> 4) as i64) as u64);
+                    if let Some(j) = owner(t).filter(|&j| j != i) {
+                        seeds[j].insert(t);
+                    }
+                }
+            }
+            a += 4;
+        }
+        if i == 0 || m.name == "sdk" {
+            continue; // the game's own modules: .eh_frame and relocations name their functions
+        }
+        // Addresses of code the module computes (ADR, ADRP + ADD): thread entries and callbacks a mod hands the system
+        // or its hooks.
+        let mut a = m.text.start & !3;
+        while a + 4 <= m.text.end {
+            if let Some(w) = word(a) {
+                let imm21 = || ((((w >> 5) & 0x7ffff) << 2 | (w >> 29) & 3) as i64) << 43 >> 43;
+                let target = if w & 0x9f00_0000 == 0x1000_0000 {
+                    Some(a.wrapping_add(imm21() as u64))
+                } else if w & 0x9f00_0000 == 0x9000_0000 {
+                    let page = (a & !0xfff).wrapping_add((imm21() << 12) as u64);
+                    // The ADD (64-bit immediate) that completes it, within the next few instructions.
+                    (1..=4).filter_map(|k| word(a + 4 * k)).find_map(|n| {
+                        (n & 0xff80_0000 == 0x9100_0000 && (n >> 5) & 31 == w & 31)
+                            .then(|| page.wrapping_add((((n >> 10) & 0xfff) as u64) << (((n >> 22) & 1) * 12)))
+                    })
+                } else {
+                    None
+                };
+                if let Some(t) = target.filter(|t| t % 4 == 0) {
+                    if let Some(j) = owner(t) {
+                        seeds[j].insert(t);
+                    }
+                }
+            }
+            a += 4;
+        }
+        for o in (0..m.image.len().saturating_sub(7)).step_by(8) {
+            let v = u64::from_le_bytes(m.image[o..o + 8].try_into().unwrap());
+            if v % 4 == 0 {
+                if let Some(j) = owner(v) {
+                    seeds[j].insert(v);
+                }
+            }
+        }
+    }
+    seeds
+}
+
 fn lift_image(
     name: &str,
     base: u64,
     img: &[u8],
     text: std::ops::Range<u64>,
     dynamic: Option<nxport::nso::Dynamic>,
+    extra_seeds: BTreeSet<u64>,
 ) -> Output {
     let mut seeds = BTreeSet::from([text.start]);
+    seeds.extend(extra_seeds);
     // Both found through MOD0, which a bare code region has none of.
     if let Some(d) = dynamic {
         if let Some(hdr) = ehframe::mod0_eh_frame_hdr(img) {
             seeds.extend(ehframe::hdr_functions(img, base, hdr));
         }
         let u64_at = |o: usize| img.get(o..o + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
+        // The module's initialisers: DT_INIT (the runtime calls a mod's), and DT_INIT_ARRAY's entries, which a load has
+        // relocated to addresses.
+        if d.init != 0 {
+            seeds.insert(base + d.init as u64);
+        }
+        for o in (d.init_array..d.init_array + d.init_arraysz).step_by(8) {
+            match u64_at(o) {
+                Some(a) if text.contains(&a) => {
+                    seeds.insert(a);
+                }
+                _ => {}
+            }
+        }
         // Elf64_Sym (24 bytes): name u32, info u8, other u8, shndx u16, value u64, size u64. The string table follows
         // the symbol table in Switch modules, which bounds it.
         if d.strtab > d.symtab {

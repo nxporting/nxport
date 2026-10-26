@@ -151,6 +151,12 @@ enum Command {
         /// Output directory for the C files
         #[arg(long, short)]
         out: PathBuf,
+        /// Mods directory (one folder per mod) to load and lift with the game
+        #[arg(long)]
+        mods: Option<PathBuf>,
+        /// With plugin mods: the image a run of a first lift dumped (nxport --aot-dump), whose code holds their patches
+        #[arg(long)]
+        patched_image: Option<PathBuf>,
     },
     /// Compile lifted C (lift / lift-game) into the guest library
     CompileGuest {
@@ -464,9 +470,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let r = nxport_build::lift::lift_nso(&nso, &name, base, &out)?;
             nxport_build::lift::report(&nso.display().to_string(), &r);
         }
-        Command::LiftGame { dump, out } => {
-            let s = nxport_build::lift::game_settings(&dump, Default::default(), None);
-            for (name, r) in nxport_build::lift::lift_game(s, &out, &|_, _, _| {})? {
+        Command::LiftGame { dump, out, mods, patched_image } => {
+            let s = nxport_build::lift::game_settings(&dump, Default::default(), mods.as_deref());
+            for (name, r) in nxport_build::lift::lift_game(s, patched_image.as_deref(), &out, &|_, _, _| {})? {
                 nxport_build::lift::report(&name, &r);
             }
         }

@@ -71,6 +71,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             mods: None,
             stages: Some(stages.clone()),
             pipeline_list: Some(list),
+            patched_image: None,
             edits: SettingsPatch::default(),
         };
         let (job, file) = (job.clone(), work.join("shaders.toml"));
@@ -98,50 +99,126 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         ));
     }
 
+    // Plugin mods (exefs/subsdkN modules) patch the game's code while it runs: the first lift holds their modules but
+    // not their patches; the app then runs headless until they patched it and writes that code out (--aot-dump), and a
+    // second lift takes it from there (nxport::guest_modules).
+    let patched = work.join("mods_patched.img");
+    let lift = |patched_image: Option<PathBuf>, file: &str| {
+        let (dump, c_dir, job, app_mods, edits, file) =
+            (dump.clone(), c_dir.clone(), job.clone(), app_mods.clone(), edits.clone(), work.join(file));
+        Box::new(move || {
+            if patched_image.as_ref().is_some_and(|p| !p.is_file()) {
+                return Ok(()); // no plugin mods
+            }
+            let w = Work {
+                kind: WorkKind::Lift,
+                dump,
+                into: c_dir,
+                mods: app_mods.lock().unwrap().clone(),
+                stages: None,
+                pipeline_list: None,
+                patched_image,
+                edits,
+            };
+            run_worker(&job, &file, &w)
+        }) as Box<dyn FnOnce() -> Result<(), String> + Send>
+    };
+    let compile = |only_if: Option<PathBuf>| {
+        let (toolchains, c_dir, app, job) = (toolchains.clone(), c_dir.clone(), app.clone(), job.clone());
+        Box::new(move || {
+            if only_if.as_ref().is_some_and(|p| !p.is_file()) {
+                return Ok(());
+            }
+            compile_guest(&toolchains, &c_dir, &app, &job)
+        }) as Box<dyn FnOnce() -> Result<(), String> + Send>
+    };
+    steps.push(("Lifting the game's code".into(), lift(None, "lift.toml")));
+    steps.push(("Compiling the game's code".into(), compile(None)));
     {
-        let (c_dir, job, file) = (c_dir.clone(), job.clone(), work.join("lift.toml"));
+        let (app, app_mods, patched, run_dir) = (app.clone(), app_mods.clone(), patched.clone(), work.join("mods_run"));
         steps.push((
-            "Lifting the game's code".into(),
+            "Recording the plugin mods' patches".into(),
             Box::new(move || {
-                let w = Work {
-                    kind: WorkKind::Lift,
-                    dump,
-                    into: c_dir,
-                    mods: app_mods.lock().unwrap().clone(),
-                    stages: None,
-                    pipeline_list: None,
-                    edits,
-                };
-                run_worker(&job, &file, &w)
+                let _ = std::fs::remove_file(&patched);
+                let plugins = plugin_mods(app_mods.lock().unwrap().as_deref());
+                if plugins.is_empty() {
+                    return Ok(());
+                }
+                println!("  plugin mods: {}", plugins.join(", "));
+                record_mod_patches(&app, &patched, &run_dir)
             }),
         ));
     }
-
+    steps.push(("Lifting the game's code with the mods' patches".into(), lift(Some(patched.clone()), "lift_patched.toml")));
     let out: Output = Arc::new(Mutex::new(None));
     {
-        let out = out.clone();
+        let (out, app, again) = (out.clone(), app.clone(), compile(Some(patched)));
         steps.push((
-            "Compiling the game's code".into(),
+            "Compiling the game's code with the mods' patches".into(),
             Box::new(move || {
-                let cc = nxport_build::zig::cc(&toolchains, &|_, _| {})?;
-                let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
-                // Also copies modules.txt beside the library.
-                nxport_build::lift::compile(&c_dir, &app.join("guest.dll"), &cc, cpus.saturating_sub(2).max(2), &|done, total| {
-                    progress(&job, "C files".into(), done, total)
-                })
-                .map_err(|e| e.to_string())?;
-                // The linker's import library (the engine loads the library at run time; the .pdb stays, for crashes).
-                for e in std::fs::read_dir(&app).into_iter().flatten().flatten() {
-                    if e.path().extension().is_some_and(|x| x == "lib") {
-                        let _ = std::fs::remove_file(e.path());
-                    }
-                }
+                again()?;
                 *out.lock().unwrap() = Some(app);
                 Ok(())
             }),
         ));
     }
     out
+}
+
+/// Compiles the lifted C in `c_dir` into the app's guest.dll (and its modules.txt).
+fn compile_guest(toolchains: &Path, c_dir: &Path, app: &Path, job: &Arc<Mutex<Job>>) -> Result<(), String> {
+    let cc = nxport_build::zig::cc(toolchains, &|_, _| {})?;
+    let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
+    // Also copies modules.txt beside the library.
+    nxport_build::lift::compile(c_dir, &app.join("guest.dll"), &cc, cpus.saturating_sub(2).max(2), &|done, total| {
+        progress(job, "C files".into(), done, total)
+    })
+    .map_err(|e| e.to_string())?;
+    // The linker's import library (the engine loads the library at run time; the .pdb stays, for crashes).
+    for e in std::fs::read_dir(app).into_iter().flatten().flatten() {
+        if e.path().extension().is_some_and(|x| x == "lib") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+    Ok(())
+}
+
+/// The mods in `mods` (one folder each) with modules of their own (exefs/subsdkN): plugin mods.
+fn plugin_mods(mods: Option<&Path>) -> Vec<String> {
+    let Some(rd) = mods.and_then(|m| std::fs::read_dir(m).ok()) else { return Vec::new() };
+    rd.flatten()
+        .filter(|e| {
+            ["exefs", "ExeFS"].iter().any(|d| (0..10).any(|i| e.path().join(d).join(format!("subsdk{i}")).is_file()))
+        })
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Runs the app (its first guest.dll, which holds the plugin mods' modules) headless until its mods patched the game's
+/// code, which it writes to `image` (--aot-dump). The run keeps its saves in `run_dir`, not the player's; what it prints
+/// goes to `run_dir`/log.txt.
+fn record_mod_patches(app: &Path, image: &Path, run_dir: &Path) -> Result<(), String> {
+    let saves = run_dir.join("save");
+    std::fs::create_dir_all(&saves).map_err(|e| format!("{}: {e}", saves.display()))?;
+    let log_path = run_dir.join("log.txt");
+    let log = std::fs::File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
+    let status = nxport_build::lift::command(app.join("nxport.exe"))
+        .arg("--headless")
+        .arg("--gpu=null")
+        .arg(format!("--aot-dump={}", image.display()))
+        .arg(format!("--save-dir={}", saves.display()))
+        .stdout(log.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log)
+        .status()
+        .map_err(|e| format!("starting the app: {e}"))?;
+    let text = std::fs::read_to_string(&log_path).unwrap_or_default();
+    for line in text.lines().filter(|l| l.contains("Mods:") || l.contains("AOT:") || l.starts_with("[-] Lifted")) {
+        println!("  {line}");
+    }
+    if !status.success() || !image.is_file() {
+        return Err(format!("the run with the plugin mods did not write their patches ({status}; {})", log_path.display()));
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +241,9 @@ pub struct Work {
     mods: Option<PathBuf>,
     stages: Option<PathBuf>,
     pipeline_list: Option<PathBuf>,
+    /// Lift: the image a first lift's run with plugin mods dumped (their patches; nxport_build::lift::lift_game).
+    #[serde(default)]
+    patched_image: Option<PathBuf>,
     /// The settings above the game's profile (last: a table).
     #[serde(default)]
     edits: SettingsPatch,
@@ -230,7 +310,7 @@ pub fn worker(file: &Path) -> Result<(), String> {
     match w.kind {
         WorkKind::Lift => {
             let s = nxport_build::lift::game_settings(&w.dump, w.edits, w.mods.as_deref());
-            let lifted = nxport_build::lift::lift_game(s, &w.into, &|i, n, name| {
+            let lifted = nxport_build::lift::lift_game(s, w.patched_image.as_deref(), &w.into, &|i, n, name| {
                 report(i as f32 / n.max(1) as f32, i, n, &format!("Lifting {name}"))
             })
             .map_err(|e| e.to_string())?;
