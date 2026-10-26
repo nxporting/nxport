@@ -735,11 +735,13 @@ impl Ctx {
         self.occl.reports.iter().any(hit) || self.inflight.iter().any(|f| f.serial > done && f.reports.iter().any(hit))
     }
 
-    /// Records a color target this submit renders: a write-back candidate unless it was rendered in the previous 4 frames.
+    /// Records a color target this submit renders: small targets (<= 64 KiB, e.g. grass cut reaction map)
+    /// are always write-back candidates; larger targets only if not rendered in the previous 4 frames.
     fn note_rendered(&mut self, t: &NvnTexture) {
         let f = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed) + 1;
         let prev = self.rt_history.insert(t.storage, f);
-        if prev.is_none_or(|p| p + 4 < f) && !self.writeback_rts.iter().any(|w| w.storage == t.storage) {
+        let is_small = t.size > 0 && t.size <= 65536;
+        if (is_small || prev.is_none_or(|p| p + 4 < f)) && !self.writeback_rts.iter().any(|w| w.storage == t.storage) {
             self.writeback_rts.push(*t);
         }
         if self.rt_history.len() > 1 << 14 {
