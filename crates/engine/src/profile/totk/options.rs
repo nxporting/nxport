@@ -5,13 +5,15 @@ use struct_patch::Patch;
 
 crate::settings::group! {
     /// Changes made to version 1.1.2's code.
-    Version112 "Tears of the Kingdom 1.1.2" [dynamic_aspect_ratio] {
+    Version112 "Tears of the Kingdom 1.1.2" [dynamic_aspect_ratio, dynamic_fps] {
         /// Render at the screen's shape and follow it as the window is resized (camera, culling and HUD
         /// layouts follow it; narrower than 16:9 shows more vertically)
         dynamic_aspect_ratio: bool = true,
         /// Workaround: hide HUD capture panes that sample the wrong screen region at shapes other than 16:9 (a ghost
         /// copy of the load screen's heading); their effect is lost there
         hide_hud_captures: bool = true,
+        /// Dynamic delta-time and frame-pacing hooks for variable and unlocked 60+ FPS
+        dynamic_fps: bool = true,
     }
 }
 
