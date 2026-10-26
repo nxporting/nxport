@@ -20,6 +20,7 @@ pub fn current_bounds() -> Option<(usize, usize)> {
 
 // call_on_stack(arg, entry, sp, hle_slot): entry(arg) with sp as its stack. The caller's stack below this frame becomes
 // the stack HLE calls use (*hle_slot) until entry returns.
+#[cfg(nx_native)]
 std::arch::global_asm!(
     ".p2align 2",
     ".globl _nxport_call_on_stack",
@@ -37,6 +38,7 @@ std::arch::global_asm!(
     "ret",
 );
 
+#[cfg(nx_native)]
 extern "C" {
     fn nxport_call_on_stack(arg: usize, entry: usize, sp: usize, hle_slot: *mut usize);
 }
@@ -44,25 +46,16 @@ extern "C" {
 /// A stack of `size` bytes for guest code that has no buffer from the game (the main thread's, which Horizon's
 /// kernel allocates). It lives as long as the process. Returns (lo, hi).
 pub fn allocate(size: usize) -> (usize, usize) {
-    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    let page = crate::os::page_size();
     let size = size.next_multiple_of(page);
-    let base = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            page + size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANON,
-            -1,
-            0,
-        )
-    };
-    assert!(base != libc::MAP_FAILED, "guest stack: mmap of {size:#x} bytes failed");
-    let base = base as usize;
-    unsafe { libc::mprotect(base as *mut _, page, libc::PROT_NONE) };
+    let base = unsafe { crate::os::alloc(page + size, crate::os::Prot::ReadWrite) }
+        .unwrap_or_else(|e| panic!("guest stack: allocating {size:#x} bytes failed: {e}")) as usize;
+    let _ = unsafe { crate::os::protect(base, page, crate::os::Prot::None) }; // a guard page below the stack
     (base + page, base + page + size)
 }
 
 /// Runs guest code `entry(arg)` on the stack [lo, hi).
+#[cfg(nx_native)]
 pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     BOUNDS.with(|b| b.set((lo, hi)));
     let tsd: *mut u8;
@@ -70,5 +63,17 @@ pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     super::cores::run_guest(|| {
         nxport_call_on_stack(arg, entry, hi & !15, tsd.add(crate::cpu::tls::hle_stack_offset()) as *mut usize)
     });
+    BOUNDS.with(|b| b.set((0, 0)));
+}
+
+/// Runs guest code `entry(arg)` on the stack [lo, hi): on a lifted host, in the thread's lifted CPU state.
+#[cfg(not(nx_native))]
+pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
+    BOUNDS.with(|b| b.set((lo, hi)));
+    let cpu = crate::lifted::thread_cpu();
+    let saved_sp = cpu.sp;
+    cpu.sp = (hi & !15) as u64;
+    crate::lifted::library().call(cpu, entry as u64, &[arg as u64]);
+    cpu.sp = saved_sp;
     BOUNDS.with(|b| b.set((0, 0)));
 }

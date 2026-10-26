@@ -18,7 +18,7 @@ use objc2_metal::{
     MTLRenderPipelineState, MTLVertexFormat,
 };
 
-use super::pipeline_list::Entry;
+use crate::gpu::pipeline_list::Entry;
 use super::shader_cache::{by_entry, CachedStage};
 use super::translated::{derive_layout, pf_kind, pipeline_descriptor, pipeline_key, ShaderLibs};
 use super::Device;

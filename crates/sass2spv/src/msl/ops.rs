@@ -174,7 +174,7 @@ pub fn operation(c: &mut Ctx, node: AstId) -> Res {
         I::LOGARITHM_B2 => unary_func(c, &op, "log2", ""),
         I::SINE => unary_func(c, &op, "sin", ""),
         I::COSINE => unary_func(c, &op, "cos", ""),
-        I::CLAMP => ternary_func(c, &op, "fast::clamp", "clamp"),
+        I::CLAMP => ternary_func(c, &op, "precise::clamp", "clamp"),
         I::CLAMP_U32 => {
             let a = c.expr(A::U32, s(0)?)?;
             let b = c.expr(A::U32, s(1)?)?;
@@ -182,8 +182,8 @@ pub fn operation(c: &mut Ctx, node: AstId) -> Res {
             vcall(c, A::U32, "clamp", vec![a, b, d])
         }
         I::FUSED_MULTIPLY_ADD => ternary_func(c, &op, "fma", ""),
-        I::MAXIMUM => binary_func(c, &op, "fast::max", "max"),
-        I::MINIMUM => binary_func(c, &op, "fast::min", "min"),
+        I::MAXIMUM => binary_func(c, &op, "precise::max", "max"),
+        I::MINIMUM => binary_func(c, &op, "precise::min", "min"),
         I::MAXIMUM_U32 => {
             let a = c.expr(A::U32, s(0)?)?;
             let b = c.expr(A::U32, s(1)?)?;
@@ -725,7 +725,13 @@ fn load(c: &mut Ctx, op: &Op) -> Res {
         let v = IoVariable::from_value(constant_operand(c, op.src(0)?).unwrap_or(0));
         let ir = io_ir_type(v, t);
         if ir != t {
-            let e = c.inst_d(ir, format!("{}({lv})", type_name(ir)?), &ds)?;
+            let tn = type_name(ir)?;
+            let expr = if matches!((ir, t), (A::S32, A::U32) | (A::U32, A::S32)) {
+                format!("{tn}({lv})")
+            } else {
+                format!("as_type<{tn}>({lv})")
+            };
+            let e = c.inst_d(ir, expr, &ds)?;
             return Ok((ir, Some(e)));
         }
     }
@@ -741,7 +747,16 @@ fn store(c: &mut Ctx, op: &Op) -> Res {
         ty = io_ir_type(v, t);
     }
     let v = c.expr(ty, op.src(op.sources.len() - 1)?)?;
-    let v = if ty != t { format!("{}({v})", type_name(t)?) } else { v };
+    let v = if ty != t {
+        let tn = type_name(t)?;
+        if matches!((t, ty), (A::S32, A::U32) | (A::U32, A::S32)) {
+            format!("{tn}({v})")
+        } else {
+            format!("as_type<{tn}>({v})")
+        }
+    } else {
+        v
+    };
     stmt(format!("{lv} = {v}"))
 }
 

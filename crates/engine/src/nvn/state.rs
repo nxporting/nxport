@@ -760,142 +760,142 @@ pub unsafe extern "C" fn hle_nvnDeviceGetSeparateSamplerHandle(
 /// NVN function name -> HLE address for everything in this module.
 pub fn lookup(name: &str) -> Option<usize> {
     macro_rules! f {
-        ($f:expr) => {
-            Some($f as *const () as usize)
+        ($f:ident($($a:tt),*)) => {
+            Some(crate::hle!($f($($a),*)) as usize)
         };
     }
     match name {
-        "nvnBlendStateSetDefaults" => f!(hle_nvnBlendStateSetDefaults),
-        "nvnBlendStateSetBlendTarget" => f!(hle_nvnBlendStateSetBlendTarget),
-        "nvnBlendStateSetBlendFunc" => f!(hle_nvnBlendStateSetBlendFunc),
-        "nvnBlendStateSetBlendEquation" => f!(hle_nvnBlendStateSetBlendEquation),
-        "nvnBlendStateSetAdvancedMode" => f!(hle_nvnBlendStateSetAdvancedMode),
-        "nvnBlendStateSetAdvancedOverlap" => f!(hle_nvnBlendStateSetAdvancedOverlap),
+        "nvnBlendStateSetDefaults" => f!(hle_nvnBlendStateSetDefaults(_)),
+        "nvnBlendStateSetBlendTarget" => f!(hle_nvnBlendStateSetBlendTarget(_, _)),
+        "nvnBlendStateSetBlendFunc" => f!(hle_nvnBlendStateSetBlendFunc(_, _, _, _, _)),
+        "nvnBlendStateSetBlendEquation" => f!(hle_nvnBlendStateSetBlendEquation(_, _, _)),
+        "nvnBlendStateSetAdvancedMode" => f!(hle_nvnBlendStateSetAdvancedMode(_, _)),
+        "nvnBlendStateSetAdvancedOverlap" => f!(hle_nvnBlendStateSetAdvancedOverlap(_, _)),
         "nvnBlendStateSetAdvancedPremultipliedSrc" => {
-            f!(hle_nvnBlendStateSetAdvancedPremultipliedSrc)
+            f!(hle_nvnBlendStateSetAdvancedPremultipliedSrc(_, _))
         }
-        "nvnBlendStateSetAdvancedNormalizedDst" => f!(hle_nvnBlendStateSetAdvancedNormalizedDst),
-        "nvnBlendStateGetBlendTarget" => f!(hle_nvnBlendStateGetBlendTarget),
-        "nvnBlendStateGetBlendFunc" => f!(hle_nvnBlendStateGetBlendFunc),
-        "nvnBlendStateGetBlendEquation" => f!(hle_nvnBlendStateGetBlendEquation),
-        "nvnBlendStateGetAdvancedMode" => f!(hle_nvnBlendStateGetAdvancedMode),
-        "nvnBlendStateGetAdvancedOverlap" => f!(hle_nvnBlendStateGetAdvancedOverlap),
+        "nvnBlendStateSetAdvancedNormalizedDst" => f!(hle_nvnBlendStateSetAdvancedNormalizedDst(_, _)),
+        "nvnBlendStateGetBlendTarget" => f!(hle_nvnBlendStateGetBlendTarget(_)),
+        "nvnBlendStateGetBlendFunc" => f!(hle_nvnBlendStateGetBlendFunc(_, _, _, _, _)),
+        "nvnBlendStateGetBlendEquation" => f!(hle_nvnBlendStateGetBlendEquation(_, _, _)),
+        "nvnBlendStateGetAdvancedMode" => f!(hle_nvnBlendStateGetAdvancedMode(_)),
+        "nvnBlendStateGetAdvancedOverlap" => f!(hle_nvnBlendStateGetAdvancedOverlap(_)),
         "nvnBlendStateGetAdvancedPremultipliedSrc" => {
-            f!(hle_nvnBlendStateGetAdvancedPremultipliedSrc)
+            f!(hle_nvnBlendStateGetAdvancedPremultipliedSrc(_))
         }
-        "nvnBlendStateGetAdvancedNormalizedDst" => f!(hle_nvnBlendStateGetAdvancedNormalizedDst),
-        "nvnChannelMaskStateSetDefaults" => f!(hle_nvnChannelMaskStateSetDefaults),
-        "nvnChannelMaskStateSetChannelMask" => f!(hle_nvnChannelMaskStateSetChannelMask),
-        "nvnChannelMaskStateGetChannelMask" => f!(hle_nvnChannelMaskStateGetChannelMask),
-        "nvnColorStateSetDefaults" => f!(hle_nvnColorStateSetDefaults),
-        "nvnColorStateSetBlendEnable" => f!(hle_nvnColorStateSetBlendEnable),
-        "nvnColorStateSetLogicOp" => f!(hle_nvnColorStateSetLogicOp),
-        "nvnColorStateSetAlphaTest" => f!(hle_nvnColorStateSetAlphaTest),
-        "nvnColorStateGetBlendEnable" => f!(hle_nvnColorStateGetBlendEnable),
-        "nvnColorStateGetLogicOp" => f!(hle_nvnColorStateGetLogicOp),
-        "nvnColorStateGetAlphaTest" => f!(hle_nvnColorStateGetAlphaTest),
-        "nvnDepthStencilStateSetDefaults" => f!(hle_nvnDepthStencilStateSetDefaults),
-        "nvnDepthStencilStateSetDepthTestEnable" => f!(hle_nvnDepthStencilStateSetDepthTestEnable),
+        "nvnBlendStateGetAdvancedNormalizedDst" => f!(hle_nvnBlendStateGetAdvancedNormalizedDst(_)),
+        "nvnChannelMaskStateSetDefaults" => f!(hle_nvnChannelMaskStateSetDefaults(_)),
+        "nvnChannelMaskStateSetChannelMask" => f!(hle_nvnChannelMaskStateSetChannelMask(_, _, _, _, _, _)),
+        "nvnChannelMaskStateGetChannelMask" => f!(hle_nvnChannelMaskStateGetChannelMask(_, _, _, _, _, _)),
+        "nvnColorStateSetDefaults" => f!(hle_nvnColorStateSetDefaults(_)),
+        "nvnColorStateSetBlendEnable" => f!(hle_nvnColorStateSetBlendEnable(_, _, _)),
+        "nvnColorStateSetLogicOp" => f!(hle_nvnColorStateSetLogicOp(_, _)),
+        "nvnColorStateSetAlphaTest" => f!(hle_nvnColorStateSetAlphaTest(_, _)),
+        "nvnColorStateGetBlendEnable" => f!(hle_nvnColorStateGetBlendEnable(_, _)),
+        "nvnColorStateGetLogicOp" => f!(hle_nvnColorStateGetLogicOp(_)),
+        "nvnColorStateGetAlphaTest" => f!(hle_nvnColorStateGetAlphaTest(_)),
+        "nvnDepthStencilStateSetDefaults" => f!(hle_nvnDepthStencilStateSetDefaults(_)),
+        "nvnDepthStencilStateSetDepthTestEnable" => f!(hle_nvnDepthStencilStateSetDepthTestEnable(_, _)),
         "nvnDepthStencilStateSetDepthWriteEnable" => {
-            f!(hle_nvnDepthStencilStateSetDepthWriteEnable)
+            f!(hle_nvnDepthStencilStateSetDepthWriteEnable(_, _))
         }
-        "nvnDepthStencilStateSetDepthFunc" => f!(hle_nvnDepthStencilStateSetDepthFunc),
+        "nvnDepthStencilStateSetDepthFunc" => f!(hle_nvnDepthStencilStateSetDepthFunc(_, _)),
         "nvnDepthStencilStateSetStencilTestEnable" => {
-            f!(hle_nvnDepthStencilStateSetStencilTestEnable)
+            f!(hle_nvnDepthStencilStateSetStencilTestEnable(_, _))
         }
-        "nvnDepthStencilStateSetStencilFunc" => f!(hle_nvnDepthStencilStateSetStencilFunc),
-        "nvnDepthStencilStateSetStencilOp" => f!(hle_nvnDepthStencilStateSetStencilOp),
-        "nvnDepthStencilStateGetDepthTestEnable" => f!(hle_nvnDepthStencilStateGetDepthTestEnable),
+        "nvnDepthStencilStateSetStencilFunc" => f!(hle_nvnDepthStencilStateSetStencilFunc(_, _, _)),
+        "nvnDepthStencilStateSetStencilOp" => f!(hle_nvnDepthStencilStateSetStencilOp(_, _, _, _, _)),
+        "nvnDepthStencilStateGetDepthTestEnable" => f!(hle_nvnDepthStencilStateGetDepthTestEnable(_)),
         "nvnDepthStencilStateGetDepthWriteEnable" => {
-            f!(hle_nvnDepthStencilStateGetDepthWriteEnable)
+            f!(hle_nvnDepthStencilStateGetDepthWriteEnable(_))
         }
-        "nvnDepthStencilStateGetDepthFunc" => f!(hle_nvnDepthStencilStateGetDepthFunc),
+        "nvnDepthStencilStateGetDepthFunc" => f!(hle_nvnDepthStencilStateGetDepthFunc(_)),
         "nvnDepthStencilStateGetStencilTestEnable" => {
-            f!(hle_nvnDepthStencilStateGetStencilTestEnable)
+            f!(hle_nvnDepthStencilStateGetStencilTestEnable(_))
         }
-        "nvnDepthStencilStateGetStencilFunc" => f!(hle_nvnDepthStencilStateGetStencilFunc),
-        "nvnDepthStencilStateGetStencilOp" => f!(hle_nvnDepthStencilStateGetStencilOp),
-        "nvnPolygonStateSetDefaults" => f!(hle_nvnPolygonStateSetDefaults),
-        "nvnPolygonStateSetCullFace" => f!(hle_nvnPolygonStateSetCullFace),
-        "nvnPolygonStateSetFrontFace" => f!(hle_nvnPolygonStateSetFrontFace),
-        "nvnPolygonStateSetPolygonMode" => f!(hle_nvnPolygonStateSetPolygonMode),
-        "nvnPolygonStateSetPolygonOffsetEnables" => f!(hle_nvnPolygonStateSetPolygonOffsetEnables),
-        "nvnPolygonStateGetCullFace" => f!(hle_nvnPolygonStateGetCullFace),
-        "nvnPolygonStateGetFrontFace" => f!(hle_nvnPolygonStateGetFrontFace),
-        "nvnPolygonStateGetPolygonMode" => f!(hle_nvnPolygonStateGetPolygonMode),
-        "nvnPolygonStateGetPolygonOffsetEnables" => f!(hle_nvnPolygonStateGetPolygonOffsetEnables),
-        "nvnVertexAttribStateSetDefaults" => f!(hle_nvnVertexAttribStateSetDefaults),
-        "nvnVertexAttribStateSetFormat" => f!(hle_nvnVertexAttribStateSetFormat),
-        "nvnVertexAttribStateSetStreamIndex" => f!(hle_nvnVertexAttribStateSetStreamIndex),
-        "nvnVertexAttribStateGetFormat" => f!(hle_nvnVertexAttribStateGetFormat),
-        "nvnVertexAttribStateGetStreamIndex" => f!(hle_nvnVertexAttribStateGetStreamIndex),
-        "nvnVertexStreamStateSetDefaults" => f!(hle_nvnVertexStreamStateSetDefaults),
-        "nvnVertexStreamStateSetStride" => f!(hle_nvnVertexStreamStateSetStride),
-        "nvnVertexStreamStateSetDivisor" => f!(hle_nvnVertexStreamStateSetDivisor),
-        "nvnVertexStreamStateGetStride" => f!(hle_nvnVertexStreamStateGetStride),
-        "nvnVertexStreamStateGetDivisor" => f!(hle_nvnVertexStreamStateGetDivisor),
-        "nvnMultisampleStateSetDefaults" => f!(hle_nvnMultisampleStateSetDefaults),
+        "nvnDepthStencilStateGetStencilFunc" => f!(hle_nvnDepthStencilStateGetStencilFunc(_, _)),
+        "nvnDepthStencilStateGetStencilOp" => f!(hle_nvnDepthStencilStateGetStencilOp(_, _, _, _, _)),
+        "nvnPolygonStateSetDefaults" => f!(hle_nvnPolygonStateSetDefaults(_)),
+        "nvnPolygonStateSetCullFace" => f!(hle_nvnPolygonStateSetCullFace(_, _)),
+        "nvnPolygonStateSetFrontFace" => f!(hle_nvnPolygonStateSetFrontFace(_, _)),
+        "nvnPolygonStateSetPolygonMode" => f!(hle_nvnPolygonStateSetPolygonMode(_, _)),
+        "nvnPolygonStateSetPolygonOffsetEnables" => f!(hle_nvnPolygonStateSetPolygonOffsetEnables(_, _)),
+        "nvnPolygonStateGetCullFace" => f!(hle_nvnPolygonStateGetCullFace(_)),
+        "nvnPolygonStateGetFrontFace" => f!(hle_nvnPolygonStateGetFrontFace(_)),
+        "nvnPolygonStateGetPolygonMode" => f!(hle_nvnPolygonStateGetPolygonMode(_)),
+        "nvnPolygonStateGetPolygonOffsetEnables" => f!(hle_nvnPolygonStateGetPolygonOffsetEnables(_)),
+        "nvnVertexAttribStateSetDefaults" => f!(hle_nvnVertexAttribStateSetDefaults(_)),
+        "nvnVertexAttribStateSetFormat" => f!(hle_nvnVertexAttribStateSetFormat(_, _, _)),
+        "nvnVertexAttribStateSetStreamIndex" => f!(hle_nvnVertexAttribStateSetStreamIndex(_, _)),
+        "nvnVertexAttribStateGetFormat" => f!(hle_nvnVertexAttribStateGetFormat(_, _, _)),
+        "nvnVertexAttribStateGetStreamIndex" => f!(hle_nvnVertexAttribStateGetStreamIndex(_)),
+        "nvnVertexStreamStateSetDefaults" => f!(hle_nvnVertexStreamStateSetDefaults(_)),
+        "nvnVertexStreamStateSetStride" => f!(hle_nvnVertexStreamStateSetStride(_, _)),
+        "nvnVertexStreamStateSetDivisor" => f!(hle_nvnVertexStreamStateSetDivisor(_, _)),
+        "nvnVertexStreamStateGetStride" => f!(hle_nvnVertexStreamStateGetStride(_)),
+        "nvnVertexStreamStateGetDivisor" => f!(hle_nvnVertexStreamStateGetDivisor(_)),
+        "nvnMultisampleStateSetDefaults" => f!(hle_nvnMultisampleStateSetDefaults(_)),
         "nvnMultisampleStateSetMultisampleEnable" => {
-            f!(hle_nvnMultisampleStateSetMultisampleEnable)
+            f!(hle_nvnMultisampleStateSetMultisampleEnable(_, _))
         }
         "nvnMultisampleStateGetMultisampleEnable" => {
-            f!(hle_nvnMultisampleStateGetMultisampleEnable)
+            f!(hle_nvnMultisampleStateGetMultisampleEnable(_))
         }
         "nvnMultisampleStateSetAlphaToCoverageEnable" => {
-            f!(hle_nvnMultisampleStateSetAlphaToCoverageEnable)
+            f!(hle_nvnMultisampleStateSetAlphaToCoverageEnable(_, _))
         }
         "nvnMultisampleStateGetAlphaToCoverageEnable" => {
-            f!(hle_nvnMultisampleStateGetAlphaToCoverageEnable)
+            f!(hle_nvnMultisampleStateGetAlphaToCoverageEnable(_))
         }
         "nvnMultisampleStateSetAlphaToCoverageDither" => {
-            f!(hle_nvnMultisampleStateSetAlphaToCoverageDither)
+            f!(hle_nvnMultisampleStateSetAlphaToCoverageDither(_, _))
         }
         "nvnMultisampleStateGetAlphaToCoverageDither" => {
-            f!(hle_nvnMultisampleStateGetAlphaToCoverageDither)
+            f!(hle_nvnMultisampleStateGetAlphaToCoverageDither(_))
         }
         "nvnMultisampleStateSetCoverageToColorEnable" => {
-            f!(hle_nvnMultisampleStateSetCoverageToColorEnable)
+            f!(hle_nvnMultisampleStateSetCoverageToColorEnable(_, _))
         }
         "nvnMultisampleStateGetCoverageToColorEnable" => {
-            f!(hle_nvnMultisampleStateGetCoverageToColorEnable)
+            f!(hle_nvnMultisampleStateGetCoverageToColorEnable(_))
         }
         "nvnMultisampleStateSetSampleLocationsEnable" => {
-            f!(hle_nvnMultisampleStateSetSampleLocationsEnable)
+            f!(hle_nvnMultisampleStateSetSampleLocationsEnable(_, _))
         }
         "nvnMultisampleStateGetSampleLocationsEnable" => {
-            f!(hle_nvnMultisampleStateGetSampleLocationsEnable)
+            f!(hle_nvnMultisampleStateGetSampleLocationsEnable(_))
         }
         "nvnMultisampleStateSetSampleLocationsGridEnable" => {
-            f!(hle_nvnMultisampleStateSetSampleLocationsGridEnable)
+            f!(hle_nvnMultisampleStateSetSampleLocationsGridEnable(_, _))
         }
         "nvnMultisampleStateGetSampleLocationsGridEnable" => {
-            f!(hle_nvnMultisampleStateGetSampleLocationsGridEnable)
+            f!(hle_nvnMultisampleStateGetSampleLocationsGridEnable(_))
         }
-        "nvnMultisampleStateSetSamples" => f!(hle_nvnMultisampleStateSetSamples),
-        "nvnMultisampleStateGetSamples" => f!(hle_nvnMultisampleStateGetSamples),
-        "nvnMultisampleStateSetRasterSamples" => f!(hle_nvnMultisampleStateSetRasterSamples),
-        "nvnMultisampleStateGetRasterSamples" => f!(hle_nvnMultisampleStateGetRasterSamples),
+        "nvnMultisampleStateSetSamples" => f!(hle_nvnMultisampleStateSetSamples(_, _)),
+        "nvnMultisampleStateGetSamples" => f!(hle_nvnMultisampleStateGetSamples(_)),
+        "nvnMultisampleStateSetRasterSamples" => f!(hle_nvnMultisampleStateSetRasterSamples(_, _)),
+        "nvnMultisampleStateGetRasterSamples" => f!(hle_nvnMultisampleStateGetRasterSamples(_)),
         "nvnMultisampleStateSetCoverageModulationMode" => {
-            f!(hle_nvnMultisampleStateSetCoverageModulationMode)
+            f!(hle_nvnMultisampleStateSetCoverageModulationMode(_, _))
         }
         "nvnMultisampleStateGetCoverageModulationMode" => {
-            f!(hle_nvnMultisampleStateGetCoverageModulationMode)
+            f!(hle_nvnMultisampleStateGetCoverageModulationMode(_))
         }
         "nvnMultisampleStateSetCoverageToColorOutput" => {
-            f!(hle_nvnMultisampleStateSetCoverageToColorOutput)
+            f!(hle_nvnMultisampleStateSetCoverageToColorOutput(_, _))
         }
         "nvnMultisampleStateGetCoverageToColorOutput" => {
-            f!(hle_nvnMultisampleStateGetCoverageToColorOutput)
+            f!(hle_nvnMultisampleStateGetCoverageToColorOutput(_))
         }
         "nvnMultisampleStateGetSampleLocationsGrid" => {
-            f!(hle_nvnMultisampleStateGetSampleLocationsGrid)
+            f!(hle_nvnMultisampleStateGetSampleLocationsGrid(_, _, _))
         }
-        "nvnMultisampleStateSetSampleLocations" => f!(hle_nvnMultisampleStateSetSampleLocations),
-        "nvnDeviceGetTextureHandle" => f!(hle_nvnDeviceGetTextureHandle),
-        "nvnDeviceGetTexelFetchHandle" => f!(hle_nvnDeviceGetTexelFetchHandle),
-        "nvnDeviceGetImageHandle" => f!(hle_nvnDeviceGetImageHandle),
-        "nvnDeviceGetSeparateTextureHandle" => f!(hle_nvnDeviceGetSeparateTextureHandle),
-        "nvnDeviceGetSeparateSamplerHandle" => f!(hle_nvnDeviceGetSeparateSamplerHandle),
+        "nvnMultisampleStateSetSampleLocations" => f!(hle_nvnMultisampleStateSetSampleLocations(_, _, _, _)),
+        "nvnDeviceGetTextureHandle" => f!(hle_nvnDeviceGetTextureHandle(_, _, _)),
+        "nvnDeviceGetTexelFetchHandle" => f!(hle_nvnDeviceGetTexelFetchHandle(_, _)),
+        "nvnDeviceGetImageHandle" => f!(hle_nvnDeviceGetImageHandle(_, _)),
+        "nvnDeviceGetSeparateTextureHandle" => f!(hle_nvnDeviceGetSeparateTextureHandle(_, _)),
+        "nvnDeviceGetSeparateSamplerHandle" => f!(hle_nvnDeviceGetSeparateSamplerHandle(_, _)),
         _ => None,
     }
 }

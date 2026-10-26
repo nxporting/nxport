@@ -29,6 +29,13 @@ fn bool_or_int<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error>
 pub struct ManifestCBuffer {
     pub binding: u32,
     pub slot: i32,
+    /// Bytes the stage reads at literal offsets; -1 when it indexes the buffer at run time or the extent is unknown.
+    #[serde(default = "unknown_extent")]
+    pub extent: i32,
+}
+
+fn unknown_extent() -> i32 {
+    -1
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +45,13 @@ pub struct ManifestSBuffer {
     pub slot: i32,
     pub cb_slot: i32,
     pub cb_offset: i32,
+    /// The stage writes it (stores or atomics); manifests without the field count as written.
+    #[serde(default = "written")]
+    pub write: bool,
+}
+
+fn written() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +64,13 @@ pub struct ManifestTextureOrImage {
     pub texture_type: String,
     #[serde(default)]
     pub array_length: i32,
+    /// Its first slot in the sampler table (ShaderManifest::sampler_table), or -1.
+    #[serde(default = "no_slot")]
+    pub sampler_slot: i32,
+}
+
+fn no_slot() -> i32 {
+    -1
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +90,9 @@ pub struct ShaderManifest {
     pub textures: Vec<ManifestTextureOrImage>,
     #[serde(default)]
     pub images: Vec<ManifestTextureOrImage>,
+    /// Size of the sampler table (properties::SAMPLER_TABLE_BINDING), 0 without one.
+    #[serde(default)]
+    pub sampler_table: u32,
 }
 
 impl ShaderProgram {
@@ -78,11 +102,25 @@ impl ShaderProgram {
             stage: Some(i.stage.to_string()),
             uses_instance_id: i.uses_instance_id,
             uses_draw_parameters: i.uses_draw_parameters,
-            cbuffers: i.cbuffers.iter().map(|b| ManifestCBuffer { binding: b.binding as u32, slot: b.slot as i32 }).collect(),
+            cbuffers: i
+                .cbuffers
+                .iter()
+                .map(|b| ManifestCBuffer {
+                    binding: b.binding as u32,
+                    slot: b.slot as i32,
+                    extent: i.cbuf_extents.iter().find(|e| e.0 == b.binding).map_or(if i.cbuf_extents.is_empty() { -1 } else { 0 }, |e| e.1),
+                })
+                .collect(),
             sbuffers: i
                 .sbuffers
                 .iter()
-                .map(|b| ManifestSBuffer { binding: b.binding as u32, slot: b.slot as i32, cb_slot: b.sb_cb_slot as i32, cb_offset: b.sb_cb_offset as i32 })
+                .map(|b| ManifestSBuffer {
+                    binding: b.binding as u32,
+                    slot: b.slot as i32,
+                    cb_slot: b.sb_cb_slot as i32,
+                    cb_offset: b.sb_cb_offset as i32,
+                    write: b.write,
+                })
                 .collect(),
             textures: i
                 .textures
@@ -93,6 +131,11 @@ impl ShaderProgram {
                     handle_index: t.handle_index,
                     texture_type: t.ty.to_string(),
                     array_length: t.array_length,
+                    sampler_slot: i
+                        .sampler_table
+                        .as_ref()
+                        .and_then(|(_, b)| b.iter().find(|b| b.0 == t.binding))
+                        .map_or(-1, |b| b.1),
                 })
                 .collect(),
             images: i
@@ -104,8 +147,10 @@ impl ShaderProgram {
                     handle_index: t.handle_index,
                     texture_type: t.ty.to_string(),
                     array_length: 0,
+                    sampler_slot: -1,
                 })
                 .collect(),
+            sampler_table: i.sampler_table.as_ref().map_or(0, |t| t.0),
         }
     }
 }

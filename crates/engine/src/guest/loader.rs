@@ -25,6 +25,11 @@ pub const GEN_SIZE: usize = 0x0010_0000;
 pub const FIXED_GUEST_BASE: usize = 0x70_0010_0000;
 /// The slot right below main for the placeholder rtld module mods expect (main.rs), reserved with a fixed guest base.
 pub const RTLD_SLOT_SIZE: usize = 0x10_0000;
+static MAIN_BASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Where main's image starts (guest addresses in logs are main-relative), or 0 before it is allocated.
+pub fn main_base() -> usize {
+    MAIN_BASE.load(std::sync::atomic::Ordering::Relaxed)
+}
 static RTLD_SLOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// The reserved rtld placeholder slot (PROT_NONE until main.rs maps it), or 0.
 pub fn rtld_slot() -> usize {
@@ -76,6 +81,8 @@ pub struct GuestMemorySpace {
     /// the SDK image (SDK_SLOT_SIZE). Hinted mmaps used to land elsewhere when the spot was taken.
     pub island_slot: usize,
     pub sdk_slot: usize,
+    /// (start, size) of the address space reserved for all of the above (crate::os::reserve).
+    reservation: (usize, usize),
     pub total_size: usize,
     pub text_size: usize,
     pub rodata_size: usize,
@@ -125,83 +132,61 @@ impl GuestMemorySpace {
         // AOT images with mods (cpu/aot.rs): exlaunch plugins write absolute addresses (trampoline pointers) into their
         // code, so the guest must sit at the same address in the run that dumps the image (macOS) and the runs that load
         // it (iOS). A fixed spot both address spaces leave free; any other run lets the kernel choose.
-        let fixed = (crate::cpu::aot::active()
-            && crate::horizon::fs::mods().iter().any(|(_, d)| {
-                (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file())
-            }))
+        // Lifted code (docs/windows-port.md) has the guest addresses it was lifted at built in: always fixed there.
+        let fixed = !cfg!(nx_native)
+            || (crate::cpu::aot::active()
+                && crate::horizon::fs::mods().iter().any(|(_, d)| {
+                    (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file())
+                }))
             || crate::settings::get().guest.fixed_guest_base;
 
-        let hint = if fixed {
-            (FIXED_GUEST_BASE - RTLD_SLOT_SIZE) as *mut libc::c_void
-        } else {
-            ptr::null_mut()
+        let expected_base = FIXED_GUEST_BASE - RTLD_SLOT_SIZE;
+        let at = if fixed { crate::os::At::Exactly(expected_base) } else { crate::os::At::Anywhere };
+        let slot = match unsafe { crate::os::reserve(at, total_reserve) } {
+            Ok(p) => p,
+            Err(e) if fixed => {
+                eprintln!("[-] the guest needs {:#x} (AOT image with mods): {}", expected_base, e);
+                return Err("guest address space: fixed base unavailable".into());
+            }
+            Err(e) => {
+                eprintln!("[-] reserving the guest address space failed: {}", e);
+                return Err("Failed to allocate guest virtual memory space".into());
+            }
         };
-
-        let raw = unsafe {
-            libc::mmap(
-                hint,
-                total_reserve,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
+        let ptr = slot + RTLD_SLOT_SIZE;
+        // The whole range stays reserved; what is usable now is committed (fresh pages read as zero):
+        //   rtld slot   reserved until the placeholder module is mapped into it (lib.rs)
+        //   main        main's image, then the island slot
+        //   gap         reserved until module_loader maps the subsdk modules into it. It used to be unmapped for hinted
+        //               mmaps; when another allocation took the spot first, the game's subsdk0 landed a few MB higher
+        //               and UltraCam's patcher wrote main's patches through a view of the wrong module (intermittent
+        //               SIGBUS at startup).
+        //   x18 island, generated code, the SDK slot
+        RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
+        MAIN_BASE.store(ptr, std::sync::atomic::Ordering::Relaxed);
+        let gap = ptr + main_end + ISLAND_SLOT_SIZE;
+        let gen = ptr + main_end + SDK_GAP - GEN_SIZE;
+        let after_gap = gen - X18_ISLAND_SIZE;
+        let committed = unsafe {
+            crate::os::commit(ptr, gap - ptr, crate::os::Prot::ReadWrite).and_then(|()| {
+                crate::os::commit(after_gap, slot + total_reserve - after_gap, crate::os::Prot::ReadWrite)
+            })
         };
-
-        if raw == libc::MAP_FAILED {
-            let err = std::io::Error::last_os_error();
-            eprintln!("[-] mmap failed with os error: {}", err);
+        if let Err(e) = committed {
+            unsafe { crate::os::release(slot, total_reserve) };
+            eprintln!("[-] committing guest memory failed: {}", e);
             return Err("Failed to allocate guest virtual memory space".into());
         }
-
-        let expected_base = FIXED_GUEST_BASE - RTLD_SLOT_SIZE;
-        if fixed && raw as usize != expected_base {
-            eprintln!(
-                "[-] the guest needs {:#x} (AOT image with mods) but the kernel placed it at {:p}",
-                expected_base, raw
-            );
-            return Err("guest address space: fixed base unavailable".into());
-        }
-
-        let slot = raw as usize;
-        let ptr = unsafe { (raw as *mut u8).add(RTLD_SLOT_SIZE) as *mut libc::c_void };
-
-        // The rtld slot below main is reserved with PROT_NONE until the placeholder module is mapped into it.
-        unsafe {
-            libc::mprotect(raw, RTLD_SLOT_SIZE, libc::PROT_NONE);
-        }
-        RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
-
-        let gap = ptr as usize + main_end + ISLAND_SLOT_SIZE;
-        unsafe {
-            libc::memset(ptr, 0, total_size);
-            // The gap stays reserved (inaccessible) until module_loader maps the subsdk modules into it with MAP_FIXED.
-            // It used to be unmapped for hinted mmaps; when another allocation took the spot first, the game's subsdk0
-            // landed a few MB higher and UltraCam's patcher wrote main's patches through a view of the wrong module
-            // (intermittent SIGBUS at startup).
-            libc::mprotect(
-                gap as *mut libc::c_void,
-                SDK_GAP - ISLAND_SLOT_SIZE,
-                libc::PROT_NONE,
-            );
-        }
-        let gen = ptr as usize + main_end + SDK_GAP - GEN_SIZE;
-        unsafe {
-            libc::mprotect(
-                (gen - X18_ISLAND_SIZE) as *mut libc::c_void,
-                X18_ISLAND_SIZE + GEN_SIZE,
-                libc::PROT_READ | libc::PROT_WRITE,
-            )
-        };
         GEN_AREA.store(gen, std::sync::atomic::Ordering::Relaxed);
         crate::cpu::aot::set_literal_pool(gen + GEN_LITERALS, GEN_LITERALS_SIZE);
         MOD_GAP.store(gap, std::sync::atomic::Ordering::Relaxed);
-        MOD_GAP_END.store(gen - X18_ISLAND_SIZE, std::sync::atomic::Ordering::Relaxed);
+        MOD_GAP_END.store(after_gap, std::sync::atomic::Ordering::Relaxed);
 
         Ok(Self {
             base_ptr: ptr as *mut u8,
-            island_slot: ptr as usize + main_end,
-            sdk_slot: ptr as usize + main_end + SDK_GAP,
+            island_slot: ptr + main_end,
+            sdk_slot: ptr + main_end + SDK_GAP,
+            reservation: (slot, total_reserve),
             total_size,
             text_size: nso.text.data.len(),
             rodata_size: nso.ro.data.len(),
@@ -474,7 +459,7 @@ impl GuestMemorySpace {
         Some(if self.default_stub_ptr != 0 {
             (self.default_stub_ptr, false)
         } else {
-            (hle::hle_default_stub as *const () as usize, true)
+            (crate::hle!(hle::hle_default_stub()) as usize, true)
         })
     }
 
@@ -489,7 +474,12 @@ impl GuestMemorySpace {
         self.trampoline_pool = (gen + GEN_TRAMPOLINES) as *mut u32;
         self.trampoline_capacity = capacity;
         self.guest_x9_value = x18_value;
-        unsafe { self.write_hle_entry_stub() };
+        // The arm64 entry code the trampolines branch to. A lifted runtime never runs trampolines: it recognises their
+        // addresses and calls the function's adapter (hle_abi).
+        #[cfg(nx_native)]
+        unsafe {
+            self.write_hle_entry_stub()
+        };
         self.trampoline_next = HLE_STUB_ENTRIES;
         Ok(())
     }
@@ -524,6 +514,7 @@ impl GuestMemorySpace {
     ///   ldr  x18, <x18 value>         ; literal of entry 0
     ///   ldp  x29, x30, [sp], #16
     ///   ret                           ; x0..x7 / v0..v7 return values intact
+    #[cfg(nx_native)]
     unsafe fn write_hle_entry_stub(&mut self) {
         let lit = gen_area() + GEN_TRAMPOLINE_LITERALS;
         ptr::write((lit + 8) as *mut usize, self.guest_x9_value);
@@ -591,6 +582,15 @@ impl GuestMemorySpace {
 
     /// A new trampoline of its own (callers may use its spare words for code of their own).
     pub fn make_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
+        // A runtime without arm64 trampolines calls the function through its adapter (hle_abi): every function bound
+        // here needs one.
+        if crate::hle_abi::adapter(rust_fn).is_none() {
+            eprintln!("[!] HLE: {rust_fn:p} has no adapter (take its address through hle_abi::hle)");
+        }
+        crate::hle_abi::bind_entry(
+            unsafe { self.trampoline_pool.add(self.trampoline_next * TRAMPOLINE_WORDS) } as u64,
+            rust_fn,
+        );
         assert!(
             self.trampoline_next < self.trampoline_capacity,
             "trampoline pool exhausted ({} entries)",
@@ -624,13 +624,7 @@ impl GuestMemorySpace {
                 self.trampoline_pool as usize,
                 pool_bytes,
             );
-            extern "C" {
-                fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-            }
-            sys_icache_invalidate(
-                self.trampoline_pool as *mut libc::c_void,
-                self.trampoline_next * TRAMPOLINE_WORDS * 4,
-            );
+            crate::os::flush_icache(self.trampoline_pool as usize, self.trampoline_next * TRAMPOLINE_WORDS * 4);
         }
         println!(
             "[+] Trampoline pool: {} entries ready at {:p}",
@@ -683,8 +677,6 @@ impl GuestMemorySpace {
 
 impl Drop for GuestMemorySpace {
     fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.base_ptr as *mut libc::c_void, self.total_size);
-        }
+        unsafe { crate::os::release(self.reservation.0, self.reservation.1) };
     }
 }

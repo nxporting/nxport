@@ -21,6 +21,12 @@ use crate::guest::loader::GuestMemorySpace;
 use std::collections::HashMap;
 use std::ptr;
 
+static SDK_SYMBOLS: std::sync::OnceLock<HashMap<String, usize>> = std::sync::OnceLock::new();
+
+pub fn sdk_symbol(name: &str) -> Option<usize> {
+    SDK_SYMBOLS.get().and_then(|m| m.get(name).copied())
+}
+
 pub struct SdkModule {
     pub base: usize,
     pub total_size: usize,
@@ -35,6 +41,9 @@ pub struct SdkModule {
     pub ro_off: usize,
     pub data_off: usize,
     pub image_size: usize,
+    /// The reservation the module was given when it did not fit the slot reserved with main (that one belongs to the
+    /// GuestMemorySpace).
+    own: Option<(usize, usize)>,
 }
 
 impl SdkModule {
@@ -68,11 +77,7 @@ impl SdkModule {
         unsafe {
             let page = addr & !0x3fff;
             let span = ((addr + 16 + 0x3fff) & !0x3fff) - page;
-            libc::mprotect(
-                page as *mut libc::c_void,
-                span,
-                libc::PROT_READ | libc::PROT_WRITE,
-            );
+            let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
             let p = addr as *mut u32;
             // The target comes from a literal (data), not the code: patched code must be the same on every launch
             // (AOT images, cpu/aot.rs).
@@ -82,10 +87,7 @@ impl SdkModule {
             ptr::write(p.add(2), 0xD61F_0200); // br x16
             ptr::write(p.add(3), 0xD503_201F); // nop
             crate::cpu::aot::protect_rx(page, span);
-            extern "C" {
-                fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-            }
-            sys_icache_invalidate(addr as *mut libc::c_void, 16);
+            crate::os::flush_icache(addr as usize, 16);
         }
         true
     }
@@ -125,16 +127,12 @@ impl SdkModule {
             g.1 += 16;
             s
         };
-        let Some(b) = crate::cpu::tpidr_rewrite::encode_b(addr, stub) else {
+        let Some(b) = crate::cpu::aot::encode_b(addr, stub) else {
             return false;
         };
         // Stub: adrp x16; ldr x16, <literal: target>; br x16; nop
         let page = stub & !0x3fff;
-        libc::mprotect(
-            page as *mut libc::c_void,
-            0x4000,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
+        let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
         let p = stub as *mut u32;
         let [adrp, ldr] = crate::cpu::aot::adrp_ldr(stub, crate::cpu::aot::literal(target), 16);
         ptr::write(p, adrp);
@@ -142,27 +140,20 @@ impl SdkModule {
         ptr::write(p.add(2), 0xD61F_0200);
         ptr::write(p.add(3), 0xD503_201F);
         crate::cpu::aot::make_exec("sdk.short_island", page, 0x4000);
-        extern "C" {
-            fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-        }
-        sys_icache_invalidate(stub as *mut libc::c_void, 16);
+        crate::os::flush_icache(stub as usize, 16);
         let fpage = addr & !0x3fff;
-        libc::mprotect(
-            fpage as *mut libc::c_void,
-            0x4000,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
+        let _ = crate::os::protect(fpage as usize, 0x4000, crate::os::Prot::ReadWrite);
         ptr::write(addr as *mut u32, b);
         crate::cpu::aot::protect_rx(fpage, 0x4000);
-        sys_icache_invalidate(addr as *mut libc::c_void, 4);
+        crate::os::flush_icache(addr as usize, 4);
         true
     }
 }
 
 impl Drop for SdkModule {
     fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.base as *mut libc::c_void, self.total_size);
+        if let Some((base, size)) = self.own {
+            unsafe { crate::os::release(base, size) };
         }
     }
 }
@@ -193,15 +184,112 @@ fn decompress_section(
     lz4_flex::decompress(src, dec_sz).map_err(|e| format!("LZ4 decompress .{}: {}", name, e).into())
 }
 
-unsafe extern "C" fn sdk_aligned_alloc(alignment: usize, size: usize) -> *mut libc::c_void {
-    let align = alignment
-        .max(std::mem::size_of::<*mut ()>())
-        .next_power_of_two();
-    let mut ptr: *mut libc::c_void = std::ptr::null_mut();
-    if libc::posix_memalign(&mut ptr, align, size) == 0 {
-        ptr
-    } else {
-        std::ptr::null_mut()
+/// The C heap the SDK's malloc family uses when main does not define its own. One family allocates and frees every
+/// block, aligned_alloc's included.
+#[cfg(unix)]
+mod c_heap {
+    pub use libc::{calloc, free, malloc, realloc};
+
+    pub unsafe extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut libc::c_void {
+        let align = alignment.max(std::mem::size_of::<*mut ()>()).next_power_of_two();
+        let mut ptr: *mut libc::c_void = std::ptr::null_mut();
+        if libc::posix_memalign(&mut ptr, align, size) == 0 {
+            ptr
+        } else {
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// The C heap on Windows, whose CRT free cannot take an aligned block: every block carries its layout in a header
+/// right below it, so free and realloc work on any of them.
+#[cfg(windows)]
+mod c_heap {
+    use libc::c_void;
+    use std::alloc::{alloc, dealloc, Layout};
+
+    /// malloc's alignment on 64-bit hosts, and the header's size: (block size, alignment).
+    const MIN_ALIGN: usize = 16;
+
+    unsafe fn allocate(size: usize, align: usize) -> *mut c_void {
+        let align = align.max(MIN_ALIGN).next_power_of_two();
+        // The header sits in the last 16 bytes of the `align` bytes in front of the block.
+        let Some(Ok(layout)) = size.checked_add(align).map(|t| Layout::from_size_align(t, align)) else {
+            return std::ptr::null_mut();
+        };
+        let raw = alloc(layout);
+        if raw.is_null() {
+            return std::ptr::null_mut();
+        }
+        let p = raw.add(align);
+        *(p.sub(16) as *mut [usize; 2]) = [size, align];
+        p as *mut c_void
+    }
+
+    unsafe fn layout_of(p: *mut c_void) -> (usize, usize) {
+        let [size, align] = *((p as *mut u8).sub(16) as *const [usize; 2]);
+        (size, align)
+    }
+
+    pub unsafe extern "C" fn malloc(size: usize) -> *mut c_void {
+        allocate(size, MIN_ALIGN)
+    }
+
+    pub unsafe extern "C" fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void {
+        allocate(size, alignment)
+    }
+
+    pub unsafe extern "C" fn calloc(n: usize, size: usize) -> *mut c_void {
+        let Some(total) = n.checked_mul(size) else {
+            return std::ptr::null_mut();
+        };
+        let p = malloc(total);
+        if !p.is_null() {
+            std::ptr::write_bytes(p as *mut u8, 0, total);
+        }
+        p
+    }
+
+    pub unsafe extern "C" fn free(p: *mut c_void) {
+        if p.is_null() {
+            return;
+        }
+        let (size, align) = layout_of(p);
+        dealloc((p as *mut u8).sub(align), Layout::from_size_align_unchecked(size + align, align));
+    }
+
+    pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
+        if p.is_null() {
+            return malloc(size);
+        }
+        let q = malloc(size);
+        if !q.is_null() {
+            std::ptr::copy_nonoverlapping(p as *const u8, q as *mut u8, layout_of(p).0.min(size));
+            free(p);
+        }
+        q
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn blocks_of_any_alignment_free_and_grow() {
+            unsafe {
+                let a = aligned_alloc(4096, 100);
+                assert_eq!(a as usize % 4096, 0);
+                *(a as *mut u8).add(99) = 9;
+                let b = realloc(a, 10_000);
+                assert_eq!(b as usize % MIN_ALIGN, 0);
+                assert_eq!(*(b as *mut u8).add(99), 9);
+                free(b);
+                let c = calloc(3, 5) as *mut u8;
+                assert!((0..15).all(|i| *c.add(i) == 0));
+                free(c as *mut c_void);
+                free(std::ptr::null_mut());
+            }
+        }
     }
 }
 
@@ -211,8 +299,7 @@ unsafe extern "C" fn sdk_default_exception_stack() -> *mut libc::c_void {
 }
 
 unsafe extern "C" fn sdk_unimplemented_stub() -> i64 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
+    let lr = crate::guest_reg!(x30);
     eprintln!(
         "[!] CRITICAL: SDK called UNRESOLVED EXTERNAL STUB! Return address LR = 0x{:x}",
         lr
@@ -278,27 +365,20 @@ pub fn load_sdk(
     // Above main with a gap for subsdk modules: rtld's order is main, subsdk*, sdk, and mods (exlaunch) address the
     // SDK as the last module. Close enough to main for one tpidr rewrite island to reach both.
     // Its slot was reserved together with main (guest::loader::SDK_SLOT_SIZE); a hint alone could land anywhere.
-    let base_ptr = if total_aligned <= crate::guest::loader::SDK_SLOT_SIZE {
-        mem_space.sdk_slot as *mut libc::c_void
+    let (base, own) = if total_aligned <= crate::guest::loader::SDK_SLOT_SIZE {
+        (mem_space.sdk_slot, None)
     } else {
         let hint =
             (mem_space.base_ptr as usize + mem_space.total_size + crate::guest::loader::SDK_GAP)
                 & !0x3fff;
-        unsafe {
-            libc::mmap(
-                hint as *mut libc::c_void,
-                total_aligned,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
+        let base = unsafe {
+            crate::os::reserve(crate::os::At::Near(hint), total_aligned).and_then(|b| {
+                crate::os::commit(b, total_aligned, crate::os::Prot::ReadWrite).map(|()| b)
+            })
         }
+        .map_err(|e| format!("SDK memory: {e}"))?;
+        (base, Some((base, total_aligned)))
     };
-    if base_ptr == libc::MAP_FAILED {
-        return Err("mmap for SDK memory failed".into());
-    }
-    let base = base_ptr as usize;
 
     // ── Copy sections ───────────────────────────────────────────────────────
     unsafe {
@@ -400,6 +480,42 @@ pub fn load_sdk(
     // x18 uses stay as they are here: macOS preserves x18 for this process, elsewhere main.rs rewrites them
     // (cpu/trampoline.rs).
 
+    // ── Patch AddressRegionManager node area ─────────────────────────────────
+    // In newer Nintendo SDKs, AddressRegionManager reserves 0x3fe00000 (~1 GB) as its node area.
+    // In games with tight address space, this causes virtual address exhaustion or AllocateAddressRegion failure (0x1803).
+    // Cutting this to 0x3e00000 (62 MB) reclaims ~960 MB of address space.
+    let mut patched_arm_nodes = 0;
+    unsafe {
+        let text_slice = std::slice::from_raw_parts_mut((base + text_mo) as *mut u32, text_ds / 4);
+        for insn in text_slice.iter_mut() {
+            match *insn {
+                0x52a7fc08 => {
+                    *insn = 0x52a07c08;
+                    patched_arm_nodes += 1;
+                }
+                0x52a7fc09 => {
+                    *insn = 0x52a07c09;
+                    patched_arm_nodes += 1;
+                }
+                0x320b23e8 => {
+                    *insn = 0x52a07c08;
+                    patched_arm_nodes += 1;
+                }
+                0x320b23e9 => {
+                    *insn = 0x52a07c09;
+                    patched_arm_nodes += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    if patched_arm_nodes > 0 {
+        println!(
+            "[+] SDK: patched AddressRegionManager node area from 1 GB to 62 MB ({} instructions patched)",
+            patched_arm_nodes
+        );
+    }
+
     // ── mprotect SDK .text ──────────────────────────────────────────────────
     let text_pages = (text_ds + 0x3FFF) & !0x3FFF;
     let rc = unsafe { crate::cpu::aot::make_exec("sdk.text", base + text_mo, text_pages) };
@@ -418,6 +534,8 @@ pub fn load_sdk(
         );
     }
 
+    let _ = SDK_SYMBOLS.set(symbols.clone());
+
     Ok(SdkModule {
         base,
         total_size: total_aligned,
@@ -428,6 +546,7 @@ pub fn load_sdk(
         ro_off: ro_mo,
         data_off: data_mo,
         image_size: total_vm,
+        own,
     })
 }
 
@@ -564,11 +683,11 @@ fn apply_relocations_from_mod0(
                                     Some(a)
                                 } else {
                                     match n {
-                                        "malloc" => Some(mem_space.make_hle_trampoline(libc::malloc as *const ()) as usize),
-                                        "free" => Some(mem_space.make_hle_trampoline(libc::free as *const ()) as usize),
-                                        "calloc" => Some(mem_space.make_hle_trampoline(libc::calloc as *const ()) as usize),
-                                        "realloc" => Some(mem_space.make_hle_trampoline(libc::realloc as *const ()) as usize),
-                                        "aligned_alloc" => Some(mem_space.make_hle_trampoline(sdk_aligned_alloc as *const ()) as usize),
+                                        "malloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::malloc(_))) as usize),
+                                        "free" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::free(_))) as usize),
+                                        "calloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::calloc(_, _))) as usize),
+                                        "realloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::realloc(_, _))) as usize),
+                                        "aligned_alloc" => Some(mem_space.make_hle_trampoline(crate::hle!(c_heap::aligned_alloc(_, _))) as usize),
                                         _ => unreachable!(),
                                     }
                                 }
@@ -587,7 +706,7 @@ fn apply_relocations_from_mod0(
                             }
                             "nnosGetDefaultUserExceptionStackForApplication" => Some(
                                 mem_space
-                                    .make_hle_trampoline(sdk_default_exception_stack as *const ())
+                                    .make_hle_trampoline(crate::hle!(sdk_default_exception_stack()))
                                     as usize,
                             ),
                             "__rel_plt_start" => jmprel.map(|v| base + v),
@@ -598,7 +717,7 @@ fn apply_relocations_from_mod0(
                                 eprintln!("[!] SDK: Unresolved external symbol '{}' at offset 0x{:x} - binding to fallback stub", other, r_offset);
                                 Some(
                                     mem_space
-                                        .make_hle_trampoline(sdk_unimplemented_stub as *const ())
+                                        .make_hle_trampoline(crate::hle!(sdk_unimplemented_stub()))
                                         as usize,
                                 )
                             }

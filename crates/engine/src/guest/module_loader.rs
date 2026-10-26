@@ -11,6 +11,8 @@
 // Stubs live in the module's own mapping (after its image), so every site is within branch range. The caller runs
 // the module's DT_INIT (exlaunch's module entry) before the game's nnMain.
 
+#[cfg(nx_native)]
+use crate::cpu::aot::encode_b;
 use crate::horizon::svc::{self, Region};
 use std::ptr;
 
@@ -25,18 +27,128 @@ pub struct LoadedModule {
 }
 
 const STUB_AREA: usize = 0x2_0000;
+// System register reads native_rewrites redirects.
+#[cfg(nx_native)]
 const MRS_TPIDR: u32 = 0xD53B_D040;
+#[cfg(nx_native)]
 const MRS_TPIDRRO: u32 = 0xD53B_D060;
+#[cfg(nx_native)]
 const MRS_CTR: u32 = 0xD53B_0020;
 
 fn r_u32(d: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(d[off..off + 4].try_into().unwrap())
 }
 
-fn encode_b(from: usize, to: usize) -> Option<u32> {
-    let delta = to as isize - from as isize;
-    (delta % 4 == 0 && delta.abs() < (128 << 20))
-        .then(|| 0x1400_0000 | (((delta >> 2) as u32) & 0x03FF_FFFF))
+
+/// The rewrites guest code needs to run natively (docs/windows-port.md): x18 uses (cpu::trampoline), svc into
+/// calls of horizon::svc, reads of TPIDR_EL0 / TPIDRRO_EL0 / CTR_EL0 into stubs (in `stubs`, STUB_AREA bytes), and
+/// load-exclusives into acquire forms. Returns what was rewritten, for the log.
+#[cfg(nx_native)]
+unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
+    if crate::cpu::trampoline::x18_trampolines() {
+        crate::cpu::trampoline::rewrite_module(name, text, text_len).map_err(|e| e.to_string())?;
+    }
+    let mut next = stubs;
+    let (mut n_svc, mut n_tp, mut n_tpro) = (0, 0, 0);
+    for off in (0..text_len & !3).step_by(4) {
+        let site = text + off;
+        let w = ptr::read(site as *const u32);
+        let stub_words: Vec<u32>;
+        if w & 0xFFE0_001F == 0xD400_0001 {
+            let n = (w >> 5) & 0xFFFF;
+            // Save x0-x7 and lr, call svc_dispatch(regs, n) through the HLE trampoline, reload, continue.
+            let mut v = vec![
+                0xD10143FF,            // sub sp, sp, #0x50
+                0xA90007E0,            // stp x0, x1, [sp]
+                0xA9010FE2,            // stp x2, x3, [sp, #16]
+                0xA90217E4,            // stp x4, x5, [sp, #32]
+                0xA9031FE6,            // stp x6, x7, [sp, #48]
+                0xF90023FE,            // str x30, [sp, #64]
+                0x910003E0,            // mov x0, sp
+                0xD2800001 | (n << 5), // movz x1, #n
+                0x58000150,            // ldr x16, <literal at +40>
+                0xD63F0200,            // blr x16
+                0xA94007E0,            // ldp x0, x1, [sp]
+                0xA9410FE2,            // ldp x2, x3, [sp, #16]
+                0xA94217E4,            // ldp x4, x5, [sp, #32]
+                0xA9431FE6,            // ldp x6, x7, [sp, #48]
+                0xF94023FE,            // ldr x30, [sp, #64]
+                0x910143FF,            // add sp, sp, #0x50
+            ];
+            let back = encode_b(next + v.len() * 4, site + 4).ok_or("stub out of branch range")?;
+            v.push(back);
+            v.push(0xD503201F); // nop (literal alignment)
+            v.push(svc_entry as u32);
+            v.push((svc_entry >> 32) as u32);
+            stub_words = v;
+            n_svc += 1;
+        } else if w & 0xFFFF_FFE0 == MRS_CTR {
+            // CTR_EL0 traps on macOS; report the Switch CPU's (Cortex-A57: 64-byte lines) for __clear_cache loops.
+            let rt = w & 0x1f;
+            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
+            stub_words = vec![
+                0xD298_0080 | rt, /* movz xt, #0xc004 */
+                0xF2B0_8880 | rt, /* movk xt, #0x8444, lsl #16 */
+                back,
+            ];
+        } else if w & 0xFFFF_FFE0 == MRS_TPIDR && w & 0x1f != 31 {
+            let rt = w & 0x1f;
+            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
+            stub_words = vec![
+                MRS_TPIDRRO | rt,
+                0xF940_0000
+                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (rt << 5)
+                    | rt,
+                back,
+            ];
+            n_tp += 1;
+        } else if w & 0xFFFF_FFE0 == MRS_TPIDRRO && w & 0x1f != 31 {
+            let rt = w & 0x1f;
+            let slot = crate::cpu::tls::FAKE_TLR_SLOT as u32;
+            let back = encode_b(next + 12, site + 4).ok_or("stub out of branch range")?;
+            stub_words = vec![
+                MRS_TPIDRRO | rt,
+                0xF940_0000
+                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (rt << 5)
+                    | rt, // guest TLS block
+                0xF940_0000 | ((slot / 8) << 10) | (rt << 5) | rt, // its fake thread-local region
+                back,
+            ];
+            n_tpro += 1;
+        } else {
+            continue;
+        }
+        if next + stub_words.len() * 4 + 8 > stubs + STUB_AREA {
+            return Err("stub area full".into());
+        }
+        // Literal pools need 8-byte alignment: svc stubs start aligned.
+        if next % 8 != 0 {
+            ptr::write(next as *mut u32, 0xD503201F);
+            next += 4;
+        }
+        let start = next;
+        for (i, word) in stub_words.iter().enumerate() {
+            ptr::write((start + i * 4) as *mut u32, *word);
+        }
+        // Re-encode the branch back now that the stub's final position is known.
+        let back_idx = stub_words
+            .iter()
+            .position(|&x| x & 0xFC00_0000 == 0x1400_0000)
+            .unwrap();
+        ptr::write(
+            (start + back_idx * 4) as *mut u32,
+            encode_b(start + back_idx * 4, site + 4).ok_or("stub out of branch range")?,
+        );
+        ptr::write(
+            site as *mut u32,
+            encode_b(site, start).ok_or("stub out of branch range")?,
+        );
+        next = start + stub_words.len() * 4;
+    }
+    let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(text, text_len, false)]);
+    Ok(format!("{n_svc} svc, {n_tp} tpidr_el0, {n_tpro} tpidrro_el0, {n_ldx} load-exclusive sites"))
 }
 
 /// Loads `path`, placing it at or above `hint` when possible. `svc_entry` is an HLE trampoline to
@@ -77,30 +189,33 @@ pub unsafe fn load(
     let bss = r_u32(&file, 0x3C) as usize;
     let image_size = segs[2].0 + segs[2].1.len() + bss;
     let image_aligned = (image_size + 0x3fff) & !0x3fff;
+    // For modules with gigantic bss (> 96 MB, e.g. Metroid Dread or Unreal Engine games),
+    // placing stubs after image_aligned exceeds the ARM64 ±128 MB branch range.
+    // Instead, place the stub area immediately BEFORE the module base.
+    let front_stubs = image_aligned > 0x600_0000;
     let total = image_aligned + STUB_AREA;
 
-    // Inside the reserved gap after main the spot is ours: map over the reservation (MAP_FIXED), so the layout is the
-    // same in every run. Elsewhere only a hint is possible.
+    // Inside the reserved gap after main the spot is ours: commit it, so the layout is the same in every run. Elsewhere
+    // only a hint is possible.
     let (gap, gap_end) = crate::guest::loader::mod_gap();
     let fixed = gap != 0 && hint >= gap && hint + total <= gap_end;
-    let p = libc::mmap(
-        hint as *mut libc::c_void,
-        total,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | if fixed { libc::MAP_FIXED } else { 0 },
-        -1,
-        0,
-    );
-    if p == libc::MAP_FAILED {
-        return Err("mmap failed".into());
-    }
+    let alloc_base = if fixed {
+        hint
+    } else {
+        crate::os::reserve(crate::os::At::Near(hint), total).map_err(|e| format!("reserve: {e}"))?
+    };
+    crate::os::commit(alloc_base, total, crate::os::Prot::ReadWrite).map_err(|e| format!("commit: {e}"))?;
     if !fixed {
         println!(
-            "[!] Mods: {} does not fit the reserved module gap; mapped at {:p} (hint {:#x})",
-            name, p, hint
+            "[!] Mods: {} does not fit the reserved module gap; mapped at {:#x} (hint {:#x})",
+            name, alloc_base, hint
         );
     }
-    let base = p as usize;
+    let (base, stubs) = if front_stubs {
+        (alloc_base + STUB_AREA, alloc_base)
+    } else {
+        (alloc_base, alloc_base + image_aligned)
+    };
     for (mo, data) in &segs {
         ptr::copy_nonoverlapping(data.as_ptr(), (base + mo) as *mut u8, data.len());
     }
@@ -215,113 +330,14 @@ pub unsafe fn load(
     }
 
     // ── make the code runnable here ──
-    if crate::cpu::trampoline::x18_trampolines() {
-        crate::cpu::trampoline::rewrite_module(name, base + text_mo, text_len)
-            .map_err(|e| e.to_string())?;
-    }
-    let stubs = base + image_aligned;
-    let mut next = stubs;
-    let (mut n_svc, mut n_tp, mut n_tpro) = (0, 0, 0);
-    for off in (0..text_len & !3).step_by(4) {
-        let site = base + text_mo + off;
-        let w = ptr::read(site as *const u32);
-        let stub_words: Vec<u32>;
-        if w & 0xFFE0_001F == 0xD400_0001 {
-            let n = (w >> 5) & 0xFFFF;
-            // Save x0-x7 and lr, call svc_dispatch(regs, n) through the HLE trampoline, reload, continue.
-            let mut v = vec![
-                0xD10143FF,            // sub sp, sp, #0x50
-                0xA90007E0,            // stp x0, x1, [sp]
-                0xA9010FE2,            // stp x2, x3, [sp, #16]
-                0xA90217E4,            // stp x4, x5, [sp, #32]
-                0xA9031FE6,            // stp x6, x7, [sp, #48]
-                0xF90023FE,            // str x30, [sp, #64]
-                0x910003E0,            // mov x0, sp
-                0xD2800001 | (n << 5), // movz x1, #n
-                0x58000150,            // ldr x16, <literal at +40>
-                0xD63F0200,            // blr x16
-                0xA94007E0,            // ldp x0, x1, [sp]
-                0xA9410FE2,            // ldp x2, x3, [sp, #16]
-                0xA94217E4,            // ldp x4, x5, [sp, #32]
-                0xA9431FE6,            // ldp x6, x7, [sp, #48]
-                0xF94023FE,            // ldr x30, [sp, #64]
-                0x910143FF,            // add sp, sp, #0x50
-            ];
-            let back = encode_b(next + v.len() * 4, site + 4).ok_or("stub out of branch range")?;
-            v.push(back);
-            v.push(0xD503201F); // nop (literal alignment)
-            v.push(svc_entry as u32);
-            v.push((svc_entry >> 32) as u32);
-            stub_words = v;
-            n_svc += 1;
-        } else if w & 0xFFFF_FFE0 == MRS_CTR {
-            // CTR_EL0 traps on macOS; report the Switch CPU's (Cortex-A57: 64-byte lines) for __clear_cache loops.
-            let rt = w & 0x1f;
-            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
-            stub_words = vec![
-                0xD298_0080 | rt, /* movz xt, #0xc004 */
-                0xF2B0_8880 | rt, /* movk xt, #0x8444, lsl #16 */
-                back,
-            ];
-        } else if w & 0xFFFF_FFE0 == MRS_TPIDR && w & 0x1f != 31 {
-            let rt = w & 0x1f;
-            let back = encode_b(next + 8, site + 4).ok_or("stub out of branch range")?;
-            stub_words = vec![
-                MRS_TPIDRRO | rt,
-                0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
-                    | (rt << 5)
-                    | rt,
-                back,
-            ];
-            n_tp += 1;
-        } else if w & 0xFFFF_FFE0 == MRS_TPIDRRO && w & 0x1f != 31 {
-            let rt = w & 0x1f;
-            let slot = crate::cpu::tls::FAKE_TLR_SLOT as u32;
-            let back = encode_b(next + 12, site + 4).ok_or("stub out of branch range")?;
-            stub_words = vec![
-                MRS_TPIDRRO | rt,
-                0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
-                    | (rt << 5)
-                    | rt, // guest TLS block
-                0xF940_0000 | ((slot / 8) << 10) | (rt << 5) | rt, // its fake thread-local region
-                back,
-            ];
-            n_tpro += 1;
-        } else {
-            continue;
-        }
-        if next + stub_words.len() * 4 + 8 > stubs + STUB_AREA {
-            return Err("stub area full".into());
-        }
-        // Literal pools need 8-byte alignment: svc stubs start aligned.
-        if next % 8 != 0 {
-            ptr::write(next as *mut u32, 0xD503201F);
-            next += 4;
-        }
-        let start = next;
-        for (i, word) in stub_words.iter().enumerate() {
-            ptr::write((start + i * 4) as *mut u32, *word);
-        }
-        // Re-encode the branch back now that the stub's final position is known.
-        let back_idx = stub_words
-            .iter()
-            .position(|&x| x & 0xFC00_0000 == 0x1400_0000)
-            .unwrap();
-        ptr::write(
-            (start + back_idx * 4) as *mut u32,
-            encode_b(start + back_idx * 4, site + 4).ok_or("stub out of branch range")?,
-        );
-        ptr::write(
-            site as *mut u32,
-            encode_b(site, start).ok_or("stub out of branch range")?,
-        );
-        next = start + stub_words.len() * 4;
-    }
-    extern "C" {
-        fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-    }
+    #[cfg(nx_native)]
+    let rewritten = native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?;
+    // Lifted code handles svc, the system registers and exclusives itself.
+    #[cfg(not(nx_native))]
+    let rewritten = {
+        let _ = svc_entry;
+        "no sites"
+    };
     let text_pages = (text_len + 0x3fff) & !0x3fff;
     // Code regions go through cpu/aot.rs: on iOS they come from the signed image (mods included, cpu/aot.rs).
     let short: String = name
@@ -332,11 +348,10 @@ pub unsafe fn load(
         .into_iter()
         .rev()
         .collect();
-    let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(base + text_mo, text_len, false)]);
     crate::cpu::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
     crate::cpu::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
-    sys_icache_invalidate((base + text_mo) as *mut libc::c_void, text_len);
-    sys_icache_invalidate(stubs as *mut libc::c_void, STUB_AREA);
+    crate::os::flush_icache(((base + text_mo)) as usize, text_len);
+    crate::os::flush_icache(stubs as usize, STUB_AREA);
 
     // Horizon reports each segment exactly (NSO segments are 4 KiB aligned): text, rodata, data+bss back to back.
     let _ = ro_len;
@@ -359,8 +374,8 @@ pub unsafe fn load(
         perm: svc::PERM_RW,
     });
     println!(
-        "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} svc, {} tpidr_el0, {} tpidrro_el0, {} load-exclusive sites rewritten",
-        name, base, image_size, n_svc, n_tp, n_tpro, n_ldx
+        "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} rewritten",
+        name, base, image_size, rewritten
     );
     Ok(LoadedModule {
         base,
@@ -380,6 +395,100 @@ static SYMBOLS: std::sync::OnceLock<std::collections::HashMap<String, usize>> =
 /// plus the overrides below).
 pub fn set_symbols(map: std::collections::HashMap<String, usize>) {
     let _ = SYMBOLS.set(map);
+}
+
+pub unsafe extern "C" fn ro_initialize() -> u32 {
+    0
+}
+
+pub unsafe extern "C" fn ro_finalize() {}
+
+pub unsafe extern "C" fn ro_get_buffer_size(out: *mut usize, image: *const u8) -> u32 {
+    if image.is_null() {
+        return 0x816; // RO_NOT_NRO
+    }
+    let magic = std::slice::from_raw_parts(image.add(0x10), 4);
+    if magic != b"NRO0" {
+        return 0x816;
+    }
+    let bss_size = ptr::read_unaligned(image.add(0x38) as *const u32) as usize;
+    if !out.is_null() {
+        *out = bss_size;
+    }
+    0
+}
+
+pub unsafe extern "C" fn ro_lookup_module_symbol(
+    out: *mut usize,
+    _mod: *const (),
+    name: *const libc::c_char,
+) -> u32 {
+    ro_lookup_symbol(out, name)
+}
+
+pub unsafe extern "C" fn ro_register_module_info(_info: *mut (), nrr: *const u8) -> u32 {
+    if nrr.is_null() {
+        return 0x816;
+    }
+    let magic = std::slice::from_raw_parts(nrr, 4);
+    if magic != b"NRR0" {
+        return 0x816;
+    }
+    0
+}
+
+pub unsafe extern "C" fn ro_unregister_module_info(_info: *const ()) -> u32 {
+    0
+}
+
+#[repr(C)]
+pub struct RoModule {
+    pub module: *mut (),
+    pub state: u32,
+    pub pad: u32,
+    pub image: *const u8,
+    pub buffer: *mut u8,
+}
+
+pub unsafe extern "C" fn ro_load_module(
+    rm: *mut RoModule,
+    image: *const u8,
+    buf: *mut u8,
+    _size: usize,
+    _flag: i32,
+) -> u32 {
+    if image.is_null() {
+        return 0x816;
+    }
+    let magic = std::slice::from_raw_parts(image.add(0x10), 4);
+    if magic != b"NRO0" {
+        return 0x816;
+    }
+    if !rm.is_null() {
+        (*rm).module = image as *mut ();
+        (*rm).state = 1;
+        (*rm).image = image;
+        (*rm).buffer = buf;
+    }
+    0
+}
+
+pub unsafe extern "C" fn ro_load_module_sdk19(
+    rm: *mut RoModule,
+    image: *const u8,
+    buf: *mut u8,
+    size: usize,
+    flag: i32,
+    _b: bool,
+) -> u32 {
+    ro_load_module(rm, image, buf, size, flag)
+}
+
+pub unsafe extern "C" fn ro_unload_module(rm: *mut RoModule) {
+    if !rm.is_null() {
+        (*rm).state = 0;
+        (*rm).module = std::ptr::null_mut();
+    }
 }
 
 pub fn lookup(name: &str) -> Option<usize> {
@@ -742,10 +851,10 @@ pub unsafe extern "C" fn sys_exit(code: i32) {
     std::process::exit(code);
 }
 
-/// The mods' thread-local keys: small indices onto pthread keys.
-static TLS_KEYS: std::sync::Mutex<Vec<libc::pthread_key_t>> = std::sync::Mutex::new(Vec::new());
+/// The mods' thread-local keys: small indices onto host keys.
+static TLS_KEYS: std::sync::Mutex<Vec<crate::os::TlsKey>> = std::sync::Mutex::new(Vec::new());
 
-fn tls_key(key: i32) -> Option<libc::pthread_key_t> {
+fn tls_key(key: i32) -> Option<crate::os::TlsKey> {
     usize::try_from(key)
         .ok()
         .and_then(|i| TLS_KEYS.lock().unwrap().get(i).copied())
@@ -755,12 +864,18 @@ pub unsafe extern "C" fn sys_tls_create(
     key_out: *mut i32,
     dtor: Option<unsafe extern "C" fn(*mut libc::c_void)>,
 ) -> i32 {
-    let mut pk: libc::pthread_key_t = 0;
-    if libc::pthread_key_create(&mut pk, dtor) != 0 {
+    // The destructor is guest code: the host calls it directly only where guest code runs natively. A lifted runtime
+    // needs a host destructor that calls it through guest::call (docs/windows-port.md, "Host calls guest").
+    #[cfg(not(nx_native))]
+    let dtor = {
+        let _ = dtor;
+        None
+    };
+    let Ok(k) = crate::os::tls_create(dtor) else {
         return -1;
-    }
+    };
     let mut keys = TLS_KEYS.lock().unwrap();
-    keys.push(pk);
+    keys.push(k);
     if !key_out.is_null() {
         *key_out = (keys.len() - 1) as i32;
     }
@@ -768,17 +883,17 @@ pub unsafe extern "C" fn sys_tls_create(
 }
 
 pub unsafe extern "C" fn sys_tls_delete(key: i32) {
-    if let Some(pk) = tls_key(key) {
-        libc::pthread_key_delete(pk);
+    if let Some(k) = tls_key(key) {
+        crate::os::tls_delete(k);
     }
 }
 
 pub unsafe extern "C" fn sys_tls_get(key: i32) -> *mut libc::c_void {
-    tls_key(key).map_or(std::ptr::null_mut(), |pk| libc::pthread_getspecific(pk))
+    tls_key(key).map_or(std::ptr::null_mut(), crate::os::tls_get)
 }
 
 pub unsafe extern "C" fn sys_tls_set(key: i32, val: *mut libc::c_void) -> i32 {
-    tls_key(key).map_or(-1, |pk| libc::pthread_setspecific(pk, val))
+    tls_key(key).map_or(-1, |k| crate::os::tls_set(k, val).map_or(-1, |()| 0))
 }
 
 pub static SEAD_QUAT_UNIT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];

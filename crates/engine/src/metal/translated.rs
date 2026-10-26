@@ -268,7 +268,28 @@ fn promote(slot: &std::sync::Arc<Slot>) {
 
 /// Queues a pipeline-list entry for compilation: false when its shaders are not in the cache, it was recorded under
 /// another window origin or depth mode, or its pipeline is already known.
-pub(super) fn queue_precompile(e: &super::pipeline_list::Entry) -> bool {
+/// Queues listed pipelines on the pipeline threads (gpu::pipeline_list).
+fn compile_listed(entries: Vec<crate::gpu::pipeline_list::Entry>) {
+    // The archives first: compiling without them would do what they hold.
+    if let Some(g) = super::GFX.get() {
+        super::pipeline_archive::load(&g.device);
+    }
+    let (mut queued, mut skipped) = (0, 0);
+    for e in &entries {
+        if queue_precompile(e) {
+            queued += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    println!(
+        "[+] Pipelines: {queued} of {} listed queued for compilation ({skipped} the same pipeline as another entry, or with missing shaders or other \
+         state)",
+        entries.len()
+    );
+}
+
+pub(super) fn queue_precompile(e: &crate::gpu::pipeline_list::Entry) -> bool {
     use super::shader_cache::by_entry;
     if e.y_negate != y_negate() || e.depth_gl != (crate::nvn::api::depth_mode() == 0) {
         return false;
@@ -1359,8 +1380,8 @@ fn record_pipeline(
             format!("pipeline list: targets {colors:?} / {depth:?} drawn as {:?} / {:?}, listed as {:?} / {:?}", p.color_pfs, p.depth_pf, derived.0, derived.1),
         );
     }
-    super::pipeline_list::record(
-        super::pipeline_list::Entry {
+    crate::gpu::pipeline_list::record(
+        crate::gpu::pipeline_list::Entry {
             vs: vs.entry.clone(),
             fs: fs.map(|f| f.entry.clone()),
             point_size: point_size.to_bits(),
@@ -2038,106 +2059,6 @@ unsafe fn max_fetched_vertex(
             (!fits(last)).then_some(last)
         }
     }
-}
-
-/// Whether `v` contains `x`, four indices per 64-bit word (a lane equals x iff it is zero after XOR; the classic
-/// has-zero-lane test, which has no false positives). ~4x the element-by-element scan.
-fn contains_u16(v: &[u16], x: u16) -> bool {
-    const LO: u64 = 0x0001_0001_0001_0001;
-    const HI: u64 = 0x8000_8000_8000_8000;
-    let pat = x as u64 * LO;
-    let (head, words, tail) = unsafe { v.align_to::<u64>() };
-    if head.contains(&x) || tail.contains(&x) {
-        return true;
-    }
-    for c in words.chunks(4) {
-        let mut hit = 0u64;
-        for &w in c {
-            let y = w ^ pat;
-            hit |= y.wrapping_sub(LO) & !y & HI;
-        }
-        if hit != 0 {
-            return true;
-        }
-    }
-    false
-}
-
-/// NVN primitive restart for an indexed draw whose indices contain the restart value (None: draw as is). Metal restarts
-/// only strips, only on 0xFFFF / 0xFFFFFFFF, and compares after adding the base vertex: TotK's strips use restart index
-/// 0xFFFF with base vertices in the thousands, so the restart became a real (garbage) vertex and triangles streaked
-/// across the screen whenever such a mesh was in view. The rewrite produces 32-bit indices with the base vertex added:
-/// strips keep a 0xFFFFFFFF restart (Metal's own), lists drop the unfinished primitive at each restart (NVN/GL rules).
-unsafe fn restart_rewrite(
-    mode: i32,
-    index_type: i32,
-    addr: u64,
-    count: i32,
-    restart: u32,
-    base_vertex: i32,
-) -> Option<Vec<u32>> {
-    if addr < 0x10000 || count <= 0 {
-        return None;
-    }
-    let n = count as usize;
-    // Checked before anything is allocated: most indexed draws contain no restart index.
-    let values: Vec<u32> = match index_type {
-        0 => {
-            let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
-            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u8, n));
-            if restart > 0xFF || !v.contains(&(restart as u8)) {
-                return None;
-            }
-            v.iter().map(|&x| x as u32).collect()
-        }
-        1 => {
-            let held = super::rt_guard::guest_copy::<u16>(addr as usize, n);
-            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u16, n));
-            if restart > 0xFFFF || !contains_u16(v, restart as u16) {
-                return None;
-            }
-            v.iter().map(|&x| x as u32).collect()
-        }
-        2 => {
-            let held = super::rt_guard::guest_copy::<u32>(addr as usize, n);
-            let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u32, n));
-            if !v.contains(&restart) {
-                return None;
-            }
-            v.to_vec()
-        }
-        _ => return None,
-    };
-    let rebase = |v: u32| (v as i64 + base_vertex as i64).clamp(0, u32::MAX as i64 - 1) as u32;
-    let per_prim = match mode {
-        0 => 1,     // points
-        1 => 2,     // lines
-        4 => 3,     // triangles
-        3 | 5 => 0, // line strip, triangle strip: Metal restarts these itself
-        _ => return None,
-    };
-    let mut out = Vec::with_capacity(n);
-    if per_prim == 0 {
-        out.extend(
-            values
-                .iter()
-                .map(|&v| if v == restart { u32::MAX } else { rebase(v) }),
-        );
-    } else {
-        let mut cur = Vec::with_capacity(3);
-        for &v in &values {
-            if v == restart {
-                cur.clear();
-                continue;
-            }
-            cur.push(rebase(v));
-            if cur.len() == per_prim {
-                out.extend_from_slice(&cur);
-                cur.clear();
-            }
-        }
-    }
-    Some(out)
 }
 
 /// Per-submit scratch memory for data that has to be synthesized (driver cbuf, u8 indices, ...).
@@ -5228,10 +5149,22 @@ impl Gfx {
                                 .and_then(|a| a.get(slot_i))
                                 .and_then(|d| d.as_ref())
                                 .filter(|d| {
-                                    d.addr == addr
-                                        && d.size == size
-                                        && d.len == n
-                                        && d.epoch == st.ubo_plan_epoch
+                                    if d.addr != addr || d.size != size || d.len != n || d.epoch != st.ubo_plan_epoch {
+                                        return false;
+                                    }
+                                    if let UboPre::Snapshot(b, off) = &d.pre {
+                                        unsafe {
+                                            let existing = std::slice::from_raw_parts((b.contents().as_ptr() as *const u8).add(*off), n);
+                                            let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+                                            let current = held.as_deref().unwrap_or_else(|| {
+                                                std::slice::from_raw_parts(addr as *const u8, n)
+                                            });
+                                            if existing != current {
+                                                return false;
+                                            }
+                                        }
+                                    }
+                                    true
                                 })
                                 .map(|d| d.pre.clone())
                         };
@@ -5253,7 +5186,14 @@ impl Gfx {
                                 } else if super::ubo_updated(&st.ubo_updated, addr as u64, n as u64)
                                 {
                                     let key = (addr, n | pad << 32);
-                                    let hit = st.plan_ubo.get(&key).cloned();
+                                    let hit = st.plan_ubo.get(&key).cloned().filter(|(b, off)| unsafe {
+                                        let existing = std::slice::from_raw_parts((b.contents().as_ptr() as *const u8).add(*off), n);
+                                        let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
+                                        let current = held.as_deref().unwrap_or_else(|| {
+                                            std::slice::from_raw_parts(addr as *const u8, n)
+                                        });
+                                        existing == current
+                                    });
                                     let copy = hit.or_else(|| {
                                         let held = super::rt_guard::guest_copy::<u8>(addr as usize, n);
                                         let bytes = held.as_deref().unwrap_or_else(|| {
@@ -5375,7 +5315,7 @@ impl Gfx {
                 e
             }
             None => {
-                super::pipeline_list::precompile();
+                crate::gpu::pipeline_list::precompile(compile_listed);
                 let Layout {
                     attr_descs,
                     streams_used,
@@ -6403,7 +6343,10 @@ impl Gfx {
                                         env.cx.ubo_epoch = epoch;
                                     }
                                     let key = (addr, bytes.len() | pad << 32);
-                                    let cached = env.cx.ubo_copies.get(&key).cloned();
+                                    let cached = env.cx.ubo_copies.get(&key).cloned().filter(|(b, off)| unsafe {
+                                        let existing = std::slice::from_raw_parts((b.contents().as_ptr() as *const u8).add(*off), bytes.len());
+                                        existing == bytes
+                                    });
                                     UBO_STATS[if cached.is_some() { 1 } else { 0 }]
                                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     if cached.is_none() {
@@ -6422,16 +6365,15 @@ impl Gfx {
                                             &self.device,
                                             bytes.len() + pad,
                                             |b| {
-                                                b[..bytes.len()].copy_from_slice(bytes);
-                                                b[bytes.len()..].fill(0);
+                                                 b[..bytes.len()].copy_from_slice(bytes);
+                                                 b[bytes.len()..].fill(0);
                                             },
                                         )
                                     } else {
                                         env.cx.arena.alloc(&self.device, bytes)
                                     };
                                     if let Some(f) = &fresh {
-                                        // Only ranges no executor write of this submit touches get here (plan_uniforms): never invalidated.
-                                        env.cx.ubo_copies.insert(key, f.clone(), false);
+                                        env.cx.ubo_copies.insert(key, f.clone(), true);
                                     }
                                     match cached.or(fresh) {
                                         Some(x) => x,
@@ -6873,7 +6815,7 @@ impl Gfx {
                     None
                 } else {
                     p.prim_restart.and_then(|r| {
-                        restart_rewrite(mode, index_type, index_addr, count, r, base_vertex)
+                        crate::gpu::restart::restart_rewrite(mode, index_type, index_addr, count, r, base_vertex)
                     })
                 };
                 if super::tracing_frame() {
@@ -7489,42 +7431,6 @@ pub(super) fn pipeline_descriptor(
 /// NVNblendState defaults (nvnBlendStateSetDefaults): ONE/ZERO factors, ADD equations.
 pub(super) const DEFAULT_BLEND_STATE: u64 =
     (2 << 4) | (1 << 10) | (2 << 16) | (1 << 22) | (1 << 28) | (1u64 << 32);
-
-#[cfg(test)]
-mod contains_u16_tests {
-    #[test]
-    fn matches_slice_contains() {
-        let mut seed = 0x1234_5678u32;
-        for len in 0..80usize {
-            for &x in &[0u16, 1, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF] {
-                for off in 0..4 {
-                    let mut v: Vec<u16> = (0..len + off)
-                        .map(|_| {
-                            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                            (seed >> 16) as u16 | 1
-                        })
-                        .collect();
-                    v.retain(|&y| y != x);
-                    v.resize(len + off, if x == 1 { 2 } else { 1 });
-                    let s = &v[off.min(v.len())..];
-                    assert_eq!(super::contains_u16(s, x), s.contains(&x));
-                    if !s.is_empty() {
-                        let mut w = s.to_vec();
-                        let i = (seed as usize) % w.len();
-                        w[i] = x;
-                        assert!(
-                            super::contains_u16(&w, x),
-                            "len {} x {:#x} at {}",
-                            w.len(),
-                            x,
-                            i
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod index_scan_tests {

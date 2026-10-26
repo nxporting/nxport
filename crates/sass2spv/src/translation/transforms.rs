@@ -25,7 +25,44 @@ pub fn run_pass(ctx: &mut TransformContext) -> Result<(), String> {
     if ctx.used_features.has(FeatureFlags::SHUFFLE) {
         run(ctx, shuffle_pass)?;
     }
+    if matches!(stage, ShaderStage::Vertex | ShaderStage::TessellationEvaluation | ShaderStage::Geometry) && ctx.gpu.host_reduced_precision() {
+        position_precise(ctx);
+    }
     Ok(())
+}
+
+/// Reduced precision lets the host compiler fuse floating-point operations, and two shaders computing the same position
+/// can then round it differently (a depth pre-pass and its EQUAL colour pass failing in whole tiles under MoltenVK, even
+/// with invariant positions). Every operation the position output depends on stays precise.
+fn position_precise(ctx: &mut TransformContext) {
+    use crate::ir::IoVariable;
+    let ir = &mut *ctx.ir;
+    let mut work: Vec<crate::ir::OperandId> = Vec::new();
+    for &block in ctx.blocks {
+        let mut node = ir.first_node(block);
+        while let Some(n) = node {
+            if ir.is_op(n) && ir.inst(n) == I::STORE && ir.op(n).storage_kind == StorageKind::Output && ir.sources_count(n) > 0 {
+                let io = ir.src(n, 0);
+                if ir.is_const(io) && ir.value(io) == IoVariable::Position as i32 {
+                    work.extend(ir.sources(n).into_iter().skip(1));
+                }
+            }
+            node = ir.next_node(n);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    while let Some(o) = work.pop() {
+        let Some(n) = ir.asg_op(o) else { continue };
+        if !seen.insert(n) {
+            continue;
+        }
+        if ir.is_phi(n) {
+            work.extend(ir.phi_node(n).sources.iter().map(|&(_, s)| s));
+        } else {
+            ir.op_mut(n).force_precise = true;
+            work.extend(ir.sources(n));
+        }
+    }
 }
 
 fn run(ctx: &mut TransformContext, pass: Pass) -> Result<(), String> {

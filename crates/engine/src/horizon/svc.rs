@@ -24,6 +24,13 @@ const RESULT_TIMEOUT: u64 = 0xEA01;
 const RESULT_NOT_IMPLEMENTED: u64 = 0xF001;
 const RESULT_INVALID_ADDRESS: u64 = 0xCC01;
 const RESULT_SESSION_CLOSED: u64 = 0xF601;
+const RESULT_INVALID_STATE: u64 = 0xFA01;
+const RESULT_OUT_OF_MEMORY: u64 = 0xD401;
+const RESULT_LIMIT_REACHED: u64 = 0x10801;
+
+const WAITERS_BIT: u32 = 0x4000_0000;
+const APP_POOL: usize = 0xCD50_0000;
+const HEAP_CAPACITY: usize = 0x1_0000_0000;
 
 const PSEUDO_CURRENT_THREAD: u32 = 0xFFFF_8000;
 const PSEUDO_CURRENT_PROCESS: u32 = 0xFFFF_8001;
@@ -32,6 +39,7 @@ const PSEUDO_CURRENT_PROCESS: u32 = 0xFFFF_8001;
 pub const MEM_FREE: u32 = 0;
 pub const MEM_CODE_STATIC: u32 = 3;
 pub const MEM_CODE_MUTABLE: u32 = 4;
+pub const MEM_HEAP: u32 = 5;
 const MEM_ALIAS_CODE: u32 = 0x15;
 const MEM_INACCESSIBLE: u32 = 0x10;
 pub const PERM_R: u32 = 1;
@@ -72,18 +80,8 @@ fn alias_region() -> (usize, usize) {
     let mut a = ALIAS.lock().unwrap();
     if a.1 == 0 {
         const SIZE: usize = 0x1_0000_0000;
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                SIZE,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if p != libc::MAP_FAILED {
-            *a = (p as usize, SIZE);
+        if let Ok(p) = unsafe { crate::os::reserve(crate::os::At::Anywhere, SIZE) } {
+            *a = (p, SIZE);
         }
     }
     *a
@@ -95,21 +93,7 @@ fn small_alias_region() -> (usize, usize) {
     static R: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
     *R.get_or_init(|| {
         const SIZE: usize = 0x400_0000;
-        let p = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                SIZE,
-                libc::PROT_NONE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            (0, 0)
-        } else {
-            (p as usize, SIZE)
-        }
+        unsafe { crate::os::reserve(crate::os::At::Anywhere, SIZE) }.map_or((0, 0), |p| (p, SIZE))
     })
 }
 
@@ -139,12 +123,35 @@ struct Session {
     cv: Condvar,
 }
 
+struct EventObj {
+    signaled: Mutex<bool>,
+    cv: Condvar,
+}
+
+#[derive(Clone)]
+struct LockWaiter {
+    tag: u32,
+    cv: Arc<Condvar>,
+    woken: Arc<Mutex<bool>>,
+}
+
+#[derive(Clone)]
+struct ArbiterWaiter {
+    cv: Arc<Condvar>,
+    woken: Arc<Mutex<bool>>,
+}
+
 enum Handle {
     Thread(ThreadObj),
     SessionServer(Arc<Session>),
     SessionClient(Arc<Session>),
     Process,
+    EventWritable(Arc<EventObj>),
+    EventReadable(Arc<EventObj>),
 }
+
+static LOCK_WAITERS: Mutex<Option<HashMap<u64, Vec<LockWaiter>>>> = Mutex::new(None);
+static ARBITER_WAITERS: Mutex<Option<HashMap<u64, Vec<ArbiterWaiter>>>> = Mutex::new(None);
 
 static HANDLES: Mutex<Option<HashMap<u32, Handle>>> = Mutex::new(None);
 static NEXT_HANDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x100);
@@ -170,7 +177,7 @@ fn session_of(handle: u32, server: bool) -> Option<Arc<Session>> {
 
 /// The calling thread's IPC message buffer (its fake Horizon thread-local region).
 unsafe fn ipc_buffer() -> Option<&'static mut [u8]> {
-    let tlr = crate::cpu::tls::current_fake_tlr();
+    let tlr = crate::guest::tls::current_fake_tlr();
     (tlr != 0).then(|| std::slice::from_raw_parts_mut(tlr as *mut u8, 0x100))
 }
 
@@ -220,6 +227,9 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         );
     }
     let result = match n {
+        0x01 => set_heap_size(r),
+        0x02 => RESULT_OK, // SetMemoryPermission
+        0x03 => RESULT_OK, // SetMemoryAttribute
         0x06 => query_memory(r),
         0x29 => get_info(r),
         0x74 => map_process_memory(r),
@@ -230,6 +240,8 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
             exit_current_thread();
             RESULT_OK
         }
+        0x11 => signal_event(r),
+        0x12 => clear_event(r),
         0x16 => {
             let removed = HANDLES
                 .lock()
@@ -243,14 +255,20 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
             }
             RESULT_OK
         }
+        0x17 => reset_signal(r),
         0x18 => wait_synchronization(r),
+        0x1A => arbitrate_lock(r),
+        0x1B => arbitrate_unlock(r),
         0x1E => {
             r[0] = crate::horizon::hle::hle_nn_os_GetSystemTick();
             return;
         }
-        0x40 => create_session(r),
         0x21 => send_sync_request(r),
+        0x34 => wait_for_address(r),
+        0x35 => signal_to_address(r),
+        0x40 => create_session(r),
         0x43 => reply_and_receive(r),
+        0x45 => create_event(r),
         _ => {
             println!(
                 "[!] svc {:#x} is not implemented (x0={:#x} x1={:#x} x2={:#x})",
@@ -278,6 +296,61 @@ struct MemoryInfo {
     ipc_refcount: u32,
     device_refcount: u32,
     pad: u32,
+}
+
+/// svcSetHeapSize(u64* out_addr, u64 size) -> x1 heap base.
+unsafe fn set_heap_size(r: &mut [u64; 8]) -> u64 {
+    let size = (r[1] as usize + 0x3fff) & !0x3fff; // 16K host page aligned
+    let mut g = HEAP.lock().unwrap();
+    let (mut base, cur_size) = *g;
+    if base == 0 {
+        match crate::os::reserve(crate::os::At::Anywhere, HEAP_CAPACITY) {
+            Ok(p) => {
+                base = p;
+                *g = (base, 0);
+            }
+            Err(e) => {
+                eprintln!("[-] SetHeapSize: failed to reserve heap arena: {e}");
+                return RESULT_OUT_OF_MEMORY;
+            }
+        }
+    }
+    if size > HEAP_CAPACITY {
+        eprintln!(
+            "[!] SetHeapSize OOM: requested {:#x} > capacity {:#x}",
+            size, HEAP_CAPACITY
+        );
+        return RESULT_OUT_OF_MEMORY;
+    }
+    if size + 0x400_0000 > APP_POOL {
+        eprintln!(
+            "[!] SetHeapSize limit reached: requested {:#x} + modules > pool {:#x}",
+            size, APP_POOL
+        );
+        return RESULT_LIMIT_REACHED;
+    }
+    if size > cur_size {
+        if let Err(e) =
+            crate::os::commit(base + cur_size, size - cur_size, crate::os::Prot::ReadWrite)
+        {
+            eprintln!("[-] SetHeapSize: commit failed: {e}");
+            return RESULT_OUT_OF_MEMORY;
+        }
+    } else if size < cur_size {
+        crate::os::decommit(base + size, cur_size - size);
+    }
+    *g = (base, size);
+    drop(g);
+
+    add_region(Region {
+        start: base,
+        size,
+        mem_type: MEM_HEAP,
+        perm: PERM_RW,
+    });
+
+    r[1] = base as u64;
+    RESULT_OK
 }
 
 /// svcQueryMemory(MemoryInfo* out, u32* page_info, u64 addr) -> w1 page_info.
@@ -350,8 +423,8 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
         3 => small_alias_region().1 as u64,
         4 => heap_start as u64,
         5 => heap_size as u64,
-        6 => 0x1_0000_0000,          // total memory
-        7 => 0x8000_0000,            // used memory
+        6 => APP_POOL as u64,        // total memory (application pool)
+        7 => (heap_size + 0x400_0000).min(APP_POOL) as u64, // used memory
         8 => 0,                      // debugger attached
         11 => 0x1234_5678_9abc_def0, // random entropy
         12 => alias_start as u64, // ASLR region: our reservation, the only space a mod may map into
@@ -359,7 +432,19 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
         14 => 0, // stack region: none reserved
         15 => 0,
         18 => 0x0100_F2C0_115B_6000, // program id
+        20 => {
+            // User exception context area (newer SDKs' SetDyingMessageRegion writes to +0x1c0).
+            static CTX: std::sync::OnceLock<Box<[u8; 0x1000]>> = std::sync::OnceLock::new();
+            CTX.get_or_init(|| Box::new([0u8; 0x1000])).as_ptr() as u64
+        }
+        21 => APP_POOL as u64,       // total non-system memory
+        22 => (heap_size + 0x400_0000).min(APP_POOL) as u64, // used non-system memory
         23 => 1,                     // is application
+        24 => {
+            // Free thread count (SDK 11+, Unity 2022+ JobSystem checks >= 1). Limit is 96 threads.
+            let active = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
+            (96usize.saturating_sub(active).max(1)) as u64
+        }
         // 65000+ are Mesosphere (Atmosphere kernel) extensions; Nintendo's kernel rejects them, as we do.
         65000.. => return 0xF001 | (0 << 9),
         _ => {
@@ -374,6 +459,7 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
     RESULT_OK
 }
 
+#[cfg(nx_native)]
 extern "C" {
     static mach_task_self_: u32;
     fn mach_vm_remap(
@@ -396,7 +482,53 @@ extern "C" {
         set_maximum: i32,
         new_protection: i32,
     ) -> i32;
-    fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
+}
+
+
+/// The alias half of map_process_memory: [dst, dst + size) maps the same pages as src (mach_vm_remap).
+#[cfg(nx_native)]
+unsafe fn alias_view(dst: usize, src: usize, size: usize) -> Result<(), u64> {
+    const PAGE: usize = 0x4000;
+    let mut target = (dst & !(PAGE - 1)) as u64;
+    let (mut cur, mut max) = (0i32, 0i32);
+    let len = ((dst + size + PAGE - 1) & !(PAGE - 1)) as u64 - target;
+    let kr = mach_vm_remap(
+        mach_task_self_,
+        &mut target,
+        len,
+        0,
+        0x4000, /* FIXED | OVERWRITE */
+        mach_task_self_,
+        (src & !(PAGE - 1)) as u64,
+        0,
+        &mut cur,
+        &mut max,
+        2,
+    );
+    if kr != 0 || target != (dst & !(PAGE - 1)) as u64 {
+        println!(
+            "[!] svcMapProcessMemory: mach_vm_remap failed ({}) for {:#x} -> {:#x}",
+            kr, src, dst
+        );
+        return Err(RESULT_INVALID_ADDRESS);
+    }
+    let kr = mach_vm_protect(
+        mach_task_self_,
+        target,
+        len,
+        0,
+        libc::PROT_READ | libc::PROT_WRITE,
+    );
+    if kr != 0 {
+        println!("[!] svcMapProcessMemory: cannot make the alias writable ({}); max protection {:#x}", kr, max);
+    }
+    if log_enabled() {
+        println!(
+            "[+] svcMapProcessMemory: {:#x}+{:#x} aliases {:#x}",
+            dst, size, src
+        );
+    }
+    Ok(())
 }
 
 /// Writable views of guest code made by MapProcessMemory whose destination does not share the source's offset within
@@ -452,28 +584,13 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
                     a = st + n;
                 }
                 None => {
-                    let mut info: libc::Dl_info = std::mem::zeroed();
-                    let what = if libc::dladdr(a as *const libc::c_void, &mut info) != 0
-                        && !info.dli_fname.is_null()
-                    {
-                        format!(
-                            "{} {}",
-                            std::ffi::CStr::from_ptr(info.dli_fname).to_string_lossy(),
-                            if info.dli_sname.is_null() {
-                                String::new()
-                            } else {
-                                std::ffi::CStr::from_ptr(info.dli_sname)
-                                    .to_string_lossy()
-                                    .into_owned()
-                            }
-                        )
-                    } else {
-                        "unknown mapping".to_string()
+                    let what = match crate::os::address_owner(a) {
+                        (Some(lib), sym) => format!("{} {}", lib, sym.unwrap_or_default()),
+                        (None, _) => "unknown mapping".to_string(),
                     };
                     println!("[!] svcMapProcessMemory: source {:#x}+{:#x} is not guest memory (first unknown byte {:#x}: {})", src, size, a, what);
                     // Who asked: return addresses up the frame-pointer chain (guest frames sit above the trampoline's).
-                    let mut fp: usize;
-                    std::arch::asm!("mov {}, x29", out(reg) fp);
+                    let mut fp = crate::guest_reg!(x29);
                     let mut chain = Vec::new();
                     for _ in 0..16 {
                         if fp < 0x1_0000_0000 || fp & 7 != 0 {
@@ -493,45 +610,11 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
     // page's new content and a loading run maps the matching signed version.
     let in_image = crate::cpu::aot::active() && crate::cpu::aot::in_region(src, size);
     let image = in_image && crate::cpu::aot::loading();
-    if dst % PAGE == src % PAGE && !in_image {
-        let mut target = (dst & !(PAGE - 1)) as u64;
-        let (mut cur, mut max) = (0i32, 0i32);
-        let len = ((dst + size + PAGE - 1) & !(PAGE - 1)) as u64 - target;
-        let kr = mach_vm_remap(
-            mach_task_self_,
-            &mut target,
-            len,
-            0,
-            0x4000, /* FIXED | OVERWRITE */
-            mach_task_self_,
-            (src & !(PAGE - 1)) as u64,
-            0,
-            &mut cur,
-            &mut max,
-            2,
-        );
-        if kr != 0 || target != (dst & !(PAGE - 1)) as u64 {
-            println!(
-                "[!] svcMapProcessMemory: mach_vm_remap failed ({}) for {:#x} -> {:#x}",
-                kr, src, dst
-            );
-            return RESULT_INVALID_ADDRESS;
-        }
-        let kr = mach_vm_protect(
-            mach_task_self_,
-            target,
-            len,
-            0,
-            libc::PROT_READ | libc::PROT_WRITE,
-        );
-        if kr != 0 {
-            println!("[!] svcMapProcessMemory: cannot make the alias writable ({}); max protection {:#x}", kr, max);
-        }
-        if log_enabled() {
-            println!(
-                "[+] svcMapProcessMemory: {:#x}+{:#x} aliases {:#x}",
-                dst, size, src
-            );
+    // A real alias where the page offsets agree and the host can make one; a copy otherwise.
+    if cfg!(nx_native) && dst % PAGE == src % PAGE && !in_image {
+        #[cfg(nx_native)]
+        if let Err(e) = alias_view(dst, src, size) {
+            return e;
         }
     } else {
         let lo = dst & !(PAGE - 1);
@@ -552,15 +635,7 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
         let mut page = lo;
         while page < hi {
             if !covered.iter().any(|&(a, b)| page >= a && page < b) {
-                let p = libc::mmap(
-                    page as *mut libc::c_void,
-                    PAGE,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                );
-                if p == libc::MAP_FAILED {
+                if crate::os::commit(page, PAGE, crate::os::Prot::ReadWrite).is_err() {
                     return RESULT_INVALID_ADDRESS;
                 }
             }
@@ -624,18 +699,10 @@ unsafe fn flush_one(v: &mut Shadow) -> usize {
                 IMAGE_MISMATCH.fetch_add(differ, std::sync::atomic::Ordering::Relaxed);
             } else {
                 let span = ((v.src + off + n + 0x3fff) & !0x3fff) - page;
-                libc::mprotect(
-                    page as *mut libc::c_void,
-                    span,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                );
+                let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
                 std::ptr::copy_nonoverlapping(view.as_ptr(), (v.src + off) as *mut u8, n);
-                libc::mprotect(
-                    page as *mut libc::c_void,
-                    span,
-                    libc::PROT_READ | libc::PROT_EXEC,
-                );
-                sys_icache_invalidate((v.src + off) as *mut libc::c_void, n);
+                let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadExec);
+                crate::os::flush_icache(((v.src + off)) as usize, n);
                 if !touched.contains(&page) {
                     touched.push(page);
                 }
@@ -678,20 +745,13 @@ unsafe fn unmap_process_memory(r: &mut [u64; 8]) -> u64 {
     let mut page = dst & !0x3fff;
     while page < (dst + size + 0x3fff) & !0x3fff {
         if !others.iter().any(|&(a, b)| page >= a && page < b) {
-            libc::mmap(
-                page as *mut libc::c_void,
-                0x4000,
-                libc::PROT_NONE,
-                libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            );
+            crate::os::decommit(page, 0x4000);
         }
         page += 0x4000;
     }
     REGIONS.lock().unwrap().retain(|x| x.start != dst);
     // Code written through the view must be visible to instruction fetch at the original address.
-    sys_icache_invalidate(src as *mut libc::c_void, size);
+    crate::os::flush_icache(src as usize, size);
     RESULT_OK
 }
 
@@ -728,12 +788,14 @@ unsafe fn start_thread(r: &mut [u64; 8]) -> u64 {
         .name(format!("svc-thread-{:x}", r[0]))
         .stack_size(1 << 20)
         .spawn(move || {
-            crate::cpu::tls::mark_guest_thread();
-            crate::cpu::tls::install_guest_tls();
-            crate::cpu::trampoline::init_worker_thread_x18();
+            crate::guest::tls::mark_guest_thread();
+            #[cfg(nx_native)]
+            {
+                crate::cpu::tls::install_guest_tls();
+                crate::cpu::trampoline::init_worker_thread_x18();
+            }
             CURRENT_SVC_THREAD_DONE.with(|c| *c.borrow_mut() = Some(done.clone()));
-            let f: unsafe extern "C" fn(usize) = std::mem::transmute(entry);
-            f(arg);
+            crate::guest::call(entry, &[arg as u64]);
             mark_done(&done);
         })
         .map_or(RESULT_NOT_IMPLEMENTED, |_| RESULT_OK)
@@ -746,7 +808,11 @@ unsafe fn exit_current_thread() {
             mark_done(d);
         }
     });
+    #[cfg(nx_native)]
     libc::pthread_exit(std::ptr::null_mut());
+    // A lifted runtime leaves the thread's guest code instead (docs/windows-port.md, step 5).
+    #[cfg(not(nx_native))]
+    unimplemented!("svcExitThread: the lifted runtime has no per-thread state yet");
 }
 
 /// svcWaitSynchronization(s32* index, const Handle* handles, s32 count, s64 timeout) -> w1 index. Threads signal when
@@ -762,6 +828,7 @@ unsafe fn wait_synchronization(r: &mut [u64; 8]) -> u64 {
                 let g = HANDLES.lock().unwrap();
                 match g.as_ref().and_then(|m| m.get(&h)) {
                     Some(Handle::Thread(t)) => *t.done.0.lock().unwrap(),
+                    Some(Handle::EventReadable(e)) => *e.signaled.lock().unwrap(),
                     Some(_) => true,
                     None if h == PSEUDO_CURRENT_THREAD => false,
                     None => return RESULT_INVALID_HANDLE,
@@ -865,4 +932,332 @@ unsafe fn reply_and_receive(r: &mut [u64; 8]) -> u64 {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
+}
+
+/// svcCreateEvent(Handle* write, Handle* read) -> w1 write, w2 read
+unsafe fn create_event(r: &mut [u64; 8]) -> u64 {
+    let ev = Arc::new(EventObj {
+        signaled: Mutex::new(false),
+        cv: Condvar::new(),
+    });
+    let hw = new_handle(Handle::EventWritable(ev.clone()));
+    let hr = new_handle(Handle::EventReadable(ev));
+    r[1] = hw as u64;
+    r[2] = hr as u64;
+    RESULT_OK
+}
+
+/// svcSignalEvent(Handle write)
+unsafe fn signal_event(r: &mut [u64; 8]) -> u64 {
+    let h = r[0] as u32;
+    let g = HANDLES.lock().unwrap();
+    match g.as_ref().and_then(|m| m.get(&h)) {
+        Some(Handle::EventWritable(ev)) => {
+            let mut sig = ev.signaled.lock().unwrap();
+            *sig = true;
+            ev.cv.notify_all();
+            RESULT_OK
+        }
+        _ => RESULT_INVALID_HANDLE,
+    }
+}
+
+/// svcClearEvent(Handle event)
+unsafe fn clear_event(r: &mut [u64; 8]) -> u64 {
+    let h = r[0] as u32;
+    let g = HANDLES.lock().unwrap();
+    match g.as_ref().and_then(|m| m.get(&h)) {
+        Some(Handle::EventWritable(ev)) | Some(Handle::EventReadable(ev)) => {
+            *ev.signaled.lock().unwrap() = false;
+            RESULT_OK
+        }
+        _ => RESULT_INVALID_HANDLE,
+    }
+}
+
+/// svcResetSignal(Handle read)
+unsafe fn reset_signal(r: &mut [u64; 8]) -> u64 {
+    let h = r[0] as u32;
+    let g = HANDLES.lock().unwrap();
+    match g.as_ref().and_then(|m| m.get(&h)) {
+        Some(Handle::EventReadable(ev)) => {
+            let mut sig = ev.signaled.lock().unwrap();
+            if !*sig {
+                RESULT_INVALID_STATE
+            } else {
+                *sig = false;
+                RESULT_OK
+            }
+        }
+        _ => RESULT_INVALID_HANDLE,
+    }
+}
+
+/// svcArbitrateLock(Handle owner, u64 address, u32 tag) -> Result
+unsafe fn arbitrate_lock(r: &mut [u64; 8]) -> u64 {
+    let owner = r[0] as u32;
+    let addr = r[1];
+    let tag = r[2] as u32;
+
+    if addr == 0 || (addr & 3) != 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let cur_val = *(addr as *const u32);
+    if cur_val == (owner | WAITERS_BIT) {
+        let waiter = LockWaiter {
+            tag,
+            cv: Arc::new(Condvar::new()),
+            woken: Arc::new(Mutex::new(false)),
+        };
+        {
+            let mut g = LOCK_WAITERS.lock().unwrap();
+            let map = g.get_or_insert_with(HashMap::new);
+            map.entry(addr).or_default().push(waiter.clone());
+        }
+        let mut lock = waiter.woken.lock().unwrap();
+        while !*lock {
+            lock = waiter.cv.wait(lock).unwrap();
+        }
+    }
+    RESULT_OK
+}
+
+/// svcArbitrateUnlock(u64 address) -> Result
+unsafe fn arbitrate_unlock(r: &mut [u64; 8]) -> u64 {
+    let addr = r[0];
+
+    if addr == 0 || (addr & 3) != 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let next_waiter = {
+        let mut g = LOCK_WAITERS.lock().unwrap();
+        if let Some(map) = g.as_mut() {
+            if let Some(list) = map.get_mut(&addr) {
+                if !list.is_empty() {
+                    let w = list.remove(0);
+                    let more = !list.is_empty();
+                    if list.is_empty() {
+                        map.remove(&addr);
+                    }
+                    Some((w, more))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some((w, more)) = next_waiter {
+        let new_val = w.tag | if more { WAITERS_BIT } else { 0 };
+        *(addr as *mut u32) = new_val;
+        *w.woken.lock().unwrap() = true;
+        w.cv.notify_one();
+    } else {
+        *(addr as *mut u32) = 0;
+    }
+    RESULT_OK
+}
+
+/// svcWaitForAddress(u64 address, u32 arb_type, u64 value, s64 timeout) -> Result
+unsafe fn wait_for_address(r: &mut [u64; 8]) -> u64 {
+    let addr = r[0];
+    let arb_type = r[1] as u32;
+    let val = r[2];
+    let timeout = r[3] as i64;
+
+    if addr == 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let ok = match arb_type {
+        0 => {
+            // WaitIfLessThan (32-bit signed)
+            if (addr & 3) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            (*(addr as *const i32)) < (val as i32)
+        }
+        1 => {
+            // DecrementIfLessThanThenWait (32-bit signed)
+            if (addr & 3) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            let atomic = &*(addr as *const std::sync::atomic::AtomicI32);
+            let mut cur = atomic.load(std::sync::atomic::Ordering::SeqCst);
+            let mut success = false;
+            loop {
+                if cur < (val as i32) {
+                    match atomic.compare_exchange_weak(
+                        cur,
+                        cur.wrapping_sub(1),
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    ) {
+                        Ok(_) => {
+                            success = true;
+                            break;
+                        }
+                        Err(actual) => cur = actual,
+                    }
+                } else {
+                    break;
+                }
+            }
+            success
+        }
+        2 => {
+            // WaitIfEqual (32-bit)
+            if (addr & 3) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            (*(addr as *const u32)) == (val as u32)
+        }
+        3 => {
+            // WaitIfEqual64 (64-bit equal)
+            if (addr & 7) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            (*(addr as *const u64)) == val
+        }
+        _ => return RESULT_NOT_IMPLEMENTED,
+    };
+
+    if !ok {
+        return RESULT_INVALID_STATE;
+    }
+
+    if timeout == 0 {
+        return RESULT_TIMEOUT;
+    }
+
+    let waiter = ArbiterWaiter {
+        cv: Arc::new(Condvar::new()),
+        woken: Arc::new(Mutex::new(false)),
+    };
+
+    {
+        let mut g = ARBITER_WAITERS.lock().unwrap();
+        let map = g.get_or_insert_with(HashMap::new);
+        map.entry(addr).or_default().push(waiter.clone());
+    }
+
+    let deadline = (timeout > 0).then(|| {
+        std::time::Instant::now() + std::time::Duration::from_nanos(timeout as u64)
+    });
+    let mut lock = waiter.woken.lock().unwrap();
+    while !*lock {
+        if timeout < 0 {
+            lock = waiter.cv.wait(lock).unwrap();
+        } else if let Some(dl) = deadline {
+            let now = std::time::Instant::now();
+            if now >= dl {
+                break;
+            }
+            let (new_lock, timeout_res) = waiter.cv.wait_timeout(lock, dl - now).unwrap();
+            lock = new_lock;
+            if timeout_res.timed_out() && !*lock {
+                break;
+            }
+        }
+    }
+    let woken = *lock;
+    drop(lock);
+
+    if !woken {
+        let mut g = ARBITER_WAITERS.lock().unwrap();
+        if let Some(map) = g.as_mut() {
+            if let Some(list) = map.get_mut(&addr) {
+                list.retain(|w| !Arc::ptr_eq(&w.woken, &waiter.woken));
+                if list.is_empty() {
+                    map.remove(&addr);
+                }
+            }
+        }
+        return RESULT_TIMEOUT;
+    }
+    RESULT_OK
+}
+
+/// svcSignalToAddress(u64 address, u32 signal_type, u32 value, s32 count) -> Result
+unsafe fn signal_to_address(r: &mut [u64; 8]) -> u64 {
+    let addr = r[0];
+    let signal_type = r[1] as u32;
+    let val = r[2] as u32;
+    let count = r[3] as i32;
+
+    if addr == 0 || (addr & 3) != 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let mut g = ARBITER_WAITERS.lock().unwrap();
+    let map = g.get_or_insert_with(HashMap::new);
+    let nw = map.get(&addr).map_or(0, |v| v.len());
+
+    if signal_type != 0 {
+        let nv = if signal_type == 1 {
+            (val as i32).wrapping_add(1)
+        } else if signal_type == 2 {
+            // Waking all (count <= 0) with waiters subtracts 2, not 1
+            // (Mesosphere KAddressArbiter::SignalAndModifyByWaitingCountIfEqual).
+            if count <= 0 {
+                if nw > 0 {
+                    (val as i32).wrapping_sub(2)
+                } else {
+                    (val as i32).wrapping_add(1)
+                }
+            } else {
+                if nw == 0 {
+                    (val as i32).wrapping_add(1)
+                } else if nw <= count as usize {
+                    (val as i32).wrapping_sub(1)
+                } else {
+                    val as i32
+                }
+            }
+        } else {
+            return RESULT_NOT_IMPLEMENTED;
+        };
+
+        let atomic = &*(addr as *const std::sync::atomic::AtomicU32);
+        if atomic
+            .compare_exchange(
+                val,
+                nv as u32,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return RESULT_INVALID_STATE;
+        }
+    }
+
+    let to_wake = if let Some(list) = map.get_mut(&addr) {
+        if count <= 0 || (count as usize) >= list.len() {
+            map.remove(&addr).unwrap_or_default()
+        } else {
+            let cnt = count as usize;
+            let drained: Vec<_> = list.drain(..cnt).collect();
+            if list.is_empty() {
+                map.remove(&addr);
+            }
+            drained
+        }
+    } else {
+        Vec::new()
+    };
+    drop(g);
+
+    for w in to_wake {
+        *w.woken.lock().unwrap() = true;
+        w.cv.notify_one();
+    }
+
+    RESULT_OK
 }

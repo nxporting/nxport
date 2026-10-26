@@ -37,8 +37,8 @@ mod issuer;
 pub mod msl_specialize;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
-pub mod pipeline_list;
 mod programs;
+mod readback;
 mod report_guard;
 pub(crate) mod rt_guard;
 pub mod shader_cache;
@@ -687,7 +687,7 @@ fn nvn_blend_factor(code: u32) -> MTLBlendFactor {
 
 /// Called once by host/display.rs after the window and layer exist.
 pub fn init(device: Device, layer: Option<Retained<CAMetalLayer>>) {
-    pipeline_list::fetch();
+    crate::gpu::pipeline_list::fetch();
     pipeline_archive::preload(&device);
     let queue = device.newCommandQueue().expect("newCommandQueue");
     let lib = device
@@ -3133,12 +3133,14 @@ impl Gfx {
                         }
                     }
                     st.plan_ubo.invalidate(*addr, *addr + 16);
+                    st.cx.ubo_copies.invalidate(*addr, *addr + 16);
                     st.ubo_plan_epoch += 1;
                 }
                 Cmd::ReportValue { value, addr } => {
                     rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     write_counter(0, *addr, Some(*value as u64));
                     st.plan_ubo.invalidate(*addr, *addr + 16);
+                    st.cx.ubo_copies.invalidate(*addr, *addr + 16);
                     st.ubo_plan_epoch += 1;
                 }
                 Cmd::BindBlendState(s) => {
@@ -3188,11 +3190,12 @@ impl Gfx {
                     if *addr > 0x10000 && !data.is_empty() {
                         let dest = (*addr as isize + *offset) as *mut u8;
                         std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
-                        // Plan-side copies of uniform buffers overlapping the written range are stale now (only those
-                        // overlap: the encode side copies only ranges no executor write of this submit touches).
+                        // Plan-side copies and encode-side copies overlapping the written range are stale now.
                         let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
                         st.plan_ubo.invalidate(lo, hi);
+                        st.cx.ubo_copies.invalidate(lo, hi);
                         st.ubo_plan_epoch += 1;
+                        GUEST_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 Cmd::BindVertexAttribState(attribs) => {
@@ -4813,6 +4816,83 @@ fn host_secs() -> f64 {
     crate::clock::now_secs()
 }
 
+/// Unlocked frame rates (present interval 0): the game measures each frame's time step from one frame start to the
+/// next. Started whenever the previous frame was done, a frame that just missed a display refresh stayed on screen a
+/// whole extra refresh the game had not counted, so motion ran ahead and fell behind in a slow wave (frame times
+/// drifting around the 8.3 ms of a 120 Hz display). Frames now start on the refresh grid, learned from when drawables
+/// actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen.
+/// Measured in windowed play (--log-frame-pacing, 2026-10-24, walking in Hateno at 65-70 fps): the spread of the time
+/// from a frame's start to its appearance on screen went from 10.7 to 4.6 ms (frames shown 4 or 5 refreshes after their
+/// start). A 60 fps cap (8.3 ms) and presenting each frame a fixed time after its start (11.9 ms: Metal did not keep the
+/// times, and frames held back stalled the drawable queue) were worse. --display-pacing (default on), F6 toggles.
+static DISPLAY_PACING: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
+/// Host time (seconds, f64 bits) of the latest frame shown, and the display's refresh period.
+static SHOWN_LAST: AtomicU64 = AtomicU64::new(0);
+static SHOWN_PERIOD: AtomicU64 = AtomicU64::new(0);
+/// Host time the current frame started (left nvnWindowAcquireTexture), for --log-frame-pacing.
+static FRAME_START: AtomicU64 = AtomicU64::new(0);
+
+fn display_pacing_flag() -> &'static std::sync::atomic::AtomicBool {
+    DISPLAY_PACING.get_or_init(|| std::sync::atomic::AtomicBool::new(crate::settings::get().graphics.display_pacing))
+}
+
+pub fn display_pacing() -> bool {
+    display_pacing_flag().load(Ordering::Relaxed)
+}
+
+pub fn toggle_display_pacing() {
+    let on = !display_pacing_flag().fetch_xor(true, Ordering::Relaxed);
+    println!("[+] Gfx: display pacing {}", if on { "on" } else { "off" });
+}
+
+/// How long to wait before starting the next frame so that it starts on the display's refresh grid (None: grid not known
+/// yet, or the last frame shown is too long ago to extrapolate from).
+pub fn display_pacing_wait() -> Option<std::time::Duration> {
+    let (last, period) = (
+        f64::from_bits(SHOWN_LAST.load(Ordering::Acquire)),
+        f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire)),
+    );
+    let now = host_secs();
+    if period <= 0.0 || last <= 0.0 || now < last || now - last > 0.25 {
+        return None;
+    }
+    let next = last + ((now - last) / period).ceil() * period;
+    Some(std::time::Duration::from_secs_f64((next - now).max(0.0)))
+}
+
+/// The frame starts now (nvnWindowAcquireTexture returns).
+pub fn frame_started() {
+    FRAME_START.store(host_secs().to_bits(), Ordering::Release);
+}
+
+/// Called when `drawable` reached the screen: learns the refresh grid; --log-frame-pacing prints the frame's times.
+fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, n: u64, start: f64, presented: f64, paced: bool) {
+    let shown: f64 = unsafe { objc2::msg_send![drawable, presentedTime] };
+    if shown <= 0.0 {
+        return; // dropped (never shown)
+    }
+    let prev = f64::from_bits(SHOWN_LAST.swap(shown.to_bits(), Ordering::AcqRel));
+    let dt = shown - prev;
+    if prev > 0.0 && dt > 1.0 / 500.0 && dt < 0.1 {
+        // Shown times are whole refreshes apart: the smallest gap seen is the period.
+        let p = f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire));
+        if p <= 0.0 || dt < p * 0.9 {
+            SHOWN_PERIOD.store(dt.to_bits(), Ordering::Release);
+        }
+    }
+    if crate::settings::get().log.log_frame_pacing {
+        println!(
+            "[frame-pacing] #{} start {:.3} present +{:.2} ms shown +{:.2} ms (gap {:.2} ms) paced {}",
+            n,
+            start * 1e3,
+            (presented - start) * 1e3,
+            (shown - start) * 1e3,
+            if prev > 0.0 { dt * 1e3 } else { 0.0 },
+            paced
+        );
+    }
+}
+
 /// Names a command buffer after the encoders it holds (--log-tail).
 fn tail_log_label(st: &State, cb: &ProtocolObject<dyn MTLCommandBuffer>) {
     if !tail_log_enabled() {
@@ -5956,6 +6036,20 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 enc.endEncoding();
             }
             crate::host::overlay::render(&g.device, &cb, &drawable.texture());
+            {
+                let (n, start, presented, paced) = (
+                    presented_frames() + 1,
+                    f64::from_bits(FRAME_START.load(Ordering::Acquire)),
+                    host_secs(),
+                    display_pacing(),
+                );
+                let handler = block2::RcBlock::new(
+                    move |d: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLDrawable>>| {
+                        on_shown(unsafe { d.as_ref() }, n, start, presented, paced)
+                    },
+                );
+                unsafe { objc2_metal::MTLDrawable::addPresentedHandler(&*drawable, block2::RcBlock::as_ptr(&handler)) };
+            }
             cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
             cb.commit();
             // Remember it: it is never waited on, so check how it ended when the next frame is presented. A failure here
@@ -7301,7 +7395,7 @@ pub fn request_capture() {
     let f = PRESENTED.load(Relaxed) + 2;
     CAPTURE_REQUESTED.store(true, Relaxed);
     TRACE_TRIGGERED_FRAME.store(f, Relaxed);
-    HISTORY_DUMP.store(true, Relaxed);
+    crate::gpu::history::request();
     println!(
         "[+] Capture requested: frame {} (trace in the log, image /tmp/nxport_frame_{}.ppm)",
         f, f
@@ -7751,7 +7845,7 @@ fn glitch_analyze(pn: u64, raw: Vec<u8>, w: usize, h: usize, fmt: MTLPixelFormat
         && ring[2].0 > LAST_DUMP.load(Ordering::Relaxed) + 120
     {
         LAST_DUMP.store(ring[2].0, Ordering::Relaxed);
-        HISTORY_DUMP.store(true, Ordering::Relaxed);
+        crate::gpu::history::request();
         println!("[glitch] frame {}: dumping the frame history", ring[2].0);
     }
     let mid = ring[2].0;
@@ -7794,19 +7888,16 @@ fn frame_history(g: &Gfx, pn: u64, src: &Tex) {
     static RING: Mutex<Ring> = Mutex::new(Ring(Vec::new()));
     let mut guard = RING.lock().unwrap();
     let ring = &mut guard.0;
-    static AT: OnceLock<Option<u64>> = OnceLock::new();
-    let at = *AT.get_or_init(|| crate::settings::get().dump.history_dump_at);
-    if (HISTORY_DUMP.swap(false, Ordering::AcqRel) || at == Some(pn)) && !ring.is_empty() {
+    if crate::gpu::history::due(pn) && !ring.is_empty() {
         if let Some(cb) = g.queue.commandBuffer() {
             cb.commit();
             cb.waitUntilCompleted();
         }
-        let dir = format!("/tmp/nxport_history_{}", pn);
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = crate::gpu::history::dir(pn);
         let mut frames: Vec<&(u64, Retained<ProtocolObject<dyn MTLTexture>>)> =
             ring.iter().collect();
         frames.sort_by_key(|f| f.0);
-        let mut halves: Vec<(u64, Vec<u8>)> = Vec::new();
+        let mut halves: Vec<(u64, usize, usize, Vec<u8>)> = Vec::new();
         for (f, t) in &frames {
             let (w, h) = (t.width(), t.height());
             let mut raw = vec![0u8; w * h * 4];
@@ -7846,46 +7937,11 @@ fn frame_history(g: &Gfx, pn: u64, src: &Tex) {
                 }
             }
             let hdr = out.len() - hw * hh * 3;
-            halves.push((*f, out[hdr..].to_vec()));
-            let _ = std::fs::write(format!("{}/{:06}.ppm", dir, f), out);
+            halves.push((*f, hw, hh, out[hdr..].to_vec()));
         }
-        let mut scores: Vec<(usize, u64)> = Vec::new();
-        for k in 1..halves.len().saturating_sub(1) {
-            let (a, b, c) = (&halves[k - 1].1, &halves[k].1, &halves[k + 1].1);
-            let d = |x: &[u8], y: &[u8], i: usize| {
-                (0..3).map(|j| x[i + j].abs_diff(y[i + j])).max().unwrap()
-            };
-            let n = (0..b.len() / 3)
-                .filter(|p| {
-                    let i = p * 3;
-                    d(a, c, i) < 16 && d(b, a, i) > 40 && d(b, c, i) > 40
-                })
-                .count();
-            scores.push((n, halves[k].0));
-        }
-        let mut sorted = scores.clone();
-        sorted.sort_unstable();
-        let median = sorted.get(sorted.len() / 2).map_or(0, |s| s.0);
-        sorted.reverse();
-        println!(
-            "[history] single-frame outlier pixels: median {}, top: {}",
-            median,
-            sorted
-                .iter()
-                .take(8)
-                .map(|(n, f)| format!("f{} {}", f, n))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        journal_write(&dir);
+        crate::gpu::history::write_frames(&dir, &mut halves);
+        crate::gpu::history::write_journal(&dir);
         history_targets_write(&dir);
-        println!(
-            "[+] Frame history: wrote {} frames ({}..{}) and their journal to {}",
-            frames.len(),
-            frames[0].0,
-            frames[frames.len() - 1].0,
-            dir
-        );
     }
     // Frames are kept at half resolution, drawn with the present's blit pipeline (linear filtering: each pixel the average
     // of a 2x2 block, the bytes the window shows), in memory row order. Full-size copies made the 360-frame ring of play
@@ -8064,30 +8120,18 @@ fn history_targets_write(dir: &str) {
         }
     }
 }
-static HISTORY_DUMP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn history_len() -> usize {
-    static N: OnceLock<usize> = OnceLock::new();
-    *N.get_or_init(|| crate::settings::get().dump.frame_history)
+    crate::gpu::history::len()
 }
-
-/// Frame journal (with --frame-history): compact engine events per frame (render passes with their targets' Metal
-/// identities, load / clear actions and draw counts, clears, texture creations and uploads, compute dispatches,
-/// shader fallbacks), kept for the same frames as the image ring and written with it as journal.txt. The glitch frame's
-/// journal against its neighbours' shows what the engine did differently in that frame.
-static JOURNAL: Mutex<(Vec<String>, std::collections::VecDeque<(u64, Vec<String>)>)> =
-    Mutex::new((Vec::new(), std::collections::VecDeque::new()));
 
 #[inline]
 pub(crate) fn journal_on() -> bool {
-    history_len() > 0
+    crate::gpu::history::journal_on()
 }
 
 pub(crate) fn journal(line: impl FnOnce() -> String) {
-    if journal_on() {
-        let l = line();
-        JOURNAL.lock().unwrap().0.push(l);
-    }
+    crate::gpu::history::journal(line)
 }
 
 fn journal_rotate(pn: u64) {
@@ -8095,25 +8139,7 @@ fn journal_rotate(pn: u64) {
         *translated::PREV_RT_ROOTS.lock().unwrap() = Some(std::mem::take(&mut g.0));
         g.1.clear();
     }
-    let mut j = JOURNAL.lock().unwrap();
-    let cur = std::mem::take(&mut j.0);
-    j.1.push_back((pn, cur));
-    while j.1.len() > history_len() {
-        j.1.pop_front();
-    }
-}
-
-fn journal_write(dir: &str) {
-    let j = JOURNAL.lock().unwrap();
-    let mut out = String::new();
-    for (f, lines) in &j.1 {
-        out.push_str(&format!("== frame {} ({} events)\n", f, lines.len()));
-        for l in lines {
-            out.push_str(l);
-            out.push('\n');
-        }
-    }
-    let _ = std::fs::write(format!("{}/journal.txt", dir), out);
+    crate::gpu::history::rotate(pn);
 }
 
 pub(crate) fn tex_id(t: &Tex) -> usize {

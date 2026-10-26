@@ -68,8 +68,7 @@ unsafe fn nvn_labeled_stub_called(idx: usize, a0: u64, a1: u64) -> u64 {
         counts[idx] += 1;
         counts[idx]
     };
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
+    let lr = crate::guest_reg!(x30);
     let name = nvn_stub_name_for_index(idx);
     // Throttled: the same few unimplemented functions can be called hundreds of thousands of times.
     if n <= 3 || n % 5000 == 0 {
@@ -743,8 +742,8 @@ static NVN_LABELED_STUB_TABLE: [NvnStubFn; NVN_LABELED_STUB_POOL_SIZE] = [
 
 fn resolve_unimplemented_nvn(name: &str) -> *const () {
     match nvn_stub_index_for_name(name) {
-        Some(idx) => NVN_LABELED_STUB_TABLE[idx] as *const (),
-        None => hle_nvn_generic_stub as *const (),
+        Some(idx) => crate::hle_abi::hle(NVN_LABELED_STUB_TABLE[idx]),
+        None => crate::hle!(hle_nvn_generic_stub()),
     }
 }
 
@@ -855,7 +854,7 @@ pub unsafe extern "C" fn hle_nvnDeviceGetProcAddress(
     name: *const c_char,
 ) -> *const () {
     if name.is_null() {
-        return guest_entry(hle_nvn_generic_stub as *const ());
+        return guest_entry(crate::hle!(hle_nvn_generic_stub()));
     }
     let func_name = CStr::from_ptr(name).to_string_lossy();
     record_hle_call(format!("nvnDeviceGetProcAddress({})", func_name));
@@ -872,582 +871,582 @@ pub fn resolve_proc(func_name: &str) -> *const () {
     }
 
     match func_name {
-        "nvnDeviceInitialize" => hle_nvnDeviceInitialize as *const (),
-        "nvnDeviceGetInteger" => hle_nvnDeviceGetInteger as *const (),
-        "nvnQueueSubmitCommands" => hle_nvnQueueSubmitCommands as *const (),
-        "nvnMemoryPoolBuilderSetDefaults" => hle_nvnMemoryPoolBuilderSetDefaults as *const (),
-        "nvnMemoryPoolBuilderSetDevice" => hle_nvnMemoryPoolBuilderSetDevice as *const (),
-        "nvnMemoryPoolBuilderSetStorage" => hle_nvnMemoryPoolBuilderSetStorage as *const (),
-        "nvnMemoryPoolBuilderSetFlags" => hle_nvnMemoryPoolBuilderSetFlags as *const (),
-        "nvnMemoryPoolBuilderGetDevice" => hle_nvnMemoryPoolBuilderGetDevice as *const (),
-        "nvnMemoryPoolBuilderGetMemory" => hle_nvnMemoryPoolBuilderGetMemory as *const (),
-        "nvnMemoryPoolBuilderGetSize" => hle_nvnMemoryPoolBuilderGetSize as *const (),
-        "nvnMemoryPoolBuilderGetFlags" => hle_nvnMemoryPoolBuilderGetFlags as *const (),
-        "nvnMemoryPoolInitialize" => hle_nvnMemoryPoolInitialize as *const (),
-        "nvnMemoryPoolFinalize" => hle_nvnMemoryPoolFinalize as *const (),
-        "nvnMemoryPoolMap" => hle_nvnMemoryPoolMap as *const (),
-        "nvnMemoryPoolGetBufferAddress" => hle_nvnMemoryPoolGetBufferAddress as *const (),
-        "nvnMemoryPoolSetDebugLabel" => hle_nvnMemoryPoolSetDebugLabel as *const (),
-        "nvnMemoryPoolFlushMappedRange" => hle_nvnMemoryPoolFlushMappedRange as *const (),
-        "nvnMemoryPoolInvalidateMappedRange" => hle_nvnMemoryPoolInvalidateMappedRange as *const (),
-        "nvnCommandBufferInitialize" => hle_nvnCommandBufferInitialize as *const (),
-        "nvnCommandBufferFinalize" => hle_nvnCommandBufferFinalize as *const (),
-        "nvnCommandBufferAddCommandMemory" => hle_nvnCommandBufferAddCommandMemory as *const (),
-        "nvnCommandBufferAddControlMemory" => hle_nvnCommandBufferAddControlMemory as *const (),
-        "nvnCommandBufferBeginRecording" => hle_nvnCommandBufferBeginRecording as *const (),
-        "nvnCommandBufferEndRecording" => hle_nvnCommandBufferEndRecording as *const (),
-        "nvnCommandBufferIsRecording" => hle_nvnCommandBufferIsRecording as *const (),
+        "nvnDeviceInitialize" => crate::hle!(hle_nvnDeviceInitialize(_, _)),
+        "nvnDeviceGetInteger" => crate::hle!(hle_nvnDeviceGetInteger(_, _, _)),
+        "nvnQueueSubmitCommands" => crate::hle!(hle_nvnQueueSubmitCommands(_, _, _)),
+        "nvnMemoryPoolBuilderSetDefaults" => crate::hle!(hle_nvnMemoryPoolBuilderSetDefaults(_)),
+        "nvnMemoryPoolBuilderSetDevice" => crate::hle!(hle_nvnMemoryPoolBuilderSetDevice(_, _)),
+        "nvnMemoryPoolBuilderSetStorage" => crate::hle!(hle_nvnMemoryPoolBuilderSetStorage(_, _, _)),
+        "nvnMemoryPoolBuilderSetFlags" => crate::hle!(hle_nvnMemoryPoolBuilderSetFlags(_, _)),
+        "nvnMemoryPoolBuilderGetDevice" => crate::hle!(hle_nvnMemoryPoolBuilderGetDevice(_)),
+        "nvnMemoryPoolBuilderGetMemory" => crate::hle!(hle_nvnMemoryPoolBuilderGetMemory(_)),
+        "nvnMemoryPoolBuilderGetSize" => crate::hle!(hle_nvnMemoryPoolBuilderGetSize(_)),
+        "nvnMemoryPoolBuilderGetFlags" => crate::hle!(hle_nvnMemoryPoolBuilderGetFlags(_)),
+        "nvnMemoryPoolInitialize" => crate::hle!(hle_nvnMemoryPoolInitialize(_, _)),
+        "nvnMemoryPoolFinalize" => crate::hle!(hle_nvnMemoryPoolFinalize(_)),
+        "nvnMemoryPoolMap" => crate::hle!(hle_nvnMemoryPoolMap(_)),
+        "nvnMemoryPoolGetBufferAddress" => crate::hle!(hle_nvnMemoryPoolGetBufferAddress(_)),
+        "nvnMemoryPoolSetDebugLabel" => crate::hle!(hle_nvnMemoryPoolSetDebugLabel(_, _)),
+        "nvnMemoryPoolFlushMappedRange" => crate::hle!(hle_nvnMemoryPoolFlushMappedRange(_, _, _)),
+        "nvnMemoryPoolInvalidateMappedRange" => crate::hle!(hle_nvnMemoryPoolInvalidateMappedRange(_, _, _)),
+        "nvnCommandBufferInitialize" => crate::hle!(hle_nvnCommandBufferInitialize(_, _)),
+        "nvnCommandBufferFinalize" => crate::hle!(hle_nvnCommandBufferFinalize(_)),
+        "nvnCommandBufferAddCommandMemory" => crate::hle!(hle_nvnCommandBufferAddCommandMemory(_, _, _, _)),
+        "nvnCommandBufferAddControlMemory" => crate::hle!(hle_nvnCommandBufferAddControlMemory(_, _, _)),
+        "nvnCommandBufferBeginRecording" => crate::hle!(hle_nvnCommandBufferBeginRecording(_)),
+        "nvnCommandBufferEndRecording" => crate::hle!(hle_nvnCommandBufferEndRecording(_)),
+        "nvnCommandBufferIsRecording" => crate::hle!(hle_nvnCommandBufferIsRecording(_)),
         "nvnCommandBufferGetCommandMemoryUsed" => {
-            hle_nvnCommandBufferGetCommandMemoryUsed as *const ()
+            crate::hle!(hle_nvnCommandBufferGetCommandMemoryUsed(_))
         }
         "nvnCommandBufferGetCommandMemoryFree" => {
-            hle_nvnCommandBufferGetCommandMemoryFree as *const ()
+            crate::hle!(hle_nvnCommandBufferGetCommandMemoryFree(_))
         }
         "nvnCommandBufferGetCommandMemorySize" => {
-            hle_nvnCommandBufferGetCommandMemorySize as *const ()
+            crate::hle!(hle_nvnCommandBufferGetCommandMemorySize(_))
         }
         "nvnCommandBufferGetControlMemoryUsed" => {
-            hle_nvnCommandBufferGetControlMemoryUsed as *const ()
+            crate::hle!(hle_nvnCommandBufferGetControlMemoryUsed(_))
         }
         "nvnCommandBufferGetControlMemoryFree" => {
-            hle_nvnCommandBufferGetControlMemoryFree as *const ()
+            crate::hle!(hle_nvnCommandBufferGetControlMemoryFree(_))
         }
         "nvnCommandBufferGetControlMemorySize" => {
-            hle_nvnCommandBufferGetControlMemorySize as *const ()
+            crate::hle!(hle_nvnCommandBufferGetControlMemorySize(_))
         }
-        "nvnCommandBufferGetMemoryCallback" => hle_nvnCommandBufferGetMemoryCallback as *const (),
+        "nvnCommandBufferGetMemoryCallback" => crate::hle!(hle_nvnCommandBufferGetMemoryCallback()),
         "nvnCommandBufferGetMemoryCallbackData" => {
-            hle_nvnCommandBufferGetMemoryCallbackData as *const ()
+            crate::hle!(hle_nvnCommandBufferGetMemoryCallbackData())
         }
-        "nvnCommandBufferGetCopyRowStride" => hle_nvnCommandBufferGetCopyRowStride as *const (),
-        "nvnCommandBufferGetCopyImageStride" => hle_nvnCommandBufferGetCopyImageStride as *const (),
-        "nvnCommandBufferBarrier" => hle_nvnCommandBufferBarrier as *const (),
+        "nvnCommandBufferGetCopyRowStride" => crate::hle!(hle_nvnCommandBufferGetCopyRowStride()),
+        "nvnCommandBufferGetCopyImageStride" => crate::hle!(hle_nvnCommandBufferGetCopyImageStride()),
+        "nvnCommandBufferBarrier" => crate::hle!(hle_nvnCommandBufferBarrier(_, _, _, _, _, _)),
         "nvnCommandBufferBeginTransformFeedback" => {
-            hle_nvnCommandBufferBeginTransformFeedback as *const ()
+            crate::hle!(hle_nvnCommandBufferBeginTransformFeedback(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindCoverageModulationTable" => {
-            hle_nvnCommandBufferBindCoverageModulationTable as *const ()
+            crate::hle!(hle_nvnCommandBufferBindCoverageModulationTable(_, _, _, _, _, _))
         }
-        "nvnCommandBufferBindImage" => hle_nvnCommandBufferBindImage as *const (),
-        "nvnCommandBufferBindImages" => hle_nvnCommandBufferBindImages as *const (),
-        "nvnCommandBufferBindImagesDeferred" => hle_nvnCommandBufferBindImagesDeferred as *const (),
+        "nvnCommandBufferBindImage" => crate::hle!(hle_nvnCommandBufferBindImage(_, _, _, _, _, _)),
+        "nvnCommandBufferBindImages" => crate::hle!(hle_nvnCommandBufferBindImages(_, _, _, _, _, _)),
+        "nvnCommandBufferBindImagesDeferred" => crate::hle!(hle_nvnCommandBufferBindImagesDeferred(_, _, _, _, _, _)),
         "nvnCommandBufferBindSeparateSampler" => {
-            hle_nvnCommandBufferBindSeparateSampler as *const ()
+            crate::hle!(hle_nvnCommandBufferBindSeparateSampler(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindSeparateSamplers" => {
-            hle_nvnCommandBufferBindSeparateSamplers as *const ()
+            crate::hle!(hle_nvnCommandBufferBindSeparateSamplers(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindSeparateSamplersDeferred" => {
-            hle_nvnCommandBufferBindSeparateSamplersDeferred as *const ()
+            crate::hle!(hle_nvnCommandBufferBindSeparateSamplersDeferred(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindSeparateTexture" => {
-            hle_nvnCommandBufferBindSeparateTexture as *const ()
+            crate::hle!(hle_nvnCommandBufferBindSeparateTexture(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindSeparateTextures" => {
-            hle_nvnCommandBufferBindSeparateTextures as *const ()
+            crate::hle!(hle_nvnCommandBufferBindSeparateTextures(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindSeparateTexturesDeferred" => {
-            hle_nvnCommandBufferBindSeparateTexturesDeferred as *const ()
+            crate::hle!(hle_nvnCommandBufferBindSeparateTexturesDeferred(_, _, _, _, _, _))
         }
-        "nvnCommandBufferBindStorageBuffer" => hle_nvnCommandBufferBindStorageBuffer as *const (),
-        "nvnCommandBufferBindStorageBuffers" => hle_nvnCommandBufferBindStorageBuffers as *const (),
+        "nvnCommandBufferBindStorageBuffer" => crate::hle!(hle_nvnCommandBufferBindStorageBuffer(_, _, _, _, _, _)),
+        "nvnCommandBufferBindStorageBuffers" => crate::hle!(hle_nvnCommandBufferBindStorageBuffers(_, _, _, _, _, _)),
         "nvnCommandBufferBindStorageBuffersDeferred" => {
-            hle_nvnCommandBufferBindStorageBuffersDeferred as *const ()
+            crate::hle!(hle_nvnCommandBufferBindStorageBuffersDeferred(_, _, _, _, _, _))
         }
-        "nvnCommandBufferBindTextures" => hle_nvnCommandBufferBindTextures as *const (),
+        "nvnCommandBufferBindTextures" => crate::hle!(hle_nvnCommandBufferBindTextures(_, _, _, _, _, _)),
         "nvnCommandBufferBindTexturesDeferred" => {
-            hle_nvnCommandBufferBindTexturesDeferred as *const ()
+            crate::hle!(hle_nvnCommandBufferBindTexturesDeferred(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindTransformFeedbackBuffer" => {
-            hle_nvnCommandBufferBindTransformFeedbackBuffer as *const ()
+            crate::hle!(hle_nvnCommandBufferBindTransformFeedbackBuffer(_, _, _, _, _, _))
         }
         "nvnCommandBufferBindTransformFeedbackBuffers" => {
-            hle_nvnCommandBufferBindTransformFeedbackBuffers as *const ()
+            crate::hle!(hle_nvnCommandBufferBindTransformFeedbackBuffers(_, _, _, _, _, _))
         }
-        "nvnCommandBufferBindUniformBuffers" => hle_nvnCommandBufferBindUniformBuffers as *const (),
+        "nvnCommandBufferBindUniformBuffers" => crate::hle!(hle_nvnCommandBufferBindUniformBuffers(_, _, _, _, _, _)),
         "nvnCommandBufferBindUniformBuffersDeferred" => {
-            hle_nvnCommandBufferBindUniformBuffersDeferred as *const ()
+            crate::hle!(hle_nvnCommandBufferBindUniformBuffersDeferred(_, _, _, _, _, _))
         }
-        "nvnCommandBufferBindVertexBuffers" => hle_nvnCommandBufferBindVertexBuffers as *const (),
-        "nvnCommandBufferClearBuffer" => hle_nvnCommandBufferClearBuffer as *const (),
-        "nvnCommandBufferClearColori" => hle_nvnCommandBufferClearColori as *const (),
-        "nvnCommandBufferClearColorui" => hle_nvnCommandBufferClearColorui as *const (),
-        "nvnCommandBufferClearTexture" => hle_nvnCommandBufferClearTexture as *const (),
-        "nvnCommandBufferClearTexturei" => hle_nvnCommandBufferClearTexturei as *const (),
-        "nvnCommandBufferClearTextureui" => hle_nvnCommandBufferClearTextureui as *const (),
-        "nvnCommandBufferCopyBufferToBuffer" => hle_nvnCommandBufferCopyBufferToBuffer as *const (),
+        "nvnCommandBufferBindVertexBuffers" => crate::hle!(hle_nvnCommandBufferBindVertexBuffers(_, _, _, _, _, _)),
+        "nvnCommandBufferClearBuffer" => crate::hle!(hle_nvnCommandBufferClearBuffer(_, _, _, _, _, _)),
+        "nvnCommandBufferClearColori" => crate::hle!(hle_nvnCommandBufferClearColori(_, _, _, _, _, _)),
+        "nvnCommandBufferClearColorui" => crate::hle!(hle_nvnCommandBufferClearColorui(_, _, _, _, _, _)),
+        "nvnCommandBufferClearTexture" => crate::hle!(hle_nvnCommandBufferClearTexture(_, _, _, _, _, _)),
+        "nvnCommandBufferClearTexturei" => crate::hle!(hle_nvnCommandBufferClearTexturei(_, _, _, _, _, _)),
+        "nvnCommandBufferClearTextureui" => crate::hle!(hle_nvnCommandBufferClearTextureui(_, _, _, _, _, _)),
+        "nvnCommandBufferCopyBufferToBuffer" => crate::hle!(hle_nvnCommandBufferCopyBufferToBuffer(_, _, _, _, _, _)),
         "nvnCommandBufferCopyBufferToTexture" => {
-            hle_nvnCommandBufferCopyBufferToTexture as *const ()
+            crate::hle!(hle_nvnCommandBufferCopyBufferToTexture(_, _, _, _, _, _))
         }
-        "nvnCommandBufferCopyCommands" => hle_nvnCommandBufferCopyCommands as *const (),
+        "nvnCommandBufferCopyCommands" => crate::hle!(hle_nvnCommandBufferCopyCommands(_, _, _, _, _, _)),
         "nvnCommandBufferCopyTextureToBuffer" => {
-            hle_nvnCommandBufferCopyTextureToBuffer as *const ()
+            crate::hle!(hle_nvnCommandBufferCopyTextureToBuffer(_, _, _, _, _, _))
         }
         "nvnCommandBufferCopyTextureToTexture" => {
-            hle_nvnCommandBufferCopyTextureToTexture as *const ()
+            crate::hle!(hle_nvnCommandBufferCopyTextureToTexture(_, _, _, _, _, _))
         }
-        "nvnCommandBufferDiscardColor" => hle_nvnCommandBufferDiscardColor as *const (),
+        "nvnCommandBufferDiscardColor" => crate::hle!(hle_nvnCommandBufferDiscardColor(_, _, _, _, _, _)),
         "nvnCommandBufferDiscardDepthStencil" => {
-            hle_nvnCommandBufferDiscardDepthStencil as *const ()
+            crate::hle!(hle_nvnCommandBufferDiscardDepthStencil(_, _, _, _, _, _))
         }
-        "nvnCommandBufferDispatchCompute" => hle_nvnCommandBufferDispatchCompute as *const (),
+        "nvnCommandBufferDispatchCompute" => crate::hle!(hle_nvnCommandBufferDispatchCompute(_, _, _, _, _, _)),
         "nvnCommandBufferDispatchComputeIndirect" => {
-            hle_nvnCommandBufferDispatchComputeIndirect as *const ()
+            crate::hle!(hle_nvnCommandBufferDispatchComputeIndirect(_, _, _, _, _, _))
         }
-        "nvnCommandBufferDownsample" => hle_nvnCommandBufferDownsample as *const (),
+        "nvnCommandBufferDownsample" => crate::hle!(hle_nvnCommandBufferDownsample(_, _, _, _, _, _)),
         "nvnCommandBufferDownsampleTextureView" => {
-            hle_nvnCommandBufferDownsampleTextureView as *const ()
+            crate::hle!(hle_nvnCommandBufferDownsampleTextureView(_, _, _, _, _, _))
         }
-        "nvnCommandBufferDrawArraysIndirect" => hle_nvnCommandBufferDrawArraysIndirect as *const (),
+        "nvnCommandBufferDrawArraysIndirect" => crate::hle!(hle_nvnCommandBufferDrawArraysIndirect(_, _, _, _, _, _)),
         "nvnCommandBufferDrawArraysInstanced" => {
-            hle_nvnCommandBufferDrawArraysInstanced as *const ()
+            crate::hle!(hle_nvnCommandBufferDrawArraysInstanced(_, _, _, _, _, _))
         }
         "nvnCommandBufferDrawElementsIndirect" => {
-            hle_nvnCommandBufferDrawElementsIndirect as *const ()
+            crate::hle!(hle_nvnCommandBufferDrawElementsIndirect(_, _, _, _, _, _))
         }
         "nvnCommandBufferDrawElementsInstanced" => {
-            hle_nvnCommandBufferDrawElementsInstanced as *const ()
+            crate::hle!(hle_nvnCommandBufferDrawElementsInstanced(_, _, _, _, _, _))
         }
-        "nvnCommandBufferDrawTexture" => hle_nvnCommandBufferDrawTexture as *const (),
+        "nvnCommandBufferDrawTexture" => crate::hle!(hle_nvnCommandBufferDrawTexture(_, _, _, _, _, _)),
         "nvnCommandBufferDrawTransformFeedback" => {
-            hle_nvnCommandBufferDrawTransformFeedback as *const ()
+            crate::hle!(hle_nvnCommandBufferDrawTransformFeedback(_, _, _, _, _, _))
         }
         "nvnCommandBufferEndTransformFeedback" => {
-            hle_nvnCommandBufferEndTransformFeedback as *const ()
+            crate::hle!(hle_nvnCommandBufferEndTransformFeedback(_, _, _, _, _, _))
         }
-        "nvnCommandBufferFenceSync" => hle_nvnCommandBufferFenceSync as *const (),
+        "nvnCommandBufferFenceSync" => crate::hle!(hle_nvnCommandBufferFenceSync(_, _, _, _, _, _)),
         "nvnCommandBufferInsertCheckpointDynamic" => {
-            hle_nvnCommandBufferInsertCheckpointDynamic as *const ()
+            crate::hle!(hle_nvnCommandBufferInsertCheckpointDynamic(_, _, _, _, _, _))
         }
         "nvnCommandBufferInsertCheckpointStatic" => {
-            hle_nvnCommandBufferInsertCheckpointStatic as *const ()
+            crate::hle!(hle_nvnCommandBufferInsertCheckpointStatic(_, _, _, _, _, _))
         }
-        "nvnCommandBufferInsertDebugMarker" => hle_nvnCommandBufferInsertDebugMarker as *const (),
+        "nvnCommandBufferInsertDebugMarker" => crate::hle!(hle_nvnCommandBufferInsertDebugMarker(_, _, _, _, _, _)),
         "nvnCommandBufferInsertDebugMarkerDynamic" => {
-            hle_nvnCommandBufferInsertDebugMarkerDynamic as *const ()
+            crate::hle!(hle_nvnCommandBufferInsertDebugMarkerDynamic(_, _, _, _, _, _))
         }
         "nvnCommandBufferInsertDebugMarkerStatic" => {
-            hle_nvnCommandBufferInsertDebugMarkerStatic as *const ()
+            crate::hle!(hle_nvnCommandBufferInsertDebugMarkerStatic(_, _, _, _, _, _))
         }
         "nvnCommandBufferMultiDrawArraysIndirectCount" => {
-            hle_nvnCommandBufferMultiDrawArraysIndirectCount as *const ()
+            crate::hle!(hle_nvnCommandBufferMultiDrawArraysIndirectCount(_, _, _, _, _, _))
         }
         "nvnCommandBufferMultiDrawElementsIndirectCount" => {
-            hle_nvnCommandBufferMultiDrawElementsIndirectCount as *const ()
+            crate::hle!(hle_nvnCommandBufferMultiDrawElementsIndirectCount(_, _, _, _, _, _))
         }
         "nvnCommandBufferOverrideSubtileSize" => {
-            hle_nvnCommandBufferOverrideSubtileSize as *const ()
+            crate::hle!(hle_nvnCommandBufferOverrideSubtileSize(_, _, _, _, _, _))
         }
         "nvnCommandBufferPauseTransformFeedback" => {
-            hle_nvnCommandBufferPauseTransformFeedback as *const ()
+            crate::hle!(hle_nvnCommandBufferPauseTransformFeedback(_, _, _, _, _, _))
         }
-        "nvnCommandBufferPopDebugGroup" => hle_nvnCommandBufferPopDebugGroup as *const (),
-        "nvnCommandBufferPopDebugGroupId" => hle_nvnCommandBufferPopDebugGroupId as *const (),
-        "nvnCommandBufferPushDebugGroup" => hle_nvnCommandBufferPushDebugGroup as *const (),
+        "nvnCommandBufferPopDebugGroup" => crate::hle!(hle_nvnCommandBufferPopDebugGroup(_, _, _, _, _, _)),
+        "nvnCommandBufferPopDebugGroupId" => crate::hle!(hle_nvnCommandBufferPopDebugGroupId(_, _, _, _, _, _)),
+        "nvnCommandBufferPushDebugGroup" => crate::hle!(hle_nvnCommandBufferPushDebugGroup(_, _, _, _, _, _)),
         "nvnCommandBufferPushDebugGroupDynamic" => {
-            hle_nvnCommandBufferPushDebugGroupDynamic as *const ()
+            crate::hle!(hle_nvnCommandBufferPushDebugGroupDynamic(_, _, _, _, _, _))
         }
         "nvnCommandBufferPushDebugGroupStatic" => {
-            hle_nvnCommandBufferPushDebugGroupStatic as *const ()
+            crate::hle!(hle_nvnCommandBufferPushDebugGroupStatic(_, _, _, _, _, _))
         }
-        "nvnCommandBufferReportCounter" => hle_nvnCommandBufferReportCounter as *const (),
-        "nvnCommandBufferReportValue" => hle_nvnCommandBufferReportValue as *const (),
-        "nvnCommandBufferResetCounter" => hle_nvnCommandBufferResetCounter as *const (),
-        "nvnCommandBufferResolveDepthBuffer" => hle_nvnCommandBufferResolveDepthBuffer as *const (),
-        "nvnCommandBufferRestoreZCullData" => hle_nvnCommandBufferRestoreZCullData as *const (),
+        "nvnCommandBufferReportCounter" => crate::hle!(hle_nvnCommandBufferReportCounter(_, _, _, _, _, _)),
+        "nvnCommandBufferReportValue" => crate::hle!(hle_nvnCommandBufferReportValue(_, _, _, _, _, _)),
+        "nvnCommandBufferResetCounter" => crate::hle!(hle_nvnCommandBufferResetCounter(_, _, _, _, _, _)),
+        "nvnCommandBufferResolveDepthBuffer" => crate::hle!(hle_nvnCommandBufferResolveDepthBuffer(_, _, _, _, _, _)),
+        "nvnCommandBufferRestoreZCullData" => crate::hle!(hle_nvnCommandBufferRestoreZCullData(_, _, _, _, _, _)),
         "nvnCommandBufferResumeTransformFeedback" => {
-            hle_nvnCommandBufferResumeTransformFeedback as *const ()
+            crate::hle!(hle_nvnCommandBufferResumeTransformFeedback(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSaveZCullData" => hle_nvnCommandBufferSaveZCullData as *const (),
-        "nvnCommandBufferSetAlphaRef" => hle_nvnCommandBufferSetAlphaRef as *const (),
+        "nvnCommandBufferSaveZCullData" => crate::hle!(hle_nvnCommandBufferSaveZCullData(_, _, _, _, _, _)),
+        "nvnCommandBufferSetAlphaRef" => crate::hle!(hle_nvnCommandBufferSetAlphaRef(_, _)),
         "nvnCommandBufferSetColorReductionEnable" => {
-            hle_nvnCommandBufferSetColorReductionEnable as *const ()
+            crate::hle!(hle_nvnCommandBufferSetColorReductionEnable(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetColorReductionThresholds" => {
-            hle_nvnCommandBufferSetColorReductionThresholds as *const ()
+            crate::hle!(hle_nvnCommandBufferSetColorReductionThresholds(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetCommandMemoryCallbackEnabled" => {
-            hle_nvnCommandBufferSetCommandMemoryCallbackEnabled as *const ()
+            crate::hle!(hle_nvnCommandBufferSetCommandMemoryCallbackEnabled(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetConservativeRasterDilate" => {
-            hle_nvnCommandBufferSetConservativeRasterDilate as *const ()
+            crate::hle!(hle_nvnCommandBufferSetConservativeRasterDilate(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetConservativeRasterEnable" => {
-            hle_nvnCommandBufferSetConservativeRasterEnable as *const ()
+            crate::hle!(hle_nvnCommandBufferSetConservativeRasterEnable(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetControlMemoryCallbackEnabled" => {
-            hle_nvnCommandBufferSetControlMemoryCallbackEnabled as *const ()
+            crate::hle!(hle_nvnCommandBufferSetControlMemoryCallbackEnabled(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetCopyImageStride" => hle_nvnCommandBufferSetCopyImageStride as *const (),
-        "nvnCommandBufferSetCopyRowStride" => hle_nvnCommandBufferSetCopyRowStride as *const (),
-        "nvnCommandBufferSetDebugLabel" => hle_nvnCommandBufferSetDebugLabel as *const (),
-        "nvnCommandBufferSetDepthBounds" => hle_nvnCommandBufferSetDepthBounds as *const (),
+        "nvnCommandBufferSetCopyImageStride" => crate::hle!(hle_nvnCommandBufferSetCopyImageStride(_, _, _, _, _, _)),
+        "nvnCommandBufferSetCopyRowStride" => crate::hle!(hle_nvnCommandBufferSetCopyRowStride(_, _, _, _, _, _)),
+        "nvnCommandBufferSetDebugLabel" => crate::hle!(hle_nvnCommandBufferSetDebugLabel(_, _, _, _, _, _)),
+        "nvnCommandBufferSetDepthBounds" => crate::hle!(hle_nvnCommandBufferSetDepthBounds(_, _, _, _, _, _)),
         "nvnCommandBufferSetDepthRanges" => {
-            crate::nvn::cmd::hle_nvnCommandBufferSetDepthRanges as *const ()
+            crate::hle!(crate::nvn::cmd::hle_nvnCommandBufferSetDepthRanges(_, _, _, _))
         }
         "nvnCommandBufferSetInnerTessellationLevels" => {
-            hle_nvnCommandBufferSetInnerTessellationLevels as *const ()
+            crate::hle!(hle_nvnCommandBufferSetInnerTessellationLevels(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetLineWidth" => hle_nvnCommandBufferSetLineWidth as *const (),
-        "nvnCommandBufferSetMemoryCallback" => hle_nvnCommandBufferSetMemoryCallback as *const (),
+        "nvnCommandBufferSetLineWidth" => crate::hle!(hle_nvnCommandBufferSetLineWidth(_, _)),
+        "nvnCommandBufferSetMemoryCallback" => crate::hle!(hle_nvnCommandBufferSetMemoryCallback(_, _, _, _, _, _)),
         "nvnCommandBufferSetMemoryCallbackData" => {
-            hle_nvnCommandBufferSetMemoryCallbackData as *const ()
+            crate::hle!(hle_nvnCommandBufferSetMemoryCallbackData(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetOuterTessellationLevels" => {
-            hle_nvnCommandBufferSetOuterTessellationLevels as *const ()
+            crate::hle!(hle_nvnCommandBufferSetOuterTessellationLevels(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetPatchSize" => hle_nvnCommandBufferSetPatchSize as *const (),
-        "nvnCommandBufferSetPointSize" => hle_nvnCommandBufferSetPointSize as *const (),
+        "nvnCommandBufferSetPatchSize" => crate::hle!(hle_nvnCommandBufferSetPatchSize(_, _, _, _, _, _)),
+        "nvnCommandBufferSetPointSize" => crate::hle!(hle_nvnCommandBufferSetPointSize(_, _, _, _, _, _)),
         "nvnCommandBufferSetPolygonOffsetClamp" => {
-            hle_nvnCommandBufferSetPolygonOffsetClamp as *const ()
+            crate::hle!(hle_nvnCommandBufferSetPolygonOffsetClamp(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetProgramSubroutines" => {
-            hle_nvnCommandBufferSetProgramSubroutines as *const ()
+            crate::hle!(hle_nvnCommandBufferSetProgramSubroutines(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetProvokingVertexMode" => {
-            hle_nvnCommandBufferSetProvokingVertexMode as *const ()
+            crate::hle!(hle_nvnCommandBufferSetProvokingVertexMode(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetRasterizerDiscard" => {
-            hle_nvnCommandBufferSetRasterizerDiscard as *const ()
+            crate::hle!(hle_nvnCommandBufferSetRasterizerDiscard(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetRenderEnable" => hle_nvnCommandBufferSetRenderEnable as *const (),
+        "nvnCommandBufferSetRenderEnable" => crate::hle!(hle_nvnCommandBufferSetRenderEnable(_, _, _, _, _, _)),
         "nvnCommandBufferSetRenderEnableConditional" => {
-            hle_nvnCommandBufferSetRenderEnableConditional as *const ()
+            crate::hle!(hle_nvnCommandBufferSetRenderEnableConditional(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetSampleMask" => hle_nvnCommandBufferSetSampleMask as *const (),
-        "nvnCommandBufferSetSamplerPool" => hle_nvnCommandBufferSetSamplerPool as *const (),
+        "nvnCommandBufferSetSampleMask" => crate::hle!(hle_nvnCommandBufferSetSampleMask(_, _, _, _, _, _)),
+        "nvnCommandBufferSetSamplerPool" => crate::hle!(hle_nvnCommandBufferSetSamplerPool(_, _, _, _, _, _)),
         "nvnCommandBufferSetScissors" => {
-            crate::nvn::cmd::hle_nvnCommandBufferSetScissors as *const ()
+            crate::hle!(crate::nvn::cmd::hle_nvnCommandBufferSetScissors(_, _, _, _))
         }
         "nvnCommandBufferSetShaderScratchMemory" => {
-            hle_nvnCommandBufferSetShaderScratchMemory as *const ()
+            crate::hle!(hle_nvnCommandBufferSetShaderScratchMemory(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetStencilCullCriteria" => {
-            hle_nvnCommandBufferSetStencilCullCriteria as *const ()
+            crate::hle!(hle_nvnCommandBufferSetStencilCullCriteria(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetStencilMask" => hle_nvnCommandBufferSetStencilMask as *const (),
-        "nvnCommandBufferSetStencilRef" => hle_nvnCommandBufferSetStencilRef as *const (),
+        "nvnCommandBufferSetStencilMask" => crate::hle!(hle_nvnCommandBufferSetStencilMask(_, _, _, _, _, _)),
+        "nvnCommandBufferSetStencilRef" => crate::hle!(hle_nvnCommandBufferSetStencilRef(_, _, _, _, _, _)),
         "nvnCommandBufferSetStencilValueMask" => {
-            hle_nvnCommandBufferSetStencilValueMask as *const ()
+            crate::hle!(hle_nvnCommandBufferSetStencilValueMask(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetSubpixelPrecisionBias" => {
-            hle_nvnCommandBufferSetSubpixelPrecisionBias as *const ()
+            crate::hle!(hle_nvnCommandBufferSetSubpixelPrecisionBias(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetTexturePool" => hle_nvnCommandBufferSetTexturePool as *const (),
+        "nvnCommandBufferSetTexturePool" => crate::hle!(hle_nvnCommandBufferSetTexturePool(_, _, _, _, _, _)),
         "nvnCommandBufferSetTiledCacheAction" => {
-            hle_nvnCommandBufferSetTiledCacheAction as *const ()
+            crate::hle!(hle_nvnCommandBufferSetTiledCacheAction(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetTiledCacheTileSize" => {
-            hle_nvnCommandBufferSetTiledCacheTileSize as *const ()
+            crate::hle!(hle_nvnCommandBufferSetTiledCacheTileSize(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetViewports" => {
-            crate::nvn::cmd::hle_nvnCommandBufferSetViewports as *const ()
+            crate::hle!(crate::nvn::cmd::hle_nvnCommandBufferSetViewports(_, _, _, _))
         }
         "nvnCommandBufferSetViewportSwizzles" => {
-            hle_nvnCommandBufferSetViewportSwizzles as *const ()
+            crate::hle!(hle_nvnCommandBufferSetViewportSwizzles(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetZCullZF32CompressionEnable" => {
-            hle_nvnCommandBufferSetZCullZF32CompressionEnable as *const ()
+            crate::hle!(hle_nvnCommandBufferSetZCullZF32CompressionEnable(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSignalEvent" => hle_nvnCommandBufferSignalEvent as *const (),
-        "nvnCommandBufferTiledDownsample" => hle_nvnCommandBufferTiledDownsample as *const (),
+        "nvnCommandBufferSignalEvent" => crate::hle!(hle_nvnCommandBufferSignalEvent(_, _, _, _, _, _)),
+        "nvnCommandBufferTiledDownsample" => crate::hle!(hle_nvnCommandBufferTiledDownsample(_, _, _, _, _, _)),
         "nvnCommandBufferTiledDownsampleTextureView" => {
-            hle_nvnCommandBufferTiledDownsampleTextureView as *const ()
+            crate::hle!(hle_nvnCommandBufferTiledDownsampleTextureView(_, _, _, _, _, _))
         }
-        "nvnCommandBufferWaitEvent" => hle_nvnCommandBufferWaitEvent as *const (),
-        "nvnCommandBufferWaitSync" => hle_nvnCommandBufferWaitSync as *const (),
-        "nvnBufferBuilderSetDefaults" => hle_nvnBufferBuilderSetDefaults as *const (),
-        "nvnBufferBuilderSetDevice" => hle_nvnBufferBuilderSetDevice as *const (),
-        "nvnBufferBuilderSetStorage" => hle_nvnBufferBuilderSetStorage as *const (),
-        "nvnBufferBuilderGetSize" => hle_nvnBufferBuilderGetSize as *const (),
-        "nvnBufferBuilderGetMemoryOffset" => hle_nvnBufferBuilderGetMemoryOffset as *const (),
-        "nvnBufferBuilderGetMemoryPool" => hle_nvnBufferBuilderGetMemoryPool as *const (),
-        "nvnBufferInitialize" => hle_nvnBufferInitialize as *const (),
-        "nvnBufferFinalize" => hle_nvnBufferFinalize as *const (),
-        "nvnBufferGetAddress" => hle_nvnBufferGetAddress as *const (),
-        "nvnBufferMap" => hle_nvnBufferMap as *const (),
-        "nvnBufferGetSize" => hle_nvnBufferGetSize as *const (),
-        "nvnBufferFlushMappedRange" => hle_nvnBufferFlushMappedRange as *const (),
-        "nvnBufferInvalidateMappedRange" => hle_nvnBufferInvalidateMappedRange as *const (),
-        "nvnTextureBuilderSetDefaults" => hle_nvnTextureBuilderSetDefaults as *const (),
-        "nvnTextureBuilderSetDevice" => hle_nvnTextureBuilderSetDevice as *const (),
-        "nvnTextureBuilderSetTarget" => hle_nvnTextureBuilderSetTarget as *const (),
-        "nvnTextureBuilderSetWidth" => hle_nvnTextureBuilderSetWidth as *const (),
-        "nvnTextureBuilderSetHeight" => hle_nvnTextureBuilderSetHeight as *const (),
-        "nvnTextureBuilderSetDepth" => hle_nvnTextureBuilderSetDepth as *const (),
-        "nvnTextureBuilderSetLevels" => hle_nvnTextureBuilderSetLevels as *const (),
-        "nvnTextureBuilderSetFormat" => hle_nvnTextureBuilderSetFormat as *const (),
-        "nvnTextureBuilderSetFlags" => hle_nvnTextureBuilderSetFlags as *const (),
-        "nvnTextureBuilderSetSamples" => hle_nvnTextureBuilderSetSamples as *const (),
-        "nvnTextureBuilderSetSwizzle" => hle_nvnTextureBuilderSetSwizzle as *const (),
-        "nvnTextureBuilderSetStride" => hle_nvnTextureBuilderSetStride as *const (),
-        "nvnTextureBuilderSetStorage" => hle_nvnTextureBuilderSetStorage as *const (),
-        "nvnTextureBuilderGetStorageSize" => hle_nvnTextureBuilderGetStorageSize as *const (),
+        "nvnCommandBufferWaitEvent" => crate::hle!(hle_nvnCommandBufferWaitEvent(_, _, _, _, _, _)),
+        "nvnCommandBufferWaitSync" => crate::hle!(hle_nvnCommandBufferWaitSync(_, _, _, _, _, _)),
+        "nvnBufferBuilderSetDefaults" => crate::hle!(hle_nvnBufferBuilderSetDefaults(_)),
+        "nvnBufferBuilderSetDevice" => crate::hle!(hle_nvnBufferBuilderSetDevice(_, _)),
+        "nvnBufferBuilderSetStorage" => crate::hle!(hle_nvnBufferBuilderSetStorage(_, _, _, _)),
+        "nvnBufferBuilderGetSize" => crate::hle!(hle_nvnBufferBuilderGetSize(_)),
+        "nvnBufferBuilderGetMemoryOffset" => crate::hle!(hle_nvnBufferBuilderGetMemoryOffset(_)),
+        "nvnBufferBuilderGetMemoryPool" => crate::hle!(hle_nvnBufferBuilderGetMemoryPool(_)),
+        "nvnBufferInitialize" => crate::hle!(hle_nvnBufferInitialize(_, _)),
+        "nvnBufferFinalize" => crate::hle!(hle_nvnBufferFinalize(_)),
+        "nvnBufferGetAddress" => crate::hle!(hle_nvnBufferGetAddress(_)),
+        "nvnBufferMap" => crate::hle!(hle_nvnBufferMap(_)),
+        "nvnBufferGetSize" => crate::hle!(hle_nvnBufferGetSize(_)),
+        "nvnBufferFlushMappedRange" => crate::hle!(hle_nvnBufferFlushMappedRange(_, _, _)),
+        "nvnBufferInvalidateMappedRange" => crate::hle!(hle_nvnBufferInvalidateMappedRange(_, _, _)),
+        "nvnTextureBuilderSetDefaults" => crate::hle!(hle_nvnTextureBuilderSetDefaults(_)),
+        "nvnTextureBuilderSetDevice" => crate::hle!(hle_nvnTextureBuilderSetDevice(_, _)),
+        "nvnTextureBuilderSetTarget" => crate::hle!(hle_nvnTextureBuilderSetTarget(_, _)),
+        "nvnTextureBuilderSetWidth" => crate::hle!(hle_nvnTextureBuilderSetWidth(_, _)),
+        "nvnTextureBuilderSetHeight" => crate::hle!(hle_nvnTextureBuilderSetHeight(_, _)),
+        "nvnTextureBuilderSetDepth" => crate::hle!(hle_nvnTextureBuilderSetDepth(_, _)),
+        "nvnTextureBuilderSetLevels" => crate::hle!(hle_nvnTextureBuilderSetLevels(_, _)),
+        "nvnTextureBuilderSetFormat" => crate::hle!(hle_nvnTextureBuilderSetFormat(_, _)),
+        "nvnTextureBuilderSetFlags" => crate::hle!(hle_nvnTextureBuilderSetFlags(_, _)),
+        "nvnTextureBuilderSetSamples" => crate::hle!(hle_nvnTextureBuilderSetSamples(_, _)),
+        "nvnTextureBuilderSetSwizzle" => crate::hle!(hle_nvnTextureBuilderSetSwizzle(_, _, _, _, _)),
+        "nvnTextureBuilderSetStride" => crate::hle!(hle_nvnTextureBuilderSetStride(_, _)),
+        "nvnTextureBuilderSetStorage" => crate::hle!(hle_nvnTextureBuilderSetStorage(_, _, _)),
+        "nvnTextureBuilderGetStorageSize" => crate::hle!(hle_nvnTextureBuilderGetStorageSize(_)),
         "nvnTextureBuilderGetStorageAlignment" => {
-            hle_nvnTextureBuilderGetStorageAlignment as *const ()
+            crate::hle!(hle_nvnTextureBuilderGetStorageAlignment(_))
         }
-        "nvnTextureBuilderGetStorageClass" => hle_nvnTextureBuilderGetStorageClass as *const (),
-        "nvnTextureBuilderGetZCullStorageSize" => hle_nvnZCullStorageSize as *const (),
-        "nvnTextureInitialize" => hle_nvnTextureInitialize as *const (),
-        "nvnTextureFinalize" => hle_nvnTextureFinalize as *const (),
-        "nvnTextureGetWidth" => hle_nvnTextureGetWidth as *const (),
-        "nvnTextureGetHeight" => hle_nvnTextureGetHeight as *const (),
-        "nvnTextureGetZCullStorageSize" => hle_nvnZCullStorageSize as *const (),
-        "nvnMemoryPoolGetFlags" => hle_nvnMemoryPoolGetFlags as *const (),
-        "nvnMemoryPoolMapVirtual" => hle_nvnMemoryPoolMapVirtual as *const (),
+        "nvnTextureBuilderGetStorageClass" => crate::hle!(hle_nvnTextureBuilderGetStorageClass()),
+        "nvnTextureBuilderGetZCullStorageSize" => crate::hle!(hle_nvnZCullStorageSize(_)),
+        "nvnTextureInitialize" => crate::hle!(hle_nvnTextureInitialize(_, _)),
+        "nvnTextureFinalize" => crate::hle!(hle_nvnTextureFinalize(_)),
+        "nvnTextureGetWidth" => crate::hle!(hle_nvnTextureGetWidth(_)),
+        "nvnTextureGetHeight" => crate::hle!(hle_nvnTextureGetHeight(_)),
+        "nvnTextureGetZCullStorageSize" => crate::hle!(hle_nvnZCullStorageSize(_)),
+        "nvnMemoryPoolGetFlags" => crate::hle!(hle_nvnMemoryPoolGetFlags(_)),
+        "nvnMemoryPoolMapVirtual" => crate::hle!(hle_nvnMemoryPoolMapVirtual(_, _, _)),
         "nvnTextureBuilderSetDepthStencilMode" => {
-            hle_nvnTextureBuilderSetDepthStencilMode as *const ()
+            crate::hle!(hle_nvnTextureBuilderSetDepthStencilMode(_, _))
         }
-        "nvnDeviceBuilderSetDefaults" => hle_nvnDeviceBuilderSetDefaults as *const (),
-        "nvnDeviceBuilderSetFlags" => hle_nvnDeviceBuilderSetFlags as *const (),
-        "nvnDeviceRegisterFastClearColor" => hle_nvnDeviceRegisterFastClearColor as *const (),
-        "nvnSamplerBuilderSetDefaults" => hle_nvnSamplerBuilderSetDefaults as *const (),
-        "nvnSamplerBuilderSetDevice" => hle_nvnSamplerBuilderSetDevice as *const (),
-        "nvnSamplerBuilderSetMinMagFilter" => hle_nvnSamplerBuilderSetMinMagFilter as *const (),
-        "nvnSamplerBuilderSetWrapMode" => hle_nvnSamplerBuilderSetWrapMode as *const (),
-        "nvnSamplerBuilderSetBorderColor" => hle_nvnSamplerBuilderSetBorderColor as *const (),
-        "nvnSamplerBuilderSetMaxAnisotropy" => hle_nvnSamplerBuilderSetMaxAnisotropy as *const (),
-        "nvnSamplerBuilderSetLodClamp" => hle_nvnSamplerBuilderSetLodClamp as *const (),
-        "nvnSamplerBuilderSetLodBias" => hle_nvnSamplerBuilderSetLodBias as *const (),
-        "nvnSamplerBuilderSetCompare" => hle_nvnSamplerBuilderSetCompare as *const (),
+        "nvnDeviceBuilderSetDefaults" => crate::hle!(hle_nvnDeviceBuilderSetDefaults(_)),
+        "nvnDeviceBuilderSetFlags" => crate::hle!(hle_nvnDeviceBuilderSetFlags(_, _)),
+        "nvnDeviceRegisterFastClearColor" => crate::hle!(hle_nvnDeviceRegisterFastClearColor(_, _, _)),
+        "nvnSamplerBuilderSetDefaults" => crate::hle!(hle_nvnSamplerBuilderSetDefaults(_)),
+        "nvnSamplerBuilderSetDevice" => crate::hle!(hle_nvnSamplerBuilderSetDevice(_, _)),
+        "nvnSamplerBuilderSetMinMagFilter" => crate::hle!(hle_nvnSamplerBuilderSetMinMagFilter(_, _, _)),
+        "nvnSamplerBuilderSetWrapMode" => crate::hle!(hle_nvnSamplerBuilderSetWrapMode(_, _, _, _)),
+        "nvnSamplerBuilderSetBorderColor" => crate::hle!(hle_nvnSamplerBuilderSetBorderColor(_, _)),
+        "nvnSamplerBuilderSetMaxAnisotropy" => crate::hle!(hle_nvnSamplerBuilderSetMaxAnisotropy(_, _)),
+        "nvnSamplerBuilderSetLodClamp" => crate::hle!(hle_nvnSamplerBuilderSetLodClamp(_, _, _)),
+        "nvnSamplerBuilderSetLodBias" => crate::hle!(hle_nvnSamplerBuilderSetLodBias(_, _)),
+        "nvnSamplerBuilderSetCompare" => crate::hle!(hle_nvnSamplerBuilderSetCompare(_, _, _)),
         "nvnSamplerBuilderSetReductionFilter" => {
-            hle_nvnSamplerBuilderSetReductionFilter as *const ()
+            crate::hle!(hle_nvnSamplerBuilderSetReductionFilter(_, _))
         }
-        "nvnSamplerGetReductionFilter" => hle_nvnSamplerGetReductionFilter as *const (),
-        "nvnSamplerGetMaxAnisotropy" => hle_nvnSamplerGetMaxAnisotropy as *const (),
-        "nvnSamplerGetLodClamp" => hle_nvnSamplerGetLodClamp as *const (),
-        "nvnSamplerGetLodBias" => hle_nvnSamplerGetLodBias as *const (),
-        "nvnSamplerGetCompare" => hle_nvnSamplerGetCompare as *const (),
-        "nvnSamplerGetBorderColor" => hle_nvnSamplerGetBorderColor as *const (),
-        "nvnSamplerInitialize" => hle_nvnSamplerInitialize as *const (),
-        "nvnSamplerFinalize" => hle_nvnSamplerFinalize as *const (),
-        "nvnTextureReadTexels" => hle_nvnTextureReadTexels as *const (),
-        "nvnTextureReadTexelsStrided" => hle_nvnTextureReadTexelsStrided as *const (),
-        "nvnTextureWriteTexels" => hle_nvnTextureWriteTexels as *const (),
-        "nvnTextureWriteTexelsStrided" => hle_nvnTextureWriteTexelsStrided as *const (),
-        "nvnTextureFlushTexels" => hle_nvnTextureFlushTexels as *const (),
-        "nvnTextureInvalidateTexels" => hle_nvnTextureInvalidateTexels as *const (),
+        "nvnSamplerGetReductionFilter" => crate::hle!(hle_nvnSamplerGetReductionFilter(_)),
+        "nvnSamplerGetMaxAnisotropy" => crate::hle!(hle_nvnSamplerGetMaxAnisotropy(_)),
+        "nvnSamplerGetLodClamp" => crate::hle!(hle_nvnSamplerGetLodClamp(_, _, _)),
+        "nvnSamplerGetLodBias" => crate::hle!(hle_nvnSamplerGetLodBias(_)),
+        "nvnSamplerGetCompare" => crate::hle!(hle_nvnSamplerGetCompare(_, _, _)),
+        "nvnSamplerGetBorderColor" => crate::hle!(hle_nvnSamplerGetBorderColor(_, _)),
+        "nvnSamplerInitialize" => crate::hle!(hle_nvnSamplerInitialize(_, _)),
+        "nvnSamplerFinalize" => crate::hle!(hle_nvnSamplerFinalize(_)),
+        "nvnTextureReadTexels" => crate::hle!(hle_nvnTextureReadTexels(_, _, _, _)),
+        "nvnTextureReadTexelsStrided" => crate::hle!(hle_nvnTextureReadTexelsStrided(_, _, _, _, _, _)),
+        "nvnTextureWriteTexels" => crate::hle!(hle_nvnTextureWriteTexels(_, _, _, _)),
+        "nvnTextureWriteTexelsStrided" => crate::hle!(hle_nvnTextureWriteTexelsStrided(_, _, _, _, _, _)),
+        "nvnTextureFlushTexels" => crate::hle!(hle_nvnTextureFlushTexels(_, _, _)),
+        "nvnTextureInvalidateTexels" => crate::hle!(hle_nvnTextureInvalidateTexels(_, _, _)),
         "nvnTextureBuilderSetPackagedTextureData" => {
-            hle_nvnTextureBuilderSetPackagedTextureData as *const ()
+            crate::hle!(hle_nvnTextureBuilderSetPackagedTextureData(_, _))
         }
-        "nvnDeviceGetTimestampInNanoseconds" => hle_nvnDeviceGetTimestampInNanoseconds as *const (),
-        "nvnDeviceSetWindowOriginMode" => hle_nvnDeviceSetWindowOriginMode as *const (),
-        "nvnDeviceSetDepthMode" => hle_nvnDeviceSetDepthMode as *const (),
+        "nvnDeviceGetTimestampInNanoseconds" => crate::hle!(hle_nvnDeviceGetTimestampInNanoseconds(_, _)),
+        "nvnDeviceSetWindowOriginMode" => crate::hle!(hle_nvnDeviceSetWindowOriginMode(_, _)),
+        "nvnDeviceSetDepthMode" => crate::hle!(hle_nvnDeviceSetDepthMode(_, _)),
         "nvnTextureBuilderSetPackagedTextureLayout" => {
-            hle_nvnTextureBuilderSetPackagedTextureLayout as *const ()
+            crate::hle!(hle_nvnTextureBuilderSetPackagedTextureLayout(_, _))
         }
         "nvnWindowSetPresentInterval" | "nvnWindowBuilderSetPresentInterval" => {
-            hle_nvnWindowSetPresentInterval as *const ()
+            crate::hle!(hle_nvnWindowSetPresentInterval(_, _))
         }
         "nvnWindowGetPresentInterval" | "nvnWindowBuilderGetPresentInterval" => {
-            hle_nvnWindowGetPresentInterval as *const ()
+            crate::hle!(hle_nvnWindowGetPresentInterval(_))
         }
         "nvnWindowBuilderSetNativeWindow"
         | "nvnBufferSetDebugLabel"
         | "nvnWindowSetPresentInterval2"
         | "nvnQueueSetDebugLabel"
         | "nvnWindowSetDebugLabel"
-        | "nvnDeviceSetDebugLabel" => hle_nvn_noop_setter as *const (),
+        | "nvnDeviceSetDebugLabel" => crate::hle!(hle_nvn_noop_setter(_, _, _)),
         "nvnWindowBuilderSetNumActiveTextures" => {
-            hle_nvnWindowBuilderSetNumActiveTextures as *const ()
+            crate::hle!(hle_nvnWindowBuilderSetNumActiveTextures(_, _))
         }
-        "nvnQueueBuilderSetQueueMemory" => hle_nvnQueueBuilderSetQueueMemory as *const (),
+        "nvnQueueBuilderSetQueueMemory" => crate::hle!(hle_nvnQueueBuilderSetQueueMemory(_, _, _)),
         "nvnQueueBuilderSetCommandFlushThreshold" => {
-            hle_nvnQueueBuilderSetCommandFlushThreshold as *const ()
+            crate::hle!(hle_nvnQueueBuilderSetCommandFlushThreshold(_, _))
         }
-        "nvnQueueBuilderSetQueuePriority" => hle_nvnQueueBuilderSetQueuePriority as *const (),
-        "nvnQueueBuilderGetDevice" => hle_nvnQueueBuilderGetDevice as *const (),
-        "nvnQueueBuilderGetFlags" => hle_nvnQueueBuilderGetFlags as *const (),
+        "nvnQueueBuilderSetQueuePriority" => crate::hle!(hle_nvnQueueBuilderSetQueuePriority(_, _)),
+        "nvnQueueBuilderGetDevice" => crate::hle!(hle_nvnQueueBuilderGetDevice(_)),
+        "nvnQueueBuilderGetFlags" => crate::hle!(hle_nvnQueueBuilderGetFlags(_)),
         "nvnQueueBuilderGetCommandMemorySize" => {
-            hle_nvnQueueBuilderGetCommandMemorySize as *const ()
+            crate::hle!(hle_nvnQueueBuilderGetCommandMemorySize(_, _))
         }
         "nvnQueueBuilderGetComputeMemorySize" => {
-            hle_nvnQueueBuilderGetComputeMemorySize as *const ()
+            crate::hle!(hle_nvnQueueBuilderGetComputeMemorySize(_, _))
         }
         "nvnQueueBuilderGetControlMemorySize" => {
-            hle_nvnQueueBuilderGetControlMemorySize as *const ()
+            crate::hle!(hle_nvnQueueBuilderGetControlMemorySize(_, _))
         }
         "nvnQueueBuilderGetCommandFlushThreshold" => {
-            hle_nvnQueueBuilderGetCommandFlushThreshold as *const ()
+            crate::hle!(hle_nvnQueueBuilderGetCommandFlushThreshold(_, _))
         }
-        "nvnQueueBuilderGetQueuePriority" => hle_nvnQueueBuilderGetQueuePriority as *const (),
-        "nvnQueueBuilderGetMemory" => hle_nvnQueueBuilderGetMemory as *const (),
-        "nvnQueueBuilderGetMemorySize" => hle_nvnQueueBuilderGetMemorySize as *const (),
-        "nvnWindowBuilderGetDevice" => hle_nvnWindowBuilderGetDevice as *const (),
-        "nvnWindowBuilderGetNumTextures" => hle_nvnWindowBuilderGetNumTextures as *const (),
-        "nvnWindowBuilderGetTexture" => hle_nvnWindowBuilderGetTexture as *const (),
+        "nvnQueueBuilderGetQueuePriority" => crate::hle!(hle_nvnQueueBuilderGetQueuePriority(_)),
+        "nvnQueueBuilderGetMemory" => crate::hle!(hle_nvnQueueBuilderGetMemory(_)),
+        "nvnQueueBuilderGetMemorySize" => crate::hle!(hle_nvnQueueBuilderGetMemorySize(_)),
+        "nvnWindowBuilderGetDevice" => crate::hle!(hle_nvnWindowBuilderGetDevice(_)),
+        "nvnWindowBuilderGetNumTextures" => crate::hle!(hle_nvnWindowBuilderGetNumTextures(_)),
+        "nvnWindowBuilderGetTexture" => crate::hle!(hle_nvnWindowBuilderGetTexture(_, _)),
         "nvnWindowBuilderGetNumActiveTextures" => {
-            hle_nvnWindowBuilderGetNumActiveTextures as *const ()
+            crate::hle!(hle_nvnWindowBuilderGetNumActiveTextures(_))
         }
-        "nvnWindowGetNumTextures" => hle_nvnWindowGetNumTextures as *const (),
-        "nvnWindowGetNumActiveTextures" => hle_nvnWindowGetNumActiveTextures as *const (),
-        "nvnWindowGetCrop" => hle_nvnWindowGetCrop as *const (),
-        "nvnBufferBuilderGetDevice" => hle_nvnBufferBuilderGetDevice as *const (),
-        "nvnBufferGetMemoryPool" => hle_nvnBufferGetMemoryPool as *const (),
-        "nvnBufferGetMemoryOffset" => hle_nvnBufferGetMemoryOffset as *const (),
-        "nvnMemoryPoolGetSize" => hle_nvnMemoryPoolGetSize as *const (),
-        "nvnDeviceGetDepthMode" => hle_nvnDeviceGetDepthMode as *const (),
-        "nvnDeviceGetWindowOriginMode" => hle_nvnDeviceGetWindowOriginMode as *const (),
+        "nvnWindowGetNumTextures" => crate::hle!(hle_nvnWindowGetNumTextures(_)),
+        "nvnWindowGetNumActiveTextures" => crate::hle!(hle_nvnWindowGetNumActiveTextures(_)),
+        "nvnWindowGetCrop" => crate::hle!(hle_nvnWindowGetCrop(_, _)),
+        "nvnBufferBuilderGetDevice" => crate::hle!(hle_nvnBufferBuilderGetDevice(_)),
+        "nvnBufferGetMemoryPool" => crate::hle!(hle_nvnBufferGetMemoryPool(_)),
+        "nvnBufferGetMemoryOffset" => crate::hle!(hle_nvnBufferGetMemoryOffset(_)),
+        "nvnMemoryPoolGetSize" => crate::hle!(hle_nvnMemoryPoolGetSize(_)),
+        "nvnDeviceGetDepthMode" => crate::hle!(hle_nvnDeviceGetDepthMode(_)),
+        "nvnDeviceGetWindowOriginMode" => crate::hle!(hle_nvnDeviceGetWindowOriginMode(_)),
         "nvnDeviceGetCurrentTimestampInNanoseconds" => {
-            hle_nvnDeviceGetCurrentTimestampInNanoseconds as *const ()
+            crate::hle!(hle_nvnDeviceGetCurrentTimestampInNanoseconds(_))
         }
-        "nvnDeviceBuilderGetFlags" => hle_nvnDeviceBuilderGetFlags as *const (),
-        "nvnTextureBuilderGetSwizzle" => hle_nvnTextureBuilderGetSwizzle as *const (),
+        "nvnDeviceBuilderGetFlags" => crate::hle!(hle_nvnDeviceBuilderGetFlags(_)),
+        "nvnTextureBuilderGetSwizzle" => crate::hle!(hle_nvnTextureBuilderGetSwizzle(_, _, _, _, _)),
         "nvnTextureBuilderGetDepthStencilMode" => {
-            hle_nvnTextureBuilderGetDepthStencilMode as *const ()
+            crate::hle!(hle_nvnTextureBuilderGetDepthStencilMode(_))
         }
-        "nvnSamplerBuilderGetDevice" => hle_nvnSamplerBuilderGetDevice as *const (),
-        "nvnSamplerBuilderGetMinMagFilter" => hle_nvnSamplerBuilderGetMinMagFilter as *const (),
-        "nvnSamplerBuilderGetWrapMode" => hle_nvnSamplerBuilderGetWrapMode as *const (),
-        "nvnSamplerBuilderGetLodClamp" => hle_nvnSamplerBuilderGetLodClamp as *const (),
-        "nvnSamplerBuilderGetLodBias" => hle_nvnSamplerBuilderGetLodBias as *const (),
-        "nvnSamplerBuilderGetCompare" => hle_nvnSamplerBuilderGetCompare as *const (),
+        "nvnSamplerBuilderGetDevice" => crate::hle!(hle_nvnSamplerBuilderGetDevice(_)),
+        "nvnSamplerBuilderGetMinMagFilter" => crate::hle!(hle_nvnSamplerBuilderGetMinMagFilter(_, _, _)),
+        "nvnSamplerBuilderGetWrapMode" => crate::hle!(hle_nvnSamplerBuilderGetWrapMode(_, _, _, _)),
+        "nvnSamplerBuilderGetLodClamp" => crate::hle!(hle_nvnSamplerBuilderGetLodClamp(_, _, _)),
+        "nvnSamplerBuilderGetLodBias" => crate::hle!(hle_nvnSamplerBuilderGetLodBias(_)),
+        "nvnSamplerBuilderGetCompare" => crate::hle!(hle_nvnSamplerBuilderGetCompare(_, _, _)),
         "nvnSamplerBuilderGetBorderColor"
         | "nvnSamplerBuilderGetBorderColori"
-        | "nvnSamplerBuilderGetBorderColorui" => hle_nvnSamplerBuilderGetBorderColor as *const (),
+        | "nvnSamplerBuilderGetBorderColorui" => crate::hle!(hle_nvnSamplerBuilderGetBorderColor(_, _)),
         "nvnSamplerBuilderSetBorderColori" | "nvnSamplerBuilderSetBorderColorui" => {
-            hle_nvnSamplerBuilderSetBorderColor as *const ()
+            crate::hle!(hle_nvnSamplerBuilderSetBorderColor(_, _))
         }
         "nvnSamplerGetBorderColori" | "nvnSamplerGetBorderColorui" => {
-            hle_nvnSamplerGetBorderColor as *const ()
+            crate::hle!(hle_nvnSamplerGetBorderColor(_, _))
         }
-        "nvnSamplerBuilderGetMaxAnisotropy" => hle_nvnSamplerBuilderGetMaxAnisotropy as *const (),
+        "nvnSamplerBuilderGetMaxAnisotropy" => crate::hle!(hle_nvnSamplerBuilderGetMaxAnisotropy(_)),
         "nvnSamplerBuilderGetReductionFilter" => {
-            hle_nvnSamplerBuilderGetReductionFilter as *const ()
+            crate::hle!(hle_nvnSamplerBuilderGetReductionFilter(_))
         }
-        "nvnSamplerCompare" => hle_nvnSamplerCompare as *const (),
-        "nvnProgramInitialize" => hle_nvnProgramInitialize as *const (),
-        "nvnProgramFinalize" => hle_nvnProgramFinalize as *const (),
-        "nvnProgramSetDebugLabel" => hle_nvnProgramSetDebugLabel as *const (),
-        "nvnProgramSetShaders" => hle_nvnProgramSetShaders as *const (),
-        "nvnProgramSetShadersExt" => hle_nvnProgramSetShadersExt as *const (),
-        "nvnProgramSetSubroutineLinkage" => hle_nvnProgramSetSubroutineLinkage as *const (),
-        "nvnProgramSetSampleShading" => hle_nvnProgramSetSampleShading as *const (),
-        "nvnSamplerGetMinMagFilter" => hle_nvnSamplerGetMinMagFilter as *const (),
-        "nvnSamplerGetWrapMode" => hle_nvnSamplerGetWrapMode as *const (),
-        "nvnSamplerSetDebugLabel" => hle_nvnSamplerSetDebugLabel as *const (),
-        "nvnWindowBuilderSetDefaults" => hle_nvnWindowBuilderSetDefaults as *const (),
-        "nvnWindowBuilderSetDevice" => hle_nvnWindowBuilderSetDevice as *const (),
-        "nvnWindowBuilderSetTextures" => hle_nvnWindowBuilderSetTextures as *const (),
-        "nvnWindowInitialize" => hle_nvnWindowInitialize as *const (),
-        "nvnWindowFinalize" => hle_nvnWindowFinalize as *const (),
-        "nvnWindowAcquireTexture" => hle_nvnWindowAcquireTexture as *const (),
-        "nvnWindowSetCrop" => hle_nvnWindowSetCrop as *const (),
-        "nvnWindowSetNumActiveTextures" => hle_nvnWindowSetNumActiveTextures as *const (),
-        "nvnQueueBuilderSetDevice" => hle_nvnQueueBuilderSetDevice as *const (),
-        "nvnQueueBuilderSetDefaults" => hle_nvnQueueBuilderSetDefaults as *const (),
-        "nvnQueueBuilderSetFlags" => hle_nvnQueueBuilderSetFlags as *const (),
+        "nvnSamplerCompare" => crate::hle!(hle_nvnSamplerCompare(_, _)),
+        "nvnProgramInitialize" => crate::hle!(hle_nvnProgramInitialize(_, _)),
+        "nvnProgramFinalize" => crate::hle!(hle_nvnProgramFinalize(_)),
+        "nvnProgramSetDebugLabel" => crate::hle!(hle_nvnProgramSetDebugLabel(_, _)),
+        "nvnProgramSetShaders" => crate::hle!(hle_nvnProgramSetShaders(_, _, _)),
+        "nvnProgramSetShadersExt" => crate::hle!(hle_nvnProgramSetShadersExt(_, _, _)),
+        "nvnProgramSetSubroutineLinkage" => crate::hle!(hle_nvnProgramSetSubroutineLinkage(_, _, _)),
+        "nvnProgramSetSampleShading" => crate::hle!(hle_nvnProgramSetSampleShading(_, _)),
+        "nvnSamplerGetMinMagFilter" => crate::hle!(hle_nvnSamplerGetMinMagFilter(_, _, _)),
+        "nvnSamplerGetWrapMode" => crate::hle!(hle_nvnSamplerGetWrapMode(_, _, _, _)),
+        "nvnSamplerSetDebugLabel" => crate::hle!(hle_nvnSamplerSetDebugLabel(_, _)),
+        "nvnWindowBuilderSetDefaults" => crate::hle!(hle_nvnWindowBuilderSetDefaults(_)),
+        "nvnWindowBuilderSetDevice" => crate::hle!(hle_nvnWindowBuilderSetDevice(_, _)),
+        "nvnWindowBuilderSetTextures" => crate::hle!(hle_nvnWindowBuilderSetTextures(_, _, _)),
+        "nvnWindowInitialize" => crate::hle!(hle_nvnWindowInitialize(_, _)),
+        "nvnWindowFinalize" => crate::hle!(hle_nvnWindowFinalize(_)),
+        "nvnWindowAcquireTexture" => crate::hle!(hle_nvnWindowAcquireTexture(_, _, _)),
+        "nvnWindowSetCrop" => crate::hle!(hle_nvnWindowSetCrop(_, _, _, _, _)),
+        "nvnWindowSetNumActiveTextures" => crate::hle!(hle_nvnWindowSetNumActiveTextures(_, _)),
+        "nvnQueueBuilderSetDevice" => crate::hle!(hle_nvnQueueBuilderSetDevice(_, _)),
+        "nvnQueueBuilderSetDefaults" => crate::hle!(hle_nvnQueueBuilderSetDefaults(_)),
+        "nvnQueueBuilderSetFlags" => crate::hle!(hle_nvnQueueBuilderSetFlags(_, _)),
         "nvnQueueBuilderSetCommandMemorySize" => {
-            hle_nvnQueueBuilderSetCommandMemorySize as *const ()
+            crate::hle!(hle_nvnQueueBuilderSetCommandMemorySize(_, _))
         }
         "nvnQueueBuilderSetComputeMemorySize" => {
-            hle_nvnQueueBuilderSetComputeMemorySize as *const ()
+            crate::hle!(hle_nvnQueueBuilderSetComputeMemorySize(_, _))
         }
         "nvnQueueBuilderSetControlMemorySize" => {
-            hle_nvnQueueBuilderSetControlMemorySize as *const ()
+            crate::hle!(hle_nvnQueueBuilderSetControlMemorySize(_, _))
         }
-        "nvnQueueBuilderGetQueueMemorySize" => hle_nvnQueueBuilderGetQueueMemorySize as *const (),
-        "nvnQueueInitialize" => hle_nvnQueueInitialize as *const (),
-        "nvnQueueFinalize" => hle_nvnQueueFinalize as *const (),
-        "nvnQueueFlush" => hle_nvnQueueFlush as *const (),
-        "nvnQueueFinish" => hle_nvnQueueFinish as *const (),
-        "nvnQueueGetError" => hle_nvnQueueGetError as *const (),
-        "nvnQueueGetTotalCommandMemoryUsed" => hle_nvnQueueGetTotalCommandMemoryUsed as *const (),
-        "nvnQueueGetTotalControlMemoryUsed" => hle_nvnQueueGetTotalControlMemoryUsed as *const (),
-        "nvnQueueGetTotalComputeMemoryUsed" => hle_nvnQueueGetTotalComputeMemoryUsed as *const (),
-        "nvnQueueResetMemoryUsageCounts" => hle_nvnQueueResetMemoryUsageCounts as *const (),
-        "nvnQueuePresentTexture" => hle_nvnQueuePresentTexture as *const (),
-        "nvnQueueAcquireTexture" => hle_nvnQueueAcquireTexture as *const (),
-        "nvnQueueWaitSync" => hle_nvnQueueWaitSync as *const (),
-        "nvnQueueFenceSync" => hle_nvnQueueFenceSync as *const (),
+        "nvnQueueBuilderGetQueueMemorySize" => crate::hle!(hle_nvnQueueBuilderGetQueueMemorySize(_)),
+        "nvnQueueInitialize" => crate::hle!(hle_nvnQueueInitialize(_, _)),
+        "nvnQueueFinalize" => crate::hle!(hle_nvnQueueFinalize(_)),
+        "nvnQueueFlush" => crate::hle!(hle_nvnQueueFlush(_)),
+        "nvnQueueFinish" => crate::hle!(hle_nvnQueueFinish(_)),
+        "nvnQueueGetError" => crate::hle!(hle_nvnQueueGetError(_, _)),
+        "nvnQueueGetTotalCommandMemoryUsed" => crate::hle!(hle_nvnQueueGetTotalCommandMemoryUsed(_)),
+        "nvnQueueGetTotalControlMemoryUsed" => crate::hle!(hle_nvnQueueGetTotalControlMemoryUsed(_)),
+        "nvnQueueGetTotalComputeMemoryUsed" => crate::hle!(hle_nvnQueueGetTotalComputeMemoryUsed(_)),
+        "nvnQueueResetMemoryUsageCounts" => crate::hle!(hle_nvnQueueResetMemoryUsageCounts(_)),
+        "nvnQueuePresentTexture" => crate::hle!(hle_nvnQueuePresentTexture(_, _, _)),
+        "nvnQueueAcquireTexture" => crate::hle!(hle_nvnQueueAcquireTexture(_, _, _)),
+        "nvnQueueWaitSync" => crate::hle!(hle_nvnQueueWaitSync(_, _)),
+        "nvnQueueFenceSync" => crate::hle!(hle_nvnQueueFenceSync(_, _, _, _)),
 
         // TexturePool family
-        "nvnTexturePoolInitialize" => hle_nvnTexturePoolInitialize as *const (),
-        "nvnTexturePoolSetDebugLabel" => hle_nvnTexturePoolSetDebugLabel as *const (),
-        "nvnTexturePoolFinalize" => hle_nvnTexturePoolFinalize as *const (),
-        "nvnTexturePoolGetMemoryPool" => hle_nvnTexturePoolGetMemoryPool as *const (),
-        "nvnTexturePoolGetMemoryOffset" => hle_nvnTexturePoolGetMemoryOffset as *const (),
-        "nvnTexturePoolGetSize" => hle_nvnTexturePoolGetSize as *const (),
-        "nvnTexturePoolRegisterTexture" => hle_nvnTexturePoolRegisterTexture as *const (),
-        "nvnTexturePoolRegisterImage" => hle_nvnTexturePoolRegisterImage as *const (),
+        "nvnTexturePoolInitialize" => crate::hle!(hle_nvnTexturePoolInitialize(_, _, _, _)),
+        "nvnTexturePoolSetDebugLabel" => crate::hle!(hle_nvnTexturePoolSetDebugLabel(_, _)),
+        "nvnTexturePoolFinalize" => crate::hle!(hle_nvnTexturePoolFinalize(_)),
+        "nvnTexturePoolGetMemoryPool" => crate::hle!(hle_nvnTexturePoolGetMemoryPool(_)),
+        "nvnTexturePoolGetMemoryOffset" => crate::hle!(hle_nvnTexturePoolGetMemoryOffset(_)),
+        "nvnTexturePoolGetSize" => crate::hle!(hle_nvnTexturePoolGetSize(_)),
+        "nvnTexturePoolRegisterTexture" => crate::hle!(hle_nvnTexturePoolRegisterTexture(_, _, _, _)),
+        "nvnTexturePoolRegisterImage" => crate::hle!(hle_nvnTexturePoolRegisterImage(_, _, _, _)),
 
         // SamplerPool family
-        "nvnSamplerPoolInitialize" => hle_nvnSamplerPoolInitialize as *const (),
-        "nvnSamplerPoolSetDebugLabel" => hle_nvnSamplerPoolSetDebugLabel as *const (),
-        "nvnSamplerPoolFinalize" => hle_nvnSamplerPoolFinalize as *const (),
-        "nvnSamplerPoolGetMemoryPool" => hle_nvnSamplerPoolGetMemoryPool as *const (),
-        "nvnSamplerPoolGetMemoryOffset" => hle_nvnSamplerPoolGetMemoryOffset as *const (),
-        "nvnSamplerPoolGetSize" => hle_nvnSamplerPoolGetSize as *const (),
-        "nvnSamplerPoolRegisterSampler" => hle_nvnSamplerPoolRegisterSampler as *const (),
+        "nvnSamplerPoolInitialize" => crate::hle!(hle_nvnSamplerPoolInitialize(_, _, _, _)),
+        "nvnSamplerPoolSetDebugLabel" => crate::hle!(hle_nvnSamplerPoolSetDebugLabel(_, _)),
+        "nvnSamplerPoolFinalize" => crate::hle!(hle_nvnSamplerPoolFinalize(_)),
+        "nvnSamplerPoolGetMemoryPool" => crate::hle!(hle_nvnSamplerPoolGetMemoryPool(_)),
+        "nvnSamplerPoolGetMemoryOffset" => crate::hle!(hle_nvnSamplerPoolGetMemoryOffset(_)),
+        "nvnSamplerPoolGetSize" => crate::hle!(hle_nvnSamplerPoolGetSize(_)),
+        "nvnSamplerPoolRegisterSampler" => crate::hle!(hle_nvnSamplerPoolRegisterSampler(_, _, _)),
         "nvnSamplerPoolRegisterSamplerBuilder" => {
-            hle_nvnSamplerPoolRegisterSamplerBuilder as *const ()
+            crate::hle!(hle_nvnSamplerPoolRegisterSamplerBuilder(_, _, _))
         }
 
         // Texture getters and helpers
-        "nvnTextureGetTextureAddress" => hle_nvnTextureGetTextureAddress as *const (),
-        "nvnTextureGetDepth" => hle_nvnTextureGetDepth as *const (),
-        "nvnTextureGetLevels" => hle_nvnTextureGetLevels as *const (),
-        "nvnTextureGetFormat" => hle_nvnTextureGetFormat as *const (),
-        "nvnTextureGetFlags" => hle_nvnTextureGetFlags as *const (),
-        "nvnTextureGetSamples" => hle_nvnTextureGetSamples as *const (),
-        "nvnTextureGetTarget" => hle_nvnTextureGetTarget as *const (),
-        "nvnTextureGetStride" => hle_nvnTextureGetStride as *const (),
-        "nvnTextureGetStorageSize" => hle_nvnTextureGetStorageSize as *const (),
-        "nvnTextureGetStorageClass" => hle_nvnTextureGetStorageClass as *const (),
-        "nvnTextureGetMemoryPool" => hle_nvnTextureGetMemoryPool as *const (),
-        "nvnTextureGetMemoryOffset" => hle_nvnTextureGetMemoryOffset as *const (),
-        "nvnTextureGetViewOffset" => hle_nvnTextureGetViewOffset as *const (),
-        "nvnTextureGetDebugID" => hle_nvnTextureGetDebugID as *const (),
-        "nvnTextureGetSwizzle" => hle_nvnTextureGetSwizzle as *const (),
-        "nvnTextureGetDepthStencilMode" => hle_nvnTextureGetDepthStencilMode as *const (),
-        "nvnTextureGetRawStorageClass" => hle_nvnTextureGetRawStorageClass as *const (),
-        "nvnTextureGetSparseTileLayout" => hle_nvnTextureGetSparseTileLayout as *const (),
-        "nvnTextureSetDebugLabel" => hle_nvnTextureSetDebugLabel as *const (),
-        "nvnTextureCompare" => hle_nvnTextureCompare as *const (),
+        "nvnTextureGetTextureAddress" => crate::hle!(hle_nvnTextureGetTextureAddress(_)),
+        "nvnTextureGetDepth" => crate::hle!(hle_nvnTextureGetDepth(_)),
+        "nvnTextureGetLevels" => crate::hle!(hle_nvnTextureGetLevels(_)),
+        "nvnTextureGetFormat" => crate::hle!(hle_nvnTextureGetFormat(_)),
+        "nvnTextureGetFlags" => crate::hle!(hle_nvnTextureGetFlags(_)),
+        "nvnTextureGetSamples" => crate::hle!(hle_nvnTextureGetSamples(_)),
+        "nvnTextureGetTarget" => crate::hle!(hle_nvnTextureGetTarget(_)),
+        "nvnTextureGetStride" => crate::hle!(hle_nvnTextureGetStride(_)),
+        "nvnTextureGetStorageSize" => crate::hle!(hle_nvnTextureGetStorageSize(_)),
+        "nvnTextureGetStorageClass" => crate::hle!(hle_nvnTextureGetStorageClass(_)),
+        "nvnTextureGetMemoryPool" => crate::hle!(hle_nvnTextureGetMemoryPool(_)),
+        "nvnTextureGetMemoryOffset" => crate::hle!(hle_nvnTextureGetMemoryOffset(_)),
+        "nvnTextureGetViewOffset" => crate::hle!(hle_nvnTextureGetViewOffset(_, _)),
+        "nvnTextureGetDebugID" => crate::hle!(hle_nvnTextureGetDebugID(_)),
+        "nvnTextureGetSwizzle" => crate::hle!(hle_nvnTextureGetSwizzle(_, _, _, _, _)),
+        "nvnTextureGetDepthStencilMode" => crate::hle!(hle_nvnTextureGetDepthStencilMode(_)),
+        "nvnTextureGetRawStorageClass" => crate::hle!(hle_nvnTextureGetRawStorageClass(_)),
+        "nvnTextureGetSparseTileLayout" => crate::hle!(hle_nvnTextureGetSparseTileLayout(_, _)),
+        "nvnTextureSetDebugLabel" => crate::hle!(hle_nvnTextureSetDebugLabel(_, _)),
+        "nvnTextureCompare" => crate::hle!(hle_nvnTextureCompare(_, _)),
 
         // TextureBuilder additional setters & getters
-        "nvnTextureBuilderSetSize1D" => hle_nvnTextureBuilderSetSize1D as *const (),
-        "nvnTextureBuilderSetSize2D" => hle_nvnTextureBuilderSetSize2D as *const (),
-        "nvnTextureBuilderSetSize3D" => hle_nvnTextureBuilderSetSize3D as *const (),
-        "nvnTextureBuilderGetDevice" => hle_nvnTextureBuilderGetDevice as *const (),
-        "nvnTextureBuilderGetTarget" => hle_nvnTextureBuilderGetTarget as *const (),
-        "nvnTextureBuilderGetWidth" => hle_nvnTextureBuilderGetWidth as *const (),
-        "nvnTextureBuilderGetHeight" => hle_nvnTextureBuilderGetHeight as *const (),
-        "nvnTextureBuilderGetDepth" => hle_nvnTextureBuilderGetDepth as *const (),
-        "nvnTextureBuilderGetLevels" => hle_nvnTextureBuilderGetLevels as *const (),
-        "nvnTextureBuilderGetFormat" => hle_nvnTextureBuilderGetFormat as *const (),
-        "nvnTextureBuilderGetFlags" => hle_nvnTextureBuilderGetFlags as *const (),
-        "nvnTextureBuilderGetSamples" => hle_nvnTextureBuilderGetSamples as *const (),
-        "nvnTextureBuilderGetStride" => hle_nvnTextureBuilderGetStride as *const (),
-        "nvnTextureBuilderGetMemoryPool" => hle_nvnTextureBuilderGetMemoryPool as *const (),
-        "nvnTextureBuilderGetMemoryOffset" => hle_nvnTextureBuilderGetMemoryOffset as *const (),
-        "nvnTextureBuilderGetViewOffset" => hle_nvnTextureBuilderGetViewOffset as *const (),
+        "nvnTextureBuilderSetSize1D" => crate::hle!(hle_nvnTextureBuilderSetSize1D(_, _)),
+        "nvnTextureBuilderSetSize2D" => crate::hle!(hle_nvnTextureBuilderSetSize2D(_, _, _)),
+        "nvnTextureBuilderSetSize3D" => crate::hle!(hle_nvnTextureBuilderSetSize3D(_, _, _, _)),
+        "nvnTextureBuilderGetDevice" => crate::hle!(hle_nvnTextureBuilderGetDevice(_)),
+        "nvnTextureBuilderGetTarget" => crate::hle!(hle_nvnTextureBuilderGetTarget(_)),
+        "nvnTextureBuilderGetWidth" => crate::hle!(hle_nvnTextureBuilderGetWidth(_)),
+        "nvnTextureBuilderGetHeight" => crate::hle!(hle_nvnTextureBuilderGetHeight(_)),
+        "nvnTextureBuilderGetDepth" => crate::hle!(hle_nvnTextureBuilderGetDepth(_)),
+        "nvnTextureBuilderGetLevels" => crate::hle!(hle_nvnTextureBuilderGetLevels(_)),
+        "nvnTextureBuilderGetFormat" => crate::hle!(hle_nvnTextureBuilderGetFormat(_)),
+        "nvnTextureBuilderGetFlags" => crate::hle!(hle_nvnTextureBuilderGetFlags(_)),
+        "nvnTextureBuilderGetSamples" => crate::hle!(hle_nvnTextureBuilderGetSamples(_)),
+        "nvnTextureBuilderGetStride" => crate::hle!(hle_nvnTextureBuilderGetStride(_)),
+        "nvnTextureBuilderGetMemoryPool" => crate::hle!(hle_nvnTextureBuilderGetMemoryPool(_)),
+        "nvnTextureBuilderGetMemoryOffset" => crate::hle!(hle_nvnTextureBuilderGetMemoryOffset(_)),
+        "nvnTextureBuilderGetViewOffset" => crate::hle!(hle_nvnTextureBuilderGetViewOffset(_, _)),
 
         // TextureView family
-        "nvnTextureViewSetDefaults" => hle_nvnTextureViewSetDefaults as *const (),
-        "nvnTextureViewSetLevels" => hle_nvnTextureViewSetLevels as *const (),
-        "nvnTextureViewSetLayers" => hle_nvnTextureViewSetLayers as *const (),
-        "nvnTextureViewSetFormat" => hle_nvnTextureViewSetFormat as *const (),
-        "nvnTextureViewSetSwizzle" => hle_nvnTextureViewSetSwizzle as *const (),
-        "nvnTextureViewSetDepthStencilMode" => hle_nvnTextureViewSetDepthStencilMode as *const (),
-        "nvnTextureViewSetTarget" => hle_nvnTextureViewSetTarget as *const (),
-        "nvnTextureViewGetLevels" => hle_nvnTextureViewGetLevels as *const (),
-        "nvnTextureViewGetLayers" => hle_nvnTextureViewGetLayers as *const (),
-        "nvnTextureViewGetFormat" => hle_nvnTextureViewGetFormat as *const (),
-        "nvnTextureViewGetSwizzle" => hle_nvnTextureViewGetSwizzle as *const (),
-        "nvnTextureViewGetDepthStencilMode" => hle_nvnTextureViewGetDepthStencilMode as *const (),
-        "nvnTextureViewGetTarget" => hle_nvnTextureViewGetTarget as *const (),
-        "nvnTextureViewCompare" => hle_nvnTextureViewCompare as *const (),
+        "nvnTextureViewSetDefaults" => crate::hle!(hle_nvnTextureViewSetDefaults(_)),
+        "nvnTextureViewSetLevels" => crate::hle!(hle_nvnTextureViewSetLevels(_, _, _)),
+        "nvnTextureViewSetLayers" => crate::hle!(hle_nvnTextureViewSetLayers(_, _, _)),
+        "nvnTextureViewSetFormat" => crate::hle!(hle_nvnTextureViewSetFormat(_, _)),
+        "nvnTextureViewSetSwizzle" => crate::hle!(hle_nvnTextureViewSetSwizzle(_, _, _, _, _)),
+        "nvnTextureViewSetDepthStencilMode" => crate::hle!(hle_nvnTextureViewSetDepthStencilMode(_, _)),
+        "nvnTextureViewSetTarget" => crate::hle!(hle_nvnTextureViewSetTarget(_, _)),
+        "nvnTextureViewGetLevels" => crate::hle!(hle_nvnTextureViewGetLevels(_, _, _)),
+        "nvnTextureViewGetLayers" => crate::hle!(hle_nvnTextureViewGetLayers(_, _, _)),
+        "nvnTextureViewGetFormat" => crate::hle!(hle_nvnTextureViewGetFormat(_, _)),
+        "nvnTextureViewGetSwizzle" => crate::hle!(hle_nvnTextureViewGetSwizzle(_, _, _, _, _)),
+        "nvnTextureViewGetDepthStencilMode" => crate::hle!(hle_nvnTextureViewGetDepthStencilMode(_, _)),
+        "nvnTextureViewGetTarget" => crate::hle!(hle_nvnTextureViewGetTarget(_, _)),
+        "nvnTextureViewCompare" => crate::hle!(hle_nvnTextureViewCompare(_, _)),
 
         // Sync & Event family
-        "nvnSyncInitialize" => hle_nvnSyncInitialize as *const (),
-        "nvnSyncFinalize" => hle_nvnSyncFinalize as *const (),
-        "nvnSyncSetDebugLabel" => hle_nvnSyncSetDebugLabel as *const (),
-        "nvnSyncWait" => hle_nvnSyncWait as *const (),
-        "nvnEventInitialize" => hle_nvnEventInitialize as *const (),
-        "nvnEventFinalize" => hle_nvnEventFinalize as *const (),
-        "nvnEventGetValue" => hle_nvnEventGetValue as *const (),
-        "nvnEventSignal" => hle_nvnEventSignal as *const (),
+        "nvnSyncInitialize" => crate::hle!(hle_nvnSyncInitialize(_, _)),
+        "nvnSyncFinalize" => crate::hle!(hle_nvnSyncFinalize(_)),
+        "nvnSyncSetDebugLabel" => crate::hle!(hle_nvnSyncSetDebugLabel(_, _)),
+        "nvnSyncWait" => crate::hle!(hle_nvnSyncWait(_, _)),
+        "nvnEventInitialize" => crate::hle!(hle_nvnEventInitialize(_, _)),
+        "nvnEventFinalize" => crate::hle!(hle_nvnEventFinalize(_)),
+        "nvnEventGetValue" => crate::hle!(hle_nvnEventGetValue(_)),
+        "nvnEventSignal" => crate::hle!(hle_nvnEventSignal(_, _, _)),
         _ => resolve_unimplemented_nvn(func_name),
     }
 }
@@ -1742,10 +1741,8 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolInitialize(
     pool: *mut NvnMemoryPool,
     builder: *const NvnMemoryPoolBuilder,
 ) -> u8 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr, options(nomem, nostack));
-    let mut fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
+    let lr = crate::guest_reg!(x30);
+    let mut fp = crate::guest_reg!(x29);
     record_hle_call("hle_nvnMemoryPoolInitialize");
     if pool.is_null() || builder.is_null() {
         return 0; // NVN_FALSE
@@ -1760,12 +1757,10 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolInitialize(
         // VIRTUAL pools (and any caller that didn't supply backing storage)
         // get real host memory of their own -- matches real NVN semantics
         // for a pool with no caller-supplied storage.
-        let align = 0x10000usize; // NVN_DEVICE_INFO_MEMORY_POOL_PAGE_SIZE
-        let mut out: *mut libc::c_void = std::ptr::null_mut();
-        if libc::posix_memalign(&mut out, align, size) != 0 || out.is_null() {
+        let out = std::alloc::alloc_zeroed(owned_pool_layout(size));
+        if out.is_null() {
             return 0;
         }
-        libc::memset(out, 0, size);
         memory = out as usize;
         owns_memory = 1;
     }
@@ -1805,7 +1800,7 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolInitialize(
     );
     if size >= 64 << 20 {
         // Big pools (render targets, streaming): who sizes them (mods such as UltraCam enlarge some).
-        let base = crate::cpu::crash_handler::get_guest_base();
+        let base = crate::guest::loader::main_base();
         let mut chain = vec![format!("{:#x}", lr.wrapping_sub(base))];
         for _ in 0..10 {
             if fp < 0x1000 || fp & 7 != 0 {
@@ -1842,9 +1837,14 @@ pub unsafe extern "C" fn hle_nvnMemoryPoolFinalize(pool: *mut NvnMemoryPool) {
     MEMORY_POOLS.lock().unwrap().remove(&base);
     bump_pools_gen();
     if (*pool).owns_memory != 0 && (*pool).memory != 0 {
-        libc::free((*pool).memory as *mut libc::c_void);
+        std::alloc::dealloc((*pool).memory as *mut u8, owned_pool_layout((*pool).size));
     }
     std::ptr::write_bytes(pool, 0, 1);
+}
+
+/// The memory of a pool given none by the game, aligned to NVN's pool page (NVN_DEVICE_INFO_MEMORY_POOL_PAGE_SIZE).
+fn owned_pool_layout(size: usize) -> std::alloc::Layout {
+    std::alloc::Layout::from_size_align(size, 0x10000).expect("pool size")
 }
 
 #[no_mangle]
@@ -2413,8 +2413,7 @@ fn command_list_recorded(cmd: usize, handle: u64, used: usize) {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferAddControlMemory(
     cmd: *mut NvnCommandBuffer,
-    _pool: *const NvnMemoryPool,
-    _offset: i64,
+    _memory: *mut libc::c_void, // control memory is plain CPU memory, not a pool range like command memory
     size: usize,
 ) {
     record_hle_call("hle_nvnCommandBufferAddControlMemory");
@@ -2772,7 +2771,6 @@ nvn_command_recorders! {
     hle_nvnCommandBufferRestoreZCullData => "nvnCommandBufferRestoreZCullData",
     hle_nvnCommandBufferResumeTransformFeedback => "nvnCommandBufferResumeTransformFeedback",
     hle_nvnCommandBufferSaveZCullData => "nvnCommandBufferSaveZCullData",
-    hle_nvnCommandBufferSetAlphaRef => "nvnCommandBufferSetAlphaRef",
     hle_nvnCommandBufferSetColorReductionEnable => "nvnCommandBufferSetColorReductionEnable",
     hle_nvnCommandBufferSetColorReductionThresholds => "nvnCommandBufferSetColorReductionThresholds",
     hle_nvnCommandBufferSetCommandMemoryCallbackEnabled => "nvnCommandBufferSetCommandMemoryCallbackEnabled",
@@ -2784,7 +2782,6 @@ nvn_command_recorders! {
     hle_nvnCommandBufferSetDebugLabel => "nvnCommandBufferSetDebugLabel",
     hle_nvnCommandBufferSetDepthBounds => "nvnCommandBufferSetDepthBounds",
     hle_nvnCommandBufferSetInnerTessellationLevels => "nvnCommandBufferSetInnerTessellationLevels",
-    hle_nvnCommandBufferSetLineWidth => "nvnCommandBufferSetLineWidth",
     hle_nvnCommandBufferSetMemoryCallback => "nvnCommandBufferSetMemoryCallback",
     hle_nvnCommandBufferSetMemoryCallbackData => "nvnCommandBufferSetMemoryCallbackData",
     hle_nvnCommandBufferSetOuterTessellationLevels => "nvnCommandBufferSetOuterTessellationLevels",
@@ -2814,6 +2811,16 @@ nvn_command_recorders! {
     hle_nvnCommandBufferTiledDownsampleTextureView => "nvnCommandBufferTiledDownsampleTextureView",
     hle_nvnCommandBufferWaitEvent => "nvnCommandBufferWaitEvent",
     hle_nvnCommandBufferWaitSync => "nvnCommandBufferWaitSync",
+}
+
+// Commands with a float argument: it comes in s0, not in the x registers the generic recorders read.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetAlphaRef(cmd: *mut NvnCommandBuffer, reference: f32) {
+    record_generic("nvnCommandBufferSetAlphaRef", cmd, reference.to_bits() as u64, 0, 0, 0, 0);
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetLineWidth(cmd: *mut NvnCommandBuffer, width: f32) {
+    record_generic("nvnCommandBufferSetLineWidth", cmd, width.to_bits() as u64, 0, 0, 0, 0);
 }
 
 // GetMemoryCallback/GetMemoryCallbackData are pure getters over state nothing
@@ -3238,8 +3245,7 @@ pub unsafe extern "C" fn hle_nvnTextureBuilderSetSwizzle(
     {
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
-            let fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp);
+            let fp = crate::guest_reg!(x29);
             println!("[swizzle] out-of-range SetSwizzle({}, {}, {}, {}) raw args {:#x} {:#x} {:#x} {:#x} callers {}", r, g, bl, a, r as u32, g as u32, bl as u32, a as u32, guest_chain(fp));
         }
     }
@@ -3293,9 +3299,8 @@ pub unsafe extern "C" fn hle_nvnTextureInitialize(
     tex: *mut NvnTexture,
     builder: *const NvnTextureBuilder,
 ) -> u8 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let lr = crate::guest_reg!(x30);
+    let base = crate::guest::loader::main_base();
     let rel_lr = if lr >= base && base != 0 {
         lr - base
     } else {
@@ -3405,15 +3410,58 @@ fn snapshot_texture(addr: usize, t: NvnTexture) {
     let idx = idx.get_or_insert_with(Default::default);
     if let Some((_, o)) = old {
         unindex_texture(idx, addr, o.storage);
+        log_index_change(o.storage, texture_span(&o));
     }
     if t.storage > 0x10000 {
         idx.entry(t.storage).or_default().push(addr);
+        log_index_change(t.storage, texture_span(&t));
         // Bound for the alias search (a container starts at most its own size below a texture it contains).
-        let span = (t.size as u64)
-            .max(crate::nvn::layout::compute_layout(&texture_layout_params(&t)).total);
-        MAX_TEXTURE_SPAN.fetch_max(span as usize, std::sync::atomic::Ordering::Relaxed);
+        let span = texture_span(&t);
+        MAX_TEXTURE_SPAN.fetch_max(span, std::sync::atomic::Ordering::Relaxed);
+        if span > SMALL_TEXTURE_SPAN {
+            TEX_LARGE_BY_STORAGE.lock().unwrap().get_or_insert_with(Default::default).entry(t.storage).or_default().push(addr);
+        }
     }
 }
+
+/// Recent changes of the live-texture index: (sequence, start, end) of the memory each indexed or unindexed texture
+/// covers. Backends caching alias resolutions drop the entries these touch (index_changes_since).
+static INDEX_CHANGES: std::sync::Mutex<(u64, std::collections::VecDeque<(u64, usize, usize)>)> =
+    std::sync::Mutex::new((0, std::collections::VecDeque::new()));
+const INDEX_CHANGES_KEPT: usize = 1 << 14;
+
+fn log_index_change(storage: usize, span: usize) {
+    if storage <= 0x10000 {
+        return;
+    }
+    let mut g = INDEX_CHANGES.lock().unwrap();
+    g.0 += 1;
+    let seq = g.0;
+    if g.1.len() == INDEX_CHANGES_KEPT {
+        g.1.pop_front();
+    }
+    g.1.push_back((seq, storage, storage + span.max(1)));
+}
+
+/// The live-texture index changes after sequence `since` as memory ranges, and the current sequence; None when some
+/// of them are no longer kept (everything must be considered changed).
+pub fn index_changes_since(since: u64, out: &mut Vec<(usize, usize)>) -> (u64, bool) {
+    let g = INDEX_CHANGES.lock().unwrap();
+    let complete = g.1.front().is_none_or(|f| f.0 <= since + 1) || g.0 == since;
+    out.extend(g.1.iter().filter(|c| c.0 > since).map(|c| (c.1, c.2)));
+    (g.0, complete)
+}
+
+/// Memory a texture covers: its declared size or its layout's, the larger.
+fn texture_span(t: &NvnTexture) -> usize {
+    (t.size as u64).max(crate::nvn::layout::compute_layout(&texture_layout_params(t)).total) as usize
+}
+
+/// textures_reaching scans TEX_BY_STORAGE this far below an address; larger textures are also indexed in
+/// TEX_LARGE_BY_STORAGE (few), scanned over the whole MAX_TEXTURE_SPAN.
+const SMALL_TEXTURE_SPAN: usize = 4 << 20;
+static TEX_LARGE_BY_STORAGE: std::sync::Mutex<Option<std::collections::BTreeMap<usize, Vec<usize>>>> =
+    std::sync::Mutex::new(None);
 
 /// Snapshots replaced at their address, by generation (bounded): commands recorded while an object described one
 /// texture still name that texture after the game re-initializes or reuses the object (resolve_texture_ref).
@@ -3494,10 +3542,12 @@ fn unindex_texture(
     addr: usize,
     storage: usize,
 ) {
-    if let Some(v) = idx.get_mut(&storage) {
-        v.retain(|a| *a != addr);
-        if v.is_empty() {
-            idx.remove(&storage);
+    for idx in [Some(idx), TEX_LARGE_BY_STORAGE.lock().unwrap().as_mut()].into_iter().flatten() {
+        if let Some(v) = idx.get_mut(&storage) {
+            v.retain(|a| *a != addr);
+            if v.is_empty() {
+                idx.remove(&storage);
+            }
         }
     }
 }
@@ -3520,6 +3570,37 @@ pub fn textures_near_storage(storage: usize, span: usize) -> Vec<(usize, u64, Nv
     addrs
         .into_iter()
         .filter_map(|a| snaps.get(&a).map(|(g, t)| (a, *g, *t)))
+        .collect()
+}
+
+/// textures_near_storage without the textures whose declared size ends at or below `storage`.
+pub fn textures_reaching(storage: usize, span: usize) -> Vec<(usize, u64, NvnTexture)> {
+    let addrs: Vec<usize> = {
+        let idx = TEX_BY_STORAGE.lock().unwrap();
+        let Some(idx) = idx.as_ref() else {
+            return Vec::new();
+        };
+        let mut a: Vec<usize> = idx
+            .range(storage.saturating_sub(span.min(SMALL_TEXTURE_SPAN))..=storage)
+            .flat_map(|(_, v)| v.iter().copied())
+            .collect();
+        if span > SMALL_TEXTURE_SPAN {
+            if let Some(large) = TEX_LARGE_BY_STORAGE.lock().unwrap().as_ref() {
+                let below = storage.saturating_sub(SMALL_TEXTURE_SPAN);
+                a.extend(large.range(storage.saturating_sub(span)..below).flat_map(|(_, v)| v.iter().copied()));
+            }
+        }
+        a
+    };
+    let snaps = TEX_SNAPSHOTS.lock().unwrap();
+    let Some(snaps) = snaps.as_ref() else {
+        return Vec::new();
+    };
+    addrs
+        .iter()
+        .filter_map(|a| snaps.get(a).map(|(g, t)| (*a, *g, t)))
+        .filter(|(_, _, t)| t.size == 0 || t.storage + t.size > storage)
+        .map(|(a, g, t)| (a, g, *t))
         .collect()
 }
 
@@ -3559,6 +3640,7 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
     if let Some((_, t)) = texture_snapshot(tex as usize) {
         if let Some(idx) = TEX_BY_STORAGE.lock().unwrap().as_mut() {
             unindex_texture(idx, tex as usize, t.storage);
+            log_index_change(t.storage, texture_span(&t));
         }
         let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(s) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
@@ -4020,46 +4102,49 @@ pub unsafe extern "C" fn hle_nvnTextureViewSetTarget(view: *mut NvnTextureView, 
         (*view).target = target as u8;
     }
 }
+// The texture view getters return whether the view specifies the attribute and write its value (the default when it
+// does not) through their pointers. The view's 16 bytes leave no room to record which attributes were set, so target,
+// depth/stencil mode and swizzle count as specified when they differ from the defaults.
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTextureViewGetLevels(
     view: *const NvnTextureView,
     min_level: *mut i32,
     num_levels: *mut i32,
-) {
+) -> bool {
     record_hle_call("hle_nvnTextureViewGetLevels");
-    if !view.is_null() {
-        if !min_level.is_null() {
-            *min_level = (*view).min_level as i32;
-        }
-        if !num_levels.is_null() {
-            *num_levels = (*view).num_levels as i32;
-        }
+    let (min, num) = view.as_ref().map_or((0, 0), |v| (v.min_level as i32, v.num_levels as i32));
+    if !min_level.is_null() {
+        *min_level = min;
     }
+    if !num_levels.is_null() {
+        *num_levels = num;
+    }
+    num != 0
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTextureViewGetLayers(
     view: *const NvnTextureView,
     min_layer: *mut i32,
     num_layers: *mut i32,
-) {
+) -> bool {
     record_hle_call("hle_nvnTextureViewGetLayers");
-    if !view.is_null() {
-        if !min_layer.is_null() {
-            *min_layer = (*view).min_layer as i32;
-        }
-        if !num_layers.is_null() {
-            *num_layers = (*view).num_layers as i32;
-        }
+    let (min, num) = view.as_ref().map_or((0, 0), |v| (v.min_layer as i32, v.num_layers as i32));
+    if !min_layer.is_null() {
+        *min_layer = min;
     }
+    if !num_layers.is_null() {
+        *num_layers = num;
+    }
+    num != 0
 }
 #[no_mangle]
-pub unsafe extern "C" fn hle_nvnTextureViewGetFormat(view: *const NvnTextureView) -> i32 {
+pub unsafe extern "C" fn hle_nvnTextureViewGetFormat(view: *const NvnTextureView, format: *mut i32) -> bool {
     record_hle_call("hle_nvnTextureViewGetFormat");
-    if view.is_null() {
-        0
-    } else {
-        (*view).format as i32
+    let f = view.as_ref().map_or(0, |v| v.format as i32); // 0: NVN_FORMAT_NONE
+    if !format.is_null() {
+        *format = f;
     }
+    f != 0
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTextureViewGetSwizzle(
@@ -4068,37 +4153,35 @@ pub unsafe extern "C" fn hle_nvnTextureViewGetSwizzle(
     g: *mut i32,
     b: *mut i32,
     a: *mut i32,
-) {
+) -> bool {
     record_hle_call("hle_nvnTextureViewGetSwizzle");
-    // Four separate outputs; ZERO when no swizzle was set (the stored default).
-    let sw = if view.is_null() {
-        [0; 4]
-    } else {
-        (*view).swizzle
-    };
+    // SetDefaults stores the identity swizzle (R, G, B, A); a view never given defaults holds ZERO.
+    const IDENTITY: [u8; 4] = [2, 3, 4, 5];
+    let sw = view.as_ref().map_or([0; 4], |v| v.swizzle);
     for (p, v) in [r, g, b, a].into_iter().zip(sw) {
         if !p.is_null() {
             *p = v as i32;
         }
     }
+    sw != IDENTITY && sw != [0; 4]
 }
 #[no_mangle]
-pub unsafe extern "C" fn hle_nvnTextureViewGetDepthStencilMode(view: *const NvnTextureView) -> i32 {
+pub unsafe extern "C" fn hle_nvnTextureViewGetDepthStencilMode(view: *const NvnTextureView, mode: *mut i32) -> bool {
     record_hle_call("hle_nvnTextureViewGetDepthStencilMode");
-    if view.is_null() {
-        0
-    } else {
-        (*view).depth_stencil_mode as i32
+    let m = view.as_ref().map_or(0, |v| v.depth_stencil_mode as i32); // 0: DEPTH
+    if !mode.is_null() {
+        *mode = m;
     }
+    m != 0
 }
 #[no_mangle]
-pub unsafe extern "C" fn hle_nvnTextureViewGetTarget(view: *const NvnTextureView) -> i32 {
+pub unsafe extern "C" fn hle_nvnTextureViewGetTarget(view: *const NvnTextureView, target: *mut i32) -> bool {
     record_hle_call("hle_nvnTextureViewGetTarget");
-    if view.is_null() {
-        0
-    } else {
-        (*view).target as i32
+    let t = view.as_ref().map_or(0, |v| v.target as i32); // 0: TARGET_1D
+    if !target.is_null() {
+        *target = t;
     }
+    t != 0
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTextureViewCompare(
@@ -4795,9 +4878,8 @@ pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interva
     if *LOG_PACING.get_or_init(|| crate::settings::get().log.log_pacing) {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp);
-        let base = crate::cpu::crash_handler::get_guest_base();
+        let fp = crate::guest_reg!(x29);
+        let base = crate::guest::loader::main_base();
         let caller_fp = *(fp as *const usize);
         if n % 10 == 0
             && base != 0
@@ -4856,8 +4938,7 @@ pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interva
         interval
     };
     if PRESENT_INTERVAL.swap(interval, std::sync::atomic::Ordering::Relaxed) != interval {
-        let fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp);
+        let fp = crate::guest_reg!(x29);
         println!(
             "[+] NVN: present interval = {} (guest callers: {})",
             interval,
@@ -5321,6 +5402,7 @@ pub unsafe extern "C" fn hle_nvnProgramInitialize(p: *mut NvnProgram, device: us
 pub unsafe extern "C" fn hle_nvnProgramFinalize(p: *mut NvnProgram) {
     record_hle_call("hle_nvnProgramFinalize");
     if !p.is_null() {
+        PROGRAM_STAGES.lock().unwrap().remove(&(p as usize));
         std::ptr::write_bytes(p, 0, 1);
     }
 }
@@ -5328,6 +5410,15 @@ pub unsafe extern "C" fn hle_nvnProgramFinalize(p: *mut NvnProgram) {
 pub unsafe extern "C" fn hle_nvnProgramSetDebugLabel(_p: *mut NvnProgram, _label: *const c_char) {
     record_hle_call("hle_nvnProgramSetDebugLabel");
 }
+/// The stages each program was last given (frame captures).
+/// The stages (code, control section) program `p` was last given.
+pub fn program_stages(p: usize) -> Vec<(u64, u64)> {
+    PROGRAM_STAGES.lock().unwrap().get(&p).cloned().unwrap_or_default()
+}
+
+static PROGRAM_STAGES: std::sync::LazyLock<StdMutex<rustc_hash::FxHashMap<usize, Vec<(u64, u64)>>>> =
+    std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
+
 unsafe fn program_set_shaders(
     p: *mut NvnProgram,
     count: i32,
@@ -5349,6 +5440,7 @@ unsafe fn program_set_shaders(
         (*p).first_stage_data = first.data;
         (*p).first_stage_control = first.control;
     }
+    PROGRAM_STAGES.lock().unwrap().insert(p as usize, list.iter().map(|s| (s.data, s.control)).collect());
     crate::gpu::backend().set_program(p as usize, &list);
     1
 }
@@ -5707,7 +5799,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolGetSize(pool: *const NvnSamplerPool) 
 }
 
 /// Sampler state as registered in a sampler pool (NVN enum values).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SamplerDesc {
     pub min_filter: i32,
     pub mag_filter: i32,
@@ -5855,6 +5947,8 @@ pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) 
     // NVN_SYNC_WAIT_RESULT: ALREADY_SIGNALED 0, CONDITION_SATISFIED 1, TIMEOUT_EXPIRED 2.
     let serial = if sync.is_null() { 0 } else { (*sync).serial };
     let gpu = crate::gpu::backend();
+    #[cfg(nx_native)]
+    crate::capture::record::hold(serial);
     if serial == 0 || gpu.wait_fence(serial, 0) {
         return 0;
     }
@@ -5880,8 +5974,7 @@ pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) 
     if *LOG.get_or_init(|| crate::settings::get().log.log_sync) {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 20 == 0 {
-            let fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp);
+            let fp = crate::guest_reg!(x29);
             println!("[sync] wait for submit {} (latest {}) took {:.1} ms timeout {} thread {:?} callers {}", serial, gpu.submitted_serial(),
                 t0.elapsed().as_secs_f64() * 1e3, timeout_ns, std::thread::current().name(), guest_chain(fp));
         }
@@ -6061,7 +6154,11 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             std::time::Duration::from_nanos(16_666_667 * interval.max(1) as u64)
         };
         let wait = if frame.is_zero() {
-            std::time::Duration::ZERO
+            if interval == 0 && crate::metal::display_pacing() && crate::host::overlay::is_vsync() {
+                crate::metal::display_pacing_wait().unwrap_or_default()
+            } else {
+                std::time::Duration::ZERO
+            }
         } else {
             let mut g = NEXT.lock().unwrap();
             let now = std::time::Instant::now();
@@ -6081,6 +6178,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             hle_sleep_ns(wait.as_nanos() as u64);
         }
     }
+    crate::metal::frame_started();
     let idx = (*w).next_index % ((*w).texture_count as u32);
     (*w).next_index = (*w).next_index.wrapping_add(1);
     if !out_index.is_null() {
@@ -6358,6 +6456,8 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
             && index >= 0
             && (index as usize) < 4
         {
+            #[cfg(nx_native)]
+            crate::capture::record::on_present((*_window).textures[index as usize], (*_window).crop);
             crate::gpu::backend().present((*_window).textures[index as usize], (*_window).crop);
         }
     }
@@ -6400,10 +6500,10 @@ pub fn resolve_bootstrap(func_name: &str) -> *const () {
 /// The functions the bootstrap loader serves itself.
 fn bootstrap_fn(func_name: &str) -> Option<*const ()> {
     Some(match func_name {
-        "nvnDeviceInitialize" => hle_nvnDeviceInitialize as *const (),
-        "nvnDeviceGetProcAddress" => hle_nvnDeviceGetProcAddress as *const (),
-        "nvnDeviceGetInteger" => hle_nvnDeviceGetInteger as *const (),
-        "nvnQueueSubmitCommands" => hle_nvnQueueSubmitCommands as *const (),
+        "nvnDeviceInitialize" => crate::hle!(hle_nvnDeviceInitialize(_, _)),
+        "nvnDeviceGetProcAddress" => crate::hle!(hle_nvnDeviceGetProcAddress(_, _)),
+        "nvnDeviceGetInteger" => crate::hle!(hle_nvnDeviceGetInteger(_, _, _)),
+        "nvnQueueSubmitCommands" => crate::hle!(hle_nvnQueueSubmitCommands(_, _, _)),
         _ => return None,
     })
 }
@@ -6432,7 +6532,7 @@ pub fn set_guest_entries(images: &[(usize, usize)], make: &mut dyn FnMut(*const 
             }
         }
     }
-    let f = hle_nvn_generic_stub as *const ();
+    let f = crate::hle!(hle_nvn_generic_stub());
     map.entry(f as usize).or_insert_with(|| make(f));
     println!("[+] NVN: {} functions behind HLE trampolines", map.len());
     let _ = GUEST_ENTRIES.set(map);
@@ -6461,6 +6561,8 @@ unsafe extern "C" fn hle_nvnQueueSubmitCommands(_queue: *mut (), num: i32, handl
     let hs: Vec<u64> = (0..num as usize)
         .map(|i| std::ptr::read_unaligned(handles.add(i)))
         .collect();
+    #[cfg(nx_native)]
+    crate::capture::record::on_submit(&hs);
     crate::gpu::backend().submit(&hs);
     mark_command_lists_submitted(&hs);
 }
@@ -6536,4 +6638,203 @@ pub fn debug_table_sizes() -> String {
         COMMAND_MEMORY.lock().unwrap().lists.len(),
         DIRTY_TEXTURES.lock().unwrap().len(),
         EVICTED_CLASS.lock().unwrap().len())
+}
+
+/// The frontend state the backend consults while it runs recorded commands (frame captures, capture/format.rs).
+pub(crate) fn export_frontend() -> crate::capture::format::Frontend {
+    use crate::capture::format::{pod_bytes, PoolTexture};
+    use std::sync::atomic::Ordering::Relaxed;
+    let flags = MEMORY_POOL_FLAGS.lock().unwrap().clone();
+    let pools = MEMORY_POOLS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(&b, &s)| (b as u64, s as u64, flags.get(&b).copied().unwrap_or(0)))
+        .collect();
+    let virtual_maps = VIRTUAL_MAPS.lock().unwrap().iter().map(|&(v, s, p)| (v as u64, s as u64, p as u64)).collect();
+    // Stand-in copies (resolve_texture_ref, lookup_pool_texture) are host objects of this process: a replay makes its own.
+    let mut copies: std::collections::HashSet<usize> = Default::default();
+    let mut history = Vec::new();
+    if let Some(h) = TEX_HISTORY.lock().unwrap().as_ref() {
+        copies.extend(h.copies.values().map(|b| &**b as *const NvnTexture as usize));
+        history = h.order.iter().filter_map(|g| h.by_gen.get(g).map(|t| (*g, pod_bytes(t)))).collect();
+    }
+    let pool_textures: Vec<PoolTexture> = POOL_TEXTURES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .map(|(&id, s)| {
+                    if let Some(c) = &s.copy {
+                        copies.insert(&**c as *const NvnTexture as usize);
+                    }
+                    PoolTexture {
+                        id,
+                        obj: s.obj as u64,
+                        gen: s.gen,
+                        state: pod_bytes(&s.state),
+                        view: s.view.as_ref().map(pod_bytes),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let textures = TEX_SNAPSHOTS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter(|(a, _)| !copies.contains(a))
+                .map(|(&a, (g, t))| (a as u64, *g, pod_bytes(t)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let indexed = TEX_BY_STORAGE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.values().flatten().map(|&a| a as u64).collect())
+        .unwrap_or_default();
+    let pool_samplers = POOL_SAMPLERS
+        .get()
+        .map(|m| m.lock().unwrap().iter().map(|(&id, d)| (id, *d)).collect())
+        .unwrap_or_default();
+    let programs = PROGRAM_STAGES.lock().unwrap().iter().map(|(&p, v)| (p as u64, v.clone())).collect();
+    crate::capture::format::Frontend {
+        pools,
+        virtual_maps,
+        textures,
+        indexed,
+        history,
+        next_gen: TEX_GENERATION.load(Relaxed),
+        max_texture_span: MAX_TEXTURE_SPAN.load(Relaxed) as u64,
+        pool_textures,
+        pool_samplers,
+        programs,
+        window_origin_mode: window_origin_mode(),
+        depth_mode: depth_mode(),
+    }
+}
+
+/// Installs exported frontend state (a capture replay, before anything is submitted); hands the programs to the backend.
+pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
+    use crate::capture::format::from_pod;
+    use std::sync::atomic::Ordering::Relaxed;
+    {
+        let mut pools = MEMORY_POOLS.lock().unwrap();
+        let mut flags = MEMORY_POOL_FLAGS.lock().unwrap();
+        for &(b, s, fl) in &f.pools {
+            pools.insert(b as usize, s as usize);
+            flags.insert(b as usize, fl);
+        }
+    }
+    *VIRTUAL_MAPS.lock().unwrap() = f.virtual_maps.iter().map(|&(v, s, p)| (v as usize, s as usize, p as usize)).collect();
+    VIRTUAL_MAPS_EMPTY.store(f.virtual_maps.is_empty(), std::sync::atomic::Ordering::Release);
+    bump_pools_gen();
+    *TEX_SNAPSHOTS.lock().unwrap() = Some(
+        f.textures.iter().map(|(a, g, t)| (*a as usize, (*g, from_pod::<NvnTexture>(t)))).collect(),
+    );
+    {
+        let mut idx: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        let mut large: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        let snaps = TEX_SNAPSHOTS.lock().unwrap();
+        for &a in &f.indexed {
+            if let Some((_, t)) = snaps.as_ref().and_then(|m| m.get(&(a as usize))) {
+                idx.entry(t.storage).or_default().push(a as usize);
+                if texture_span(t) > SMALL_TEXTURE_SPAN {
+                    large.entry(t.storage).or_default().push(a as usize);
+                }
+            }
+        }
+        *TEX_BY_STORAGE.lock().unwrap() = Some(idx);
+        *TEX_LARGE_BY_STORAGE.lock().unwrap() = Some(large);
+    }
+    *TEX_HISTORY.lock().unwrap() = Some(SnapshotHistory {
+        by_gen: f.history.iter().map(|(g, t)| (*g, from_pod::<NvnTexture>(t))).collect(),
+        order: f.history.iter().map(|(g, _)| *g).collect(),
+        copies: Default::default(),
+    });
+    TEX_GENERATION.fetch_max(f.next_gen, Relaxed);
+    MAX_TEXTURE_SPAN.fetch_max(f.max_texture_span as usize, Relaxed);
+    *POOL_TEXTURES.lock().unwrap() = Some(
+        f.pool_textures
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    PoolSlot {
+                        obj: p.obj as usize,
+                        gen: p.gen,
+                        state: from_pod(&p.state),
+                        view: p.view.as_ref().map(|v| from_pod(v)),
+                        copy: None,
+                    },
+                )
+            })
+            .collect(),
+    );
+    bump_tex_table_epoch();
+    for &(id, d) in &f.pool_samplers {
+        register_pool_sampler(id, d);
+    }
+    WINDOW_ORIGIN_MODE.store(f.window_origin_mode, Relaxed);
+    DEPTH_MODE.store(f.depth_mode, Relaxed);
+    for (p, stages) in &f.programs {
+        let list: Vec<crate::gpu::ShaderStage> =
+            stages.iter().map(|&(data, control)| crate::gpu::ShaderStage { data, control }).collect();
+        PROGRAM_STAGES.lock().unwrap().insert(*p as usize, stages.clone());
+        crate::gpu::backend().set_program(*p as usize, &list);
+    }
+}
+
+/// Every command list reachable from `roots` (through CallCommands), for a capture.
+pub(crate) fn export_lists(roots: &[u64]) -> Vec<(u64, Vec<crate::capture::format::Op>)> {
+    let map = COMMAND_LISTS.lock().unwrap();
+    let mut seen: std::collections::HashSet<u64> = Default::default();
+    let mut stack: Vec<u64> = roots.to_vec();
+    let mut out = Vec::new();
+    while let Some(h) = stack.pop() {
+        if !seen.insert(h) {
+            continue;
+        }
+        let Some(e) = map.get(&h) else { continue };
+        stack.extend_from_slice(&e.0.summary().1);
+        out.push((
+            h,
+            e.0.ops
+                .iter()
+                .map(|op| crate::capture::format::Op {
+                    name: op.name.to_string(),
+                    typed: op.typed.clone(),
+                    args: op.args.as_deref().copied(),
+                })
+                .collect(),
+        ));
+    }
+    out
+}
+
+/// Installs a command list under `handle` (capture replays); it is never evicted as dead or one-shot.
+pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::Op>) {
+    static NAMES: std::sync::LazyLock<StdMutex<std::collections::HashMap<String, &'static str>>> =
+        std::sync::LazyLock::new(Default::default);
+    let ops: Vec<RecordedNvnCommand> = ops
+        .into_iter()
+        .map(|op| {
+            let name = *NAMES.lock().unwrap().entry(op.name.clone()).or_insert_with(|| Box::leak(op.name.into_boxed_str()));
+            RecordedNvnCommand { name, typed: op.typed, args: op.args.map(Box::new) }
+        })
+        .collect();
+    let list = std::sync::Arc::new(RecordedCommandList {
+        ops,
+        summary: std::sync::OnceLock::new(),
+        recorded_frame: 0,
+        visit: std::sync::atomic::AtomicU64::new(0),
+    });
+    let bytes = recorded_list_bytes(&list);
+    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes));
+    COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+    NEXT_COMMAND_HANDLE.fetch_max(handle + 1, std::sync::atomic::Ordering::Relaxed);
 }

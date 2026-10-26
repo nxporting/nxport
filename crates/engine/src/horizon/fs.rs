@@ -1,11 +1,35 @@
 // Horizon OS High-Level Emulation for File System (nn::fs)
 // Maps RomFS and game paths directly to the local dumped assets.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
+use std::fs::File;
 use std::os::raw::c_char;
-use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+/// pread: reads at `off` (Windows also moves the file position, which nothing here uses).
+fn read_at(f: &File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    return std::os::unix::fs::FileExt::read_at(f, buf, off);
+    #[cfg(windows)]
+    return std::os::windows::fs::FileExt::seek_read(f, buf, off);
+}
+
+/// pwrite, as `read_at`.
+fn write_at(f: &File, buf: &[u8], off: u64) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    return std::os::unix::fs::FileExt::write_at(f, buf, off);
+    #[cfg(windows)]
+    return std::os::windows::fs::FileExt::seek_write(f, buf, off);
+}
+
+/// The OS could not write the destination buffer (EFAULT; Windows: ERROR_NOACCESS).
+fn is_buffer_fault(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    return e.raw_os_error() == Some(libc::EFAULT);
+    #[cfg(windows)]
+    return e.raw_os_error() == Some(998);
+}
 
 fn romfs_root() -> &'static std::path::Path {
     crate::game::romfs()
@@ -124,14 +148,14 @@ fn is_save_path(guest_path: &str) -> bool {
 }
 
 fn errno_to_result(err: &std::io::Error) -> i32 {
-    match err.raw_os_error() {
-        Some(libc::EEXIST) => RESULT_PATH_ALREADY_EXISTS,
+    match err.kind() {
+        std::io::ErrorKind::AlreadyExists => RESULT_PATH_ALREADY_EXISTS,
         _ => RESULT_PATH_NOT_FOUND,
     }
 }
 
 enum FileData {
-    Fd(i32),
+    Fd(File),
     Buf(Vec<u8>),
 }
 
@@ -333,32 +357,23 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
 
     if is_save_path(&path_str) {
         // Save data is plain host files: no .zs fallback, writable when OpenMode_Write (2) is set.
-        let c = match CString::new(host_path.to_string_lossy().as_bytes()) {
-            Ok(c) => c,
-            Err(_) => return RESULT_PATH_NOT_FOUND,
+        let f = match std::fs::OpenOptions::new().read(true).write(mode & 2 != 0).open(&host_path) {
+            Ok(f) => f,
+            Err(err) => {
+                log_fs_miss(
+                    "OpenFile(save)",
+                    &path_str,
+                    &format!("mode={} -> {}", mode, err),
+                );
+                return errno_to_result(&err);
+            }
         };
-        let flags = if mode & 2 != 0 {
-            libc::O_RDWR
-        } else {
-            libc::O_RDONLY
-        };
-        let fd = libc::open(c.as_ptr(), flags);
-        if fd < 0 {
-            let err = std::io::Error::last_os_error();
-            log_fs_miss(
-                "OpenFile(save)",
-                &path_str,
-                &format!("mode={} -> {}", mode, err),
-            );
-            return errno_to_result(&err);
-        }
-        let mut st: libc::stat = std::mem::zeroed();
-        libc::fstat(fd, &mut st);
+        let size = f.metadata().map_or(0, |m| m.len() as i64);
         let mut files = OPEN_FILES.lock().unwrap();
         files.push(Some(OpenFile {
-            data: FileData::Fd(fd),
+            data: FileData::Fd(f),
             path: path_str.to_string(),
-            size: st.st_size,
+            size,
         }));
         *out_handle = files.len() as u64;
         println!(
@@ -366,7 +381,7 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
             files.len(),
             path_str,
             mode,
-            st.st_size
+            size
         );
         return 0;
     }
@@ -383,41 +398,35 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
         ),
     ];
 
-    let mut fd = -1i32;
-    let mut chosen_path = host_path.clone();
-    for candidate in &candidates {
-        let c_candidate = match CString::new(candidate.to_string_lossy().as_bytes()) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let f = libc::open(c_candidate.as_ptr(), libc::O_RDONLY);
-        if f >= 0 {
-            fd = f;
-            chosen_path = candidate.clone();
-            break;
-        }
-    }
-
-    if fd < 0 {
-        let err = std::io::Error::last_os_error();
-        println!(
-            "[-] HLE: nn::fs::OpenFile NOT FOUND: '{}' -> '{}' ({err})",
-            path_str,
-            host_path.display()
-        );
-        return RESULT_PATH_NOT_FOUND; // PathNotFound Result
-    }
-
-    let mut st: libc::stat = std::mem::zeroed();
-    libc::fstat(fd, &mut st);
-    if (st.st_mode & libc::S_IFMT) == libc::S_IFDIR {
-        libc::close(fd);
+    // Checked before opening: Windows cannot open a directory as a file at all.
+    if host_path.is_dir() {
         println!(
             "[-] HLE: nn::fs::OpenFile rejected directory: '{}' -> ResultTargetIsDirectory (0x00202602)",
             path_str
         );
         return 0x00202602;
     }
+
+    let mut opened = Err(std::io::ErrorKind::NotFound.into());
+    let mut chosen_path = host_path.clone();
+    for candidate in &candidates {
+        opened = File::open(candidate);
+        if opened.is_ok() {
+            chosen_path = candidate.clone();
+            break;
+        }
+    }
+    let f = match opened {
+        Ok(f) => f,
+        Err(err) => {
+            println!(
+                "[-] HLE: nn::fs::OpenFile NOT FOUND: '{}' -> '{}' ({err})",
+                path_str,
+                host_path.display()
+            );
+            return RESULT_PATH_NOT_FOUND; // PathNotFound Result
+        }
+    };
 
     // Decompress only when we did a transparent fallback: the game requested a
     // plain file but on disk it only exists as a .zs archive.  If the game
@@ -427,9 +436,8 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
         chosen_path != candidates[0] && chosen_path.extension().map(|e| e == "zs").unwrap_or(false);
 
     let (file_data, size) = if used_zs_fallback {
-        let raw_file = std::fs::File::from_raw_fd(fd);
         let mut decompressed = Vec::new();
-        match zstd::stream::copy_decode(raw_file, &mut decompressed) {
+        match zstd::stream::copy_decode(f, &mut decompressed) {
             Ok(_) => {
                 let sz = decompressed.len() as i64;
                 println!(
@@ -449,8 +457,8 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
             }
         }
     } else {
-        let sz = st.st_size;
-        (FileData::Fd(fd), sz)
+        let sz = f.metadata().map_or(0, |m| m.len() as i64);
+        (FileData::Fd(f), sz)
     };
 
     let mut files = OPEN_FILES.lock().unwrap();
@@ -505,28 +513,28 @@ pub unsafe extern "C" fn hle_nn_fs_ReadFile(
     let files = OPEN_FILES.lock().unwrap();
     if let Some(Some(entry)) = files.get(idx) {
         let bytes_read = match &entry.data {
-            FileData::Fd(fd) => {
+            FileData::Fd(f) => {
                 // The kernel cannot write write-tracked (read-only) pages: unprotect them first, and retry if the
-                // executor re-protected them in between (EFAULT).
-                let mut n = -1;
+                // executor re-protected them in between (a buffer fault).
+                let dst = std::slice::from_raw_parts_mut(buffer, size);
+                let mut n = Err(std::io::ErrorKind::Other.into());
                 for _ in 0..4 {
                     crate::guest::dirty_track::before_host_write(buffer as usize, size);
-                    n = libc::pread(*fd, buffer as *mut libc::c_void, size, offset);
-                    if !(n < 0
-                        && std::io::Error::last_os_error().raw_os_error() == Some(libc::EFAULT))
-                    {
+                    n = read_at(f, dst, offset as u64);
+                    if !n.as_ref().is_err_and(is_buffer_fault) {
                         break;
                     }
                 }
-                if n < 0 {
-                    let err = std::io::Error::last_os_error();
-                    eprintln!(
-                        "[-] HLE: nn::fs::ReadFile error reading handle {}: {err}",
-                        handle
-                    );
-                    return RESULT_PATH_NOT_FOUND;
+                match n {
+                    Ok(n) => n,
+                    Err(err) => {
+                        eprintln!(
+                            "[-] HLE: nn::fs::ReadFile error reading handle {}: {err}",
+                            handle
+                        );
+                        return RESULT_PATH_NOT_FOUND;
+                    }
                 }
-                n as usize
             }
             FileData::Buf(buf) => {
                 let off = offset as usize;
@@ -609,12 +617,8 @@ pub unsafe extern "C" fn hle_nn_fs_CloseFile(handle: u64) {
     let idx = (handle - 1) as usize;
     let mut files = OPEN_FILES.lock().unwrap();
     if let Some(slot) = files.get_mut(idx) {
-        if let Some(entry) = slot.take() {
-            if let FileData::Fd(fd) = entry.data {
-                libc::close(fd);
-            }
-            // FileData::Buf drops automatically
-        }
+        // Dropping the entry closes its file.
+        slot.take();
     }
 }
 
@@ -646,28 +650,18 @@ pub unsafe extern "C" fn hle_nn_fs_GetEntryType(out_type: *mut i32, path: *const
         None => return RESULT_PATH_NOT_FOUND,
     };
 
-    let c_path = match CString::new(host_path.to_string_lossy().as_bytes()) {
-        Ok(c) => c,
-        Err(_) => return RESULT_PATH_NOT_FOUND,
-    };
-
-    let mut st: libc::stat = std::mem::zeroed();
-    if libc::stat(c_path.as_ptr(), &mut st) != 0 {
+    let Ok(meta) = std::fs::metadata(&host_path) else {
         log_fs_miss(
             "GetEntryType",
             &path_str,
             &format!("-> host '{}'", host_path.display()),
         );
         return RESULT_PATH_NOT_FOUND;
-    }
+    };
 
     // nn::fs::DirectoryEntryType: Directory = 0, File = 1. Reporting 1/2 made an existing save file
     // look like "not a file": TotK's album code then retried CreateFile on it forever (loading never finished).
-    *out_type = if (st.st_mode & libc::S_IFMT) == libc::S_IFDIR {
-        0
-    } else {
-        1
-    };
+    *out_type = if meta.is_dir() { 0 } else { 1 };
     0
 }
 
@@ -978,7 +972,7 @@ pub unsafe extern "C" fn hle_nn_fs_GetDirectoryEntryCount(out_count: *mut i64, h
 }
 
 // ── Save-data write path ────────────────────────────────────────────────────
-unsafe fn save_host_path(path: *const c_char) -> Option<(String, CString)> {
+unsafe fn save_host_path(path: *const c_char) -> Option<(String, PathBuf)> {
     if path.is_null() {
         return None;
     }
@@ -988,21 +982,19 @@ unsafe fn save_host_path(path: *const c_char) -> Option<(String, CString)> {
         return None;
     }
     let host = resolve_path(&guest)?;
-    let c = CString::new(host.to_string_lossy().as_bytes()).ok()?;
-    Some((guest, c))
+    Some((guest, host))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_CreateDirectory(path: *const c_char) -> i32 {
-    let Some((guest, c)) = save_host_path(path) else {
+    let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
-    if libc::mkdir(c.as_ptr(), 0o755) != 0 {
-        let err = std::io::Error::last_os_error();
+    if let Err(err) = std::fs::create_dir(&host) {
         log_fs_miss(
             "CreateDirectory",
             &guest,
-            &format!("-> {} (host '{}')", err, c.to_string_lossy()),
+            &format!("-> {} (host '{}')", err, host.display()),
         );
         return errno_to_result(&err);
     }
@@ -1012,38 +1004,34 @@ pub unsafe extern "C" fn hle_nn_fs_CreateDirectory(path: *const c_char) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_CreateFile(path: *const c_char, size: i64) -> i32 {
-    let Some((guest, c)) = save_host_path(path) else {
+    let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
-    let fd = libc::open(
-        c.as_ptr(),
-        libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-        0o644,
-    );
-    if fd < 0 {
-        let err = std::io::Error::last_os_error();
-        log_fs_miss(
-            "CreateFile",
-            &guest,
-            &format!("size={} -> {} (host '{}')", size, err, c.to_string_lossy()),
-        );
-        return errno_to_result(&err);
-    }
+    let f = match std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&host) {
+        Ok(f) => f,
+        Err(err) => {
+            log_fs_miss(
+                "CreateFile",
+                &guest,
+                &format!("size={} -> {} (host '{}')", size, err, host.display()),
+            );
+            return errno_to_result(&err);
+        }
+    };
     if size > 0 {
-        libc::ftruncate(fd, size);
+        let _ = f.set_len(size as u64);
     }
-    libc::close(fd);
     println!("[+] HLE: nn::fs::CreateFile '{}' size={}", guest, size);
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_DeleteFile(path: *const c_char) -> i32 {
-    let Some((guest, c)) = save_host_path(path) else {
+    let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
-    if libc::unlink(c.as_ptr()) != 0 {
-        return errno_to_result(&std::io::Error::last_os_error());
+    if let Err(err) = std::fs::remove_file(&host) {
+        return errno_to_result(&err);
     }
     println!("[+] HLE: nn::fs::DeleteFile '{}'", guest);
     0
@@ -1051,10 +1039,9 @@ pub unsafe extern "C" fn hle_nn_fs_DeleteFile(path: *const c_char) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_DeleteDirectoryRecursively(path: *const c_char) -> i32 {
-    let Some((guest, c)) = save_host_path(path) else {
+    let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
-    let host = c.to_string_lossy().into_owned();
     match std::fs::remove_dir_all(&host) {
         Ok(_) => {
             println!("[+] HLE: nn::fs::DeleteDirectoryRecursively '{}'", guest);
@@ -1067,10 +1054,9 @@ pub unsafe extern "C" fn hle_nn_fs_DeleteDirectoryRecursively(path: *const c_cha
 /// nn::fs::CleanDirectoryRecursively: deletes everything inside the directory and keeps the directory itself.
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_CleanDirectoryRecursively(path: *const c_char) -> i32 {
-    let Some((guest, c)) = save_host_path(path) else {
+    let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
-    let host = c.to_string_lossy().into_owned();
     let entries = match std::fs::read_dir(&host) {
         Ok(e) => e,
         Err(e) => return errno_to_result(&e),
@@ -1097,6 +1083,41 @@ pub unsafe extern "C" fn hle_nn_fs_EnsureSaveData(_uid: *const u8) -> i32 {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_GetSaveDataSizeMax(size: *mut i64, journal: *mut i64) -> i32 {
+    if !size.is_null() {
+        *size = 256 << 20; // 256 MB data
+    }
+    if !journal.is_null() {
+        *journal = 256 << 20; // 256 MB journal
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_GetCacheStorageSize(size: *mut i64, journal: *mut i64, _index: i32) -> i32 {
+    if !size.is_null() {
+        *size = 256 << 20;
+    }
+    if !journal.is_null() {
+        *journal = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_GetFreeSpaceSize(out: *mut i64, _path: *const c_char) -> i32 {
+    if !out.is_null() {
+        *out = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_fs_ExtendSaveData(_uid: *const (), _size: i64, _journal: i64) -> i32 {
+    0
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_RenameFile(
     old_path: *const c_char,
     new_path: *const c_char,
@@ -1105,8 +1126,8 @@ pub unsafe extern "C" fn hle_nn_fs_RenameFile(
     else {
         return RESULT_PATH_NOT_FOUND;
     };
-    if libc::rename(from.as_ptr(), to.as_ptr()) != 0 {
-        return errno_to_result(&std::io::Error::last_os_error());
+    if let Err(err) = std::fs::rename(&from, &to) {
+        return errno_to_result(&err);
     }
     0
 }
@@ -1125,9 +1146,9 @@ pub unsafe extern "C" fn hle_nn_fs_WriteFile(
     let mut files = OPEN_FILES.lock().unwrap();
     match files.get_mut((handle - 1) as usize) {
         Some(Some(entry)) => match &entry.data {
-            FileData::Fd(fd) => {
-                let n = libc::pwrite(*fd, buffer as *const libc::c_void, size, offset);
-                if n < 0 || n as usize != size {
+            FileData::Fd(f) => {
+                let src = if size == 0 { &[][..] } else { std::slice::from_raw_parts(buffer, size) };
+                if write_at(f, src, offset as u64).ok() != Some(size) {
                     eprintln!(
                         "[-] HLE: nn::fs::WriteFile short/failed write on handle {}",
                         handle
@@ -1147,11 +1168,11 @@ pub unsafe extern "C" fn hle_nn_fs_WriteFile(
 pub unsafe extern "C" fn hle_nn_fs_FlushFile(handle: u64) -> i32 {
     let files = OPEN_FILES.lock().unwrap();
     if let Some(Some(OpenFile {
-        data: FileData::Fd(fd),
+        data: FileData::Fd(f),
         ..
     })) = files.get((handle.wrapping_sub(1)) as usize)
     {
-        libc::fsync(*fd);
+        let _ = f.sync_all();
     }
     0
 }
@@ -1161,8 +1182,8 @@ pub unsafe extern "C" fn hle_nn_fs_SetFileSize(handle: u64, size: i64) -> i32 {
     let mut files = OPEN_FILES.lock().unwrap();
     match files.get_mut((handle.wrapping_sub(1)) as usize) {
         Some(Some(entry)) => match &entry.data {
-            FileData::Fd(fd) => {
-                if libc::ftruncate(*fd, size) != 0 {
+            FileData::Fd(f) => {
+                if f.set_len(size as u64).is_err() {
                     return RESULT_PATH_NOT_FOUND;
                 }
                 entry.size = size;

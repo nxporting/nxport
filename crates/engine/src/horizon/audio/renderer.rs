@@ -243,18 +243,17 @@ static mut SERVICE: ServiceObject = ServiceObject {
 static TRAMPOLINES: Mutex<(usize, usize)> = Mutex::new((0, 0));
 
 pub fn request_update_fn() -> *const () {
-    request_update as *const ()
+    crate::hle!(request_update(_, _, _, _))
 }
 pub fn unexpected_call_fn() -> *const () {
-    unexpected_service_call as *const ()
+    crate::hle!(unexpected_service_call())
 }
 pub fn set_trampolines(request_update: usize, unexpected: usize) {
     *TRAMPOLINES.lock().unwrap() = (request_update, unexpected);
 }
 
 unsafe extern "C" fn unexpected_service_call() -> u32 {
-    let lr: usize;
-    std::arch::asm!("mov {}, x30", out(reg) lr);
+    let lr = crate::guest_reg!(x30);
     eprintln!(
         "[!] audren: unexpected IAudioRenderer call (return address {:#x})",
         lr
@@ -307,9 +306,9 @@ pub unsafe fn open(param: *const u32) -> usize {
     let (tramp_update, tramp_unexpected) = *TRAMPOLINES.lock().unwrap();
     let pick = |t: usize, f: *const ()| if t != 0 { t } else { f as usize };
     for s in svc.slots.iter_mut() {
-        *s = pick(tramp_unexpected, unexpected_service_call as *const ());
+        *s = pick(tramp_unexpected, crate::hle!(unexpected_service_call()));
     }
-    svc.slots[8] = pick(tramp_update, request_update as *const ());
+    svc.slots[8] = pick(tramp_update, crate::hle!(request_update(_, _, _, _)));
     svc.vtable = svc.slots.as_ptr();
     svc as *mut ServiceObject as usize
 }

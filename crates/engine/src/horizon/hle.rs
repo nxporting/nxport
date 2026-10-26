@@ -94,11 +94,9 @@ pub unsafe extern "C" fn hle_cxa_atexit(_func: *const (), _arg: *const (), _dso:
 // 2. Musl Libc init stub & Diagnostic Stub
 #[no_mangle]
 pub unsafe extern "C" fn hle_default_stub() -> i64 {
-    let got_slot: usize;
-    std::arch::asm!("mov {}, x16", out(reg) got_slot);
-    let caller_lr: usize;
-    std::arch::asm!("mov {}, x17", out(reg) caller_lr);
-    let guest_base = crate::cpu::crash_handler::get_guest_base();
+    let got_slot = crate::guest_reg!(x16);
+    let caller_lr = crate::guest_reg!(x17);
+    let guest_base = crate::guest::loader::main_base();
     let got_virtual = if got_slot >= guest_base {
         got_slot - guest_base
     } else {
@@ -150,7 +148,7 @@ pub unsafe extern "C" fn hle_nnmusl_init_dso(
         tbss_end.saturating_sub(tbss_start),
         align
     );
-    crate::cpu::tls::set_module_tls_template(template, align);
+    crate::guest::tls::set_module_tls_template(template, align);
     1
 }
 
@@ -284,7 +282,7 @@ thread_local! {
 
 /// Snapshot the Darwin-owned TSD slots for this thread (no-op after the first call).
 pub unsafe fn capture_darwin_tsd_shadow() {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(nx_native)]
     {
         if TSD_SHADOW.with(|c| c.get().is_some()) {
             return;
@@ -305,7 +303,7 @@ pub unsafe fn capture_darwin_tsd_shadow() {
 
 pub unsafe fn setup_horizon_tpidrro(thread_ptr: *mut NnThreadType) {
     capture_darwin_tsd_shadow();
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(nx_native)]
     {
         let tp: *mut u8;
         std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tp);
@@ -329,10 +327,19 @@ pub unsafe fn setup_horizon_tpidrro(thread_ptr: *mut NnThreadType) {
             *(tpidr.add(0x1f0) as *mut usize) = thread_ptr as usize;
         }
     }
+    // Lifted: the same thread pointers in the thread's own region and TLS block, which its Cpu's tpidrro / tpidr hold.
+    #[cfg(not(nx_native))]
+    {
+        let tlr = crate::guest::tls::current_fake_tlr();
+        for p in [crate::guest::tls::thread_block(), tlr].into_iter().filter(|&p| p != 0) {
+            *((p + 0x1f8) as *mut usize) = thread_ptr as usize;
+            *((p + 0x1f0) as *mut usize) = thread_ptr as usize;
+        }
+    }
 }
 
 pub unsafe fn sanitize_darwin_tpidrro() {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(nx_native)]
     {
         let tp: *mut u8;
         std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tp);
@@ -365,17 +372,13 @@ pub unsafe extern "C" fn hle_nn_os_GetCurrentThread() -> *mut NnThreadType {
         let mut ptr = *cell.borrow();
         if ptr.is_null() {
             ptr = THREAD_SELF_STRUCT.with(|s| s.as_ptr());
-            let self_pthread = libc::pthread_self();
             let handle = ThreadTail::of(ptr).handle();
             if *handle == 0 {
                 *handle = 1;
             }
             // Populate the REAL host stack bounds at the REAL field offsets
             // (_stack/_stackSize), not a placeholder. See struct doc comment.
-            let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(|| {
-                let top = libc::pthread_get_stackaddr_np(self_pthread) as usize;
-                (top.saturating_sub(libc::pthread_get_stacksize_np(self_pthread)), top)
-            });
+            let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(crate::os::current_thread_stack);
             (*ptr).stack = lo as *mut ();
             (*ptr).original_stack = (*ptr).stack;
             (*ptr).stack_size = hi - lo;
@@ -395,7 +398,7 @@ pub struct NnMutex {
     pub nest_count: i32,
     pub _pad2: [u8; 4],
     pub owner_thread: *mut NnThreadType,
-    pub lock: libc::os_unfair_lock,
+    pub lock: u32,
     pub _pad3: u32,
 }
 
@@ -413,7 +416,7 @@ pub unsafe extern "C" fn hle_nn_os_InitializeMutex(
         (*mutex).nest_count = 0;
         (*mutex)._pad2 = [0; 4];
         (*mutex).owner_thread = std::ptr::null_mut();
-        (*mutex).lock = libc::OS_UNFAIR_LOCK_INIT;
+        (*mutex).lock = 0;
         (*mutex)._pad3 = 0;
     }
 }
@@ -442,8 +445,7 @@ pub unsafe extern "C" fn hle_nn_os_LockMutex(mutex: *mut NnMutex) {
             static WARNED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                let lr: usize;
-                std::arch::asm!("mov {}, x30", out(reg) lr);
+                let lr = crate::guest_reg!(x30);
                 eprintln!("[!] nn::os::LockMutex: non-recursive mutex {:p} relocked by its owner (guest_lr={:#x}); treating as recursive", mutex, lr);
             }
         }
@@ -515,7 +517,7 @@ pub unsafe extern "C" fn hle_nn_os_FinalizeMutex(mutex: *mut NnMutex) {
         (*mutex).state = 0;
         (*mutex).owner_thread = std::ptr::null_mut();
         (*mutex).nest_count = 0;
-        (*mutex).lock = libc::OS_UNFAIR_LOCK_INIT;
+        (*mutex).lock = 0;
     }
 }
 
@@ -532,9 +534,6 @@ pub unsafe extern "C" fn hle_nn_os_IsMutexLockedByCurrentThread(mutex: *const Nn
 // 5. System clocks. The guest's system tick is the host clock (crate::clock), not the Switch's 19.2 MHz counter:
 // GetSystemTick, GetSystemTickFrequency and ConvertToTimeSpan all use it, so they agree with each other and with NVN
 // timestamps.
-extern "C" {
-    fn mach_wait_until(deadline: u64) -> libc::c_int;
-}
 
 /// --log-timestamps (with metal/mod.rs): guest-main's GPU syncs and sleeps next to the TIMESTAMP reports, in ms of the
 /// same clock, to reconstruct a frame's timeline.
@@ -545,11 +544,9 @@ pub(crate) fn log_timestamps() -> bool {
 /// Sleep on a guest thread without nanosleep(): libsystem's nanosleep makes a MIG call that
 /// needs this thread's mach reply-port TSD slot, which the guest's use of tpidrro_el0 as
 /// its Horizon TLS can clobber ("clock_get_time() failed: (ipc/send) invalid reply port").
-/// mach_wait_until is a bare kernel trap with no reply port.
+/// mach_wait_until is a bare kernel trap with no reply port (crate::clock::sleep_ns).
 pub fn hle_sleep_ns(ns: u64) {
-    unsafe {
-        mach_wait_until(crate::clock::ticks().saturating_add(crate::clock::ns_to_ticks(ns)));
-    }
+    crate::clock::sleep_ns(ns);
 }
 
 #[no_mangle]
@@ -730,7 +727,7 @@ impl BlockGuard {
             *slot = *((gfp + 8) as *const usize);
             gfp = *(gfp as *const usize);
         }
-        let key = libc::pthread_self() as u64;
+        let key = crate::os::current_thread_id();
         blocked_table()
             .lock()
             .unwrap()
@@ -746,7 +743,7 @@ impl Drop for BlockGuard {
 }
 
 pub fn dump_blocked_threads() {
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let fmt = |a: usize| {
         if a == 0 {
             String::new()
@@ -852,7 +849,7 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
     if let Some(i) = b.iter().position(|&(a, _)| a == addr) {
         b.remove(i);
         crate::guest::dirty_track::release(addr, size);
-        libc::munmap(addr as *mut libc::c_void, size);
+        crate::os::free(addr as *mut u8, size);
     }
     println!(
         "[+] HLE: nn::os::FreeMemoryBlock({:#x}, {} MB)",
@@ -863,21 +860,13 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, size: usize) -> i32 {
-    let ptr = libc::mmap(
-        std::ptr::null_mut(),
-        size,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-        -1,
-        0,
-    );
-    if ptr == libc::MAP_FAILED {
+    let Ok(ptr) = crate::os::alloc(size, crate::os::Prot::ReadWrite) else {
         eprintln!(
-            "[-] HLE: AllocateMemoryBlock mmap failed for {} bytes",
+            "[-] HLE: AllocateMemoryBlock failed for {} bytes",
             size
         );
         return 1;
-    }
+    };
     // Fresh anonymous memory is already zero; touching it would commit the whole block (2.5 GB for TotK's heap).
     if !out_addr.is_null() {
         *out_addr = ptr as usize;
@@ -889,7 +878,9 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, siz
         ptr
     );
     crate::guest::dirty_track::register_domain(ptr as usize, size);
+    #[cfg(nx_native)]
     let focus = crate::cpu::crash_handler::watch_focus();
+    #[cfg(nx_native)]
     if focus >= ptr as usize && focus < ptr as usize + size {
         crate::cpu::crash_handler::add_watchpoint(focus);
     }
@@ -953,9 +944,12 @@ pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_Initialize(
     // to [inner_alloc+0] instead of the correct sead vtable pointer.
     // NOTE: do NOT watch pool_base itself here — bump_alloc will memset it
     // during AllocateAligned, which would fault on a read-only page.
-    let pool_base = addr as usize;
-    let inner_alloc_page = (pool_base + 0x17000920) & !0xfff;
-    crate::cpu::crash_handler::add_watchpoint(inner_alloc_page);
+    #[cfg(nx_native)]
+    {
+        let pool_base = addr as usize;
+        let inner_alloc_page = (pool_base + 0x17000920) & !0xfff;
+        crate::cpu::crash_handler::add_watchpoint(inner_alloc_page);
+    }
 }
 
 fn bump_alloc(this: *mut (), size: usize, align: usize) -> *mut u8 {
@@ -1032,8 +1026,7 @@ pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_AllocateAligned(
     alignment: usize,
 ) -> *mut u8 {
     // x17 holds the guest LR saved by the trampoline (mov x17, x30 before blr).
-    let guest_lr: usize;
-    std::arch::asm!("mov {}, x17", out(reg) guest_lr, options(nomem, nostack));
+    let guest_lr = crate::guest_reg!(x17);
     // bump_alloc zeroes the allocation with memset before returning.
     let ptr = bump_alloc(_this, size, alignment);
     println!("[+] HLE: StandardAllocator::AllocateAligned(this={:p}, size={:#x}, align={}) -> {:p} [guest_caller=0x{:x}]",
@@ -1050,6 +1043,7 @@ pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_AllocateAligned(
             )
             .is_ok()
     {
+        #[cfg(nx_native)]
         crate::cpu::crash_handler::add_watchpoint(ptr as usize);
     }
     ptr
@@ -1113,8 +1107,7 @@ pub unsafe extern "C" fn hle_nn_sm_GetServiceHandle(
     // its request is written to the thread's Horizon IPC buffer, which on this host is Darwin's TLS (thread-specific
     // data; the MIG reply port in slot 2 gets overwritten and later Mach calls fail). The fix is HLE of the nn:: API
     // that led here (symbolize the caller below).
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     // Our frame's return address is the HLE trampoline; the guest's frames follow through the frame-pointer chain.
     let mut chain = Vec::new();
     let mut f = fp;
@@ -1149,8 +1142,7 @@ pub unsafe extern "C" fn hle_nn_diag_detail_Abort(res: *const u32) -> ! {
         "[!] Result code: 0x{:08X} (Module: {}, Description: {})",
         code, module, desc
     );
-    let mut fp: usize;
-    std::arch::asm!("mov {}, fp", out(reg) fp);
+    let mut fp = crate::guest_reg!(x29);
     eprintln!("[!] Call trace for Abort:");
     for frame_idx in 0..15 {
         if fp < 0x10000 || (fp & 7) != 0 {
@@ -1158,26 +1150,8 @@ pub unsafe extern "C" fn hle_nn_diag_detail_Abort(res: *const u32) -> ! {
         }
         let next_fp = *(fp as *const usize);
         let lr = *((fp + 8) as *const usize);
-        let mut dl_info: libc::Dl_info = std::mem::zeroed();
-        let (sname, dname) = if libc::dladdr(lr as *const libc::c_void, &mut dl_info) != 0 {
-            let s = if !dl_info.dli_sname.is_null() {
-                std::ffi::CStr::from_ptr(dl_info.dli_sname)
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                "?".into()
-            };
-            let f = if !dl_info.dli_fname.is_null() {
-                std::ffi::CStr::from_ptr(dl_info.dli_fname)
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                "?".into()
-            };
-            (s, f)
-        } else {
-            ("?".into(), "?".into())
-        };
+        let (lib, sym) = crate::os::address_owner(lr);
+        let (sname, dname) = (sym.unwrap_or_else(|| "?".into()), lib.unwrap_or_else(|| "?".into()));
         eprintln!(
             "    Frame #{:02}: FP={:#x} LR={:#x} <{} in {}>",
             frame_idx, fp, lr, sname, dname
@@ -1570,19 +1544,70 @@ unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
         *(p.add(28) as *mut i32) = 15;
     }
 }
-/// GetSixAxisSensorState (96 bytes): no motion, identity orientation.
+/// SixAxisSensorState (96 bytes): 200 Hz accelerometer + gyroscope samples.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct SixAxisSensorState {
+    pub delta_ns: i64,
+    pub sampling_number: i64,
+    pub acceleration: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub angle: [f32; 3],
+    pub direction: [f32; 9],
+    pub attributes: u32,
+    pub _pad: u32,
+}
+
+impl Default for SixAxisSensorState {
+    fn default() -> Self {
+        Self {
+            delta_ns: 5_000_000, // 5 ms (200 Hz)
+            sampling_number: 0,
+            acceleration: [0.0, 0.0, -1.0], // Gravity vector: 1G downwards
+            angular_velocity: [0.0, 0.0, 0.0],
+            angle: [0.0, 0.0, 0.0],
+            direction: [
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0,
+            ],
+            attributes: 1, // SixAxisSensorAttribute_IsConnected
+            _pad: 0,
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorState(out: *mut u8, _handle: *const u32) {
     if out.is_null() {
         return;
     }
-    std::ptr::write_bytes(out, 0, 96);
-    // direction (DirectionState: Float3 x, y, z) starts after deltaTime, samplingNumber and three Float3s: 16 + 36.
-    let dir = out.add(52) as *mut f32;
-    *dir.add(0) = 1.0;
-    *dir.add(4) = 1.0;
-    *dir.add(8) = 1.0;
+    let samp = (hle_nn_os_GetSystemTick() / 96_000) as i64; // ~5ms ticks at 19.2MHz
+    let mut state = SixAxisSensorState::default();
+    state.sampling_number = samp;
+    std::ptr::copy_nonoverlapping(&state, out as *mut SixAxisSensorState, 1);
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorStates(
+    out: *mut u8,
+    count: i32,
+    _handle: *const u32,
+) -> i32 {
+    if out.is_null() || count <= 0 {
+        return 0;
+    }
+    let n = count.min(16) as usize;
+    let samp = (hle_nn_os_GetSystemTick() / 96_000) as i64;
+    let states_ptr = out as *mut SixAxisSensorState;
+    for i in 0..n {
+        let mut state = SixAxisSensorState::default();
+        state.sampling_number = samp - i as i64;
+        std::ptr::copy_nonoverlapping(&state, states_ptr.add(i), 1);
+    }
+    n as i32
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_IsSixAxisSensorAtRest(_handle: *const u32) -> bool {
     true
@@ -1649,8 +1674,7 @@ unsafe fn npad_states(
     // --log-hid-buttons: every read that returns pressed buttons (which id / style path the game polls).
     static LOG_BUTTONS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if buttons != 0 && *LOG_BUTTONS.get_or_init(|| crate::settings::get().log.log_hid_buttons) {
-        let fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp);
+        let fp = crate::guest_reg!(x29);
         let lr = if fp > 0x10000 {
             *((fp + 8) as *const usize)
         } else {
@@ -1943,8 +1967,7 @@ pub unsafe extern "C" fn hle_nn_hid_ShowControllerSupport(
     static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if n < 3 || n % 10000 == 0 {
-        let fp: usize;
-        std::arch::asm!("mov {}, x29", out(reg) fp);
+        let fp = crate::guest_reg!(x29);
         let bytes = if arg.is_null() {
             Vec::new()
         } else {
@@ -2133,10 +2156,11 @@ pub unsafe extern "C" fn hle_nn_os_StartThread(thread: *mut NnThreadType) {
         // past 512 KiB in long play sessions.
         .stack_size(8 << 20)
         .spawn(move || {
-            crate::cpu::tls::mark_guest_thread();
+            crate::guest::tls::mark_guest_thread();
             println!("[+] HLE: Guest thread '{}' starting execution", name_str);
             // The threads on the frame's critical path (all of our Metal encoding runs on the Presentation Thread)
             // ask for performance cores: with the default QoS macOS may run them on efficiency cores.
+            #[cfg(target_vendor = "apple")]
             if name_str == "Presentation Thread" || name_str == "guest-main" {
                 extern "C" {
                     fn pthread_set_qos_class_self_np(qos: u32, relpri: i32) -> i32;
@@ -2148,13 +2172,17 @@ pub unsafe extern "C" fn hle_nn_os_StartThread(thread: *mut NnThreadType) {
                     name_str, r
                 );
             }
+            #[cfg(nx_native)]
             crate::cpu::crash_handler::ensure_altstack();
             // Every guest thread reads tpidr_el0 directly for thread_local /
             // SDK per-thread state -- must be installed before any guest code
             // (including code reached indirectly through HLE calls below) runs
             // on this OS thread. See cpu/tls.rs.
-            crate::cpu::tls::install_guest_tls();
-            crate::cpu::trampoline::init_worker_thread_x18();
+            #[cfg(nx_native)]
+            {
+                crate::cpu::tls::install_guest_tls();
+                crate::cpu::trampoline::init_worker_thread_x18();
+            }
             let thread_ptr = thread_usize as *mut NnThreadType;
             // Initialize this thread's TLS self-pointer
             CURRENT_NN_THREAD.with(|cell| {
@@ -2445,31 +2473,12 @@ struct RegionArena {
 fn region_arena() -> &'static StdMutex<RegionArena> {
     static ARENA: OnceLock<StdMutex<RegionArena>> = OnceLock::new();
     ARENA.get_or_init(|| {
-        let (raw, size) = REGION_ARENA_SIZES
-            .iter()
-            .map(|&size| {
-                let raw = unsafe {
-                    libc::mmap(
-                        std::ptr::null_mut(),
-                        size + REGION_ALIGN,
-                        libc::PROT_NONE,
-                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                        -1,
-                        0,
-                    )
-                };
-                (raw, size)
-            })
-            .find(|(raw, _)| *raw != libc::MAP_FAILED)
-            .unwrap_or((libc::MAP_FAILED, 0));
+        let reserved = REGION_ARENA_SIZES.iter().find_map(|&size| {
+            unsafe { crate::os::reserve(crate::os::At::Anywhere, size + REGION_ALIGN) }.ok().map(|raw| (raw, size))
+        });
         let mut free = std::collections::BTreeMap::new();
-        let base = if raw == libc::MAP_FAILED {
-            println!(
-                "[!] HLE: could not reserve the address region arena; regions fall back to mmap"
-            );
-            0
-        } else {
-            let base = (raw as usize + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
+        let (base, size) = if let Some((raw, size)) = reserved {
+            let base = (raw + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
             free.insert(base, size);
             println!(
                 "[+] HLE: address region arena reserved at {:#x}..{:#x} ({} GB)",
@@ -2478,7 +2487,10 @@ fn region_arena() -> &'static StdMutex<RegionArena> {
                 size >> 30
             );
             crate::guest::dirty_track::register_domain(base, size);
-            base
+            (base, size)
+        } else {
+            println!("[!] HLE: could not reserve the address region arena; regions are reserved one by one");
+            (0, 0)
         };
         StdMutex::new(RegionArena { base, size, free })
     })
@@ -2520,18 +2532,11 @@ fn region_arena_free(addr: usize, size: usize) {
 /// Returns a freed region's memory to the system (and its addresses to the arena).
 pub(crate) unsafe fn release_address_region(addr: usize, size: usize) {
     if in_region_arena(addr) {
-        // Replace with a fresh PROT_NONE reservation: drops the pages but keeps the arena contiguous.
-        libc::mmap(
-            addr as *mut libc::c_void,
-            size,
-            libc::PROT_NONE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED,
-            -1,
-            0,
-        );
+        // Back to reserved: drops the pages but keeps the arena contiguous.
+        crate::os::decommit(addr, size);
         region_arena_free(addr, size);
     } else {
-        libc::munmap(addr as *mut libc::c_void, size);
+        crate::os::release(addr, size);
     }
 }
 
@@ -2543,15 +2548,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateAddressRegion(
     let aligned_size = (size + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
     let aligned_addr = match region_arena_alloc(aligned_size) {
         Some(addr) => {
-            let p = libc::mmap(
-                addr as *mut libc::c_void,
-                aligned_size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE | libc::MAP_FIXED,
-                -1,
-                0,
-            );
-            if p == libc::MAP_FAILED {
+            if crate::os::commit(addr, aligned_size, crate::os::Prot::ReadWrite).is_err() {
                 region_arena_free(addr, aligned_size);
                 println!(
                     "[!] HLE: nn::os::AllocateAddressRegion(size={}) FAILED",
@@ -2562,38 +2559,26 @@ pub unsafe extern "C" fn hle_nn_os_AllocateAddressRegion(
             addr
         }
         None => {
-            // Arena exhausted (or unreserved): an aligned mapping anywhere, as before.
+            // Arena exhausted (or unreserved): an aligned region anywhere. Windows reservations are already 64 KiB
+            // aligned, so `addr` is the reservation's start there, as release_address_region needs.
             println!(
                 "[!] HLE: address region arena exhausted; mapping {} bytes outside it",
                 aligned_size
             );
-            let total_alloc = aligned_size + REGION_ALIGN;
-            let raw = libc::mmap(
-                std::ptr::null_mut(),
-                total_alloc,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
-                -1,
-                0,
-            );
-            if raw == libc::MAP_FAILED {
-                println!(
-                    "[!] HLE: nn::os::AllocateAddressRegion(size={}) FAILED",
-                    size
-                );
-                return -1;
+            let region = crate::os::reserve(crate::os::At::Anywhere, aligned_size + REGION_ALIGN).and_then(|raw| {
+                let addr = (raw + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
+                crate::os::commit(addr, aligned_size, crate::os::Prot::ReadWrite).map(|()| addr)
+            });
+            match region {
+                Ok(addr) => addr,
+                Err(_) => {
+                    println!(
+                        "[!] HLE: nn::os::AllocateAddressRegion(size={}) FAILED",
+                        size
+                    );
+                    return -1;
+                }
             }
-            let raw_addr = raw as usize;
-            let aligned_addr = (raw_addr + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
-            let pre_pad = aligned_addr - raw_addr;
-            if pre_pad > 0 {
-                libc::munmap(raw, pre_pad);
-            }
-            let post_pad = total_alloc - pre_pad - aligned_size;
-            if post_pad > 0 {
-                libc::munmap((aligned_addr + aligned_size) as *mut libc::c_void, post_pad);
-            }
-            aligned_addr
         }
     };
     if !out_address.is_null() {
@@ -2618,13 +2603,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryPages(address: usize, size: usi
     let page_len = page_end - page_start;
     // These pages are made writable and zeroed below without faulting: tell write tracking.
     crate::guest::dirty_track::before_host_write(page_start, page_len);
-    let res = libc::mprotect(
-        page_start as *mut libc::c_void,
-        page_len,
-        libc::PROT_READ | libc::PROT_WRITE,
-    );
-    if res != 0 {
-        let err = std::io::Error::last_os_error();
+    if let Err(err) = crate::os::protect(page_start, page_len, crate::os::Prot::ReadWrite) {
         println!(
             "[!] HLE: nn::os::AllocateMemoryPages(addr=0x{:x}, size={}) FAILED: {}",
             address, size, err
@@ -2685,11 +2664,7 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryPages(address: usize, size: usize) 
     for host in first_host..last_host {
         let base = host * per_host;
         if (base..base + per_host).all(|p| !mapped.contains(&p)) {
-            libc::madvise(
-                (host * HOST_PAGE) as *mut libc::c_void,
-                HOST_PAGE,
-                libc::MADV_FREE_REUSABLE,
-            );
+            crate::os::discard(host * HOST_PAGE, HOST_PAGE);
             released += 1;
         }
     }
@@ -2716,11 +2691,7 @@ pub unsafe extern "C" fn hle_nn_os_GetCurrentStackInfo(
     out_stack: *mut usize,
     out_stack_size: *mut usize,
 ) {
-    let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(|| {
-        let me = libc::pthread_self();
-        let hi = libc::pthread_get_stackaddr_np(me) as usize;
-        (hi - libc::pthread_get_stacksize_np(me), hi)
-    });
+    let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(crate::os::current_thread_stack);
     if !out_stack.is_null() {
         *out_stack = lo;
     }
@@ -2909,8 +2880,7 @@ pub unsafe extern "C" fn hle_nn_os_TryJamLightMessageQueue(mq: *mut (), data: u6
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_ReceiveLightMessageQueue(out: *mut u64, mq: *mut ()) {
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     let state = light_mq_get(mq);
     let mut inner = state.inner.lock().unwrap();
     let _blocked = if inner.queue.is_empty() {
@@ -3144,8 +3114,7 @@ pub unsafe extern "C" fn hle_nn_os_TimedWaitConditionVariable(
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_WaitConditionVariable(cv: *mut (), mutex: *mut NnMutex) {
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     let state = condvar_get(cv);
     let seen_gen = *state.generation.lock().unwrap();
 
@@ -3269,7 +3238,7 @@ pub unsafe extern "C" fn hle_nn_os_ClearLightEvent(ev: *mut ()) {
 /// Debug aid: report (once per wait) a blocking nn::os wait that has not completed after 5s,
 /// with the guest call site, so whole-process stalls can be attributed to a specific wait.
 pub(crate) fn guest_chain(fp: usize) -> String {
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let fmt = |a: usize| {
         if base != 0 && a >= base && a < base + 0x5000000 {
             format!("guest+{:#x}", a - base)
@@ -3295,7 +3264,7 @@ pub fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Du
     // `fp` is x29 inside the HLE function: its frame record's saved x29 is the guest's FP (the
     // trampoline doesn't change it), so [guest_fp + 8] is the return address of the guest function
     // that called the wait, followed up the guest FP chain.
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let fmt = |a: usize| {
         if base != 0 && a >= base && a < base + 0x5000000 {
             format!("guest+{:#x}", a - base)
@@ -3326,8 +3295,7 @@ pub fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Du
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_WaitLightEvent(ev: *mut ()) {
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     let state = light_event_get(ev);
     let mut guard = state.signaled.lock().unwrap();
     let _blocked = if *guard {
@@ -3580,8 +3548,7 @@ pub unsafe extern "C" fn hle_nn_os_WaitTimerEvent(ev: *mut ()) {
     if (ev as usize) < 0x10000 {
         return;
     }
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     let _blocked = BlockGuard::new("TimerEvent", ev as usize, fp);
     let p = ev as *mut u8;
     let state = timer_event_get(ev);
@@ -3830,8 +3797,7 @@ pub unsafe extern "C" fn hle_nn_os_FinalizeSemaphore(sem: *mut ()) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_AcquireSemaphore(sem: *mut ()) {
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     semaphore_acquire(sem, fp);
 }
 
@@ -3853,8 +3819,7 @@ pub unsafe extern "C" fn hle_nn_os_FinalizeLightSemaphore(sem: *mut ()) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_AcquireLightSemaphore(sem: *mut ()) {
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     semaphore_acquire(sem, fp);
 }
 
@@ -3972,6 +3937,11 @@ static HLE_SYSTEM_EVENTS: StdMutex<Vec<(usize, std::sync::Arc<HleSystemEvent>)>>
 pub fn hle_system_event_register_addr(addr: usize) {
     hle_system_event_register(addr);
 }
+pub fn hle_system_event_signal_addr(addr: usize) {
+    if let Some(ev) = hle_system_event_lookup(addr) {
+        hle_system_event_signal(&ev);
+    }
+}
 /// Registers an HLE system event at `addr` that is already signaled (an operation that completed at once).
 pub fn hle_system_event_register_signaled(addr: usize) {
     let ev = hle_system_event_register(addr);
@@ -4033,8 +4003,7 @@ pub unsafe extern "C" fn hle_nn_os_TimedWaitSystemEvent(event: *mut (), timeout_
         let mut seen = SEEN.lock().unwrap();
         if !seen.contains(&(event as usize)) {
             seen.push(event as usize);
-            let fp: usize;
-            std::arch::asm!("mov {}, x29", out(reg) fp);
+            let fp = crate::guest_reg!(x29);
             println!(
                 "[sysevent] TimedWait {:p} timeout {} ns registered={} callers: {}",
                 event,
@@ -4070,8 +4039,7 @@ pub unsafe extern "C" fn hle_nn_os_TimedWaitSystemEvent(event: *mut (), timeout_
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_WaitSystemEvent(event: *mut ()) {
     record_hle_call("hle_nn_os_WaitSystemEvent");
-    let fp: usize;
-    std::arch::asm!("mov {}, x29", out(reg) fp);
+    let fp = crate::guest_reg!(x29);
     match hle_system_event_lookup(event as usize) {
         Some(ev) => {
             let mut g = ev.signaled.lock().unwrap();
@@ -4209,17 +4177,25 @@ pub unsafe extern "C" fn hle_nn_audio_AcquireAudioDeviceNotificationForOutput(ev
 // Same story as audren: the decoder object lives in another sysmodule, so every
 // entry point that touches it is HLE. Per-decoder state (sample rate, channels)
 // is kept in a side table keyed by address and the getters are HLE too. Decoding goes through
-// libopus (horizon/audio/opus.rs), or produces silence with correct accounting without it;
+// the SDK's software Opus decoder (zero external dependencies), falling back to libopus
+// (horizon/audio/opus.rs), or silence with correct accounting;
 // nn::codec::GetOpusPacketSize is pure CPU and stays in the sdk module.
 static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new()); // (addr, rate, channels)
+/// Address of guest decoder -> (software decoder buffer address, is_multistream)
+static SOFT_OPUS_MAP: StdMutex<Option<std::collections::HashMap<usize, (usize, bool)>>> = StdMutex::new(None);
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize(
-    _rate: i32,
+    rate: i32,
     channels: i32,
     _streams: i32,
 ) -> usize {
     record_hle_call("hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize");
+    if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii") {
+        type SoftWorkSize = unsafe extern "C" fn(i32, i32) -> usize;
+        let f: SoftWorkSize = std::mem::transmute(sym);
+        return f(rate, channels);
+    }
     audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
 }
 /// GetHardwareOpusDecoderWorkBufferSize(sampleRate, channelCount): the overload without the stream count.
@@ -4260,6 +4236,23 @@ pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusDecoder(
             },
         );
     }
+
+    if let Some(init_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec21InitializeOpusDecoderEPNS0_15OpusDecoderTypeEiiPvm") {
+        let soft_buf = Box::into_raw(vec![0u8; 512].into_boxed_slice()) as *mut u8 as usize;
+        let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
+        let map = map_guard.get_or_insert_with(std::collections::HashMap::new);
+        if let Some((old_buf, _)) = map.insert(dec as usize, (soft_buf, false)) {
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(old_buf as *mut u8, 512)));
+        }
+        type SoftInit = unsafe extern "C" fn(usize, i32, i32, usize, usize) -> u32;
+        let f: SoftInit = std::mem::transmute(init_sym);
+        let res = f(soft_buf, rate, channels, _work as usize, _work_size);
+        let mut t = HLE_OPUS_DECODERS.lock().unwrap();
+        t.retain(|(a, _, _)| *a != dec as usize);
+        t.push((dec as usize, rate, channels));
+        return res;
+    }
+
     crate::horizon::audio::opus::destroy(dec as usize); // re-initialized: a fresh libopus decoder on the next decode
     let mut t = HLE_OPUS_DECODERS.lock().unwrap();
     t.retain(|(a, _, _)| *a != dec as usize);
@@ -4271,6 +4264,14 @@ pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusDecoder(
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_HardwareOpusDecoder_Finalize(this: *mut u8) {
     hle_nn_codec_FinalizeHardwareOpusDecoder(this.add(8) as *mut ());
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_HardwareOpusDecoder_Ctor(this: *mut u8, _option: i32) {
+    if let Some(ctor) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec11OpusDecoderC1Ev") {
+        type SoftCtor = unsafe extern "C" fn(*mut u8);
+        let f: SoftCtor = std::mem::transmute(ctor);
+        f(this);
+    }
 }
 /// Stand-in for the decoder's service object (HardwareOpusDecoderType::_handle): code that releases it calls
 /// through its vtable, so every entry is a no-op.
@@ -4294,6 +4295,17 @@ struct OpusDecoderType {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_FinalizeHardwareOpusDecoder(dec: *mut ()) {
     record_hle_call("hle_nn_codec_FinalizeHardwareOpusDecoder");
+    let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some(map) = map_guard.as_mut() {
+        if let Some((soft_buf, _)) = map.remove(&(dec as usize)) {
+            if let Some(fini_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec19FinalizeOpusDecoderEPNS0_15OpusDecoderTypeE") {
+                type SoftFini = unsafe extern "C" fn(usize);
+                let f: SoftFini = std::mem::transmute(fini_sym);
+                f(soft_buf);
+            }
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(soft_buf as *mut u8, 512)));
+        }
+    }
     crate::horizon::audio::opus::destroy(dec as usize);
     HLE_OPUS_DECODERS
         .lock()
@@ -4314,16 +4326,41 @@ fn hle_opus_decoder(dec: usize) -> Option<(i32, i32)> {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderSampleRate(dec: *const ()) -> i32 {
     record_hle_call("hle_nn_codec_GetHardwareOpusDecoderSampleRate");
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec24GetOpusDecoderSampleRateEPKNS0_15OpusDecoderTypeE") {
+            type SoftRate = unsafe extern "C" fn(usize) -> i32;
+            let f: SoftRate = std::mem::transmute(sym);
+            return f(*soft_buf);
+        }
+    }
     hle_opus_decoder(dec as usize).map(|(r, _)| r).unwrap_or(0)
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderChannelCount(dec: *const ()) -> i32 {
     record_hle_call("hle_nn_codec_GetHardwareOpusDecoderChannelCount");
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec26GetOpusDecoderChannelCountEPKNS0_15OpusDecoderTypeE") {
+            type SoftCh = unsafe extern "C" fn(usize) -> i32;
+            let f: SoftCh = std::mem::transmute(sym);
+            return f(*soft_buf);
+        }
+    }
     hle_opus_decoder(dec as usize).map(|(_, c)| c).unwrap_or(0)
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_codec_ResetHardwareOpusDecoder(dec: *mut ()) {
     record_hle_call("hle_nn_codec_ResetHardwareOpusDecoder");
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec16ResetOpusDecoderEPNS0_15OpusDecoderTypeE") {
+            type SoftReset = unsafe extern "C" fn(usize);
+            let f: SoftReset = std::mem::transmute(sym);
+            f(*soft_buf);
+            return;
+        }
+    }
     crate::horizon::audio::opus::reset(dec as usize);
 }
 /// Samples per channel in one Opus packet at `rate`, from the TOC byte (RFC 6716 §3.1).
@@ -4356,6 +4393,16 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
     input_size: usize,
 ) -> u32 {
     record_hle_call("hle_nn_codec_DecodeOpusInterleavedWithHardware");
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, false)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec21DecodeOpusInterleavedEPNS0_15OpusDecoderTypeEPmPiPsmPKvm") {
+            type SoftDecode = unsafe extern "C" fn(usize, *mut usize, *mut i32, *mut i16, usize, *const u8, usize) -> u32;
+            let f: SoftDecode = std::mem::transmute(sym);
+            return f(*soft_buf, out_consumed, out_samples, out_buf, out_buf_size, input, input_size);
+        }
+    }
+    drop(map_guard);
+
     let Some((rate, channels)) = hle_opus_decoder(dec as usize) else {
         return 0x4E;
     };
@@ -4403,11 +4450,184 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
     NN_RESULT_SUCCESS
 }
 
+// ── nn::codec HardwareOpusMultiStreamDecoder ────────────────────────────────
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_HardwareOpusMultiStreamDecoder_Ctor(this: *mut u8, _option: i32) {
+    if let Some(ctor) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec22OpusMultiStreamDecoderC1Ev") {
+        type SoftCtor = unsafe extern "C" fn(*mut u8);
+        let f: SoftCtor = std::mem::transmute(ctor);
+        f(this);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBufferSize(
+    rate: i32,
+    channels: i32,
+    streams: i32,
+    stereo: i32,
+) -> usize {
+    if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec39GetOpusMultiStreamDecoderWorkBufferSizeEiiii") {
+        type SoftWorkSize = unsafe extern "C" fn(i32, i32, i32, i32) -> usize;
+        let f: SoftWorkSize = std::mem::transmute(sym);
+        return f(rate, channels, streams, stereo);
+    }
+    audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBufferSize5(
+    rate: i32,
+    channels: i32,
+    streams: i32,
+    stereo: i32,
+    _option: i32,
+) -> usize {
+    hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBufferSize(rate, channels, streams, stereo)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusMultiStreamDecoder(
+    dec: *mut (),
+    rate: i32,
+    channels: i32,
+    streams: i32,
+    stereo: i32,
+    mapping: *const u8,
+    work: *mut (),
+    work_size: usize,
+    _option: i32,
+) -> u32 {
+    record_hle_call("hle_nn_codec_InitializeHardwareOpusMultiStreamDecoder");
+    if let Some(init_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec32InitializeOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeEiiiiPKhPvm") {
+        let soft_buf = Box::into_raw(vec![0u8; 512].into_boxed_slice()) as *mut u8 as usize;
+        let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
+        let map = map_guard.get_or_insert_with(std::collections::HashMap::new);
+        if let Some((old_buf, _)) = map.insert(dec as usize, (soft_buf, true)) {
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(old_buf as *mut u8, 512)));
+        }
+        type SoftInit = unsafe extern "C" fn(usize, i32, i32, i32, i32, *const u8, usize, usize) -> u32;
+        let f: SoftInit = std::mem::transmute(init_sym);
+        return f(soft_buf, rate, channels, streams, stereo, mapping, work as usize, work_size);
+    }
+    NN_RESULT_SUCCESS
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_FinalizeHardwareOpusMultiStreamDecoder(dec: *mut ()) {
+    record_hle_call("hle_nn_codec_FinalizeHardwareOpusMultiStreamDecoder");
+    let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some(map) = map_guard.as_mut() {
+        if let Some((soft_buf, _)) = map.remove(&(dec as usize)) {
+            if let Some(fini_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec30FinalizeOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeE") {
+                type SoftFini = unsafe extern "C" fn(usize);
+                let f: SoftFini = std::mem::transmute(fini_sym);
+                f(soft_buf);
+            }
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(soft_buf as *mut u8, 512)));
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderSampleRate(dec: *const ()) -> i32 {
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec35GetOpusMultiStreamDecoderSampleRateEPKNS0_26OpusMultiStreamDecoderTypeE") {
+            type SoftRate = unsafe extern "C" fn(usize) -> i32;
+            let f: SoftRate = std::mem::transmute(sym);
+            return f(*soft_buf);
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderChannelCount(dec: *const ()) -> i32 {
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec37GetOpusMultiStreamDecoderChannelCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
+            type SoftCh = unsafe extern "C" fn(usize) -> i32;
+            let f: SoftCh = std::mem::transmute(sym);
+            return f(*soft_buf);
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderTotalStreamCount(dec: *const ()) -> i32 {
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec41GetOpusMultiStreamDecoderTotalStreamCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
+            type SoftCount = unsafe extern "C" fn(usize) -> i32;
+            let f: SoftCount = std::mem::transmute(sym);
+            return f(*soft_buf);
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderStereoStreamCount(dec: *const ()) -> i32 {
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec42GetOpusMultiStreamDecoderStereoStreamCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
+            type SoftCount = unsafe extern "C" fn(usize) -> i32;
+            let f: SoftCount = std::mem::transmute(sym);
+            return f(*soft_buf);
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_ResetHardwareOpusMultiStreamDecoder(dec: *mut ()) {
+    record_hle_call("hle_nn_codec_ResetHardwareOpusMultiStreamDecoder");
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec27ResetOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeE") {
+            type SoftReset = unsafe extern "C" fn(usize);
+            let f: SoftReset = std::mem::transmute(sym);
+            f(*soft_buf);
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_DecodeOpusMultiStreamInterleavedWithHardware(
+    dec: *mut (),
+    out_consumed: *mut usize,
+    out_samples: *mut i32,
+    out_buf: *mut i16,
+    out_buf_size: usize,
+    input: *const u8,
+    input_size: usize,
+) -> u32 {
+    record_hle_call("hle_nn_codec_DecodeOpusMultiStreamInterleavedWithHardware");
+    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
+    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
+        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec32DecodeOpusMultiStreamInterleavedEPNS0_26OpusMultiStreamDecoderTypeEPmPiPsmPKvm") {
+            type SoftDecode = unsafe extern "C" fn(usize, *mut usize, *mut i32, *mut i16, usize, *const u8, usize) -> u32;
+            let f: SoftDecode = std::mem::transmute(sym);
+            return f(*soft_buf, out_consumed, out_samples, out_buf, out_buf_size, input, input_size);
+        }
+    }
+    0x4E
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderProcessingTime(_dec: *const ()) -> i64 {
+    0
+}
+
 // ── Guest-main sampler (--sample-main=<seconds>) ──────────────────────────────────────────────
 // Suspends the guest-main thread every few ms, reads its register state and walks the frame-pointer chain, then
 // prints the hottest guest call chains. Shows which guest function the main loop is actually running/waiting in.
+#[cfg(nx_native)]
 static SAMPLE_TARGET: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+#[cfg(nx_native)]
 pub fn register_main_sample_target() {
     if crate::settings::get().debug.sample_main.is_some() {
         extern "C" {
@@ -4424,6 +4644,7 @@ pub fn register_main_sample_target() {
     }
 }
 
+#[cfg(nx_native)]
 fn sample_main_thread() {
     extern "C" {
         fn thread_suspend(t: u32) -> i32;
@@ -4435,7 +4656,7 @@ fn sample_main_thread() {
     let delay: u64 = crate::settings::get().debug.sample_delay;
     std::thread::sleep(std::time::Duration::from_secs(delay));
     let target = SAMPLE_TARGET.load(std::sync::atomic::Ordering::SeqCst);
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::loader::main_base();
     let in_guest = |a: usize| base != 0 && a >= base && a < base + 0x5000000;
     let mut hist: rustc_hash::FxHashMap<Vec<usize>, u32> = rustc_hash::FxHashMap::default();
     let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);

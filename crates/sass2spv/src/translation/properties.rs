@@ -151,9 +151,78 @@ pub enum SupportBufferField {
     TfeVertexCount,
 }
 
+/// Constant buffer bound sizes in the support buffer (Host::cbuf_limits): one u32 per binding (in vec4 units), at this
+/// byte offset (std140: after tfe_vertex_count, an array of 16-byte elements).
+pub const SUPPORT_CBUF_LIMITS_OFFSET: usize = 1392;
+pub const SUPPORT_CBUF_LIMITS_COUNT: i32 = 32;
+/// Its field index.
+pub const SUPPORT_CBUF_LIMITS_FIELD: i32 = 8;
+
+/// Sampler table (Host::sampler_slots): each texture's table index in the support buffer, one u32 per texture slot
+/// (16-byte elements), after the constant buffer bound sizes.
+pub const SUPPORT_SAMPLER_SLOTS_OFFSET: usize = SUPPORT_CBUF_LIMITS_OFFSET + 16 * SUPPORT_CBUF_LIMITS_COUNT as usize;
+pub const SUPPORT_SAMPLER_SLOTS_COUNT: i32 = 64;
+pub const SUPPORT_SAMPLER_SLOTS_FIELD: i32 = SUPPORT_CBUF_LIMITS_FIELD + 1;
+/// The sampler table's binding (below the textures, above the storage images).
+pub const SAMPLER_TABLE_BINDING: i32 = 120;
+
+/// A stage's sampler table (Host::sampler_slots), from its textures: (binding, array length, kind). A stage needing more
+/// samplers than the host has slots samples its combined textures as separate images with samplers from a table of the
+/// remaining slots; the host fills the table per draw (deduplicated) and writes each texture's table index into the
+/// support buffer at its texture slot. Returns the table size and the first texture slot of each combined texture
+/// binding, or None when the stage fits (or cannot use a table).
+pub fn sampler_table_plan(textures: &[(i32, i32, TextureKind)], slots: u32) -> Option<(u32, Vec<(i32, i32)>)> {
+    if slots == 0 {
+        return None;
+    }
+    let mut sorted: Vec<&(i32, i32, TextureKind)> = textures.iter().collect();
+    sorted.sort_by_key(|t| t.0);
+    let sampler_only = sorted.iter().filter(|t| t.2 == TextureKind::SamplerOnly).count() as u32;
+    let combined: u32 = sorted.iter().filter(|t| t.2 == TextureKind::Combined).map(|t| t.1.max(1) as u32).sum();
+    if combined + sampler_only <= slots || sampler_only >= slots || sorted.iter().any(|t| t.2 == TextureKind::Combined && t.1 == 0) {
+        return None;
+    }
+    let mut next = 0;
+    let mut bases = Vec::new();
+    for t in sorted.iter().filter(|t| t.2 == TextureKind::Combined) {
+        bases.push((t.0, next));
+        next += t.1.max(1);
+    }
+    (next <= SUPPORT_SAMPLER_SLOTS_COUNT).then_some((slots - sampler_only, bases))
+}
+
+impl TextureKind {
+    pub fn of(ty: crate::types::SamplerType, separate: bool) -> TextureKind {
+        use crate::types::SamplerType;
+        if ty == SamplerType::NONE {
+            TextureKind::SamplerOnly
+        } else if separate || ty.base() == SamplerType::TEXTURE_BUFFER {
+            TextureKind::Other
+        } else {
+            TextureKind::Combined
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureKind {
+    /// A texture with its sampler (one host sampler slot per element).
+    Combined,
+    /// A separate sampler (bindless textures with separate handles): one slot.
+    SamplerOnly,
+    /// A separate image or a buffer texture: no sampler slot.
+    Other,
+}
+
 pub fn support_buffer_structure_type() -> StructureType {
+    support_buffer_structure_type_for(false, false)
+}
+
+/// The support buffer, with the constant buffer bound sizes when `limits` (Host::cbuf_limits) and the texture sampler
+/// table indices when `sampler_slots` (Host::sampler_slots; needs `limits`).
+pub fn support_buffer_structure_type_for(limits: bool, sampler_slots: bool) -> StructureType {
     use AggregateType as A;
-    StructureType {
+    let mut t = StructureType {
         fields: vec![
             StructureField::new(A::U32, "alpha_test", 1),
             StructureField::new(A::ARRAY | A::U32, "is_bgra", FRAGMENT_IS_BGRA_COUNT),
@@ -164,7 +233,14 @@ pub fn support_buffer_structure_type() -> StructureType {
             StructureField::new(A::VECTOR4 | A::S32, "tfe_offset", 1),
             StructureField::new(A::S32, "tfe_vertex_count", 1),
         ],
+    };
+    if limits || sampler_slots {
+        t.fields.push(StructureField::new(A::ARRAY | A::U32, "cbuf_limits", SUPPORT_CBUF_LIMITS_COUNT));
     }
+    if sampler_slots {
+        t.fields.push(StructureField::new(A::ARRAY | A::U32, "sampler_slots", SUPPORT_SAMPLER_SLOTS_COUNT));
+    }
+    t
 }
 
 #[derive(Clone, Copy, Debug)]

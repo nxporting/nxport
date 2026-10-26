@@ -124,6 +124,9 @@ group! {
         movie_shim: Option<PathBuf> = None,
         /// libopus, for the hardware Opus decoder
         libopus: Option<PathBuf> = None,
+        /// The game's lifted code, where guest code does not run natively (nxport-cli lift-game, then compile-guest
+        /// with the same settings); its modules.txt beside it
+        guest_library: Option<PathBuf> = None,
         /// System data archives from the console's firmware, one directory per archive named by its id (16 hex digits),
         /// for games that mount them (default: the data directory's system_data/)
         system_data_dir: Option<PathBuf> = None,
@@ -259,6 +262,8 @@ group! {
         split_ms: f64 = 1.0,
         /// Run tiny render passes as compute kernels
         tiny_compute: bool = true,
+        /// Unlocked frame rates (present interval 0): start frames on the display's refresh (F6 toggles)
+        display_pacing: bool = true,
         /// Largest tiny-pass rectangle, in pixels
         tiny_max_px: u64 = 640 * 360,
         /// Draw runs that differ only in their uniforms as one instanced draw
@@ -275,6 +280,8 @@ group! {
         ubo_zero_copy: bool = false,
         /// Which work the GPU executor does
         gfx_mode: GfxMode = GfxMode::All,
+        /// The GPU backend
+        gpu: GpuBackend = GpuBackend::Metal,
         /// Do not copy rarely drawn render targets back into guest memory (a workaround: the CPU reads of
         /// GPU-written memory are not trapped)
         no_rt_writeback: bool = false,
@@ -305,6 +312,13 @@ group! {
         replay_ab_null_draws: u8 = 0,
         /// Side B: render encoders cut every N draws
         replay_ab_split: Option<u32> = None,
+        /// Capture presented frame N for GPU backend tests: its NVN commands, the memory they reach and the textures only
+        /// the GPU holds
+        capture_frame: Option<u64> = None,
+        /// Where --capture-frame writes (default: the game's data directory's captures/frame_N)
+        capture_dir: Option<PathBuf> = None,
+        /// Exit once the capture is written
+        capture_exit: bool = false,
     }
 }
 
@@ -424,6 +438,8 @@ group! {
         log_movie: bool = false,
         log_occl: bool = false,
         log_pacing: bool = false,
+        /// Per frame: start, present and on-screen times, and whether display pacing was on
+        log_frame_pacing: bool = false,
         log_phases: bool = false,
         log_pool_reg: bool = false,
         log_refresh_hash: bool = false,
@@ -461,8 +477,11 @@ group! {
 group! {
     /// Diagnostics that change what runs: validation, shader replacement, bisection aids, input scripts.
     Debug "Debugging" {
-        /// Metal shader validation (invalid GPU memory accesses are reported instead of faulting)
+        /// Metal shader validation (invalid GPU memory accesses are reported instead of faulting); the Vulkan backend's
+        /// validation layer
         validate: bool = false,
+        /// Vulkan backend: write each translated stage's SPIR-V and manifest here (<code address>_<state>.spv / .json)
+        dump_spirv: Option<PathBuf> = None,
         /// Per-draw debug groups and binding details in GPU error reports
         draw_details: bool = false,
         /// Encoder labels with attachment shapes

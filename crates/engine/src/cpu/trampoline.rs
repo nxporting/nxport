@@ -1078,12 +1078,7 @@ impl TrampolineIsland {
             return Err("Failed to protect trampoline island as executable");
         }
 
-        extern "C" {
-            fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
-        }
-        unsafe {
-            sys_icache_invalidate(self.base_ptr as *mut libc::c_void, self.next_offset);
-        }
+        crate::os::flush_icache(self.base_ptr as usize, self.next_offset);
 
         println!(
             "[+] Trampoline Island finalized: {} KB of executable stubs ready ({} bytes)",
