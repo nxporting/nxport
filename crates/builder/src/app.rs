@@ -1073,6 +1073,9 @@ struct Args {
     /// With --build: the folder the app goes in
     #[arg(long, requires = "build")]
     out: Option<PathBuf>,
+    /// With --build: the mods folder (one folder per mod) instead of the one last used for the game
+    #[arg(long, requires = "build")]
+    mods: Option<PathBuf>,
     /// A build step's worker process (windows.rs)
     #[arg(long, hide = true)]
     worker: Option<PathBuf>,
@@ -1127,7 +1130,7 @@ fn attach_console() {
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let Args { dump, snapshot, expand, height, build, preset, out, worker } = clap::Parser::parse();
+    let Args { dump, snapshot, expand, height, build, preset, out, mods, worker } = clap::Parser::parse();
     #[cfg(windows)]
     if let Some(file) = worker {
         return crate::windows::worker(&file).map_err(Into::into);
@@ -1139,6 +1142,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut b = Builder::new(dump);
     b.expand_all = expand;
     if build {
+        if let Some(m) = mods {
+            b.mods = m.display().to_string();
+        }
         let app = b.build_now(preset.as_deref(), out)?;
         println!("Built {}", app.display());
         return Ok(());

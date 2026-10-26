@@ -466,6 +466,26 @@ fn dump(to: &DumpTo, regions: &[Region]) -> Result<(), String> {
     Ok(())
 }
 
+/// The regions of an image a dump run wrote to a file (`--aot-dump`): (name, bytes), in the image's order. Lifting takes
+/// the code from here where plugin mods patched it (crate::guest_modules).
+pub fn image_regions(img: &[u8]) -> Result<Vec<(String, &[u8])>, String> {
+    if img.len() < 2 * PAGE || &img[..8] != MAGIC {
+        return Err("not an AOT image (--aot-dump writes one)".into());
+    }
+    let count = u64::from_le_bytes(img[8..16].try_into().unwrap()) as usize;
+    (0..count)
+        .map(|i| {
+            let e = 16 + i * 64;
+            let n = img[e..e + 48].iter().position(|&b| b == 0).unwrap_or(48);
+            let name = String::from_utf8_lossy(&img[e..e + n]).into_owned();
+            let off = u64::from_le_bytes(img[e + 48..e + 56].try_into().unwrap()) as usize;
+            let len = u64::from_le_bytes(img[e + 56..e + 64].try_into().unwrap()) as usize;
+            let bytes = img.get(off..off + len).ok_or_else(|| format!("AOT image region {name} is cut short"))?;
+            Ok((name, bytes))
+        })
+        .collect()
+}
+
 /// File offset of section `sect` in a Mach-O file.
 #[cfg(nx_native)]
 fn section_offset(file: &[u8], sect: &str) -> Option<usize> {

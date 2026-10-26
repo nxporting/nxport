@@ -6460,6 +6460,21 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
         if f % 600 == 0 {
             dump_command_histogram(f);
         }
+        // A dump run with plugin mods (lifted hosts; natively the Metal backend does this): the image of the code as the
+        // mods patched it, then nothing more to do.
+        #[cfg(not(nx_native))]
+        if crate::cpu::aot::deferred_dump_frame() == Some(f) {
+            match unsafe { crate::cpu::aot::dump_after_mods() } {
+                Ok(()) => {
+                    println!("[+] AOT: image written at frame {f}; exiting (--aot-dump)");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("[!!] AOT: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         if (crate::host::display::window_up() || crate::host::display::headless())
             && !_window.is_null()
             && index >= 0

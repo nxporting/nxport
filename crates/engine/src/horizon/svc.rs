@@ -808,11 +808,8 @@ unsafe fn exit_current_thread() {
             mark_done(d);
         }
     });
-    #[cfg(nx_native)]
-    libc::pthread_exit(std::ptr::null_mut());
-    // A lifted runtime leaves the thread's guest code instead (docs/windows-port.md, step 5).
-    #[cfg(not(nx_native))]
-    unimplemented!("svcExitThread: the lifted runtime has no per-thread state yet");
+    // The thread is one start_thread made: nothing of it is needed after the guest's entry.
+    crate::os::exit_thread();
 }
 
 /// svcWaitSynchronization(s32* index, const Handle* handles, s32 count, s64 timeout) -> w1 index. Threads signal when

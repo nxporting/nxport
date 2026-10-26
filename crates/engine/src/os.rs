@@ -144,6 +144,11 @@ pub fn current_thread_id() -> u64 {
     imp::current_thread_id()
 }
 
+/// Ends the calling thread without returning or unwinding (guest code that exits its thread, svcExitThread).
+pub fn exit_thread() -> ! {
+    imp::exit_thread()
+}
+
 /// The host library containing `addr` and the nearest symbol before it, as far as the host's loader knows (logs).
 /// Windows names only the library.
 pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
@@ -333,6 +338,10 @@ mod imp {
 
     pub fn current_thread_id() -> u64 {
         unsafe { libc::pthread_self() as u64 }
+    }
+
+    pub fn exit_thread() -> ! {
+        unsafe { libc::pthread_exit(std::ptr::null_mut()) }
     }
 
     pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
@@ -558,6 +567,13 @@ mod imp {
             fn GetCurrentThreadId() -> u32;
         }
         unsafe { GetCurrentThreadId() as u64 }
+    }
+
+    pub fn exit_thread() -> ! {
+        extern "system" {
+            fn ExitThread(code: u32) -> !;
+        }
+        unsafe { ExitThread(0) }
     }
 
     pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {

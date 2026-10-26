@@ -10,12 +10,12 @@ and update this file when you finish or drop it.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
-- **Plugin mods on lifted hosts (UltraCam / exlaunch subsdk modules), and an unlocked frame rate on Windows.**
-  Plan: two passes. Lift the game with the mod's modules, run it headless with the mod until its initialisers and
-  early hooks have patched the code (the iOS dump run's machinery: cpu/aot.rs Mode::Dump, horizon::svc code writes),
-  then lift that patched image. Test mod: "TOTK Optimizer" (UltraCam 2.7.1, exefs/subsdk3), which supports TotK
-  1.1.0 - 1.2.1 only; the Windows test dump may be 1.0.0 (main build id 082CE09B06E33A123CB1E2770F5F9147), so a
-  supported version may be needed. Not started beyond reading the code.
+- **Plugin mods on lifted hosts (UltraCam / exlaunch subsdk modules).** In progress (plugin-mods agent). Two passes:
+  `nxport-cli lift-game --mods DIR` lifts the game with the mods' modules (unpatched); a lifted run with
+  `--aot-dump=FILE` writes the code as the mods patched it at `--aot-dump-frame`; `lift-game --mods DIR
+  --patched-image FILE` lifts that, with function starts seeded across modules (hooks, trampolines). Builder
+  automation next. Test mod: "TOTK Optimizer" (UltraCam 2.7.1, exefs/subsdk3), which supports TotK 1.1.0 - 1.2.1;
+  the Windows test dump is 1.0.0 (main build id 082CE09B06E33A123CB1E2770F5F9147).
 - **SDL controllers per player.** main's 8-player input (host/input.rs PLAYER_PADS) is wired for GameController.framework;
   on Windows every SDL controller still feeds player 0 (input::set_pad). Give each SDL gamepad its own player.
 

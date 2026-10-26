@@ -19,6 +19,8 @@ use std::ptr;
 pub struct LoadedModule {
     pub base: usize,
     pub image_size: usize,
+    /// The text segment (guest addresses).
+    pub text: std::ops::Range<usize>,
     pub init: Option<usize>,
     /// DT_INIT_ARRAY (address, entry count): static constructors, for modules whose DT_INIT does not run them.
     pub init_array: (usize, usize),
@@ -380,6 +382,7 @@ pub unsafe fn load(
     Ok(LoadedModule {
         base,
         image_size,
+        text: base + text_mo..base + text_mo + text_len,
         init,
         init_array,
         exports,
