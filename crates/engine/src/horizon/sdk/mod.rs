@@ -116,13 +116,7 @@ pub struct Layer {
 /// Version layers, oldest first.
 static LAYERS: &[&Layer] = &[&v4_4::LAYER, &v7_3::LAYER, &v15_3::LAYER];
 
-static BASE: Layer = Layer {
-    name: "base",
-    from: SdkVersion(0, 0, 0),
-    tables: base::TABLES,
-    nvn_api: None,
-    thread_tail_shift: None,
-};
+static BASE: &Layer = &base::LAYER;
 
 static VERSION: OnceLock<Option<SdkVersion>> = OnceLock::new();
 
@@ -151,7 +145,7 @@ fn chain() -> &'static Chain {
             None => LAYERS.len() - 1,
         };
         let mut layers: Vec<&'static Layer> = LAYERS[..=start].iter().rev().copied().collect();
-        layers.push(&BASE);
+        layers.push(BASE);
         let names: Vec<&str> = layers.iter().map(|l| l.name).collect();
         match v {
             Some(v) if LAYERS[start].from.0 == v.0 && LAYERS[start].from.1 == v.1 => {

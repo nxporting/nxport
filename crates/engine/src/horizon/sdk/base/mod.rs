@@ -38,9 +38,17 @@ mod time;
 mod vi;
 mod web;
 
-use super::Entry;
+use super::{Entry, Layer, SdkVersion};
 
-pub(super) static TABLES: &[&[Entry]] = &[
+pub(super) static LAYER: Layer = Layer {
+    name: "base",
+    from: SdkVersion(0, 0, 0),
+    tables: TABLES,
+    nvn_api: None,
+    thread_tail_shift: None,
+};
+
+static TABLES: &[&[Entry]] = &[
     account::TABLE,
     aoc::TABLE,
     apm::TABLE,

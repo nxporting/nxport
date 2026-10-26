@@ -695,7 +695,10 @@ mod tests {
         let size = 16 * 0x10000;
         unsafe {
             let r = reserve(At::Anywhere, size).unwrap();
+            #[cfg(windows)]
             assert_eq!(r % 0x10000, 0);
+            #[cfg(not(windows))]
+            assert_eq!(r % page_size(), 0);
             // Part of it in the middle, as the loader commits main and leaves the module gap reserved.
             commit(r + 0x10000, 0x10000, Prot::ReadWrite).unwrap();
             let p = (r + 0x10000) as *mut u8;
