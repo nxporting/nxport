@@ -4366,7 +4366,7 @@ pub(super) enum GuestWrite {
 /// Records GPU work that writes guest memory (results the game can read after the frame's fence) into the command
 /// buffer being encoded. --early-fence does not wait for it: TotK reads such results right after each frame fence
 /// (occlusion report slots; small compute storage buffers, e.g. s_e7935105553f7e48's 0x160-byte outputs, read by
-/// main+0x10c4xxx), so it gets them one frame late, as emulators' asynchronous GPU modes do. --early-fence-strict
+/// TotK 1.1.2 main+0x10c4xxx), so it gets them one frame late, as emulators' asynchronous GPU modes do. --early-fence-strict
 /// falls back to a full wait while any is pending: correct, but in Hateno play every frame has some (one buffer copy,
 /// ~77 occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
 pub(super) fn note_gpu_guest_write(kind: GuestWrite, addr: u64, len: usize) {
@@ -7060,7 +7060,7 @@ unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         // Drawn again since (the game rendered it in the frame just submitted too): present waited for that rendering
         // to finish, so the write-back copies the newest contents now. Postponing it until the game stopped drawing the
         // target (dc6c9bf) wrote textures back long after the game had moved them (tera::ImageResourceMgr compacts its
-        // terrain textures with CPU copies) into memory it had reused: SIGSEGV at main+0xbecbf8 on a list node full of
+        // terrain textures with CPU copies) into memory it had reused: SIGSEGV at TotK 1.1.2 main+0xbecbf8 on a list node full of
         // texels, reliably after unequipping a weapon in the inventory (2026-10-14). Skipping it (b743568) lost targets
         // rendered over a few consecutive frames and then kept.
         let Some(info) = crate::nvn::layout::format_info(t.format) else {
@@ -7071,7 +7071,7 @@ unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         }
         // The texture may have been freed since it was drawn (the descriptor is the one recorded at initialization) and
         // its memory returned to the game's heap: writing there corrupted live game data (2026-10-14: a list node of
-        // tera::ImageResourceMgr overwritten with texels, SIGSEGV at main+0xbecbf8 after ~7 minutes of play). On the
+        // tera::ImageResourceMgr overwritten with texels, SIGSEGV at TotK 1.1.2 main+0xbecbf8 after ~7 minutes of play). On the
         // Switch the GPU wrote this memory while it was still a texture; only memory still inside a live memory pool
         // is written now.
         if crate::nvn::api::containing_pool(t.storage, layout_of(&t).total as usize).is_none() {
