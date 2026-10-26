@@ -405,7 +405,15 @@ TPIDR_EL0 for user code has to be tested; faults come through vectored exception
    thread's write-back copies are the busiest host work. Tried without effect: a 1 ms system timer resolution
    (timeBeginPeriod; the precise sleeps already use a high-resolution waitable timer), higher thread priority for
    guest-main and the Presentation Thread, `restrict` on the lifted functions' Cpu pointer (clang generates the same
-   code: the pointer escapes into every call). Compile flags: zig cc builds every -O1 to -O3 as clang -O2 (its
+   code: the pointer escapes into every call; with `noescape` as well, on every lifted function, GuestFn and the rt_
+   declarations, registers stay in host registers across guest stores, but a TotK file has only 1% fewer moves and
+   the frame rate is the same: the stores lifted code makes to its Cpu before each call are needed anyway), spinning
+   30 us before a light event or message queue wait parks (a parked waiter already runs 3.3 us after the signal, on
+   average). What did help: short sleeps. guest-main and the module workers poll with 20 us SleepThread calls, a few
+   a frame, and the waitable timer made each about 0.5 ms; clock::sleep_ns now yields for the last 0.7 ms (null GPU
+   gameplay 67 -> 69 fps). A wait profile of that gameplay (per thread, time blocked in each HLE wait): guest-main
+   is blocked 60% of the time, the module workers and the three BaseProcExecutors 55 to 65%, nobody is busy for
+   more than about 45%: the frame is the game's chain of jobs, each thread waiting for the next one's. Compile flags: zig cc builds every -O1 to -O3 as clang -O2 (its
    ReleaseFast), for the build machine's CPU, so the -O1 compile-guest passes is -O2 there; a compile from scratch
    takes 8 to 13 minutes on 16 threads (the FZ path's out-of-line functions, specialised per operation, make guest.dll
    about 6% larger).
