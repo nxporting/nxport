@@ -52,11 +52,10 @@ define_class!(
                 crate::metal::display_fps()
             };
             let app_name = crate::profile::app_title();
-            let base_title = format!("{app_name} - native");
             let title = if fps > 0.0 {
-                format!("{base_title}  |  {:.0} fps", fps)
+                format!("{app_name}  |  {:.0} fps", fps)
             } else {
-                base_title
+                app_name.to_string()
             };
             for w in NSApplication::sharedApplication(mtm).windows().iter() {
                 if w.title().to_string().starts_with(app_name) {
@@ -302,7 +301,7 @@ pub fn run_main_thread() -> ! {
         )
     };
     let app_name = crate::profile::app_title();
-    window.setTitle(&NSString::from_str(&format!("{app_name} - native")));
+    window.setTitle(&NSString::from_str(&app_name));
     unsafe { window.setReleasedWhenClosed(false) };
     window.setBackgroundColor(Some(&objc2_app_kit::NSColor::blackColor()));
 
