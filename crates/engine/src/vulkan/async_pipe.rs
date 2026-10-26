@@ -49,6 +49,7 @@ pub(super) struct PipeJob {
     pub dev: Arc<Dev>,
     pub desc: Desc,
     pub vstage: Stage,
+    pub gstage: Option<Stage>,
     pub fstage: Option<Stage>,
     pub layout: vk::PipelineLayout,
     pub cache: vk::PipelineCache,
@@ -98,7 +99,7 @@ fn async_queue() -> &'static (Mutex<Queue>, Condvar) {
                     };
                     if take {
                         let res = unsafe {
-                            pipelines::create(&j.dev, &j.desc, &j.vstage, j.fstage.as_ref(), j.layout, j.cache)
+                            pipelines::create(&j.dev, &j.desc, &j.vstage, j.gstage.as_ref(), j.fstage.as_ref(), j.layout, j.cache)
                         };
                         match res {
                             Ok(p) => {

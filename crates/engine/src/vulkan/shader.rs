@@ -81,10 +81,13 @@ pub fn prep(code: &[u8], ctrl: Option<&[u8]>, index: usize) -> Prep {
     } else if magic == 0x12345678 {
         match (word(code, 0x30) >> 10) & 0xF {
             5 => 1,
+            4 => 4,
             _ => 2,
         }
     } else if index == 1 {
         1
+    } else if index == 4 {
+        4
     } else {
         2
     };
@@ -124,6 +127,8 @@ pub struct Stage {
     pub outputs: u32,
 }
 
+/// Geometry stages' first binding (vertex starts at 0, geometry at 128, fragment at 256).
+pub const GEOMETRY_BINDING_BASE: u32 = 128;
 /// Fragment stages' first binding (vertex stages start at 0; sass2spv numbers a stage's bindings below 256).
 pub const FRAGMENT_BINDING_BASE: u32 = 256;
 
@@ -347,6 +352,8 @@ unsafe fn build_stage(
         vk::ShaderStageFlags::COMPUTE
     } else if hint == 1 {
         vk::ShaderStageFlags::FRAGMENT
+    } else if hint == 4 {
+        vk::ShaderStageFlags::GEOMETRY
     } else {
         vk::ShaderStageFlags::VERTEX
     };

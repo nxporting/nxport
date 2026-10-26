@@ -67,10 +67,11 @@ const TEXTURE_TABLE_CBUF: i32 = 2;
 /// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
 
 impl Ctx {
-    /// The guest program's vertex and fragment stages: (code, control section, content hash).
-    fn graphics_stages(&self) -> Option<((u64, u64, u64), Option<(u64, u64, u64)>)> {
+    /// The guest program's vertex, geometry, and fragment stages: (code, control section, content hash).
+    fn graphics_stages(&self) -> Option<((u64, u64, u64), Option<(u64, u64, u64)>, Option<(u64, u64, u64)>)> {
         let stages = self.programs.get(&self.st.program)?;
         let mut vs = None;
+        let mut gs = None;
         let mut fs = None;
         for &(data, control, content) in stages {
             if data < 0x10000 {
@@ -79,11 +80,12 @@ impl Ctx {
             let sph = unsafe { std::ptr::read_unaligned((data + 0x30) as *const u32) };
             match (sph >> 10) & 0xF {
                 5 => fs = Some((data, control, content)),
+                4 => gs = Some((data, control, content)),
                 0 | 1 => vs = Some((data, control, content)),
                 _ => {}
             }
         }
-        Some((vs?, fs))
+        Some((vs?, gs, fs))
     }
 
     /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions.
@@ -126,8 +128,14 @@ impl Ctx {
         if self.failed_stages.contains(&k) {
             return false;
         }
-        // Graphics stages share set 0, the fragment stage's bindings above the vertex stage's.
-        let base = if set == 1 { shader::FRAGMENT_BINDING_BASE } else { 0 };
+        // Graphics stages share set 0: vertex starts at 0, geometry at 128, fragment at 256.
+        let base = if set == 1 {
+            shader::FRAGMENT_BINDING_BASE
+        } else if set == 4 {
+            shader::GEOMETRY_BINDING_BASE
+        } else {
+            0
+        };
         let code = shader::guest_code(data);
         let prep = shader::prep(code, shader::guest_ctrl(control), index);
         let known = crate::vulkan::stage_cache::identify(code, &prep);
@@ -168,7 +176,7 @@ impl Ctx {
             self.warn(format!("draw mode {mode} is not implemented"));
             return;
         };
-        let Some(((vd, vc, vh), fs)) = self.graphics_stages() else {
+        let Some(((vd, vc, vh), gs, fs)) = self.graphics_stages() else {
             self.warn(format!("program {:#x} has no vertex stage", self.st.program));
             return;
         };
@@ -177,8 +185,24 @@ impl Ctx {
         if !self.stage(vd, vc, 0, vstate, vkey, 0, None, true) {
             return;
         }
-        // Metal links a fragment function's inputs to the vertex function's outputs (MoltenVK).
-        let varyings = self.dev.link_varyings.then(|| self.stages[&(vd, vkey)].outputs);
+        let gkey = match gs {
+            Some((gd, gc, gh)) => {
+                let gkey = hash(&(gh, self.stages[&(vd, vkey)].outputs));
+                if !self.stage(gd, gc, 4, GraphicsState::engine(), gkey, 4, None, false) {
+                    return;
+                }
+                Some((gd, gkey))
+            }
+            None => None,
+        };
+        // Metal links a fragment function's inputs to the preceding stage's outputs (MoltenVK).
+        let varyings = self.dev.link_varyings.then(|| {
+            if let Some((gd, gk)) = gkey {
+                self.stages[&(gd, gk)].outputs
+            } else {
+                self.stages[&(vd, vkey)].outputs
+            }
+        });
         let fkey = match fs {
             Some((fd, fc, fh)) => {
                 let (fstate, fkey) = self.fragment_state();
@@ -201,10 +225,13 @@ impl Ctx {
                 (vl, h)
             }
         };
-        let Some((pipe, layout)) = self.pipeline(mode, topology, (vd, vkey), fkey, &vl, vl_hash) else { return };
-        let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), fkey) else { return };
+        let Some((pipe, layout)) = self.pipeline(mode, topology, (vd, vkey), gkey, fkey, &vl, vl_hash) else { return };
+        let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), gkey, fkey) else { return };
         let mut w = DescWrites::default();
         self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
+        if let (Some(k), Some((gd, gc, _))) = (gkey, gs) {
+            self.stage_writes(k, gd, gc, 4, &call, base_instance, &mut w);
+        }
         if let (Some(k), Some((fd, fc, _))) = (fkey, fs) {
             self.stage_writes(k, fd, fc, 1, &call, base_instance, &mut w);
         }
@@ -321,20 +348,26 @@ impl Ctx {
         self.dev.full_barrier(self.cb);
     }
 
-    /// The descriptor set layout (both stages' bindings in set 0) and pipeline layout of a vertex / fragment stage pair,
+    /// The descriptor set layout and pipeline layout of graphics stages,
     /// and whether its descriptors are pushed: when each stage stays within the push limits.
-    unsafe fn graphics_layout(&mut self, vs: (u64, u64), fs: Option<(u64, u64)>) -> Option<(vk::DescriptorSetLayout, vk::PipelineLayout, bool)> {
-        if let Some(&l) = self.graphics_layouts.get(&(vs, fs)) {
+    unsafe fn graphics_layout(
+        &mut self,
+        vs: (u64, u64),
+        gs: Option<(u64, u64)>,
+        fs: Option<(u64, u64)>,
+    ) -> Option<(vk::DescriptorSetLayout, vk::PipelineLayout, bool)> {
+        if let Some(&l) = self.graphics_layouts.get(&(vs, gs, fs)) {
             return Some(l);
         }
         let vstage = self.stages.get(&vs)?;
+        let gstage = gs.and_then(|k| self.stages.get(&k));
         let fstage = fs.and_then(|k| self.stages.get(&k));
-        // The one the pipeline workers made for this pair, if any (their pipelines were made with it).
-        let l = match pipelines::made_layout(vstage.id, fstage.map(|f| f.id)) {
+        // The one the pipeline workers made for these stages, if any (their pipelines were made with it).
+        let l = match pipelines::made_layout(vstage.id, gstage.map(|g| g.id), fstage.map(|f| f.id)) {
             Some(l) => l,
-            None => pipelines::layout(&self.dev, vstage, fstage)?,
+            None => pipelines::layout(&self.dev, vstage, gstage, fstage)?,
         };
-        self.graphics_layouts.insert((vs, fs), l);
+        self.graphics_layouts.insert((vs, gs, fs), l);
         Some(l)
     }
 
@@ -344,11 +377,12 @@ impl Ctx {
         mode: i32,
         topology: vk::PrimitiveTopology,
         vs: (u64, u64),
+        gs: Option<(u64, u64)>,
         fs: Option<(u64, u64)>,
         vl: &[VStream],
         vl_hash: u64,
     ) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
-        let (_, layout, _) = self.graphics_layout(vs, fs)?;
+        let (_, layout, _) = self.graphics_layout(vs, gs, fs)?;
         let cache = self.pipeline_cache();
         let pass = self.pass.as_ref()?;
         let upper_left = crate::nvn::api::window_origin_mode() == 1;
@@ -367,7 +401,7 @@ impl Ctx {
             depth_fmt,
         );
         let key = hash(&(
-            (vs, fs, vl_hash, &blend),
+            (vs, gs, fs, vl_hash, &blend),
             (color_state, channel_mask, depth_stencil, self.st.polygon, self.st.multisample),
             (color_fmts.iter().map(|f| f.as_raw()).collect::<Vec<_>>(), depth_fmt.as_raw(), pass.samples.as_raw()),
             (topology.as_raw(), restart, self.st.depth_clamp, upper_left, gl_depth),
@@ -376,9 +410,11 @@ impl Ctx {
             return Some(p);
         }
         let vstage = self.stages.get(&vs)?;
+        let gstage = gs.and_then(|k| self.stages.get(&k));
         let fstage = fs.and_then(|k| self.stages.get(&k));
         let desc = pipelines::Desc {
             vs: vstage.id,
+            gs: gstage.map(|g| g.id),
             fs: fstage.map(|f| f.id),
             topology: topology.as_raw(),
             restart,
@@ -405,6 +441,7 @@ impl Ctx {
                         dev: self.dev.clone(),
                         desc: desc.clone(),
                         vstage: vstage.clone(),
+                        gstage: gstage.cloned(),
                         fstage: fstage.cloned(),
                         layout,
                         cache,
@@ -413,7 +450,7 @@ impl Ctx {
                         crate::vulkan::async_pipe::AsyncPipe::Ready(p) => {
                             crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            self.record_pipeline(mode, vstage, fstage, &desc);
+                            self.record_pipeline(mode, vstage, gstage, fstage, &desc);
                             p
                         }
                         crate::vulkan::async_pipe::AsyncPipe::Pending => {
@@ -421,21 +458,21 @@ impl Ctx {
                         }
                         crate::vulkan::async_pipe::AsyncPipe::Failed => {
                             let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
-                            self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): async compile failed", vs.0, fs.map(|f| f.0)));
+                            self.warn(format!("pipeline for {:#x}/{:?}/{:?} (targets {targets:?}): async compile failed", vs.0, gs.map(|g| g.0), fs.map(|f| f.0)));
                             return None;
                         }
                     }
                 } else {
                     crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    match pipelines::create(&self.dev, &desc, vstage, fstage, layout, cache) {
+                    match pipelines::create(&self.dev, &desc, vstage, gstage, fstage, layout, cache) {
                         Ok(p) => {
-                            self.record_pipeline(mode, vstage, fstage, &desc);
+                            self.record_pipeline(mode, vstage, gstage, fstage, &desc);
                             p
                         }
                         Err(e) => {
                             let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
-                            self.warn(format!("pipeline for {:#x}/{:?} (targets {targets:?}): {e}", vs.0, fs.map(|f| f.0)));
+                            self.warn(format!("pipeline for {:#x}/{:?}/{:?} (targets {targets:?}): {e}", vs.0, gs.map(|g| g.0), fs.map(|f| f.0)));
                             return None;
                         }
                     }
@@ -1038,7 +1075,7 @@ pub(in crate::vulkan) fn vertex_streams(dev: &Dev, attribs: impl Iterator<Item =
 
 impl Ctx {
     /// Adds a new pipeline to the pipeline list, and checks that the entry gives back this pipeline (listed.rs).
-    unsafe fn record_pipeline(&self, mode: i32, vstage: &Stage, fstage: Option<&Stage>, desc: &pipelines::Desc) {
+    unsafe fn record_pipeline(&self, mode: i32, vstage: &Stage, _gstage: Option<&Stage>, fstage: Option<&Stage>, desc: &pipelines::Desc) {
         let Some(pass) = self.pass.as_ref() else { return };
         let attribs = self.st.attribs.as_slice();
         let e = nxport_pipelines::Entry {

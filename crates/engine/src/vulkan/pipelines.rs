@@ -18,6 +18,7 @@ pub(super) type Stream = (u32, u32, bool, Vec<(u32, i32, u32)>);
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct Desc {
     pub vs: StageId,
+    pub gs: Option<StageId>,
     pub fs: Option<StageId>,
     pub topology: i32,
     pub restart: bool,
@@ -73,10 +74,15 @@ pub(super) fn normalize(
 /// A descriptor set layout for both stages and its pipeline layout; whether the set is pushed.
 pub(super) type Layout = (vk::DescriptorSetLayout, vk::PipelineLayout, bool);
 
-/// The layout of a graphics stage pair (one set: vertex bindings, then fragment ones).
-pub(super) unsafe fn layout(dev: &Dev, vstage: &Stage, fstage: Option<&Stage>) -> Option<Layout> {
+/// The layout of graphics stages (one set: vertex, geometry, then fragment bindings).
+pub(super) unsafe fn layout(
+    dev: &Dev,
+    vstage: &Stage,
+    gstage: Option<&Stage>,
+    fstage: Option<&Stage>,
+) -> Option<Layout> {
     let mut lb: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
-    for st in std::iter::once(vstage).chain(fstage) {
+    for st in std::iter::once(vstage).chain(gstage).chain(fstage) {
         lb.extend(st.bindings.iter().map(|b| {
             vk::DescriptorSetLayoutBinding::default().binding(b.binding).descriptor_type(b.ty).descriptor_count(b.count).stage_flags(st.stage_flags)
         }));
@@ -86,6 +92,7 @@ pub(super) unsafe fn layout(dev: &Dev, vstage: &Stage, fstage: Option<&Stage>) -
     let push = dev.push.as_ref().is_some_and(|p| {
         total <= p.max
             && vstage.samplers <= p.samplers
+            && gstage.is_none_or(|g| g.samplers <= p.samplers && g.buffers <= p.buffers)
             && fstage.is_none_or(|f| f.samplers <= p.samplers && f.buffers <= p.buffers)
             && vstage.buffers + 17 <= p.buffers
     });
@@ -101,12 +108,16 @@ pub(super) unsafe fn create(
     dev: &Dev,
     d: &Desc,
     vstage: &Stage,
+    gstage: Option<&Stage>,
     fstage: Option<&Stage>,
     layout: vk::PipelineLayout,
     cache: vk::PipelineCache,
 ) -> Result<vk::Pipeline, vk::Result> {
     let entry = c"main";
     let mut stages = vec![vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vstage.module).name(entry)];
+    if let Some(g) = gstage {
+        stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::GEOMETRY).module(g.module).name(entry));
+    }
     if let Some(f) = fstage {
         stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(f.module).name(entry));
     }
@@ -208,7 +219,7 @@ pub(super) unsafe fn create(
 #[derive(Default)]
 struct Made {
     pipelines: HashMap<u64, (vk::Pipeline, vk::PipelineLayout)>,
-    layouts: HashMap<(StageId, Option<StageId>), Layout>,
+    layouts: HashMap<(StageId, Option<StageId>, Option<StageId>), Layout>,
 }
 
 fn made() -> &'static Mutex<Made> {
@@ -221,9 +232,9 @@ pub(super) fn take(key: u64) -> Option<(vk::Pipeline, vk::PipelineLayout)> {
     made().lock().unwrap().pipelines.get(&key).copied()
 }
 
-/// A layout the workers made for this stage pair.
-pub(super) fn made_layout(vs: StageId, fs: Option<StageId>) -> Option<Layout> {
-    made().lock().unwrap().layouts.get(&(vs, fs)).copied()
+/// A layout the workers made for these stages.
+pub(super) fn made_layout(vs: StageId, gs: Option<StageId>, fs: Option<StageId>) -> Option<Layout> {
+    made().lock().unwrap().layouts.get(&(vs, gs, fs)).copied()
 }
 
 /// Adds a pipeline the workers made.
@@ -231,7 +242,7 @@ pub(super) fn put(key: u64, p: vk::Pipeline, layout: vk::PipelineLayout) {
     made().lock().unwrap().pipelines.insert(key, (p, layout));
 }
 
-/// Adds a layout the workers made for this stage pair (or returns the one another worker added first).
-pub(super) fn put_layout(vs: StageId, fs: Option<StageId>, l: Layout) -> Layout {
-    *made().lock().unwrap().layouts.entry((vs, fs)).or_insert(l)
+/// Adds a layout the workers made for these stages (or returns the one another worker added first).
+pub(super) fn put_layout(vs: StageId, gs: Option<StageId>, fs: Option<StageId>, l: Layout) -> Layout {
+    *made().lock().unwrap().layouts.entry((vs, gs, fs)).or_insert(l)
 }
