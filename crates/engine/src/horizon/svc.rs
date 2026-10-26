@@ -24,6 +24,9 @@ const RESULT_TIMEOUT: u64 = 0xEA01;
 const RESULT_NOT_IMPLEMENTED: u64 = 0xF001;
 const RESULT_INVALID_ADDRESS: u64 = 0xCC01;
 const RESULT_SESSION_CLOSED: u64 = 0xF601;
+const RESULT_INVALID_STATE: u64 = 0xFA01;
+
+const WAITERS_BIT: u32 = 0x4000_0000;
 
 const PSEUDO_CURRENT_THREAD: u32 = 0xFFFF_8000;
 const PSEUDO_CURRENT_PROCESS: u32 = 0xFFFF_8001;
@@ -115,12 +118,35 @@ struct Session {
     cv: Condvar,
 }
 
+struct EventObj {
+    signaled: Mutex<bool>,
+    cv: Condvar,
+}
+
+#[derive(Clone)]
+struct LockWaiter {
+    tag: u32,
+    cv: Arc<Condvar>,
+    woken: Arc<Mutex<bool>>,
+}
+
+#[derive(Clone)]
+struct ArbiterWaiter {
+    cv: Arc<Condvar>,
+    woken: Arc<Mutex<bool>>,
+}
+
 enum Handle {
     Thread(ThreadObj),
     SessionServer(Arc<Session>),
     SessionClient(Arc<Session>),
     Process,
+    EventWritable(Arc<EventObj>),
+    EventReadable(Arc<EventObj>),
 }
+
+static LOCK_WAITERS: Mutex<Option<HashMap<u64, Vec<LockWaiter>>>> = Mutex::new(None);
+static ARBITER_WAITERS: Mutex<Option<HashMap<u64, Vec<ArbiterWaiter>>>> = Mutex::new(None);
 
 static HANDLES: Mutex<Option<HashMap<u32, Handle>>> = Mutex::new(None);
 static NEXT_HANDLE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x100);
@@ -206,6 +232,8 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
             exit_current_thread();
             RESULT_OK
         }
+        0x11 => signal_event(r),
+        0x12 => clear_event(r),
         0x16 => {
             let removed = HANDLES
                 .lock()
@@ -219,14 +247,20 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
             }
             RESULT_OK
         }
+        0x17 => reset_signal(r),
         0x18 => wait_synchronization(r),
+        0x1A => arbitrate_lock(r),
+        0x1B => arbitrate_unlock(r),
         0x1E => {
             r[0] = crate::horizon::hle::hle_nn_os_GetSystemTick();
             return;
         }
-        0x40 => create_session(r),
         0x21 => send_sync_request(r),
+        0x34 => wait_for_address(r),
+        0x35 => signal_to_address(r),
+        0x40 => create_session(r),
         0x43 => reply_and_receive(r),
+        0x45 => create_event(r),
         _ => {
             println!(
                 "[!] svc {:#x} is not implemented (x0={:#x} x1={:#x} x2={:#x})",
@@ -731,6 +765,7 @@ unsafe fn wait_synchronization(r: &mut [u64; 8]) -> u64 {
                 let g = HANDLES.lock().unwrap();
                 match g.as_ref().and_then(|m| m.get(&h)) {
                     Some(Handle::Thread(t)) => *t.done.0.lock().unwrap(),
+                    Some(Handle::EventReadable(e)) => *e.signaled.lock().unwrap(),
                     Some(_) => true,
                     None if h == PSEUDO_CURRENT_THREAD => false,
                     None => return RESULT_INVALID_HANDLE,
@@ -834,4 +869,332 @@ unsafe fn reply_and_receive(r: &mut [u64; 8]) -> u64 {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
+}
+
+/// svcCreateEvent(Handle* write, Handle* read) -> w1 write, w2 read
+unsafe fn create_event(r: &mut [u64; 8]) -> u64 {
+    let ev = Arc::new(EventObj {
+        signaled: Mutex::new(false),
+        cv: Condvar::new(),
+    });
+    let hw = new_handle(Handle::EventWritable(ev.clone()));
+    let hr = new_handle(Handle::EventReadable(ev));
+    r[1] = hw as u64;
+    r[2] = hr as u64;
+    RESULT_OK
+}
+
+/// svcSignalEvent(Handle write)
+unsafe fn signal_event(r: &mut [u64; 8]) -> u64 {
+    let h = r[0] as u32;
+    let g = HANDLES.lock().unwrap();
+    match g.as_ref().and_then(|m| m.get(&h)) {
+        Some(Handle::EventWritable(ev)) => {
+            let mut sig = ev.signaled.lock().unwrap();
+            *sig = true;
+            ev.cv.notify_all();
+            RESULT_OK
+        }
+        _ => RESULT_INVALID_HANDLE,
+    }
+}
+
+/// svcClearEvent(Handle event)
+unsafe fn clear_event(r: &mut [u64; 8]) -> u64 {
+    let h = r[0] as u32;
+    let g = HANDLES.lock().unwrap();
+    match g.as_ref().and_then(|m| m.get(&h)) {
+        Some(Handle::EventWritable(ev)) | Some(Handle::EventReadable(ev)) => {
+            *ev.signaled.lock().unwrap() = false;
+            RESULT_OK
+        }
+        _ => RESULT_INVALID_HANDLE,
+    }
+}
+
+/// svcResetSignal(Handle read)
+unsafe fn reset_signal(r: &mut [u64; 8]) -> u64 {
+    let h = r[0] as u32;
+    let g = HANDLES.lock().unwrap();
+    match g.as_ref().and_then(|m| m.get(&h)) {
+        Some(Handle::EventReadable(ev)) => {
+            let mut sig = ev.signaled.lock().unwrap();
+            if !*sig {
+                RESULT_INVALID_STATE
+            } else {
+                *sig = false;
+                RESULT_OK
+            }
+        }
+        _ => RESULT_INVALID_HANDLE,
+    }
+}
+
+/// svcArbitrateLock(Handle owner, u64 address, u32 tag) -> Result
+unsafe fn arbitrate_lock(r: &mut [u64; 8]) -> u64 {
+    let owner = r[0] as u32;
+    let addr = r[1];
+    let tag = r[2] as u32;
+
+    if addr == 0 || (addr & 3) != 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let cur_val = *(addr as *const u32);
+    if cur_val == (owner | WAITERS_BIT) {
+        let waiter = LockWaiter {
+            tag,
+            cv: Arc::new(Condvar::new()),
+            woken: Arc::new(Mutex::new(false)),
+        };
+        {
+            let mut g = LOCK_WAITERS.lock().unwrap();
+            let map = g.get_or_insert_with(HashMap::new);
+            map.entry(addr).or_default().push(waiter.clone());
+        }
+        let mut lock = waiter.woken.lock().unwrap();
+        while !*lock {
+            lock = waiter.cv.wait(lock).unwrap();
+        }
+    }
+    RESULT_OK
+}
+
+/// svcArbitrateUnlock(u64 address) -> Result
+unsafe fn arbitrate_unlock(r: &mut [u64; 8]) -> u64 {
+    let addr = r[0];
+
+    if addr == 0 || (addr & 3) != 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let next_waiter = {
+        let mut g = LOCK_WAITERS.lock().unwrap();
+        if let Some(map) = g.as_mut() {
+            if let Some(list) = map.get_mut(&addr) {
+                if !list.is_empty() {
+                    let w = list.remove(0);
+                    let more = !list.is_empty();
+                    if list.is_empty() {
+                        map.remove(&addr);
+                    }
+                    Some((w, more))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some((w, more)) = next_waiter {
+        let new_val = w.tag | if more { WAITERS_BIT } else { 0 };
+        *(addr as *mut u32) = new_val;
+        *w.woken.lock().unwrap() = true;
+        w.cv.notify_one();
+    } else {
+        *(addr as *mut u32) = 0;
+    }
+    RESULT_OK
+}
+
+/// svcWaitForAddress(u64 address, u32 arb_type, u64 value, s64 timeout) -> Result
+unsafe fn wait_for_address(r: &mut [u64; 8]) -> u64 {
+    let addr = r[0];
+    let arb_type = r[1] as u32;
+    let val = r[2];
+    let timeout = r[3] as i64;
+
+    if addr == 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let ok = match arb_type {
+        0 => {
+            // WaitIfLessThan (32-bit signed)
+            if (addr & 3) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            (*(addr as *const i32)) < (val as i32)
+        }
+        1 => {
+            // DecrementIfLessThanThenWait (32-bit signed)
+            if (addr & 3) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            let atomic = &*(addr as *const std::sync::atomic::AtomicI32);
+            let mut cur = atomic.load(std::sync::atomic::Ordering::SeqCst);
+            let mut success = false;
+            loop {
+                if cur < (val as i32) {
+                    match atomic.compare_exchange_weak(
+                        cur,
+                        cur.wrapping_sub(1),
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    ) {
+                        Ok(_) => {
+                            success = true;
+                            break;
+                        }
+                        Err(actual) => cur = actual,
+                    }
+                } else {
+                    break;
+                }
+            }
+            success
+        }
+        2 => {
+            // WaitIfEqual (32-bit)
+            if (addr & 3) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            (*(addr as *const u32)) == (val as u32)
+        }
+        3 => {
+            // WaitIfEqual64 (64-bit equal)
+            if (addr & 7) != 0 {
+                return RESULT_INVALID_ADDRESS;
+            }
+            (*(addr as *const u64)) == val
+        }
+        _ => return RESULT_NOT_IMPLEMENTED,
+    };
+
+    if !ok {
+        return RESULT_INVALID_STATE;
+    }
+
+    if timeout == 0 {
+        return RESULT_TIMEOUT;
+    }
+
+    let waiter = ArbiterWaiter {
+        cv: Arc::new(Condvar::new()),
+        woken: Arc::new(Mutex::new(false)),
+    };
+
+    {
+        let mut g = ARBITER_WAITERS.lock().unwrap();
+        let map = g.get_or_insert_with(HashMap::new);
+        map.entry(addr).or_default().push(waiter.clone());
+    }
+
+    let deadline = (timeout > 0).then(|| {
+        std::time::Instant::now() + std::time::Duration::from_nanos(timeout as u64)
+    });
+    let mut lock = waiter.woken.lock().unwrap();
+    while !*lock {
+        if timeout < 0 {
+            lock = waiter.cv.wait(lock).unwrap();
+        } else if let Some(dl) = deadline {
+            let now = std::time::Instant::now();
+            if now >= dl {
+                break;
+            }
+            let (new_lock, timeout_res) = waiter.cv.wait_timeout(lock, dl - now).unwrap();
+            lock = new_lock;
+            if timeout_res.timed_out() && !*lock {
+                break;
+            }
+        }
+    }
+    let woken = *lock;
+    drop(lock);
+
+    if !woken {
+        let mut g = ARBITER_WAITERS.lock().unwrap();
+        if let Some(map) = g.as_mut() {
+            if let Some(list) = map.get_mut(&addr) {
+                list.retain(|w| !Arc::ptr_eq(&w.woken, &waiter.woken));
+                if list.is_empty() {
+                    map.remove(&addr);
+                }
+            }
+        }
+        return RESULT_TIMEOUT;
+    }
+    RESULT_OK
+}
+
+/// svcSignalToAddress(u64 address, u32 signal_type, u32 value, s32 count) -> Result
+unsafe fn signal_to_address(r: &mut [u64; 8]) -> u64 {
+    let addr = r[0];
+    let signal_type = r[1] as u32;
+    let val = r[2] as u32;
+    let count = r[3] as i32;
+
+    if addr == 0 || (addr & 3) != 0 {
+        return RESULT_INVALID_ADDRESS;
+    }
+
+    let mut g = ARBITER_WAITERS.lock().unwrap();
+    let map = g.get_or_insert_with(HashMap::new);
+    let nw = map.get(&addr).map_or(0, |v| v.len());
+
+    if signal_type != 0 {
+        let nv = if signal_type == 1 {
+            (val as i32).wrapping_add(1)
+        } else if signal_type == 2 {
+            // Waking all (count <= 0) with waiters subtracts 2, not 1
+            // (Mesosphere KAddressArbiter::SignalAndModifyByWaitingCountIfEqual).
+            if count <= 0 {
+                if nw > 0 {
+                    (val as i32).wrapping_sub(2)
+                } else {
+                    (val as i32).wrapping_add(1)
+                }
+            } else {
+                if nw == 0 {
+                    (val as i32).wrapping_add(1)
+                } else if nw <= count as usize {
+                    (val as i32).wrapping_sub(1)
+                } else {
+                    val as i32
+                }
+            }
+        } else {
+            return RESULT_NOT_IMPLEMENTED;
+        };
+
+        let atomic = &*(addr as *const std::sync::atomic::AtomicU32);
+        if atomic
+            .compare_exchange(
+                val,
+                nv as u32,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return RESULT_INVALID_STATE;
+        }
+    }
+
+    let to_wake = if let Some(list) = map.get_mut(&addr) {
+        if count <= 0 || (count as usize) >= list.len() {
+            map.remove(&addr).unwrap_or_default()
+        } else {
+            let cnt = count as usize;
+            let drained: Vec<_> = list.drain(..cnt).collect();
+            if list.is_empty() {
+                map.remove(&addr);
+            }
+            drained
+        }
+    } else {
+        Vec::new()
+    };
+    drop(g);
+
+    for w in to_wake {
+        *w.woken.lock().unwrap() = true;
+        w.cv.notify_one();
+    }
+
+    RESULT_OK
 }
