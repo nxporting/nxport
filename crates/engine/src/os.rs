@@ -112,7 +112,7 @@ pub fn tls_set(key: TlsKey, value: *mut std::ffi::c_void) -> io::Result<()> {
     unsafe { imp::tls_set(key, value) }
 }
 
-/// A dynamic library, loaded for the rest of the process (the lifted guest library, the movie shim).
+/// A dynamic library, loaded for the rest of the process (the lifted guest library, libopus).
 #[derive(Clone, Copy, Debug)]
 pub struct Library(*mut std::ffi::c_void);
 

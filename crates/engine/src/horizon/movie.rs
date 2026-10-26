@@ -1,7 +1,6 @@
 // HLE of the game's horizon::movie:: library (subsdk0): Buffer, MediaData, Extractor and Decoder,
-// backed by ffmpeg through target/movie_shim.dylib (tools/movie_shim). The native library decodes through
-// multimedia sysmodules and the hardware video decoder, neither of which runs here. Without the shim, files open with no
-// tracks (playback ends at once).
+// backed by crates/media (its demuxers and decoders are built into the program). The native library decodes through
+// multimedia sysmodules and the hardware video decoder, neither of which runs here.
 //
 // Object layouts: Buffer is plain data, MediaData / Extractor / Decoder are a pointer
 // to an implementation (plus a vtable for the last two). Vtables follow declaration order
@@ -27,8 +26,9 @@ const NULL_DECODER: u32 = 0x2004;
 const NULL_EXTRACTOR: u32 = 0x3003;
 const BUFFER_FLAG_EOS: u32 = 4; // BufferFlags_EndOfStream
 
-// ── ffmpeg shim ─────────────────────────────────────────────────────────────────────────────────────────────────
-#[repr(C)]
+// ── Movie files (crates/media) ─────────────────────────────────────────────────────────────────────────────────────
+// The extractor and decoder below hold their file and decoder as handles (a boxed nxport_media::Source / Decoder) and
+// talk to them through these functions: sizes and statuses as ints, -1 at the end, -2 when a buffer is too small.
 #[derive(Default, Clone, Copy)]
 struct TrackInfo {
     ty: c_int,
@@ -41,69 +41,140 @@ struct TrackInfo {
     duration_us: i64,
 }
 
-struct Shim {
-    open: unsafe extern "C" fn(*const c_char, *mut c_int) -> *mut c_void,
-    track_info: unsafe extern "C" fn(*mut c_void, c_int, *mut TrackInfo) -> c_int,
-    peek: unsafe extern "C" fn(*mut c_void, *mut c_int, *mut c_int, *mut i64, *mut c_int) -> c_int,
-    copy: unsafe extern "C" fn(*mut c_void, *mut u8, c_int) -> c_int,
-    advance: unsafe extern "C" fn(*mut c_void),
-    seek: unsafe extern "C" fn(*mut c_void, i64) -> c_int,
-    close: unsafe extern "C" fn(*mut c_void),
-    md_open: unsafe extern "C" fn(*mut c_void, c_int, c_int) -> *mut c_void,
-    md_send: unsafe extern "C" fn(*mut c_void, *const u8, c_int, i64, c_int) -> c_int,
-    md_receive: unsafe extern "C" fn(
-        *mut c_void,
-        *mut u8,
-        c_int,
-        *mut i64,
-        *mut c_int,
-        *mut c_int,
-        *mut c_int,
-        *mut c_int,
-    ) -> c_int,
-    md_flush: unsafe extern "C" fn(*mut c_void),
-    md_close: unsafe extern "C" fn(*mut c_void),
+struct Media {
+    open: unsafe fn(*const c_char, *mut c_int) -> *mut c_void,
+    track_info: unsafe fn(*mut c_void, c_int, *mut TrackInfo) -> c_int,
+    peek: unsafe fn(*mut c_void, *mut c_int, *mut c_int, *mut i64, *mut c_int) -> c_int,
+    copy: unsafe fn(*mut c_void, *mut u8, c_int) -> c_int,
+    advance: unsafe fn(*mut c_void),
+    seek: unsafe fn(*mut c_void, i64) -> c_int,
+    close: unsafe fn(*mut c_void),
+    md_open: unsafe fn(*mut c_void, c_int, c_int) -> *mut c_void,
+    md_send: unsafe fn(*mut c_void, *const u8, c_int, i64, c_int) -> c_int,
+    md_receive: unsafe fn(*mut c_void, *mut u8, c_int, *mut i64, *mut c_int, *mut c_int, *mut c_int, *mut c_int) -> c_int,
+    md_flush: unsafe fn(*mut c_void),
+    md_close: unsafe fn(*mut c_void),
 }
-unsafe impl Sync for Shim {}
 
-fn shim() -> Option<&'static Shim> {
-    static S: OnceLock<Option<Shim>> = OnceLock::new();
-    S.get_or_init(|| unsafe {
-        let mut candidates: Vec<String> = Vec::new();
-        if let Some(p) = &crate::settings::get().files.movie_shim {
-            candidates.push(p.display().to_string());
-        }
-        if let Ok(e) = std::env::current_exe() {
-            if let Some(p) = e.parent() {
-                candidates.push(p.join("movie_shim.dylib").display().to_string());
-                candidates.push(p.join("../Frameworks/movie_shim.dylib").display().to_string());
-                candidates.push(p.join("Frameworks/movie_shim.dylib").display().to_string());
+fn media() -> &'static Media {
+    use nxport_media::{Codec, Decoder, Format, Kind, Output, Source};
+    unsafe fn src<'a>(h: *mut c_void) -> &'a mut Source {
+        &mut *(h as *mut Source)
+    }
+    unsafe fn dec<'a>(h: *mut c_void) -> &'a mut Decoder {
+        &mut *(h as *mut Decoder)
+    }
+    static MEDIA: Media = Media {
+        open: |path, n| unsafe {
+            let p = CStr::from_ptr(path).to_string_lossy().into_owned();
+            match Source::open(std::path::Path::new(&p)) {
+                Ok(s) => {
+                    *n = s.tracks().len() as c_int;
+                    Box::into_raw(Box::new(s)) as *mut c_void
+                }
+                Err(e) => {
+                    println!("[!] movie: {e}");
+                    std::ptr::null_mut()
+                }
             }
-        }
-        for c in candidates.iter().filter(|c| !c.is_empty()) {
-            let Ok(lib) = crate::os::Library::open(std::path::Path::new(c)) else {
-                continue;
+        },
+        track_info: |h, i, out| unsafe {
+            let Some(t) = src(h).tracks().get(i as usize) else { return -1 };
+            *out = TrackInfo {
+                ty: match t.kind {
+                    Kind::Video => 1,
+                    Kind::Audio => 2,
+                    Kind::Other => 0,
+                },
+                codec: match t.codec {
+                    Codec::Avc => 1,
+                    Codec::Vp8 => 2,
+                    Codec::Vp9 => 3,
+                    Codec::Aac => 4,
+                    Codec::Vorbis => 5,
+                    Codec::Opus => 6,
+                    Codec::Unknown => 0,
+                },
+                width: t.width as c_int,
+                height: t.height as c_int,
+                fps: t.fps,
+                sample_rate: t.sample_rate as c_int,
+                channels: t.channels as c_int,
+                duration_us: t.duration_us,
             };
-            macro_rules! sym {
-                ($n:literal) => {{
-                    let p = lib.symbol($n);
-                    if p.is_null() {
-                        println!("[!] movie: {} lacks {}", c, $n);
-                        return None;
-                    }
-                    std::mem::transmute(p)
-                }};
+            0
+        },
+        peek: |h, track, size, pts, key| unsafe {
+            let Some(s) = src(h).peek() else { return -1 };
+            (*track, *size, *pts, *key) = (s.track as c_int, s.data.len() as c_int, s.pts_us, s.key as c_int);
+            0
+        },
+        copy: |h, buf, cap| unsafe {
+            let Some(s) = src(h).peek() else { return -1 };
+            if s.data.len() > cap as usize {
+                return -2;
             }
-            println!("[+] movie: playback through {}", c);
-            return Some(Shim {
-                open: sym!("ms_open"), track_info: sym!("ms_track_info"), peek: sym!("ms_peek"), copy: sym!("ms_copy"),
-                advance: sym!("ms_advance"), seek: sym!("ms_seek"), close: sym!("ms_close"), md_open: sym!("md_open"),
-                md_send: sym!("md_send"), md_receive: sym!("md_receive"), md_flush: sym!("md_flush"), md_close: sym!("md_close"),
-            });
-        }
-        println!("[!] movie: no target/movie_shim.dylib (tools/build_movie_shim.sh): movies have no tracks");
-        None
-    }).as_ref()
+            std::ptr::copy_nonoverlapping(s.data.as_ptr(), buf, s.data.len());
+            s.data.len() as c_int
+        },
+        advance: |h| unsafe { src(h).advance() },
+        seek: |h, us| unsafe {
+            if src(h).seek(us) {
+                0
+            } else {
+                -1
+            }
+        },
+        close: |h| unsafe { drop(Box::from_raw(h as *mut Source)) },
+        md_open: |file, track, fmt| unsafe {
+            let Some(t) = src(file).tracks().get(track as usize) else { return std::ptr::null_mut() };
+            // movie::DecoderOutputFormat: 1 PCM16, 3 ABGR (bytes R, G, B, A), 4 NV12.
+            let format = match fmt {
+                1 => Format::Pcm16,
+                3 => Format::Rgba,
+                _ => Format::Nv12,
+            };
+            match Decoder::new(t, format) {
+                Ok(d) => Box::into_raw(Box::new(d)) as *mut c_void,
+                Err(e) => {
+                    println!("[!] movie: {e}");
+                    std::ptr::null_mut()
+                }
+            }
+        },
+        md_send: |h, data, size, pts, eos| unsafe {
+            let data = if size > 0 { std::slice::from_raw_parts(data, size as usize) } else { &[] };
+            match dec(h).send(data, pts, eos != 0) {
+                Ok(()) => 0,
+                Err(e) => {
+                    println!("[!] movie: {e}");
+                    -1
+                }
+            }
+        },
+        md_receive: |h, out, cap, pts, w, hh, stride, need| unsafe {
+            let buf = std::slice::from_raw_parts_mut(out, cap.max(0) as usize);
+            match dec(h).receive(buf) {
+                Output::Picture { pts_us, width, height, stride: s, size } => {
+                    (*pts, *w, *hh, *stride) = (pts_us, width as c_int, height as c_int, s as c_int);
+                    size as c_int
+                }
+                Output::Audio { pts_us, frames, channels, size } => {
+                    (*pts, *w, *hh, *stride) = (pts_us, frames as c_int, channels as c_int, 0);
+                    size as c_int
+                }
+                Output::NeedInput => 0,
+                Output::End => -1,
+                Output::TooSmall(n) => {
+                    *need = n as c_int;
+                    -2
+                }
+            }
+        },
+        md_flush: |h| unsafe { dec(h).flush() },
+        md_close: |h| unsafe { drop(Box::from_raw(h as *mut Decoder)) },
+    };
+    &MEDIA
 }
 
 // ── horizon::movie::Buffer (private members) ─────────────────────────────────────────────────────────────────────
@@ -470,7 +541,7 @@ unsafe extern "C" fn md_count(md: *mut usize) -> usize {
 static EXTRACTOR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Extractor {
-    file: usize, // shim handle
+    file: usize, // media file handle
     tracks: Vec<TrackInfo>,
     selected: Vec<bool>,
 }
@@ -499,9 +570,7 @@ unsafe extern "C" fn x_dtor(this: *mut usize) {
     if *this.add(1) != 0 {
         let e = Box::from_raw(*this.add(1) as *mut Extractor);
         if e.file != 0 {
-            if let Some(s) = shim() {
-                (s.close)(e.file as *mut c_void);
-            }
+            (media().close)(e.file as *mut c_void);
         }
         *this.add(1) = 0;
     }
@@ -512,10 +581,7 @@ unsafe fn x_open(this: *mut usize, uri: *const c_char) -> u32 {
     let Some(e) = ext(this) else {
         return NULL_EXTRACTOR;
     };
-    let Some(s) = shim() else {
-        println!("[movie] {}: no decoder library, no tracks", u);
-        return OK;
-    };
+    let s = media();
     let Some(path) = crate::horizon::fs::resolve_path(&u) else {
         return ERR_IO;
     };
@@ -642,17 +708,14 @@ unsafe extern "C" fn x_seek(this: *mut usize, us: i64) -> u32 {
     let Some(e) = ext(this) else {
         return NULL_EXTRACTOR;
     };
-    match shim() {
-        Some(s) if e.file != 0 => {
-            (s.seek)(e.file as *mut c_void, us);
-            OK
-        }
-        _ => OK,
+    if e.file != 0 {
+        (media().seek)(e.file as *mut c_void, us);
     }
+    OK
 }
 /// The current sample of a selected track (skipping the others): (track, size, pts, key).
 unsafe fn x_current(e: &mut Extractor) -> Option<(i32, i32, i64, i32)> {
-    let s = shim()?;
+    let s = media();
     if e.file == 0 {
         return None;
     }
@@ -688,9 +751,7 @@ unsafe extern "C" fn x_read(this: *mut usize, b: *mut Buffer) -> u32 {
     let Some((_t, size, pts, _k)) = x_current(e) else {
         return END_OF_STREAM;
     };
-    let Some(s) = shim() else {
-        return END_OF_STREAM;
-    };
+    let s = media();
     if (*b).data.is_null() || ((*b).capacity as i64) < size as i64 {
         return ERR_BUFFER_TOO_SMALL;
     }
@@ -716,16 +777,11 @@ unsafe extern "C" fn x_advance(this: *mut usize) -> u32 {
     let Some(e) = ext(this) else {
         return NULL_EXTRACTOR;
     };
-    match shim() {
-        Some(s) if e.file != 0 => {
-            if x_current(e).is_none() {
-                return END_OF_STREAM;
-            }
-            (s.advance)(e.file as *mut c_void);
-            OK
-        }
-        _ => END_OF_STREAM,
+    if e.file == 0 || x_current(e).is_none() {
+        return END_OF_STREAM;
     }
+    (media().advance)(e.file as *mut c_void);
+    OK
 }
 unsafe extern "C" fn x_sample_time(this: *mut usize, out: *mut i64) -> u32 {
     let _guard = EXTRACTOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -841,7 +897,7 @@ struct OutFrame {
 struct Decoder {
     out_format: i32,
     events: [usize; 4], // input available, output available, format changed, error
-    dec: usize,         // shim decoder
+    dec: usize,         // media decoder handle
     is_video: bool,
     width: i32,
     height: i32,
@@ -888,9 +944,7 @@ unsafe extern "C" fn d_dtor(this: *mut usize) {
     if *this.add(1) != 0 {
         let d = Box::from_raw(*this.add(1) as *mut Decoder);
         if d.dec != 0 {
-            if let Some(s) = shim() {
-                (s.md_close)(d.dec as *mut c_void);
-            }
+            (media().md_close)(d.dec as *mut c_void);
         }
         *this.add(1) = 0;
     }
@@ -900,9 +954,7 @@ unsafe extern "C" fn d_configure(this: *mut usize, md: *mut usize) -> u32 {
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
-    let Some(s) = shim() else {
-        return ERR_NOT_SUPPORTED;
-    };
+    let s = media();
     let (mut file, mut track) = (0i64, 0i32);
     if !md_find_i64(md, b"nx-movie-file\0".as_ptr() as _, &mut file)
         || !md_find_i32(md, b"nx-movie-track\0".as_ptr() as _, &mut track)
@@ -977,7 +1029,7 @@ fn fill_format(d: &Decoder, md: *mut usize) {
         );
         md_set(md, "slice-height", Val::I32(d.height));
         if d.out_format == 4 {
-            // Plane offsets inside an NV12 output buffer (the shim writes tightly packed planes).
+            // Plane offsets inside an NV12 output buffer (the decoder writes tightly packed planes).
             md_set(md, "nv12-y-offset", Val::I32(0));
             md_set(md, "nv12-uv-offset", Val::I32(d.width * d.height));
         }
@@ -1024,10 +1076,8 @@ unsafe extern "C" fn d_flush(this: *mut usize) -> u32 {
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
-    if let Some(s) = shim() {
-        if d.dec != 0 {
-            (s.md_flush)(d.dec as *mut c_void);
-        }
+    if d.dec != 0 {
+        (media().md_flush)(d.dec as *mut c_void);
     }
     for i in d.inputs.iter_mut() {
         i.1 = true;
@@ -1056,7 +1106,7 @@ fn distribute(d: &mut Decoder) {
     }
 }
 unsafe fn drain(d: &mut Decoder) {
-    let Some(s) = shim() else { return };
+    let s = media();
     loop {
         let (mut pts, mut w, mut h, mut stride, mut need) = (0i64, 0, 0, 0, 0);
         let cap = d.scratch.len() as c_int;
@@ -1159,7 +1209,7 @@ unsafe extern "C" fn d_send_input(
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
-    let Some(s) = shim() else { return ERR_UNKNOWN };
+    let s = media();
     let Some(slot) = d.inputs.get_mut(idx as usize) else {
         return ERR_INVALID_RANGE;
     };

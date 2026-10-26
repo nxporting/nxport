@@ -60,19 +60,6 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     let frameworks = contents.join("Frameworks");
     let _ = fs::create_dir_all(&frameworks);
 
-    // Copy movie_shim dylib for in-game video playback
-    for candidate in &[
-        engine_bin.with_file_name("movie_shim.dylib"),
-        PathBuf::from("target/movie_shim.dylib"),
-        PathBuf::from("movie_shim.dylib"),
-    ] {
-        if candidate.is_file() {
-            let _ = copy_file_robust(candidate, &macos.join("movie_shim.dylib"));
-            let _ = copy_file_robust(candidate, &frameworks.join("movie_shim.dylib"));
-            break;
-        }
-    }
-
     // Copy or symlink Dump (ExeFS & RomFS)
     let dest_exefs = bundle_dump.join("ExeFS");
     let dest_romfs = bundle_dump.join("RomFS");

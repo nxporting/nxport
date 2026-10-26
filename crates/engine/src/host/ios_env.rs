@@ -80,10 +80,6 @@ pub fn setup() -> (
     if image.is_file() {
         env.guest.aot_image = Some(image.clone());
     }
-    let movie_shim = b.join("Frameworks/movie_shim.dylib");
-    if movie_shim.is_file() {
-        env.files.movie_shim = Some(movie_shim.clone());
-    }
     println!(
         "[+] iOS: bundle {}, documents {}",
         b.display(),
@@ -109,12 +105,6 @@ pub fn setup() -> (
         println!(
             "[!] iOS: no signed guest code image at {}; guest code cannot run without JIT",
             image.display()
-        );
-    }
-    if !movie_shim.is_file() {
-        println!(
-            "[!] iOS: no movie shim at {}; in-game movies will have no tracks",
-            movie_shim.display()
         );
     }
     let built = b.join("settings.toml");
