@@ -47,6 +47,10 @@ impl Shadows {
     const CHUNK: u64 = 4 << 20;
     /// Offsets of slots: every binding kind's alignment (storage and uniform offsets are at most 256 bytes on desktop).
     const ALIGN: u64 = 256;
+    /// The largest range given a slot. The buffers that wanted one are small (TotK: 128 B to 58 KB of counters and
+    /// histograms); storage bindings sized by the memory mapped after them run to 1 MiB, and a slot each, filled and
+    /// copied back with every submit, made the in-flight watcher copy for a second per frame. Those stay in place.
+    const MAX_SLOT: usize = 64 << 10;
 
     unsafe fn alloc(&mut self, dev: &Dev, len: usize) -> Option<(vk::Buffer, u64, *mut u8)> {
         let len = (len as u64).max(16);
@@ -104,6 +108,9 @@ impl Shadows {
             }
         }
         if self.slot_overlaps(a, len) {
+            return None;
+        }
+        if len > Self::MAX_SLOT && !self.last.range(..a + len).next_back().is_some_and(|(s, v)| s + v.3 > a) {
             return None;
         }
         // The range a running submit wrote last: its whole slot, copied on the GPU after that submit's writes.
