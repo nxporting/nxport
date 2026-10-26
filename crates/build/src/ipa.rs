@@ -135,8 +135,11 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     copy(&engine, &app.join(EXECUTABLE))?;
     set_executable(&app.join(EXECUTABLE))?;
     if let Some(shim) = ios_artifact("movie_shim.dylib") {
+        println!("  Including movie shim from {}", shim.display());
         copy(&shim, &app.join("Frameworks/movie_shim.dylib"))?;
         macho::sign(&app.join("Frameworks/movie_shim.dylib"), None)?;
+    } else {
+        println!("  [!] Warning: movie_shim.dylib not found; in-game movies will have no tracks");
     }
     let mut packaged_any_mods = false;
     if let Some(m) = o.mods {
@@ -309,8 +312,22 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 /// to this program (a release).
 fn ios_artifact(name: &str) -> Option<PathBuf> {
     let built = Path::new(env!("NXPORT_ENGINE_IOS")).with_file_name(name);
-    let release = std::env::current_exe().ok()?.parent()?.join("ios").join(name);
-    [built, release].into_iter().find(|p| p.is_file())
+    let mut candidates = vec![
+        built,
+        PathBuf::from("target/engines/aarch64-apple-ios/release").join(name),
+        PathBuf::from("target/aarch64-apple-ios/release").join(name),
+        PathBuf::from("tools/ios").join(name),
+        PathBuf::from("target/ios").join(name),
+        PathBuf::from("target/ios/work/Payload/Kirby.app/Frameworks").join(name),
+        PathBuf::from("target/work/Payload/TotK.app/Frameworks").join(name),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("ios").join(name));
+            candidates.push(parent.join(name));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 fn sanitize(name: &str) -> String {
