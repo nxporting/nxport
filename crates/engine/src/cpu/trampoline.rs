@@ -800,6 +800,194 @@ impl TrampolineIsland {
             return Ok(words.len());
         }
 
+        // 3b. SP writeback instructions (LDP/STP/LDR/STR with pre-index or post-index on SP)
+        let sp_wb = detect_sp_writeback(original_word);
+        match sp_wb {
+            SpWriteback::PreIndexPair { scale, imm, is_load, is_64, x18_is_rt2, other_reg } => {
+                if !is_load {
+                    // Pre-indexed store pair: stp x18, xN, [sp, #imm]!
+                    let sp_delta = imm - 16;
+                    if sp_delta >= -512 && sp_delta <= 504 && (sp_delta % 8 == 0) {
+                        let imm7 = (((sp_delta / 8) as u32) & 0x7F) << 15;
+                        words.push(0xA98003E0u32 | imm7 | (repl_idx << 10) | scratch_idx);
+                    } else {
+                        let abs_delta = (-sp_delta) as u32;
+                        words.push(0xD10003FFu32 | ((abs_delta & 0xFFF) << 10)); // sub sp, sp, #abs_delta
+                        words.push(0xA90003E0u32 | (repl_idx << 10) | scratch_idx); // stp scratch, repl, [sp]
+                    }
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // ldr repl, [scratch, #imm_scaled]
+                    let opc = if is_64 { 2u32 } else { 0u32 };
+                    let (r1, r2) = if other_reg == 18 {
+                        (repl_idx, repl_idx)
+                    } else if x18_is_rt2 {
+                        (other_reg, repl_idx)
+                    } else {
+                        (repl_idx, other_reg)
+                    };
+                    let imm7_pair = (((16 / scale) as u32) & 0x7F) << 15;
+                    words.push((opc << 30) | 0x290003E0u32 | imm7_pair | (r2 << 10) | r1); // stp r1, r2, [sp, #16]
+                    words.push(0xA8C103E0u32 | (repl_idx << 10) | scratch_idx); // ldp scratch, repl, [sp], #16
+                } else {
+                    // Pre-indexed load pair: ldp x18, xN, [sp, #imm]!
+                    words.push(0xA9BF03E0u32 | (repl_idx << 10) | scratch_idx); // stp scratch, repl, [sp, #-16]!
+                    let load_offset = 16 + imm;
+                    let opc = if is_64 { 2u32 } else { 0u32 };
+                    let (r1, r2) = if other_reg == 18 {
+                        (repl_idx, scratch_idx)
+                    } else if x18_is_rt2 {
+                        (other_reg, repl_idx)
+                    } else {
+                        (repl_idx, other_reg)
+                    };
+                    if load_offset >= -512 && load_offset <= 504 && (load_offset % scale == 0) {
+                        let imm7_load = (((load_offset / scale) as u32) & 0x7F) << 15;
+                        words.push((opc << 30) | 0x294003E0u32 | imm7_load | (r2 << 10) | r1); // ldp r1, r2, [sp, #load_offset]
+                    } else {
+                        words.push(0x91000000u32 | (((load_offset as u32) & 0xFFF) << 10) | (31 << 5) | scratch_idx); // add scratch, sp, #load_offset
+                        words.push((opc << 30) | 0x29400000u32 | (scratch_idx << 5) | (r2 << 10) | r1); // ldp r1, r2, [scratch]
+                    }
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9000000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // str repl, [scratch, #imm_scaled]
+                    words.push(0xA8C103E0u32 | (repl_idx << 10) | scratch_idx); // ldp scratch, repl, [sp], #16
+                    if imm > 0 {
+                        words.push(0x910003FFu32 | (((imm as u32) & 0xFFF) << 10)); // add sp, sp, #imm
+                    } else if imm < 0 {
+                        words.push(0xD10003FFu32 | ((((-imm) as u32) & 0xFFF) << 10)); // sub sp, sp, #(-imm)
+                    }
+                }
+                let current_stub_pc = stub_addr + (words.len() * 4);
+                let return_diff = ((original_pc + 4) as i64) - (current_stub_pc as i64);
+                words.push(0x1400_0000u32 | (((return_diff >> 2) as u32) & 0x03FF_FFFF));
+                for (i, &w) in words.iter().enumerate() {
+                    ptr::write(stub_ptr.add(i), w);
+                }
+                return Ok(words.len());
+            }
+            SpWriteback::PostIndexPair { scale, imm, is_load, is_64, x18_is_rt2, other_reg } => {
+                words.push(0xA9BF03E0u32 | (repl_idx << 10) | scratch_idx); // stp scratch, repl, [sp, #-16]!
+                let opc = if is_64 { 2u32 } else { 0u32 };
+                let imm7_pair = (((16 / scale) as u32) & 0x7F) << 15;
+                if is_load {
+                    // Post-indexed load pair: ldp x18, xN, [sp], #imm
+                    let (r1, r2) = if other_reg == 18 {
+                        (repl_idx, scratch_idx)
+                    } else if x18_is_rt2 {
+                        (other_reg, repl_idx)
+                    } else {
+                        (repl_idx, other_reg)
+                    };
+                    words.push((opc << 30) | 0x294003E0u32 | imm7_pair | (r2 << 10) | r1); // ldp r1, r2, [sp, #16]
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9000000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // str repl, [scratch, #imm_scaled]
+                } else {
+                    // Post-indexed store pair: stp x18, xN, [sp], #imm
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // ldr repl, [scratch, #imm_scaled]
+                    let (r1, r2) = if other_reg == 18 {
+                        (repl_idx, repl_idx)
+                    } else if x18_is_rt2 {
+                        (other_reg, repl_idx)
+                    } else {
+                        (repl_idx, other_reg)
+                    };
+                    words.push((opc << 30) | 0x290003E0u32 | imm7_pair | (r2 << 10) | r1); // stp r1, r2, [sp, #16]
+                }
+                words.push(0xA8C103E0u32 | (repl_idx << 10) | scratch_idx); // ldp scratch, repl, [sp], #16
+                if imm > 0 {
+                    words.push(0x910003FFu32 | (((imm as u32) & 0xFFF) << 10)); // add sp, sp, #imm
+                } else if imm < 0 {
+                    words.push(0xD10003FFu32 | ((((-imm) as u32) & 0xFFF) << 10)); // sub sp, sp, #(-imm)
+                }
+                let current_stub_pc = stub_addr + (words.len() * 4);
+                let return_diff = ((original_pc + 4) as i64) - (current_stub_pc as i64);
+                words.push(0x1400_0000u32 | (((return_diff >> 2) as u32) & 0x03FF_FFFF));
+                for (i, &w) in words.iter().enumerate() {
+                    ptr::write(stub_ptr.add(i), w);
+                }
+                return Ok(words.len());
+            }
+            SpWriteback::PreIndexSingle { scale, size, imm, is_load } => {
+                if !is_load {
+                    // Pre-indexed single store: str x18, [sp, #imm]!
+                    let sp_delta = imm - 16;
+                    if sp_delta >= -512 && sp_delta <= 504 && (sp_delta % 8 == 0) {
+                        let imm7 = (((sp_delta / 8) as u32) & 0x7F) << 15;
+                        words.push(0xA98003E0u32 | imm7 | (repl_idx << 10) | scratch_idx);
+                    } else {
+                        let abs_delta = (-sp_delta) as u32;
+                        words.push(0xD10003FFu32 | ((abs_delta & 0xFFF) << 10)); // sub sp, sp, #abs_delta
+                        words.push(0xA90003E0u32 | (repl_idx << 10) | scratch_idx); // stp scratch, repl, [sp]
+                    }
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // ldr repl, [scratch, #imm_scaled]
+                    let imm_scaled_16 = 16 / scale;
+                    let store_op = 0x39000000u32 | ((size as u32) << 30) | (((imm_scaled_16 as u32) & 0xFFF) << 10) | (31 << 5) | repl_idx;
+                    words.push(store_op); // str repl, [sp, #16]
+                    words.push(0xA8C103E0u32 | (repl_idx << 10) | scratch_idx); // ldp scratch, repl, [sp], #16
+                } else {
+                    // Pre-indexed single load: ldr x18, [sp, #imm]!
+                    words.push(0xA9BF03E0u32 | (repl_idx << 10) | scratch_idx); // stp scratch, repl, [sp, #-16]!
+                    let load_offset = 16 + imm;
+                    let imm_scaled_load = load_offset / scale;
+                    if imm_scaled_load >= 0 && imm_scaled_load <= 0xFFF && (load_offset % scale == 0) {
+                        let load_op = 0x39400000u32 | ((size as u32) << 30) | (((imm_scaled_load as u32) & 0xFFF) << 10) | (31 << 5) | repl_idx;
+                        words.push(load_op);
+                    } else {
+                        words.push(0x91000000u32 | (((load_offset as u32) & 0xFFF) << 10) | (31 << 5) | scratch_idx); // add scratch, sp, #load_offset
+                        let load_op = 0x39400000u32 | ((size as u32) << 30) | (scratch_idx << 5) | repl_idx;
+                        words.push(load_op);
+                    }
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9000000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // str repl, [scratch, #imm_scaled]
+                    words.push(0xA8C103E0u32 | (repl_idx << 10) | scratch_idx); // ldp scratch, repl, [sp], #16
+                    if imm > 0 {
+                        words.push(0x910003FFu32 | (((imm as u32) & 0xFFF) << 10)); // add sp, sp, #imm
+                    } else if imm < 0 {
+                        words.push(0xD10003FFu32 | ((((-imm) as u32) & 0xFFF) << 10)); // sub sp, sp, #(-imm)
+                    }
+                }
+                let current_stub_pc = stub_addr + (words.len() * 4);
+                let return_diff = ((original_pc + 4) as i64) - (current_stub_pc as i64);
+                words.push(0x1400_0000u32 | (((return_diff >> 2) as u32) & 0x03FF_FFFF));
+                for (i, &w) in words.iter().enumerate() {
+                    ptr::write(stub_ptr.add(i), w);
+                }
+                return Ok(words.len());
+            }
+            SpWriteback::PostIndexSingle { scale, size, imm, is_load } => {
+                words.push(0xA9BF03E0u32 | (repl_idx << 10) | scratch_idx); // stp scratch, repl, [sp, #-16]!
+                let imm_scaled_16 = 16 / scale;
+                if is_load {
+                    // Post-indexed single load: ldr x18, [sp], #imm
+                    let load_op = 0x39400000u32 | ((size as u32) << 30) | (((imm_scaled_16 as u32) & 0xFFF) << 10) | (31 << 5) | repl_idx;
+                    words.push(load_op); // ldr repl, [sp, #16]
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9000000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // str repl, [scratch, #imm_scaled]
+                } else {
+                    // Post-indexed single store: str x18, [sp], #imm
+                    words.push(0xD53BD060u32 | scratch_idx); // mrs scratch, tpidrro_el0
+                    words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (scratch_idx << 5) | repl_idx); // ldr repl, [scratch, #imm_scaled]
+                    let store_op = 0x39000000u32 | ((size as u32) << 30) | (((imm_scaled_16 as u32) & 0xFFF) << 10) | (31 << 5) | repl_idx;
+                    words.push(store_op); // str repl, [sp, #16]
+                }
+                words.push(0xA8C103E0u32 | (repl_idx << 10) | scratch_idx); // ldp scratch, repl, [sp], #16
+                if imm > 0 {
+                    words.push(0x910003FFu32 | (((imm as u32) & 0xFFF) << 10)); // add sp, sp, #imm
+                } else if imm < 0 {
+                    words.push(0xD10003FFu32 | ((((-imm) as u32) & 0xFFF) << 10)); // sub sp, sp, #(-imm)
+                }
+                let current_stub_pc = stub_addr + (words.len() * 4);
+                let return_diff = ((original_pc + 4) as i64) - (current_stub_pc as i64);
+                words.push(0x1400_0000u32 | (((return_diff >> 2) as u32) & 0x03FF_FFFF));
+                for (i, &w) in words.iter().enumerate() {
+                    ptr::write(stub_ptr.add(i), w);
+                }
+                return Ok(words.len());
+            }
+            SpWriteback::None => {}
+        }
+
         // 4. stp scratch, repl, [sp, #-16]! (Pre-index store pair, 16-byte aligned)
         let stp_insn = 0xA9BF03E0u32 | (repl_idx << 10) | scratch_idx;
         words.push(stp_insn);
@@ -900,7 +1088,7 @@ impl TrampolineIsland {
             let adjusted = adjust_sp_offset(modified_insn);
             if adjusted != modified_insn {
                 words.push(adjusted);
-            } else if (original_word & 0x3E000000) == 0x28000000 {
+            } else if (original_word & 0x3B800000) == 0x29000000 {
                 // LDP/STP signed immediate overflow when adding 16:
                 // Pre-compute effective SP address in scratch_idx
                 let opc = (original_word >> 30) & 3;
@@ -1290,7 +1478,130 @@ fn rename_register_precise(fw: u32, from: u32, to: u32) -> u32 {
     new_w
 }
 
+/// SP writeback categorization for x18 instructions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpWriteback {
+    None,
+    PreIndexPair {
+        scale: i32,
+        imm: i32,
+        is_load: bool,
+        is_64: bool,
+        x18_is_rt2: bool,
+        other_reg: u32,
+    },
+    PostIndexPair {
+        scale: i32,
+        imm: i32,
+        is_load: bool,
+        is_64: bool,
+        x18_is_rt2: bool,
+        other_reg: u32,
+    },
+    PreIndexSingle {
+        scale: i32,
+        size: usize,
+        imm: i32,
+        is_load: bool,
+    },
+    PostIndexSingle {
+        scale: i32,
+        size: usize,
+        imm: i32,
+        is_load: bool,
+    },
+}
+
+/// Identifies whether an instruction modifies SP via pre-index or post-index writeback while referencing x18.
+pub fn detect_sp_writeback(fw: u32) -> SpWriteback {
+    let rn = (fw >> 5) & 0x1F;
+    if rn != 31 {
+        // Base register is not SP
+        return SpWriteback::None;
+    }
+
+    // 1. Load/Store Register Pair (bits 29:27 == 0b101, bit 26 == 0 for GPR)
+    if (fw & 0x3E000000) == 0x28000000 {
+        let addr_mode = (fw >> 23) & 3;
+        // addr_mode: 0b01 = Post-index, 0b11 = Pre-index
+        if addr_mode == 0b01 || addr_mode == 0b11 {
+            let opc = (fw >> 30) & 3;
+            let is_64 = opc == 2;
+            let scale = if is_64 { 8 } else { 4 };
+            let imm7 = (fw >> 15) & 0x7F;
+            let signed_imm7 = ((imm7 as i32) << 25) >> 25;
+            let imm = signed_imm7 * scale;
+            let is_load = (fw & 0x00400000) != 0;
+            let rt = fw & 0x1F;
+            let rt2 = (fw >> 10) & 0x1F;
+
+            let touches_x18 = rt == 18 || rt2 == 18;
+            let x18_is_rt2 = rt2 == 18;
+            let other_reg = if x18_is_rt2 { rt } else { rt2 };
+
+            if touches_x18 {
+                if addr_mode == 0b11 {
+                    return SpWriteback::PreIndexPair {
+                        scale,
+                        imm,
+                        is_load,
+                        is_64,
+                        x18_is_rt2,
+                        other_reg,
+                    };
+                } else {
+                    return SpWriteback::PostIndexPair {
+                        scale,
+                        imm,
+                        is_load,
+                        is_64,
+                        x18_is_rt2,
+                        other_reg,
+                    };
+                }
+            }
+        }
+    }
+
+    // 2. Load/Store Register (immediate unscaled / pre/post-indexed)
+    // Bits 29:24 == 0b111000 (0x38000000), bit 26 == 0 (GPR)
+    if (fw & 0x3B000000) == 0x38000000 {
+        let addr_mode = (fw >> 10) & 3;
+        // addr_mode: 0b01 = Post-index, 0b11 = Pre-index
+        if addr_mode == 0b01 || addr_mode == 0b11 {
+            let rt = fw & 0x1F;
+            if rt == 18 {
+                let size = ((fw >> 30) & 3) as usize;
+                let scale = 1 << size;
+                let imm9 = (fw >> 12) & 0x1FF;
+                let signed_imm9 = ((imm9 as i32) << 23) >> 23;
+                let imm = signed_imm9;
+                let is_load = (fw & 0x00400000) != 0;
+
+                if addr_mode == 0b11 {
+                    return SpWriteback::PreIndexSingle {
+                        scale,
+                        size,
+                        imm,
+                        is_load,
+                    };
+                } else {
+                    return SpWriteback::PostIndexSingle {
+                        scale,
+                        size,
+                        imm,
+                        is_load,
+                    };
+                }
+            }
+        }
+    }
+
+    SpWriteback::None
+}
+
 /// Helper to adjust SP-relative immediate offset by +16 when SP has been decremented by 16.
+/// Note: writeback instructions (pre/post-indexed) are handled separately by detect_sp_writeback.
 fn adjust_sp_offset(fw: u32) -> u32 {
     // 1. LDR/STR unsigned immediate: bits 29:24 == 0b111001 (0x39000000)
     if (fw & 0x3B000000) == 0x39000000 {
@@ -1300,11 +1611,16 @@ fn adjust_sp_offset(fw: u32) -> u32 {
         let byte_offset = imm12 * scale;
         let new_byte_offset = byte_offset + 16;
         let new_imm12 = new_byte_offset / scale;
-        return (fw & !(0xFFF << 10)) | ((new_imm12 & 0xFFF) << 10);
+        if new_imm12 <= 0xFFF {
+            return (fw & !(0xFFF << 10)) | ((new_imm12 & 0xFFF) << 10);
+        } else {
+            return fw;
+        }
     }
 
-    // 2. LDP/STP signed immediate: bits 29:26 == 0b10100 (0x28000000)
-    if (fw & 0x3E000000) == 0x28000000 {
+    // 2. LDP/STP signed immediate: ONLY signed offset without writeback (addr_mode == 0b10)
+    // Bits 29:27 == 0b101, bits 24:23 == 0b10 -> mask 0x3B800000 == 0x29000000
+    if (fw & 0x3B800000) == 0x29000000 {
         let opc = (fw >> 30) & 3;
         let scale = if opc == 2 { 8 } else { 4 };
         let imm7 = (fw >> 15) & 0x7F;
@@ -1320,20 +1636,38 @@ fn adjust_sp_offset(fw: u32) -> u32 {
         }
     }
 
-    // 3. ADD/SUB immediate: bits 28:24 == 0b10001 (0x11000000)
+    // 3. LDUR/STUR unscaled signed offset without writeback (addr_mode == 0b00)
+    // Bits 29:24 == 0b111000 (0x38000000), bits 11:10 == 0b00 -> mask 0x3B200C00 == 0x38000000
+    if (fw & 0x3B200C00) == 0x38000000 {
+        let imm9 = (fw >> 12) & 0x1FF;
+        let signed_imm9 = ((imm9 as i32) << 23) >> 23;
+        let new_imm9_val = signed_imm9 + 16;
+        if new_imm9_val >= -256 && new_imm9_val <= 255 {
+            let new_imm9 = (new_imm9_val as u32) & 0x1FF;
+            return (fw & !(0x1FF << 12)) | (new_imm9 << 12);
+        } else {
+            return fw;
+        }
+    }
+
+    // 4. ADD/SUB immediate: bits 28:24 == 0b10001 (0x11000000)
     if (fw & 0x1F000000) == 0x11000000 {
         let is_sub = (fw & 0x40000000) != 0;
-        let imm12 = (fw >> 10) & 0xFFF;
-        let new_imm12 = if is_sub {
-            if imm12 >= 16 {
-                imm12 - 16
+        let shift = (fw >> 22) & 1;
+        if shift == 0 {
+            let imm12 = (fw >> 10) & 0xFFF;
+            if is_sub {
+                if imm12 >= 16 {
+                    let new_imm12 = imm12 - 16;
+                    return (fw & !(0xFFF << 10)) | ((new_imm12 & 0xFFF) << 10);
+                }
             } else {
-                imm12
+                let new_imm12 = imm12 + 16;
+                if new_imm12 <= 0xFFF {
+                    return (fw & !(0xFFF << 10)) | ((new_imm12 & 0xFFF) << 10);
+                }
             }
-        } else {
-            imm12 + 16
-        };
-        return (fw & !(0xFFF << 10)) | ((new_imm12 & 0xFFF) << 10);
+        }
     }
 
     fw
@@ -1368,4 +1702,253 @@ unsafe fn jump_table_of(text: *const u32, i: usize) -> Option<(usize, usize)> {
         }
     }
     Some((base?, width?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_sp_writeback_pre_index_pair() {
+        let cs = Capstone::new()
+            .arm64()
+            .mode(capstone::arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .unwrap();
+
+        // stp x18, x19, [sp, #-16]!
+        let stp_pre = 0xA9BF4FF2u32;
+        let insns = cs.disasm_count(&stp_pre.to_le_bytes(), 0x1000, 1).unwrap();
+        let insn = insns.first().unwrap();
+        assert_eq!(insn.mnemonic().unwrap(), "stp");
+        assert!(insn.op_str().unwrap().contains("x18"));
+        assert!(insn.op_str().unwrap().contains("[sp, #-0x10]!"));
+
+        let wb = detect_sp_writeback(stp_pre);
+        assert_eq!(
+            wb,
+            SpWriteback::PreIndexPair {
+                scale: 8,
+                imm: -16,
+                is_load: false,
+                is_64: true,
+                x18_is_rt2: false,
+                other_reg: 19,
+            }
+        );
+    }
+
+    #[test]
+    fn test_detect_sp_writeback_post_index_pair() {
+        let cs = Capstone::new()
+            .arm64()
+            .mode(capstone::arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .unwrap();
+
+        // ldp x18, x19, [sp], #16
+        let ldp_post = 0xA8C14FF2u32;
+        let insns = cs.disasm_count(&ldp_post.to_le_bytes(), 0x1000, 1).unwrap();
+        let insn = insns.first().unwrap();
+        assert_eq!(insn.mnemonic().unwrap(), "ldp");
+        assert!(insn.op_str().unwrap().contains("[sp], #0x10"));
+
+        let wb = detect_sp_writeback(ldp_post);
+        assert_eq!(
+            wb,
+            SpWriteback::PostIndexPair {
+                scale: 8,
+                imm: 16,
+                is_load: true,
+                is_64: true,
+                x18_is_rt2: false,
+                other_reg: 19,
+            }
+        );
+    }
+
+    #[test]
+    fn test_detect_sp_writeback_single() {
+        // str x18, [sp, #-16]!
+        let str_pre = 0xF81F0FF2u32;
+        let wb = detect_sp_writeback(str_pre);
+        assert_eq!(
+            wb,
+            SpWriteback::PreIndexSingle {
+                scale: 8,
+                size: 3,
+                imm: -16,
+                is_load: false,
+            }
+        );
+
+        // ldr x18, [sp], #16
+        let ldr_post = 0xF84107F2u32;
+        let wb_post = detect_sp_writeback(ldr_post);
+        assert_eq!(
+            wb_post,
+            SpWriteback::PostIndexSingle {
+                scale: 8,
+                size: 3,
+                imm: 16,
+                is_load: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_non_writeback_sp_offset_adjust() {
+        // stp x18, x19, [sp, #16] (signed offset, NO writeback)
+        let stp_offset = 0xA9014FF2u32;
+        assert_eq!(detect_sp_writeback(stp_offset), SpWriteback::None);
+
+        // adjust_sp_offset should add 16 to the offset (16 -> 32)
+        let adjusted = adjust_sp_offset(stp_offset);
+        assert_ne!(adjusted, stp_offset);
+
+        let cs = Capstone::new()
+            .arm64()
+            .mode(capstone::arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .unwrap();
+        let insns = cs.disasm_count(&adjusted.to_le_bytes(), 0x1000, 1).unwrap();
+        let insn = insns.first().unwrap();
+        assert_eq!(insn.mnemonic().unwrap(), "stp");
+        assert!(insn.op_str().unwrap().contains("[sp, #0x20]"));
+    }
+
+    #[test]
+    fn test_pre_index_stub_disassembly() {
+        // Test that emitting a stub for `stp x18, x19, [sp, #-16]!` generates valid instructions
+        let mut pool = TrampolineIsland {
+            base_ptr: 0x1000_0000 as *mut u32,
+            capacity_bytes: 0x10000,
+            next_offset: 0,
+            pthread_key_offset: 0xc90,
+        };
+        let mut buffer = [0u32; 16];
+        let original_word = 0xA9BF4FF2u32; // stp x18, x19, [sp, #-16]!
+        let original_pc = 0x10e2cce50usize;
+        let stub_addr = buffer.as_mut_ptr() as usize;
+
+        let words_count = unsafe {
+            pool.emit_stub(
+                original_word,
+                original_pc,
+                stub_addr,
+                false, // writes_x18
+                true,  // touches_sp
+                false, // is_cbz_cbnz
+                false, // is_tbz_tbnz
+                false, // is_adr_adrp
+                0,
+                false, // is_br
+                false, // is_blr
+                None,  // fp_simd_x18_shift
+                9,     // repl_idx (x9)
+                16,    // scratch_idx (x16)
+                None,
+            )
+            .unwrap()
+        };
+
+        let cs = Capstone::new()
+            .arm64()
+            .mode(capstone::arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .unwrap();
+
+        let mut disasm_lines = Vec::new();
+        for i in 0..words_count {
+            let chunk = buffer[i].to_le_bytes();
+            let insns = cs.disasm_count(&chunk, (stub_addr + i * 4) as u64, 1).unwrap();
+            let insn = insns.first().unwrap();
+            disasm_lines.push(format!("{} {}", insn.mnemonic().unwrap(), insn.op_str().unwrap()));
+        }
+
+        // Verify the emitted sequence:
+        // 0: stp x16, x9, [sp, #-0x20]!
+        // 1: mrs x16, tpidrro_el0
+        // 2: ldr x9, [x16, #0xc90]
+        // 3: stp x9, x19, [sp, #0x10]
+        // 4: ldp x16, x9, [sp], #0x10
+        // 5: b original_pc + 4
+        assert!(disasm_lines[0].starts_with("stp") && disasm_lines[0].contains("[sp, #-0x20]!"));
+        assert!(disasm_lines[1].starts_with("mrs") && disasm_lines[1].contains("tpidrro_el0"));
+        assert!(disasm_lines[2].starts_with("ldr") && disasm_lines[2].contains("0xc90"));
+        assert!(disasm_lines[3].starts_with("stp") && disasm_lines[3].contains("[sp, #0x10]"));
+        assert!(disasm_lines[4].starts_with("ldp") && disasm_lines[4].contains("[sp], #0x10"));
+        assert!(disasm_lines[5].starts_with("b"));
+    }
+
+    #[test]
+    fn test_post_index_stub_disassembly() {
+        // Test that emitting a stub for `ldp x18, x19, [sp], #16` generates valid instructions
+        let mut pool = TrampolineIsland {
+            base_ptr: 0x1000_0000 as *mut u32,
+            capacity_bytes: 0x10000,
+            next_offset: 0,
+            pthread_key_offset: 0xc90,
+        };
+        let mut buffer = [0u32; 16];
+        let original_word = 0xA8C14FF2u32; // ldp x18, x19, [sp], #16
+        let original_pc = 0x10e2cce50usize;
+        let stub_addr = buffer.as_mut_ptr() as usize;
+
+        let words_count = unsafe {
+            pool.emit_stub(
+                original_word,
+                original_pc,
+                stub_addr,
+                true,  // writes_x18
+                true,  // touches_sp
+                false, // is_cbz_cbnz
+                false, // is_tbz_tbnz
+                false, // is_adr_adrp
+                0,
+                false, // is_br
+                false, // is_blr
+                None,  // fp_simd_x18_shift
+                9,     // repl_idx (x9)
+                16,    // scratch_idx (x16)
+                None,
+            )
+            .unwrap()
+        };
+
+        let cs = Capstone::new()
+            .arm64()
+            .mode(capstone::arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .unwrap();
+
+        let mut disasm_lines = Vec::new();
+        for i in 0..words_count {
+            let chunk = buffer[i].to_le_bytes();
+            let insns = cs.disasm_count(&chunk, (stub_addr + i * 4) as u64, 1).unwrap();
+            let insn = insns.first().unwrap();
+            disasm_lines.push(format!("{} {}", insn.mnemonic().unwrap(), insn.op_str().unwrap()));
+        }
+
+        // Verify the emitted sequence:
+        // 0: stp x16, x9, [sp, #-0x10]!
+        // 1: ldp x9, x19, [sp, #0x10]
+        // 2: mrs x16, tpidrro_el0
+        // 3: str x9, [x16, #0xc90]
+        // 4: ldp x16, x9, [sp], #0x10
+        // 5: add sp, sp, #0x10
+        // 6: b original_pc + 4
+        assert!(disasm_lines[0].starts_with("stp") && disasm_lines[0].contains("[sp, #-0x10]!"));
+        assert!(disasm_lines[1].starts_with("ldp") && disasm_lines[1].contains("[sp, #0x10]"));
+        assert!(disasm_lines[2].starts_with("mrs") && disasm_lines[2].contains("tpidrro_el0"));
+        assert!(disasm_lines[3].starts_with("str") && disasm_lines[3].contains("0xc90"));
+        assert!(disasm_lines[4].starts_with("ldp") && disasm_lines[4].contains("[sp], #0x10"));
+        assert!(disasm_lines[5].starts_with("add") && disasm_lines[5].contains("sp, sp, #0x10"));
+        assert!(disasm_lines[6].starts_with("b"));
+    }
 }

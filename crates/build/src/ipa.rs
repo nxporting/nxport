@@ -180,9 +180,50 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
             copy(&e.path(), &app.join("shader_cache").join(&n))?;
         }
     }
+    let font_src = o.edits.files.shared_fonts.as_deref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            let d = o.dump.join("fonts");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            let d = o.dump.join("RomFS/fonts");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            let d = o.dump.join("romfs/fonts");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/nxport/fonts")).filter(|d| d.is_dir())
+        })
+        .or_else(|| {
+            std::env::current_exe().ok().and_then(|exe| {
+                let macos = exe.parent()?;
+                (macos.file_name()? == "MacOS").then(|| macos.parent().map(|c| c.join("Resources/fonts"))).flatten()
+            }).filter(|d| d.is_dir())
+        })
+        .or_else(|| {
+            let d = PathBuf::from("Resources/fonts");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            let d = PathBuf::from("fonts");
+            d.is_dir().then_some(d)
+        });
+
+    if let Some(src) = font_src {
+        if src.is_dir() {
+            println!("  Including shared fonts from {}", src.display());
+            copy_tree(&src, &app.join("fonts"))?;
+        }
+    }
     let mut edits = o.edits.clone();
     if !packaged_any_mods {
         edits.files.no_mods = Some(true);
+    }
+    if app.join("fonts").is_dir() {
+        edits.files.shared_fonts = Some(PathBuf::from("fonts"));
     }
     settings::save_preset(&app.join("settings.toml"), &edits)?;
     let icons = icons(o.dump, tid, &app)?;
