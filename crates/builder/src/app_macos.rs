@@ -213,6 +213,7 @@ struct Builder {
     game: Option<Game>,
     target: Target,
     mods: String,
+    system_data: String,
     out_dir: String,
     /// The profiles' settings for the game on the target, and the edited settings above them.
     base: Settings,
@@ -288,11 +289,16 @@ fn valid_preset_name(name: &str) -> bool {
 
 impl Builder {
     fn new(dump: Option<PathBuf>) -> Self {
+        let default_sys = std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library/Application Support/nxport/system_data"))
+            .filter(|d| d.is_dir())
+            .map_or_else(String::new, |d| d.display().to_string());
         let mut b = Builder {
             dump: String::new(),
             game: None,
             target: Target::MacApp,
             mods: String::new(),
+            system_data: default_sys,
             out_dir: default_out_dir(Target::MacApp),
             base: Settings::default(),
             settings: Settings::default(),
@@ -349,6 +355,16 @@ impl Builder {
         self.bundle_id = mem.bundle_id.unwrap_or_default();
         self.ios_gpu = mem.gpu.unwrap_or_default();
         let edits = mem.settings.unwrap_or_default();
+        if let Some(sys) = edits.files.system_data_dir.as_ref() {
+            self.system_data = sys.display().to_string();
+        } else if self.system_data.is_empty() {
+            if let Some(d) = std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join("Library/Application Support/nxport/system_data"))
+                .filter(|d| d.is_dir())
+            {
+                self.system_data = d.display().to_string();
+            }
+        }
         self.base = settings::resolve(self.base_layers());
         self.settings = settings::resolve(self.base_layers().into_iter().chain([edits]));
     }
@@ -390,6 +406,10 @@ impl Builder {
     fn edits(&self) -> SettingsPatch {
         let mut patch = self.settings.clone().into_patch_by_diff(self.base.clone());
         nxport::profile::keep_own_options(self.game.as_ref().and_then(|g| g.profile), &mut patch);
+        let sys = self.system_data.trim();
+        if !sys.is_empty() {
+            patch.files.system_data_dir = Some(PathBuf::from(sys));
+        }
         patch
     }
 
@@ -399,6 +419,9 @@ impl Builder {
         }
         if let Some(p) = nxport::ui::window::take_path("mods") {
             self.mods = p.display().to_string();
+        }
+        if let Some(p) = nxport::ui::window::take_path("system_data") {
+            self.system_data = p.display().to_string();
         }
         if let Some(p) = nxport::ui::window::take_path("out") {
             self.out_dir = p.display().to_string();
@@ -443,6 +466,11 @@ impl Builder {
         ui.same_line();
         if ui.button("Choose…##mods") {
             nxport::ui::window::request_path("mods", PathKind::Directory);
+        }
+        ui.input_text("System Data##system_data", &mut self.system_data).build();
+        ui.same_line();
+        if ui.button("Choose…##system_data") {
+            nxport::ui::window::request_path("system_data", PathKind::Directory);
         }
 
         ui.separator_with_text("Output");
