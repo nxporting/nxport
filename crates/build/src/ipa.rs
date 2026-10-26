@@ -218,12 +218,65 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
             copy_tree(&src, &app.join("fonts"))?;
         }
     }
+    let sys_data_src = o.edits.files.system_data_dir.as_deref()
+        .map(PathBuf::from)
+        .or_else(|| {
+            let d = o.dump.join("system_data");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            let d = o.dump.join("RomFS/system_data");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            let d = o.dump.join("romfs/system_data");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/nxport/system_data")).filter(|d| d.is_dir())
+        })
+        .or_else(|| {
+            std::env::current_exe().ok().and_then(|exe| {
+                let macos = exe.parent()?;
+                (macos.file_name()? == "MacOS").then(|| macos.parent().map(|c| c.join("Resources/system_data"))).flatten()
+            }).filter(|d| d.is_dir())
+        })
+        .or_else(|| {
+            let d = PathBuf::from("Resources/system_data");
+            d.is_dir().then_some(d)
+        })
+        .or_else(|| {
+            let d = PathBuf::from("system_data");
+            d.is_dir().then_some(d)
+        });
+
+    if let Some(src) = sys_data_src {
+        if src.is_dir() {
+            println!("  Including system data from {}", src.display());
+            copy_tree(&src, &app.join("system_data"))?;
+        }
+    }
+    if let Ok(entries) = fs::read_dir(o.dump) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.len() == 16 && u64::from_str_radix(name, 16).is_ok() {
+                        let _ = copy_tree(&p, &app.join("system_data").join(name));
+                    }
+                }
+            }
+        }
+    }
     let mut edits = o.edits.clone();
     if !packaged_any_mods {
         edits.files.no_mods = Some(true);
     }
     if app.join("fonts").is_dir() {
         edits.files.shared_fonts = Some(PathBuf::from("fonts"));
+    }
+    if app.join("system_data").is_dir() {
+        edits.files.system_data_dir = Some(PathBuf::from("system_data"));
     }
     settings::save_preset(&app.join("settings.toml"), &edits)?;
     let icons = icons(o.dump, tid, &app)?;

@@ -694,16 +694,62 @@ pub unsafe extern "C" fn hle_nn_fs_MountSaveDataReadOnly(
 
 /// System data archives (ncm::SystemDataId) come with the console's firmware: <system data dir>/<id as 16 hex
 /// digits>/ holds an archive's files (--system-data-dir, default: the data directory's system_data/).
-fn system_data_dir(id: u64) -> Option<PathBuf> {
-    let root = crate::settings::get()
-        .files
-        .system_data_dir
-        .clone()
-        .or_else(|| {
-            // nxport/games/<title id> -> nxport/system_data
-            Some(crate::profile::data_dir()?.parent()?.parent()?.join("system_data"))
-        })?;
-    Some(root.join(format!("{id:016x}"))).filter(|d| d.is_dir())
+pub(crate) fn system_data_dir(id: u64) -> Option<PathBuf> {
+    let id_hex = format!("{id:016x}");
+    let mut candidate_roots: Vec<PathBuf> = Vec::new();
+
+    if let Some(dir) = crate::settings::get().files.system_data_dir.clone() {
+        candidate_roots.push(dir.clone());
+        if dir.is_relative() {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(parent) = exe.parent() {
+                    candidate_roots.push(parent.join(&dir));
+                    if let Some(grandparent) = parent.parent() {
+                        candidate_roots.push(grandparent.join(&dir));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidate_roots.push(parent.join("system_data"));
+            candidate_roots.push(parent.join("Resources/system_data"));
+            if let Some(grandparent) = parent.parent() {
+                candidate_roots.push(grandparent.join("Resources/system_data"));
+                candidate_roots.push(grandparent.join("system_data"));
+            }
+        }
+    }
+
+    if let Some(game_dir) = &crate::settings::get().files.game_dir {
+        candidate_roots.push(game_dir.join("system_data"));
+        candidate_roots.push(game_dir.join("RomFS/system_data"));
+    }
+
+    if let Some(app_data) = crate::profile::data_dir() {
+        if let Some(nxport_dir) = app_data.parent().and_then(|p| p.parent()) {
+            candidate_roots.push(nxport_dir.join("system_data"));
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home);
+        candidate_roots.push(p.join("Library/Application Support/nxport/system_data"));
+        candidate_roots.push(p.join("Documents/system_data"));
+        candidate_roots.push(p.join("Documents/Game/system_data"));
+    }
+
+    candidate_roots.push(PathBuf::from("system_data"));
+
+    for root in candidate_roots {
+        let target = root.join(&id_hex);
+        if target.is_dir() {
+            return Some(target);
+        }
+    }
+    None
 }
 
 #[no_mangle]
