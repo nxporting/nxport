@@ -397,6 +397,100 @@ pub fn set_symbols(map: std::collections::HashMap<String, usize>) {
     let _ = SYMBOLS.set(map);
 }
 
+pub unsafe extern "C" fn ro_initialize() -> u32 {
+    0
+}
+
+pub unsafe extern "C" fn ro_finalize() {}
+
+pub unsafe extern "C" fn ro_get_buffer_size(out: *mut usize, image: *const u8) -> u32 {
+    if image.is_null() {
+        return 0x816; // RO_NOT_NRO
+    }
+    let magic = std::slice::from_raw_parts(image.add(0x10), 4);
+    if magic != b"NRO0" {
+        return 0x816;
+    }
+    let bss_size = ptr::read_unaligned(image.add(0x38) as *const u32) as usize;
+    if !out.is_null() {
+        *out = bss_size;
+    }
+    0
+}
+
+pub unsafe extern "C" fn ro_lookup_module_symbol(
+    out: *mut usize,
+    _mod: *const (),
+    name: *const libc::c_char,
+) -> u32 {
+    ro_lookup_symbol(out, name)
+}
+
+pub unsafe extern "C" fn ro_register_module_info(_info: *mut (), nrr: *const u8) -> u32 {
+    if nrr.is_null() {
+        return 0x816;
+    }
+    let magic = std::slice::from_raw_parts(nrr, 4);
+    if magic != b"NRR0" {
+        return 0x816;
+    }
+    0
+}
+
+pub unsafe extern "C" fn ro_unregister_module_info(_info: *const ()) -> u32 {
+    0
+}
+
+#[repr(C)]
+pub struct RoModule {
+    pub module: *mut (),
+    pub state: u32,
+    pub pad: u32,
+    pub image: *const u8,
+    pub buffer: *mut u8,
+}
+
+pub unsafe extern "C" fn ro_load_module(
+    rm: *mut RoModule,
+    image: *const u8,
+    buf: *mut u8,
+    _size: usize,
+    _flag: i32,
+) -> u32 {
+    if image.is_null() {
+        return 0x816;
+    }
+    let magic = std::slice::from_raw_parts(image.add(0x10), 4);
+    if magic != b"NRO0" {
+        return 0x816;
+    }
+    if !rm.is_null() {
+        (*rm).module = image as *mut ();
+        (*rm).state = 1;
+        (*rm).image = image;
+        (*rm).buffer = buf;
+    }
+    0
+}
+
+pub unsafe extern "C" fn ro_load_module_sdk19(
+    rm: *mut RoModule,
+    image: *const u8,
+    buf: *mut u8,
+    size: usize,
+    flag: i32,
+    _b: bool,
+) -> u32 {
+    ro_load_module(rm, image, buf, size, flag)
+}
+
+pub unsafe extern "C" fn ro_unload_module(rm: *mut RoModule) {
+    if !rm.is_null() {
+        (*rm).state = 0;
+        (*rm).module = std::ptr::null_mut();
+    }
+}
+
 pub fn lookup(name: &str) -> Option<usize> {
     SYMBOLS.get()?.get(name).copied()
 }
