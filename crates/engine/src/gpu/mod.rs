@@ -7,8 +7,43 @@
 pub mod history;
 pub mod null;
 pub mod pipeline_list;
+#[cfg(nx_native)]
 pub mod report_guard;
 pub mod restart;
+
+/// Where guest code is lifted there is no report guard yet: it aliases guarded pages with mach_vm_remap and decides
+/// whether a fault may wait from the guest's arm64 registers, neither of which a lifted host has. Occlusion reports are
+/// written once their submit completed, as before the guard; the functions keep the real module's signatures.
+#[cfg(not(nx_native))]
+pub mod report_guard {
+    pub(crate) fn engine_scope() -> impl Drop {
+        struct Scope;
+        impl Drop for Scope {
+            fn drop(&mut self) {}
+        }
+        Scope
+    }
+    pub(crate) fn set_guest_code_range(_start: usize, _end: usize) {}
+    pub(crate) fn mode() -> crate::settings::ReportGuard {
+        crate::settings::ReportGuard::Off
+    }
+    pub(crate) unsafe fn reprotect_held(_addr: usize, _len: usize) {}
+    pub(crate) fn begin_submit(_addrs: &[usize]) {}
+    pub(crate) fn describe(_addr: usize) -> String {
+        String::new()
+    }
+    pub(crate) fn engine_ptr(a: usize) -> usize {
+        a
+    }
+    pub(crate) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
+        std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), dst.len());
+    }
+    pub(crate) fn close(_a: usize) {}
+    pub(crate) unsafe fn fault(_addr: usize, _pc: usize, _lr: usize, _write: bool) -> bool {
+        false
+    }
+    pub(crate) fn frame_end(_frame: u64) {}
+}
 
 use std::sync::OnceLock;
 

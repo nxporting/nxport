@@ -1578,6 +1578,7 @@ pub(crate) static PENDING_UNMAPS: StdMutex<Vec<(usize, usize, u64)>> = StdMutex:
 
 pub(crate) fn guest_memory_released(addr: usize, size: usize) {
     unsafe { crate::guest::dirty_track::release(addr, size) };
+    #[cfg(nx_native)]
     crate::metal::rt_guard::released(addr, size);
     RELEASED_RANGES.lock().unwrap().push((addr, size));
     TEX_RELEASED.lock().unwrap().push((addr, size));
@@ -6153,8 +6154,16 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             std::time::Duration::from_nanos(16_666_667 * interval.max(1) as u64)
         };
         let wait = if frame.is_zero() {
-            if interval == 0 && crate::metal::display_pacing() && crate::host::overlay::is_vsync() {
-                crate::metal::display_pacing_wait().unwrap_or_default()
+            #[cfg(nx_native)]
+            let paced = interval == 0 && crate::metal::display_pacing() && crate::host::overlay::is_vsync();
+            #[cfg(not(nx_native))]
+            let paced = false;
+            if paced {
+                #[cfg(nx_native)]
+                let w = crate::metal::display_pacing_wait().unwrap_or_default();
+                #[cfg(not(nx_native))]
+                let w = std::time::Duration::ZERO;
+                w
             } else {
                 std::time::Duration::ZERO
             }
@@ -6177,6 +6186,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             hle_sleep_ns(wait.as_nanos() as u64);
         }
     }
+    #[cfg(nx_native)]
     crate::metal::frame_started();
     let idx = (*w).next_index % ((*w).texture_count as u32);
     (*w).next_index = (*w).next_index.wrapping_add(1);
