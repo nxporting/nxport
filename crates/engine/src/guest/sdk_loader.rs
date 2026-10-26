@@ -21,6 +21,12 @@ use crate::guest::loader::GuestMemorySpace;
 use std::collections::HashMap;
 use std::ptr;
 
+static SDK_SYMBOLS: std::sync::OnceLock<HashMap<String, usize>> = std::sync::OnceLock::new();
+
+pub fn sdk_symbol(name: &str) -> Option<usize> {
+    SDK_SYMBOLS.get().and_then(|m| m.get(name).copied())
+}
+
 pub struct SdkModule {
     pub base: usize,
     pub total_size: usize,
@@ -527,6 +533,8 @@ pub fn load_sdk(
             text_pages
         );
     }
+
+    let _ = SDK_SYMBOLS.set(symbols.clone());
 
     Ok(SdkModule {
         base,
