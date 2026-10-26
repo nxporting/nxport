@@ -1181,6 +1181,8 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (cpu::crash_handler).
     #[cfg(windows)]
     os::on_access_fault(lifted_access_fault);
+    #[cfg(windows)]
+    os::report_crashes();
     vulkan::init(s.debug.validate)?;
     // On this thread, before any guest thread: SDL's subsystems belong to the main thread.
     host::audio::init();
