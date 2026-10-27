@@ -7,8 +7,6 @@ and update this file when you finish or drop it.
 
 - **TotK 1.0.0 game time follows real time.** Uncapped, game speed scales with the frame rate (time step = present
   interval / 2 per frame, main+0x8f68b8). Replacing it with a step from real elapsed time, clamped. In progress.
-- **TotK title hitches** (lifted, Windows): every background cut stalls ~128 ms with ~3 ms of recording, no uploads or
-  pipelines (--log-hitch=50): the time goes to the game's CPU side. In progress.
 - **SDL controllers per player.** main's 8-player input (host/input.rs PLAYER_PADS) is wired for GameController.framework;
   on Windows every SDL controller still feeds player 0 (input::set_pad). Give each SDL gamepad its own player.
 
@@ -47,6 +45,12 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **TotK title hitches fixed** (S41L0R Windows Machine, `47bcfe5`, `96c89ce`): render targets the CPU reads were
+  copied into write-combined memory and retiled from it (90-600 ms on the watcher, which the frame wait waited for:
+  ~128 ms at every background cut); they now go through a host-cached arena. The counter-scan cache freed ~32k
+  recorded lists at once when it overflowed (~80 ms every few seconds); it keeps recent ones and frees the rest on
+  another thread. Title uncapped: ~148 fps, no periodic hitches.
 
 - **Intermittent Vulkan device loss fixed** (S41L0R Windows Machine, `426ec48`): vertex buffers bound in place from
   imported guest memory lost the device on NVIDIA (title ~45 s in uncapped, every run; Great Sky Island ~1 in 2;
