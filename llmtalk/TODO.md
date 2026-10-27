@@ -5,6 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
+- **TotK 1.0.0 game time follows real time.** Uncapped, game speed scales with the frame rate (time step = present
+  interval / 2 per frame, main+0x8f68b8). Replacing it with a step from real elapsed time, clamped. In progress.
 - **TotK title hitches** (lifted, Windows): every background cut stalls ~128 ms with ~3 ms of recording, no uploads or
   pipelines (--log-hitch=50): the time goes to the game's CPU side. In progress.
 - **SDL controllers per player.** main's 8-player input (host/input.rs PLAYER_PADS) is wired for GameController.framework;
