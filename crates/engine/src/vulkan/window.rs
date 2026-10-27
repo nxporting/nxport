@@ -24,6 +24,9 @@ pub(super) struct Window {
     vsync: bool,
     slots: Vec<Slot>,
     next: usize,
+    /// Signaled when an image's blit is done, waited by its present: one per swapchain image (a semaphore per slot
+    /// could be signaled again while the presentation engine still waited on it, which the slot's fence does not cover).
+    done: Vec<vk::Semaphore>,
     /// The presented content size the drawable was last fitted to.
     content: (u32, u32),
 }
@@ -32,7 +35,6 @@ struct Slot {
     cb: vk::CommandBuffer,
     fence: vk::Fence,
     acquired: vk::Semaphore,
-    done: vk::Semaphore,
 }
 
 impl Window {
@@ -67,8 +69,7 @@ impl Window {
                 .ok()?[0];
             let fence = dev.device.create_fence(&vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED), None).ok()?;
             let acquired = dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).ok()?;
-            let done = dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).ok()?;
-            slots.push(Slot { cb, fence, acquired, done });
+            slots.push(Slot { cb, fence, acquired });
         }
         let mut w = Window {
             handle,
@@ -79,6 +80,7 @@ impl Window {
             vsync: true,
             slots,
             next: 0,
+            done: Vec::new(),
             content: (0, 0),
         };
         w.recreate(dev)?;
@@ -130,6 +132,10 @@ impl Window {
         }
         self.swapchain = new;
         self.images = s.swapchain.get_swapchain_images(new).ok()?;
+        // Kept across swapchains (presents of the old one may still wait on theirs).
+        while self.done.len() < self.images.len() {
+            self.done.push(dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).ok()?);
+        }
         self.extent = extent;
         self.vsync = vsync;
         Some(())
@@ -230,7 +236,7 @@ impl Window {
             .subresource_range(range)];
         d.cmd_pipeline_barrier(slot.cb, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::BOTTOM_OF_PIPE, vk::DependencyFlags::empty(), &[], &[], &to_present);
         let _ = d.end_command_buffer(slot.cb);
-        let (cbs, waits, stages, signals) = ([slot.cb], [slot.acquired], [vk::PipelineStageFlags::TRANSFER], [slot.done]);
+        let (cbs, waits, stages, signals) = ([slot.cb], [slot.acquired], [vk::PipelineStageFlags::TRANSFER], [self.done[index as usize]]);
         let submit = vk::SubmitInfo::default().command_buffers(&cbs).wait_semaphores(&waits).wait_dst_stage_mask(&stages).signal_semaphores(&signals);
         if d.queue_submit(dev.queue, &[submit], slot.fence).is_err() {
             return;
