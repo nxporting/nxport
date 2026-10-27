@@ -132,7 +132,7 @@ impl VCache {
             let fresh = e.checked == serial
                 || match e.token {
                     Some(t) => crate::guest::dirty_track::generation(a, len) == Some(t),
-                    None => super::texture::hash_bytes(std::slice::from_raw_parts(a as *const u8, len)) == e.hash,
+                    None => fast_hash(std::slice::from_raw_parts(a as *const u8, len)) == e.hash,
                 };
             if fresh {
                 e.checked = serial;
@@ -152,7 +152,7 @@ impl VCache {
         // The token first, so writes made while copying change it.
         let token = if tracked { Some(crate::guest::dirty_track::protect(a, len)?) } else { None };
         let src = std::slice::from_raw_parts(a as *const u8, len);
-        let hash = if tracked { 0 } else { super::texture::hash_bytes(src) };
+        let hash = if tracked { 0 } else { fast_hash(src) };
         let (chunk, off) = self.alloc(dev, len as u64)?;
         if !upload(self.chunks[chunk].buffer, off, src.as_ptr(), len) {
             self.release(chunk, off, len as u64);
@@ -182,4 +182,30 @@ impl VCache {
             self.release(chunk, off, size);
         }
     }
+}
+
+/// Change detection for small ranges, checked once per submit for every one drawn (several MB a frame): four lanes of
+/// 64-bit multiplies folded from 128 bits, 64 bytes a step. Only compared with itself within a session.
+fn fast_hash(b: &[u8]) -> u64 {
+    const P: [u64; 4] = [0xa076_1d64_78bd_642f, 0xe703_7ed1_a0b4_28db, 0x8ebc_6af0_9c88_c6e3, 0x5899_65cc_7537_4cc3];
+    let mix = |a: u64, b: u64| {
+        let m = (a as u128) * (b as u128);
+        (m as u64) ^ ((m >> 64) as u64)
+    };
+    let word = |c: &[u8], i: usize| u64::from_le_bytes(c[i * 8..i * 8 + 8].try_into().unwrap());
+    let mut l = [P[0] ^ b.len() as u64, P[1], P[2], P[3]];
+    let (body, rest) = b.split_at(b.len() / 64 * 64);
+    for c in body.chunks_exact(64) {
+        for (k, lane) in l.iter_mut().enumerate() {
+            *lane = mix(word(c, 2 * k) ^ P[k], word(c, 2 * k + 1) ^ *lane);
+        }
+    }
+    let mut h = mix(l[0] ^ l[2], l[1] ^ l[3] ^ P[0]);
+    let (words, tail) = rest.split_at(rest.len() / 8 * 8);
+    for w in words.chunks_exact(8) {
+        h = mix(h ^ u64::from_le_bytes(w.try_into().unwrap()), P[1]);
+    }
+    let mut last = [0u8; 8];
+    last[..tail.len()].copy_from_slice(tail);
+    mix(h ^ u64::from_le_bytes(last), P[2] ^ tail.len() as u64)
 }

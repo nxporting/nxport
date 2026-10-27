@@ -91,7 +91,8 @@ impl Ctx {
     /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions.
     fn vertex_state(&self) -> (GraphicsState, u64) {
         let s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
-        let codes: Vec<u8> = s.attribute_types.iter().map(|&t| attr_type_code(t)).collect();
+        // An array hashes as the slice a Vec would (length included): the same keys, without an allocation per draw.
+        let codes: [u8; 32] = s.attribute_types.map(attr_type_code);
         let key = hash(&(codes, s.depth_mode));
         (s, key)
     }
@@ -100,7 +101,7 @@ impl Ctx {
     fn fragment_state(&self) -> (GraphicsState, u64) {
         // Unbound slots keep the engine default (Uint): a code of their own, or a stage translated for a pass with an
         // unbound slot is reused for one with a float target there.
-        let rendered: Vec<(usize, i32)> =
+        let rendered: smallvec::SmallVec<[(usize, i32); 8]> =
             self.pass.iter().flat_map(|p| p.colors.iter().enumerate().take(8).filter_map(|(i, c)| c.map(|c| (i, c.2)))).collect();
         let s = fragment_graphics_state(rendered.iter().copied());
         let mut codes = [0xFFu8; 8];
@@ -240,8 +241,10 @@ impl Ctx {
             return;
         }
         self.ensure_begun();
-        let d = &self.dev.device;
-        d.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::GRAPHICS, pipe);
+        if self.bound.pipeline != pipe {
+            self.dev.device.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::GRAPHICS, pipe);
+            self.bound.pipeline = pipe;
+        }
         self.bind_writes(&w, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
@@ -680,7 +683,22 @@ impl Ctx {
                                 }
                             }
                         }
-                        Some(v) => self.arena.copy(&self.dev, v).map(|(b, o)| (b, o, v.len() as u64, v.len())),
+                        // The driver buffer (4 KiB, mostly zeros): the extent the stage reads too, one copy per contents in
+                        // a submit (most draws differ in nothing it holds, and the same copy lets their sets be shared).
+                        Some(v) => {
+                            let n = if b.extent >= 0 { (b.extent as usize).max(16).min(v.len()) } else { v.len() };
+                            let key = (super::texture::hash_bytes(&v[..n]), n);
+                            match self.driver_copies.get(&key) {
+                                Some(&(b, o)) => Some((b, o, n as u64, v.len())),
+                                None => {
+                                    let c = self.arena.copy(&self.dev, &v[..n]);
+                                    if let Some(c) = c {
+                                        self.driver_copies.insert(key, c);
+                                    }
+                                    c.map(|(b, o)| (b, o, n as u64, v.len()))
+                                }
+                            }
+                        }
                         None => zero.map(|(b, o)| (b, o, 256, 256)),
                     };
                     if let Some((buf, off, len, bound)) = x {
@@ -820,8 +838,14 @@ impl Ctx {
             .collect();
         dynamic.sort_unstable_by_key(|d| d.0);
         let offsets: smallvec::SmallVec<[u32; 32]> = dynamic.iter().map(|d| d.1).collect();
+        let point = (bind_point == vk::PipelineBindPoint::COMPUTE) as usize;
         if let Some(&s) = key.and_then(|k| self.set_memo.get(&k)) {
+            // The same set, layout and offsets bound last stay bound across pipeline changes (same layout).
+            if self.bound.sets[point].as_ref().is_some_and(|(l, b, o)| *l == layout && *b == s && *o == offsets) {
+                return;
+            }
             self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[s], &offsets);
+            self.bound.sets[point] = Some((layout, s, offsets));
             return;
         }
         let set = if push {
@@ -856,9 +880,11 @@ impl Ctx {
             if let Some(p) = &self.dev.push {
                 p.ext.cmd_push_descriptor_set(self.cb, bind_point, layout, 0, &writes);
             }
+            self.bound.sets[point] = None;
         } else {
             self.dev.device.update_descriptor_sets(&writes, &[]);
             self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[set], &offsets);
+            self.bound.sets[point] = Some((layout, set, offsets));
         }
     }
 
@@ -898,7 +924,7 @@ impl Ctx {
     unsafe fn storage_buffer(&mut self, addr: usize, size: usize, write: bool) -> Option<vk::DescriptorBufferInfo> {
         let a = crate::nvn::api::translate_virtual(addr);
         if write {
-            self.gpu_dirty.add(a, a + size);
+            self.gpu_write_added(a, a + size);
             // GPU writes cannot fault: pages the write tracking protected would lose them.
             crate::guest::dirty_track::release_for_gpu(a, size);
             crate::vulkan::guard::note_write(a, size);

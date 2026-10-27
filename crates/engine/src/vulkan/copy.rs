@@ -69,7 +69,7 @@ impl Ctx {
             return None;
         }
         if write {
-            self.gpu_dirty.add(a, a + len);
+            self.gpu_write_added(a, a + len);
             crate::guest::dirty_track::release_for_gpu(a, len);
             crate::vulkan::guard::note_write(a, len);
         }
