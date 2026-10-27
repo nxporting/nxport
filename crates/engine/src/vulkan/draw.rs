@@ -1007,6 +1007,7 @@ impl Ctx {
                     })
                 })
                 .collect();
+            self.dev.checkpoint(self.cb, "feedback snapshot (W, H, levels, layers)", [src.extent.width as u64, src.extent.height as u64, src.levels as u64, src.layers as u64]);
             self.dev.device.cmd_copy_image(self.cb, src.image, vk::ImageLayout::GENERAL, snap.image, vk::ImageLayout::GENERAL, &regions);
             self.dev.full_barrier(self.cb);
             self.fb_snaps.get_mut(&d)?.0 = self.fb_epoch;
@@ -1180,24 +1181,18 @@ impl Ctx {
                     self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
                     continue;
                 }
-                let b = match self.imports.find(&self.dev, a, size) {
-                    Some(x) => {
-                        crate::vulkan::guard::note_read(a, size);
-                        Some(x)
-                    }
-                    // A copy, once per submit.
+                // A copy, once per submit; never the imported pool in place. Vertex data read in place lost the device on
+                // NVIDIA (TotK's title, ~45 s in, every time: the first draw from a 20 MB pool the game had just filled;
+                // the replay of that frame and runs with copies never did), and copies cost nothing measurable here.
+                let key = super::hash_of(&(a, size, u32::MAX));
+                let b = match self.repacked.get(&key) {
+                    Some(&b) => Some(b),
                     None => {
-                        let key = super::hash_of(&(a, size, u32::MAX));
-                        match self.repacked.get(&key) {
-                            Some(&b) => Some(b),
-                            None => {
-                                let b = self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, size));
-                                if let Some(b) = b {
-                                    self.repacked.insert(key, b);
-                                }
-                                b
-                            }
+                        let b = self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, size));
+                        if let Some(b) = b {
+                            self.repacked.insert(key, b);
                         }
+                        b
                     }
                 };
                 if let Some(b) = b {
