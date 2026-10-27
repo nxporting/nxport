@@ -196,12 +196,13 @@ impl Host {
         }
     }
 
-    /// Reads every open controller (values combined by maximum) into host/input.rs's controller elements, and sends
-    /// each the game's rumble.
+    /// Reads every open controller into host/input.rs's controller elements, in the order they were connected: the first
+    /// is player 1 (with the keyboard), the next player 2 and so on. Sends each the game's rumble.
     fn poll_controllers(&mut self) {
         use PadElem as P;
-        let mut v = [0f32; 25];
-        for (pad, rumble) in self.pads.iter_mut() {
+        let mut players: Vec<[f32; 25]> = Vec::with_capacity(self.pads.len());
+        for (pad, rumble) in self.pads.iter_mut().take(input::MAX_PLAYERS) {
+            let mut v = [0f32; 25];
             let mut put = |e: PadElem, val: f32| v[e.index()] = v[e.index()].max(val);
             let button = |b: Button| if pad.button(b) { 1.0 } else { 0.0 };
             // SDL names the face buttons by position; macOS reads them by label (input::face_elems). Each position's
@@ -242,8 +243,9 @@ impl Host {
                 }
             }
             rumble.update(pad);
+            players.push(v);
         }
-        input::set_pad(v);
+        input::set_players(&players);
     }
 
     fn update_title(&mut self, base_title: &str) {

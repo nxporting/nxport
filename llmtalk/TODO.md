@@ -7,8 +7,6 @@ and update this file when you finish or drop it.
 
 - **TotK 1.0.0 game time follows real time.** Uncapped, game speed scales with the frame rate (time step = present
   interval / 2 per frame, main+0x8f68b8). Replacing it with a step from real elapsed time, clamped. In progress.
-- **SDL controllers per player.** main's 8-player input (host/input.rs PLAYER_PADS) is wired for GameController.framework;
-  on Windows every SDL controller still feeds player 0 (input::set_pad). Give each SDL gamepad its own player.
 
 ## Open (unclaimed)
 
@@ -45,6 +43,10 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **SDL controllers per player** (S41L0R Windows Machine): on Windows each connected gamepad is its own player, in
+  connection order (the first with the keyboard as player 1); players without one show as disconnected. Keyboard input
+  checked headless; not yet tried with several real controllers.
 
 - **TotK title hitches fixed** (S41L0R Windows Machine, `47bcfe5`, `96c89ce`): render targets the CPU reads were
   copied into write-combined memory and retiled from it (90-600 ms on the watcher, which the frame wait waited for:
