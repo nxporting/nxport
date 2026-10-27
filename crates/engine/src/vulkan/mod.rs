@@ -67,6 +67,18 @@ static PIPELINES: AtomicU64 = AtomicU64::new(0);
 /// Pipelines created in all (the saved pipeline cache is written when it grew).
 static PIPELINES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ARENA_BYTES: AtomicU64 = AtomicU64::new(0);
+/// This frame's work for --log-hitch: pipelines created, texture uploads, their bytes, ASTC decodes, shader stages translated,
+/// recording ns.
+static HITCH: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+pub(crate) const HITCH_PIPELINES: usize = 0;
+pub(crate) const HITCH_UPLOADS: usize = 1;
+pub(crate) const HITCH_UPLOAD_BYTES: usize = 2;
+pub(crate) const HITCH_ASTC: usize = 3;
+pub(crate) const HITCH_STAGES: usize = 4;
+pub(crate) const HITCH_RECORD_NS: usize = 5;
+pub(crate) fn hitch_add(what: usize, n: u64) {
+    HITCH[what].fetch_add(n, Ordering::Relaxed);
+}
 
 /// Counts bytes written for the GPU outside the arena (repacked vertex streams).
 pub(crate) fn note_copied(n: usize) {
@@ -309,10 +321,19 @@ fn log_hitch(frame: u64) {
     let prev = LAST.lock().unwrap().replace(now);
     let async_started = async_pipe::ASYNC_STARTED.swap(0, Ordering::Relaxed);
     let async_skips = async_pipe::ASYNC_SKIPS.swap(0, Ordering::Relaxed);
+    let work: [u64; 6] = std::array::from_fn(|i| HITCH[i].swap(0, Ordering::Relaxed));
     if let Some(p) = prev {
         let ms = (now - p).as_secs_f64() * 1e3;
         if ms > thr {
-            println!("[hitch] frame {frame} {ms:.1} ms");
+            println!(
+                "[hitch] frame {frame} {ms:.1} ms: recording {:.1} ms, {} pipelines created, {} stages translated, {} texture uploads ({:.1} MB), {} ASTC decodes",
+                work[HITCH_RECORD_NS] as f64 / 1e6,
+                work[HITCH_PIPELINES],
+                work[HITCH_STAGES],
+                work[HITCH_UPLOADS],
+                work[HITCH_UPLOAD_BYTES] as f64 / 1e6,
+                work[HITCH_ASTC]
+            );
             if async_started + async_skips > 0 {
                 println!("[hitch]   async pipelines: {async_started} compiles started, {async_skips} draws skipped while compiling");
             }

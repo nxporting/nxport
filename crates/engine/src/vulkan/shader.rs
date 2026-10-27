@@ -235,6 +235,7 @@ pub unsafe fn get(
         None => {
             let whole = state_for(None);
             let p = translate(whole.clone())?;
+            super::hitch_add(super::HITCH_STAGES, 1);
             let k = sc::remember(code, named_len(code, p.size), prep, spirv_inputs(&p.binary_code));
             first = Some((format!("{whole:?}"), p));
             k
@@ -252,6 +253,7 @@ pub unsafe fn get(
         return build_stage(dev, &spirv, &m, id, &prep, known);
     }
     let p = translate(state)?;
+    super::hitch_add(super::HITCH_STAGES, 1);
     let m = p.manifest();
     sc::store(key, &p.binary_code, &m);
     if let Some(dir) = &crate::settings::get().debug.dump_spirv {

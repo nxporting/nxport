@@ -98,6 +98,18 @@ impl Ctx {
 
     pub(super) unsafe fn exec_copy(&mut self, c: &Cmd) {
         self.end_pass();
+        // Always marked, not only with --gpu-checkpoints-each: copies and clears run between passes, where the coarse
+        // checkpoints (pass begin and end) cannot tell one that never finishes from idle.
+        let (what, args): (&'static str, [u64; 4]) = match c {
+            Cmd::CopyBufferToBuffer { src, dst, size } => ("copy buffer (source, destination, bytes)", [*src, *dst, *size as u64, 0]),
+            Cmd::ClearBuffer { dst, size, .. } => ("clear buffer (destination, bytes)", [*dst, *size as u64, 0, 0]),
+            Cmd::CopyBufferToTexture { src, .. } => ("copy buffer to texture (source)", [*src, 0, 0, 0]),
+            Cmd::CopyTextureToBuffer { dst, .. } => ("copy texture to buffer (destination)", [*dst, 0, 0, 0]),
+            Cmd::CopyTextureToTexture(_) => ("copy texture to texture", [0; 4]),
+            Cmd::ClearTexture(_) => ("clear texture", [0; 4]),
+            _ => ("copy", [0; 4]),
+        };
+        self.dev.checkpoint(self.cb, what, args);
         match c {
             Cmd::CopyBufferToBuffer { src, dst, size } => {
                 let (Some((sb, so)), Some((db, d_off))) = (self.guest_range(*src, *size, false), self.guest_range(*dst, *size, true)) else {

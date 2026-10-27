@@ -331,6 +331,7 @@ impl Ctx {
                     .layout(layout);
                 let cache = self.pipeline_cache();
                 crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
                 let pipe = match self.dev.device.create_compute_pipelines(cache, &[info], None) {
                     Ok(p) => p[0],
                     Err((_, e)) => {
@@ -458,6 +459,7 @@ impl Ctx {
                         crate::vulkan::async_pipe::AsyncPipe::Ready(p) => {
                             crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
                             self.record_pipeline(mode, vstage, gstage, fstage, &desc);
                             p
                         }
@@ -473,6 +475,7 @@ impl Ctx {
                 } else {
                     crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
                     match pipelines::create(&self.dev, &desc, vstage, gstage, fstage, layout, cache) {
                         Ok(p) => {
                             self.record_pipeline(mode, vstage, gstage, fstage, &desc);
