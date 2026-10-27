@@ -663,7 +663,22 @@ impl Ctx {
         // Lists not reached lately may be gone: forget those now and then (not all of them: scanning a whole frame's lists
         // again took ~80 ms, a hitch every few seconds on TotK's title).
         if self.scan_cache.len() > 1 << 15 {
-            self.scan_cache.retain(|_, e| e.2 + 8 >= serial);
+            // Freed on another thread: they hold the last references to tens of thousands of recorded lists, whose
+            // freeing took ~80 ms here.
+            let (keep, old): (rustc_hash::FxHashMap<_, _>, Vec<_>) = {
+                let mut keep = rustc_hash::FxHashMap::default();
+                let mut old = Vec::new();
+                for (k, e) in std::mem::take(&mut self.scan_cache) {
+                    if e.2 + 8 >= serial {
+                        keep.insert(k, e);
+                    } else {
+                        old.push(e);
+                    }
+                }
+                (keep, old)
+            };
+            self.scan_cache = keep;
+            let _ = std::thread::Builder::new().name("vk-list-free".into()).spawn(move || drop(old));
         }
         self.occl.upcoming = upcoming;
         self.occl.cursor = 0;
