@@ -5,8 +5,6 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- **Vulkan recording speed.** Great Sky Island records ~20 ms a frame on the Presentation thread and the GPU idles
-  waiting for recorded chunks (capture sky2203 replay: recording ~20.7 ms median). In progress.
 - **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
   about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
   scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
@@ -49,6 +47,13 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **Vulkan recording speed, first round** (S41L0R Windows Machine, `cc29ace`): redundant pipeline and descriptor set
+  binds left out, the driver constant buffer copied only for the extent read and once per contents, vertex/index cache
+  lookups once per submit, no per-draw allocations for stage keys. Capture sky2203 replayed (interleaved with the old
+  build): recording 26.1 -> 21.3 ms a frame, every pass matching. Game, Great Sky Island headless: record 41-46 -> 28
+  ms, 19 -> 30 fps (another game run shared the machine). What is left is spread over the per-draw path (stage_writes
+  ~40%, driver ~15%, arena copies ~8%); a bigger step needs recording passes on several threads.
 
 - **Plugin mods on lifted hosts** (S41L0R Windows Machine, `e1cd615`): two passes. `nxport-cli lift-game --mods
   DIR` lifts the game with the mods' modules; a lifted run with `--aot-dump=FILE` writes the code as the mods
