@@ -344,9 +344,13 @@ impl Ctx {
         };
         let mut w = DescWrites::default();
         self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
-        let set_layout = self.stages[&(data, content)].set_layout;
+        let s = &self.stages[&(data, content)];
+        let (set_layout, full) = (s.set_layout, s.known.full);
         self.dev.device.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
         self.bind_writes(&w, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
+        // Always marked, not only with --gpu-checkpoints-each: dispatches run between passes, where the coarse checkpoints
+        // (pass begin and end) cannot tell a compute shader that never finishes from idle.
+        self.dev.checkpoint(self.cb, "dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
         let d = &self.dev.device;
         d.cmd_dispatch(self.cb, x as u32, y as u32, z as u32);
         self.dev.full_barrier(self.cb);
