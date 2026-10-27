@@ -578,6 +578,30 @@ impl Dev {
         Ok(HostBuffer { buffer, memory, ptr, size })
     }
 
+    /// A host-visible buffer the CPU reads back from, mapped: host-cached memory where the device has it (reads from
+    /// write-combined memory are uncached: copying render targets out of it took tens to hundreds of milliseconds).
+    pub unsafe fn readback_buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<HostBuffer, String> {
+        let buffer = self
+            .device
+            .create_buffer(&vk::BufferCreateInfo::default().size(size.max(16)).usage(usage), None)
+            .map_err(|e| e.to_string())?;
+        let req = self.device.get_buffer_memory_requirements(buffer);
+        let mapped = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory = self
+            .memory_type(req.memory_type_bits, mapped | vk::MemoryPropertyFlags::HOST_CACHED)
+            .and_then(|ty| self.device.allocate_memory(&vk::MemoryAllocateInfo::default().allocation_size(req.size).memory_type_index(ty), None).ok());
+        let memory = match memory {
+            Some(m) => m,
+            None => self.alloc(req, mapped)?,
+        };
+        self.device.bind_buffer_memory(buffer, memory, 0).map_err(|e| e.to_string())?;
+        let ptr = self
+            .device
+            .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+            .map_err(|e| e.to_string())? as *mut u8;
+        Ok(HostBuffer { buffer, memory, ptr, size })
+    }
+
     /// A mapped buffer in device-local memory the CPU can map (the BAR window) where the device has it, else as
     /// host_buffer.
     pub unsafe fn mapped_device_buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<HostBuffer, String> {

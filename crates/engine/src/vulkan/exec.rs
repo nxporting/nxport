@@ -85,6 +85,8 @@ pub struct Ctx {
     tex: Textures,
     imports: Imports,
     arena: Arena,
+    /// Host-cached memory the GPU copies render targets into for the watcher to write back to guest memory.
+    readback: Arena,
     stages: HashMap<(u64, u64), Stage>,
     failed_stages: HashSet<(u64, u64)>,
     pipelines: HashMap<u64, (vk::Pipeline, vk::PipelineLayout)>,
@@ -190,7 +192,7 @@ pub struct Ctx {
     /// The submit's command lists by handle (fetched once by the pre-scan).
     lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
     /// Pre-scans of lists without calls, by list.
-    scan_cache: rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan)>,
+    scan_cache: rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan, u64)>,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -405,6 +407,7 @@ struct InFlight {
     cbs: Vec<vk::CommandBuffer>,
     desc_pools: Vec<vk::DescriptorPool>,
     chunks: Vec<super::device::HostBuffer>,
+    readback_chunks: Vec<super::device::HostBuffer>,
     occl_pool: vk::QueryPool,
     timestamps: vk::QueryPool,
     imports: Vec<(vk::Buffer, vk::DeviceMemory)>,
@@ -490,7 +493,8 @@ impl Ctx {
             programs: Default::default(),
             tex: Textures::default(),
             imports: Imports::default(),
-            arena: Arena { chunks: Vec::new(), free: Vec::new(), cur: 0, used: 0, align },
+            arena: Arena { chunks: Vec::new(), free: Vec::new(), cur: 0, used: 0, align, cached: false },
+            readback: Arena { chunks: Vec::new(), free: Vec::new(), cur: 0, used: 0, align, cached: true },
             stages: Default::default(),
             failed_stages: Default::default(),
             pipelines: Default::default(),
@@ -653,12 +657,13 @@ impl Ctx {
         let mut writes = std::mem::take(&mut self.cmd_writes);
         writes.clear();
         for &h in lists {
-            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache, &mut self.lists);
+            Self::scan_counters(h, serial, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache, &mut self.lists);
         }
         self.cmd_writes = writes;
-        // Lists not reached in this submit may be gone: forget them now and then.
+        // Lists not reached lately may be gone: forget those now and then (not all of them: scanning a whole frame's lists
+        // again took ~80 ms, a hitch every few seconds on TotK's title).
         if self.scan_cache.len() > 1 << 15 {
-            self.scan_cache.clear();
+            self.scan_cache.retain(|_, e| e.2 + 8 >= serial);
         }
         self.occl.upcoming = upcoming;
         self.occl.cursor = 0;
@@ -724,6 +729,7 @@ impl Ctx {
             cbs,
             desc_pools: std::mem::take(&mut self.desc_pools),
             chunks: self.arena.take_used(),
+            readback_chunks: self.readback.take_used(),
             occl_pool,
             timestamps,
             imports: std::mem::take(&mut self.imports.retired),
@@ -795,6 +801,7 @@ impl Ctx {
                 }
             }
             self.arena.give_back(&self.dev, f.chunks);
+            self.readback.give_back(&self.dev, f.readback_chunks);
             if f.occl_pool != vk::QueryPool::null() {
                 self.free_occl.push(f.occl_pool);
             }
@@ -868,7 +875,7 @@ impl Ctx {
             }
             for level in 0..t.levels.max(1) as u32 {
                 let Some((mut region, _, _, n)) = Textures::read_region(img, t.format, level + at_level, at_layer) else { break };
-                let Some((buf, off, ptr)) = self.arena.alloc(&self.dev, n as usize) else { break };
+                let Some((buf, off, ptr)) = self.readback.alloc(&self.dev, n as usize) else { break };
                 region.buffer_offset = off;
                 self.dev.device.cmd_copy_image_to_buffer(self.cb, img.image, vk::ImageLayout::GENERAL, buf, &[region]);
                 self.rt_reads.push((t, level, ptr as usize, n as usize));
@@ -941,11 +948,12 @@ impl Ctx {
     /// memory their commands write (inline uniform updates, reports).
     unsafe fn scan_counters(
         handle: u64,
+        serial: u64,
         depth: u32,
         index: &mut u64,
         out: &mut Vec<(u64, bool)>,
         writes: &mut Ranges,
-        cache: &mut rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan)>,
+        cache: &mut rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan, u64)>,
         lists: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
     ) {
         let list = match lists.get(&handle) {
@@ -959,7 +967,9 @@ impl Ctx {
         // Lists without calls (most: TotK records each mesh's list once) are scanned once.
         if list.summary().1.is_empty() {
             let key = std::sync::Arc::as_ptr(&list) as usize;
-            let scan = &cache.entry(key).or_insert_with(|| (list.clone(), ListScan::of(&list))).1;
+            let e = cache.entry(key).or_insert_with(|| (list.clone(), ListScan::of(&list), serial));
+            e.2 = serial;
+            let scan = &e.1;
             out.extend(scan.events.iter().map(|&(i, report)| (*index + i, report)));
             for &(addr, len) in &scan.writes {
                 let a = crate::nvn::api::translate_virtual(addr as usize);
@@ -972,7 +982,7 @@ impl Ctx {
             match &op.typed {
                 Some(Cmd::CallCommands(hs)) if depth < 16 => {
                     for &h in hs.iter() {
-                        Self::scan_counters(h, depth + 1, index, out, writes, cache, lists);
+                        Self::scan_counters(h, serial, depth + 1, index, out, writes, cache, lists);
                     }
                     continue;
                 }
