@@ -5,9 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- **Vulkan device loss on Great Sky Island.** Reproduces headless: Continue on a save there loses the device at
-  about frame 2400 to 2650 (last checkpoint: end of a render pass); not with --gpu-checkpoints-each (timing). The
-  scene also runs at 20 fps (record and GPU about 33 ms a frame). In progress.
+- **TotK title hitches** (lifted, Windows): every background cut stalls ~128 ms with ~3 ms of recording, no uploads or
+  pipelines (--log-hitch=50): the time goes to the game's CPU side. In progress.
 - **SDL controllers per player.** main's 8-player input (host/input.rs PLAYER_PADS) is wired for GameController.framework;
   on Windows every SDL controller still feeds player 0 (input::set_pad). Give each SDL gamepad its own player.
 
@@ -20,7 +19,6 @@ and update this file when you finish or drop it.
 - Lifted TotK with `--no-vsync` runs faster than real time above 60 fps (the time step stays half a 30 fps frame).
 - `retro-work` has commits not on main.
 - With `--no-vsync`, TotK starts no sounds (title runs ~600 fps; its idle voices are never routed to splitters).
-- Rare Vulkan device loss at startup (about 1 in 10, empty fault report); lost-device reports and checkpoints are on.
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
 - VP8 movies have no decoder (crates/media); everything else the old ffmpeg shim covered is built in.
 - CPU side on lifted hosts: null-GPU gameplay ~69 fps; threads wait on each other's jobs (see the CPU notes in
@@ -47,6 +45,13 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **Intermittent Vulkan device loss fixed** (S41L0R Windows Machine, `426ec48`): vertex buffers bound in place from
+  imported guest memory lost the device on NVIDIA (title ~45 s in uncapped, every run; Great Sky Island ~1 in 2;
+  also the "rare loss at startup"). Bisected on the title: only --no-host-import and not importing that one 20 MB pool
+  avoided it; vertex data now always comes from its shadow, the vertex cache or a per-submit copy (no measurable cost).
+  Lost-device reports now also mark dispatches, copies, clears and feedback snapshots; --log-hitch names a slow
+  frame's work.
 
 - **Vulkan recording speed, first round** (S41L0R Windows Machine, `cc29ace`): redundant pipeline and descriptor set
   binds left out, the driver constant buffer copied only for the extent read and once per contents, vertex/index cache
