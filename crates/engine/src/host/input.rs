@@ -730,12 +730,17 @@ pub fn log_hid(func: &str, id: u32, count: i32) {
 
 // ---- game controllers (GameController.framework, main thread only) ----
 
-/// Takes player 0's controller element values (`PAD_ELEMS` order, combined over its controllers) and refreshes the Npad
-/// state if they changed.
-pub fn set_pad(v: [f32; 25]) {
+/// Takes each connected controller's element values (`PAD_ELEMS` order), controller i for player i (player 0 also has the
+/// keyboard and stays connected without one), and refreshes the Npad state if anything changed.
+pub fn set_players(pads: &[[f32; 25]]) {
     let mut changed = false;
-    for (slot, val) in PLAYER_PADS[0].iter().zip(v) {
-        changed |= slot.swap(val.to_bits(), Ordering::Relaxed) != val.to_bits();
+    for p in 0..MAX_PLAYERS {
+        let v = pads.get(p).copied().unwrap_or([0.0; 25]);
+        for (slot, val) in PLAYER_PADS[p].iter().zip(v) {
+            changed |= slot.swap(val.to_bits(), Ordering::Relaxed) != val.to_bits();
+        }
+        let connected = p == 0 || p < pads.len();
+        changed |= PLAYER_CONNECTED[p].swap(connected, Ordering::Relaxed) != connected;
     }
     if changed {
         update_npad();
