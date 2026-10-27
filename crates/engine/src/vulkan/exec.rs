@@ -152,6 +152,8 @@ pub struct Ctx {
     pub(super) driver_scratch: Vec<u8>,
     /// Descriptor sets written in this submit, by contents.
     pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
+    /// What the command buffer being recorded has bound (draw.rs), so binding the same again is left out.
+    pub(super) bound: Bound,
     /// The dynamic state set in the current pass (draw.rs dynamic_state).
     pub(super) dynamic_memo: Option<u64>,
     /// The vertex layout of the bound attribute and stream state, and its hash (draw.rs vertex_layout).
@@ -163,6 +165,11 @@ pub struct Ctx {
     /// Uniform buffer copies of this submit by (host address, length, epoch); the epoch advances at every write of guest
     /// memory by this submit's commands (inline uniform updates, reports).
     pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize, u64), (vk::Buffer, u64)>,
+    /// Vertex and index data found in the device copies (vcache.rs) in this submit, by (address, length); cleared when
+    /// the submit's commands add a range they write.
+    pub(super) cached_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
+    /// Driver constant buffer copies of this submit, by (contents hash, length).
+    pub(super) driver_copies: rustc_hash::FxHashMap<(u64, usize), (vk::Buffer, u64)>,
     pub(super) ubo_epoch: u64,
     /// Two timestamps around each submit's commands: the GPU's own time for it (null if the queue has none); then, when
     /// profiling passes, one at the end of each pass, with a description of the pass.
@@ -228,6 +235,15 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
     std::ptr::write_unaligned((p + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
 }
 
+/// What a command buffer has bound: the graphics pipeline, and per bind point (graphics, compute) the descriptor set with
+/// its pipeline layout and dynamic offsets. The driver charges as much for binding the same again as for a change, and
+/// consecutive draws mostly use the same pipeline and set.
+#[derive(Default)]
+pub(super) struct Bound {
+    pub(super) pipeline: vk::Pipeline,
+    pub(super) sets: [Option<(vk::PipelineLayout, vk::DescriptorSet, smallvec::SmallVec<[u32; 32]>)>; 2],
+}
+
 /// Disjoint address ranges [start, end), merged as they are added.
 #[derive(Default)]
 pub(super) struct Ranges(std::collections::BTreeMap<usize, usize>);
@@ -251,6 +267,10 @@ impl Ranges {
             hi = hi.max(e);
         }
         self.0.insert(lo, hi);
+    }
+
+    pub(super) fn covers(&self, a: usize, b: usize) -> bool {
+        self.0.range(..=a).next_back().is_some_and(|(_, &e)| e >= b)
     }
 
     pub(super) fn overlaps(&self, a: usize, b: usize) -> bool {
@@ -289,18 +309,33 @@ impl Ctx {
     /// The device copy of vertex or index data at guest [a, a + len) (vcache.rs); None for memory GPU work writes (its
     /// shadow or guest memory is bound) or where it is not cached.
     pub(super) unsafe fn cached(&mut self, a: usize, len: usize) -> Option<(vk::Buffer, u64)> {
+        // Checked once per submit while nothing this submit's commands write is added (cached_memo).
+        if let Some(&b) = self.cached_memo.get(&(a, len)) {
+            return Some(b);
+        }
         if self.gpu_writes(a, a + len) {
             return None;
         }
         let serial = super::guard::RECORDING.load(std::sync::atomic::Ordering::Relaxed);
         let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         let (dev, tex, arena) = (&self.dev, &mut self.tex, &mut self.arena);
-        self.vcache.get(dev, a, len, serial, frame, &mut |dst, dst_off, src, n| {
+        let b = self.vcache.get(dev, a, len, serial, frame, &mut |dst, dst_off, src, n| {
             let Some((b, o, p)) = arena.alloc(dev, n) else { return false };
             std::ptr::copy_nonoverlapping(src, p, n);
             tex.record_copy(dev, b, o, dst, dst_off, n as u64);
             true
-        })
+        })?;
+        self.cached_memo.insert((a, len), b);
+        Some(b)
+    }
+
+    /// Guest memory [a, b) is written by this submit's commands: what was checked against it is checked again.
+    pub(super) fn gpu_write_added(&mut self, a: usize, b: usize) {
+        // Draws binding the same storage buffer add it again and again: only new ranges change anything.
+        if !self.gpu_dirty.covers(a, b) {
+            self.gpu_dirty.add(a, b);
+            self.cached_memo.clear();
+        }
     }
 }
 
@@ -495,6 +530,7 @@ impl Ctx {
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
             set_memo: Default::default(),
+            bound: Bound::default(),
             dynamic_memo: None,
             vl_cache: None,
             repack_cache: Default::default(),
@@ -502,6 +538,8 @@ impl Ctx {
             supports: Default::default(),
             restart_memo: Default::default(),
             ubo_copies: Default::default(),
+            driver_copies: Default::default(),
+            cached_memo: Default::default(),
             ubo_epoch: 0,
             timestamps,
             timestamps_supported,
@@ -588,6 +626,7 @@ impl Ctx {
             return;
         };
         self.cb = cbs[0];
+        self.bound = Bound::default();
         self.tex.begin_batch(self.pool);
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
         self.tex.begin_submit();
@@ -706,6 +745,8 @@ impl Ctx {
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
+        self.driver_copies.clear();
+        self.cached_memo.clear();
     }
 
     /// The pipeline cache.
@@ -1438,6 +1479,7 @@ impl Ctx {
         }
         self.chunks.extend_from_slice(&cbs);
         self.cb = next[0];
+        self.bound = Bound::default();
         let _ = d.begin_command_buffer(self.cb, &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT));
         self.chunk_start = std::time::Instant::now();
     }
