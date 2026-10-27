@@ -724,6 +724,8 @@ impl Textures {
             return;
         }
         let Ok(staging) = dev.host_buffer(data.len() as u64, vk::BufferUsageFlags::TRANSFER_SRC) else { return };
+        super::hitch_add(super::HITCH_UPLOADS, 1);
+        super::hitch_add(super::HITCH_UPLOAD_BYTES, data.len() as u64);
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
         let image = img.image;
         let batched = self.batch.is_some();
@@ -742,6 +744,7 @@ impl Textures {
     /// An ASTC upload where the device has no ASTC: `data` holds each region's blocks, which the decoder writes into the
     /// image's levels and layers.
     unsafe fn upload_astc(&mut self, dev: &Dev, d: &Desc, data: &[u8], regions: &[vk::BufferImageCopy], bw: u32, bh: u32) {
+        super::hitch_add(super::HITCH_ASTC, 1);
         if self.astc.is_none() {
             self.astc = super::astc::Decoder::new(dev);
             if self.astc.is_none() {

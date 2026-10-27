@@ -651,6 +651,7 @@ impl Ctx {
         let record = t0.elapsed().as_nanos() as u64;
         super::RECORD_NS.fetch_add(record, std::sync::atomic::Ordering::Relaxed);
         super::LAST_RECORD_NS.store(record, std::sync::atomic::Ordering::Relaxed);
+        super::hitch_add(super::HITCH_RECORD_NS, record);
         super::LAST_WAIT_NS.store(0, std::sync::atomic::Ordering::Relaxed);
         let mut all = std::mem::take(&mut self.chunks);
         all.extend_from_slice(&cbs);
