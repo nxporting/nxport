@@ -379,6 +379,9 @@ pub(crate) struct Arena {
     cur: usize,
     used: u64,
     align: u64,
+    /// Chunks in host-cached memory: for what the CPU reads back (render-target write-backs). Other chunks are in
+    /// host-visible memory the CPU writes and the GPU reads, which is write-combined and very slow for CPU reads.
+    cached: bool,
 }
 
 impl Arena {
@@ -411,7 +414,11 @@ impl Arena {
                 | vk::BufferUsageFlags::INDEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST;
-            let chunk = dev.host_buffer(Self::CHUNK.max(len), usage).ok()?;
+            let chunk = if self.cached {
+                dev.readback_buffer((16 << 20u64).max(len), usage).ok()?
+            } else {
+                dev.host_buffer(Self::CHUNK.max(len), usage).ok()?
+            };
             std::ptr::write_bytes(chunk.ptr, 0, chunk.size as usize);
             self.chunks.push(chunk);
             self.cur = self.chunks.len() - 1;
