@@ -8,6 +8,8 @@ pub mod aspect;
 pub mod dynamic_fps;
 #[cfg(nx_native)]
 pub mod hud;
+#[cfg(nx_native)]
+pub mod font_draw;
 
 use crate::profile::VersionProfile;
 
@@ -204,6 +206,12 @@ pub unsafe fn install_v1_1_2_hooks(
             }
             (w, ..) => println!("[!] Drawable probe hook not installed (main+{:#x} = {:#010x}, or out of branch range)", SITE, w),
         }
+    }
+
+    // 5. Text draws (nn::font::RectDrawer)
+    let d = &crate::settings::get().totk.diagnostics;
+    if d.native_font_draws || d.verify_font_draws {
+        font_draw::install(base, mem_space);
     }
 }
 

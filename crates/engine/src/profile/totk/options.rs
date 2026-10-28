@@ -26,6 +26,10 @@ crate::settings::group! {
         log_drawables: bool = false,
         /// Count draws by their render item, and how much of each repeats from its previous run
         log_draw_items: bool = false,
+        /// Text draws recorded by the engine instead of the game's font drawer
+        native_font_draws: bool = false,
+        /// Compare each text draw the game records with what --native-font-draws would record
+        verify_font_draws: bool = false,
     }
 }
 
