@@ -1319,11 +1319,14 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
         }
         let next = *(fp as *const usize);
         let ret = *((fp + 8) as *const usize);
-        if ret >= base && ret < base + (256 << 20) {
+        // The HLE function's frame returns into the entry stub, which ran it on the host stack: its saved frame pointer
+        // is the guest's, on the guest stack (not above this one), and the stub itself is not a caller.
+        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
+        if !stub && ret >= base && ret < base + (256 << 20) {
             key[n] = (ret - base) as u32;
             n += 1;
         }
-        if next <= fp {
+        if next <= fp && !stub {
             break;
         }
         fp = next;
