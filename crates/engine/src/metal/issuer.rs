@@ -18,8 +18,8 @@ use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder,
     MTLComputePipelineState, MTLCullMode, MTLDepthClipMode, MTLDepthStencilState, MTLIndexType,
     MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineState,
-    MTLSamplerState, MTLScissorRect, MTLSize, MTLTexture, MTLTriangleFillMode, MTLViewport,
-    MTLVisibilityResultMode, MTLWinding,
+    MTLRenderStages, MTLResource, MTLResourceUsage, MTLSamplerState, MTLScissorRect, MTLSize, MTLTexture,
+    MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode, MTLWinding,
 };
 
 type Buf = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -40,6 +40,13 @@ pub(super) enum Op {
         label: String,
     },
     End,
+    /// An argument-buffer draw's per-stage structs (bound at buffer 0 of each stage) and the resources they point to
+    /// (made resident once per encoder).
+    ArgStructs {
+        v: Box<[u64]>,
+        f: Box<[u64]>,
+        res: Vec<(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage)>,
+    },
     Pipeline(Retained<ProtocolObject<dyn MTLRenderPipelineState>>),
     Viewport(MTLViewport),
     Scissor(MTLScissorRect),
@@ -238,8 +245,14 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
 }
 
 /// Executes one render-encoder (or commit) op.
+thread_local! {
+    /// Resources made resident (useResource) in the current render encoder, with their usage.
+    static RESIDENT: std::cell::RefCell<rustc_hash::FxHashSet<(usize, usize)>> = std::cell::RefCell::new(Default::default());
+}
+
 unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
     if let Op::Begin { cb, desc, label } = op {
+        RESIDENT.with(|r| r.borrow_mut().clear());
         super::pass_prof::render_pass(&desc);
         super::ISSUED_PASSES[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *enc = cb.renderCommandEncoderWithDescriptor(&desc);
@@ -283,6 +296,28 @@ unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
         Op::DepthStencil(d) => e.setDepthStencilState(Some(&d)),
         Op::StencilRef(f, b) => e.setStencilFrontReferenceValue_backReferenceValue(f, b),
         Op::Blend(c) => e.setBlendColorRed_green_blue_alpha(c[0], c[1], c[2], c[3]),
+        Op::ArgStructs { v, f, res } => {
+            RESIDENT.with(|r| {
+                let mut r = r.borrow_mut();
+                for (x, usage) in &res {
+                    let k = (&**x as *const ProtocolObject<dyn MTLResource> as *const u8 as usize, usage.0);
+                    if r.insert(k) {
+                        e.useResource_usage_stages(x, *usage, MTLRenderStages::Vertex | MTLRenderStages::Fragment);
+                    }
+                }
+            });
+            for (t, vertex) in [(&v, true), (&f, false)] {
+                if t.is_empty() {
+                    continue;
+                }
+                let ptr = std::ptr::NonNull::new(t.as_ptr() as *mut libc::c_void).unwrap();
+                if vertex {
+                    e.setVertexBytes_length_atIndex(ptr, t.len() * 8, 0);
+                } else {
+                    e.setFragmentBytes_length_atIndex(ptr, t.len() * 8, 0);
+                }
+            }
+        }
         Op::VBuf(b, off, i) => e.setVertexBuffer_offset_atIndex(Some(&b), off, i),
         Op::FBuf(b, off, i) => e.setFragmentBuffer_offset_atIndex(Some(&b), off, i),
         Op::VBufOff(off, i) => e.setVertexBufferOffset_atIndex(off, i),

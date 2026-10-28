@@ -269,6 +269,7 @@ fn descriptor(device: &Device, lib: &ShaderLibs, p: &Planned) -> Option<Retained
         e.color_state,
         e.channel_mask,
         false,
+        false,
     )
 }
 
