@@ -16,7 +16,6 @@ and update this file when you finish or drop it.
   present interval / 2 itself (main+0x8f68b8), so the 1.1.2 counterpart of the 1.0.0 unlock (lowest interval 1 + no
   veto) may be all 1.1.2 needs: verify on a Mac before relying on dynamic_fps.
 - `retro-work` has commits not on main.
-- With `--no-vsync`, TotK starts no sounds (title runs ~600 fps; its idle voices are never routed to splitters).
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
 - VP8 movies have no decoder (crates/media); everything else the old ffmpeg shim covered is built in.
 - CPU side on lifted hosts: null-GPU gameplay ~69 fps; threads wait on each other's jobs (see the CPU notes in
@@ -43,6 +42,9 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **No sound with VSync off fixed** (S41L0R Windows Machine, `cd68d55`): above ~200 fps (the audio renderer's frame
+  rate) TotK starts no sounds at all; VSync off is now paced to at most 144 fps (sound checked through gameplay).
 
 - **SDL controllers per player** (S41L0R Windows Machine): on Windows each connected gamepad is its own player, in
   connection order (the first with the keyboard as player 1); players without one show as disconnected. Keyboard input
