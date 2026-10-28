@@ -18,11 +18,42 @@ const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
 const PFN_BIND_TEXTURE: usize = 0x466e008;
 const PFN_BIND_TEXTURES_DEFERRED: usize = 0x466e018;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
+const PFN_BIND_PROGRAM: usize = 0x466dfb0;
+const PFN_BLEND_STATE_SET_DEFAULTS: usize = 0x466dc58;
+const PFN_COLOR_STATE_SET_DEFAULTS: usize = 0x466dcd0;
+const PFN_COLOR_STATE_SET_BLEND_ENABLE: usize = 0x466dcd8;
+const PFN_BLEND_STATE_SET_BLEND_EQUATION: usize = 0x466dc70;
+const PFN_BLEND_STATE_SET_BLEND_FUNC: usize = 0x466dc68;
+const PFN_BLEND_STATE_SET_BLEND_TARGET: usize = 0x466dc60;
+const PFN_BIND_BLEND_STATE: usize = 0x466df70;
+const PFN_COLOR_STATE_SET_LOGIC_OP: usize = 0x466dce0;
+const PFN_BIND_COLOR_STATE: usize = 0x466df80;
+const PFN_SET_BLEND_COLOR: usize = 0x466e190;
+const PFN_CHANNEL_MASK_STATE_SET_CHANNEL_MASK: usize = 0x466dd10;
+const PFN_BIND_CHANNEL_MASK_STATE: usize = 0x466df78;
+const PFN_DEPTH_STENCIL_SET_DEPTH_TEST_ENABLE: usize = 0x466de28;
+const PFN_DEPTH_STENCIL_SET_DEPTH_WRITE_ENABLE: usize = 0x466de30;
+const PFN_DEPTH_STENCIL_SET_DEPTH_FUNC: usize = 0x466de38;
+const PFN_DEPTH_STENCIL_SET_STENCIL_TEST_ENABLE: usize = 0x466de40;
+const PFN_DEPTH_STENCIL_SET_STENCIL_FUNC: usize = 0x466de48;
+const PFN_DEPTH_STENCIL_SET_STENCIL_OP: usize = 0x466de50;
+const PFN_BIND_DEPTH_STENCIL_STATE: usize = 0x466df98;
+const PFN_SET_STENCIL_VALUE_MASK: usize = 0x466e178;
+const PFN_SET_STENCIL_MASK: usize = 0x466e180;
+const PFN_SET_STENCIL_REF: usize = 0x466e188;
+const PFN_POLYGON_STATE_SET_CULL_FACE: usize = 0x466dde0;
+const PFN_POLYGON_STATE_SET_FRONT_FACE: usize = 0x466dde8;
+const PFN_POLYGON_STATE_SET_POLYGON_MODE: usize = 0x466ddf0;
+const PFN_POLYGON_STATE_SET_POLYGON_OFFSET_ENABLES: usize = 0x466ddf8;
+const PFN_BIND_POLYGON_STATE: usize = 0x466df90;
+const PFN_SET_POLYGON_OFFSET_CLAMP: usize = 0x466e1a8;
+const PFN_SET_DEPTH_CLAMP: usize = 0x466e1c8;
 
 // Data (main+)
 const DEFAULT_MATERIAL_SLOT: usize = 0x4639fb0; // pointer used when the drawable has no material for the pass
 const DEVICE_HOLDER: usize = 0x462bbe8; // pointer to the object holding the NVNdevice at +0x30
 const NO_VERTEX_STATE: usize = 0x386de44; // three u32 used when the shape has no vertex state
+const SHADER_SLOT_OFFSETS: usize = 0x46138a0; // pointer to the offsets of a program set's vertex / geometry / ... shaders
 const PRIMITIVE_TABLE: usize = 0x37ff9b8; // nn::gfx primitive topology -> NVN draw mode
 const INDEX_TYPE_TABLE: usize = 0x37ffa0c; // nn::gfx index format -> NVN index type
 
@@ -52,6 +83,113 @@ impl Port {
     unsafe fn call_commands(&mut self, cmd: usize, handles: usize) {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.call(self.pfn(PFN_CALL_COMMANDS), &[cmd as u64, 1, handles as u64]);
+    }
+
+    /// nn::gfx's shader stage bits -> NVNshaderStageBits (main+0x307d8).
+    fn nvn_stage_bits(b: u32) -> u32 {
+        let mut r = b & 1;
+        r |= ((b >> 1) & 1) << 3;
+        r |= ((b >> 2) & 1) << 4;
+        r |= (b >> 1) & 4;
+        r |= (b >> 3) & 2;
+        r | (b & 0x20)
+    }
+
+    /// nn::gfx::CommandBuffer::SetShader (main+0x74b81c) through the wrapper `w8` (= the context's wrapper + 8).
+    unsafe fn set_shader(&mut self, w8: usize, shader: usize, stages: u32) {
+        let cmd = self.m.r64(w8 + 0xb0);
+        let (program, bits) = if shader == 0 {
+            (0, Self::nvn_stage_bits(stages))
+        } else if self.m.r8(shader + 1) & 1 == 0 {
+            (self.m.r64(shader + 8), self.m.r32(shader + 4))
+        } else {
+            (self.m.r64(shader + 8), Self::nvn_stage_bits(stages))
+        };
+        self.call(self.pfn(PFN_BIND_PROGRAM), &[cmd as u64, program as u64, bits as u64]);
+    }
+
+    /// sub_764efc: binds the program the shape state's flags select (+0x34 bits 2 / 4 / 3) from its program set.
+    unsafe fn bind_shape_program(&mut self, st: usize, w8: usize) {
+        let f = self.m.r16(st + 0x34);
+        let k = if (f >> 2) & 1 != 0 {
+            0
+        } else if (f >> 4) & 1 != 0 {
+            1
+        } else if (f >> 3) & 1 != 0 {
+            2
+        } else {
+            return;
+        };
+        let off = self.m.r64(self.m.r64(self.base + SHADER_SLOT_OFFSETS) + k * 8);
+        let shader = self.m.r64(self.m.r64(self.m.r64(st + 0x20) + off) + 0x68);
+        self.set_shader(w8, shader, 0x3f);
+    }
+
+    /// sead::GraphicsContext::apply (main+0x74d980): `g` is the context's render state, `w` the command buffer wrapper.
+    unsafe fn apply_graphics_context(&mut self, g: usize, w: usize) {
+        let cmd = self.m.r64(w + 0xb8) as u64;
+        let mut blend = [0u64; 8];
+        let mut color = [0u64; 8];
+        let mut mask = [0u64; 8];
+        let mut ds = [0u64; 8];
+        let mut poly = [0u64; 8];
+        let (bp, cp, mp, dp, pp) = (
+            blend.as_mut_ptr() as u64,
+            color.as_mut_ptr() as u64,
+            mask.as_mut_ptr() as u64,
+            ds.as_mut_ptr() as u64,
+            poly.as_mut_ptr() as u64,
+        );
+        let f = |s: &Self, v: usize| s.pfn(v);
+        self.call(f(self, PFN_BLEND_STATE_SET_DEFAULTS), &[bp]);
+        self.call(f(self, PFN_COLOR_STATE_SET_DEFAULTS), &[cp]);
+        let targets = self.m.r32(g + 4);
+        for i in 0..8u32 {
+            if (targets >> i) & 1 == 0 {
+                continue;
+            }
+            let t = g + i as usize * 6;
+            let b = |o: usize| self.m.r8(t + o) as u64;
+            let (a0, a2, a1, a3, e0, e1) = (b(0x28), b(0x2a), b(0x29), b(0x2b), b(0x2c), b(0x2d));
+            self.call(f(self, PFN_COLOR_STATE_SET_BLEND_ENABLE), &[cp, i as u64, 1]);
+            self.call(f(self, PFN_BLEND_STATE_SET_BLEND_TARGET), &[bp, i as u64]);
+            self.call(f(self, PFN_BLEND_STATE_SET_BLEND_FUNC), &[bp, a0, a2, a1, a3]);
+            self.call(f(self, PFN_BLEND_STATE_SET_BLEND_EQUATION), &[bp, e0, e1]);
+            self.call(f(self, PFN_BIND_BLEND_STATE), &[cmd, bp]);
+        }
+        self.call(f(self, PFN_COLOR_STATE_SET_LOGIC_OP), &[cp, 3]);
+        self.call(f(self, PFN_BIND_COLOR_STATE), &[cmd, cp]);
+        let bc = [self.m.f32(g + 8), self.m.f32(g + 12), self.m.f32(g + 16), self.m.f32(g + 20)];
+        self.call(f(self, PFN_SET_BLEND_COLOR), &[cmd, bc.as_ptr() as u64]);
+        let cm = self.m.r32(g + 0x1c);
+        for i in 0..8u32 {
+            let v = (cm >> (i * 4)) as u64;
+            self.call(f(self, PFN_CHANNEL_MASK_STATE_SET_CHANNEL_MASK), &[mp, i as u64, v & 1, (v >> 1) & 1, (v >> 2) & 1, (v >> 3) & 1]);
+        }
+        self.call(f(self, PFN_BIND_CHANNEL_MASK_STATE), &[cmd, mp]);
+        let b = |o: usize| self.m.r8(g + o) as u64;
+        let stencil = b(3);
+        self.call(f(self, PFN_DEPTH_STENCIL_SET_DEPTH_TEST_ENABLE), &[dp, b(0)]);
+        self.call(f(self, PFN_DEPTH_STENCIL_SET_DEPTH_WRITE_ENABLE), &[dp, b(1)]);
+        self.call(f(self, PFN_DEPTH_STENCIL_SET_DEPTH_FUNC), &[dp, b(0x64)]);
+        self.call(f(self, PFN_DEPTH_STENCIL_SET_STENCIL_TEST_ENABLE), &[dp, stencil]);
+        self.call(f(self, PFN_DEPTH_STENCIL_SET_STENCIL_FUNC), &[dp, 3, b(0x6a)]);
+        self.call(f(self, PFN_DEPTH_STENCIL_SET_STENCIL_OP), &[dp, 3, b(0x67), b(0x68), b(0x69)]);
+        self.call(f(self, PFN_BIND_DEPTH_STENCIL_STATE), &[cmd, dp]);
+        if stencil != 0 {
+            self.call(f(self, PFN_SET_STENCIL_VALUE_MASK), &[cmd, 3, self.m.r32(g + 0x24) as u64]);
+            self.call(f(self, PFN_SET_STENCIL_MASK), &[cmd, 3, 0xff]);
+            self.call(f(self, PFN_SET_STENCIL_REF), &[cmd, 3, self.m.r32(g + 0x20) as u64]);
+        }
+        self.call(f(self, PFN_POLYGON_STATE_SET_CULL_FACE), &[pp, b(0x65)]);
+        self.call(f(self, PFN_POLYGON_STATE_SET_FRONT_FACE), &[pp, 1]);
+        self.call(f(self, PFN_POLYGON_STATE_SET_POLYGON_MODE), &[pp, b(0x6b)]);
+        self.call(f(self, PFN_POLYGON_STATE_SET_POLYGON_OFFSET_ENABLES), &[pp, ((b(0x6d) & 1).wrapping_neg()) & 7]);
+        self.call(f(self, PFN_BIND_POLYGON_STATE), &[cmd, pp]);
+        let clamp: unsafe extern "C" fn(u64, f32, f32, f32) = std::mem::transmute(self.pfn(PFN_SET_POLYGON_OFFSET_CLAMP));
+        clamp(cmd, self.m.f32(g + 0x58), self.m.f32(g + 0x5c), self.m.f32(g + 0x60));
+        self.call(f(self, PFN_SET_DEPTH_CLAMP), &[cmd, b(0x6e)]);
+        let _ = (&mut blend, &mut color, &mut mask, &mut ds, &mut poly);
     }
 
     /// sub_68b1d8: the GPU address of an nn::gfx buffer (its NVNbuffer at +8).
@@ -435,7 +573,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
             }
             L::Cdc => {
                 if (u55 >> 0x10) & 1 == 0 {
-                    return Err("sead::GraphicsContext::apply");
+                    p.apply_graphics_context(c + 0x128, p.m.r64(c + 0x20));
                 }
                 break;
             }
@@ -445,7 +583,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
     // Shape state: vertex / uniform slots and the texture table.
     if cur_ss != ss {
         if b18 {
-            return Err("sub_764efc");
+            p.bind_shape_program(p.m.r64(shape_state_holder), p.m.r64(c + 0x20) + 8);
         }
         let mut u10 = p.m.r16(c + 0x40);
         p.m.w::<u32>(c + 0x108, 0);
