@@ -53,6 +53,9 @@ pub struct Dev {
     pub checkpoints: Option<ash::nv::device_diagnostic_checkpoints::Device>,
     /// --gpu-checkpoints-each: checkpoint_each marks every command and draw too.
     pub checkpoints_each: bool,
+    /// A discrete GPU (its own memory): device-local memory the CPU maps is the BAR window over PCIe, slow to read.
+    /// False for unified memory (Apple GPUs through MoltenVK, integrated GPUs).
+    pub discrete: bool,
 }
 
 /// The most recent checkpoints (Dev::checkpoint): marker, what follows it and its numbers.
@@ -542,6 +545,7 @@ impl Dev {
                 fault,
                 checkpoints,
                 checkpoints_each: crate::settings::get().debug.gpu_checkpoints_each,
+                discrete: props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU,
             })
         }
     }

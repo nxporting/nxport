@@ -104,7 +104,14 @@ pub struct Textures {
     batch: Option<Batch>,
     /// The ASTC decoder (devices without ASTC), made with the first ASTC upload.
     astc: Option<super::astc::Decoder>,
+    /// Staging buffers of completed submits, for the next uploads (recycle_staging): making and freeing one for each
+    /// upload was a steady part of recording (the driver's allocation calls).
+    spare_staging: Vec<super::device::HostBuffer>,
+    spare_bytes: u64,
 }
+
+/// Staging memory kept for reuse at most.
+const SPARE_STAGING_MAX: u64 = 256 << 20;
 
 struct Batch {
     pool: vk::CommandPool,
@@ -723,11 +730,11 @@ impl Textures {
             self.upload_astc(dev, d, &data, &regions, bw, bh);
             return;
         }
-        let Ok(staging) = dev.host_buffer(data.len() as u64, vk::BufferUsageFlags::TRANSFER_SRC) else { return };
+        let image = img.image;
+        let Ok(staging) = self.staging(dev, data.len()) else { return };
         super::hitch_add(super::HITCH_UPLOADS, 1);
         super::hitch_add(super::HITCH_UPLOAD_BYTES, data.len() as u64);
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
-        let image = img.image;
         let batched = self.batch.is_some();
         self.record(dev, |cb| {
             // Submits still in flight may read the old contents.
@@ -737,7 +744,8 @@ impl Textures {
         });
         match &mut self.batch {
             Some(b) if batched => b.staging.push(staging),
-            _ => dev.free_host_buffer(&staging),
+            // Recorded and run (one_shot waits).
+            _ => self.recycle_staging(dev, staging),
         }
     }
 
@@ -776,7 +784,7 @@ impl Textures {
             };
             jobs.push((view, p));
         }
-        let Ok(staging) = dev.host_buffer(data.len() as u64, vk::BufferUsageFlags::STORAGE_BUFFER) else { return };
+        let Ok(staging) = self.staging(dev, data.len()) else { return };
         std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
         let decoder = self.astc.take().unwrap();
         let batched = self.batch.is_some();
@@ -792,8 +800,32 @@ impl Textures {
         self.astc = Some(decoder);
         match &mut self.batch {
             Some(b) if batched => b.staging.push(staging),
-            _ => dev.free_host_buffer(&staging),
+            // Recorded and run (one_shot waits).
+            _ => self.recycle_staging(dev, staging),
         }
+    }
+
+    /// A staging buffer of at least `len` bytes: a spare one not much larger, else a new one (sizes rounded up to powers
+    /// of two, so spares fit later uploads).
+    unsafe fn staging(&mut self, dev: &Dev, len: usize) -> Result<super::device::HostBuffer, String> {
+        let len = len as u64;
+        let best = self.spare_staging.iter().enumerate().filter(|(_, b)| b.size >= len && b.size <= len.max(64 << 10) * 4).min_by_key(|(_, b)| b.size);
+        if let Some((i, _)) = best {
+            let b = self.spare_staging.swap_remove(i);
+            self.spare_bytes -= b.size;
+            return Ok(b);
+        }
+        dev.host_buffer(len.max(64 << 10).next_power_of_two(), vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::STORAGE_BUFFER)
+    }
+
+    /// A staging buffer no submit uses any more: kept for later uploads, or freed past SPARE_STAGING_MAX.
+    pub unsafe fn recycle_staging(&mut self, dev: &Dev, b: super::device::HostBuffer) {
+        if self.spare_bytes + b.size > SPARE_STAGING_MAX {
+            dev.free_host_buffer(&b);
+            return;
+        }
+        self.spare_bytes += b.size;
+        self.spare_staging.push(b);
     }
 
     /// Image creation and uploads of the submit being recorded go into command buffers from `pool` (`take_batch`).
