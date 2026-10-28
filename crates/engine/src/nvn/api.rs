@@ -2655,6 +2655,9 @@ unsafe fn record_generic(
     ) {
         return;
     }
+    if capture(|| format!("{name} {a1:#x} {a2:#x} {a3:#x} {a4:#x} {a5:#x}")) {
+        return;
+    }
     let ops_vec = &mut *((*cmd).ops as *mut Vec<RecordedNvnCommand>);
     ops_vec.push(RecordedNvnCommand {
         name,
@@ -2675,10 +2678,80 @@ fn drawable_cmd_probe(name: &'static str) {
     }
 }
 
+enum Capture {
+    /// Commands are collected and not recorded.
+    Dry(Vec<String>),
+    /// Commands are recorded and collected until there are as many as expected, then passed to the report.
+    Watch { expected: Vec<String>, got: Vec<String>, report: fn(&[String], &[String]) },
+}
+
+thread_local! {
+    static CAPTURE: std::cell::RefCell<Option<Capture>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` with this thread's commands collected (as text) instead of recorded.
+pub fn capture_dry(f: impl FnOnce()) -> Vec<String> {
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Dry(Vec::new())));
+    f();
+    match CAPTURE.with(|c| c.borrow_mut().take()) {
+        Some(Capture::Dry(v)) => v,
+        _ => Vec::new(),
+    }
+}
+
+/// Collects this thread's next `expected.len()` commands (recorded as usual), then calls `report(expected, got)`.
+pub fn capture_watch(expected: Vec<String>, report: fn(&[String], &[String])) {
+    if expected.is_empty() {
+        return report(&[], &[]);
+    }
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Watch { expected, got: Vec::new(), report }));
+}
+
+/// Ends an unfinished watch: (expected, got so far).
+pub fn capture_finish() -> Option<(Vec<String>, Vec<String>)> {
+    match CAPTURE.with(|c| c.borrow_mut().take()) {
+        Some(Capture::Watch { expected, got, .. }) => Some((expected, got)),
+        _ => None,
+    }
+}
+
+/// Collects the command when this thread captures; true when it must not be recorded.
+fn capture(text: impl FnOnce() -> String) -> bool {
+    CAPTURE.with(|c| {
+        let mut c = c.borrow_mut();
+        match c.as_mut() {
+            None => false,
+            Some(Capture::Dry(v)) => {
+                v.push(text());
+                true
+            }
+            Some(Capture::Watch { expected, got, .. }) => {
+                got.push(text());
+                if got.len() == expected.len() {
+                    if let Some(Capture::Watch { expected, got, report }) = c.take() {
+                        drop(c);
+                        report(&expected, &got);
+                    }
+                }
+                false
+            }
+        }
+    })
+}
+
 /// Record a decoded command (see nvn/cmd.rs). `cmd` is the NvnCommandBuffer address.
 pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::nvn::cmd::Cmd) {
     record_hle_call(name);
     drawable_cmd_probe(name);
+    if capture(|| {
+        let mut t = typed.clone();
+        if let crate::nvn::cmd::Cmd::DrawElementsInstanced { caller, .. } = &mut t {
+            *caller = 0;
+        }
+        format!("{name} {t:?}")
+    }) {
+        return;
+    }
     let cmd = cmd as *mut NvnCommandBuffer;
     if cmd.is_null() || (*cmd).ops == 0 {
         return;
