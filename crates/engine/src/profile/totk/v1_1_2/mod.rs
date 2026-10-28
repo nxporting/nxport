@@ -140,7 +140,7 @@ pub unsafe fn install_v1_1_2_hooks(
 
     // 4. --log-drawables (RE probe): the render-list loop main+0x12de2a0 calls each entry's
     // drawable through its vtable (entry+0x10, slot 0x60) at main+0x12de360 (`blr x8`, the object in x0). The call
-    // branches to a wrapper (a second trampoline entry's 16 words) that saves the argument registers, tells
+    // branches to a wrapper that saves the argument registers, tells
     // nvn::cmd::note_drawable(object, target, context), restores them and makes the call; draws recorded meanwhile carry the
     // drawable (gfx_cmd note_draw_caller).
     if crate::settings::get().totk.diagnostics.log_drawables {
@@ -149,10 +149,8 @@ pub unsafe fn install_v1_1_2_hooks(
         let site = (base + SITE) as *mut u32;
         let tramp =
             mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize;
-        let wrap =
-            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize; // its words: the wrapper
-        let post =
-            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize; // after the call
+        let wrap = mem_space.make_code_block(15) as usize;
+        let post = mem_space.make_code_block(8) as usize; // after the call
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
             (d.abs() < 1 << 27).then(
