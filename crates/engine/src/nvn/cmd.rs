@@ -795,7 +795,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindDepthStencilState(cmd: usize, s
         Cmd::BindDepthStencilState(if s.is_null() {
             0
         } else {
-            std::ptr::read_unaligned(s)
+            std::ptr::read_unaligned(s) & crate::nvn::state::DS_DEFINED
         })
     );
 }
@@ -1177,6 +1177,11 @@ unsafe fn note_draw_caller(count: c_int) -> u32 {
 }
 
 unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
+    static TRACE_VTABLES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *TRACE_VTABLES.get_or_init(|| crate::settings::get().log.trace_vtable_callers) {
+        let fp = crate::guest_reg!(x29);
+        crate::guest::tracer::on_draw_record(count, index_addr, fp);
+    }
     static DRAWABLES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *DRAWABLES.get_or_init(|| crate::settings::get().totk.diagnostics.log_drawables) {
         let (obj, func, nth) = next_drawable_draw();
