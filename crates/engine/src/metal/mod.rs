@@ -3344,6 +3344,34 @@ impl Gfx {
                 Cmd::SetBlendColor(c) => {
                     st.blend_color = *c;
                 }
+                Cmd::ModelDraw(m) => {
+                    self.run_list(st, cb, m.unit, depth + 1);
+                    if let Some(new_cb) = &st.cur_cb {
+                        if Retained::as_ptr(&cur) != Retained::as_ptr(new_cb) {
+                            cur = new_cb.clone();
+                        }
+                    }
+                    for r in &m.ranges {
+                        st.cur_caller = 0;
+                        st.stats.draws += 1;
+                        if st.occl.counting {
+                            st.occl.draws_seen += 1;
+                        }
+                        if gfx_mode() >= GfxMode::Draws || gfx_mode() == GfxMode::Dry {
+                            self.draw_elements(
+                                st,
+                                &cur,
+                                r.mode,
+                                r.index_type,
+                                r.count,
+                                r.index_addr,
+                                r.base_vertex,
+                                r.base_instance,
+                                r.instances,
+                            );
+                        }
+                    }
+                }
                 Cmd::CallCommands(handles) => {
                     // --log-draw-reuse: the call path through lists from earlier frames (per-frame lists change
                     // every frame and are left out).

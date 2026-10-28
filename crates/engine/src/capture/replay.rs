@@ -101,6 +101,25 @@ fn flatten(
                     flatten(lists, c, depth + 1, out, missing);
                 }
             }
+            Some(Cmd::ModelDraw(m)) if depth < 16 => {
+                flatten(lists, m.unit, depth + 1, out, missing);
+                for r in &m.ranges {
+                    out.push(Op {
+                        name: "nvnCommandBufferDrawElementsInstanced".into(),
+                        typed: Some(Cmd::DrawElementsInstanced {
+                            mode: r.mode,
+                            index_type: r.index_type,
+                            count: r.count,
+                            index_addr: r.index_addr,
+                            base_vertex: r.base_vertex,
+                            base_instance: r.base_instance,
+                            instances: r.instances,
+                            caller: 0,
+                        }),
+                        args: None,
+                    });
+                }
+            }
             _ => out.push(op.clone()),
         }
     }

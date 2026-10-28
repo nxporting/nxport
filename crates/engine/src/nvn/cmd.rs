@@ -278,6 +278,26 @@ pub enum Cmd {
     },
     /// `color` holds the raw 32-bit words of the float / int / uint clear value.
     ClearTexture(Box<ClearTextureParams>),
+    /// A render unit of TotK's model renderer (the port, --native-model-draws): its list called, then its index ranges
+    /// drawn, as CallCommands([unit]) followed by DrawElementsInstanced per range.
+    ModelDraw(Box<ModelDraw>),
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ModelDraw {
+    pub unit: u64,
+    pub ranges: smallvec::SmallVec<[ModelRange; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ModelRange {
+    pub mode: i32,
+    pub index_type: i32,
+    pub count: i32,
+    pub index_addr: u64,
+    pub base_vertex: i32,
+    pub base_instance: i32,
+    pub instances: i32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

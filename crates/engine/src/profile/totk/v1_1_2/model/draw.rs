@@ -65,6 +65,11 @@ pub(super) static UNKNOWN_VFNS: std::sync::Mutex<Vec<(usize, usize)>> = std::syn
 pub(super) struct Port {
     pub(super) m: Mem,
     pub(super) base: usize,
+    /// --native-model-draws on Metal: a render unit's list call and the index ranges drawn after it are recorded as
+    /// one Cmd::ModelDraw.
+    pub(super) native: bool,
+    /// The unit call waiting for its draws: (NVNcommandBuffer, list handle, ranges). Recorded before anything else is.
+    pending: std::cell::RefCell<Option<(usize, u64, smallvec::SmallVec<[crate::nvn::cmd::ModelRange; 2]>)>>,
 }
 
 impl Port {
@@ -72,7 +77,29 @@ impl Port {
         self.m.r64(self.base + var)
     }
 
+    pub(super) fn new(m: Mem, base: usize, native: bool) -> Self {
+        Port { m, base, native, pending: Default::default() }
+    }
+
+    /// Records the pending unit draw (anything recorded after it must come after it in the stream).
+    pub(super) unsafe fn flush(&self) {
+        if let Some((cmd, unit, ranges)) = self.pending.borrow_mut().take() {
+            crate::nvn::api::record_typed(
+                "nvnCommandBufferModelDraw",
+                cmd,
+                crate::nvn::cmd::Cmd::ModelDraw(Box::new(crate::nvn::cmd::ModelDraw { unit, ranges })),
+            );
+        }
+    }
+
+    /// A call into the game or an NVN entry point that may record commands.
     unsafe fn call(&self, f: usize, args: &[u64]) -> u64 {
+        self.flush();
+        crate::guest::call(f, args)
+    }
+
+    /// An NVN entry point that records nothing (addresses, handles).
+    unsafe fn query(&self, f: usize, args: &[u64]) -> u64 {
         crate::guest::call(f, args)
     }
 
@@ -85,7 +112,7 @@ impl Port {
     }
 
     unsafe fn buffer_address(&self, nvn_buffer: usize) -> u64 {
-        self.call(self.pfn(PFN_BUFFER_GET_ADDRESS), &[nvn_buffer as u64])
+        self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[nvn_buffer as u64])
     }
 
     unsafe fn bind_uniform_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
@@ -96,6 +123,16 @@ impl Port {
     unsafe fn call_commands(&mut self, cmd: usize, handles: usize) {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.call(self.pfn(PFN_CALL_COMMANDS), &[cmd as u64, 1, handles as u64]);
+    }
+
+    /// Calls a render unit's material list (its draws follow).
+    unsafe fn call_unit(&mut self, cmd: usize, handles: usize) {
+        if !self.native {
+            return self.call_commands(cmd, handles);
+        }
+        self.m.w::<u8>(cmd + 0x10, 1);
+        self.flush();
+        *self.pending.borrow_mut() = Some((cmd, self.m.r64(handles) as u64, Default::default()));
     }
 
     /// The main+ offset of `obj`'s virtual function at vtable slot `slot`.
@@ -264,6 +301,7 @@ impl Port {
         self.call(f(self, PFN_POLYGON_STATE_SET_POLYGON_OFFSET_ENABLES), &[pp, ((b(0x6d) & 1).wrapping_neg()) & 7]);
         self.call(f(self, PFN_BIND_POLYGON_STATE), &[cmd, pp]);
         let clamp: unsafe extern "C" fn(u64, f32, f32, f32) = std::mem::transmute(self.pfn(PFN_SET_POLYGON_OFFSET_CLAMP));
+        self.flush();
         clamp(cmd, self.m.f32(g + 0x58), self.m.f32(g + 0x5c), self.m.f32(g + 0x60));
         self.call(f(self, PFN_SET_DEPTH_CLAMP), &[cmd, b(0x6e)]);
         let _ = (&mut blend, &mut color, &mut mask, &mut ds, &mut poly);
@@ -280,6 +318,20 @@ impl Port {
         let cmd = self.m.r64(w + 0xb0);
         let mode = self.m.r32(self.base + PRIMITIVE_TABLE + prim as usize * 4);
         let ty = self.m.r32(self.base + INDEX_TYPE_TABLE + itype as usize * 4);
+        if let Some((pcmd, _, ranges)) = self.pending.borrow_mut().as_mut() {
+            if *pcmd == cmd {
+                ranges.push(crate::nvn::cmd::ModelRange {
+                    mode: mode as i32,
+                    index_type: ty as i32,
+                    count,
+                    index_addr: addr,
+                    base_vertex,
+                    base_instance,
+                    instances,
+                });
+                return;
+            }
+        }
         self.call(
             self.pfn(PFN_DRAW_ELEMENTS_INSTANCED),
             &[cmd as u64, mode as u64, ty as u64, count as u64, addr, base_vertex as u64, base_instance as u64, instances as u64],
@@ -792,7 +844,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
                             continue;
                         }
                         let dev = p.m.r64(p.m.r64(p.m.r64(base + DEVICE_HOLDER)) + 0x30);
-                        let handle = p.call(p.pfn(PFN_DEVICE_GET_TEXTURE_HANDLE), &[dev as u64, tid as u64, sid as u64]);
+                        let handle = p.query(p.pfn(PFN_DEVICE_GET_TEXTURE_HANDLE), &[dev as u64, tid as u64, sid as u64]);
                         let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
                         for (stage, sh) in [(0u64, 0), (1, 8), (2, 16), (5, 24)] {
                             if (slots >> sh) & 0xff != 0xff {
@@ -886,7 +938,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
             let rec = p.m.r64(p.m.r64(pl58) + 0x10);
             if p.m.r8(rec + 0x50) & 1 != 0 {
                 let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
-                p.call_commands(cmd, rec + 0x48);
+                p.call_unit(cmd, rec + 0x48);
             }
         }
         let shader_set = p.m.r64((p.m.r64(d + 0x68) as isize + pass as isize * 0x60 + 0x40) as usize);
@@ -898,7 +950,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
     } else {
         if p.m.r8(mat_rec) & 1 != 0 {
             let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
-            p.call_commands(cmd, mat + u59 * 0x58 + 0x50);
+            p.call_unit(cmd, mat + u59 * 0x58 + 0x50);
         }
         if p.m.r8(c + 0x30) != 0 && (p.m.r8(d + 0x47) >> 2) & 1 != 0 {
             let table = p.m.r64(p.m.r64(d + 8) + 0x178);
