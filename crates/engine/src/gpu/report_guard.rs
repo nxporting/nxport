@@ -86,6 +86,11 @@ fn within(r: &[AtomicUsize; 2], a: usize) -> bool {
     a >= r[0].load(Ordering::Acquire) && a < r[1].load(Ordering::Acquire)
 }
 
+/// Whether `addr` lies in the HLE trampoline pool (a return address there is the HLE entry stub's).
+pub(crate) fn in_hle_stubs(addr: usize) -> bool {
+    within(&STUBS, addr)
+}
+
 /// Guest code waits, and so does a library function the guest called straight through an HLE stub (its return address
 /// is the stub, its code is not ours: memcpy, which TotK copies its freshly rendered terrain normal maps with; reading
 /// them before the write-back gave the copies zeros). Our own code never waits: a game thread inside it may hold a lock

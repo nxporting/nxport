@@ -15,6 +15,9 @@ and update this file when you finish or drop it.
   main+0x7f7a58 and forces the pacer; nobody has checked it against a 1.1.2 binary. In 1.0.0 the game steps its time by
   present interval / 2 itself (main+0x8f68b8), so the 1.1.2 counterpart of the 1.0.0 unlock (lowest interval 1 + no
   veto) may be all 1.1.2 needs: verify on a Mac before relying on dynamic_fps.
+- `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
+  address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
+  clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save).
 - `retro-work` has commits not on main.
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
 - VP8 movies have no decoder (crates/media); everything else the old ffmpeg shim covered is built in.
