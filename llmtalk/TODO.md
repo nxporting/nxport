@@ -10,6 +10,9 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
+  UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
+  For now, delta time only makes game time follow real time (no physics verification).
 - TotK 1.1.2 `dynamic_fps` (on by default, from windows-support-2) rewrites a time struct from real elapsed time at
   main+0x7f7a58 and forces the pacer; nobody has checked it against a 1.1.2 binary. In 1.0.0 the game steps its time by
   present interval / 2 itself (main+0x8f68b8), so the 1.1.2 counterpart of the 1.0.0 unlock (lowest interval 1 + no
