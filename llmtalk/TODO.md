@@ -43,6 +43,10 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **Sky Island hang fixed** (S41L0R Windows Machine, `bdd0211`): the watcher's write-back spun forever on a page a
+  reprotect race left read-only. **UltraCam runs on TotK 1.1.2** (`b440ac1`: plugin-mod trampolines are lifted); its
+  frame-rate design (target FPS + own limiter, smoothed delta time, menus at 60) is in local docs/ultracam-totk-112.md.
+
 - **No sound with VSync off fixed** (S41L0R Windows Machine, `cd68d55`): above ~200 fps (the audio renderer's frame
   rate) TotK starts no sounds at all; VSync off is now paced to at most 144 fps (sound checked through gameplay).
 
