@@ -2122,6 +2122,7 @@ impl RecordedCommandList {
                     Some(crate::nvn::cmd::Cmd::CallCommands(h)) => {
                         calls.extend_from_slice(h.as_slice())
                     }
+                    Some(crate::nvn::cmd::Cmd::ModelDraw(m)) => calls.push(m.unit),
                     _ => {}
                 }
             }
