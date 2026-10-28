@@ -43,6 +43,17 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **Vulkan recording, second round** (S41L0R Windows Machine): driver calls run on their own thread (vk-record), and
+  chunks are queued without waiting for it. The bound pipeline and stages are reused until pipeline state really
+  changes. Small vertex ranges are hashed before the submit on helper threads, not draw by draw. Texture staging
+  buffers are pooled. On discrete GPUs, write-backs read host-cached memory: shadow slots had been read from the BAR
+  window, 173 KB in 12 ms a frame on the watcher. Idle machine, sky2203 replay: whole frame 35.3 -> 16.7 ms, recording
+  18.3 -> 13.0 ms, GPU 21.6 -> 9.4 ms. Most of the "pass 21 stall" was the GPU waiting for chunks. Every pass matches;
+  title5950 matches too. Game, Great Sky Island headless with --no-vsync, same input script: 36 fps / record 26 ms
+  -> 46-48 fps / record 20.4 ms. 1000 s run without hang or device loss.
+  Next: the Presentation thread is still saturated. stage_writes is about 40% of it. 100+ fps needs the per-draw
+  preparation split over threads.
+
 - **Sky Island hang fixed** (S41L0R Windows Machine, `bdd0211`): the watcher's write-back spun forever on a page a
   reprotect race left read-only. **UltraCam runs on TotK 1.1.2** (`b440ac1`: plugin-mod trampolines are lifted); its
   frame-rate design (target FPS + own limiter, smoothed delta time, menus at 60) is in local docs/ultracam-totk-112.md.

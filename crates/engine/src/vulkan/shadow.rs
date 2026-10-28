@@ -140,12 +140,12 @@ impl Shadows {
     }
 
     /// The submit `serial` was recorded: its written slots, to copy back to guest memory once it completed (guest
-    /// address, source, length); later submits copy from them while it runs.
-    pub(super) fn end_submit(&mut self, serial: u64) -> Vec<(usize, *const u8, usize)> {
+    /// address, slot buffer, offset, length, mapped slot); later submits copy from them while it runs.
+    pub(super) fn end_submit(&mut self, serial: u64) -> Vec<(usize, vk::Buffer, u64, usize, *const u8)> {
         let mut writebacks = Vec::new();
         for (start, s) in std::mem::take(&mut self.slots) {
             if s.written {
-                writebacks.push((start, s.ptr as *const u8, s.len));
+                writebacks.push((start, s.buffer, s.off, s.len, s.ptr as *const u8));
                 self.last.insert(start, (serial, s.buffer, s.off, s.len));
             }
         }

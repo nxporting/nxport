@@ -5,10 +5,40 @@ use super::*;
 const DRIVER_CBUF_SIZE: usize = 0x1000;
 
 /// One draw's or dispatch's descriptors: (binding, type, buffer) and (binding, type, images).
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct DescWrites {
     buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 24]>,
     images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
+}
+
+/// Writes `w` into `set`, or pushes it into `cb` for `push` (bind point, layout). Dynamic uniform buffers are written at
+/// offset 0 (their offsets are bound with the set).
+pub(super) unsafe fn write_set(dev: &Dev, cb: vk::CommandBuffer, set: vk::DescriptorSet, w: &DescWrites, push: Option<(vk::PipelineBindPoint, vk::PipelineLayout)>) {
+    let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 32]> = w
+        .buffers
+        .iter()
+        .map(|b| if b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC { [vk::DescriptorBufferInfo { offset: 0, ..b.2 }] } else { [b.2] })
+        .collect();
+    let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 64]> = w
+        .buffers
+        .iter()
+        .zip(&bi)
+        .map(|((binding, ty, _), info)| vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).buffer_info(info))
+        .collect();
+    for (binding, ty, infos) in &w.images {
+        if *ty == vk::DescriptorType::UNIFORM_TEXEL_BUFFER || *ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER {
+            continue;
+        }
+        writes.push(vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).image_info(infos));
+    }
+    match push {
+        Some((point, layout)) => {
+            if let Some(p) = &dev.push {
+                p.ext.cmd_push_descriptor_set(cb, point, layout, 0, &writes);
+            }
+        }
+        None => dev.device.update_descriptor_sets(&writes, &[]),
+    }
 }
 /// The support buffer with the constant buffer bound sizes (sass2spv::accessor::Host::cbuf_limits).
 const SUPPORT_SIZE: usize = sass2spv::translation::properties::SUPPORT_SAMPLER_SLOTS_OFFSET
@@ -63,6 +93,23 @@ pub(in crate::vulkan) struct VStream {
 /// The constant buffer NVN keeps bound texture and image handles in: handles a shader reads from it are the bound
 /// tables (the Metal backend reads every handle from them).
 const TEXTURE_TABLE_CBUF: i32 = 2;
+
+/// What a draw's pipeline was made from and what it came to (draw_state), with the state it depends on (`key`: mode,
+/// Ctx::pipe_gen, Ctx::pass_gen, origin and depth modes): draws after it with the same state reuse it (most draws change
+/// only the resources they bind).
+#[derive(Clone)]
+pub(super) struct DrawMemo {
+    key: (i32, u64, u64, i32, i32),
+    /// (code, control section, key in Ctx::stages).
+    vs: (u64, u64, u64),
+    gs: Option<(u64, u64, u64)>,
+    fs: Option<(u64, u64, u64)>,
+    vl: std::sync::Arc<[VStream]>,
+    pipe: vk::Pipeline,
+    layout: vk::PipelineLayout,
+    set_layout: vk::DescriptorSetLayout,
+    push: bool,
+}
 
 /// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
 
@@ -164,33 +211,26 @@ impl Ctx {
         }
     }
 
-    pub(super) unsafe fn draw(&mut self, mode: i32, call: Draw, base_instance: i32, instances: i32) {
-        // Pipelines listed by earlier sessions, made on worker threads from the first draw.
-        if self.pipeline_cache.is_none() {
-            let cache = self.pipeline_cache();
-            crate::vulkan::listed::start(self.dev.clone(), cache);
-        }
-        if self.st.render_disabled || instances <= 0 || !self.begin_pass() {
-            return;
-        }
+    /// The stages, vertex layout and pipeline of a draw of `mode` with the bound program and state.
+    unsafe fn draw_state(&mut self, mode: i32) -> Option<DrawMemo> {
         let Some(topology) = state::topology(mode) else {
             self.warn(format!("draw mode {mode} is not implemented"));
-            return;
+            return None;
         };
         let Some(((vd, vc, vh), gs, fs)) = self.graphics_stages() else {
             self.warn(format!("program {:#x} has no vertex stage", self.st.program));
-            return;
+            return None;
         };
         let (vstate, vkey) = self.vertex_state();
         let vkey = hash(&(vkey, vh));
         if !self.stage(vd, vc, 0, vstate, vkey, 0, None, true) {
-            return;
+            return None;
         }
         let gkey = match gs {
             Some((gd, gc, gh)) => {
                 let gkey = hash(&(gh, self.stages[&(vd, vkey)].outputs));
                 if !self.stage(gd, gc, 4, GraphicsState::engine(), gkey, 4, None, false) {
-                    return;
+                    return None;
                 }
                 Some((gd, gkey))
             }
@@ -209,7 +249,7 @@ impl Ctx {
                 let (fstate, fkey) = self.fragment_state();
                 let fkey = hash(&(fkey, fh, varyings));
                 if !self.stage(fd, fc, 1, fstate, fkey, 1, varyings, false) {
-                    return;
+                    return None;
                 }
                 Some((fd, fkey))
             }
@@ -226,15 +266,48 @@ impl Ctx {
                 (vl, h)
             }
         };
-        let Some((pipe, layout)) = self.pipeline(mode, topology, (vd, vkey), gkey, fkey, &vl, vl_hash) else { return };
-        let Some((set_layout, _, push)) = self.graphics_layout((vd, vkey), gkey, fkey) else { return };
+        let (pipe, layout) = self.pipeline(mode, topology, (vd, vkey), gkey, fkey, &vl, vl_hash)?;
+        let (set_layout, _, push) = self.graphics_layout((vd, vkey), gkey, fkey)?;
+        Some(DrawMemo {
+            key: Default::default(),
+            vs: (vd, vc, vkey),
+            gs: gs.zip(gkey).map(|((gd, gc, _), (_, k))| (gd, gc, k)),
+            fs: fs.zip(fkey).map(|((fd, fc, _), (_, k))| (fd, fc, k)),
+            vl,
+            pipe,
+            layout,
+            set_layout,
+            push,
+        })
+    }
+
+    pub(super) unsafe fn draw(&mut self, mode: i32, call: Draw, base_instance: i32, instances: i32) {
+        // Pipelines listed by earlier sessions, made on worker threads from the first draw.
+        if self.pipeline_cache.is_none() {
+            let cache = self.pipeline_cache();
+            crate::vulkan::listed::start(self.dev.clone(), cache);
+        }
+        if self.st.render_disabled || instances <= 0 || !self.begin_pass() {
+            return;
+        }
+        let memo_key = (mode, self.pipe_gen, self.pass_gen, crate::nvn::api::window_origin_mode(), crate::nvn::api::depth_mode());
+        let m = match &self.draw_memo {
+            Some(m) if m.key == memo_key => m.clone(),
+            _ => {
+                let Some(m) = self.draw_state(mode) else { return };
+                self.draw_memo = Some(DrawMemo { key: memo_key, ..m.clone() });
+                m
+            }
+        };
+        let DrawMemo { vs: (vd, vc, vkey), gs, fs, vl, pipe, layout, set_layout, push, .. } = m;
+        let fkey = fs.map(|(fd, _, k)| (fd, k));
         let mut w = DescWrites::default();
         self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
-        if let (Some(k), Some((gd, gc, _))) = (gkey, gs) {
-            self.stage_writes(k, gd, gc, 4, &call, base_instance, &mut w);
+        if let Some((gd, gc, k)) = gs {
+            self.stage_writes((gd, k), gd, gc, 4, &call, base_instance, &mut w);
         }
-        if let (Some(k), Some((fd, fc, _))) = (fkey, fs) {
-            self.stage_writes(k, fd, fc, 1, &call, base_instance, &mut w);
+        if let Some((fd, fc, k)) = fs {
+            self.stage_writes((fd, k), fd, fc, 1, &call, base_instance, &mut w);
         }
         // A feedback copy ended the pass: it resumes (loading what was rendered).
         if self.pass.is_none() && !self.begin_pass() {
@@ -242,7 +315,7 @@ impl Ctx {
         }
         self.ensure_begun();
         if self.bound.pipeline != pipe {
-            self.dev.device.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::GRAPHICS, pipe);
+            self.rec.op(record::Op::Pipeline(vk::PipelineBindPoint::GRAPHICS, pipe));
             self.bound.pipeline = pipe;
         }
         self.bind_writes(&w, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
@@ -261,10 +334,10 @@ impl Ctx {
         // The stages, the target size and how many storage buffers it binds (writes there are what lost devices so far).
         let storage = w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::STORAGE_BUFFER).count() as u64;
         let extent = self.pass.as_ref().map_or(0, |p| (p.extent.0 as u64) << 32 | p.extent.1 as u64);
-        self.dev.checkpoint_each(self.cb, "draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
+        self.checkpoint_each("draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
         match call {
             Draw::Arrays { first, count } => {
-                self.dev.device.cmd_draw(self.cb, count.max(0) as u32, instances as u32, first.max(0) as u32, base_instance.max(0) as u32);
+                self.rec.op(record::Op::Draw(count.max(0) as u32, instances as u32, first.max(0) as u32, base_instance.max(0) as u32));
             }
             Draw::Elements { index_type, count, addr, base_vertex } => {
                 // Restart indices present: Metal-based hosts restart only strips and compare after adding the base
@@ -284,16 +357,14 @@ impl Ctx {
                         }
                     };
                     if let Some((buf, off, n)) = rewritten {
-                        let d = &self.dev.device;
-                        d.cmd_bind_index_buffer(self.cb, buf, off, vk::IndexType::UINT32);
-                        d.cmd_draw_indexed(self.cb, n, instances as u32, 0, 0, base_instance.max(0) as u32);
+                        self.rec.op(record::Op::IndexBuffer(buf, off, vk::IndexType::UINT32));
+                        self.rec.op(record::Op::DrawIndexed(n, instances as u32, 0, 0, base_instance.max(0) as u32));
                         return;
                     }
                 }
                 let Some((buf, off, ty)) = self.index_buffer(index_type, count, addr) else { return };
-                let d = &self.dev.device;
-                d.cmd_bind_index_buffer(self.cb, buf, off, ty);
-                d.cmd_draw_indexed(self.cb, count.max(0) as u32, instances as u32, 0, base_vertex, base_instance.max(0) as u32);
+                self.rec.op(record::Op::IndexBuffer(buf, off, ty));
+                self.rec.op(record::Op::DrawIndexed(count.max(0) as u32, instances as u32, 0, base_vertex, base_instance.max(0) as u32));
             }
         }
     }
@@ -350,14 +421,13 @@ impl Ctx {
         self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
         let s = &self.stages[&(data, content)];
         let (set_layout, full) = (s.set_layout, s.known.full);
-        self.dev.device.cmd_bind_pipeline(self.cb, vk::PipelineBindPoint::COMPUTE, pipe);
+        self.rec.op(record::Op::Pipeline(vk::PipelineBindPoint::COMPUTE, pipe));
         self.bind_writes(&w, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
         // Always marked, not only with --gpu-checkpoints-each: dispatches run between passes, where the coarse checkpoints
         // (pass begin and end) cannot tell a compute shader that never finishes from idle.
-        self.dev.checkpoint(self.cb, "dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
-        let d = &self.dev.device;
-        d.cmd_dispatch(self.cb, x as u32, y as u32, z as u32);
-        self.dev.full_barrier(self.cb);
+        self.checkpoint("dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
+        self.rec.cmd(move |d, cb| d.device.cmd_dispatch(cb, x as u32, y as u32, z as u32));
+        self.barrier();
     }
 
     /// The descriptor set layout and pipeline layout of graphics stages,
@@ -399,7 +469,7 @@ impl Ctx {
         let pass = self.pass.as_ref()?;
         let upper_left = crate::nvn::api::window_origin_mode() == 1;
         let gl_depth = crate::nvn::api::depth_mode() == 0;
-        let color_fmts: Vec<vk::Format> = pass.colors.iter().map(|c| c.map_or(vk::Format::UNDEFINED, |c| c.1)).collect();
+        let color_fmts: smallvec::SmallVec<[vk::Format; 8]> = pass.colors.iter().map(|c| c.map_or(vk::Format::UNDEFINED, |c| c.1)).collect();
         let depth_fmt = pass.depth.map_or(vk::Format::UNDEFINED, |d| d.1);
         let restart = self.st.prim_restart.is_some()
             && matches!(topology, vk::PrimitiveTopology::LINE_STRIP | vk::PrimitiveTopology::TRIANGLE_STRIP | vk::PrimitiveTopology::TRIANGLE_FAN);
@@ -415,7 +485,7 @@ impl Ctx {
         let key = hash(&(
             (vs, gs, fs, vl_hash, &blend),
             (color_state, channel_mask, depth_stencil, self.st.polygon, self.st.multisample),
-            (color_fmts.iter().map(|f| f.as_raw()).collect::<Vec<_>>(), depth_fmt.as_raw(), pass.samples.as_raw()),
+            (color_fmts.iter().map(|f| f.as_raw()).collect::<smallvec::SmallVec<[i32; 8]>>(), depth_fmt.as_raw(), pass.samples.as_raw()),
             (topology.as_raw(), restart, self.st.depth_clamp, upper_left, gl_depth),
         ));
         if let Some(&p) = self.pipelines.get(&key) {
@@ -844,7 +914,7 @@ impl Ctx {
             if self.bound.sets[point].as_ref().is_some_and(|(l, b, o)| *l == layout && *b == s && *o == offsets) {
                 return;
             }
-            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[s], &offsets);
+            self.rec.sets(bind_point, layout, s, &offsets);
             self.bound.sets[point] = Some((layout, s, offsets));
             return;
         }
@@ -859,31 +929,13 @@ impl Ctx {
         if let Some(k) = key {
             self.set_memo.insert(k, set);
         }
-        let bi: smallvec::SmallVec<[[vk::DescriptorBufferInfo; 1]; 32]> = w
-            .buffers
-            .iter()
-            .map(|b| if b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC { [vk::DescriptorBufferInfo { offset: 0, ..b.2 }] } else { [b.2] })
-            .collect();
-        let mut writes: smallvec::SmallVec<[vk::WriteDescriptorSet; 64]> = w
-            .buffers
-            .iter()
-            .zip(&bi)
-            .map(|((binding, ty, _), info)| vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).buffer_info(info))
-            .collect();
-        for (binding, ty, infos) in &w.images {
-            if *ty == vk::DescriptorType::UNIFORM_TEXEL_BUFFER || *ty == vk::DescriptorType::STORAGE_TEXEL_BUFFER {
-                continue;
-            }
-            writes.push(vk::WriteDescriptorSet::default().dst_set(set).dst_binding(*binding).descriptor_type(*ty).image_info(infos));
-        }
+        // Written on vk-record (the set is not used before the command binding it).
         if push {
-            if let Some(p) = &self.dev.push {
-                p.ext.cmd_push_descriptor_set(self.cb, bind_point, layout, 0, &writes);
-            }
+            self.rec.op(record::Op::Push(bind_point, layout, Box::new(w.clone())));
             self.bound.sets[point] = None;
         } else {
-            self.dev.device.update_descriptor_sets(&writes, &[]);
-            self.dev.device.cmd_bind_descriptor_sets(self.cb, bind_point, layout, 0, &[set], &offsets);
+            self.rec.op(record::Op::Write(set, Box::new(w.clone())));
+            self.rec.sets(bind_point, layout, set, &offsets);
             self.bound.sets[point] = Some((layout, set, offsets));
         }
     }
@@ -941,7 +993,9 @@ impl Ctx {
                 return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
             }
         }
-        let (buf, off, p) = self.arena.alloc(&self.dev, size)?;
+        // Ones the stage writes are read back by the watcher: on discrete GPUs host-cached memory (the other arena is
+        // write-combined, slow to read).
+        let (buf, off, p) = if write && self.dev.discrete { self.readback.alloc(&self.dev, size)? } else { self.arena.alloc(&self.dev, size)? };
         std::ptr::copy_nonoverlapping(a as *const u8, p, size);
         crate::vulkan::guard::patch(a, p, size);
         if write {
@@ -1007,9 +1061,11 @@ impl Ctx {
                     })
                 })
                 .collect();
-            self.dev.checkpoint(self.cb, "feedback snapshot (W, H, levels, layers)", [src.extent.width as u64, src.extent.height as u64, src.levels as u64, src.layers as u64]);
-            self.dev.device.cmd_copy_image(self.cb, src.image, vk::ImageLayout::GENERAL, snap.image, vk::ImageLayout::GENERAL, &regions);
-            self.dev.full_barrier(self.cb);
+            let args = [src.extent.width as u64, src.extent.height as u64, src.levels as u64, src.layers as u64];
+            let (si, di) = (src.image, snap.image);
+            self.checkpoint("feedback snapshot (W, H, levels, layers)", args);
+            self.rec.cmd(move |d, cb| d.device.cmd_copy_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &regions));
+            self.barrier();
             self.fb_snaps.get_mut(&d)?.0 = self.fb_epoch;
         }
         let (_, snap) = self.fb_snaps.get_mut(&d)?;
@@ -1161,7 +1217,7 @@ impl Ctx {
     }
 
     unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {
-        self.dev.device.cmd_bind_vertex_buffers(self.cb, pipelines::ZERO_STREAM, &[self.zeros.buffer], &[0]);
+        self.rec.op(record::Op::VertexBuffer(pipelines::ZERO_STREAM, self.zeros.buffer, 0));
         for v in vl {
             let (addr, size) = self.st.vertex_buffers.get(v.stream as usize).copied().unwrap_or((0, 0));
             let a = crate::nvn::api::translate_virtual(addr as usize);
@@ -1169,16 +1225,16 @@ impl Ctx {
                 Some((self.zeros.buffer, 0))
             } else if !v.repack {
                 if let Some(&b) = self.vb_memo.get(&(a, size)) {
-                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
                     continue;
                 }
                 // What GPU work wrote: its shadow.
                 if let Some(b) = self.shadow(a, size, false) {
-                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
                     continue;
                 }
                 if let Some(b) = self.cached(a, size) {
-                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
                     continue;
                 }
                 // A copy, once per submit; never the imported pool in place. Vertex data read in place lost the device on
@@ -1217,12 +1273,12 @@ impl Ctx {
                     // Checked once per submit (guest memory does not change during one).
                     let skey = super::hash_of(&(a, size, v, n, u32::MAX - 1));
                     if let Some(&b) = self.repacked.get(&skey) {
-                        self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                        self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
                         continue;
                     }
                     if let Some(b) = self.cached_repack(a, size, v, n) {
                         self.repacked.insert(skey, (b, 0));
-                        self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b], &[0]);
+                        self.rec.op(record::Op::VertexBuffer(v.stream, b, 0));
                         continue;
                     }
                 }
@@ -1230,7 +1286,7 @@ impl Ctx {
                 // one).
                 let key = super::hash_of(&(a, size, v, n, base_instance));
                 if let Some(&b) = self.repacked.get(&key) {
-                    self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[b.0], &[b.1]);
+                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
                     continue;
                 }
                 let src = std::slice::from_raw_parts(a as *const u8, size);
@@ -1258,7 +1314,7 @@ impl Ctx {
                 b
             };
             if let Some((buf, off)) = bound {
-                self.dev.device.cmd_bind_vertex_buffers(self.cb, v.stream, &[buf], &[off]);
+                self.rec.op(record::Op::VertexBuffer(v.stream, buf, off));
             }
         }
     }
@@ -1443,18 +1499,21 @@ impl Ctx {
             return;
         }
         self.dynamic_memo = Some(key);
-        let d = &self.dev.device;
-        d.cmd_set_viewport(self.cb, 0, &[vp]);
-        d.cmd_set_scissor(self.cb, 0, &[sc]);
         let [r, vm, wm] = self.st.stencil;
-        for (face, i) in [(vk::StencilFaceFlags::FRONT, 0), (vk::StencilFaceFlags::BACK, 1)] {
-            d.cmd_set_stencil_reference(self.cb, face, r[i]);
-            d.cmd_set_stencil_compare_mask(self.cb, face, vm[i]);
-            d.cmd_set_stencil_write_mask(self.cb, face, wm[i]);
-        }
-        d.cmd_set_blend_constants(self.cb, &self.st.blend_color);
+        let blend = self.st.blend_color;
         let (factor, units, clamp) = self.st.polygon_offset;
-        d.cmd_set_depth_bias(self.cb, units, clamp, factor);
+        self.rec.cmd(move |d, cb| {
+            let d = &d.device;
+            d.cmd_set_viewport(cb, 0, &[vp]);
+            d.cmd_set_scissor(cb, 0, &[sc]);
+            for (face, i) in [(vk::StencilFaceFlags::FRONT, 0), (vk::StencilFaceFlags::BACK, 1)] {
+                d.cmd_set_stencil_reference(cb, face, r[i]);
+                d.cmd_set_stencil_compare_mask(cb, face, vm[i]);
+                d.cmd_set_stencil_write_mask(cb, face, wm[i]);
+            }
+            d.cmd_set_blend_constants(cb, &blend);
+            d.cmd_set_depth_bias(cb, units, clamp, factor);
+        });
     }
 }
 

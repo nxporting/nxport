@@ -52,6 +52,8 @@ pub(crate) struct VCache {
     /// Blocks no longer drawn from, freed once the submit that last used them completed: (serial, chunk, offset, size).
     retired: Vec<(u64, usize, u64, u64)>,
     swept_frame: u64,
+    /// Small ranges drawn from this submit before their hash was checked (verify).
+    unverified: Vec<(usize, usize)>,
 }
 
 impl VCache {
@@ -129,10 +131,15 @@ impl VCache {
             if e.dynamic {
                 return None;
             }
+            // Small ranges are drawn from as they were and hashed before the submit (verify), on several threads:
+            // hashing them here, one by one, was over a millisecond of each frame's recording.
             let fresh = e.checked == serial
                 || match e.token {
                     Some(t) => crate::guest::dirty_track::generation(a, len) == Some(t),
-                    None => fast_hash(std::slice::from_raw_parts(a as *const u8, len)) == e.hash,
+                    None => {
+                        self.unverified.push((a, len));
+                        true
+                    }
                 };
             if fresh {
                 e.checked = serial;
@@ -165,6 +172,55 @@ impl VCache {
         Some((self.chunks[chunk].buffer, off))
     }
 
+    /// Hashes the ranges drawn from unchecked (get) and copies those written since into their blocks, recorded with
+    /// `upload` ahead of the draws (the uploads run first in the queue, after what earlier submits read there). Before
+    /// anything recorded since the last call is submitted.
+    pub(super) unsafe fn verify(&mut self, serial: u64, upload: &mut dyn FnMut(vk::Buffer, u64, *const u8, usize) -> bool) {
+        if self.unverified.is_empty() {
+            return;
+        }
+        let ranges = std::mem::take(&mut self.unverified);
+        let bytes: usize = ranges.iter().map(|r| r.1).sum();
+        let pool = if bytes < 256 << 10 { None } else { hash_pool().lock().ok() };
+        let hashes: Vec<u64> = match pool {
+            None => ranges.iter().map(|r| hash_range(r)).collect(),
+            Some(pool) => {
+                // This thread hashes the first part, the pool the others.
+                let per = ranges.len().div_ceil(pool.len() + 1);
+                let mut parts = ranges.chunks(per);
+                let mine = parts.next().unwrap_or(&[]);
+                let sent: smallvec::SmallVec<[(&[(usize, usize)], bool); 8]> =
+                    parts.zip(pool.iter()).map(|(part, (tx, _))| (part, tx.send(HashJob(part.as_ptr(), part.len())).is_ok())).collect();
+                let mut hashes: Vec<u64> = mine.iter().map(|r| hash_range(r)).collect();
+                for (&(part, ok), (_, rx)) in sent.iter().zip(pool.iter()) {
+                    match if ok { rx.recv().ok() } else { None } {
+                        Some(h) => hashes.extend(h),
+                        None => hashes.extend(part.iter().map(|r| hash_range(r))),
+                    }
+                }
+                hashes
+            }
+        };
+        for (&(a, len), h) in ranges.iter().zip(hashes) {
+            let Some(e) = self.entries.get_mut(&(a, len)) else { continue };
+            if e.hash == h || e.dynamic {
+                continue;
+            }
+            // This submit's draws read the block: the new contents go there.
+            e.hash = h;
+            e.uploads += 1;
+            let (chunk, off) = (e.chunk, e.off);
+            let ok = upload(self.chunks[chunk].buffer, off, a as *const u8, len);
+            let e = self.entries.get_mut(&(a, len)).unwrap();
+            if !ok || e.uploads >= MAX_UPLOADS {
+                // Rewritten all the time: read in place from now on, its block freed after this submit.
+                e.dynamic = true;
+                let (chunk, off, size) = (e.chunk, e.off, e.size);
+                self.retired.push((serial, chunk, off, size));
+            }
+        }
+    }
+
     /// Frees retired blocks whose submits completed, and retires ranges not drawn for a while.
     pub(super) fn collect(&mut self, completed: u64, frame: u64) {
         if frame >= self.swept_frame + 60 {
@@ -182,6 +238,41 @@ impl VCache {
             self.release(chunk, off, size);
         }
     }
+}
+
+unsafe fn hash_range(&(a, len): &(usize, usize)) -> u64 {
+    fast_hash(std::slice::from_raw_parts(a as *const u8, len))
+}
+
+/// Ranges for a hashing thread, which the sender waits for its hashes of.
+struct HashJob(*const (usize, usize), usize);
+unsafe impl Send for HashJob {}
+
+type HashPool = std::sync::Mutex<Vec<(std::sync::mpsc::Sender<HashJob>, std::sync::mpsc::Receiver<Vec<u64>>)>>;
+
+/// Threads hashing for verify (vk-hash): spawning them for each submit cost more than the hashing.
+fn hash_pool() -> &'static HashPool {
+    static POOL: std::sync::OnceLock<HashPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(1, |n| n.get()).saturating_sub(2).clamp(1, 5);
+        let workers = (0..n)
+            .filter_map(|i| {
+                let (tx, rx) = std::sync::mpsc::channel::<HashJob>();
+                let (htx, hrx) = std::sync::mpsc::channel();
+                std::thread::Builder::new()
+                    .name(format!("vk-hash-{i}"))
+                    .spawn(move || {
+                        while let Ok(HashJob(p, n)) = rx.recv() {
+                            let ranges = unsafe { std::slice::from_raw_parts(p, n) };
+                            let _ = htx.send(ranges.iter().map(|r| unsafe { hash_range(r) }).collect());
+                        }
+                    })
+                    .ok()
+                    .map(|_| (tx, hrx))
+            })
+            .collect();
+        std::sync::Mutex::new(workers)
+    })
 }
 
 /// Change detection for small ranges, checked once per submit for every one drawn (several MB a frame): four lanes of

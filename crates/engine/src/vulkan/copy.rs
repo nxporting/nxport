@@ -109,13 +109,14 @@ impl Ctx {
             Cmd::ClearTexture(_) => ("clear texture", [0; 4]),
             _ => ("copy", [0; 4]),
         };
-        self.dev.checkpoint(self.cb, what, args);
+        self.checkpoint(what, args);
         match c {
             Cmd::CopyBufferToBuffer { src, dst, size } => {
                 let (Some((sb, so)), Some((db, d_off))) = (self.guest_range(*src, *size, false), self.guest_range(*dst, *size, true)) else {
                     return;
                 };
-                self.dev.device.cmd_copy_buffer(self.cb, sb, db, &[vk::BufferCopy { src_offset: so, dst_offset: d_off, size: *size as u64 }]);
+                let region = vk::BufferCopy { src_offset: so, dst_offset: d_off, size: *size as u64 };
+                self.rec.cmd(move |d, cb| d.device.cmd_copy_buffer(cb, sb, db, &[region]));
             }
             Cmd::ClearBuffer { dst, size, value } => {
                 let Some((db, off)) = self.guest_range(*dst, *size, true) else { return };
@@ -123,7 +124,8 @@ impl Ctx {
                     self.warn("ClearBuffer of an unaligned range");
                     return;
                 }
-                self.dev.device.cmd_fill_buffer(self.cb, db, off, *size as u64, *value);
+                let (size, value) = (*size as u64, *value);
+                self.rec.cmd(move |d, cb| d.device.cmd_fill_buffer(cb, db, off, size, value));
             }
             Cmd::CopyBufferToTexture { src, dst, region, row_stride, image_stride } => {
                 let Some((t, d, image, at)) = self.tex_ref(dst) else { return };
@@ -142,7 +144,7 @@ impl Ctx {
                     .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(g.aspect).mip_level(g.level).base_array_layer(g.base_layer).layer_count(g.layers))
                     .image_offset(g.offset)
                     .image_extent(g.extent);
-                self.dev.device.cmd_copy_buffer_to_image(self.cb, sb, image, vk::ImageLayout::GENERAL, &[region]);
+                self.rec.cmd(move |d, cb| d.device.cmd_copy_buffer_to_image(cb, sb, image, vk::ImageLayout::GENERAL, &[region]));
             }
             Cmd::CopyTextureToBuffer { src, region, dst, row_stride, image_stride } => {
                 let Some((t, d, image, at)) = self.tex_ref(src) else { return };
@@ -157,7 +159,7 @@ impl Ctx {
                     .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(g.aspect).mip_level(g.level).base_array_layer(g.base_layer).layer_count(g.layers))
                     .image_offset(g.offset)
                     .image_extent(g.extent);
-                self.dev.device.cmd_copy_image_to_buffer(self.cb, image, vk::ImageLayout::GENERAL, db, &[region]);
+                self.rec.cmd(move |d, cb| d.device.cmd_copy_image_to_buffer(cb, image, vk::ImageLayout::GENERAL, db, &[region]));
             }
             Cmd::CopyTextureToTexture(p) => {
                 let (Some((st_, sd, si, sat)), Some((dt, dd, di, dat))) = (self.tex_ref(&p.src), self.tex_ref(&p.dst)) else { return };
@@ -178,7 +180,7 @@ impl Ctx {
                         .dst_subresource(sub(&dg, format::aspects(dfmt)))
                         .dst_offset(dg.offset)
                         .extent(sg.extent);
-                    self.dev.device.cmd_copy_image(self.cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &[r]);
+                    self.rec.cmd(move |d, cb| d.device.cmd_copy_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &[r]));
                 } else {
                     // Different sizes: a scaled copy.
                     let corners = |g: &Geometry| {
@@ -190,7 +192,7 @@ impl Ctx {
                         .dst_subresource(sub(&dg, format::aspects(dfmt)))
                         .dst_offsets(corners(&dg));
                     let filter = if format::is_depth(sfmt) { vk::Filter::NEAREST } else { vk::Filter::LINEAR };
-                    self.dev.device.cmd_blit_image(self.cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &[r], filter);
+                    self.rec.cmd(move |d, cb| d.device.cmd_blit_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &[r], filter));
                 }
             }
             Cmd::ClearTexture(p) => {
@@ -212,15 +214,15 @@ impl Ctx {
                     .layer_count(g.layers.min(layers - g.base_layer.min(layers - 1)));
                 if format::is_depth(fmt) {
                     let v = vk::ClearDepthStencilValue { depth: f32::from_bits(p.color[0]), stencil: p.color[1] };
-                    self.dev.device.cmd_clear_depth_stencil_image(self.cb, image, vk::ImageLayout::GENERAL, &v, &[range]);
+                    self.rec.cmd(move |d, cb| d.device.cmd_clear_depth_stencil_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]));
                 } else {
                     // The raw words of the float / int / uint value.
                     let v = vk::ClearColorValue { uint32: p.color };
-                    self.dev.device.cmd_clear_color_image(self.cb, image, vk::ImageLayout::GENERAL, &v, &[range]);
+                    self.rec.cmd(move |d, cb| d.device.cmd_clear_color_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]));
                 }
             }
             _ => {}
         }
-        self.dev.full_barrier(self.cb);
+        self.barrier();
     }
 }
