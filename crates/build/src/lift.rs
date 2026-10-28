@@ -288,6 +288,11 @@ fn cross_module_seeds(modules: &[nxport::GuestModule]) -> Vec<BTreeSet<u64>> {
         if i == 0 || m.name == "sdk" {
             continue; // the game's own modules: .eh_frame and relocations name their functions
         }
+        // The code a mod wrote at run time (a lift with its image): its trampolines, entered through addresses its .bss
+        // holds. Every instruction of it.
+        for r in &m.patched {
+            seeds[i].extend((r.start & !3..r.end).step_by(4).filter(|a| m.text.contains(a)));
+        }
         // Addresses of code the module computes (ADR, ADRP + ADD): thread entries and callbacks a mod hands the system
         // or its hooks.
         let mut a = m.text.start & !3;
