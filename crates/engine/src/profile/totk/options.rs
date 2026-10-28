@@ -30,6 +30,8 @@ crate::settings::group! {
         native_font_draws: bool = false,
         /// Compare each text draw the game records with what --native-font-draws would record
         verify_font_draws: bool = false,
+        /// Compare each model draw the game records with what the model renderer port predicts
+        verify_model_draws: bool = false,
     }
 }
 

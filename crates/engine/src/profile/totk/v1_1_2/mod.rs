@@ -10,6 +10,8 @@ pub mod dynamic_fps;
 pub mod hud;
 #[cfg(nx_native)]
 pub mod font_draw;
+#[cfg(nx_native)]
+pub mod model;
 
 use crate::profile::VersionProfile;
 
@@ -210,6 +212,11 @@ pub unsafe fn install_v1_1_2_hooks(
     let d = &crate::settings::get().totk.diagnostics;
     if d.native_font_draws || d.verify_font_draws {
         font_draw::install(base, mem_space);
+    }
+
+    // 6. The model renderer port (main+0x688c68)
+    if d.verify_model_draws {
+        model::install(base, mem_space);
     }
 }
 
