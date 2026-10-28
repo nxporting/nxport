@@ -5,8 +5,6 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- **TotK 1.0.0 game time follows real time.** Uncapped, game speed scales with the frame rate (time step = present
-  interval / 2 per frame, main+0x8f68b8). Replacing it with a step from real elapsed time, clamped. In progress.
 
 ## Open (unclaimed)
 
@@ -17,7 +15,6 @@ and update this file when you finish or drop it.
   main+0x7f7a58 and forces the pacer; nobody has checked it against a 1.1.2 binary. In 1.0.0 the game steps its time by
   present interval / 2 itself (main+0x8f68b8), so the 1.1.2 counterpart of the 1.0.0 unlock (lowest interval 1 + no
   veto) may be all 1.1.2 needs: verify on a Mac before relying on dynamic_fps.
-- Lifted TotK with `--no-vsync` runs faster than real time above 60 fps (the time step stays half a 30 fps frame).
 - `retro-work` has commits not on main.
 - With `--no-vsync`, TotK starts no sounds (title runs ~600 fps; its idle voices are never routed to splitters).
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
@@ -79,6 +76,9 @@ and update this file when you finish or drop it.
   on Windows needs a supported TotK version (2.7.1: 1.1.0 - 1.2.1). On the 1.0.0 test dump it patches 113 bytes,
   the patched lift runs into its hooks, and they fault (hooks at 1.1.x addresses).
 
+- **TotK 1.0.0 game time follows real time** (S41L0R Windows Machine): the time manager's step (main+0x7a83e4) and
+  the controllers' hold-timer step come from real elapsed time (1/240 .. 2/30 s), in every fps mode. Lifted title menu
+  at 30 / 60 / ~140 fps shows the same shots at the same wall times. Lifted builds need a re-lift to pick it up.
 - **TotK 1.0.0 frame rate unlocked** (S41L0R Windows Machine): lowest present interval 1 and no veto on drops
   (profile/totk/v1_0_0.rs); applies natively and to lifted images (re-lift to pick it up). Title menu 60 fps with
   vsync, ~80 without. Great Sky Island is held at 20-30 fps by Vulkan recording (~29 ms a frame), not pacing.
