@@ -32,6 +32,8 @@ crate::settings::group! {
         verify_font_draws: bool = false,
         /// Compare each model draw the game records with what the model renderer port predicts
         verify_model_draws: bool = false,
+        /// Model draws by the port instead of the game's model renderer
+        native_model_draws: bool = false,
     }
 }
 

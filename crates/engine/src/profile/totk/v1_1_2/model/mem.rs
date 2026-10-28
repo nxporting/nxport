@@ -12,7 +12,6 @@ impl Mem {
         Mem { overlay: Some(HashMap::default()) }
     }
 
-    #[allow(dead_code)]
     pub(super) fn applying() -> Self {
         Mem { overlay: None }
     }
