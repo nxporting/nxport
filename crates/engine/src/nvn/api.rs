@@ -6128,6 +6128,8 @@ pub unsafe extern "C" fn hle_nvnWindowFinalize(w: *mut NvnWindow) {
 pub static ACQUIRE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static ACQUIRE_SLEEP_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The highest frame rate with VSync off.
+const UNPACED_MAX_FPS: u64 = 144;
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
     w: *mut NvnWindow,
@@ -6146,8 +6148,13 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         // a window's CAMetalLayer still paces presentation at the display's refresh rate).
         let interval = present_interval();
         let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
+        let vsync = crate::host::overlay::is_vsync();
         let frame = if is_stock30 {
             std::time::Duration::from_nanos(1_000_000_000 / 30)
+        } else if !vsync {
+            // VSync off still stops at UNPACED_MAX_FPS: above the audio renderer's 200 frames a second TotK starts no sounds at
+            // all (silent at 240 and at 400-600 uncapped; sound at 60 and 144, through gameplay).
+            std::time::Duration::from_nanos(1_000_000_000 / UNPACED_MAX_FPS)
         } else if interval == 0 {
             std::time::Duration::ZERO
         } else {
@@ -6178,7 +6185,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             deadline.saturating_duration_since(now)
         };
         ACQUIRE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if !wait.is_zero() && (is_stock30 || crate::host::overlay::is_vsync()) {
+        if !wait.is_zero() {
             ACQUIRE_SLEEP_US.fetch_add(
                 wait.as_micros() as u64,
                 std::sync::atomic::Ordering::Relaxed,
