@@ -82,6 +82,8 @@ pub struct GuestModule {
     pub text: std::ops::Range<u64>,
     /// Whether `image` holds a module's dynamic tables (symbols, relocations, .eh_frame_hdr), which name functions.
     pub dynamic: bool,
+    /// The runs of bytes the plugin mods' patches changed (a lift with their image; nxport::guest_modules).
+    pub patched: Vec<std::ops::Range<u64>>,
 }
 
 /// `s` as a C identifier (lifted modules' tables are named after them).
@@ -119,6 +121,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
         image: copy(main, l.mem_space.total_size),
         text: main as u64..(main + l.mem_space.text_size) as u64,
         dynamic: true,
+        patched: Vec::new(),
     }];
     if let Some(sdk) = &l.sdk {
         modules.push(GuestModule {
@@ -127,6 +130,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
             image: copy(sdk.base, sdk.total_size),
             text: sdk.text_start as u64..(sdk.text_start + sdk.text_size) as u64,
             dynamic: true,
+            patched: Vec::new(),
         });
     }
     for (label, base, size, text) in &l.mod_modules {
@@ -136,6 +140,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
             image: copy(*base, *size),
             text: text.start as u64..text.end as u64,
             dynamic: true,
+            patched: Vec::new(),
         });
     }
     let covered = |a: usize| modules.iter().any(|m| m.text.contains(&(a as u64)));
@@ -149,6 +154,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
             image: copy(*start, *len),
             text: *start as u64..(*start + *len) as u64,
             dynamic: false,
+            patched: Vec::new(),
         })
         .collect();
     modules.extend(extra);
@@ -171,6 +177,15 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
                     let differ: Vec<usize> = (0..src.len()).filter(|&i| src[i] != dst[i]).collect();
                     if let (Some(&f), Some(&l)) = (differ.first(), differ.last()) {
                         println!("[+] patched image: {name}: {} bytes differ in {}, {:#x}..{:#x}", differ.len(), m.name, lo + f, lo + l + 1);
+                    }
+                    // Runs of changed bytes: hooks, and in a mod's code the trampolines it wrote (their addresses sit in its
+                    // .bss, which the image does not hold).
+                    for &i in &differ {
+                        let a = (lo + i) as u64;
+                        match m.patched.last_mut() {
+                            Some(r) if r.end == a => r.end = a + 1,
+                            _ => m.patched.push(a..a + 1),
+                        }
                     }
                     changed += differ.len();
                     dst.copy_from_slice(src);
