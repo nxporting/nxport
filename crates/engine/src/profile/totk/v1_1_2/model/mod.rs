@@ -75,6 +75,11 @@ fn report() {
     let mut s = STOPS.lock().unwrap().clone();
     s.sort_by(|a, b| b.1.cmp(&a.1));
     let stops: Vec<String> = s.iter().map(|(w, k)| format!("{w} {:.1}%", *k as f64 * 100.0 / n as f64)).collect();
+    let vf: Vec<String> =
+        draw::UNKNOWN_VFNS.lock().unwrap().iter().map(|(slot, f)| format!("+{slot:#x}=main+{f:#x}")).collect();
+    if !vf.is_empty() {
+        println!("[model-draw] virtual functions met: {}", vf.join(" "));
+    }
     println!(
         "[model-draw] {n} calls: {:.1}% identical, {diff} different; unported: {}",
         same as f64 * 100.0 / n as f64,

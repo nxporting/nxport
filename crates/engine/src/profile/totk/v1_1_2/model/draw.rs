@@ -57,6 +57,9 @@ const SHADER_SLOT_OFFSETS: usize = 0x46138a0; // pointer to the offsets of a pro
 const PRIMITIVE_TABLE: usize = 0x37ff9b8; // nn::gfx primitive topology -> NVN draw mode
 const INDEX_TYPE_TABLE: usize = 0x37ffa0c; // nn::gfx index format -> NVN index type
 
+/// Virtual functions the port met but does not implement: (vtable slot, main+ offset).
+pub(super) static UNKNOWN_VFNS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
 pub(super) struct Port {
     pub(super) m: Mem,
     pub(super) base: usize,
@@ -83,6 +86,65 @@ impl Port {
     unsafe fn call_commands(&mut self, cmd: usize, handles: usize) {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.call(self.pfn(PFN_CALL_COMMANDS), &[cmd as u64, 1, handles as u64]);
+    }
+
+    /// The main+ offset of `obj`'s virtual function at vtable slot `slot`.
+    unsafe fn vfn(&self, obj: usize, slot: usize) -> usize {
+        self.m.r64(self.m.r64(obj) + slot).wrapping_sub(self.base)
+    }
+
+    fn unknown_vfn(&self, slot: usize, f: usize) -> &'static str {
+        let mut u = UNKNOWN_VFNS.lock().unwrap();
+        if !u.contains(&(slot, f)) {
+            u.push((slot, f));
+        }
+        "uniform block virtual function"
+    }
+
+    /// Uniform block object, virtual +0x20: the block alignment.
+    unsafe fn block_alignment(&mut self, obj: usize) -> R<i32> {
+        match self.vfn(obj, 0x20) {
+            0x2a30390 => Ok(0x100),
+            f => Err(self.unknown_vfn(0x20, f)),
+        }
+    }
+
+    /// Uniform block object, virtual +0x48: binds `addr` (`size`) to `slot` of `stage`.
+    unsafe fn bind_block(&mut self, obj: usize, cmd: usize, stage: i32, slot: i32, addr: u64, size: u32) -> R<()> {
+        match self.vfn(obj, 0x48) {
+            // nvnPrivate0 is 0 under the HLE: always through the NVN entry point.
+            0x2a303b4 => {
+                self.bind_uniform_buffer(cmd, stage, slot, addr, size as u64);
+                Ok(())
+            }
+            f => Err(self.unknown_vfn(0x48, f)),
+        }
+    }
+
+    /// sub_887400: binds element `index` of uniform block object `obj` to the stages / slots packed in `slots`.
+    unsafe fn bind_uniform_block(&mut self, obj: usize, w: usize, slots: u32, index: i32) -> R<bool> {
+        let shift = self.m.r8(obj + 0x42) >> 4;
+        let mut addr = self.m.r64(obj + 0x78) as u64;
+        let count = self.m.r16(obj + 0x40) as u32;
+        let size = self.m.r64(obj + 0x38);
+        let a = self.block_alignment(obj)?;
+        let b = self.block_alignment(obj)?;
+        if slots == 0xffff_ffff {
+            return Ok(false);
+        }
+        let size32 = self.m.r32(obj + 0x38);
+        let cmd = self.m.r64(w + 0xb8);
+        let stride = ((size as i32).wrapping_add(a).wrapping_sub(1) as u32 & (b.wrapping_neg() as u32)) as u64;
+        addr = addr.wrapping_add(stride.wrapping_mul((index as u32).wrapping_add(count.wrapping_mul(shift as u32)) as i32 as i64 as u64));
+        for (stage, sh) in [(0, 0), (1, 8), (2, 16)] {
+            if (!(slots >> sh)) & 0xff != 0 {
+                self.bind_block(obj, cmd, stage, (slots >> sh) as i8 as i32, addr, size32)?;
+            }
+        }
+        if (slots >> 24) & 0xff != 0xff {
+            self.bind_block(obj, cmd, 5, (slots >> 24) as i8 as i32, addr, size32)?;
+        }
+        Ok(true)
     }
 
     /// nn::gfx's shader stage bits -> NVNshaderStageBits (main+0x307d8).
@@ -618,7 +680,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
                 if a != p.m.r32(c + 0x5c) {
                     p.m.w::<u32>(c + 0x5c, a);
                     if p.m.r8(c + 0x43) & 1 == 0 {
-                        return Err("sub_887400 (vertex uniform block)");
+                        p.bind_uniform_block(p.m.r64(c + 0x28), p.m.r64(c + 0x20), a, 0)?;
                     }
                 }
                 if u48 != p.m.r32(c + 0x60) {
@@ -744,7 +806,42 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
     if sel != p.m.i8(c + 0x42) && p.m.r32(c + 0x64) != 0xffff_ffff {
         let scene = p.m.r64(c + 0x10);
         if p.m.r64(scene + 0x530) != 0 {
-            return Err("scene uniform block (vt +0x20 / +0x48)");
+            let records = p.m.r32(scene + 0x598);
+            let pick = |v: i8| {
+                let v = if v == -1 { 0 } else { v as i32 as u32 };
+                if records <= v { 0 } else { v }
+            };
+            let rec = p.m.r64(scene + 0x5a0) + pick(sel) as usize * 0xd0;
+            let mut k = (p.m.r8(rec + 0x42) >> 4) as u32;
+            if p.m.r32(rec + 0x80) <= k {
+                k = 0;
+            }
+            p.m.w::<usize>(c + 0xe8, p.m.r64(p.m.r64(rec + 0x88) + k as usize * 8));
+            let obj = p.m.r64(scene + 0x5a0) + pick(p.m.i8(d + 0x49)) as usize * 0xd0;
+            if p.m.fetch_or32(obj + 200, 1) == 0 {
+                return Err("sub_765148 (scene uniform block init)");
+            }
+            let slots = p.m.r32(c + 0x64);
+            let shift = (p.m.r8(obj + 0x42) >> 4) as u64;
+            let count = p.m.r16(obj + 0x40) as u64;
+            let size = p.m.r64(obj + 0x38);
+            let a = p.block_alignment(obj)?;
+            let b = p.block_alignment(obj)?;
+            if slots != 0xffff_ffff {
+                let size32 = p.m.r32(obj + 0x38);
+                let stride = ((size as i32).wrapping_add(a).wrapping_sub(1) as u32 & (b.wrapping_neg() as u32)) as u64;
+                let addr = (p.m.r64(obj + 0x78) as u64).wrapping_add(count.wrapping_mul(shift).wrapping_mul(stride));
+                let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
+                for (stage, sh) in [(0, 0), (1, 8), (2, 16)] {
+                    if (!(slots >> sh)) & 0xff != 0 {
+                        p.bind_block(obj, cmd, stage, (slots >> sh) as i8 as i32, addr, size32)?;
+                    }
+                }
+                if slots >> 24 != 0xff {
+                    p.bind_block(obj, cmd, 5, (slots >> 24) as i8 as i32, addr, size32)?;
+                }
+            }
+            p.m.w::<u8>(c + 0x42, p.m.r8(d + 0x49));
         }
     }
 
