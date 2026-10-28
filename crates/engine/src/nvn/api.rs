@@ -2683,6 +2683,8 @@ enum Capture {
     Dry(Vec<String>),
     /// Commands are recorded and collected until there are as many as expected, then passed to the report.
     Watch { expected: Vec<String>, got: Vec<String>, report: fn(&[String], &[String]) },
+    /// Commands are recorded and collected until capture_collected.
+    Collect(Vec<String>),
 }
 
 thread_local! {
@@ -2707,6 +2709,19 @@ pub fn capture_watch(expected: Vec<String>, report: fn(&[String], &[String])) {
     CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Watch { expected, got: Vec::new(), report }));
 }
 
+/// Collects this thread's commands (recorded as usual) until capture_collected.
+pub fn capture_collect() {
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Collect(Vec::new())));
+}
+
+/// The commands collected since capture_collect (empty if this thread was not collecting); ends the collection.
+pub fn capture_collected() -> Vec<String> {
+    match CAPTURE.with(|c| c.borrow_mut().take()) {
+        Some(Capture::Collect(v)) => v,
+        _ => Vec::new(),
+    }
+}
+
 /// Ends an unfinished watch: (expected, got so far).
 pub fn capture_finish() -> Option<(Vec<String>, Vec<String>)> {
     match CAPTURE.with(|c| c.borrow_mut().take()) {
@@ -2724,6 +2739,10 @@ fn capture(text: impl FnOnce() -> String) -> bool {
             Some(Capture::Dry(v)) => {
                 v.push(text());
                 true
+            }
+            Some(Capture::Collect(v)) => {
+                v.push(text());
+                false
             }
             Some(Capture::Watch { expected, got, .. }) => {
                 got.push(text());
