@@ -215,7 +215,7 @@ pub unsafe fn install_v1_1_2_hooks(
     }
 
     // 6. The model renderer port (main+0x688c68)
-    if d.verify_model_draws {
+    if d.verify_model_draws || d.native_model_draws {
         model::install(base, mem_space);
     }
 }

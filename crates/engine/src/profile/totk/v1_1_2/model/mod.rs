@@ -35,6 +35,14 @@ pub unsafe extern "C" fn on_model_draw(d: usize, c: usize, shape: u32, flags: u3
         report();
     }
     let base = crate::guest::loader::main_base();
+    if crate::settings::get().totk.diagnostics.native_model_draws {
+        let mut port = draw::Port { m: mem::Mem::applying(), base };
+        if let Err(what) = draw::draw(&mut port, d, c, shape, flags) {
+            // Applying never stops (helpers it does not implement call the game's); a stop here is a port bug.
+            note_stop(what);
+        }
+        return 1;
+    }
     let mut port = draw::Port { m: mem::Mem::predicting(), base };
     let mut result = Ok(());
     let expected = crate::nvn::api::capture_dry(|| result = draw::draw(&mut port, d, c, shape, flags));

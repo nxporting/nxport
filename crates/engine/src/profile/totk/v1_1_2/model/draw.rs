@@ -54,6 +54,8 @@ const DEFAULT_MATERIAL_SLOT: usize = 0x4639fb0; // pointer used when the drawabl
 const DEVICE_HOLDER: usize = 0x462bbe8; // pointer to the object holding the NVNdevice at +0x30
 const NO_VERTEX_STATE: usize = 0x386de44; // three u32 used when the shape has no vertex state
 const SHADER_SLOT_OFFSETS: usize = 0x46138a0; // pointer to the offsets of a program set's vertex / geometry / ... shaders
+const TICK_HOLDER: usize = 0x462ab50; // pointer to the tick frequency the texture wait's sleep step derives from
+const SLEEP: usize = 0x1051cb8; // the sleep the texture wait loops on (symmatch named it agl::RenderTargetColor::invalidateGPUCache)
 const PRIMITIVE_TABLE: usize = 0x37ff9b8; // nn::gfx primitive topology -> NVN draw mode
 const INDEX_TYPE_TABLE: usize = 0x37ffa0c; // nn::gfx index format -> NVN index type
 
@@ -72,6 +74,14 @@ impl Port {
 
     unsafe fn call(&self, f: usize, args: &[u64]) -> u64 {
         crate::guest::call(f, args)
+    }
+
+    /// A game helper the port does not implement: predicting stops there; applying calls the game's function.
+    unsafe fn helper(&self, name: &'static str, addr: usize, args: &[u64]) -> R<u64> {
+        if self.m.predict() {
+            return Err(name);
+        }
+        Ok(self.call(self.base + addr, args))
     }
 
     unsafe fn buffer_address(&self, nvn_buffer: usize) -> u64 {
@@ -105,7 +115,8 @@ impl Port {
     unsafe fn block_alignment(&mut self, obj: usize) -> R<i32> {
         match self.vfn(obj, 0x20) {
             0x2a30390 => Ok(0x100),
-            f => Err(self.unknown_vfn(0x20, f)),
+            f if self.m.predict() => Err(self.unknown_vfn(0x20, f)),
+            f => Ok(self.call(self.base + f, &[obj as u64]) as i32),
         }
     }
 
@@ -117,7 +128,11 @@ impl Port {
                 self.bind_uniform_buffer(cmd, stage, slot, addr, size as u64);
                 Ok(())
             }
-            f => Err(self.unknown_vfn(0x48, f)),
+            f if self.m.predict() => Err(self.unknown_vfn(0x48, f)),
+            f => {
+                self.call(self.base + f, &[obj as u64, cmd as u64, stage as u64, slot as u64, addr, size as u64]);
+                Ok(())
+            }
         }
     }
 
@@ -490,7 +505,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
         if pipes != 0 {
             let pipe = (pipes as isize + pipe_index as isize * 200) as usize;
             if p.m.r8(pipe) != 0 {
-                return Err("nn::gfx::CommandBuffer::SetPipeline");
+                p.helper("nn::gfx::CommandBuffer::SetPipeline", 0x21fe6c8, &[pipe as u64, w as u64])?;
             }
         }
         pipes == 0
@@ -757,8 +772,19 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
                             let old = p.m.fetch_or32(ready, 0x8000_0000);
                             if old & 0x7fff_ffff == 0 {
                                 p.m.w::<u32>(ready, 0);
+                            } else if (old as i32) < 0 {
+                                // Another thread is making it ready: wait (the game sleeps in steps), then clear.
+                                if p.m.predict() {
+                                    return Err("texture ready wait");
+                                }
+                                let step = (p.m.r64(p.m.r64(base + TICK_HOLDER)) as i64 / 1_000_000) as u64;
+                                while p.m.i32(ready) < 0 {
+                                    p.call(base + SLEEP, &[step]);
+                                }
+                                (*(ready as *const std::sync::atomic::AtomicU32)).store(0, std::sync::atomic::Ordering::Release);
                             } else {
-                                return Err("texture ready wait");
+                                p.helper("texture ready wait", 0x7ff1fc, &[tex as u64])?;
+                                (*(ready as *const std::sync::atomic::AtomicU32)).store(0, std::sync::atomic::Ordering::Release);
                             }
                         }
                         let (tid, sid) = (p.m.i32(tex + 0x58), p.m.r16(tex + 0xea) as i16 as i32);
@@ -796,7 +822,8 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
     if mask != 0 {
         let m = mask & !p.m.r16(d + 0x14);
         if m & !p.m.r16(c + 0xc6) != 0 {
-            return Err("sub_766cf8");
+            let scene = p.m.r64(c + 0x10);
+            p.helper("sub_766cf8", 0x766cf8, &[(scene + 0x470) as u64, w as u64, p.m.r64(c + 0x110) as u64, 0xffff_ffff])?;
         }
         p.m.w::<u16>(c + 0xc6, m);
     }
@@ -819,7 +846,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
             p.m.w::<usize>(c + 0xe8, p.m.r64(p.m.r64(rec + 0x88) + k as usize * 8));
             let obj = p.m.r64(scene + 0x5a0) + pick(p.m.i8(d + 0x49)) as usize * 0xd0;
             if p.m.fetch_or32(obj + 200, 1) == 0 {
-                return Err("sub_765148 (scene uniform block init)");
+                p.helper("sub_765148 (scene uniform block init)", 0x765148, &[scene as u64, p.m.i8(d + 0x49) as i32 as u32 as u64])?;
             }
             let slots = p.m.r32(c + 0x64);
             let shift = (p.m.r8(obj + 0x42) >> 4) as u64;
@@ -854,30 +881,49 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
             pl58 = p.m.r64(p.m.r64(d + 0x50) + mat_index as usize * 8);
         }
         if (p.m.r16(c + 0x40) >> 6) & 1 == 0 || (p.m.r8(d + 0x48) >> 2) & 1 == 0 {
-            return Err("sub_764f4c");
+            p.helper("sub_764f4c", 0x764f4c, &[p.m.r64(d + 0x68) as u64, w as u64, pass as i32 as u32 as u64])?;
+        } else {
+            let rec = p.m.r64(p.m.r64(pl58) + 0x10);
+            if p.m.r8(rec + 0x50) & 1 != 0 {
+                let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
+                p.call_commands(cmd, rec + 0x48);
+            }
         }
-        let rec = p.m.r64(p.m.r64(pl58) + 0x10);
-        if p.m.r8(rec + 0x50) & 1 != 0 {
-            let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
-            p.call_commands(cmd, rec + 0x48);
-        }
-        return Err("sub_7b42f0 (material bind)");
+        let shader_set = p.m.r64((p.m.r64(d + 0x68) as isize + pass as isize * 0x60 + 0x40) as usize);
+        p.helper(
+            "sub_7b42f0 (material bind)",
+            0x7b42f0,
+            &[d as u64, w as u64, p.m.r64(mat) as u64, shader_set as u64, p.m.i8(c + 0x30) as i64 as u64, u59 as u64],
+        )?;
     } else {
         if p.m.r8(mat_rec) & 1 != 0 {
             let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
             p.call_commands(cmd, mat + u59 * 0x58 + 0x50);
         }
         if p.m.r8(c + 0x30) != 0 && (p.m.r8(d + 0x47) >> 2) & 1 != 0 {
-            return Err("sub_7b576c");
+            let table = p.m.r64(p.m.r64(d + 8) + 0x178);
+            let rec = table + p.m.r16(d + 0x16) as usize * 0x70;
+            let blocks = p.m.r64(rec + 0x20);
+            let mut k = u59;
+            if p.m.r8(rec + 0xd) != 0 {
+                k = p.m.r8(rec + 0xf) as usize * p.m.r8(c + 0x30) as usize + u59;
+            }
+            let block = if blocks != 0 { blocks + k * 0x48 } else { 0 };
+            let slot = p.m.r32(p.m.r64(p.m.r64(c + 0x110)) + 0x28);
+            p.helper("sub_7b576c", 0x7b576c, &[w as u64, slot as u64, block as u64, 0x100, u59 as u64])?;
         }
     }
 
     let mut b31 = p.m.r8(d + 0x47);
     if ((flags & b31 as u32) >> 3) & 1 != 0 {
-        return Err("sub_68b3fc");
+        let r = p.helper("sub_68b3fc", 0x68b3fc, &[p.m.r64(d + 0x80) as u64, w as u64, p.m.i8(c + 0x30) as i64 as u64, 0])?;
+        if r & 1 == 0 {
+            return Ok(());
+        }
+        b31 = p.m.r8(d + 0x47);
     }
     if (b31 >> 5) & 1 != 0 {
-        return Err("sub_68b500");
+        p.helper("sub_68b500", 0x68b500, &[d as u64, c as u64])?;
     }
     b31 = p.m.r8(d + 0x47);
     let model = p.m.r64(d + 0x68);
@@ -903,10 +949,14 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
         tris = p.m.i32(list_rec + 0x260);
     } else {
         let sf = f as u8 as i8 as i32 as u32;
-        if (sf >> 4) & 1 != 0 {
-            return Err("sub_68b474");
-        }
-        tris = if f & 0x41 != 0 { draw_culled(p, d, c, shape, sf, w)? } else { 0 };
+        tris = if (sf >> 4) & 1 != 0 {
+            p.helper("sub_68b474", 0x68b474, &[p.m.r64(d + 0x80) as u64, w as u64, p.m.i8(c + 0x30) as i64 as u64])?;
+            p.m.i32(p.m.r64(model + 0x8c8) + shape as i32 as isize as usize * 0x268 + 0x260)
+        } else if f & 0x41 != 0 {
+            draw_culled(p, d, c, shape, sf, w)?
+        } else {
+            0
+        };
     }
     p.m.w::<u32>(c + 0x34, p.m.r32(c + 0x34).wrapping_add(tris as u32));
     Ok(())
@@ -926,8 +976,8 @@ unsafe fn draw_culled(p: &mut Port, d: usize, c: usize, shape: u32, sf: u32, w: 
             let a = p.m.i8(mesh + 0x5b) as i32;
             let v = if a > 1 { n } else { (if n + 1 < 0 { n + 2 } else { n + 1 }) >> 1 } + 1;
             if (v as i64 * 6) as u64 <= p.m.r32(c + 0x1a8) as u64 {
+                p.helper("sub_221f100", 0x221f100, &[p.m.r64(c + 0x1a0) as u64, list as u64, p.m.r64(list_at + 8) as u64])?;
                 list = p.m.r64(c + 0x1a0);
-                return Err("sub_221f100");
             }
         }
         let mut n = p.m.r16(list + 2) as u32;
