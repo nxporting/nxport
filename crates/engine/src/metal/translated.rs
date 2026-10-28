@@ -99,6 +99,8 @@ pub(super) struct PipeJob {
     blend_color: [f32; 4],
     /// Build the batched variant (metal/batch.rs: tb_<entry> functions).
     batched: bool,
+    /// Build the argument-buffer variant (ab_<entry> functions, --arg-buffers).
+    args: bool,
 }
 
 pub(super) enum AsyncPipe {
@@ -240,6 +242,7 @@ fn build_job(j: &PipeJob) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTL
         j.channel_mask,
         j.blend_color,
         j.batched,
+        j.args,
     )
 }
 
@@ -346,6 +349,7 @@ pub(super) fn queue_precompile(e: &crate::gpu::pipeline_list::Entry) -> bool {
         channel_mask: e.channel_mask,
         blend_color: [0.0; 4],
         batched: false,
+        args: false,
     };
     push_job(SendJob(job, slot), true);
     true
@@ -512,6 +516,7 @@ fn register_batchable(
         channel_mask: p.channel_mask,
         blend_color: p.blend_color,
         batched: true,
+        args: false,
     };
     super::batch::register(pipe, vtb, ftb, key, job);
 }
@@ -1497,6 +1502,71 @@ pub(super) fn derive_layout(vs: &CachedStage, attr_bits: &[Option<u32>], vertex_
         repack.push((s, new_stride, copies));
     }
     Layout { attr_descs, streams_used, needs_default_attr, streams_eff, repack }
+}
+
+/// Pipeline key marker of argument-buffer pipelines (ab_ variants).
+const AB_KEY: u64 = 0xAB00_0000_0000_0000;
+
+/// --arg-buffers, or replay side B with --replay-ab-args.
+fn args_on() -> bool {
+    static ON: std::sync::OnceLock<(bool, bool)> = std::sync::OnceLock::new();
+    let (on, ab) = *ON.get_or_init(|| {
+        let s = crate::settings::get();
+        (s.graphics.arg_buffers, s.replay.replay_ab_args)
+    });
+    on || (ab && super::replay_b())
+}
+
+/// The struct of an argument-buffer variant (index line `ab`): per member the GPU address of the buffer the plain path
+/// bound at that binding, or the resource ID of its texture / sampler. Unbound buffers point at the zero buffer.
+unsafe fn compose_args(
+    stage: &CachedStage,
+    bufs: &[(Retained<ProtocolObject<dyn MTLBuffer>>, usize, usize)],
+    tex: &[(Tex, usize)],
+    samp: &[(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize)],
+    zero: Option<&ProtocolObject<dyn MTLBuffer>>,
+    res: &mut Vec<(Retained<ProtocolObject<dyn objc2_metal::MTLResource>>, objc2_metal::MTLResourceUsage)>,
+) -> Vec<u64> {
+    use objc2_metal::{MTLResource, MTLResourceUsage};
+    let members = stage.args.as_deref().unwrap_or(&[]);
+    let mut out = Vec::with_capacity(members.len());
+    for &(class, b) in members {
+        let b = b as usize;
+        out.push(match class {
+            b'c' | b'b' => {
+                // Storage buffers the shader may write (older caches list them as c: by the stage's storage bindings).
+                let written = class == b'b'
+                    || (stage.sbuffers.iter().any(|s| s.0 as usize == b) && !stage.sb_readonly.iter().any(|&r| r as usize == b));
+                let usage = if written { MTLResourceUsage::Read | MTLResourceUsage::Write } else { MTLResourceUsage::Read };
+                let (buf, off) = match bufs.iter().rev().find(|x| x.2 == b) {
+                    Some((buf, off, _)) => (Some(&**buf), *off),
+                    None => (zero, 0),
+                };
+                match buf {
+                    Some(buf) => {
+                        res.push((ProtocolObject::<dyn MTLResource>::from_ref(buf).retain(), usage));
+                        buf.gpuAddress() + off as u64
+                    }
+                    None => 0,
+                }
+            }
+            b't' => match tex.iter().rev().find(|x| x.1 == b) {
+                Some((t, _)) => {
+                    res.push((ProtocolObject::<dyn MTLResource>::from_ref(&**t).retain(), MTLResourceUsage::Read));
+                    std::mem::transmute::<_, u64>(t.gpuResourceID())
+                }
+                None => 0,
+            },
+            b's' => samp
+                .iter()
+                .rev()
+                .find(|x| x.1 == b)
+                .and_then(|(s, _)| s.as_ref())
+                .map_or(0, |s| std::mem::transmute::<_, u64>(s.gpuResourceID())),
+            _ => 0,
+        });
+    }
+    out
 }
 
 /// The key of the render pipeline build_translated_pipeline makes from these inputs.
@@ -5260,6 +5330,12 @@ impl Gfx {
         let blend = blends[0];
         // Points take the command buffer's point size (only point draws, so other draws share one pipeline).
         let point_size = if mode == 0 { p.point_size } else { 1.0 };
+        // Argument-buffer draws: both stages bind their resources through one struct each (their ab_ variants).
+        let use_ab = args_on()
+            && p.tiny.is_none()
+            && !super::batch::enabled()
+            && vs.args.is_some()
+            && fs.map_or(true, |f| f.args.is_some());
         let mut memo_key: smallvec::SmallVec<[u64; 64]> = smallvec::smallvec![
             point_size.to_bits() as u64,
             vs as *const CachedStage as u64,
@@ -5274,6 +5350,7 @@ impl Gfx {
         memo_key.push(p.attr_bits.len() as u64);
         memo_key.extend(p.attr_bits.iter().map(|b| b.map_or(u64::MAX, |b| b as u64)));
         memo_key.extend(p.vertex_streams.iter().copied());
+        memo_key.push(use_ab as u64);
         // Consecutive draws mostly repeat the previous draw's inputs: compare with those before hashing.
         let last_hit = env
             .cx
@@ -5362,7 +5439,7 @@ impl Gfx {
                         }
                     }
                 }
-                let key = pipeline_key(
+                let mut key = pipeline_key(
                     point_size,
                     vs,
                     fs,
@@ -5376,6 +5453,9 @@ impl Gfx {
                     &streams_used,
                     &streams_eff,
                 );
+                if use_ab {
+                    key.push(AB_KEY);
+                }
 
                 let pipe = if let Some(p) = env.sh.translated_pipelines.get(key.as_slice()) {
                     p.clone()
@@ -5405,6 +5485,7 @@ impl Gfx {
                         channel_mask: p.channel_mask,
                         blend_color: p.blend_color,
                         batched: false,
+                        args: use_ab,
                     };
                     match async_pipeline(key.as_slice(), job) {
                         AsyncPipe::Ready(pipe) => {
@@ -5467,6 +5548,7 @@ impl Gfx {
                             p.channel_mask,
                             p.blend_color,
                             false,
+                            use_ab,
                         );
                         super::HITCH_PIPE_NS.fetch_add(
                             t0.elapsed().as_nanos() as u64,
@@ -5934,6 +6016,9 @@ impl Gfx {
             );
         }
         // ---- per-stage resources ----
+        if use_ab {
+            env.cx.ec.bind_rec = Some(TinyRec::default());
+        }
         let mut notes: Vec<String> = Vec::new();
         // Per-draw detail text is only for traces and GPU-error reports (first 16 draws of an encoder); formatting it for
         // every draw cost ~20% of the executor.
@@ -6727,6 +6812,17 @@ impl Gfx {
             super::TRANSLATED_DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return true;
         }
+        if use_ab {
+            let rec = env.cx.ec.bind_rec.take().unwrap_or_default();
+            // The structs take buffer 0 of each stage: the plain path's binding there is gone.
+            env.cx.ec.vbuf[0] = (0, usize::MAX);
+            env.cx.ec.fbuf[0] = (0, usize::MAX);
+            let zero = self.zero_buffer(&mut *env.sh);
+            let mut res = Vec::new();
+            let v = compose_args(vs, &rec.vbufs, &rec.vtex, &rec.vsamp, zero.as_deref(), &mut res);
+            let f = fs.map_or_else(Vec::new, |f| compose_args(f, &rec.fbufs, &rec.ftex, &rec.fsamp, zero.as_deref(), &mut res));
+            enc.push(Op::ArgStructs { v: v.into(), f: f.into(), res });
+        }
         if details {
             enc.push(Op::PushGroup(pair.clone()));
         }
@@ -7092,6 +7188,7 @@ impl Gfx {
         channel_mask: u32,
         _blend_color: [f32; 4],
         batched: bool,
+        args: bool,
     ) -> Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
         let desc = pipeline_descriptor(
             &self.device,
@@ -7110,6 +7207,7 @@ impl Gfx {
             color_state,
             channel_mask,
             batched,
+            args,
         )?;
         super::pipeline_archive::create(&self.device, &desc, &vs.entry, fs.map_or("-", |f| f.entry.as_str()))
     }
@@ -7134,6 +7232,7 @@ pub(super) fn pipeline_descriptor(
     color_state: u32,
     channel_mask: u32,
     batched: bool,
+    args: bool,
 ) -> Option<Retained<MTLRenderPipelineDescriptor>> {
 
     let set_int = |cv: &MTLFunctionConstantValues, id: usize, v: i32| unsafe {
@@ -7171,6 +7270,8 @@ pub(super) fn pipeline_descriptor(
     // constant buffer and stays as it is.
     let vres = if batched {
         lib.kernel(&vs.entry, &format!("tb_{}", vs.entry), &vcv)
+    } else if args {
+        lib.kernel(&vs.entry, &format!("ab_{}", vs.entry), &vcv)
     } else {
         lib.function(&vs.entry, &vcv)
     };
@@ -7237,6 +7338,8 @@ pub(super) fn pipeline_descriptor(
         }
         let fres = if batched && fs.batch_cbufs.is_some() {
             lib.kernel(&fs.entry, &format!("tb_{}", fs.entry), &fcv)
+        } else if args && fs.args.is_some() {
+            lib.kernel(&fs.entry, &format!("ab_{}", fs.entry), &fcv)
         } else {
             lib.function(&fs.entry, &fcv)
         };
@@ -7515,6 +7618,9 @@ pub(crate) struct EncCache {
     /// Tiny-pass compute mode: bindings are recorded per stage for the kernels instead of being
     /// set on a render encoder, fixed-function state is ignored.
     pub(super) rec: Option<TinyRec>,
+    /// Argument-buffer draws (--arg-buffers): resource bindings are recorded for the draw's structs; fixed-function
+    /// state is set as usual.
+    pub(super) bind_rec: Option<TinyRec>,
 }
 
 /// Bindings encode_draw made for a draw that runs as compute: (object, offset / none, index) per stage.
@@ -7549,6 +7655,7 @@ impl Default for EncCache {
             vsamp: [usize::MAX; 32],
             fsamp: [usize::MAX; 32],
             rec: None,
+            bind_rec: None,
         }
     }
 }
@@ -7691,7 +7798,7 @@ impl EncCache {
         off: usize,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.vbufs.push((b.retain(), off, i));
             return;
         }
@@ -7716,7 +7823,7 @@ impl EncCache {
         off: usize,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.fbufs.push((b.retain(), off, i));
             return;
         }
@@ -7740,7 +7847,7 @@ impl EncCache {
         t: &ProtocolObject<dyn objc2_metal::MTLTexture>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.vtex.push((t.retain(), i));
             return;
         }
@@ -7759,7 +7866,7 @@ impl EncCache {
         t: &ProtocolObject<dyn objc2_metal::MTLTexture>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.ftex.push((t.retain(), i));
             return;
         }
@@ -7778,7 +7885,7 @@ impl EncCache {
         s: Option<&ProtocolObject<dyn MTLSamplerState>>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.vsamp.push((s.map(|x| x.retain()), i));
             return;
         }
@@ -7797,7 +7904,7 @@ impl EncCache {
         s: Option<&ProtocolObject<dyn MTLSamplerState>>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.fsamp.push((s.map(|x| x.retain()), i));
             return;
         }

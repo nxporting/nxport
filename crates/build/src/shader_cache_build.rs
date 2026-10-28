@@ -401,7 +401,7 @@ pub fn cbuf_extents(msl: &str) -> BTreeMap<u32, usize> {
     // Only the stage's own code: the tiny-pass kernels appended after it (tiny_kernels::COMMON onwards) pass every
     // buffer whole to a copy of the body, which read as a whole-buffer use and dropped every tiny-capable stage's extents.
     let body = &msl[m.end()..];
-    let body = [crate::tiny_kernels::MARKER, crate::batch_kernels::MARKER].iter().filter_map(|m| body.find(m)).min().map_or(body, |e| &body[..e]);
+    let body = [crate::tiny_kernels::MARKER, crate::batch_kernels::MARKER, crate::arg_kernels::MARKER].iter().filter_map(|m| body.find(m)).min().map_or(body, |e| &body[..e]);
     for c in param.captures_iter(m.as_str()) {
         let use_re = Regex::new(&format!(r"\b{}\b", regex::escape(&c[1]))).unwrap();
         let mut top = Some(0usize);
@@ -510,11 +510,24 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
             _ => None,
         }
     };
+    // Argument-buffer variants (crate::arg_kernels), from the stage's own code. --no-arg-kernels: none.
+    let args = if crate::translation::get().no_arg_kernels {
+        None
+    } else {
+        match stage {
+            ShaderStage::Vertex => crate::arg_kernels::arg_variant(&text, "vertex"),
+            ShaderStage::Fragment => crate::arg_kernels::arg_variant(&text, "fragment"),
+            _ => None,
+        }
+    };
     if let Some(k) = &tiny {
         text.push('\n');
         text.push_str(k);
     }
     if let Some((k, _)) = &batch {
+        text.push_str(k);
+    }
+    if let Some((k, _)) = &args {
         text.push_str(k);
     }
     std::fs::write(&msl_path, &text).map_err(|e| {
@@ -557,6 +570,7 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
         tkl: tiny.as_deref().and_then(crate::tiny_kernels::implicit_tag),
         tkc: tiny.as_deref().is_some_and(crate::tiny_kernels::applies_clears),
         tb: batch.as_ref().map(|(_, b)| b.clone()),
+        ab: args.as_ref().map(|(_, a)| a.clone()),
     };
     Ok((rec, tag))
 }
@@ -593,6 +607,8 @@ pub struct StageRecord {
     pub tkc: bool,
     #[serde(default)]
     pub tb: Option<Vec<u32>>,
+    #[serde(default)]
+    pub ab: Option<Vec<String>>,
 }
 
 /// Compiles the .metal files of `tags` in one Metal compiler launch: {tag: None | (phase, message)}; each AIR is renamed
@@ -759,6 +775,10 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
         // Batched variant tb_<entry> (crate::batch_kernels): its address table's constant-buffer bindings in order.
         if let Some(b) = &r.tb {
             f.push_str(&format!("tb {}\n", b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ")));
+        }
+        // Argument-buffer variant ab_<entry> (crate::arg_kernels): its struct's members in order.
+        if let Some(a) = &r.ab {
+            f.push_str(&format!("ab {}\n", a.join(" ")));
         }
         for t in &mf.textures {
             let _ = writeln!(f, "tex {} {} {} {}", t.binding, t.cbuf_slot, t.handle_index, t.texture_type.replace(", ", "+").replace(' ', ""));

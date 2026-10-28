@@ -269,6 +269,8 @@ group! {
         tiny_max_px: u64 = 640 * 360,
         /// Draw runs that differ only in their uniforms as one instanced draw
         batch: bool = false,
+        /// Draws bind their resources through one argument buffer per stage (the stages' ab_ variants)
+        arg_buffers: bool = false,
         /// TIMESTAMP reports carry the GPU's times (the game's dynamic resolution then sees GPU load)
         gpu_timestamps: bool = false,
         /// Guest pages under textures that live in Metal
@@ -309,6 +311,8 @@ group! {
         replay_ab_skip: Vec<String> = Vec::new(),
         /// Side B: draws of these shaders get a 1x1 scissor (or "all")
         replay_ab_scissor: Vec<String> = Vec::new(),
+        /// Replay side B draws through argument buffers (--arg-buffers)
+        replay_ab_args: bool = false,
         /// Side B: no draw calls (1); none on either side (2)
         replay_ab_null_draws: u8 = 0,
         /// Side B: render encoders cut every N draws

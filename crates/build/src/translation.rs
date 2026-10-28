@@ -42,6 +42,9 @@ pub struct Translation {
     /// No batched variants
     #[arg(long)]
     pub no_batch_kernels: bool,
+    /// No argument-buffer variants
+    #[arg(long)]
+    pub no_arg_kernels: bool,
     /// Log why the kernel generators decline stages (does not change the output)
     #[arg(long)]
     pub debug_kernels: bool,
@@ -62,6 +65,7 @@ impl Default for Translation {
             early_tests: false,
             no_tiny_kernels: false,
             no_batch_kernels: false,
+            no_arg_kernels: false,
             debug_kernels: false,
             spirv_cross: false,
         }
@@ -96,8 +100,8 @@ pub fn get() -> Translation {
 pub fn fingerprint() -> String {
     let t = get();
     format!(
-        "contract={:?} optnone={} guards={} invariant={} cbuf_limits={} discard_depth={} early_tests={} tiny={} batch={}{}",
+        "contract={:?} optnone={} guards={} invariant={} cbuf_limits={} discard_depth={} early_tests={} tiny={} batch={} ab={}{}",
         t.contract_fast, t.keep_optnone, t.fuse_guards, !t.no_invariant, !t.no_cbuf_limits, !t.no_discard_depth,
-        t.early_tests, !t.no_tiny_kernels, !t.no_batch_kernels, if t.spirv_cross { "" } else { " backend=msl" }
+        t.early_tests, !t.no_tiny_kernels, !t.no_batch_kernels, !t.no_arg_kernels, if t.spirv_cross { "" } else { " backend=msl" }
     )
 }

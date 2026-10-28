@@ -3,6 +3,7 @@
 // (lift, compiled with zig cc on Windows).
 
 #[cfg(target_os = "macos")]
+mod arg_kernels;
 mod batch_kernels;
 pub mod extract_shaders;
 #[cfg(target_os = "macos")]
