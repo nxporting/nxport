@@ -303,21 +303,33 @@ pub unsafe fn handle_fault(addr: usize) -> bool {
 }
 
 /// Another page guard made [start, start+len) writable: the pages tracked here are made read-only again (signal-safe:
-/// atomics and mprotect only).
+/// atomics and mprotect only). Each page is claimed (PG_PROT -> PG_BUSY) around the mprotect: unclaimed, a fault that
+/// made the page writable between the state check and the mprotect left it read-only as PG_NONE, and every later write
+/// to it faulted and was retried forever (the Vulkan watcher's write-back copy spun, 2026-10-28).
 pub unsafe fn reprotect_held(start: usize, len: usize) {
     let Some((_, f, first, last)) = locate(start, len) else { return };
+    let claim = |p: usize| {
+        let cur = f[p].load(Ordering::Acquire);
+        cur & STATE_MASK == PG_PROT
+            && f[p].compare_exchange(cur, (cur & !STATE_MASK) | PG_BUSY, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    };
     let mut p = first;
     while p <= last {
-        if f[p].load(Ordering::Acquire) & STATE_MASK != PG_PROT {
+        if !claim(p) {
             p += 1;
             continue;
         }
         let run = p;
-        while p <= last && f[p].load(Ordering::Acquire) & STATE_MASK == PG_PROT {
+        p += 1;
+        while p <= last && claim(p) {
             p += 1;
         }
         let at = (start & !(PAGE - 1)) + (run - first) * PAGE;
         let _ = crate::os::protect(at, (p - run) * PAGE, crate::os::Prot::Read);
+        for q in run..p {
+            let cur = f[q].load(Ordering::Acquire);
+            f[q].store((cur & !STATE_MASK) | PG_PROT, Ordering::Release);
+        }
     }
 }
 

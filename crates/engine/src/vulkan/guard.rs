@@ -370,7 +370,13 @@ pub(super) unsafe fn fault(addr: usize) -> bool {
             FAULTS.fetch_add(1, Ordering::Relaxed);
         }
         mark_hot(addr);
+        // Released already, yet the page faulted: a reprotect raced the release and left it read-only. Retrying
+        // without opening it faulted forever.
+        let stale = TABLES[gen & 1].released[i].load(Ordering::Acquire) != 0;
         release_slot(gen, i);
+        if stale && ACTIVE.load(Ordering::Acquire) == gen {
+            set_prot(addr & !(PAGE - 1), PAGE, true);
+        }
         // A page the write tracking holds too: the write is its to record (and its handler makes the page writable).
         crate::guest::dirty_track::handle_fault(addr);
         return true;
@@ -418,6 +424,10 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
             let (x, y) = (s.max(addr & !(PAGE - 1)), e.min((addr + len + PAGE - 1) & !(PAGE - 1)));
             if x < y {
                 let _ = crate::os::protect(x, y - x, crate::os::Prot::Read);
+                // Released meanwhile (release_slot made it writable before this mprotect): writable again.
+                if t.released[i].load(Ordering::Acquire) != 0 {
+                    set_prot(x, y - x, true);
+                }
             }
         }
     }
