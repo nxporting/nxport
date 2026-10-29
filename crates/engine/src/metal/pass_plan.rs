@@ -20,6 +20,8 @@ pub(super) struct Bind {
     pub clears: u32,
     /// What came between the previous bind and this one that needs stored results.
     pub break_before: Option<&'static str>,
+    /// The game call chain that recorded the list holding the bind (--log-frame-map), and when.
+    pub recorder: Option<([u32; 16], u64)>,
 }
 
 pub(super) struct Group {
@@ -66,7 +68,7 @@ fn walk(
     let Some(list) = lists.get(&handle) else { return };
     for e in list.pass_events() {
         match e {
-            PassEvent::Targets(colors, d) => {
+            PassEvent::Targets(colors, d, index) => {
                 let mut b = Bind {
                     colors: Default::default(),
                     depth: None,
@@ -75,6 +77,11 @@ fn walk(
                     draws: 0,
                     clears: 0,
                     break_before: pending_break.take(),
+                    recorder: list
+                        .recorder
+                        .as_deref()
+                        .and_then(|r| r.iter().find(|(i, _)| i == index))
+                        .map(|(_, c)| (*c, list.recorded_frame)),
                 };
                 for (i, c) in colors.iter().enumerate() {
                     if c.texture == 0 {
@@ -170,6 +177,10 @@ pub(super) fn log(binds: &[Bind], groups: &[Group]) {
             b.clears,
             b.break_before.map_or(String::new(), |w| format!(" after {}", w))
         );
+        if let Some((r, f)) = &b.recorder {
+            let c: Vec<String> = r.iter().filter(|&&a| a != 0).map(|a| format!("{:x}", a)).collect();
+            println!("[pg]     recorded f{} by {}", f, c.join(" "));
+        }
     }
     for (n, g) in groups.iter().enumerate() {
         let draws: u32 = binds[g.first..=g.last].iter().map(|b| b.draws).sum();
