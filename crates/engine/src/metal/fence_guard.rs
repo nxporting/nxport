@@ -214,6 +214,7 @@ fn record(addr: usize, len: usize, write: bool) -> Option<(usize, usize)> {
 
 /// GPU work being encoded reads host memory [addr, addr+len) through a zero-copy buffer.
 pub(super) fn note_read(addr: usize, len: usize) {
+    super::unit_memo::note(super::unit_memo::Note::Read(addr, len));
     if enabled() {
         record(addr, len, false);
     }
