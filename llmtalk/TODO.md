@@ -8,6 +8,8 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- MetalFX upscaling (render below output resolution, upscale) as a future opt-in setting, off by default: it changes
+  the image, so it is not part of the exact performance work (user decision 2026-10-28).
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
   For now, delta time only makes game time follow real time (no physics verification).
