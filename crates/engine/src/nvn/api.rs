@@ -2698,6 +2698,7 @@ unsafe fn record_generic(
     a5: u64,
 ) {
     record_hle_call(name);
+    super::frame_map::note(name, cmd as usize);
     drawable_cmd_probe(name);
     if cmd.is_null() || (*cmd).ops == 0 {
         return;
@@ -2820,6 +2821,7 @@ fn capture(text: impl FnOnce() -> String) -> bool {
 /// Record a decoded command (see nvn/cmd.rs). `cmd` is the NvnCommandBuffer address.
 pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::nvn::cmd::Cmd) {
     record_hle_call(name);
+    super::frame_map::note(name, cmd);
     drawable_cmd_probe(name);
     if capture(|| {
         let mut t = typed.clone();
