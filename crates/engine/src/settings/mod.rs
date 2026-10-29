@@ -267,10 +267,6 @@ group! {
         display_pacing: bool = true,
         /// Largest tiny-pass rectangle, in pixels
         tiny_max_px: u64 = 640 * 360,
-        /// Replay the recorded bindings of unit draws (Cmd::ModelDraw) while their inputs are unchanged
-        unit_memo: bool = true,
-        /// Resolve unit draws' bindings anyway and compare them with the recorded ones
-        verify_unit_memo: bool = false,
         /// Draw runs that differ only in their uniforms as one instanced draw
         batch: bool = false,
         /// Draws bind their resources through one argument buffer per stage (the stages' ab_ variants)
@@ -317,8 +313,6 @@ group! {
         replay_ab_scissor: Vec<String> = Vec::new(),
         /// Replay side B draws through argument buffers (--arg-buffers)
         replay_ab_args: bool = false,
-        /// Replay side B resolves unit draws' bindings (--unit-memo=0)
-        replay_ab_unit_memo: bool = false,
         /// Side B: no draw calls (1); none on either side (2)
         replay_ab_null_draws: u8 = 0,
         /// Side B: render encoders cut every N draws
