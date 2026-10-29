@@ -2093,6 +2093,8 @@ pub(crate) struct RecordedCommandList {
     pub(crate) summary: std::sync::OnceLock<(Vec<(u64, u64)>, Vec<u64>, Vec<u64>)>,
     /// Its render-pass events, computed on first use (see `pass_events`).
     pub(crate) pass_events: std::sync::OnceLock<Vec<PassEvent>>,
+    /// (op index, call chain) of its pass-level commands (--log-frame-map).
+    pub(crate) recorder: Option<Box<Vec<(u32, [u32; 16])>>>,
     /// Frames presented when it was recorded (diagnostics: replayed lists vs. lists recorded this frame).
     pub(crate) recorded_frame: u64,
     /// Stamp of the last walk_command_lists that visited it.
@@ -2138,7 +2140,8 @@ impl RecordedCommandList {
 /// copies, buffer / texture clears) and the lists it calls.
 #[derive(Clone, Debug)]
 pub(crate) enum PassEvent {
-    Targets(Vec<crate::nvn::cmd::RtRef>, Option<crate::nvn::cmd::RtRef>),
+    /// The bind, with its op index in the list.
+    Targets(Vec<crate::nvn::cmd::RtRef>, Option<crate::nvn::cmd::RtRef>, u32),
     Draw,
     Clear,
     Break(&'static str),
@@ -2150,9 +2153,9 @@ impl RecordedCommandList {
         use crate::nvn::cmd::Cmd;
         self.pass_events.get_or_init(|| {
             let mut ev = Vec::new();
-            for op in &self.ops {
+            for (index, op) in self.ops.iter().enumerate() {
                 let e = match &op.typed {
-                    Some(Cmd::SetRenderTargets { colors, depth }) => PassEvent::Targets(colors.clone(), *depth),
+                    Some(Cmd::SetRenderTargets { colors, depth }) => PassEvent::Targets(colors.clone(), *depth, index as u32),
                     Some(
                         Cmd::DrawArrays { .. }
                         | Cmd::DrawElements { .. }
@@ -2522,6 +2525,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         ops: ops_vec.drain(..).collect(),
         summary: std::sync::OnceLock::new(),
         pass_events: std::sync::OnceLock::new(),
+        recorder: super::frame_map::take_recorder(cmd as usize),
         recorded_frame: crate::gpu::backend().presented_frames(),
         visit: std::sync::atomic::AtomicU64::new(0),
     });
@@ -2819,6 +2823,15 @@ fn capture(text: impl FnOnce() -> String) -> bool {
 }
 
 /// Record a decoded command (see nvn/cmd.rs). `cmd` is the NvnCommandBuffer address.
+/// Commands recorded so far into the list `cmd` is recording.
+pub(crate) unsafe fn recording_len(cmd: usize) -> Option<usize> {
+    let cmd = cmd as *const NvnCommandBuffer;
+    if cmd.is_null() || (*cmd).ops == 0 {
+        return None;
+    }
+    Some((*((*cmd).ops as *const Vec<RecordedNvnCommand>)).len())
+}
+
 pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::nvn::cmd::Cmd) {
     record_hle_call(name);
     super::frame_map::note(name, cmd);
@@ -7013,6 +7026,7 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
         ops,
         summary: std::sync::OnceLock::new(),
         pass_events: std::sync::OnceLock::new(),
+        recorder: None,
         recorded_frame: 0,
         visit: std::sync::atomic::AtomicU64::new(0),
     });

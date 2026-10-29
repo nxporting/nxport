@@ -12,6 +12,19 @@ struct Entry {
 }
 
 static LOG: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+/// Per command buffer being recorded: (op index, call chain) of its pass-level commands (render-target binds, clears,
+/// barriers, compute, copies) since its last EndRecording.
+static RECORDERS: Mutex<Option<rustc_hash::FxHashMap<usize, Vec<(u32, [u32; 16])>>>> = Mutex::new(None);
+
+/// EndRecording: the chains that recorded the list's pass-level commands (with --log-frame-map).
+pub(crate) fn take_recorder(cmd: usize) -> Option<Box<Vec<(u32, [u32; 16])>>> {
+    crate::settings::get().log.log_frame_map?;
+    RECORDERS.lock().unwrap().as_mut()?.remove(&cmd).map(Box::new)
+}
+
+fn pass_level(name: &str) -> bool {
+    ["RenderTargets", "Clear", "Barrier", "Dispatch", "Copy"].iter().any(|k| name.contains(k))
+}
 static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The game's call chain at an HLE entry (frame-pointer walk over the guest stack; HLE entry stubs skipped).
@@ -41,6 +54,14 @@ pub(crate) unsafe fn guest_chain<const N: usize>() -> [u32; N] {
 
 pub(crate) unsafe fn note(name: &'static str, cmd: usize) {
     let Some(f) = crate::settings::get().log.log_frame_map else { return };
+    if pass_level(name) {
+        // Recorded right after this (the op's index in the list being recorded).
+        if let Some(index) = crate::nvn::api::recording_len(cmd) {
+            let index = index as u32;
+            let chain = guest_chain::<16>();
+            RECORDERS.lock().unwrap().get_or_insert_with(Default::default).entry(cmd).or_default().push((index, chain));
+        }
+    }
     if DONE.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
