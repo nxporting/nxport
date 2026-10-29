@@ -37,7 +37,6 @@ mod issuer;
 pub mod msl_specialize;
 mod pass_graph;
 mod pass_plan;
-mod unit_memo;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
 mod programs;
@@ -217,8 +216,6 @@ pub(crate) struct State {
     cur_list_op: Option<(usize, usize, bool)>,
     /// Frame traces: the game caller (main+ offset) of the draw being executed (--log-draw-callers).
     pub(super) cur_caller: u32,
-    /// The unit list of the ModelDraw being executed (0: none).
-    pub(super) cur_unit: u64,
     /// --log-draw-reuse: plan hash of each (list, op) draw's previous run.
     draw_reuse: rustc_hash::FxHashMap<(usize, usize, u64), [u64; 12]>,
     /// --log-draw-reuse: hash of the call path (parent list and op index at each level).
@@ -327,8 +324,6 @@ impl Default for TexCache {
 /// See State::cx.
 pub(super) struct EncodeCtx {
     pub(super) arena: translated::Arena,
-    /// Recorded bindings of unit draws by key (metal/unit_memo.rs).
-    pub(super) unit_memo: HashMap<u64, unit_memo::Entry>,
     /// Ryujinx support buffers by viewport size (its only input). Arena chunks are never written again after reset,
     /// so a cached allocation stays valid.
     pub(super) support_cache: HashMap<(u32, u32), (Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
@@ -374,7 +369,6 @@ pub(super) struct EncodeCtx {
 impl Default for EncodeCtx {
     fn default() -> Self {
         EncodeCtx {
-            unit_memo: HashMap::default(),
             bind_memo: HashMap::default(),
             layout_memo: HashMap::default(),
             layout_last: None,
@@ -594,7 +588,6 @@ impl Default for State {
             submit_lists: HashMap::default(),
             cur_list_op: None,
             cur_caller: 0,
-            cur_unit: 0,
             draw_reuse: Default::default(),
             call_ctx: 0,
             force_split: false,
@@ -3367,7 +3360,6 @@ impl Gfx {
                             cur = new_cb.clone();
                         }
                     }
-                    st.cur_unit = m.unit;
                     for r in &m.ranges {
                         st.cur_caller = 0;
                         st.stats.draws += 1;
@@ -3388,7 +3380,6 @@ impl Gfx {
                             );
                         }
                     }
-                    st.cur_unit = 0;
                 }
                 Cmd::CallCommands(handles) => {
                     // --log-draw-reuse: the call path through lists from earlier frames (per-frame lists change
@@ -4421,7 +4412,6 @@ pub(super) enum GuestWrite {
 /// falls back to a full wait while any is pending: correct, but in Hateno play every frame has some (one buffer copy,
 /// ~77 occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
 pub(super) fn note_gpu_guest_write(kind: GuestWrite, addr: u64, len: usize) {
-    unit_memo::note(unit_memo::Note::GpuWrite(kind, addr, len));
     if !matches!(kind, GuestWrite::Occlusion) {
         // (Reports end holds where they are recorded, Cmd::ReportCounter / ReportValue.)
         rt_guard::superseded(crate::nvn::api::translate_virtual(addr as usize), len);
@@ -6018,7 +6008,6 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             }
         };
         pass_graph::at_present(presented_frames() + 1, &src);
-        unit_memo::report(presented_frames() + 1);
         if let Some(layer) = g.layer.get().filter(|_| gfx_mode() != GfxMode::Dry) {
             // The drawable (and on iOS the letterboxed layer) follows the shape the game presents: mods render other aspect
             // ratios (UltraCam at the iPhone's 19.5:9).

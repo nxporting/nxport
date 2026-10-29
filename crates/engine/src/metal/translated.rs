@@ -1504,38 +1504,6 @@ pub(super) fn derive_layout(vs: &CachedStage, attr_bits: &[Option<u32>], vertex_
     Layout { attr_descs, streams_used, needs_default_attr, streams_eff, repack }
 }
 
-/// Hash of the first `st_size` bytes at `addr`: the repack cache's check of a repacked vertex stream's source.
-pub(super) unsafe fn repack_src_hash(addr: u64, st_size: usize) -> u64 {
-        if addr <= 0x10000 {
-            return 0;
-        }
-        let words =
-            std::slice::from_raw_parts(addr as usize as *const u64, st_size / 8);
-        // Four independent lanes (a single dependency chain ran at ~1 word per multiply latency).
-        let mut lanes = [0x9E37_79B9_7F4A_7C15u64 ^ st_size as u64, 1, 2, 3];
-        let mut chunks = words.chunks_exact(4);
-        for (i, c) in (&mut chunks).enumerate() {
-            for k in 0..4 {
-                lanes[k] = (lanes[k] ^ c[k].wrapping_add(i as u64))
-                    .rotate_left(27)
-                    .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            }
-        }
-        let mut h = lanes
-            .iter()
-            .fold(0u64, |a, &l| (a ^ l).wrapping_mul(0x100_0000_01B3));
-        for &w in chunks.remainder() {
-            h = (h ^ w).rotate_left(27).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        }
-        for &b in std::slice::from_raw_parts(
-            (addr as usize + st_size / 8 * 8) as *const u8,
-            st_size % 8,
-        ) {
-            h = (h ^ b as u64).wrapping_mul(0x100_0000_01B3);
-        }
-        h
-}
-
 /// Pipeline key marker of argument-buffer pipelines (ab_ variants).
 const AB_KEY: u64 = 0xAB00_0000_0000_0000;
 
@@ -1704,8 +1672,6 @@ pub(super) struct DrawPacket {
     pub(super) tiny: Option<TinyPlan>,
     /// The draw came from a command list recorded in an earlier frame (--log-phases).
     pub(super) from_old_list: bool,
-    /// The unit list of the ModelDraw this draw belongs to (0: none): its bindings may be replayed (UnitMemo).
-    pub(super) unit: u64,
 }
 
 /// A draw the tiny-pass path runs as compute: the command buffer, its color outputs (color index, target texture) and
@@ -1774,7 +1740,6 @@ impl Default for DrawPacket {
             nvn_targets: ([(0, 0); 8], (0, 0), 1),
             tiny: None,
             from_old_list: false,
-            unit: 0,
         }
     }
 }
@@ -1803,7 +1768,6 @@ impl DrawPacket {
         self.prim = prim;
         self.call = call;
         self.from_old_list = st.in_old_list;
-        self.unit = st.cur_unit;
         self.vs = Some(vs);
         self.fs = fs;
         self.vs_code = CodeRef {
@@ -2177,11 +2141,6 @@ pub(crate) struct Arena {
 }
 
 impl Arena {
-    /// Whether `buf` (pointer) is one of this submit's chunks.
-    pub(super) fn contains(&self, buf: usize) -> bool {
-        self.chunks.iter().any(|(b, _)| Retained::as_ptr(b) as *const () as usize == buf)
-    }
-
     pub(super) fn reset(&mut self) {
         // Every command buffer that used these chunks is committed by now (a reset starts a submit).
         let tag = super::submitted_serial();
@@ -5347,11 +5306,6 @@ impl Gfx {
     /// Second half of a translated draw: everything that only needs the draw's packet and the caches (vertex buffers,
     /// pipeline, resources, the draw itself). Reads no NVN state from `State`: the packet holds what the draw uses.
     unsafe fn encode_draw(&self, env: &mut EncodeEnv, p: &DrawPacket) -> bool {
-        // A unit recording left open by a skipped draw (early return) is dropped.
-        if super::unit_memo::recording() {
-            let _ = super::unit_memo::finish(&self.device, &TinyRec::default(), |_| true);
-            env.cx.ec.rec = None;
-        }
         let _ph_t0 = if super::phases_on() {
             Some(std::time::Instant::now())
         } else {
@@ -5834,6 +5788,237 @@ impl Gfx {
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
+        // ---- vertex buffers ----
+        // Highest vertex this draw fetches (index scan), computed at most once and only if some stream needs it.
+        let mut exact_cache: Option<Option<u64>> = None;
+        for s in 0..MAX_STREAMS {
+            if !streams_used[s] {
+                continue;
+            }
+            let Some((addr, size)) = p.vertex_buffers[s] else {
+                println!("[!] Gfx: draw needs vertex stream {} but none is bound", s);
+                {
+                    if super::tracing_frame() {
+                        println!("[ftrace] SKIP draw at translated.rs:1155");
+                    }
+                    return true;
+                };
+            };
+            // NVN bounds-checks vertex fetches against the bound size (out of range reads as zero); Metal reads past
+            // it. TotK draws with base vertices beyond the bound buffers (e.g. base vertex 2533 into 408-vertex
+            // streams while meshes stream in): Metal fetched other meshes' data and huge triangles streaked across
+            // the screen. Such streams get a copy padded with zeros up to the highest vertex the draw fetches.
+            let bits = p.vertex_streams.get(s).copied().unwrap_or(0);
+            let (stride, divisor) = ((bits & 0xFFFF_FFFF) as u64, bits >> 32);
+            if let Some((_, new_stride, copies)) = repack.iter().find(|r| r.0 == s) {
+                let last = exact_cache
+                    .get_or_insert_with(|| {
+                        cached_max_vertex(&mut env.cx.max_index_memo, &call, p.prim_restart)
+                    })
+                    .unwrap_or(0);
+                let n = (last + 1) as usize;
+                let ns = *new_stride as usize;
+                if n * ns <= (64 << 20) {
+                    // Repacked streams are cached by source range and layout (TotK's are mostly static meshes: 7 MB
+                    // per frame was re-copied in Hateno). An entry covers the whole stream, so every draw from it
+                    // shares one copy, and is validated by a hash of the source bytes once per frame. A changed
+                    // stream gets a new buffer: one the GPU may still read is never rewritten.
+                    let layout_sig = copies.iter().fold(ns as u64, |h, &(a, b, c)| {
+                        (h ^ ((a as u64) << 32 | (b as u64) << 16 | c as u64))
+                            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    });
+                    let key = (addr as u64, size, stride, layout_sig);
+                    let frame = super::presented_frames();
+                    let src_hash = |st_size: usize| -> u64 {
+                        if addr <= 0x10000 {
+                            return 0;
+                        }
+                        let words =
+                            std::slice::from_raw_parts(addr as usize as *const u64, st_size / 8);
+                        // Four independent lanes (a single dependency chain ran at ~1 word per multiply latency).
+                        let mut lanes = [0x9E37_79B9_7F4A_7C15u64 ^ st_size as u64, 1, 2, 3];
+                        let mut chunks = words.chunks_exact(4);
+                        for (i, c) in (&mut chunks).enumerate() {
+                            for k in 0..4 {
+                                lanes[k] = (lanes[k] ^ c[k].wrapping_add(i as u64))
+                                    .rotate_left(27)
+                                    .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                            }
+                        }
+                        let mut h = lanes
+                            .iter()
+                            .fold(0u64, |a, &l| (a ^ l).wrapping_mul(0x100_0000_01B3));
+                        for &w in chunks.remainder() {
+                            h = (h ^ w).rotate_left(27).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                        }
+                        for &b in std::slice::from_raw_parts(
+                            (addr as usize + st_size / 8 * 8) as *const u8,
+                            st_size % 8,
+                        ) {
+                            h = (h ^ b as u64).wrapping_mul(0x100_0000_01B3);
+                        }
+                        h
+                    };
+                    let mut hit: Option<Retained<ProtocolObject<dyn MTLBuffer>>> = None;
+                    if let Some(e) = env.sh.repack_cache.get_mut(&key) {
+                        if e.cap >= n && (e.checked == frame || e.src_hash == src_hash(size)) {
+                            e.checked = frame;
+                            hit = Some(e.buf.clone());
+                        }
+                    }
+                    if hit.is_none() {
+                        let cap = n.max(if stride > 0 {
+                            (size + stride as usize - 1) / stride as usize
+                        } else {
+                            0
+                        });
+                        let fill = |out: &mut [u8]| {
+                            out.fill(0);
+                            if addr <= 0x10000 {
+                                return;
+                            }
+                            // Fixed-size unaligned moves: a memcpy call per attribute per vertex dominated this loop.
+                            let base = addr as usize as *const u8;
+                            let o = out.as_mut_ptr();
+                            for &(src, dst, len) in copies {
+                                let mut from = src;
+                                let mut to = dst;
+                                for _ in 0..cap {
+                                    if from + len > size {
+                                        break; // the rest of the stream is past the bound size: zeros, as NVN reads them
+                                    }
+                                    let (s, d) = (base.add(from), o.add(to));
+                                    match len {
+                                        4 => (d as *mut u32)
+                                            .write_unaligned((s as *const u32).read_unaligned()),
+                                        8 => (d as *mut u64)
+                                            .write_unaligned((s as *const u64).read_unaligned()),
+                                        2 => (d as *mut u16)
+                                            .write_unaligned((s as *const u16).read_unaligned()),
+                                        16 => (d as *mut u128)
+                                            .write_unaligned((s as *const u128).read_unaligned()),
+                                        _ => std::ptr::copy_nonoverlapping(s, d, len),
+                                    }
+                                    from += stride as usize;
+                                    to += ns;
+                                }
+                            }
+                        };
+                        let bytes = (cap * ns).max(16);
+                        if let Some(buf) = self.device.newBufferWithLength_options(
+                            bytes + CBUF_DECL_SIZE.min(4096),
+                            MTLResourceOptions::empty(),
+                        ) {
+                            fill(std::slice::from_raw_parts_mut(
+                                buf.contents().as_ptr() as *mut u8,
+                                cap * ns,
+                            ));
+                            if env.sh.repack_bytes + bytes > (256 << 20) {
+                                env.sh.repack_cache.clear();
+                                env.sh.repack_bytes = 0;
+                            }
+                            if let Some(old) = env.sh.repack_cache.insert(
+                                key,
+                                super::RepackEntry {
+                                    buf: buf.clone(),
+                                    cap,
+                                    src_hash: src_hash(size),
+                                    checked: frame,
+                                },
+                            ) {
+                                env.sh.repack_bytes =
+                                    env.sh.repack_bytes.saturating_sub(old.buf.length());
+                            }
+                            env.sh.repack_bytes += buf.length();
+                            hit = Some(buf);
+                        }
+                    }
+                    if let Some(buf) = hit {
+                        if super::tracing_frame() {
+                            println!(
+                                "[ftrace]   vb{} repacked: stride {} -> {}, {} vertices",
+                                s, stride, new_stride, n
+                            );
+                        }
+                        env.cx.ec.vbuf(&enc, &buf, 0, VB_BASE - s);
+                        continue;
+                    }
+                }
+            }
+            if stride > 0 && divisor == 0 {
+                let mv = max_fetched_vertex(&call, stride, size as u64, || {
+                    *exact_cache.get_or_insert_with(|| {
+                        cached_max_vertex(&mut env.cx.max_index_memo, &call, p.prim_restart)
+                    })
+                });
+                if let Some(mv) = mv {
+                    let need = (mv + 1) * stride;
+                    if need > size as u64 && need <= (64 << 20) {
+                        let mut bytes = vec![0u8; need as usize];
+                        if addr > 0x10000 {
+                            std::ptr::copy_nonoverlapping(
+                                addr as *const u8,
+                                bytes.as_mut_ptr(),
+                                size.min(need as usize),
+                            );
+                        }
+                        if let Some((buf, off)) = env.cx.arena.alloc(&self.device, &bytes) {
+                            if super::tracing_frame() {
+                                println!("[ftrace]   vb{} padded: fetches up to vertex {} ({:#x} bytes) of a {:#x}-byte buffer", s, mv, need, size);
+                            }
+                            env.cx.ec.vbuf(&enc, &buf, off, VB_BASE - s);
+                            continue;
+                        }
+                    }
+                }
+            }
+            let Some((buf, off)) = self.guest_buffer_ro(&mut *env.sh, &mut *env.cx, addr, size)
+            else {
+                let t = crate::nvn::api::translate_virtual(addr as usize);
+                println!("[!] Gfx: vertex stream {} at 0x{:x} (+{}) is not in a known memory pool (translated 0x{:x}, pool {:x?}, covering {:x?})",
+                    s, addr, size, t, crate::nvn::api::find_memory_pool(t), crate::nvn::api::containing_pool(t, size));
+                {
+                    if super::tracing_frame() {
+                        println!("[ftrace] SKIP draw at translated.rs:1159");
+                    }
+                    return true;
+                };
+            };
+            if super::tracing_frame() {
+                println!(
+                    "[ftrace]   vb{} mtl len={:#x} off={:#x} (guest {:#x}+{:#x})",
+                    s,
+                    buf.length(),
+                    off,
+                    addr,
+                    size
+                );
+            }
+            env.cx.ec.vbuf(&enc, &buf, off, VB_BASE - s);
+        }
+        if needs_default_attr {
+            let one = [0.0f32, 0.0, 0.0, 1.0];
+            let bytes = std::slice::from_raw_parts(one.as_ptr() as *const u8, 16);
+            if let Some((buf, off)) = env.cx.arena.alloc(&self.device, bytes) {
+                env.cx.ec.vbuf(&enc, &buf, off, DEFAULT_ATTR_BUFFER);
+            }
+        }
+
+        let _ph_t3 = if super::phases_on() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        if let (Some(a), Some(b)) = (_ph_t2, _ph_t3) {
+            super::PHASES2[1].fetch_add(
+                (b - a).as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        // ---- per-stage resources ----
+        if use_ab {
+            env.cx.ec.bind_rec = Some(TinyRec::default());
+        }
         let mut notes: Vec<String> = Vec::new();
         // Per-draw detail text is only for traces and GPU-error reports (first 16 draws of an encoder); formatting it for
         // every draw cost ~20% of the executor.
@@ -5904,806 +6089,499 @@ impl Gfx {
                 base_instance
             }
         };
-        // Unit draws (the index ranges of a Cmd::ModelDraw): the vertex-buffer and per-stage bindings are recorded once and
-        // replayed while their inputs are unchanged (metal/unit_memo.rs).
-        let unit_key = if super::unit_memo::enabled() && !want_notes && !use_ab {
-            super::unit_memo::key(p)
-        } else {
-            None
-        };
-        let mut _ph_t3: Option<std::time::Instant> = None;
-        let unit_hit = unit_key.filter(|k| {
-            let Some(e) = env.cx.unit_memo.get(k) else { return false };
-            // Repacked vertex streams: the repack cache's own check of the source (once per frame per stream).
-            let frame = super::presented_frames();
-            e.checks().iter().all(|&(key, buf, n)| match env.sh.repack_cache.get_mut(&key) {
-                Some(r) if Retained::as_ptr(&r.buf) as *const () as usize == buf && r.cap >= n => {
-                    if r.checked != frame && r.src_hash != repack_src_hash(key.0, key.1) {
-                        return false;
-                    }
-                    r.checked = frame;
-                    true
+        for (nvn_stage, code, cached) in [
+            (STAGE_VERTEX, Some(vs_code), Some(vs)),
+            (STAGE_FRAGMENT, fs_code, fs),
+        ] {
+            let (Some(code), Some(cached)) = (code, cached) else {
+                continue;
+            };
+            let is_vs = nvn_stage == STAGE_VERTEX;
+            // Storage buffers. The NVN driver keeps a 0x100-byte block of {u64 address, u32 size, pad} descriptors per
+            // hardware stage in cbuf 0, starting at 0x110 (vertex = block 0, fragment = block 4; inferred from TotK's
+            // shaders against the game's BindStorageBuffer calls). A shader may instead read a descriptor the game wrote
+            // into one of its own uniform buffers.
+            let sb_block = 0x110 + 0x100 * if is_vs { 0 } else { 4 };
+            let mut sb_descs: Vec<(usize, u64, u64)> = Vec::new(); // (cbuf0 byte offset, address, size)
+                                                                   // p.sbufs holds the non-empty bindings of both stages in index order (DrawPacket::fill).
+            for &(s, i, addr, size) in &p.sbufs {
+                if s == nvn_stage && (0..16).contains(&i) {
+                    sb_descs.push((sb_block + 0x10 * i as usize, addr, size as u64));
                 }
-                _ => false,
-            })
-        });
-        if unit_hit.is_some() && !super::unit_memo::verify() {
-            let e = &env.cx.unit_memo[&unit_hit.unwrap()];
-            super::unit_memo::replay_notes(e);
-            let r = std::ptr::addr_of!(e.rec);
-            let r = &*r;
-            for (b, off, i) in &r.vbufs {
-                env.cx.ec.vbuf(&enc, b, *off, *i);
             }
-            for (b, off, i) in &r.fbufs {
-                env.cx.ec.fbuf(&enc, b, *off, *i);
-            }
-            for (t, i) in &r.vtex {
-                env.cx.ec.vtex(&enc, t, *i);
-            }
-            for (t, i) in &r.ftex {
-                env.cx.ec.ftex(&enc, t, *i);
-            }
-            for (sm, i) in &r.vsamp {
-                env.cx.ec.vsamp(&enc, sm.as_deref(), *i);
-            }
-            for (sm, i) in &r.fsamp {
-                env.cx.ec.fsamp(&enc, sm.as_deref(), *i);
-            }
-            super::unit_memo::HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        } else {
-            if unit_key.is_some() {
-                env.cx.ec.rec = Some(TinyRec::default());
-                super::unit_memo::begin();
-            }
-            // ---- vertex buffers ----
-            // Highest vertex this draw fetches (index scan), computed at most once and only if some stream needs it.
-            let mut exact_cache: Option<Option<u64>> = None;
-            for s in 0..MAX_STREAMS {
-                if !streams_used[s] {
-                    continue;
-                }
-                let Some((addr, size)) = p.vertex_buffers[s] else {
-                    println!("[!] Gfx: draw needs vertex stream {} but none is bound", s);
-                    {
-                        if super::tracing_frame() {
-                            println!("[ftrace] SKIP draw at translated.rs:1155");
-                        }
-                        return true;
-                    };
+            for &(binding, _slot, cb_slot, cb_off) in &cached.sbuffers {
+                let byte = cb_off as usize * 4;
+                let desc = if cb_slot == 0 {
+                    sb_descs.iter().find(|d| d.0 == byte).map(|d| (d.1, d.2))
+                } else if cb_slot >= 3 {
+                    p.sb_desc(nvn_stage, binding)
+                } else {
+                    None
                 };
-                // NVN bounds-checks vertex fetches against the bound size (out of range reads as zero); Metal reads past
-                // it. TotK draws with base vertices beyond the bound buffers (e.g. base vertex 2533 into 408-vertex
-                // streams while meshes stream in): Metal fetched other meshes' data and huge triangles streaked across
-                // the screen. Such streams get a copy padded with zeros up to the highest vertex the draw fetches.
-                let bits = p.vertex_streams.get(s).copied().unwrap_or(0);
-                let (stride, divisor) = ((bits & 0xFFFF_FFFF) as u64, bits >> 32);
-                if let Some((_, new_stride, copies)) = repack.iter().find(|r| r.0 == s) {
-                    let last = exact_cache
-                        .get_or_insert_with(|| {
-                            cached_max_vertex(&mut env.cx.max_index_memo, &call, p.prim_restart)
-                        })
-                        .unwrap_or(0);
-                    let n = (last + 1) as usize;
-                    let ns = *new_stride as usize;
-                    if n * ns <= (64 << 20) {
-                        // Repacked streams are cached by source range and layout (TotK's are mostly static meshes: 7 MB
-                        // per frame was re-copied in Hateno). An entry covers the whole stream, so every draw from it
-                        // shares one copy, and is validated by a hash of the source bytes once per frame. A changed
-                        // stream gets a new buffer: one the GPU may still read is never rewritten.
-                        let layout_sig = copies.iter().fold(ns as u64, |h, &(a, b, c)| {
-                            (h ^ ((a as u64) << 32 | (b as u64) << 16 | c as u64))
-                                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                        });
-                        let key = (addr as u64, size, stride, layout_sig);
-                        let frame = super::presented_frames();
-                        let src_hash = |st_size: usize| -> u64 { repack_src_hash(addr, st_size) };
-                        let mut hit: Option<Retained<ProtocolObject<dyn MTLBuffer>>> = None;
-                        if let Some(e) = env.sh.repack_cache.get_mut(&key) {
-                            if e.cap >= n && (e.checked == frame || e.src_hash == src_hash(size)) {
-                                e.checked = frame;
-                                hit = Some(e.buf.clone());
+                let bound = {
+                    desc.and_then(|(a, sz)| {
+                        if a > 0x10000 && sz > 0 {
+                            // Storage buffers the shader never writes are GPU reads (write tracking and the early-fence guard keep them).
+                            if cached.sb_readonly.contains(&binding) {
+                                self.guest_buffer_ro(&mut *env.sh, &mut *env.cx, a, sz as usize)
+                            } else {
+                                super::note_gpu_guest_write(
+                                    super::GuestWrite::Storage,
+                                    a,
+                                    sz as usize,
+                                );
+                                self.guest_buffer(&mut *env.sh, &mut *env.cx, a, sz as usize)
                             }
+                        } else {
+                            None
                         }
-                        if hit.is_none() {
-                            let cap = n.max(if stride > 0 {
-                                (size + stride as usize - 1) / stride as usize
+                    })
+                };
+                let (buf, off) = match bound {
+                    Some(b) => {
+                        if want_notes {
+                            let words = desc
+                                .map(|(a, sz)| {
+                                    let n = (sz as usize / 4).min(32);
+                                    format!(
+                                        "{:08x?}",
+                                        std::slice::from_raw_parts(a as *const u32, n)
+                                    )
+                                })
+                                .unwrap_or_default();
+                            notes.push(format!(
+                                "s{} sb b{} desc cb{}+{:#x} -> {:x?} words {}",
+                                nvn_stage, binding, cb_slot, byte, desc, words
+                            ));
+                        }
+                        b
+                    }
+                    None => {
+                        if want_notes {
+                            notes.push(format!(
+                                "s{} sb b{} desc cb{}+{:#x} UNRESOLVED ({:x?}) -> zero buffer",
+                                nvn_stage, binding, cb_slot, byte, desc
+                            ));
+                        }
+                        match self.zero_buffer(&mut *env.sh) {
+                            Some(z) => (z, 0),
+                            None => continue,
+                        }
+                    }
+                };
+                if is_vs {
+                    env.cx.ec.vbuf(&enc, &buf, off, binding as usize);
+                } else {
+                    env.cx.ec.fbuf(&enc, &buf, off, binding as usize);
+                }
+            }
+            // Ryujinx's support buffer (buffer 0; the guest's cbuf 0 is translated to binding 17): render scales for
+            // texture-size queries, viewport size/inverse. Shaders that use it read it unconditionally.
+            {
+                let (vw, vh) = p
+                    .viewport
+                    .map(|(_, _, w, h)| (w.max(1) as f32, h.max(1) as f32))
+                    .unwrap_or((1.0, 1.0));
+                let key = (vw.to_bits(), vh.to_bits());
+                if !env.cx.support_cache.contains_key(&key) {
+                    let mut sup = vec![0u8; SUPPORT_BUFFER_SIZE];
+                    let put = |b: &mut Vec<u8>, off: usize, v: [f32; 4]| {
+                        for (i, x) in v.iter().enumerate() {
+                            b[off + i * 4..off + i * 4 + 4].copy_from_slice(&x.to_le_bytes());
+                        }
+                    };
+                    put(&mut sup, 144, [2.0 / vw, 2.0 / vh, 1.0, 0.0]); // ViewportInverse
+                    put(&mut sup, 160, [vw, vh, 1.0, 0.0]); // ViewportSize
+                    for i in 0..73 {
+                        put(&mut sup, 192 + i * 16, [1.0, 0.0, 0.0, 0.0]); // RenderScale: native resolution
+                    }
+                    if env.cx.support_cache.len() > 64 {
+                        env.cx.support_cache.clear();
+                    }
+                    if let Some(x) = env.cx.arena.alloc(&self.device, &sup) {
+                        env.cx.support_cache.insert(key, x);
+                    }
+                }
+                if let Some((buf, off)) = env.cx.support_cache.get(&key).cloned() {
+                    if is_vs {
+                        env.cx.ec.vbuf(&enc, &buf, off, 0);
+                    } else {
+                        env.cx.ec.fbuf(&enc, &buf, off, 0);
+                    }
+                }
+            }
+            // Bound size of each constant buffer the stage reads (see CBUF_LIMITS_OFFSET).
+            let mut limits = [4096u32; 18];
+            for &(binding, slot) in &cached.cbuffers {
+                if let Some(l) = limits.get_mut(binding as usize) {
+                    *l = match slot {
+                        0 => cbuf_limit(0x1000),
+                        n if n >= 3 => p.ubo(nvn_stage, n as i32 - 3).map_or(0, |(a, sz)| {
+                            if a > 0x10000 {
+                                cbuf_limit(sz)
                             } else {
                                 0
-                            });
-                            let fill = |out: &mut [u8]| {
-                                out.fill(0);
-                                if addr <= 0x10000 {
-                                    return;
-                                }
-                                // Fixed-size unaligned moves: a memcpy call per attribute per vertex dominated this loop.
-                                let base = addr as usize as *const u8;
-                                let o = out.as_mut_ptr();
-                                for &(src, dst, len) in copies {
-                                    let mut from = src;
-                                    let mut to = dst;
-                                    for _ in 0..cap {
-                                        if from + len > size {
-                                            break; // the rest of the stream is past the bound size: zeros, as NVN reads them
-                                        }
-                                        let (s, d) = (base.add(from), o.add(to));
-                                        match len {
-                                            4 => (d as *mut u32)
-                                                .write_unaligned((s as *const u32).read_unaligned()),
-                                            8 => (d as *mut u64)
-                                                .write_unaligned((s as *const u64).read_unaligned()),
-                                            2 => (d as *mut u16)
-                                                .write_unaligned((s as *const u16).read_unaligned()),
-                                            16 => (d as *mut u128)
-                                                .write_unaligned((s as *const u128).read_unaligned()),
-                                            _ => std::ptr::copy_nonoverlapping(s, d, len),
-                                        }
-                                        from += stride as usize;
-                                        to += ns;
-                                    }
-                                }
-                            };
-                            let bytes = (cap * ns).max(16);
-                            if let Some(buf) = self.device.newBufferWithLength_options(
-                                bytes + CBUF_DECL_SIZE.min(4096),
-                                MTLResourceOptions::empty(),
-                            ) {
-                                fill(std::slice::from_raw_parts_mut(
-                                    buf.contents().as_ptr() as *mut u8,
-                                    cap * ns,
-                                ));
-                                if env.sh.repack_bytes + bytes > (256 << 20) {
-                                    env.sh.repack_cache.clear();
-                                    env.sh.repack_bytes = 0;
-                                }
-                                if let Some(old) = env.sh.repack_cache.insert(
-                                    key,
-                                    super::RepackEntry {
-                                        buf: buf.clone(),
-                                        cap,
-                                        src_hash: src_hash(size),
-                                        checked: frame,
-                                    },
-                                ) {
-                                    env.sh.repack_bytes =
-                                        env.sh.repack_bytes.saturating_sub(old.buf.length());
-                                }
-                                env.sh.repack_bytes += buf.length();
-                                hit = Some(buf);
                             }
-                        }
-                        if let Some(buf) = hit {
-                            if super::tracing_frame() {
-                                println!(
-                                    "[ftrace]   vb{} repacked: stride {} -> {}, {} vertices",
-                                    s, stride, new_stride, n
-                                );
-                            }
-                            super::unit_memo::repacked(&buf, key, n);
-                            env.cx.ec.vbuf(&enc, &buf, 0, VB_BASE - s);
-                            continue;
-                        }
-                    }
-                }
-                if stride > 0 && divisor == 0 {
-                    let mv = max_fetched_vertex(&call, stride, size as u64, || {
-                        *exact_cache.get_or_insert_with(|| {
-                            cached_max_vertex(&mut env.cx.max_index_memo, &call, p.prim_restart)
-                        })
-                    });
-                    if let Some(mv) = mv {
-                        let need = (mv + 1) * stride;
-                        if need > size as u64 && need <= (64 << 20) {
-                            let mut bytes = vec![0u8; need as usize];
-                            if addr > 0x10000 {
-                                std::ptr::copy_nonoverlapping(
-                                    addr as *const u8,
-                                    bytes.as_mut_ptr(),
-                                    size.min(need as usize),
-                                );
-                            }
-                            if let Some((buf, off)) = env.cx.arena.alloc(&self.device, &bytes) {
-                                if super::tracing_frame() {
-                                    println!("[ftrace]   vb{} padded: fetches up to vertex {} ({:#x} bytes) of a {:#x}-byte buffer", s, mv, need, size);
-                                }
-                                env.cx.ec.vbuf(&enc, &buf, off, VB_BASE - s);
-                                continue;
-                            }
-                        }
-                    }
-                }
-                let Some((buf, off)) = self.guest_buffer_ro(&mut *env.sh, &mut *env.cx, addr, size)
-                else {
-                    let t = crate::nvn::api::translate_virtual(addr as usize);
-                    println!("[!] Gfx: vertex stream {} at 0x{:x} (+{}) is not in a known memory pool (translated 0x{:x}, pool {:x?}, covering {:x?})",
-                        s, addr, size, t, crate::nvn::api::find_memory_pool(t), crate::nvn::api::containing_pool(t, size));
-                    {
-                        if super::tracing_frame() {
-                            println!("[ftrace] SKIP draw at translated.rs:1159");
-                        }
-                        return true;
+                        }),
+                        _ => 4096,
                     };
-                };
-                if super::tracing_frame() {
-                    println!(
-                        "[ftrace]   vb{} mtl len={:#x} off={:#x} (guest {:#x}+{:#x})",
-                        s,
-                        buf.length(),
-                        off,
-                        addr,
-                        size
-                    );
-                }
-                env.cx.ec.vbuf(&enc, &buf, off, VB_BASE - s);
-            }
-            if needs_default_attr {
-                let one = [0.0f32, 0.0, 0.0, 1.0];
-                let bytes = std::slice::from_raw_parts(one.as_ptr() as *const u8, 16);
-                if let Some((buf, off)) = env.cx.arena.alloc(&self.device, bytes) {
-                    super::unit_memo::owned(&buf, off, 16);
-                    env.cx.ec.vbuf(&enc, &buf, off, DEFAULT_ATTR_BUFFER);
                 }
             }
-
-            _ph_t3 = if super::phases_on() {
-                Some(std::time::Instant::now())
-            } else {
-                None
+            // Driver cbuf: draw parameters at the offsets Ryujinx documents for NVN titles, the storage buffer descriptors
+            // of this stage and the constant buffer sizes.
+            let fill = |c0: &mut [u8]| {
+                c0.fill(0);
+                c0[0x640..0x644].copy_from_slice(&(base_vertex as i32).to_le_bytes());
+                c0[0x644..0x648].copy_from_slice(&base_instance_value.to_le_bytes());
+                for &(o, a, sz) in &sb_descs {
+                    c0[o..o + 8].copy_from_slice(&a.to_le_bytes());
+                    c0[o + 8..o + 12].copy_from_slice(&(sz as u32).to_le_bytes());
+                }
+                for (b, l) in limits.iter().enumerate() {
+                    c0[CBUF_LIMITS_OFFSET + b * 4..CBUF_LIMITS_OFFSET + b * 4 + 4]
+                        .copy_from_slice(&l.to_le_bytes());
+                }
             };
-            if let (Some(a), Some(b)) = (_ph_t2, _ph_t3) {
-                super::PHASES2[1].fetch_add(
-                    (b - a).as_nanos() as u64,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-            }
-            // ---- per-stage resources ----
-            if use_ab {
-                env.cx.ec.bind_rec = Some(TinyRec::default());
-            }
-            for (nvn_stage, code, cached) in [
-                (STAGE_VERTEX, Some(vs_code), Some(vs)),
-                (STAGE_FRAGMENT, fs_code, fs),
-            ] {
-                let (Some(code), Some(cached)) = (code, cached) else {
-                    continue;
+            // One copy per distinct content: consecutive draws mostly share it (--no-driver-cb-memo: a copy per draw).
+            let dkey = DriverCbKey {
+                base_vertex: base_vertex as i32,
+                base_instance: base_instance_value,
+                sb_descs: sb_descs.clone(),
+                limits,
+            };
+            let driver_cb =
+                |env: &mut EncodeEnv| -> Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)> {
+                    let si = if is_vs { 0 } else { 1 };
+                    if let Some((k, x)) = &env.cx.driver_cb_memo[si] {
+                        if *k == dkey {
+                            return Some(x.clone());
+                        }
+                    }
+                    let x = env.cx.arena.alloc_with(&self.device, 0x1000, fill)?;
+                    env.cx.driver_cb_memo[si] = Some((dkey.clone(), x.clone()));
+                    Some(x)
                 };
-                let is_vs = nvn_stage == STAGE_VERTEX;
-                // Storage buffers. The NVN driver keeps a 0x100-byte block of {u64 address, u32 size, pad} descriptors per
-                // hardware stage in cbuf 0, starting at 0x110 (vertex = block 0, fragment = block 4; inferred from TotK's
-                // shaders against the game's BindStorageBuffer calls). A shader may instead read a descriptor the game wrote
-                // into one of its own uniform buffers.
-                let sb_block = 0x110 + 0x100 * if is_vs { 0 } else { 4 };
-                let mut sb_descs: Vec<(usize, u64, u64)> = Vec::new(); // (cbuf0 byte offset, address, size)
-                                                                       // p.sbufs holds the non-empty bindings of both stages in index order (DrawPacket::fill).
-                for &(s, i, addr, size) in &p.sbufs {
-                    if s == nvn_stage && (0..16).contains(&i) {
-                        sb_descs.push((sb_block + 0x10 * i as usize, addr, size as u64));
+            if cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0) {
+                if let Some((buf, off)) = driver_cb(env) {
+                    if is_vs {
+                        env.cx.ec.vbuf(&enc, &buf, off, 17);
+                    } else {
+                        env.cx.ec.fbuf(&enc, &buf, off, 17);
                     }
                 }
-                for &(binding, _slot, cb_slot, cb_off) in &cached.sbuffers {
-                    let byte = cb_off as usize * 4;
-                    let desc = if cb_slot == 0 {
-                        sb_descs.iter().find(|d| d.0 == byte).map(|d| (d.1, d.2))
-                    } else if cb_slot >= 3 {
-                        p.sb_desc(nvn_stage, binding)
-                    } else {
-                        None
-                    };
-                    let bound = {
-                        desc.and_then(|(a, sz)| {
-                            if a > 0x10000 && sz > 0 {
-                                // Storage buffers the shader never writes are GPU reads (write tracking and the early-fence guard keep them).
-                                if cached.sb_readonly.contains(&binding) {
-                                    self.guest_buffer_ro(&mut *env.sh, &mut *env.cx, a, sz as usize)
-                                } else {
-                                    super::note_gpu_guest_write(
-                                        super::GuestWrite::Storage,
-                                        a,
-                                        sz as usize,
-                                    );
-                                    self.guest_buffer(&mut *env.sh, &mut *env.cx, a, sz as usize)
-                                }
-                            } else {
-                                None
-                            }
-                        })
-                    };
-                    let (buf, off) = match bound {
+            }
+            for &(binding, slot) in &cached.cbuffers {
+                let (buf, off) = match slot {
+                    0 => match driver_cb(env) {
+                        Some(x) => x,
+                        None => continue,
+                    },
+                    1 => match self.const_bank(&mut *env.sh, code.data, code.control, cached) {
                         Some(b) => {
-                            if want_notes {
-                                let words = desc
-                                    .map(|(a, sz)| {
-                                        let n = (sz as usize / 4).min(32);
-                                        format!(
-                                            "{:08x?}",
-                                            std::slice::from_raw_parts(a as *const u32, n)
-                                        )
-                                    })
-                                    .unwrap_or_default();
-                                notes.push(format!(
-                                    "s{} sb b{} desc cb{}+{:#x} -> {:x?} words {}",
-                                    nvn_stage, binding, cb_slot, byte, desc, words
-                                ));
+                            if super::tracing_frame() {
+                                let f = std::slice::from_raw_parts(
+                                    b.contents().as_ptr() as *const f32,
+                                    8,
+                                );
+                                if want_notes {
+                                    notes.push(format!(
+                                        "s{} cbuf1 (const bank {:x?}) f32={:?}",
+                                        nvn_stage,
+                                        control_const_bank(code.control),
+                                        f
+                                    ));
+                                }
                             }
-                            b
+                            (b, 0)
                         }
                         None => {
                             if want_notes {
                                 notes.push(format!(
-                                    "s{} sb b{} desc cb{}+{:#x} UNRESOLVED ({:x?}) -> zero buffer",
-                                    nvn_stage, binding, cb_slot, byte, desc
+                                    "s{} cbuf1 (const bank) MISSING -> mtl{} left unbound",
+                                    nvn_stage, binding
                                 ));
                             }
-                            match self.zero_buffer(&mut *env.sh) {
-                                Some(z) => (z, 0),
-                                None => continue,
+                            continue;
+                        }
+                    },
+                    // Texture handle table: textures are bound directly, but a shader that declares it must not read null.
+                    2 => match self.zero_buffer(&mut *env.sh) {
+                        Some(z) => (z, 0),
+                        None => continue,
+                    },
+                    n => {
+                        let ubo = (nvn_stage, n as i32 - 3);
+                        if let Some(UboPre::Snapshot(b, o)) = p.ubo_pre(nvn_stage, binding) {
+                            if want_notes {
+                                notes.push(format!("s{} ubo{} (cbuf{} -> mtl{}) copied in command order (written later in this submit)", nvn_stage, n as i32 - 3, n, binding));
                             }
-                        }
-                    };
-                    if is_vs {
-                        env.cx.ec.vbuf(&enc, &buf, off, binding as usize);
-                    } else {
-                        env.cx.ec.fbuf(&enc, &buf, off, binding as usize);
-                    }
-                }
-                // Ryujinx's support buffer (buffer 0; the guest's cbuf 0 is translated to binding 17): render scales for
-                // texture-size queries, viewport size/inverse. Shaders that use it read it unconditionally.
-                {
-                    let (vw, vh) = p
-                        .viewport
-                        .map(|(_, _, w, h)| (w.max(1) as f32, h.max(1) as f32))
-                        .unwrap_or((1.0, 1.0));
-                    let key = (vw.to_bits(), vh.to_bits());
-                    if !env.cx.support_cache.contains_key(&key) {
-                        let mut sup = vec![0u8; SUPPORT_BUFFER_SIZE];
-                        let put = |b: &mut Vec<u8>, off: usize, v: [f32; 4]| {
-                            for (i, x) in v.iter().enumerate() {
-                                b[off + i * 4..off + i * 4 + 4].copy_from_slice(&x.to_le_bytes());
-                            }
-                        };
-                        put(&mut sup, 144, [2.0 / vw, 2.0 / vh, 1.0, 0.0]); // ViewportInverse
-                        put(&mut sup, 160, [vw, vh, 1.0, 0.0]); // ViewportSize
-                        for i in 0..73 {
-                            put(&mut sup, 192 + i * 16, [1.0, 0.0, 0.0, 0.0]); // RenderScale: native resolution
-                        }
-                        if env.cx.support_cache.len() > 64 {
-                            env.cx.support_cache.clear();
-                        }
-                        if let Some(x) = env.cx.arena.alloc(&self.device, &sup) {
-                            env.cx.support_cache.insert(key, x);
-                        }
-                    }
-                    if let Some((buf, off)) = env.cx.support_cache.get(&key).cloned() {
-                        super::unit_memo::owned(&buf, off, SUPPORT_BUFFER_SIZE);
-                        if is_vs {
-                            env.cx.ec.vbuf(&enc, &buf, off, 0);
+                            (b.clone(), *o)
                         } else {
-                            env.cx.ec.fbuf(&enc, &buf, off, 0);
-                        }
-                    }
-                }
-                // Bound size of each constant buffer the stage reads (see CBUF_LIMITS_OFFSET).
-                let mut limits = [4096u32; 18];
-                for &(binding, slot) in &cached.cbuffers {
-                    if let Some(l) = limits.get_mut(binding as usize) {
-                        *l = match slot {
-                            0 => cbuf_limit(0x1000),
-                            n if n >= 3 => p.ubo(nvn_stage, n as i32 - 3).map_or(0, |(a, sz)| {
-                                if a > 0x10000 {
-                                    cbuf_limit(sz)
-                                } else {
-                                    0
-                                }
-                            }),
-                            _ => 4096,
-                        };
-                    }
-                }
-                // Driver cbuf: draw parameters at the offsets Ryujinx documents for NVN titles, the storage buffer descriptors
-                // of this stage and the constant buffer sizes.
-                let fill = |c0: &mut [u8]| {
-                    c0.fill(0);
-                    c0[0x640..0x644].copy_from_slice(&(base_vertex as i32).to_le_bytes());
-                    c0[0x644..0x648].copy_from_slice(&base_instance_value.to_le_bytes());
-                    for &(o, a, sz) in &sb_descs {
-                        c0[o..o + 8].copy_from_slice(&a.to_le_bytes());
-                        c0[o + 8..o + 12].copy_from_slice(&(sz as u32).to_le_bytes());
-                    }
-                    for (b, l) in limits.iter().enumerate() {
-                        c0[CBUF_LIMITS_OFFSET + b * 4..CBUF_LIMITS_OFFSET + b * 4 + 4]
-                            .copy_from_slice(&l.to_le_bytes());
-                    }
-                };
-                // One copy per distinct content: consecutive draws mostly share it (--no-driver-cb-memo: a copy per draw).
-                let dkey = DriverCbKey {
-                    base_vertex: base_vertex as i32,
-                    base_instance: base_instance_value,
-                    sb_descs: sb_descs.clone(),
-                    limits,
-                };
-                let driver_cb =
-                    |env: &mut EncodeEnv| -> Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)> {
-                        let si = if is_vs { 0 } else { 1 };
-                        if let Some((k, x)) = &env.cx.driver_cb_memo[si] {
-                            if *k == dkey {
-                                super::unit_memo::owned(&x.0, x.1, 0x1000);
-                                return Some(x.clone());
-                            }
-                        }
-                        let x = env.cx.arena.alloc_with(&self.device, 0x1000, fill)?;
-                        super::unit_memo::owned(&x.0, x.1, 0x1000);
-                        env.cx.driver_cb_memo[si] = Some((dkey.clone(), x.clone()));
-                        Some(x)
-                    };
-                if cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0) {
-                    if let Some((buf, off)) = driver_cb(env) {
-                        if is_vs {
-                            env.cx.ec.vbuf(&enc, &buf, off, 17);
-                        } else {
-                            env.cx.ec.fbuf(&enc, &buf, off, 17);
-                        }
-                    }
-                }
-                for &(binding, slot) in &cached.cbuffers {
-                    let (buf, off) = match slot {
-                        0 => match driver_cb(env) {
-                            Some(x) => x,
-                            None => continue,
-                        },
-                        1 => match self.const_bank(&mut *env.sh, code.data, code.control, cached) {
-                            Some(b) => {
-                                if super::tracing_frame() {
-                                    let f = std::slice::from_raw_parts(
-                                        b.contents().as_ptr() as *const f32,
-                                        8,
-                                    );
+                            match p.ubo(ubo.0, ubo.1) {
+                                // Copied at encode time, not bound zero-copy: UpdateUniformBuffer commands rewrite guest memory in
+                                // stream order on the CPU, while the GPU reads it later, so a shared pool binding would show every
+                                // draw in the submit the final value.
+                                // Zero-copy, as the GPU reads it: memory GPU work of this submit writes, and with
+                                // --ubo-zero-copy (experiment) memory no UpdateUniformBuffer of this submit writes.
+                                // Inline updates are applied to guest memory at encode time, so buffers they touch must be
+                                // copied per draw. Measured no faster than copying (8000 uniform binds per frame in Hateno),
+                                // and a zero-copy binding near a pool's end lacks the slack copies have for the shaders'
+                                // 64 KB declarations, so it stays off.
+                                Some((addr, size))
+                                    if addr > 0x10000
+                                        && size > 0
+                                        && matches!(
+                                            p.ubo_pre(nvn_stage, binding),
+                                            Some(UboPre::ZeroCopy)
+                                        ) =>
+                                {
                                     if want_notes {
+                                        // Shared memory: what the CPU sees now is the previous submit's GPU result.
+                                        let prev: Vec<f32> = if super::tracing_frame() {
+                                            let k = crate::settings::get()
+                                                .trace
+                                                .trace_ubo_floats
+                                                .min(size / 4);
+                                            std::slice::from_raw_parts(addr as *const f32, k)
+                                                .to_vec()
+                                        } else {
+                                            Vec::new()
+                                        };
+                                        notes.push(format!("s{} ubo{} (cbuf{} -> mtl{}) {}B written by GPU work this submit: bound zero-copy; previous={:?}", nvn_stage, n as i32 - 3, n, binding, size, prev));
+                                    }
+                                    match self.guest_buffer_ro(
+                                        &mut *env.sh,
+                                        &mut *env.cx,
+                                        addr,
+                                        size.min(CBUF_DECL_SIZE),
+                                    ) {
+                                        Some(x) => x,
+                                        None => match self.zero_buffer(&mut *env.sh) {
+                                            Some(z) => (z, 0),
+                                            None => continue,
+                                        },
+                                    }
+                                }
+                                Some((addr, size)) if addr > 0x10000 && size > 0 => {
+                                    // Only what the stage can read (its literal-offset extent). The arena leaves
+                                    // CBUF_DECL_SIZE of slack after every copy for the shaders' 64 KB declarations.
+                                    let len = cached.cbuf_read_len(binding, CBUF_DECL_SIZE);
+                                    let bytes = std::slice::from_raw_parts(
+                                        addr as *const u8,
+                                        size.min(len).max(size.min(16)),
+                                    );
+                                    let pad = cbuf_zero_pad(len, size);
+                                    if want_notes {
+                                        let first: Vec<f32> = bytes
+                                            .chunks(4)
+                                            .take(if super::tracing_frame() {
+                                                crate::settings::get().trace.trace_ubo_floats
+                                            } else {
+                                                6
+                                            })
+                                            .map(|c| {
+                                                if c.len() == 4 {
+                                                    f32::from_le_bytes([c[0], c[1], c[2], c[3]])
+                                                } else {
+                                                    0.0
+                                                }
+                                            })
+                                            .collect();
                                         notes.push(format!(
-                                            "s{} cbuf1 (const bank {:x?}) f32={:?}",
+                                            "s{} ubo{} (cbuf{} -> mtl{}) {}B first={:?}",
                                             nvn_stage,
-                                            control_const_bank(code.control),
-                                            f
+                                            n as i32 - 3,
+                                            n,
+                                            binding,
+                                            size,
+                                            first
                                         ));
                                     }
-                                }
-                                (b, 0)
-                            }
-                            None => {
-                                if want_notes {
-                                    notes.push(format!(
-                                        "s{} cbuf1 (const bank) MISSING -> mtl{} left unbound",
-                                        nvn_stage, binding
-                                    ));
-                                }
-                                continue;
-                            }
-                        },
-                        // Texture handle table: textures are bound directly, but a shader that declares it must not read null.
-                        2 => match self.zero_buffer(&mut *env.sh) {
-                            Some(z) => (z, 0),
-                            None => continue,
-                        },
-                        n => {
-                            let ubo = (nvn_stage, n as i32 - 3);
-                            if let Some(UboPre::Snapshot(b, o)) = p.ubo_pre(nvn_stage, binding) {
-                                if want_notes {
-                                    notes.push(format!("s{} ubo{} (cbuf{} -> mtl{}) copied in command order (written later in this submit)", nvn_stage, n as i32 - 3, n, binding));
-                                }
-                                (b.clone(), *o)
-                            } else {
-                                match p.ubo(ubo.0, ubo.1) {
-                                    // Copied at encode time, not bound zero-copy: UpdateUniformBuffer commands rewrite guest memory in
-                                    // stream order on the CPU, while the GPU reads it later, so a shared pool binding would show every
-                                    // draw in the submit the final value.
-                                    // Zero-copy, as the GPU reads it: memory GPU work of this submit writes, and with
-                                    // --ubo-zero-copy (experiment) memory no UpdateUniformBuffer of this submit writes.
-                                    // Inline updates are applied to guest memory at encode time, so buffers they touch must be
-                                    // copied per draw. Measured no faster than copying (8000 uniform binds per frame in Hateno),
-                                    // and a zero-copy binding near a pool's end lacks the slack copies have for the shaders'
-                                    // 64 KB declarations, so it stays off.
-                                    Some((addr, size))
-                                        if addr > 0x10000
-                                            && size > 0
-                                            && matches!(
-                                                p.ubo_pre(nvn_stage, binding),
-                                                Some(UboPre::ZeroCopy)
-                                            ) =>
-                                    {
-                                        if want_notes {
-                                            // Shared memory: what the CPU sees now is the previous submit's GPU result.
-                                            let prev: Vec<f32> = if super::tracing_frame() {
-                                                let k = crate::settings::get()
-                                                    .trace
-                                                    .trace_ubo_floats
-                                                    .min(size / 4);
-                                                std::slice::from_raw_parts(addr as *const f32, k)
-                                                    .to_vec()
-                                            } else {
-                                                Vec::new()
-                                            };
-                                            notes.push(format!("s{} ubo{} (cbuf{} -> mtl{}) {}B written by GPU work this submit: bound zero-copy; previous={:?}", nvn_stage, n as i32 - 3, n, binding, size, prev));
-                                        }
-                                        match self.guest_buffer_ro(
-                                            &mut *env.sh,
-                                            &mut *env.cx,
-                                            addr,
-                                            size.min(CBUF_DECL_SIZE),
-                                        ) {
-                                            Some(x) => x,
-                                            None => match self.zero_buffer(&mut *env.sh) {
+                                    // Within a submit the bytes change only through the executor's own writes (which drop
+                                    // affected copies) or GPU work (bound zero-copy above): reuse the copy made for an
+                                    // earlier draw.
+                                    let epoch = super::GUEST_WRITES
+                                        .load(std::sync::atomic::Ordering::Relaxed);
+                                    if env.cx.ubo_epoch != epoch {
+                                        UBO_STATS[3]
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        env.cx.ubo_copies.clear();
+                                        env.cx.ubo_epoch = epoch;
+                                    }
+                                    let key = (addr, bytes.len() | pad << 32);
+                                    let cached = env.cx.ubo_copies.get(&key).cloned();
+                                    UBO_STATS[if cached.is_some() { 1 } else { 0 }]
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    if cached.is_none() {
+                                        UBO_STATS[2].fetch_add(
+                                            bytes.len() as u64,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
+                                    }
+                                    if cached.is_none() {
+                                        super::note_ubo_pages(addr as u64, bytes.len());
+                                    }
+                                    let fresh = if cached.is_some() {
+                                        None
+                                    } else if pad > 0 {
+                                        env.cx.arena.alloc_with(
+                                            &self.device,
+                                            bytes.len() + pad,
+                                            |b| {
+                                                b[..bytes.len()].copy_from_slice(bytes);
+                                                b[bytes.len()..].fill(0);
+                                            },
+                                        )
+                                    } else {
+                                        env.cx.arena.alloc(&self.device, bytes)
+                                    };
+                                    if let Some(f) = &fresh {
+                                        env.cx.ubo_copies.insert(key, f.clone(), true);
+                                    }
+                                    match cached.or(fresh) {
+                                        Some(x) => x,
+                                        None => {
+                                            if want_notes {
+                                                notes.push(format!("s{} cbuf{} arena allocation FAILED -> mtl{} zero buffer", nvn_stage, n, binding));
+                                            }
+                                            match self.zero_buffer(&mut *env.sh) {
                                                 Some(z) => (z, 0),
                                                 None => continue,
-                                            },
-                                        }
-                                    }
-                                    Some((addr, size)) if addr > 0x10000 && size > 0 => {
-                                        // Only what the stage can read (its literal-offset extent). The arena leaves
-                                        // CBUF_DECL_SIZE of slack after every copy for the shaders' 64 KB declarations.
-                                        let len = cached.cbuf_read_len(binding, CBUF_DECL_SIZE);
-                                        let bytes = std::slice::from_raw_parts(
-                                            addr as *const u8,
-                                            size.min(len).max(size.min(16)),
-                                        );
-                                        let pad = cbuf_zero_pad(len, size);
-                                        if want_notes {
-                                            let first: Vec<f32> = bytes
-                                                .chunks(4)
-                                                .take(if super::tracing_frame() {
-                                                    crate::settings::get().trace.trace_ubo_floats
-                                                } else {
-                                                    6
-                                                })
-                                                .map(|c| {
-                                                    if c.len() == 4 {
-                                                        f32::from_le_bytes([c[0], c[1], c[2], c[3]])
-                                                    } else {
-                                                        0.0
-                                                    }
-                                                })
-                                                .collect();
-                                            notes.push(format!(
-                                                "s{} ubo{} (cbuf{} -> mtl{}) {}B first={:?}",
-                                                nvn_stage,
-                                                n as i32 - 3,
-                                                n,
-                                                binding,
-                                                size,
-                                                first
-                                            ));
-                                        }
-                                        // Within a submit the bytes change only through the executor's own writes (which drop
-                                        // affected copies) or GPU work (bound zero-copy above): reuse the copy made for an
-                                        // earlier draw.
-                                        let epoch = super::GUEST_WRITES
-                                            .load(std::sync::atomic::Ordering::Relaxed);
-                                        if env.cx.ubo_epoch != epoch {
-                                            UBO_STATS[3]
-                                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                            env.cx.ubo_copies.clear();
-                                            env.cx.ubo_epoch = epoch;
-                                        }
-                                        let key = (addr, bytes.len() | pad << 32);
-                                        let cached = env.cx.ubo_copies.get(&key).cloned();
-                                        UBO_STATS[if cached.is_some() { 1 } else { 0 }]
-                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                        if cached.is_none() {
-                                            UBO_STATS[2].fetch_add(
-                                                bytes.len() as u64,
-                                                std::sync::atomic::Ordering::Relaxed,
-                                            );
-                                        }
-                                        if cached.is_none() {
-                                            super::note_ubo_pages(addr as u64, bytes.len());
-                                        }
-                                        let fresh = if cached.is_some() {
-                                            None
-                                        } else if pad > 0 {
-                                            env.cx.arena.alloc_with(
-                                                &self.device,
-                                                bytes.len() + pad,
-                                                |b| {
-                                                    b[..bytes.len()].copy_from_slice(bytes);
-                                                    b[bytes.len()..].fill(0);
-                                                },
-                                            )
-                                        } else {
-                                            env.cx.arena.alloc(&self.device, bytes)
-                                        };
-                                        if let Some(f) = &fresh {
-                                            env.cx.ubo_copies.insert(key, f.clone(), true);
-                                        }
-                                        match cached.or(fresh) {
-                                            Some(x) => x,
-                                            None => {
-                                                if want_notes {
-                                                    notes.push(format!("s{} cbuf{} arena allocation FAILED -> mtl{} zero buffer", nvn_stage, n, binding));
-                                                }
-                                                match self.zero_buffer(&mut *env.sh) {
-                                                    Some(z) => (z, 0),
-                                                    None => continue,
-                                                }
                                             }
                                         }
                                     }
-                                    _ => {
-                                        if want_notes {
-                                            notes.push(format!("s{} ubo{} (cbuf{} -> mtl{}) NOT BOUND by the game: zero-filled", nvn_stage, n as i32 - 3, n, binding));
-                                        }
-                                        match self.zero_buffer(&mut *env.sh) {
-                                            Some(z) => (z, 0),
-                                            None => continue,
-                                        }
+                                }
+                                _ => {
+                                    if want_notes {
+                                        notes.push(format!("s{} ubo{} (cbuf{} -> mtl{}) NOT BOUND by the game: zero-filled", nvn_stage, n as i32 - 3, n, binding));
+                                    }
+                                    match self.zero_buffer(&mut *env.sh) {
+                                        Some(z) => (z, 0),
+                                        None => continue,
                                     }
                                 }
                             }
                         }
-                    };
-                    if is_vs {
-                        env.cx.ec.vbuf(&enc, &buf, off, binding as usize);
-                    } else {
-                        env.cx.ec.fbuf(&enc, &buf, off, binding as usize);
                     }
-                }
-                let mut extra_samplers: Vec<(usize, Retained<ProtocolObject<dyn MTLSamplerState>>)> =
-                    Vec::new();
-                for tb in &cached.textures {
-                    let (tex, sampler_id) = match resolved_tex
-                        .iter()
-                        .find(|r| r.0 == nvn_stage && r.1 == tb.binding)
-                    {
-                        Some(r) => (r.2.clone(), r.3),
-                        None => (None, None),
-                    };
-                    // The plan resolved every binding (dummies included): None means no dummy could be made either.
-                    let Some(tex) = tex else {
-                        if want_notes {
-                            notes.push(format!(
-                                "s{} tex b{} {} NO TEXTURE and no dummy -> left unbound",
-                                nvn_stage, tb.binding, tb.ty
-                            ));
-                        }
-                        continue;
-                    };
-                    let k = tb.handle_index.wrapping_sub(8) / 2;
-                    if super::tracing_frame()
-                        && tex.width() * tex.height() <= 64
-                        && tex.pixelFormat() == MTLPixelFormat::RGBA8Unorm
-                    {
-                        let n = tex.width() * tex.height();
-                        let mut px = vec![0u8; n * 4];
-                        let region = MTLRegion {
-                            origin: MTLOrigin { x: 0, y: 0, z: 0 },
-                            size: MTLSize {
-                                width: tex.width(),
-                                height: tex.height(),
-                                depth: 1,
-                            },
-                        };
-                        tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                            std::ptr::NonNull::new(px.as_mut_ptr().cast()).unwrap(),
-                            tex.width() * 4,
-                            region,
-                            0,
-                        );
-                        if want_notes {
-                            notes.push(format!(
-                                "s{} tex b{} texels(rgba8)={:?}",
-                                nvn_stage,
-                                tb.binding,
-                                &px[..px.len().min(32)]
-                            ));
-                        }
-                    }
-                    if want_notes {
-                        let tex_root = root_id(&tex);
-                        let src = env
-                            .frame_rts
-                            .iter()
-                            .position(|(id, ..)| *id == tex_root)
-                            .map_or("not drawn this frame".to_string(), |i| {
-                                format!("=rt{:02}", i)
-                            });
-                        let nvn = p.handle(nvn_stage, k as i32).and_then(|h| crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32)).and_then(|(a, v)| {
-                        // The recorded state: the object itself may have been freed and reused by the game.
-                        let (_, t) = super::tex_info(a)?;
-                        let t = &t;
-                        let verify = if super::verify_tex_enabled() {
-                            let upl = super::upload_record(super::storage_id(&tex));
-                            let cur = super::current_guest_hash(a);
-                            let nz = if t.storage > 0x10000 && crate::cpu::crash_handler::readable(t.storage as usize, 0x4000) { std::slice::from_raw_parts(t.storage as *const u8, 0x4000).iter().filter(|&&x| x != 0).count() } else { 0 };
-                            format!(" verify: guest_nonzero16k={} snap_storage={:x?} upload={:x?} {}", nz, cur.map(|c| c.0), upl,
-                                match (cur, upl) { (Some(c), Some(u)) if c.0 == u.0 && c.1 == u.1 => "OK", (Some(c), Some(u)) if c.0 != u.0 => "FOREIGN", (Some(_), Some(_)) => "STALE", _ => "?" })
-                        } else { String::new() };
-                        Some(format!("nvn tex {:#x} {}x{} fmt={} storage={:#x} view={:?} mtl_swizzle={:?}{}", a, t.width, t.height, t.format, t.storage, v, {
-                            let sw = tex.swizzle();
-                            (sw.red.0, sw.green.0, sw.blue.0, sw.alpha.0)
-                        }, verify))
-                    });
-                        notes.push(format!(
-                        "s{} tex b{} want={} got={:?} {}x{} {:?} lvls={} handle={:x?} sampler={:?} src {} [{}]",
-                        nvn_stage, tb.binding, tb.ty, tex.textureType(), tex.width(), tex.height(), tex.pixelFormat(), tex.mipmapLevelCount(),
-                        p.handle(nvn_stage, k as i32), sampler_id, src, nvn.unwrap_or_default()
-                    ));
-                    }
-                    let sampler = sampler_id
-                        .and_then(|id| self.sampler_state(&mut *env.sh, id))
-                        .or_else(|| self.default_sampler(&mut *env.sh));
-                    if is_vs {
-                        env.cx.ec.vtex(&enc, &tex, tb.binding as usize);
-                    } else {
-                        env.cx.ec.ftex(&enc, &tex, tb.binding as usize);
-                    }
-                    if (tb.binding as usize) < EXTRA_SAMPLER_BASE {
-                        if is_vs {
-                            env.cx
-                                .ec
-                                .vsamp(&enc, sampler.as_deref(), tb.binding as usize);
-                        } else {
-                            env.cx
-                                .ec
-                                .fsamp(&enc, sampler.as_deref(), tb.binding as usize);
-                        }
-                    } else if let Some(s) = sampler {
-                        extra_samplers.push((tb.binding as usize - EXTRA_SAMPLER_BASE, s));
-                    }
-                }
-                if let Some((buf, off)) = self.extra_sampler_buffer(&mut *env.cx, &extra_samplers) {
-                    super::unit_memo::owned(&buf, off, extra_samplers.iter().map(|(i, _)| i + 1).max().unwrap_or(0) * 8);
-                    if is_vs {
-                        env.cx.ec.vbuf(&enc, &buf, off, EXTRA_SAMPLER_BUFFER);
-                    } else {
-                        env.cx.ec.fbuf(&enc, &buf, off, EXTRA_SAMPLER_BUFFER);
-                    }
+                };
+                if is_vs {
+                    env.cx.ec.vbuf(&enc, &buf, off, binding as usize);
+                } else {
+                    env.cx.ec.fbuf(&enc, &buf, off, binding as usize);
                 }
             }
-
-            if let Some(k) = unit_key {
-                let rec = env.cx.ec.rec.take().unwrap_or_default();
-                let arena = |b: usize| env.cx.arena.contains(b);
-                let entry = super::unit_memo::finish(&self.device, &rec, arena);
-                for (b, off, i) in &rec.vbufs {
-                    env.cx.ec.vbuf(&enc, b, *off, *i);
-                }
-                for (b, off, i) in &rec.fbufs {
-                    env.cx.ec.fbuf(&enc, b, *off, *i);
-                }
-                for (t, i) in &rec.vtex {
-                    env.cx.ec.vtex(&enc, t, *i);
-                }
-                for (t, i) in &rec.ftex {
-                    env.cx.ec.ftex(&enc, t, *i);
-                }
-                for (sm, i) in &rec.vsamp {
-                    env.cx.ec.vsamp(&enc, sm.as_deref(), *i);
-                }
-                for (sm, i) in &rec.fsamp {
-                    env.cx.ec.fsamp(&enc, sm.as_deref(), *i);
-                }
-                match entry {
-                    Some(e) => {
-                        if unit_hit.is_some() {
-                            super::unit_memo::KEY_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        if let Some(old) = unit_hit.and_then(|k| env.cx.unit_memo.get(&k)) {
-                            if let Err(why) = super::unit_memo::same(&old.rec, &e.rec) {
-                                let n = super::unit_memo::MISMATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                if n < 8 {
-                                    println!("[unit-memo] verify mismatch {} / {}: {}", vs.entry, fs.map_or("-", |f| &f.entry), why);
-                                }
-                            }
-                        }
-                        if env.cx.unit_memo.len() >= 32768 {
-                            env.cx.unit_memo.clear();
-                        }
-                        env.cx.unit_memo.insert(k, e);
-                        super::unit_memo::RECORDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut extra_samplers: Vec<(usize, Retained<ProtocolObject<dyn MTLSamplerState>>)> =
+                Vec::new();
+            for tb in &cached.textures {
+                let (tex, sampler_id) = match resolved_tex
+                    .iter()
+                    .find(|r| r.0 == nvn_stage && r.1 == tb.binding)
+                {
+                    Some(r) => (r.2.clone(), r.3),
+                    None => (None, None),
+                };
+                // The plan resolved every binding (dummies included): None means no dummy could be made either.
+                let Some(tex) = tex else {
+                    if want_notes {
+                        notes.push(format!(
+                            "s{} tex b{} {} NO TEXTURE and no dummy -> left unbound",
+                            nvn_stage, tb.binding, tb.ty
+                        ));
                     }
-                    None => {
-                        super::unit_memo::UNRECORDABLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                };
+                let k = tb.handle_index.wrapping_sub(8) / 2;
+                if super::tracing_frame()
+                    && tex.width() * tex.height() <= 64
+                    && tex.pixelFormat() == MTLPixelFormat::RGBA8Unorm
+                {
+                    let n = tex.width() * tex.height();
+                    let mut px = vec![0u8; n * 4];
+                    let region = MTLRegion {
+                        origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                        size: MTLSize {
+                            width: tex.width(),
+                            height: tex.height(),
+                            depth: 1,
+                        },
+                    };
+                    tex.getBytes_bytesPerRow_fromRegion_mipmapLevel(
+                        std::ptr::NonNull::new(px.as_mut_ptr().cast()).unwrap(),
+                        tex.width() * 4,
+                        region,
+                        0,
+                    );
+                    if want_notes {
+                        notes.push(format!(
+                            "s{} tex b{} texels(rgba8)={:?}",
+                            nvn_stage,
+                            tb.binding,
+                            &px[..px.len().min(32)]
+                        ));
                     }
+                }
+                if want_notes {
+                    let tex_root = root_id(&tex);
+                    let src = env
+                        .frame_rts
+                        .iter()
+                        .position(|(id, ..)| *id == tex_root)
+                        .map_or("not drawn this frame".to_string(), |i| {
+                            format!("=rt{:02}", i)
+                        });
+                    let nvn = p.handle(nvn_stage, k as i32).and_then(|h| crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32)).and_then(|(a, v)| {
+                    // The recorded state: the object itself may have been freed and reused by the game.
+                    let (_, t) = super::tex_info(a)?;
+                    let t = &t;
+                    let verify = if super::verify_tex_enabled() {
+                        let upl = super::upload_record(super::storage_id(&tex));
+                        let cur = super::current_guest_hash(a);
+                        let nz = if t.storage > 0x10000 && crate::cpu::crash_handler::readable(t.storage as usize, 0x4000) { std::slice::from_raw_parts(t.storage as *const u8, 0x4000).iter().filter(|&&x| x != 0).count() } else { 0 };
+                        format!(" verify: guest_nonzero16k={} snap_storage={:x?} upload={:x?} {}", nz, cur.map(|c| c.0), upl,
+                            match (cur, upl) { (Some(c), Some(u)) if c.0 == u.0 && c.1 == u.1 => "OK", (Some(c), Some(u)) if c.0 != u.0 => "FOREIGN", (Some(_), Some(_)) => "STALE", _ => "?" })
+                    } else { String::new() };
+                    Some(format!("nvn tex {:#x} {}x{} fmt={} storage={:#x} view={:?} mtl_swizzle={:?}{}", a, t.width, t.height, t.format, t.storage, v, {
+                        let sw = tex.swizzle();
+                        (sw.red.0, sw.green.0, sw.blue.0, sw.alpha.0)
+                    }, verify))
+                });
+                    notes.push(format!(
+                    "s{} tex b{} want={} got={:?} {}x{} {:?} lvls={} handle={:x?} sampler={:?} src {} [{}]",
+                    nvn_stage, tb.binding, tb.ty, tex.textureType(), tex.width(), tex.height(), tex.pixelFormat(), tex.mipmapLevelCount(),
+                    p.handle(nvn_stage, k as i32), sampler_id, src, nvn.unwrap_or_default()
+                ));
+                }
+                let sampler = sampler_id
+                    .and_then(|id| self.sampler_state(&mut *env.sh, id))
+                    .or_else(|| self.default_sampler(&mut *env.sh));
+                if is_vs {
+                    env.cx.ec.vtex(&enc, &tex, tb.binding as usize);
+                } else {
+                    env.cx.ec.ftex(&enc, &tex, tb.binding as usize);
+                }
+                if (tb.binding as usize) < EXTRA_SAMPLER_BASE {
+                    if is_vs {
+                        env.cx
+                            .ec
+                            .vsamp(&enc, sampler.as_deref(), tb.binding as usize);
+                    } else {
+                        env.cx
+                            .ec
+                            .fsamp(&enc, sampler.as_deref(), tb.binding as usize);
+                    }
+                } else if let Some(s) = sampler {
+                    extra_samplers.push((tb.binding as usize - EXTRA_SAMPLER_BASE, s));
+                }
+            }
+            if let Some((buf, off)) = self.extra_sampler_buffer(&mut *env.cx, &extra_samplers) {
+                if is_vs {
+                    env.cx.ec.vbuf(&enc, &buf, off, EXTRA_SAMPLER_BUFFER);
+                } else {
+                    env.cx.ec.fbuf(&enc, &buf, off, EXTRA_SAMPLER_BUFFER);
                 }
             }
         }
+
         {
             let (cnt, inst) = match call {
                 DrawKind::Arrays {
