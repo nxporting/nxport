@@ -179,6 +179,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
     end_linger(cenc);
     match op {
         Op::CBegin(cb, label) => {
+            if super::pass_graph::on() {
+                super::pass_graph::compute_pass(&label);
+            }
             super::ISSUED_PASSES[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *cenc = match super::pass_prof::compute_pass(&label) {
                 Some(d) => cb.computeCommandEncoderWithDescriptor(&d),
@@ -206,6 +209,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
             return;
         }
         Op::CTex(t, i) => {
+            if super::pass_graph::on() {
+                super::pass_graph::bind(&t, b'c', i);
+            }
             if let Some(e) = cenc.as_ref() {
                 e.setTexture_atIndex(Some(&t), i)
             }
@@ -218,6 +224,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
             return;
         }
         Op::CDispatch(groups, threads) => {
+            if super::pass_graph::on() {
+                super::pass_graph::dispatch((groups.width, groups.height, groups.depth), (threads.width, threads.height, threads.depth));
+            }
             if let Some(e) = cenc.as_ref() {
                 e.dispatchThreadgroups_threadsPerThreadgroup(groups, threads)
             }
@@ -226,6 +235,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
         Op::Blit { cb, label, f } => {
             if let Some(e) = enc.take() {
                 e.endEncoding(); // never expected: the encoding thread ends its render encoder first
+            }
+            if super::pass_graph::on() {
+                super::pass_graph::blit(label, None, None);
             }
             match cb.blitCommandEncoder() {
                 Some(b) => {
@@ -253,6 +265,9 @@ thread_local! {
 unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
     if let Op::Begin { cb, desc, label } = op {
         RESIDENT.with(|r| r.borrow_mut().clear());
+        if super::pass_graph::on() {
+            super::pass_graph::render_pass(&desc, &label);
+        }
         super::pass_prof::render_pass(&desc);
         super::ISSUED_PASSES[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *enc = cb.renderCommandEncoderWithDescriptor(&desc);
@@ -322,8 +337,18 @@ unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
         Op::FBuf(b, off, i) => e.setFragmentBuffer_offset_atIndex(Some(&b), off, i),
         Op::VBufOff(off, i) => e.setVertexBufferOffset_atIndex(off, i),
         Op::FBufOff(off, i) => e.setFragmentBufferOffset_atIndex(off, i),
-        Op::VTex(t, i) => e.setVertexTexture_atIndex(Some(&t), i),
-        Op::FTex(t, i) => e.setFragmentTexture_atIndex(Some(&t), i),
+        Op::VTex(t, i) => {
+            if super::pass_graph::on() {
+                super::pass_graph::bind(&t, b'v', i);
+            }
+            e.setVertexTexture_atIndex(Some(&t), i)
+        }
+        Op::FTex(t, i) => {
+            if super::pass_graph::on() {
+                super::pass_graph::bind(&t, b'f', i);
+            }
+            e.setFragmentTexture_atIndex(Some(&t), i)
+        }
         Op::VSamp(s, i) => e.setVertexSamplerState_atIndex(s.as_deref(), i),
         Op::FSamp(s, i) => e.setFragmentSamplerState_atIndex(s.as_deref(), i),
         Op::Visibility(m, off) => e.setVisibilityResultMode_offset(m, off),
