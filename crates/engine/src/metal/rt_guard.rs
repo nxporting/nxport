@@ -266,6 +266,11 @@ unsafe fn supersede(start: usize, end: usize, keep: bool, why: Option<&str>) {
     if LIVE.load(Ordering::Acquire) == 0 || start >= HI.load(Ordering::Relaxed) || end <= LO.load(Ordering::Relaxed) {
         return;
     }
+    // No hold on any of its pages (short ranges: checking the counts is cheaper than the slot scan).
+    let (p0, p1) = (start & !(PAGE - 1), end.div_ceil(PAGE) * PAGE);
+    if p1 - p0 <= 64 * PAGE && (p0..p1).step_by(PAGE).all(|p| page_holds(p).load(Ordering::Acquire) == 0) {
+        return;
+    }
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
     for i in 0..n {
         if STATE[i].load(Ordering::Acquire) != HELD {
