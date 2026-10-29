@@ -35,6 +35,7 @@ mod copy;
 mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
+mod pass_graph;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
 mod programs;
@@ -1279,6 +1280,10 @@ impl Gfx {
                 .entry((loc.file(), loc.line()))
                 .or_insert(0) += 1;
         }
+        if st.enc.is_some() && pass_graph::on() {
+            let loc = std::panic::Location::caller();
+            println!("[pg]   end by {}:{} after {} draws", loc.file().rsplit('/').next().unwrap_or(""), loc.line(), st.enc_draws);
+        }
         if let Some(e) = st.enc.take() {
             rt_guard::pass_end();
             st.rts_dirty = true;
@@ -1313,6 +1318,9 @@ impl Gfx {
             Some(&objc2_foundation::NSString::from_str("bc proxy resolve")),
         );
         for (proxy, target, level) in std::mem::take(&mut st.bc_pending) {
+            if pass_graph::on() {
+                pass_graph::blit("bc proxy", Some(&proxy), Some(&target));
+            }
             let (bw, bh) = (proxy.width(), proxy.height());
             let bpb = match proxy.pixelFormat() {
                 MTLPixelFormat::RGBA32Uint | MTLPixelFormat::RGBA32Sint => 16,
@@ -5991,6 +5999,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 _ => t,
             }
         };
+        pass_graph::at_present(presented_frames() + 1, &src);
         if let Some(layer) = g.layer.get().filter(|_| gfx_mode() != GfxMode::Dry) {
             // The drawable (and on iOS the letterboxed layer) follows the shape the game presents: mods render other aspect
             // ratios (UltraCam at the iPhone's 19.5:9).
