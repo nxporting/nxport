@@ -4,12 +4,16 @@
 
 mod draw;
 mod mem;
+mod render_list;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub const SITE: usize = 0x688c68;
 const SITE_INSTRUCTION: u32 = 0xd10383ff; // sub sp, sp, #0xe0
+/// The render-list loop (render_list.rs).
+const LIST_SITE: usize = 0x12de2a0;
+const LIST_SITE_INSTRUCTION: u32 = 0xd10183ff; // sub sp, sp, #0x60
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
 static SAME: AtomicU64 = AtomicU64::new(0);
@@ -82,6 +86,42 @@ pub unsafe extern "C" fn on_model_draw_end() -> u32 {
     0
 }
 
+static LIST_CALLS: AtomicU64 = AtomicU64::new(0);
+
+#[no_mangle]
+pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask: u32, _x4: usize, flags: u32) -> u32 {
+    let n = LIST_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    CALLS.fetch_add(1, Ordering::Relaxed);
+    if n % 20_000 == 0 {
+        report();
+    }
+    let base = crate::guest::loader::main_base();
+    let d = &crate::settings::get().totk.diagnostics;
+    if d.native_render_lists {
+        static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
+        let mut port = draw::Port::new(mem::Mem::applying(), base, metal && d.native_model_draws);
+        let r = render_list::draw_list(&mut port, list, count, c, mask, flags);
+        port.flush();
+        if let Err(what) = r {
+            note_stop(what);
+        }
+        return 1;
+    }
+    let mut port = draw::Port::new(mem::Mem::predicting(), base, false);
+    let mut result = Ok(());
+    let expected =
+        crate::nvn::api::capture_dry(|| result = render_list::draw_list(&mut port, list, count, c, mask, flags));
+    match result {
+        Ok(()) => {
+            EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            crate::nvn::api::capture_collect();
+        }
+        Err(what) => note_stop(what),
+    }
+    0
+}
+
 fn report() {
     let (n, same, diff) = (CALLS.load(Ordering::Relaxed), SAME.load(Ordering::Relaxed), DIFFERENT.load(Ordering::Relaxed));
     let mut s = STOPS.lock().unwrap().clone();
@@ -103,17 +143,37 @@ extern "C" {
     fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
 }
 
-/// The entry branches to a wrapper: on_model_draw(args); unless it returned nonzero, the function itself (the displaced
-/// instruction, then the rest of it) as a call; then on_model_draw_end.
 pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
-    let site = (base + SITE) as *mut u32;
+    let d = &crate::settings::get().totk.diagnostics;
+    if d.verify_model_draws || (d.native_model_draws && !d.native_render_lists) {
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_model_draw(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
+        hook(base, mem_space, SITE, SITE_INSTRUCTION, pre, post, "Model draw");
+    }
+    if d.verify_render_lists || d.native_render_lists {
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_list(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
+        hook(base, mem_space, LIST_SITE, LIST_SITE_INSTRUCTION, pre, post, "Render list");
+    }
+}
+
+/// The entry of the function at main+`site` branches to a wrapper: pre(args); unless it returned nonzero, the function
+/// itself (the displaced instruction, then the rest of it) as a call; then post().
+unsafe fn hook(
+    base: usize,
+    mem_space: &mut crate::guest::loader::GuestMemorySpace,
+    site_off: usize,
+    instruction: u32,
+    pre: usize,
+    post: usize,
+    what: &str,
+) {
+    let site = (base + site_off) as *mut u32;
     let actual = std::ptr::read(site);
-    if actual != SITE_INSTRUCTION {
-        println!("[!] Model draw hook not installed: main+{SITE:#x} = {actual:#010x}");
+    if actual != instruction {
+        println!("[!] {what} hook not installed: main+{site_off:#x} = {actual:#010x}");
         return;
     }
-    let pre = mem_space.make_hle_trampoline(crate::hle!(on_model_draw(_, _, _, _))) as usize;
-    let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
     let wrap = mem_space.make_code_block(20) as usize;
     let b = |from: usize, to: usize, link: bool| -> Option<u32> {
         let d = to as i64 - from as i64;
@@ -127,30 +187,30 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         b(at(13), post, true),
         b(at(19), site as usize + 4, false),
     ) else {
-        println!("[!] Model draw hook not installed: wrapper out of branch range");
+        println!("[!] {what} hook not installed: wrapper out of branch range");
         return;
     };
     let code: [u32; 20] = [
-        0xa9ba7bfd,       // 0: stp x29, x30, [sp, #-0x60]!
-        0x910003fd,       // 1: mov x29, sp
-        0xa90107e0,       // 2: stp x0, x1, [sp, #0x10]
-        0xa9020fe2,       // 3: stp x2, x3, [sp, #0x20]
-        0xa90317e4,       // 4: stp x4, x5, [sp, #0x30]
-        0xa9041fe6,       // 5: stp x6, x7, [sp, #0x40]
-        call_pre,         // 6: bl on_model_draw
-        0x35000120,       // 7: cbnz w0, 16 (handled)
-        0xa9441fe6,       // 8: ldp x6, x7, [sp, #0x40]
-        0xa94317e4,       // 9: ldp x4, x5, [sp, #0x30]
-        0xa9420fe2,       // 10: ldp x2, x3, [sp, #0x20]
-        0xa94107e0,       // 11: ldp x0, x1, [sp, #0x10]
-        call_body,        // 12: bl 18 (the function)
-        call_post,        // 13: bl on_model_draw_end
-        0xa8c67bfd,       // 14: ldp x29, x30, [sp], #0x60
-        0xd65f03c0,       // 15: ret
-        0xa8c67bfd,       // 16: ldp x29, x30, [sp], #0x60
-        0xd65f03c0,       // 17: ret
-        SITE_INSTRUCTION, // 18: the displaced instruction
-        back,             // 19: b site+4
+        0xa9ba7bfd,  // 0: stp x29, x30, [sp, #-0x60]!
+        0x910003fd,  // 1: mov x29, sp
+        0xa90107e0,  // 2: stp x0, x1, [sp, #0x10]
+        0xa9020fe2,  // 3: stp x2, x3, [sp, #0x20]
+        0xa90317e4,  // 4: stp x4, x5, [sp, #0x30]
+        0xa9041fe6,  // 5: stp x6, x7, [sp, #0x40]
+        call_pre,    // 6: bl pre
+        0x35000120,  // 7: cbnz w0, 16 (handled)
+        0xa9441fe6,  // 8: ldp x6, x7, [sp, #0x40]
+        0xa94317e4,  // 9: ldp x4, x5, [sp, #0x30]
+        0xa9420fe2,  // 10: ldp x2, x3, [sp, #0x20]
+        0xa94107e0,  // 11: ldp x0, x1, [sp, #0x10]
+        call_body,   // 12: bl 18 (the function)
+        call_post,   // 13: bl post
+        0xa8c67bfd,  // 14: ldp x29, x30, [sp], #0x60
+        0xd65f03c0,  // 15: ret
+        0xa8c67bfd,  // 16: ldp x29, x30, [sp], #0x60
+        0xd65f03c0,  // 17: ret
+        instruction, // 18: the displaced instruction
+        back,        // 19: b site+4
     ];
     let w = wrap as *mut u32;
     for (k, c) in code.iter().enumerate() {
@@ -159,5 +219,5 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     sys_icache_invalidate(w as *mut libc::c_void, code.len() * 4);
     std::ptr::write(site, to_wrap);
     sys_icache_invalidate(site as *mut libc::c_void, 4);
-    println!("[+] Model draw hook installed at main+{SITE:#x}");
+    println!("[+] {what} hook installed at main+{site_off:#x}");
 }

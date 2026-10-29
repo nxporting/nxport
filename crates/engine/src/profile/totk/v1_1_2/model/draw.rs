@@ -73,7 +73,7 @@ pub(super) struct Port {
 }
 
 impl Port {
-    unsafe fn pfn(&self, var: usize) -> usize {
+    pub(super) unsafe fn pfn(&self, var: usize) -> usize {
         self.m.r64(self.base + var)
     }
 
@@ -93,18 +93,18 @@ impl Port {
     }
 
     /// A call into the game or an NVN entry point that may record commands.
-    unsafe fn call(&self, f: usize, args: &[u64]) -> u64 {
+    pub(super) unsafe fn call(&self, f: usize, args: &[u64]) -> u64 {
         self.flush();
         crate::guest::call(f, args)
     }
 
     /// An NVN entry point that records nothing (addresses, handles).
-    unsafe fn query(&self, f: usize, args: &[u64]) -> u64 {
+    pub(super) unsafe fn query(&self, f: usize, args: &[u64]) -> u64 {
         crate::guest::call(f, args)
     }
 
     /// A game helper the port does not implement: predicting stops there; applying calls the game's function.
-    unsafe fn helper(&self, name: &'static str, addr: usize, args: &[u64]) -> R<u64> {
+    pub(super) unsafe fn helper(&self, name: &'static str, addr: usize, args: &[u64]) -> R<u64> {
         if self.m.predict() {
             return Err(name);
         }
@@ -136,7 +136,7 @@ impl Port {
     }
 
     /// The main+ offset of `obj`'s virtual function at vtable slot `slot`.
-    unsafe fn vfn(&self, obj: usize, slot: usize) -> usize {
+    pub(super) unsafe fn vfn(&self, obj: usize, slot: usize) -> usize {
         self.m.r64(self.m.r64(obj) + slot).wrapping_sub(self.base)
     }
 
@@ -240,7 +240,7 @@ impl Port {
     }
 
     /// sead::GraphicsContext::apply (main+0x74d980): `g` is the context's render state, `w` the command buffer wrapper.
-    unsafe fn apply_graphics_context(&mut self, g: usize, w: usize) {
+    pub(super) unsafe fn apply_graphics_context(&mut self, g: usize, w: usize) {
         let cmd = self.m.r64(w + 0xb8) as u64;
         let mut blend = [0u64; 8];
         let mut color = [0u64; 8];
