@@ -36,6 +36,7 @@ mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
 mod pass_graph;
+mod pass_plan;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
 mod programs;
@@ -5401,6 +5402,10 @@ fn cur_cb_and_ranges(
     st.ubo_updated = ranges;
     st.lists_stack = stack;
     st.submit_lists = submit_lists;
+    if pass_graph::on() {
+        let binds = pass_plan::scan(&st.submit_lists, handles);
+        pass_plan::log(&binds, &pass_plan::groups(&binds));
+    }
     LISTS_SEEN.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
     // Sorted, merged: ubo_updated is a binary search.
     st.ubo_updated.sort_unstable();
@@ -5448,6 +5453,9 @@ fn submit_inner(handles: &[u64]) {
         {
             let mut st = g.state.lock().unwrap();
             st.stats.submits += 1;
+            if pass_graph::on() {
+                println!("[pg] submit {} lists", handles.len());
+            }
             // The issuer thread's encode state (parallel encoding) resets its per-submit memory in stream order.
             st.issuer.push(issuer::Op::SubmitStart);
             st.cx.arena.reset();
