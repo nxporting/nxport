@@ -2091,6 +2091,8 @@ pub(crate) struct RecordedCommandList {
     /// (ranges written by UpdateUniformBuffer, handles called), computed on first use (see metal::ubo_updated_ranges).
     /// Ranges its uniform updates and reports write, the lists it calls, its SAMPLES_PASSED report addresses.
     pub(crate) summary: std::sync::OnceLock<(Vec<(u64, u64)>, Vec<u64>, Vec<u64>)>,
+    /// Its render-pass events, computed on first use (see `pass_events`).
+    pub(crate) pass_events: std::sync::OnceLock<Vec<PassEvent>>,
     /// Frames presented when it was recorded (diagnostics: replayed lists vs. lists recorded this frame).
     pub(crate) recorded_frame: u64,
     /// Stamp of the last walk_command_lists that visited it.
@@ -2127,6 +2129,61 @@ impl RecordedCommandList {
                 }
             }
             (ranges, calls, samples)
+        })
+    }
+}
+
+/// What a command list does that decides how its draws can share render passes, in order: render-target binds, draws
+/// (consecutive ones as one), clears of the bound targets, commands that need earlier passes' results stored (compute,
+/// copies, buffer / texture clears) and the lists it calls.
+#[derive(Clone, Debug)]
+pub(crate) enum PassEvent {
+    Targets(Vec<crate::nvn::cmd::RtRef>, Option<crate::nvn::cmd::RtRef>),
+    Draw,
+    Clear,
+    Break(&'static str),
+    Call(u64),
+}
+
+impl RecordedCommandList {
+    pub(crate) fn pass_events(&self) -> &[PassEvent] {
+        use crate::nvn::cmd::Cmd;
+        self.pass_events.get_or_init(|| {
+            let mut ev = Vec::new();
+            for op in &self.ops {
+                let e = match &op.typed {
+                    Some(Cmd::SetRenderTargets { colors, depth }) => PassEvent::Targets(colors.clone(), *depth),
+                    Some(
+                        Cmd::DrawArrays { .. }
+                        | Cmd::DrawElements { .. }
+                        | Cmd::DrawArraysInstanced { .. }
+                        | Cmd::DrawElementsInstanced { .. },
+                    ) => PassEvent::Draw,
+                    Some(Cmd::ModelDraw(m)) => {
+                        ev.push(PassEvent::Call(m.unit));
+                        PassEvent::Draw
+                    }
+                    Some(Cmd::ClearColor { .. } | Cmd::ClearDepthStencil { .. }) => PassEvent::Clear,
+                    Some(Cmd::DispatchCompute { .. }) => PassEvent::Break("compute"),
+                    Some(
+                        Cmd::CopyBufferToTexture { .. }
+                        | Cmd::CopyTextureToBuffer { .. }
+                        | Cmd::CopyTextureToTexture { .. }
+                        | Cmd::CopyBufferToBuffer { .. },
+                    ) => PassEvent::Break("copy"),
+                    Some(Cmd::ClearBuffer { .. } | Cmd::ClearTexture { .. }) => PassEvent::Break("clear texture / buffer"),
+                    Some(Cmd::CallCommands(h)) => {
+                        ev.extend(h.iter().map(|&h| PassEvent::Call(h)));
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if matches!(e, PassEvent::Draw) && matches!(ev.last(), Some(PassEvent::Draw)) {
+                    continue;
+                }
+                ev.push(e);
+            }
+            ev
         })
     }
 }
@@ -2464,6 +2521,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         // short) and made the next BeginRecording allocate it again.
         ops: ops_vec.drain(..).collect(),
         summary: std::sync::OnceLock::new(),
+        pass_events: std::sync::OnceLock::new(),
         recorded_frame: crate::gpu::backend().presented_frames(),
         visit: std::sync::atomic::AtomicU64::new(0),
     });
@@ -6952,6 +7010,7 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
     let list = std::sync::Arc::new(RecordedCommandList {
         ops,
         summary: std::sync::OnceLock::new(),
+        pass_events: std::sync::OnceLock::new(),
         recorded_frame: 0,
         visit: std::sync::atomic::AtomicU64::new(0),
     });
