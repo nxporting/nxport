@@ -420,6 +420,8 @@ group! {
         hle_history_at: Option<u64> = None,
         /// GPU passes of frames N and N+1 in order: attachments, bound textures, blits (data flow)
         log_pass_graph: Option<u64> = None,
+        /// NVN commands the game records in frame N, with the recording thread and call chain
+        log_frame_map: Option<u64> = None,
         /// Frames slower than this many ms: what happened in them
         log_hitch: Option<f64> = None,
         /// Draws by the game's call chain, frames N..N+60
