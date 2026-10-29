@@ -34,6 +34,10 @@ crate::settings::group! {
         verify_model_draws: bool = false,
         /// Model draws by the port instead of the game's model renderer
         native_model_draws: bool = false,
+        /// Compare each render-list loop's NVN commands with what the render-list port predicts
+        verify_render_lists: bool = false,
+        /// Render lists drawn by the port (model units through the model port)
+        native_render_lists: bool = false,
     }
 }
 
