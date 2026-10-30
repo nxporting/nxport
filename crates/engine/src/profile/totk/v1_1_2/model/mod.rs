@@ -2,6 +2,7 @@
 // each call of the game's function and compares the NVN commands the game then records with the prediction; calls
 // that reach a helper the port does not implement yet are counted by that helper.
 
+mod cave;
 mod dispatch;
 mod draw;
 mod mem;

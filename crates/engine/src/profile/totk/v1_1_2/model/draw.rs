@@ -177,7 +177,7 @@ impl Port {
     }
 
     /// Uniform block object, virtual +0x48: binds `addr` (`size`) to `slot` of `stage`.
-    unsafe fn bind_block(&mut self, obj: usize, cmd: usize, stage: i32, slot: i32, addr: u64, size: u32) -> R<()> {
+    pub(super) unsafe fn bind_block(&mut self, obj: usize, cmd: usize, stage: i32, slot: i32, addr: u64, size: u32) -> R<()> {
         match self.vfn(obj, 0x48) {
             // nvnPrivate0 is 0 under the HLE: always through the NVN entry point.
             0x2a303b4 => {
