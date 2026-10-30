@@ -30,6 +30,15 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, lod: u32, flags: u32
         Some(Some(t)) => t,
         None => p.vfn(delegate, 0),
     };
+    let this = {
+        let (obj, adj) = (p.m.r64(delegate + 8), p.m.r64(delegate + 0x18));
+        obj.wrapping_add(((adj as i64) >> 1) as usize)
+    };
+    match target {
+        0x137c740 => return super::cave::target(p, this, arg.as_ptr() as usize, 1),
+        0x137c95c => return super::cave::target(p, this, arg.as_ptr() as usize, 4),
+        _ => {}
+    }
     note(target);
     p.helper("dispatch draw", p.vfn(delegate, 0), &[delegate as u64, arg.as_ptr() as u64])?;
     Ok(())

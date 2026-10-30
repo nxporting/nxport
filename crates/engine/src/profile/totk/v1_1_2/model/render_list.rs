@@ -9,6 +9,7 @@ const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
 const MODEL_DRAW: usize = 0x688c68;
 const TERRAIN_DRAW: usize = 0x2a47078;
 const DISPATCH_DRAW: usize = 0x763718;
+const FORWARD_DRAW: usize = 0x2a3f77c;
 const STATE_HOOK: usize = 0x27d0468;
 
 /// Draws of drawables the port does not draw: (main+ draw function, count).
@@ -26,7 +27,11 @@ fn note_drawable(f: usize) {
 pub(super) fn drawables_report() -> String {
     let mut g = std::mem::take(&mut *DRAWABLES.lock().unwrap());
     g.sort_by(|a, b| b.1.cmp(&a.1));
-    g.iter().take(12).map(|(f, n)| format!("main+{f:#x} {n}")).collect::<Vec<_>>().join(", ")
+    g.iter()
+        .take(12)
+        .map(|(f, n)| if f >> 40 != 0 { format!("forwarded main+{:#x} {n}", f & ((1 << 40) - 1)) } else { format!("main+{f:#x} {n}") })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// sub_12de2a0(list, count, ctx, mask, _, flags).
@@ -46,6 +51,12 @@ pub(super) unsafe fn draw_list(p: &mut Port, list: usize, count: u32, c: usize, 
             super::terrain::draw(p, d, c, sub, flags)?;
         } else if f == DISPATCH_DRAW {
             super::dispatch::draw(p, d, c, sub, flags)?;
+        } else if f == FORWARD_DRAW {
+            // main+0x2a3f77c: forwards to its object's virtual function +0x2f8 (object, index at +0x18, context).
+            let obj = p.m.r64(d + 8);
+            let target = p.vfn(obj, 0x2f8);
+            note_drawable(target | 1 << 40);
+            p.helper("forwarded draw", target, &[obj as u64, p.m.r16(d + 0x18) as u64, c as u64])?;
         } else {
             note_drawable(f);
             p.helper("drawable draw", f, &[d as u64, c as u64, sub as u64, flags as u64])?;
