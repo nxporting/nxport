@@ -111,6 +111,22 @@ impl Port {
         crate::guest::call(f, args)
     }
 
+    /// A game function taking float arguments too (AAPCS64: integers in x0-x7, floats in s0-s7), recording nothing.
+    #[cfg(nx_native)]
+    pub(super) unsafe fn query_f(&self, f: usize, ints: &[u64], floats: &[f32]) -> u64 {
+        type F = unsafe extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, f32, f32, f32, f32, f32, f32, f32, f32) -> u64;
+        assert!(ints.len() <= 8 && floats.len() <= 8);
+        let (mut x, mut s) = ([0u64; 8], [0f32; 8]);
+        x[..ints.len()].copy_from_slice(ints);
+        s[..floats.len()].copy_from_slice(floats);
+        std::mem::transmute::<usize, F>(f)(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7])
+    }
+
+    #[cfg(not(nx_native))]
+    pub(super) unsafe fn query_f(&self, _f: usize, _ints: &[u64], _floats: &[f32]) -> u64 {
+        unimplemented!("guest calls with float arguments on a lifted host")
+    }
+
     /// A game helper the port does not implement: predicting stops there; applying calls the game's function.
     pub(super) unsafe fn helper(&self, name: &'static str, addr: usize, args: &[u64]) -> R<u64> {
         if self.m.predict() {
