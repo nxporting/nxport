@@ -1,5 +1,6 @@
 // The driver's share of recording, on a thread of its own (vk-record): the Presentation thread works out what each draw
-// binds and hands the commands that bind and draw it to this thread in batches, which it records in order.
+// binds and hands the commands that bind and draw it to this thread in batches, which it records in order. Descriptor
+// sets are found or written here too (bind).
 
 use super::draw::{write_set, DescWrites};
 use super::*;
@@ -7,19 +8,19 @@ use super::*;
 /// Commands handed over at a time.
 const BATCH: usize = 512;
 
-/// Small (copied into the batch for every command): larger arguments are boxed or kept in the batch's `words`.
+/// Small (copied into the batch for every command): larger arguments are boxed.
 pub(super) enum Op {
     /// Begins recording into the command buffer.
     Begin(vk::CommandBuffer),
     /// Ends it (Recorder::wait_ended, try_ended).
     End,
+    /// A submit begins: sets written for the one before are not used again (their pools are reset once it completed).
+    Submit,
+    /// What the command buffer has bound is not known (a new one).
+    Unbound,
     Pipeline(vk::PipelineBindPoint, vk::Pipeline),
-    /// Binds set 0 with its dynamic offsets (`words[start..start + len]`).
-    Sets(vk::PipelineBindPoint, vk::PipelineLayout, vk::DescriptorSet, u32, u32),
-    /// Writes the descriptors of a set allocated for them (before a command binds it).
-    Write(vk::DescriptorSet, Box<DescWrites>),
-    /// Pushes the descriptors.
-    Push(vk::PipelineBindPoint, vk::PipelineLayout, Box<DescWrites>),
+    /// Binds a draw's or dispatch's descriptors (bind).
+    Bind(Box<BindJob>),
     VertexBuffer(u32, vk::Buffer, u64),
     IndexBuffer(vk::Buffer, u64, vk::IndexType),
     Draw(u32, u32, u32, u32),
@@ -33,19 +34,39 @@ pub(super) enum Op {
     Cmd(Box<dyn FnOnce(&Dev, vk::CommandBuffer)>),
 }
 
+/// A draw's or dispatch's descriptors, bound at `point` with `layout`: pushed, or in a set of `set_layout`. Handed back
+/// for reuse once bound (Recorder::job).
+pub(super) struct BindJob {
+    pub(super) w: DescWrites,
+    pub(super) point: vk::PipelineBindPoint,
+    pub(super) layout: vk::PipelineLayout,
+    pub(super) set_layout: vk::DescriptorSetLayout,
+    pub(super) push: bool,
+}
+
 /// Ops own what they record (handles, plain values); the Presentation thread no longer touches them once handed over.
 #[derive(Default)]
 struct Batch {
     ops: Vec<Op>,
-    words: Vec<u32>,
 }
 unsafe impl Send for Batch {}
+unsafe impl Send for BindJob {}
+
+/// Descriptor pools: those the submits being recorded allocated sets from (taken with the submit, Recorder::used_pools)
+/// and reset ones to allocate from again (Recorder::give_pool).
+#[derive(Default)]
+struct Pools {
+    used: std::sync::Mutex<Vec<vk::DescriptorPool>>,
+    free: std::sync::Mutex<Vec<vk::DescriptorPool>>,
+}
 
 pub(super) struct Recorder {
     batch: Batch,
     tx: std::sync::mpsc::Sender<Batch>,
     spare: std::sync::mpsc::Receiver<Batch>,
     ended: std::sync::mpsc::Receiver<()>,
+    jobs: std::sync::mpsc::Receiver<Box<BindJob>>,
+    pools: std::sync::Arc<Pools>,
 }
 
 impl Recorder {
@@ -53,20 +74,31 @@ impl Recorder {
         let (tx, rx) = std::sync::mpsc::channel::<Batch>();
         let (spare_tx, spare) = std::sync::mpsc::channel();
         let (ended_tx, ended) = std::sync::mpsc::channel();
+        let (jobs_tx, jobs) = std::sync::mpsc::channel();
+        let pools = std::sync::Arc::new(Pools::default());
+        let shared = pools.clone();
         std::thread::Builder::new()
             .name("vk-record".into())
             .spawn(move || {
                 let mut cb = vk::CommandBuffer::null();
+                let mut sets = Sets::default();
                 while let Ok(mut b) = rx.recv() {
                     for op in b.ops.drain(..) {
-                        unsafe { run(&dev, &mut cb, op, &b.words, &ended_tx) };
+                        match op {
+                            Op::Bind(mut j) => unsafe {
+                                bind(&dev, cb, &mut sets, &shared, &j);
+                                j.w.buffers.clear();
+                                j.w.images.clear();
+                                let _ = jobs_tx.send(j);
+                            },
+                            op => unsafe { run(&dev, &mut cb, &mut sets, op, &ended_tx) },
+                        }
                     }
-                    b.words.clear();
                     let _ = spare_tx.send(b);
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Recorder { batch: Batch { ops: Vec::with_capacity(BATCH), words: Vec::new() }, tx, spare, ended })
+        Ok(Recorder { batch: Batch { ops: Vec::with_capacity(BATCH) }, tx, spare, ended, jobs, pools })
     }
 
     pub(super) fn op(&mut self, op: Op) {
@@ -86,18 +118,34 @@ impl Recorder {
         self.op(Op::Fill(src, dst as usize, len as u32, epoch));
     }
 
-    /// Binds set 0 with `offsets`.
-    pub(super) fn sets(&mut self, point: vk::PipelineBindPoint, layout: vk::PipelineLayout, set: vk::DescriptorSet, offsets: &[u32]) {
-        let start = self.batch.words.len() as u32;
-        self.batch.words.extend_from_slice(offsets);
-        self.op(Op::Sets(point, layout, set, start, offsets.len() as u32));
+    /// An empty BindJob to fill (one vk-record handed back, else a new one).
+    pub(super) fn job(&mut self) -> Box<BindJob> {
+        self.jobs.try_recv().unwrap_or_else(|_| {
+            Box::new(BindJob {
+                w: DescWrites::default(),
+                point: vk::PipelineBindPoint::GRAPHICS,
+                layout: vk::PipelineLayout::null(),
+                set_layout: vk::DescriptorSetLayout::null(),
+                push: false,
+            })
+        })
+    }
+
+    /// The pools the submit allocated sets from (once vk-record ended its last command buffer).
+    pub(super) fn used_pools(&self) -> Vec<vk::DescriptorPool> {
+        std::mem::take(&mut *self.pools.used.lock().unwrap())
+    }
+
+    /// A pool reset after the submit that used it completed.
+    pub(super) fn give_pool(&self, p: vk::DescriptorPool) {
+        self.pools.free.lock().unwrap().push(p);
     }
 
     fn flush(&mut self) {
         if self.batch.ops.is_empty() {
             return;
         }
-        let next = self.spare.try_recv().unwrap_or_else(|_| Batch { ops: Vec::with_capacity(BATCH), words: Vec::new() });
+        let next = self.spare.try_recv().unwrap_or_else(|_| Batch { ops: Vec::with_capacity(BATCH) });
         let b = std::mem::replace(&mut self.batch, next);
         let _ = self.tx.send(b);
     }
@@ -119,7 +167,108 @@ impl Recorder {
     }
 }
 
-unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, op: Op, words: &[u32], ended: &std::sync::mpsc::Sender<()>) {
+/// vk-record's descriptor state: sets written in this submit by contents, the pool they come from, and per bind point
+/// (graphics, compute) the set bound with its layout and dynamic offsets.
+#[derive(Default)]
+struct Sets {
+    memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
+    pool: Option<vk::DescriptorPool>,
+    bound: [Option<(vk::PipelineLayout, vk::DescriptorSet, smallvec::SmallVec<[u32; 32]>)>; 2],
+}
+
+/// Binds `j`'s descriptors into `cb`: a set with the same contents written earlier in this submit is bound again (draws of
+/// one mesh or material), and the set bound last stays bound across pipeline changes (same layout).
+unsafe fn bind(dev: &Dev, cb: vk::CommandBuffer, s: &mut Sets, pools: &Pools, j: &BindJob) {
+    let w = &j.w;
+    if w.buffers.is_empty() && w.images.is_empty() {
+        return;
+    }
+    let key = (!j.push).then(|| {
+        use std::hash::Hasher;
+        let mut h = rustc_hash::FxHasher::default();
+        h.write_u64(vk::Handle::as_raw(j.set_layout));
+        for (binding, ty, info) in &w.buffers {
+            h.write_u32(*binding);
+            h.write_i32(ty.as_raw());
+            h.write_u64(vk::Handle::as_raw(info.buffer));
+            if *ty != vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC {
+                h.write_u64(info.offset);
+            }
+            h.write_u64(info.range);
+        }
+        for (binding, ty, infos) in &w.images {
+            h.write_u32(*binding);
+            h.write_i32(ty.as_raw());
+            for i in infos {
+                h.write_u64(vk::Handle::as_raw(i.sampler));
+                h.write_u64(vk::Handle::as_raw(i.image_view));
+            }
+        }
+        h.finish()
+    });
+    // Dynamic offsets in binding order.
+    let mut dynamic: smallvec::SmallVec<[(u32, u32); 32]> =
+        w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC).map(|b| (b.0, b.2.offset as u32)).collect();
+    dynamic.sort_unstable_by_key(|d| d.0);
+    let offsets: smallvec::SmallVec<[u32; 32]> = dynamic.iter().map(|d| d.1).collect();
+    let point = (j.point == vk::PipelineBindPoint::COMPUTE) as usize;
+    let set = match key.and_then(|k| s.memo.get(&k)) {
+        Some(&set) => {
+            if s.bound[point].as_ref().is_some_and(|(l, b, o)| *l == j.layout && *b == set && *o == offsets) {
+                return;
+            }
+            set
+        }
+        None if j.push => {
+            write_set(dev, cb, vk::DescriptorSet::null(), w, Some((j.point, j.layout)));
+            s.bound[point] = None;
+            return;
+        }
+        None => {
+            let Some(set) = alloc_set(dev, s, pools, j.set_layout) else { return };
+            if let Some(k) = key {
+                s.memo.insert(k, set);
+            }
+            write_set(dev, cb, set, w, None);
+            set
+        }
+    };
+    dev.device.cmd_bind_descriptor_sets(cb, j.point, j.layout, 0, &[set], &offsets);
+    s.bound[point] = Some((j.layout, set, offsets));
+}
+
+unsafe fn alloc_set(dev: &Dev, s: &mut Sets, pools: &Pools, layout: vk::DescriptorSetLayout) -> Option<vk::DescriptorSet> {
+    let layouts = [layout];
+    let alloc = |p: vk::DescriptorPool| {
+        dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)).ok().map(|s| s[0])
+    };
+    if let Some(set) = s.pool.and_then(alloc) {
+        return Some(set);
+    }
+    let reset = pools.free.lock().unwrap().pop();
+    let p = match reset {
+        Some(p) => p,
+        None => {
+            let sizes = [
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1024 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC, descriptor_count: 16384 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8192 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 16384 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 2048 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER, descriptor_count: 1024 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_TEXEL_BUFFER, descriptor_count: 1024 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 4096 },
+                vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 4096 },
+            ];
+            dev.device.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(2048).pool_sizes(&sizes), None).ok()?
+        }
+    };
+    pools.used.lock().unwrap().push(p);
+    s.pool = Some(p);
+    alloc(p)
+}
+
+unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, sets: &mut Sets, op: Op, ended: &std::sync::mpsc::Sender<()>) {
     let d = &dev.device;
     let c = *cb;
     match op {
@@ -132,12 +281,15 @@ unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, op: Op, words: &[u32], ende
             *cb = vk::CommandBuffer::null();
             let _ = ended.send(());
         }
-        Op::Pipeline(point, p) => d.cmd_bind_pipeline(c, point, p),
-        Op::Sets(point, layout, set, start, len) => {
-            d.cmd_bind_descriptor_sets(c, point, layout, 0, &[set], &words[start as usize..(start + len) as usize])
+        Op::Submit => {
+            sets.memo.clear();
+            sets.pool = None;
+            sets.bound = Default::default();
         }
-        Op::Write(set, w) => write_set(dev, c, set, &w, None),
-        Op::Push(point, layout, w) => write_set(dev, c, vk::DescriptorSet::null(), &w, Some((point, layout))),
+        Op::Unbound => sets.bound = Default::default(),
+        Op::Pipeline(point, p) => d.cmd_bind_pipeline(c, point, p),
+        // Bound by the vk-record loop, which hands the job back.
+        Op::Bind(_) => unreachable!(),
         Op::VertexBuffer(binding, b, o) => d.cmd_bind_vertex_buffers(c, binding, &[b], &[o]),
         Op::IndexBuffer(b, o, ty) => d.cmd_bind_index_buffer(c, b, o, ty),
         Op::Draw(n, i, first, base) => d.cmd_draw(c, n, i, first, base),

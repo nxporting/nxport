@@ -7,8 +7,8 @@ const DRIVER_CBUF_SIZE: usize = 0x1000;
 /// One draw's or dispatch's descriptors: (binding, type, buffer) and (binding, type, images).
 #[derive(Default, Clone)]
 pub(super) struct DescWrites {
-    buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 24]>,
-    images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
+    pub(super) buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 24]>,
+    pub(super) images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
 }
 
 /// Writes `w` into `set`, or pushes it into `cb` for `push` (bind point, layout). Dynamic uniform buffers are written at
@@ -345,14 +345,15 @@ impl Ctx {
         };
         let DrawMemo { vs: (vd, vc, vkey), gs, fs, vl, pipe, layout, set_layout, push, .. } = m;
         let fkey = fs.map(|(fd, _, k)| (fd, k));
-        let mut w = DescWrites::default();
-        self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
+        let mut j = self.rec.job();
+        self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut j.w);
         if let Some((gd, gc, k)) = gs {
-            self.stage_writes((gd, k), gd, gc, 4, &call, base_instance, &mut w);
+            self.stage_writes((gd, k), gd, gc, 4, &call, base_instance, &mut j.w);
         }
         if let Some((fd, fc, k)) = fs {
-            self.stage_writes((fd, k), fd, fc, 1, &call, base_instance, &mut w);
+            self.stage_writes((fd, k), fd, fc, 1, &call, base_instance, &mut j.w);
         }
+        let storage = j.w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::STORAGE_BUFFER).count() as u64;
         // A feedback copy ended the pass: it resumes (loading what was rendered).
         if self.pass.is_none() && !self.begin_pass() {
             return;
@@ -362,7 +363,7 @@ impl Ctx {
             self.rec.op(record::Op::Pipeline(vk::PipelineBindPoint::GRAPHICS, pipe));
             self.bound.pipeline = pipe;
         }
-        self.bind_writes(&w, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
+        self.bind_writes(j, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
         if let Some(p) = self.pass.as_mut() {
@@ -376,7 +377,6 @@ impl Ctx {
             }
         }
         // The stages, the target size and how many storage buffers it binds (writes there are what lost devices so far).
-        let storage = w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::STORAGE_BUFFER).count() as u64;
         let extent = self.pass.as_ref().map_or(0, |p| (p.extent.0 as u64) << 32 | p.extent.1 as u64);
         self.checkpoint_each("draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
         match call {
@@ -461,12 +461,12 @@ impl Ctx {
                 (pipe, layout)
             }
         };
-        let mut w = DescWrites::default();
-        self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
+        let mut j = self.rec.job();
+        self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut j.w);
         let s = &self.stages[&(data, content)];
         let (set_layout, full) = (s.set_layout, s.known.full);
         self.rec.op(record::Op::Pipeline(vk::PipelineBindPoint::COMPUTE, pipe));
-        self.bind_writes(&w, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
+        self.bind_writes(j, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
         // Always marked, not only with --gpu-checkpoints-each: dispatches run between passes, where the coarse checkpoints
         // (pass begin and end) cannot tell a compute shader that never finishes from idle.
         self.checkpoint("dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
@@ -937,103 +937,14 @@ impl Ctx {
         self.driver_scratch = driver;
     }
 
-    /// Binds `w` for the next draw or dispatch: pushed into the command buffer, or written into a new set of `set_layout`.
-    unsafe fn bind_writes(&mut self, w: &DescWrites, bind_point: vk::PipelineBindPoint, layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout, push: bool) {
-        if w.buffers.is_empty() && w.images.is_empty() {
+    /// Binds `j`'s descriptors for the next draw or dispatch, on vk-record (record::bind): pushed into the command buffer,
+    /// or in a set of `set_layout`.
+    unsafe fn bind_writes(&mut self, mut j: Box<record::BindJob>, point: vk::PipelineBindPoint, layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout, push: bool) {
+        if j.w.buffers.is_empty() && j.w.images.is_empty() {
             return;
         }
-        // A set with the same contents written earlier in this submit is bound again (draws of one mesh or material).
-        let key = (!push).then(|| {
-            use std::hash::Hasher;
-            let mut h = rustc_hash::FxHasher::default();
-            h.write_u64(vk::Handle::as_raw(set_layout));
-            for (binding, ty, info) in &w.buffers {
-                h.write_u32(*binding);
-                h.write_i32(ty.as_raw());
-                h.write_u64(vk::Handle::as_raw(info.buffer));
-                if *ty != vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC {
-                    h.write_u64(info.offset);
-                }
-                h.write_u64(info.range);
-            }
-            for (binding, ty, infos) in &w.images {
-                h.write_u32(*binding);
-                h.write_i32(ty.as_raw());
-                for i in infos {
-                    h.write_u64(vk::Handle::as_raw(i.sampler));
-                    h.write_u64(vk::Handle::as_raw(i.image_view));
-                }
-            }
-            h.finish()
-        });
-        // Dynamic offsets in binding order.
-        let mut dynamic: smallvec::SmallVec<[(u32, u32); 32]> = w
-            .buffers
-            .iter()
-            .filter(|b| b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-            .map(|b| (b.0, b.2.offset as u32))
-            .collect();
-        dynamic.sort_unstable_by_key(|d| d.0);
-        let offsets: smallvec::SmallVec<[u32; 32]> = dynamic.iter().map(|d| d.1).collect();
-        let point = (bind_point == vk::PipelineBindPoint::COMPUTE) as usize;
-        if let Some(&s) = key.and_then(|k| self.set_memo.get(&k)) {
-            // The same set, layout and offsets bound last stay bound across pipeline changes (same layout).
-            if self.bound.sets[point].as_ref().is_some_and(|(l, b, o)| *l == layout && *b == s && *o == offsets) {
-                return;
-            }
-            self.rec.sets(bind_point, layout, s, &offsets);
-            self.bound.sets[point] = Some((layout, s, offsets));
-            return;
-        }
-        let set = if push {
-            vk::DescriptorSet::null()
-        } else {
-            match self.alloc_set(set_layout) {
-                Some(s) => s,
-                None => return,
-            }
-        };
-        if let Some(k) = key {
-            self.set_memo.insert(k, set);
-        }
-        // Written on vk-record (the set is not used before the command binding it).
-        if push {
-            self.rec.op(record::Op::Push(bind_point, layout, Box::new(w.clone())));
-            self.bound.sets[point] = None;
-        } else {
-            self.rec.op(record::Op::Write(set, Box::new(w.clone())));
-            self.rec.sets(bind_point, layout, set, &offsets);
-            self.bound.sets[point] = Some((layout, set, offsets));
-        }
-    }
-
-    unsafe fn alloc_set(&mut self, layout: vk::DescriptorSetLayout) -> Option<vk::DescriptorSet> {
-        let layouts = [layout];
-        if let Some(&p) = self.desc_pools.last() {
-            if let Ok(s) = self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)) {
-                return Some(s[0]);
-            }
-        }
-        if let Some(p) = self.free_desc_pools.pop() {
-            self.desc_pools.push(p);
-            if let Ok(s) = self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)) {
-                return Some(s[0]);
-            }
-        }
-        let sizes = [
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1024 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC, descriptor_count: 16384 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8192 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 16384 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 2048 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER, descriptor_count: 1024 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_TEXEL_BUFFER, descriptor_count: 1024 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 4096 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 4096 },
-        ];
-        let p = self.dev.device.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(2048).pool_sizes(&sizes), None).ok()?;
-        self.desc_pools.push(p);
-        self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)).ok().map(|s| s[0])
+        (j.point, j.layout, j.set_layout, j.push) = (point, layout, set_layout, push);
+        self.rec.op(record::Op::Bind(j));
     }
 
     /// A storage buffer over guest memory: in place when its pool is imported and the offset aligned, else a copy that is
