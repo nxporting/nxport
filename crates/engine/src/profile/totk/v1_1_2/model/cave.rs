@@ -29,15 +29,17 @@ const IN_CASCADE: usize = 0x1387a50;
 /// Byte table: mesh class + mode * 5 + 30 when a cascade is drawn -> the mesh draws.
 const MESH_DRAWS: usize = 0x3810b18;
 
-/// The delegate targets main+0x137c740 (mode 1) and main+0x137c95c (mode 4): mark the subsystem used this frame
-/// (+0x40 bit 4, under its lock), and in the main pass draw it.
-pub(super) unsafe fn target(p: &mut Port, this: usize, arg: usize, mode: u32) -> R<()> {
+/// The delegate targets main+0x137c740 / 0x137c7f4 / 0x137c95c (modes 1 / 2 / 4, `main_pass`: drawn only in pass
+/// 3 while +0x13c2 is 0) and main+0xad2978 (mode 0: drawn except in pass 3 while +0x13c2 is not 1): mark the
+/// subsystem used this frame (+0x40 bit 4, under its lock), then draw it.
+pub(super) unsafe fn target(p: &mut Port, this: usize, arg: usize, mode: u32, main_pass: bool) -> R<()> {
     let s = p.m.r64(this + 0x28);
     p.query(p.base + LOCK, &[(s + 0x20) as u64]);
     p.m.w::<u32>(s + 0x40, p.m.r32(s + 0x40) | 0x10);
     p.query(p.base + UNLOCK, &[(s + 0x20) as u64]);
     let ctx = p.m.r64(arg);
-    if p.m.r8(ctx + 0x31) == 3 && p.m.r8(p.m.r64(this + 0x28) + 0x13c2) == 0 {
+    let (pass3, flag) = (p.m.r8(ctx + 0x31) == 3, p.m.r8(p.m.r64(this + 0x28) + 0x13c2));
+    if if main_pass { pass3 && flag == 0 } else { !pass3 || flag == 1 } {
         let s = p.m.r64(this + 0x28);
         p.m.w::<u64>(s + 0x13d0, p.m.r64(this + 0x20) as u64);
         p.m.w::<u32>(s + 0x13e0, p.m.r8(ctx + 0x30) as u32 | p.m.r32(this + 0xe00) << 8);
@@ -88,9 +90,10 @@ fn name(s: &'static [u8]) -> [u64; 2] {
 /// main+0xad2cf8(this, arg, mode, params).
 unsafe fn mesh_draw(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) -> R<()> {
     let ctx = p.m.r64(arg);
-    // The targets draw only in pass 3; pass 7's light setup (sub_8fd5cc, float arguments) is not ported.
+    // Pass 7's light setup (sub_8fd5cc, float arguments) is not ported: the game draws that pass.
     if p.m.r8(ctx + 0x31) == 7 {
-        return Err("cave mesh draw: light pass");
+        p.helper("cave light pass", 0xad2cf8, &[this as u64, arg as u64, mode as u64, info as u64])?;
+        return Ok(());
     }
     let w = p.m.r64(ctx + 0x20);
     let w_cell = [w as u64];
