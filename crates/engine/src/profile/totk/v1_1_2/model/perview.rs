@@ -102,7 +102,14 @@ unsafe fn name_kind(p: &Port, name: usize) -> R<Option<(u32, usize)>> {
             }
             Ok(None)
         }
-        b'D' => Err("per-view degeneracy"),
+        b'D' => {
+            if (0..9).any(|k| p.m.r8(name + 3 + k) != b"egeneracy"[k]) {
+                return Ok(None);
+            }
+            let z = |c: u8| p.m.r8(name + 0xc) == c && p.m.r8(name + 0xd) == 0;
+            // 3 / 4: the Degeneracy pairs (Y / X).
+            Ok(if z(b'Y') { Some((3, name + 0xc)) } else if z(b'X') { Some((4, name + 0xc)) } else { None })
+        }
         _ => Ok(None),
     }
 }
@@ -329,7 +336,7 @@ unsafe fn locked(
         let i = p.m.i32(row + o);
         if i != -1 && entries.get(i as usize).copied().unwrap_or(-1) == -1 { -1 } else { i }
     };
-    let (i_a, _i_b, i_c, i_d) = (pick(p, 0xaec), pick(p, 0xaf0), pick(p, 0xaf4), pick(p, 0xaf8));
+    let (i_a, i_b, i_c, i_d) = (pick(p, 0xaec), pick(p, 0xaf0), pick(p, 0xaf4), pick(p, 0xaf8));
     let _i_e = pick(p, 0xb08);
     let slots_a = block_slots(p, 0xbb0);
     // The LOD records: the first of t+0x80 whose tag rotates to 0x41, and the first rotating to 0.
@@ -376,9 +383,40 @@ unsafe fn locked(
     };
     sets = dr.sets;
     let _ = sets;
-    let n = p.m.i32(comp + 0xa0).max(0) as usize;
-    let list = p.m.r64(comp + 0xa8);
     let mut drawn = 0u32;
+    if kind >= 3 {
+        // Pairs (Y: comp+0xb0, X: comp+0xc0) whose two instances are visible: the pair's block element, four slots
+        // through the pair's record of its two instance records, the mesh at owner+0x138 / 0x148 (+8 flipped).
+        let pl = comp + if kind == 3 { 0xb0 } else { 0xc0 };
+        let np = p.m.i32(pl).max(0) as usize;
+        let pairs = p.m.r64(pl + 8);
+        for k in 0..np {
+            let e = p.m.r64(pairs + k * 8);
+            let (a, b) = (p.m.r64(e + 8), p.m.r64(e + 0x10));
+            let vis = |p: &Port, i: usize| {
+                let id = p.m.r16(i) as usize;
+                (p.m.r8(i + 5) >> 3) & 1 != 0 && (p.m.r64(cache + ((id >> 2) & 0x3ff8)) as u64 >> ((id << 1) & 0x3e)) & 1 != 0
+            };
+            if !vis(p, a) || !vis(p, b) {
+                continue;
+            }
+            let prec = p.m.r64(e + 0x18);
+            if prec == 0 {
+                return Err("per-view pair record");
+            }
+            p.bind_uniform_block(comp + 0x198, w, slots_a, p.m.r16(e + 4) as i32)?;
+            let (ra, rb) = (p.m.r64(prec), p.m.r64(prec + 8));
+            for (idx, set, lod) in [(i_a, ra + 8, lod_a), (i_b, rb + 8, lod_a), (i_c, ra + 0x18, lod_b), (i_d, rb + 0x18, lod_b)] {
+                set_slot(p, idx, p.m.r64(set) as u64, lod, &mut dr.sets, &mut dr.table, pb, w, defaults, &entries)?;
+            }
+            let flip = ((p.m.r8(a + 5) | p.m.r8(b + 5)) >> 2) & 1 != 0;
+            let base = owner + if kind == 3 { 0x138 } else { 0x148 };
+            let mesh = p.m.r64(base + if flip { 8 } else { 0 });
+            drawn = drawn.wrapping_add(mesh_draw(p, mesh, w)?.wrapping_sub(2));
+        }
+    }
+    let n = if kind >= 3 { 0 } else { p.m.i32(comp + 0xa0).max(0) as usize };
+    let list = p.m.r64(comp + 0xa8);
     for k in 0..n {
         let inst = p.m.r64(list + k * 8);
         let f = p.m.r8(inst + 5);
