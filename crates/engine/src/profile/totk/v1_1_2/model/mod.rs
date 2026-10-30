@@ -8,6 +8,7 @@ mod dispatch;
 mod draw;
 mod grid;
 mod mem;
+mod perview;
 mod render_list;
 mod ring;
 mod terrain;
@@ -230,6 +231,10 @@ fn report() {
     let dp = dispatch::ported_report();
     if !dp.is_empty() {
         println!("[model-draw] dispatch targets reached: {dp}");
+    }
+    let pv = perview::report();
+    if !pv.is_empty() {
+        println!("[model-draw] per-view calls left to the game: {pv}");
     }
     let cl = cells::report();
     if !cl.is_empty() {
