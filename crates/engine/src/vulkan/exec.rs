@@ -273,7 +273,15 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
     std::ptr::write_unaligned((p + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
 }
 
-/// What a command buffer has bound: the graphics pipeline, per bind point (graphics, compute) the descriptor set with
+/// A report at guest `addr` is about to be written, beginning uniform epoch `epoch` (record::overwriting).
+unsafe fn report_overwriting(epoch: u64, addr: u64) {
+    let a = crate::nvn::api::translate_virtual(addr as usize);
+    if a >= 0x10000 {
+        record::overwriting(epoch, a, crate::gpu::report_guard::engine_ptr(a) as *const u8, 16);
+    }
+}
+
+/// What a command buffer has bound:the graphics pipeline, per bind point (graphics, compute) the descriptor set with
 /// its pipeline layout and dynamic offsets, the vertex buffers (NVN's 16 streams and pipelines::ZERO_STREAM) and the
 /// index buffer. The driver charges as much for binding the same again as for a change, and consecutive draws mostly
 /// use the same pipeline and set, and many the same buffers.
@@ -690,6 +698,7 @@ impl Ctx {
         self.bound = Bound::default();
         self.tex.begin_batch(self.pool);
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
+        record::clear_overwritten();
         self.tex.begin_submit();
         self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
         if self.timestamps_supported {
@@ -1292,6 +1301,7 @@ impl Ctx {
                 let a = crate::nvn::api::translate_virtual((*addr as i64 + *offset as i64) as usize);
                 self.ubo_epoch += 1;
                 if a > 0x10000 {
+                    record::overwriting(self.ubo_epoch, a, a as *const u8, data.len());
                     std::ptr::copy_nonoverlapping(data.as_ptr(), a as *mut u8, data.len());
                 }
             }
@@ -1315,6 +1325,7 @@ impl Ctx {
             }
             Cmd::ReportValue { value, addr } => {
                 self.ubo_epoch += 1;
+                report_overwriting(self.ubo_epoch, *addr);
                 write_report(*addr, *value as u64, true)
             }
             Cmd::ReportCounter { counter, addr } => {
@@ -1325,6 +1336,7 @@ impl Ctx {
                 } else {
                     let v = if *counter == 0 { crate::clock::now_ns() } else { 0 };
                     self.ubo_epoch += 1;
+                    report_overwriting(self.ubo_epoch, *addr);
                     write_report(*addr, v, *counter != 0xF);
                 }
             }
