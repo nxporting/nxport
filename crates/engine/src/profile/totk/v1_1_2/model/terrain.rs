@@ -37,8 +37,8 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, sub: u32, flags: u32
     let entry = p.base + VARIANTS + idx as usize * 16;
     let (func, adj) = (p.m.r64(entry), p.m.r64(entry + 8) as i64);
     let this = (p.m.r64(p.m.r64(d + 8) + 0x40) as i64 + (adj >> 1)) as usize;
-    if idx == 0 && adj & 1 == 0 {
-        tiles(p, this, c, d, sub, n)?;
+    if (idx == 0 || idx == 8) && adj & 1 == 0 {
+        tiles(p, this, c, d, sub, n, idx == 8)?;
     } else if idx == 12 && adj & 1 == 0 {
         tile_lists(p, this, c, d, n)?;
     } else {
@@ -49,9 +49,10 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, sub: u32, flags: u32
     Ok(())
 }
 
-/// Variant 0 (main+0x2246be4): the tile loop without any of the feature bits. Returns the tiles drawn (-1 when the
-/// context could not be set up).
-unsafe fn tiles(p: &mut Port, t: usize, c: usize, d: usize, sub: u32, n: u32) -> R<i32> {
+/// Variant 0 (main+0x2246be4): the tile loop without any of the feature bits; variant 8 (main+0x224790c, feature bit
+/// 3) draws each tile with the LOD `sub`'s prebuilt display list (main+0x2247ab8) instead. Returns the tiles drawn (-1
+/// when the context could not be set up).
+unsafe fn tiles(p: &mut Port, t: usize, c: usize, d: usize, sub: u32, n: u32, lod_lists: bool) -> R<i32> {
     let count = p.m.r16(t + 0x22) as usize;
     if count == 0 {
         return Ok(0);
@@ -79,7 +80,11 @@ unsafe fn tiles(p: &mut Port, t: usize, c: usize, d: usize, sub: u32, n: u32) ->
         let b92 = p.m.r8(tile + 0x92) as i32;
         let index = (b92 & 3) + ((b92 >> 2) & 3) * p.m.r16(tile + 0x7a) as i32;
         p.bind_uniform_block(p.m.r64(tile + 0x10), w, slots, index)?;
-        tile_draw(p, d, w, c, sub);
+        if lod_lists {
+            lod_list(p, d, w, c, sub as usize);
+        } else {
+            tile_draw(p, d, w, c, sub);
+        }
         drawn += 1;
     }
     Ok(drawn)
@@ -115,15 +120,7 @@ unsafe fn tile_lists(p: &mut Port, t: usize, c: usize, d: usize, n: u32) -> R<i3
             slots = p.m.r32(p.m.r64(p.m.r64(c + 0x110)) + 0x28);
         }
         p.bind_uniform_block(p.m.r64(tile), w, slots, p.m.r16(tile + 0x16) as i32)?;
-        let lod = p.m.r8(tile + 0x18) as usize;
-        let model = p.m.r64(d + 0x68);
-        if lod < p.m.r8(p.m.r64(model + 8) + 0x5b) as usize {
-            let lists = p.m.r64(model + 0x8c8);
-            let cmd = p.m.r64(w + 0xb8);
-            p.call_commands(cmd, lists + lod * 0x268 + 0x48);
-            let tris = p.m.r32(lists + lod * 0x268 + 0x260);
-            p.m.w::<u32>(c + 0x34, p.m.r32(c + 0x34).wrapping_add(tris));
-        }
+        lod_list(p, d, w, c, p.m.r8(tile + 0x18) as usize);
         drawn += 1;
     }
     Ok(drawn)
@@ -161,4 +158,16 @@ unsafe fn sphere_visible(p: &Port, f: usize, s: usize) -> bool {
         }
     }
     true
+}
+
+/// main+0x2247ab8(d, w, c, lod): the model's prebuilt display list of LOD `lod`, its triangles counted.
+unsafe fn lod_list(p: &mut Port, d: usize, w: usize, c: usize, lod: usize) {
+    let model = p.m.r64(d + 0x68);
+    if (lod as i32) < p.m.r8(p.m.r64(model + 8) + 0x5b) as i32 {
+        let lists = p.m.r64(model + 0x8c8);
+        let cmd = p.m.r64(w + 0xb8);
+        p.call_commands(cmd, lists + lod * 0x268 + 0x48);
+        let tris = p.m.r32(lists + lod * 0x268 + 0x260);
+        p.m.w::<u32>(c + 0x34, p.m.r32(c + 0x34).wrapping_add(tris));
+    }
 }
