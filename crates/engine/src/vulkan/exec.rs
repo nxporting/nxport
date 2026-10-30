@@ -96,7 +96,6 @@ pub struct Ctx {
     /// Vertex / geometry / fragment stage combinations: (set layout, pipeline layout, descriptors pushed).
     graphics_layouts: HashMap<((u64, u64), Option<(u64, u64)>, Option<(u64, u64)>), (vk::DescriptorSetLayout, vk::PipelineLayout, bool)>,
     empty_layout: vk::DescriptorSetLayout,
-    desc_pools: Vec<vk::DescriptorPool>,
     st: Nvn,
     /// The command buffer being recorded (on vk-record, from `rec_pool`).
     cb: vk::CommandBuffer,
@@ -172,8 +171,6 @@ pub struct Ctx {
     /// Advanced at every storage / uniform buffer binding.
     pub(super) storage_gen: u64,
     pub(super) uniform_gen: u64,
-    /// Descriptor sets written in this submit, by contents.
-    pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
     /// What the command buffer being recorded has bound (draw.rs), so binding the same again is left out.
     pub(super) bound: Bound,
     /// The dynamic state set in the current pass (draw.rs dynamic_state).
@@ -238,7 +235,6 @@ pub struct Ctx {
     /// Query and descriptor pools of retired submits, for reuse.
     free_occl: Vec<vk::QueryPool>,
     free_timestamps: Vec<vk::QueryPool>,
-    free_desc_pools: Vec<vk::DescriptorPool>,
     warned: HashSet<String>,
     /// The pipeline cache (stage_cache.rs; made at the first pipeline), and pipelines created since it was last saved.
     pipeline_cache: Option<vk::PipelineCache>,
@@ -281,14 +277,13 @@ unsafe fn report_overwriting(epoch: u64, addr: u64) {
     }
 }
 
-/// What a command buffer has bound:the graphics pipeline, per bind point (graphics, compute) the descriptor set with
-/// its pipeline layout and dynamic offsets, the vertex buffers (NVN's 16 streams and pipelines::ZERO_STREAM) and the
-/// index buffer. The driver charges as much for binding the same again as for a change, and consecutive draws mostly
-/// use the same pipeline and set, and many the same buffers.
+/// What a command buffer has bound: the graphics pipeline, the vertex buffers (NVN's 16 streams and
+/// pipelines::ZERO_STREAM) and the index buffer (descriptor sets: vk-record, record::Sets). The driver charges as much
+/// for binding the same again as for a change, and consecutive draws mostly use the same pipeline and many the same
+/// buffers.
 #[derive(Default)]
 pub(super) struct Bound {
     pub(super) pipeline: vk::Pipeline,
-    pub(super) sets: [Option<(vk::PipelineLayout, vk::DescriptorSet, smallvec::SmallVec<[u32; 32]>)>; 2],
     pub(super) vertex: [(vk::Buffer, u64); pipelines::ZERO_STREAM as usize + 1],
     pub(super) index: Option<(vk::Buffer, u64, vk::IndexType)>,
 }
@@ -561,7 +556,6 @@ impl Ctx {
             layouts: Default::default(),
             graphics_layouts: Default::default(),
             empty_layout,
-            desc_pools: Vec::new(),
             st: Nvn {
                 depth_range: (0.0, 1.0),
                 stencil: [[0, 0], [0xFF, 0xFF], [0xFF, 0xFF]],
@@ -601,7 +595,6 @@ impl Ctx {
             driver_hash: None,
             storage_gen: 0,
             uniform_gen: 0,
-            set_memo: Default::default(),
             bound: Bound::default(),
             dynamic_memo: None,
             dynamic_gen: 0,
@@ -638,7 +631,6 @@ impl Ctx {
             free_pools,
             free_occl: Vec::new(),
             free_timestamps: Vec::new(),
-            free_desc_pools: Vec::new(),
             warned: Default::default(),
             unimplemented: Default::default(),
             pipeline_cache: None,
@@ -696,6 +688,7 @@ impl Ctx {
             return;
         };
         self.bound = Bound::default();
+        self.rec.op(record::Op::Submit);
         self.tex.begin_batch(self.pool);
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
         record::clear_overwritten();
@@ -840,7 +833,7 @@ impl Ctx {
             cbs,
             rec_pool: self.rec_pool,
             rec_cbs,
-            desc_pools: std::mem::take(&mut self.desc_pools),
+            desc_pools: self.rec.used_pools(),
             chunks: self.arena.take_used(),
             readback_chunks: self.readback.take_used(),
             occl_pool,
@@ -860,7 +853,6 @@ impl Ctx {
         self.max_indices.clear();
         self.lists.clear();
         self.vb_memo.clear();
-        self.set_memo.clear();
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
@@ -910,7 +902,7 @@ impl Ctx {
             let _ = self.pool_tx.send((f.rec_pool, f.rec_cbs));
             for p in f.desc_pools {
                 if d.reset_descriptor_pool(p, vk::DescriptorPoolResetFlags::empty()).is_ok() {
-                    self.free_desc_pools.push(p);
+                    self.rec.give_pool(p);
                 } else {
                     d.destroy_descriptor_pool(p, None);
                 }
@@ -1653,6 +1645,7 @@ impl Ctx {
         }
         self.queue_chunks(false);
         self.bound = Bound::default();
+        self.rec.op(record::Op::Unbound);
         match self.next_cb() {
             Some(cb) => self.rec.op(record::Op::Begin(cb)),
             None => self.lost = true,
