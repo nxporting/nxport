@@ -33,7 +33,11 @@ pub(super) fn drawables_report() -> String {
     g.sort_by(|a, b| b.1.cmp(&a.1));
     g.iter()
         .take(12)
-        .map(|(f, n)| if f >> 40 != 0 { format!("forwarded main+{:#x} {n}", f & ((1 << 40) - 1)) } else { format!("main+{f:#x} {n}") })
+        .map(|(f, n)| match f >> 40 {
+            1 => format!("forwarded main+{:#x} {n}", f & ((1 << 40) - 1)),
+            2 => format!("state hook main+{:#x} {n}", f & ((1 << 40) - 1)),
+            _ => format!("main+{f:#x} {n}"),
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -233,7 +237,8 @@ unsafe fn entry_state(p: &mut Port, c: usize, e: usize) -> R<()> {
             match p.delegate_target(hook) {
                 Some(None) => {}
                 Some(Some(STATE_HOOK)) => state_hook(p, p.m.r32(c + 0xb0), c + 0x128),
-                _ => {
+                t => {
+                    note_drawable(match t { Some(Some(f)) => f, _ => 0x1_0000_0000 | p.vfn(hook, 0) } | 1 << 41);
                     p.helper("render state hook", p.vfn(hook, 0), &[hook as u64, arg.as_ptr() as u64])?;
                 }
             }
