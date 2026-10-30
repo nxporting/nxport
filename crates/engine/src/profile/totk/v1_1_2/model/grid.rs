@@ -508,14 +508,6 @@ pub(super) unsafe fn draw_levels(p: &mut Port, this: usize, arg: usize, k: u32) 
         }
         let holder = p.m.r64(p.m.r64(p.m.r64(p.base + LEVEL_TEXTURE_HOLDER)) + 0xd0);
         let f = p.vfn(holder, 0x210);
-        {
-            let mut o = OTHER.lock().unwrap();
-            let key = f | 1 << 40;
-            match o.iter_mut().find(|x| x.0 == key) {
-                Some(x) => x.1 += 1,
-                None => o.push((key, 1)),
-            }
-        }
         // main+0x287bf48: the holder's +0x260 object's texture at +0x190.
         let tex = if f == 0x287bf48 { (p.m.r64(holder + 0x260) + 0x190) as u64 } else { p.helper("level texture", f, &[holder as u64])? };
         set(role(p, 5, 0x14), tex, &mut mask, &mut table);
