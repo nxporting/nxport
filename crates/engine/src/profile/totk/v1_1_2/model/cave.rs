@@ -23,6 +23,9 @@ const PARAMS: usize = 0xad2bfc;
 const SLOT_BY_NAME: usize = 0x985798;
 const TEXTURE_SLOT_BY_NAME: usize = 0x138cd08;
 const DRAW_STATE_INIT: usize = 0x11cbac4;
+const LIGHT_VOLUME: usize = 0x8fd5cc;
+const LIGHT_FRUSTUM: usize = 0x8fd654;
+const FOOTPRINT: usize = 0x93a4c4;
 const IN_FRUSTUM: usize = 0x138d420;
 const IN_OCCLUDER: usize = 0x940c88;
 const IN_CASCADE: usize = 0x1387a50;
@@ -90,11 +93,6 @@ fn name(s: &'static [u8]) -> [u64; 2] {
 /// main+0xad2cf8(this, arg, mode, params).
 unsafe fn mesh_draw(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) -> R<()> {
     let ctx = p.m.r64(arg);
-    // Pass 7's light setup (sub_8fd5cc, float arguments) is not ported: the game draws that pass.
-    if p.m.r8(ctx + 0x31) == 7 {
-        p.helper("cave light pass", 0xad2cf8, &[this as u64, arg as u64, mode as u64, info as u64])?;
-        return Ok(());
-    }
     let w = p.m.r64(ctx + 0x20);
     let w_cell = [w as u64];
     load_resource(p, ctx, p.m.r64(arg + 8))?;
@@ -130,6 +128,19 @@ unsafe fn mesh_draw(p: &mut Port, this: usize, arg: usize, mode: u32, info: usiz
     let slots: [u64; 3] = [w_cell.as_ptr() as u64, normals.as_ptr() as u64, weights.as_ptr() as u64];
     let mut state = [0u8; 0x240];
     p.query(p.base + DRAW_STATE_INIT, &[state.as_mut_ptr() as u64]);
+    // Pass 7 (lights): the view's light volume (main+0x8fd5cc: near / far, overridden by the info's +0x1c / +0x24,
+    // and two more parameters) culls instead of the view's frustum.
+    if p.m.r8(ctx + 0x31) == 7 {
+        let v = views + view * 0x430;
+        let near = p.m.f32(if p.m.r8(info + 0x1c) != 0 { info + 0x20 } else { v + 0x1e0 });
+        let far = p.m.f32(if p.m.r8(info + 0x24) != 0 { info + 0x28 } else { v + 0x1e4 });
+        p.query_f(
+            p.base + LIGHT_VOLUME,
+            &[state.as_mut_ptr() as u64, (v + 0x100) as u64, (v + 0x160) as u64, (v + 0x1fc) as u64],
+            &[near, far, p.m.f32(v + 0x1e8), p.m.f32(v + 0x1ec)],
+        );
+        frustum = state.as_ptr() as usize;
+    }
     let occluder = if p.m.r8(info + 0xb6) != 0 { p.m.r64(info + 0xb8) } else { 0 };
     let culled = p.m.r8(info + 0xb5) != 0;
     if !culled {
@@ -509,17 +520,16 @@ pub(super) unsafe fn chunk_target(p: &mut Port, this: usize, arg: usize, mode: u
     p.m.w::<u64>(s + 0x13d0, p.m.r64(this + 0x20) as u64);
     p.m.w::<u32>(s + 0x13e0, p.m.r8(ctx + 0x30) as u32 | p.m.r32(this + 0xe00) << 8);
     let (sys, info) = (p.m.r64(s + 0x4e8), s + 5000);
-    // Pass 7's light setup (sub_8fd654, float arguments) is not ported: the game draws that pass.
-    if p.m.r8(ctx + 0x31) == 7 {
-        p.helper("cave chunk light pass", 0x98434c, &[sys as u64, arg as u64, mode as u64, info as u64])?;
-        return Ok(());
-    }
     if p.m.r8(info + 2) == 0 {
         return Ok(());
     }
     if p.m.r64(sys) != 0 {
         let t0 = p.query(p.base + TICK, &[]);
         let mut params = [0u8; 0xc0];
+        params[0x18] = p.m.r8(info + 0x20);
+        params[0x1c..0x20].copy_from_slice(&p.m.r32(info + 0x24).to_le_bytes());
+        params[0x20] = p.m.r8(info + 0x28);
+        params[0x24..0x28].copy_from_slice(&p.m.r32(info + 0x2c).to_le_bytes());
         params[0x30..0x38].copy_from_slice(&(p.m.r64(info + 0x48) as u64).to_le_bytes());
         params[0x40..0x44].copy_from_slice(&p.m.r32(info + 0x58).to_le_bytes());
         params[0xb5] = p.m.r8(info + 0xcd);
@@ -586,6 +596,26 @@ unsafe fn chunks(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) 
         }
         cascade = p.m.r64(shadow + 0xd28) + k as usize * 0xb48;
         cascade_index = (view as u32 - 5) & 0xff;
+    }
+    // Pass 7 (lights): the view's light volume (main+0x8fd654 over the draw state, the view's light matrix copied to
+    // +0xa0 and its footprint at +0xd0) culls instead of the view's frustum.
+    let mut state = [0u8; 0x240];
+    let mut frustum = frustum;
+    if p.m.r8(ctx + 0x31) == 7 {
+        let v = p.m.r64(p.m.r64(ctx + 0x10) + 0x18) + view * 0x430;
+        p.query(p.base + DRAW_STATE_INIT, &[state.as_mut_ptr() as u64]);
+        let near = p.m.f32(if p.m.r8(info + 0x18) != 0 { info + 0x1c } else { v + 0x1e0 });
+        let far = p.m.f32(if p.m.r8(info + 0x20) != 0 { info + 0x24 } else { v + 0x1e4 });
+        for k in 0..0x30usize {
+            state[0xa0 + k] = p.m.r8(v + 0x100 + k);
+        }
+        p.query(p.base + FOOTPRINT, &[state.as_mut_ptr() as u64 + 0xd0, (v + 0x100) as u64]);
+        p.query_f(
+            p.base + LIGHT_FRUSTUM,
+            &[state.as_mut_ptr() as u64, (v + 0x160) as u64, (v + 0x1fc) as u64],
+            &[near, far, p.m.f32(v + 0x1e8), p.m.f32(v + 0x1ec)],
+        );
+        frustum = state.as_ptr() as usize;
     }
     let culled = p.m.r8(info + 0xb5) != 0;
     let occluder = if p.m.r8(info + 0xb6) != 0 { p.m.r64(info + 0xb8) } else { 0 };
