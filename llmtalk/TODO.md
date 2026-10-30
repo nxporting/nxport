@@ -46,6 +46,15 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **Vulkan recording, third round** (S41L0R Windows Machine, `6a4a870`, `d3ba8b7`): uniform bindings resolved once
+  per contents, driver constant buffer rebuilt only when it changes, draw states found by content across submits,
+  unchanged vertex / index buffers and dynamic state not bound again. sky2203 replay, idle machine: recording 13.1 ->
+  10.1 ms, whole frame 16.7 -> 13.6 ms; sky2203 and title5950 match. Not yet measured in the game (the cross-submit
+  draw-state map is at its best in a replay of one frame). What is left is spread thin (~1.4 us a draw, 7,300 draws,
+  no hotspot; array slots instead of the (stage, index) maps measured no faster). The "mpmc recv" samples on the
+  Presentation thread are wait_ended (identical-code folding), ~5%: vk-record ending command buffers.
+  Next: per-draw preparation over several threads.
+
 - **Vulkan recording, second round** (S41L0R Windows Machine): driver calls run on their own thread (vk-record), and
   chunks are queued without waiting for it. The bound pipeline and stages are reused until pipeline state really
   changes. Small vertex ranges are hashed before the submit on helper threads, not draw by draw. Texture staging
