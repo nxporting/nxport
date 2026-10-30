@@ -111,6 +111,16 @@ impl Port {
         Ok(self.call(self.base + addr, args))
     }
 
+    /// A game helper that only writes memory the predicted commands do not depend on (no NVN commands): predicting
+    /// skips it (the game's own call does it; the comparison would show commands it records or state the port then
+    /// reads); applying calls it.
+    pub(super) unsafe fn cpu_helper(&self, addr: usize, args: &[u64]) -> u64 {
+        if self.m.predict() {
+            return 0;
+        }
+        self.call(self.base + addr, args)
+    }
+
     unsafe fn buffer_address(&self, nvn_buffer: usize) -> u64 {
         self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[nvn_buffer as u64])
     }
@@ -983,7 +993,8 @@ pub(super) unsafe fn load_resource(p: &mut Port, c: usize, d: usize) -> R<bool> 
             p.m.w::<usize>(c + 0xe8, p.m.r64(p.m.r64(rec + 0x88) + k as usize * 8));
             let obj = p.m.r64(scene + 0x5a0) + pick(p.m.i8(d + 0x49)) as usize * 0xd0;
             if p.m.fetch_or32(obj + 200, 1) == 0 {
-                p.helper("sub_765148 (scene uniform block init)", 0x765148, &[scene as u64, p.m.i8(d + 0x49) as i32 as u32 as u64])?;
+                // Fills the block's contents on the CPU.
+                p.cpu_helper(0x765148, &[scene as u64, p.m.i8(d + 0x49) as i32 as u32 as u64]);
             }
             let slots = p.m.r32(c + 0x64);
             let shift = (p.m.r8(obj + 0x42) >> 4) as u64;
