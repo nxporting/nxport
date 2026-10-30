@@ -397,7 +397,7 @@ fn system(wd: u32) -> R {
     match key {
         (3, 3, 13, 0, 2) => op(format!("c->tpidr = {v};")),
         (3, 3, 4, 2, 0) => op(format!("c->nzcv = {v} & 0xf0000000ull;")),
-        (3, 3, 4, 4, 0) => op(format!("c->fpcr = {v} & 0x7c00000ull;")),
+        (3, 3, 4, 4, 0) => op(format!("rt_fpcr(c, {v} & 0x7c00000ull);")),
         (3, 3, 4, 4, 1) => op(format!("c->fpsr = {v} & 0xf800009full;")),
         _ => unsupported(format!("msr {key:?}")),
     }

@@ -58,6 +58,17 @@ void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) __attribute__((noreturn));
 void rt_udf(Cpu *c, uint64_t pc) __attribute__((noreturn));
 uint64_t rt_ticks(void);
 
+// msr fpcr. The thread's MXCSR follows FPCR.FZ: DAZ and FTZ flush denormal operands and tiny results as FZ does, so
+// FP instructions under FZ (how games run) are host instructions (simd_fp.h, FN(op)). Each host thread runs one Cpu.
+static inline void rt_fpcr(Cpu *c, uint64_t v) {
+    c->fpcr = v;
+#if defined(__x86_64__)
+    unsigned m = __builtin_ia32_stmxcsr();
+    unsigned want = (v & (1u << 24)) ? (m | 0x8040u) : (m & ~0x8040u);
+    if (want != m) __builtin_ia32_ldmxcsr(want);
+#endif
+}
+
 // After a call: continue here only if the callee returned to `ra`.
 #define RT_RETURNED(c, ra)                                   \
     if (__builtin_expect((c)->pc != (ra), 0)) {              \
