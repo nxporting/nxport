@@ -530,6 +530,29 @@ unsafe fn set_slot(p: &mut Port, idx: i32, set: u64, lod: usize, sets: &mut [u64
     Ok(true)
 }
 
+/// The first set of the chain from `c` (next at +0x18) of type <= 2 with a present texture for the LOD, or 0.
+unsafe fn chain(p: &Port, mut c: usize, lod: usize) -> usize {
+    while c != 0 {
+        if p.m.r8(c) & 0xf <= 2 {
+            let bits = p.m.r32(c + 0xc);
+            let b = p.m.r8(lod + 1) as u32 & 31;
+            if (bits >> b) & 1 != 0 {
+                let m = bits & !(u32::MAX << b);
+                let nn = if m >= 2 { m.count_ones() } else { m };
+                let tex = p.m.r64(p.m.r64(c + 0x10) + nn as usize * 8);
+                if tex != 0 {
+                    let s18 = p.m.r32(tex + 0x18);
+                    if (p.m.r8(tex + 0x12) >> 2) & 1 != 0 || (p.m.r64(tex + 8) != 0 && s18 != 0 && s18 >> 30 == 0) {
+                        return c;
+                    }
+                }
+            }
+        }
+        c = p.m.r64(c + 0x18);
+    }
+    0
+}
+
 /// main+0x24b2a04(this, slot, arg): as main+0xd7c1d8 with the scene's 8 tiers (+0x1244), exact LOD names
 /// (..NormalNear / NormalMiddle / NormalFar) and an inlined instance draw over seven texture set slots.
 pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) -> R<()> {
@@ -585,9 +608,23 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
                 _ => return Ok(()),
             }
         }
-        b'D' => return Err("per-view degeneracy"),
+        b'D' => {
+            if (0..9).any(|k| p.m.r8(name + 3 + k) != b"egeneracy"[k]) {
+                return Ok(());
+            }
+            let z = |c: u8| p.m.r8(name + 0xc) == c && p.m.r8(name + 0xd) == 0;
+            if z(b'Y') {
+                3
+            } else if z(b'X') {
+                4
+            } else {
+                return Ok(());
+            }
+        }
         _ => return Ok(()),
     };
+    // 3 / 4: the Degeneracy pairs (Y / X); their name tail starts at +0xc.
+    let tail = if kind >= 3 { name + 0xc } else { name + 8 };
     let record = p.m.r64(arg + 0x10);
     if record == 0 {
         return Ok(());
@@ -596,7 +633,6 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
     if prog == 0 {
         return Ok(());
     }
-    let tail = name + 8;
     if p.m.r8(tail) != 0 {
         let len = strlen(p, tail + 1) + 1;
         if len >= 10 && find(p, tail, b"Deformable", len - 9) {
@@ -640,6 +676,7 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
     };
     let (i_1b4, i_1b0, i_1ac, i_1a8) = (pick(p, 0x1264), pick(p, 0x126c), pick(p, 0x1270), pick(p, 0x1274));
     let (i_1a4, i_1a0, i_19c) = (pick(p, 0x1278), pick(p, 0x127c), pick(p, 0x1280));
+    let i_40 = pick(p, 0x1268);
     let lods = p.m.r64(t + 0x80);
     let nl = p.m.i32(t + 0x78);
     if nl == 0 {
@@ -663,9 +700,57 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
         bind_entry(p, pb, w, defaults, &table, entries[i_1ac as usize & 31]);
     }
     let slots_a = block_slots(p, 0x13e8);
-    let n = p.m.i32(comp + 0xa0).max(0) as usize;
-    let list = p.m.r64(comp + 0xa8);
     let mut drawn = 0u32;
+    if kind >= 3 {
+        // Pairs (Y: comp+0xb0, X: comp+0xc0; {_, _, instance A, instance B, record of their two records}), drawn
+        // when both instances are visible.
+        let pl = comp + if kind == 3 { 0xb0 } else { 0xc0 };
+        let np = p.m.i32(pl).max(0) as usize;
+        let pairs = p.m.r64(pl + 8);
+        for k in 0..np {
+            let e = p.m.r64(pairs + k * 8);
+            let (a, b) = (p.m.r64(e + 8), p.m.r64(e + 0x10));
+            let vis = |p: &Port, i: usize| {
+                let id = p.m.r16(i) as usize;
+                (p.m.r8(i + 5) >> 3) & 1 != 0 && (p.m.r64(cache + ((id >> 2) & 0x3ff8)) as u64 >> ((id << 1) & 0x3e)) & 1 != 0
+            };
+            if !vis(p, a) || !vis(p, b) {
+                continue;
+            }
+            let prec = p.m.r64(e + 0x18);
+            if prec == 0 {
+                return Err("per-view pair record");
+            }
+            p.bind_uniform_block(comp + 0x198, w, slots_a, p.m.r16(e + 4) as i32)?;
+            let ra = p.m.r64(prec);
+            set_slot(p, i_1b4, p.m.r64(ra + 8) as u64, lod_0, &mut sets, &mut table, pb, w, defaults, &entries)?;
+            set_slot(p, i_40, p.m.r64(p.m.r64(prec + 8) + 8) as u64, lod_0, &mut sets, &mut table, pb, w, defaults, &entries)?;
+            set_slot(p, i_1a8, p.m.r64(ra + 0x18) as u64, lod_1, &mut sets, &mut table, pb, w, defaults, &entries)?;
+            let c = chain(p, p.m.r64(ra + 0x18), lod_1);
+            if i_1a4 != -1 && sets[i_1a4 as usize & 31] != c as u64 {
+                if c == 0 {
+                    return Err("per-view empty set chain");
+                }
+                set_slot(p, i_1a4, c as u64, lod_1, &mut sets, &mut table, pb, w, defaults, &entries)?;
+            }
+            if set_slot(p, i_1a0, p.m.r64(ra + 0x28) as u64, lod_20, &mut sets, &mut table, pb, w, defaults, &entries)? && i_19c != -1 {
+                table[i_19c as usize & 31] = table[i_1a0 as usize & 31];
+                bind_entry(p, pb, w, defaults, &table, entries[i_19c as usize & 31]);
+            }
+            for (idx, o, lod) in [(i_1b0, 0x38, lod_41), (i_1ac, 0x48, lod_50)] {
+                let s = p.m.r64(ra + o);
+                if idx != -1 && s != 0 {
+                    set_slot(p, idx, s as u64, lod, &mut sets, &mut table, pb, w, defaults, &entries)?;
+                }
+            }
+            let flip = ((p.m.r8(a + 5) | p.m.r8(b + 5)) >> 2) & 1 != 0;
+            let base = meshes + if kind == 3 { 0x10 } else { 0x20 };
+            let mesh = p.m.r64(base + if flip { 8 } else { 0 });
+            drawn = drawn.wrapping_add(mesh_draw(p, mesh, w)?.wrapping_sub(2));
+        }
+    }
+    let n = if kind >= 3 { 0 } else { p.m.i32(comp + 0xa0).max(0) as usize };
+    let list = p.m.r64(comp + 0xa8);
     for k in 0..n {
         let inst = p.m.r64(list + k * 8);
         let f = p.m.r8(inst + 5);
@@ -686,26 +771,7 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
         // The first slot's set is the instance's own (+0x28); the others are the record's.
         set_slot(p, i_1b4, p.m.r64(inst + 0x28) as u64, lod_0, &mut sets, &mut table, pb, w, defaults, &entries)?;
         set_slot(p, i_1a8, p.m.r64(rec + 0x18) as u64, lod_1, &mut sets, &mut table, pb, w, defaults, &entries)?;
-        // The first set of the chain from +0x18 (next at +0x18) of type <= 2 with a present texture for the LOD.
-        let mut c = p.m.r64(rec + 0x18);
-        while c != 0 {
-            if p.m.r8(c) & 0xf <= 2 {
-                let bits = p.m.r32(c + 0xc);
-                let b = p.m.r8(lod_1 + 1) as u32 & 31;
-                if (bits >> b) & 1 != 0 {
-                    let m = bits & !(u32::MAX << b);
-                    let nn = if m >= 2 { m.count_ones() } else { m };
-                    let tex = p.m.r64(p.m.r64(c + 0x10) + nn as usize * 8);
-                    if tex != 0 {
-                        let s18 = p.m.r32(tex + 0x18);
-                        if (p.m.r8(tex + 0x12) >> 2) & 1 != 0 || (p.m.r64(tex + 8) != 0 && s18 != 0 && s18 >> 30 == 0) {
-                            break;
-                        }
-                    }
-                }
-            }
-            c = p.m.r64(c + 0x18);
-        }
+        let c = chain(p, p.m.r64(rec + 0x18), lod_1);
         if i_1a4 != -1 && sets[i_1a4 as usize & 31] != c as u64 {
             if c == 0 {
                 return Err("per-view empty set chain");
