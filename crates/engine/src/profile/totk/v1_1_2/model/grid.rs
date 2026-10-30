@@ -27,7 +27,7 @@ const MIN_WIDTH: usize = 0x380e988;
 const MIN_SCALE: usize = 0x380eeb0;
 
 /// AArch64 FMAX: NaN if either is NaN, +0 above -0.
-fn fmax(a: f32, b: f32) -> f32 {
+pub(super) fn fmax(a: f32, b: f32) -> f32 {
     if a.is_nan() || b.is_nan() {
         f32::NAN
     } else if a == b {
@@ -48,7 +48,7 @@ pub(super) unsafe fn bind_slot(p: &mut Port, w: usize, arg: usize, k: usize, blo
 
 /// main+0x745a30(w, arg, table, mask): the textures of the program's table entries in `mask` (a table entry 0: the
 /// drawable's default), bound to their slots.
-unsafe fn bind_texture_table(p: &mut Port, w: usize, arg: usize, table: &[u64; 32], mask: u32) -> R<()> {
+pub(super) unsafe fn bind_texture_table(p: &mut Port, w: usize, arg: usize, table: &[u64; 32], mask: u32) -> R<()> {
     if mask == 0 {
         return Ok(());
     }
@@ -398,6 +398,12 @@ pub(super) unsafe fn gate(p: &mut Port, this: usize, arg: usize) -> R<()> {
     if target == 0x18ccb80 {
         return draw(p, this, arg, index as u32);
     }
+    if target == 0x84cd40 {
+        return super::gridtile::draw_layers(p, this, arg, index as u32);
+    }
+    if target == 0x12e3774 {
+        return super::gridtile::draw(p, this, arg, index as u32);
+    }
     if target == 0x18cd8b0 {
         return draw_levels(p, this, arg, index as u32);
     }
@@ -659,7 +665,7 @@ pub(super) unsafe fn draw_levels(p: &mut Port, this: usize, arg: usize, k: u32) 
 const PART_TABLE: usize = 0x381f4d0;
 
 /// The shader's draw of `count` indices from `first` (main+0x18cfb1c with one instance), when it is enabled.
-unsafe fn draw_indices(p: &mut Port, s: usize, w: usize, first: u32, count: u32) -> u32 {
+pub(super) unsafe fn draw_indices(p: &mut Port, s: usize, w: usize, first: u32, count: u32) -> u32 {
     if count == 0 || p.m.r8(s + 8) & 1 == 0 {
         return 0;
     }
@@ -735,7 +741,7 @@ unsafe fn draw_parts(p: &mut Port, s: usize, w: usize, k: u32, mask: u32, select
 }
 
 /// AArch64 FMIN: NaN if either is NaN, -0 below +0.
-fn fmin(a: f32, b: f32) -> f32 {
+pub(super) fn fmin(a: f32, b: f32) -> f32 {
     if a.is_nan() || b.is_nan() {
         f32::NAN
     } else if a == b {

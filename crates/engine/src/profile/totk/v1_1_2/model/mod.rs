@@ -7,6 +7,7 @@ mod cells;
 mod dispatch;
 mod draw;
 mod grid;
+mod gridtile;
 mod mem;
 mod perview;
 mod render_list;
