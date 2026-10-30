@@ -13,6 +13,7 @@ pub(super) type R<T> = Result<T, &'static str>;
 // The game's NVN entry point variables (main+): filled through nvnDeviceGetProcAddress.
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
+const PFN_BIND_STORAGE_BUFFER: usize = 0x466dff0;
 const PFN_BUFFER_FINALIZE: usize = 0x466d808;
 const PFN_BUFFER_INITIALIZE: usize = 0x466d7f8;
 const PFN_BUFFER_BUILDER_SET_DEVICE: usize = 0x466d7c0;
@@ -228,6 +229,8 @@ impl Port {
     unsafe fn block_alignment(&mut self, obj: usize) -> R<i32> {
         match self.vfn(obj, 0x20) {
             0x2a30390 => Ok(0x100),
+            // Storage blocks: their own alignment.
+            0x2a2c054 => Ok(self.m.i32(obj + 0x80)),
             f if self.m.predict() => Err(self.unknown_vfn(0x20, f)),
             f => Ok(self.call(self.base + f, &[obj as u64]) as i32),
         }
@@ -239,6 +242,11 @@ impl Port {
             // nvnPrivate0 is 0 under the HLE: always through the NVN entry point.
             0x2a303b4 => {
                 self.bind_uniform_buffer(cmd, stage, slot, addr, size as u64);
+                Ok(())
+            }
+            // Storage blocks: nvnCommandBufferBindStorageBuffer.
+            0x2a2c078 => {
+                self.call(self.pfn(PFN_BIND_STORAGE_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size as u64]);
                 Ok(())
             }
             f if self.m.predict() => Err(self.unknown_vfn(0x48, f)),

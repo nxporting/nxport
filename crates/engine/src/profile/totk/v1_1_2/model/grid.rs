@@ -40,7 +40,7 @@ fn fmax(a: f32, b: f32) -> f32 {
 }
 
 /// main+0x7456fc(w, arg, k, block, index): uniform block `block` bound to the program's block slots k.
-unsafe fn bind_slot(p: &mut Port, w: usize, arg: usize, k: usize, block: usize, index: i32) -> R<()> {
+pub(super) unsafe fn bind_slot(p: &mut Port, w: usize, arg: usize, k: usize, block: usize, index: i32) -> R<()> {
     let slots = p.m.r32(p.m.r64(p.m.r64(p.m.r64(arg + 0x10) + 8)) + 0x10 + k * 4);
     p.bind_uniform_block(block, w, slots, index)?;
     Ok(())
@@ -55,6 +55,11 @@ unsafe fn bind_texture_table(p: &mut Port, w: usize, arg: usize, table: &[u64; 3
     let (ctx, d) = (p.m.r64(arg), p.m.r64(arg + 8));
     let pb = p.m.r64(p.m.r64(d + 0x68) + p.m.r8(ctx + 0x31) as usize * 0x60 + 0x40);
     let defaults = p.m.r64(p.m.r64(d + 8) + 0x180) + p.m.r16(d + 0x18) as usize * 0x80;
+    bind_textures(p, w, pb, defaults, table, mask)
+}
+
+/// The program's texture entries (`pb`) in `mask` from `table`, else from `defaults`.
+pub(super) unsafe fn bind_textures(p: &mut Port, w: usize, pb: usize, defaults: usize, table: &[u64; 32], mask: u32) -> R<()> {
     // All bits: main+0x777170, the same loop over every entry.
     let all = mask == u32::MAX;
     let mut k = 0usize;
