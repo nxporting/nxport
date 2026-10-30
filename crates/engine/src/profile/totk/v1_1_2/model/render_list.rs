@@ -11,6 +11,10 @@ const TERRAIN_DRAW: usize = 0x2a47078;
 const DISPATCH_DRAW: usize = 0x763718;
 const FORWARD_DRAW: usize = 0x2a3f77c;
 const STATE_HOOK: usize = 0x27d0468;
+const PFN_BARRIER: usize = 0x466e290;
+/// Holders of global game objects (pointers to the pointer).
+const GRAPHICS_FLAGS_HOLDER: usize = 0x462bbf0;
+pub(super) const SCENE_HOLDER: usize = 0x462bc08;
 
 /// Draws of drawables the port does not draw: (main+ draw function, count).
 static DRAWABLES: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -55,11 +59,44 @@ pub(super) unsafe fn draw_list(p: &mut Port, list: usize, count: u32, c: usize, 
             // main+0x2a3f77c: forwards to its object's virtual function +0x2f8 (object, index at +0x18, context).
             let obj = p.m.r64(d + 8);
             let target = p.vfn(obj, 0x2f8);
-            note_drawable(target | 1 << 40);
-            p.helper("forwarded draw", target, &[obj as u64, p.m.r16(d + 0x18) as u64, c as u64])?;
+            forwarded(p, target, obj, p.m.r16(d + 0x18) as u32, c)?;
         } else {
             note_drawable(f);
             p.helper("drawable draw", f, &[d as u64, c as u64, sub as u64, flags as u64])?;
+        }
+    }
+    Ok(())
+}
+
+/// The forwarding drawable's target `f`(obj, index, ctx).
+unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) -> R<()> {
+    match f {
+        0x27e04b8 => {}
+        // A barrier before the first four views (ORDER_FRAGMENTS | INVALIDATE_TEXTURE, + INVALIDATE_SHADER with a
+        // graphics flag).
+        0x27d0104 => {
+            if index < 4 {
+                let flags = if p.m.r8(p.m.r64(p.m.r64(p.base + GRAPHICS_FLAGS_HOLDER)) + 0x50c) & 2 != 0 { 0x112 } else { 0x12 };
+                p.call(p.pfn(PFN_BARRIER), &[p.m.r64(p.m.r64(c + 0x20) + 0xb8) as u64, flags]);
+            }
+        }
+        // A list drawn only in pass 0 with scene flags 1, 2 and 6 set.
+        0x1229090 => {
+            let g = p.m.r64(p.m.r64(p.base + SCENE_HOLDER));
+            let f948 = p.m.r32(g + 0x948);
+            if !f948 & 6 == 0
+                && p.m.r8(g + 0x98) == 0
+                && p.m.r8(p.m.r64(g + 0x70) + 0x2c4) & 1 != 0
+                && p.m.r8(c + 0x31) == 0
+                && (f948 >> 6) & 1 != 0
+            {
+                note_drawable(f | 1 << 40);
+                p.helper("forwarded draw", f, &[obj as u64, index as u64, c as u64])?;
+            }
+        }
+        _ => {
+            note_drawable(f | 1 << 40);
+            p.helper("forwarded draw", f, &[obj as u64, index as u64, c as u64])?;
         }
     }
     Ok(())

@@ -10,7 +10,9 @@ static TARGETS: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec:
 pub(super) fn report() -> String {
     let mut g = std::mem::take(&mut *TARGETS.lock().unwrap());
     g.sort_by(|a, b| b.1.cmp(&a.1));
-    g.iter().take(16).map(|(f, n)| format!("main+{f:#x} {n}")).collect::<Vec<_>>().join(", ")
+    g.iter()
+        .take(16)
+        .map(|(f, n)| if f >> 40 != 0 { format!("per-view main+{:#x} {n}", f & ((1 << 40) - 1)) } else { format!("main+{f:#x} {n}") }).collect::<Vec<_>>().join(", ")
 }
 
 /// main+0x763718(drawable, ctx, lod, flags).
@@ -37,6 +39,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, lod: u32, flags: u32
     match target {
         0x137c740 => return super::cave::target(p, this, arg.as_ptr() as usize, 1),
         0x137c95c => return super::cave::target(p, this, arg.as_ptr() as usize, 4),
+        0x2ad00a0 => return per_view(p, this, arg.as_ptr() as usize),
         _ => {}
     }
     note(target);
@@ -50,4 +53,35 @@ fn note(f: usize) {
         Some(x) => x.1 += 1,
         None => g.push((f, 1)),
     }
+}
+
+/// main+0x2ad00a0(this, arg): the drawable's view slot of the context's view (scene table at +0x70 +0x1c8, two bytes
+/// per view); drawn through its virtual +0x30 when the scene is in its main state and the slot's entry is enabled.
+unsafe fn per_view(p: &mut Port, this: usize, arg: usize) -> R<()> {
+    let g = p.m.r64(p.m.r64(p.base + super::render_list::SCENE_HOLDER));
+    let ctx = p.m.r64(arg);
+    let views = p.m.r64(g + 0x70);
+    let mut k = p.m.r8(ctx + 0x30) as u32;
+    if p.m.r32(views + 0x1c0) <= k {
+        k = 0;
+    }
+    let slot = p.m.i8(p.m.r64(views + 0x1c8) + k as usize * 2);
+    if slot == -1 || !p.m.r32(g + 0x948) & 6 != 0 || p.m.r32(g + 0x1e8) != 0 {
+        return Ok(());
+    }
+    let t = p.m.r64(this + 0x18);
+    if !p.m.r32(t) & 0xc != 0 {
+        return Ok(());
+    }
+    let mut u = slot as i32 as u32;
+    if p.m.r32(t + 0xea0) <= u {
+        u = 0;
+    }
+    if p.m.r8((p.m.r64(t + 0xea8) as i64 + u as i32 as i64 * 0xe0 + 0xb4) as usize) == 0 {
+        return Ok(());
+    }
+    let f = p.vfn(this, 0x30);
+    note(f | 1 << 40);
+    p.helper("per-view draw", f, &[this as u64, slot as i64 as u64, arg as u64])?;
+    Ok(())
 }
