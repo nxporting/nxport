@@ -441,3 +441,304 @@ unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u32, count: 
         &[cmd as u64, prim, itype, count as u64, addr, base_vertex as u32 as u64, base_instance as u32 as u64, instances as u64],
     );
 }
+
+const PFN_BIND_VERTEX_BUFFER: usize = 0x466dfb8;
+const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
+const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
+const GRAPHICS_HOLDER: usize = 0x462bbf0;
+const WORKER_KEY: usize = 0x462af70;
+const TLS_GET: usize = 0x2b15be0;
+const CORE: usize = 0x2b15c10;
+const CHUNK_DRAWS: usize = 0x3810a58;
+const CHUNK_PARAMS: usize = 0x985920;
+const IN_FRUSTUM_BOX: usize = 0x937d08;
+
+/// The game's worker index: its thread-local value - 1, else the core number.
+unsafe fn worker(p: &Port) -> u32 {
+    let v = p.query(p.base + TLS_GET, &[p.m.r32(p.m.r64(p.base + WORKER_KEY)) as u64]);
+    if v == 0 {
+        p.query(p.base + CORE, &[]) as u32
+    } else {
+        (v as u32).wrapping_sub(1)
+    }
+}
+
+/// The cave chunk renderer's delegate targets main+0x137c5d8 / 0x137c68c (modes 1 / 2, drawn only in pass 3 while
+/// +0x13c1 is 0) and main+0x984294 (mode 0, drawn except in pass 3 while +0x13c1 is not 1): mark the subsystem used
+/// (+0x40 bit 3), then main+0x98434c: the chunk set (main+0x984528) and the second set (main+0x9859e4), each timed.
+pub(super) unsafe fn chunk_target(p: &mut Port, this: usize, arg: usize, mode: u32, main_pass: bool) -> R<()> {
+    let s = p.m.r64(this + 0x28);
+    p.query(p.base + LOCK, &[(s + 0x20) as u64]);
+    p.m.w::<u32>(s + 0x40, p.m.r32(s + 0x40) | 8);
+    p.query(p.base + UNLOCK, &[(s + 0x20) as u64]);
+    let ctx = p.m.r64(arg);
+    let (pass3, flag) = (p.m.r8(ctx + 0x31) == 3, p.m.r8(p.m.r64(this + 0x28) + 0x13c1));
+    if !(if main_pass { pass3 && flag == 0 } else { !pass3 || flag == 1 }) {
+        return Ok(());
+    }
+    let s = p.m.r64(this + 0x28);
+    p.m.w::<u64>(s + 0x13d0, p.m.r64(this + 0x20) as u64);
+    p.m.w::<u32>(s + 0x13e0, p.m.r8(ctx + 0x30) as u32 | p.m.r32(this + 0xe00) << 8);
+    let (sys, info) = (p.m.r64(s + 0x4e8), s + 5000);
+    // Pass 7's light setup (sub_8fd654, float arguments) is not ported: the game draws that pass.
+    if p.m.r8(ctx + 0x31) == 7 {
+        p.helper("cave chunk light pass", 0x98434c, &[sys as u64, arg as u64, mode as u64, info as u64])?;
+        return Ok(());
+    }
+    if p.m.r8(info + 2) == 0 {
+        return Ok(());
+    }
+    if p.m.r64(sys) != 0 {
+        let t0 = p.query(p.base + TICK, &[]);
+        let mut params = [0u8; 0xc0];
+        params[0x30..0x38].copy_from_slice(&(p.m.r64(info + 0x48) as u64).to_le_bytes());
+        params[0x40..0x44].copy_from_slice(&p.m.r32(info + 0x58).to_le_bytes());
+        params[0xb5] = p.m.r8(info + 0xcd);
+        params[0xb6] = p.m.r8(info + 0xce);
+        params[0xb8..0xc0].copy_from_slice(&(p.m.r64(info + 0xd0) as u64).to_le_bytes());
+        chunks(p, p.m.r64(sys), arg, mode, params.as_ptr() as usize)?;
+        let t1 = p.query(p.base + TICK, &[]);
+        p.m.w::<u64>(sys + 0xb8, t1.wrapping_sub(t0).wrapping_add(p.m.r64(sys + 0xb8) as u64));
+        p.m.w::<u32>(sys + 0xc0, p.m.r32(sys + 0xc0).wrapping_add(1));
+        if p.m.r8(info + 2) == 0 {
+            return Ok(());
+        }
+    }
+    if p.m.r64(sys + 8) != 0 {
+        let mut params = [0u8; 0xb0];
+        p.query(p.base + CHUNK_PARAMS, &[params.as_mut_ptr() as u64, info as u64]);
+        let t0 = p.query(p.base + TICK, &[]);
+        second_set(p, p.m.r64(sys + 8), arg, mode, params.as_ptr() as usize)?;
+        let t1 = p.query(p.base + TICK, &[]);
+        p.m.w::<u64>(sys + 0xb8, t1.wrapping_sub(t0).wrapping_add(p.m.r64(sys + 0xb8) as u64));
+        p.m.w::<u32>(sys + 0xc0, p.m.r32(sys + 0xc0).wrapping_add(1));
+    }
+    Ok(())
+}
+
+/// The plane test of main+0x984528's culling: some plane (normal at +0, distance at +0xc) has the box's corner
+/// along its normal in front of it.
+unsafe fn outside(p: &Port, plane: usize, bounds: usize, d_first: bool) -> bool {
+    let (nx, ny, nz, d) = (p.m.f32(plane), p.m.f32(plane + 4), p.m.f32(plane + 8), p.m.f32(plane + 0xc));
+    let corner = |n: f32, k: usize| if n > 0.0 { p.m.f32(bounds + k * 4) } else { p.m.f32(bounds + 0xc + k * 4) };
+    let s = nx * corner(nx, 0) + ny * corner(ny, 1) + nz * corner(nz, 2);
+    if d_first { d + s > 0.0 } else { s - d > 0.0 }
+}
+
+/// main+0x984528(this, arg, mode, params): named blocks, the worker's vertex state, then the group's records last to
+/// first: culling, uniform updates, the worker's vertex and index buffers re-initialized over the record's storage,
+/// vertex buffers bound, the indexed draw.
+unsafe fn chunks(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) -> R<()> {
+    let ctx = p.m.r64(arg);
+    let w = p.m.r64(ctx + 0x20);
+    load_resource(p, ctx, p.m.r64(arg + 8))?;
+    let program = p.m.r64(p.m.r64(arg + 0x10));
+    let mut user = [0xffff_ffffu32; 4];
+    for (k, n) in [&b"gsys_user0\0"[..], b"gsys_user1\0", b"gsys_user2\0", b"gsys_user3\0"].iter().enumerate() {
+        user[k] = slot_by_name(p, SLOT_BY_NAME, program, n);
+    }
+    for (k, (block, addr)) in [(0x158, 0x1d0), (0x2d8, 0x350), (0x398, 0x410), (0x458, 0x4d0)].iter().enumerate() {
+        bind_named_block(p, this + block, w, p.m.r64(this + addr) as u64, user[k])?;
+    }
+    let cmd = p.m.r64(w + 0xb8);
+    let core = worker(p);
+    let pick = |p: &Port, n: usize| if p.m.r32(this + n) > core { core } else { 0 };
+    let pc = (p.m.r64(this + 0x5a0) as i64 + pick(p, 0x598) as i32 as i64 * 0x340) as usize;
+    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd as u64, 0x10, (pc + 0x27c) as u64]);
+    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd as u64, 0x10, (pc + 0x2c0) as u64]);
+    let view = p.m.r8(ctx + 0x46) as usize;
+    let frustum = p.m.r64(p.m.r64(ctx + 0x10) + 0x18) + view * 0x430 + 0x60;
+    let shadow = p.m.r64(info + 0x30);
+    let (mut cascade, mut cascade_index) = (0usize, 0u32);
+    if shadow != 0 && p.m.r8(ctx + 0x31) == 8 && (5..=8).contains(&view) {
+        let mut k = p.m.r8(ctx + 0x30) as u32;
+        if p.m.r32(shadow + 0xd20) <= k {
+            k = 0;
+        }
+        cascade = p.m.r64(shadow + 0xd28) + k as usize * 0xb48;
+        cascade_index = (view as u32 - 5) & 0xff;
+    }
+    let culled = p.m.r8(info + 0xb5) != 0;
+    let occluder = if p.m.r8(info + 0xb6) != 0 { p.m.r64(info + 0xb8) } else { 0 };
+    let cascade = if culled { cascade } else { 0 };
+    let frustum = if culled { frustum } else { 0 };
+    let groups = p.m.r64(this + 0x5a8);
+    let n = p.m.i32(this + 0x5b4).max(0) as usize;
+    let want = p.m.r32(info + 0x40);
+    let mut drawn = 0u32;
+    if let Some(g) = (0..n).map(|k| groups + k * 0x14).find(|&g| p.m.r32(g) == want) {
+        let core2 = worker(p);
+        let ib = (p.m.r64(this + 0x8b8) as i64 + (if p.m.r32(this + 0x8b0) > core2 { core2 } else { 0 }) as i32 as i64 * 0x60) as usize;
+        let core3 = worker(p);
+        let (start, end) = (p.m.i32(g + 0xc) as i64, p.m.i32(g + 0x10) as i64);
+        let table = p.base + CHUNK_DRAWS + (cascade != 0) as usize * 0x2d;
+        let (mut last1, mut last2) = (-1i32, -1i32);
+        let mut i = end;
+        while i > start {
+            i -= 1;
+            let rec = p.m.r64(this + 0x98) + i as usize * 0x30;
+            let idx = p.m.i32(rec + 0x1c) as i64;
+            let ent = (p.m.r64(this + 0x38) as i64 + idx * 0x40) as usize;
+            if p.m.r64(ent) == 0 {
+                continue;
+            }
+            let lod = p.m.i32(ent + 0x1c).min(2) as i64;
+            let k = (table as i64 + lod * 15 + mode as i32 as i64 * 5 + p.m.r16(rec + 0x28) as i64) as usize;
+            if p.m.r8(k) == 0 {
+                continue;
+            }
+            let bounds = (p.m.r64(this + 0x58) as i64 + idx * 0x18) as usize;
+            if cascade != 0 {
+                let mut c = cascade_index;
+                if p.m.r32(cascade + 0x360) <= c {
+                    c = 0;
+                }
+                let planes = p.m.r64(cascade + 0x368) + c as usize * 0x590;
+                let np = p.m.i32(planes + 0x3f8);
+                if (0..np.max(0) as usize).any(|k| outside(p, planes + (if k < 0x18 { k } else { 0 }) * 0x10 + 0x3fc, bounds, false)) {
+                    continue;
+                }
+            } else if frustum != 0 {
+                let f = |o: usize| p.m.f32(frustum + o);
+                let b = |o: usize| p.m.f32(bounds + o);
+                if !(b(0) <= f(0x210)) || !(f(0x204) <= b(0xc)) || !(b(4) <= f(0x214)) || !(f(0x208) <= b(0x10)) {
+                    continue;
+                }
+                if !(b(8) <= f(0x218)) || !(f(0x20c) <= b(0x14)) {
+                    continue;
+                }
+                if (0..6).any(|k| outside(p, frustum + 0x1a4 + k * 0x10, bounds, true)) {
+                    continue;
+                }
+                if occluder != 0 && p.query(p.base + IN_OCCLUDER, &[occluder as u64, bounds as u64]) & 1 == 0 {
+                    continue;
+                }
+            }
+            let v = p.m.i32(ent + 8);
+            if last1 != v {
+                let mut u = v as u32;
+                if p.m.r32(this + 0x108) <= u {
+                    u = 0;
+                }
+                let src = (p.m.r64(this + 0x110) as i64 + u as i32 as i64 * 0x30) as u64;
+                p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x350) as u64, p.m.r64(this + 0x2c8) as u64, 0, 0x30, src]);
+                last1 = p.m.i32(ent + 8);
+            }
+            if last2 != last1 {
+                let block = p.m.r64(p.m.r64(p.m.r64(ent)) + 8);
+                let x = p.m.r64(block + 0xa0) as u64;
+                let size = ((x as i64) >> 27) as u64 & !0x1f;
+                p.call(
+                    p.pfn(PFN_UPDATE_UNIFORM_BUFFER),
+                    &[cmd as u64, p.m.r64(this + 0x410) as u64, p.m.r64(this + 0x388) as u64, 0, size, block as u64 + (x & 0xffff_ffff)],
+                );
+                last2 = p.m.i32(ent + 8);
+            }
+            let src = (p.m.r64(this + 0x78) as i64 + idx * 0x60) as u64;
+            p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x4d0) as u64, p.m.r64(this + 0x448) as u64, 0, 0x60, src]);
+            // The worker's vertex buffer over the record's storage.
+            let k3 = if p.m.r32(this + 0x598) > core3 { core3 } else { 0 };
+            let vb = (p.m.r64(this + 0x5a0) as i64 + k3 as i32 as i64 * 0x340) as usize;
+            p.m.w::<u32>(vb + 0x138, p.m.r32(rec));
+            p.m.w::<u32>(vb + 0x13c, p.m.r32(rec + 4));
+            p.m.w::<u32>(vb + 0x158, p.m.r32(rec + 0x18));
+            p.m.w::<u64>(vb + 0x140, p.m.r64(rec + 8) as u64);
+            p.m.w::<u64>(vb + 0x148, p.m.r64(rec + 0x10) as u64);
+            let counters = p.m.r64(p.m.r64(p.base + GRAPHICS_HOLDER));
+            p.reinit_buffer(vb + 0x48, counters + 0x810, p.m.r64(vb + 0x140), p.m.r32(vb + 0x138), p.m.r32(vb + 0x158));
+            let streams = p.m.r32(vb + 0x268) as usize;
+            let list = p.m.r64(vb + 0x270);
+            for k in 0..streams {
+                let e = p.m.r64(list + k * 8);
+                if e == 0 {
+                    continue;
+                }
+                let a = p.buffer_address_of(e + 8);
+                let size = p.m.r32(e + 0x118);
+                p.m.w::<u8>(cmd + 0x10, 1);
+                p.call(p.pfn(PFN_BIND_VERTEX_BUFFER), &[cmd as u64, k as u64, a, size as u64]);
+            }
+            // The worker's index buffer over the same storage (+0x28: half the record's size, in elements of +0x2c).
+            p.m.w::<u32>(ib + 0x10, p.m.r32(rec));
+            p.m.w::<u32>(ib + 0x14, p.m.r32(rec + 4));
+            p.m.w::<u64>(ib + 0x18, p.m.r64(rec + 8) as u64);
+            p.m.w::<u64>(ib + 0x20, p.m.r64(rec + 0x10) as u64);
+            p.m.w::<i32>(ib + 0x28, p.m.i32(rec + 0x18) >> 1);
+            p.reinit_buffer(ib + 0x30, counters + 0x81c, p.m.r64(ib + 0x18), p.m.r32(ib + 0x10), p.m.r32(ib + 0x28).wrapping_mul(p.m.r32(ib + 0x2c)));
+            let count = p.m.r32(rec + 0x24);
+            if count != 0 {
+                let prim = p.m.r32(ib + 0xc) as u64;
+                let first = p.m.r32(rec + 0x20);
+                let addr = p.buffer_address_of(ib + 0x30).wrapping_add(p.m.r32(ib + 0x2c).wrapping_mul(first) as u64);
+                let itype = p.m.r32(ib + 8) as u64;
+                p.m.w::<u8>(cmd + 0x10, 1);
+                p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, count as u64, addr]);
+            }
+            drawn = drawn.wrapping_add(p.m.r32(rec + 0x24));
+        }
+    }
+    p.m.w::<u32>(ctx + 0x34, p.m.r32(ctx + 0x34).wrapping_add(drawn / 3));
+    Ok(())
+}
+
+/// main+0x9859e4(this, arg, mode, params): named blocks and storage buffers (main+0x1387188); in mode 0 the group's
+/// chunks drawn one instance each with their index as base instance (main+0x13876c8).
+unsafe fn second_set(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) -> R<()> {
+    let ctx = p.m.r64(arg);
+    let w = p.m.r64(ctx + 0x20);
+    load_resource(p, ctx, p.m.r64(arg + 8))?;
+    let program = p.m.r64(p.m.r64(arg + 0x10));
+    let user0 = slot_by_name(p, SLOT_BY_NAME, program, b"gsys_user0\0");
+    bind_named_block(p, this + 0x4760, w, p.m.r64(this + 0x47d8) as u64, user0)?;
+    for (n, obj) in [
+        (&b"cave_CaveInstanceDynamicDataSSBO\0"[..], this + 8),
+        (b"cave_ChunkDynamicDataSSBO\0", this + 0x198),
+        (b"cave_DrawCallDataSSBO\0", this + 0x328),
+    ] {
+        let slot = slot_by_name(p, STORAGE_SLOT_BY_NAME, program, n);
+        if slot != 0xffff_ffff {
+            bind_named_block(p, obj + 0x40, w, p.m.r64(obj + 0xb8) as u64, slot)?;
+        }
+    }
+    let view = p.m.r8(ctx + 0x46) as usize;
+    let shadow = p.m.r64(info + 0x20);
+    let (mut cascade, mut cascade_index) = (0usize, 0u32);
+    if shadow != 0 && p.m.r8(ctx + 0x31) == 8 && (5..=8).contains(&view) {
+        cascade_index = view as u32 - 5;
+        let mut k = p.m.r8(ctx + 0x30) as u32;
+        if p.m.r32(shadow + 0xd20) <= k {
+            k = 0;
+        }
+        cascade = p.m.r64(shadow + 0xd28) + k as usize * 0xb48;
+    }
+    if mode != 0 {
+        return Ok(());
+    }
+    let culled = p.m.r8(info + 0xa5) != 0;
+    let cascade = if culled { cascade } else { 0 };
+    let frustum = if culled { p.m.r64(p.m.r64(ctx + 0x10) + 0x18) + view * 0x430 + 0x60 } else { 0 };
+    let group = p.m.r32(info + 0x30);
+    let groups = p.m.r64(this + 0x4f8);
+    let n = p.m.i32(this + 0x504).max(0) as usize;
+    let Some(g) = (0..n).map(|k| groups + k * 0x14).find(|&g| p.m.r32(g) == group) else { return Ok(()) };
+    let (start, end) = (p.m.i32(g + 0xc), p.m.i32(g + 0x10));
+    for i in start..end {
+        let rec = (p.m.r64(this + 0x4d8) as i64 + i as i64 * 0xc) as usize;
+        let chunk = (p.m.r64(this + 0x4b8) as i64 + p.m.i32(rec) as i64 * 0x50) as usize;
+        if p.m.r8(chunk + 0x20) != 0 {
+            continue;
+        }
+        let (first, count) = (p.m.r32(rec + 4), p.m.r32(rec + 8));
+        let visible = if cascade != 0 {
+            p.query(p.base + IN_CASCADE, &[cascade as u64, (chunk + 0x34) as u64, cascade_index as u64]) & 1 != 0
+        } else if frustum != 0 {
+            p.query(p.base + IN_FRUSTUM_BOX, &[frustum as u64, (chunk + 0x34) as u64, (chunk + 0x40) as u64]) & 1 != 0
+        } else {
+            true
+        };
+        if count != 0 && visible {
+            mesh_elements(p, this + 0x4a98, w, first, count, 1, 0, i);
+        }
+    }
+    Ok(())
+}
