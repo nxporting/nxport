@@ -7,6 +7,15 @@ use super::draw::{load_resource, Port, R};
 /// Draws of delegate targets the port does not implement: (main+ target, count).
 static TARGETS: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
 
+/// Draws of delegate targets the port draws: (main+ target, count).
+static PORTED: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
+
+pub(super) fn ported_report() -> String {
+    let mut g = std::mem::take(&mut *PORTED.lock().unwrap());
+    g.sort_by(|a, b| b.1.cmp(&a.1));
+    g.iter().map(|(f, n)| format!("main+{f:#x} {n}")).collect::<Vec<_>>().join(", ")
+}
+
 pub(super) fn report() -> String {
     let mut g = std::mem::take(&mut *TARGETS.lock().unwrap());
     g.sort_by(|a, b| b.1.cmp(&a.1));
@@ -36,6 +45,13 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, lod: u32, flags: u32
         let (obj, adj) = (p.m.r64(delegate + 8), p.m.r64(delegate + 0x18));
         obj.wrapping_add(((adj as i64) >> 1) as usize)
     };
+    {
+        let mut g = PORTED.lock().unwrap();
+        match g.iter_mut().find(|x| x.0 == target) {
+            Some(x) => x.1 += 1,
+            None => g.push((target, 1)),
+        }
+    }
     match target {
         0x137c740 => return super::cave::target(p, this, arg.as_ptr() as usize, 1, true),
         0x137c7f4 => return super::cave::target(p, this, arg.as_ptr() as usize, 2, true),
@@ -49,6 +65,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, lod: u32, flags: u32
         0x137c4bc => return super::cave::instanced_target(p, this, arg.as_ptr() as usize, 3),
         0x137ca10 => return super::cave::target(p, this, arg.as_ptr() as usize, 5, true),
         0x2ad00a0 => return per_view(p, this, arg.as_ptr() as usize),
+        0x27da4cc => return super::grid::gate(p, this, arg.as_ptr() as usize),
         _ => {}
     }
     note(target);

@@ -2794,6 +2794,11 @@ pub fn capture_finish() -> Option<(Vec<String>, Vec<String>)> {
     }
 }
 
+/// Whether this thread collects its commands (a prediction or a check is under way).
+pub fn capturing() -> bool {
+    CAPTURE.with(|c| c.borrow().is_some())
+}
+
 /// Collects the command when this thread captures; true when it must not be recorded.
 fn capture(text: impl FnOnce() -> String) -> bool {
     CAPTURE.with(|c| {

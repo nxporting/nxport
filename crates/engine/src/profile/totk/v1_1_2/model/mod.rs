@@ -5,6 +5,7 @@
 mod cave;
 mod dispatch;
 mod draw;
+mod grid;
 mod mem;
 mod render_list;
 mod ring;
@@ -18,6 +19,9 @@ const SITE_INSTRUCTION: u32 = 0xd10383ff; // sub sp, sp, #0xe0
 /// The render-list loop (render_list.rs).
 const LIST_SITE: usize = 0x12de2a0;
 const LIST_SITE_INSTRUCTION: u32 = 0xd10183ff; // sub sp, sp, #0x60
+/// The dispatch drawable's draw (dispatch.rs), checked by itself when no enclosing render list is.
+const DISPATCH_SITE: usize = 0x763718;
+const DISPATCH_SITE_INSTRUCTION: u32 = 0xd10143ff; // sub sp, sp, #0x50
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
 static SAME: AtomicU64 = AtomicU64::new(0);
@@ -144,6 +148,74 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
     0
 }
 
+static DISPATCH_CALLS: AtomicU64 = AtomicU64::new(0);
+static DISPATCH_SAME: AtomicU64 = AtomicU64::new(0);
+static DISPATCH_DIFFERENT: AtomicU64 = AtomicU64::new(0);
+static DISPATCH_STOPS: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static DISPATCH_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// --verify-render-lists: a dispatch drawable drawn by the game (its render list was not predicted) is predicted by
+/// itself and compared.
+#[no_mangle]
+pub unsafe extern "C" fn on_dispatch(d: usize, c: usize, lod: u32, flags: u32) -> u32 {
+    if crate::nvn::api::capturing() {
+        return 0;
+    }
+    DISPATCH_CALLS.fetch_add(1, Ordering::Relaxed);
+    let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+    let mut result = Ok(());
+    let expected = crate::nvn::api::capture_dry(|| result = dispatch::draw(&mut port, d, c, lod, flags));
+    match result {
+        Ok(()) => {
+            DISPATCH_EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            ring::watch();
+            crate::nvn::api::capture_collect();
+        }
+        Err(what) => {
+            ring::discard();
+            let mut s = DISPATCH_STOPS.lock().unwrap();
+            match s.iter_mut().find(|x| x.0 == what) {
+                Some(x) => x.1 += 1,
+                None => s.push((what, 1)),
+            }
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_dispatch_end() -> u32 {
+    let Some(expected) = DISPATCH_EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
+    let got = crate::nvn::api::capture_collected();
+    let expected = match ring::resolve(expected) {
+        Ok(e) => e,
+        Err(why) => {
+            DISPATCH_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+            println!("[model-draw] dispatch mismatch: {why}");
+            return 0;
+        }
+    };
+    if expected == got {
+        DISPATCH_SAME.fetch_add(1, Ordering::Relaxed);
+        return 0;
+    }
+    let k = DISPATCH_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+    if k < 6 {
+        println!("[model-draw] dispatch mismatch #{k}:");
+        for i in 0..expected.len().max(got.len()) {
+            let (e, g) = (expected.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
+            println!("[model-draw]   {} port: {e}", if e == g { " " } else { "!" });
+            if e != g {
+                println!("[model-draw]     game: {g}");
+            }
+        }
+    }
+    0
+}
+
 fn report() {
     let (n, same, diff) = (CALLS.load(Ordering::Relaxed), SAME.load(Ordering::Relaxed), DIFFERENT.load(Ordering::Relaxed));
     let mut s = STOPS.lock().unwrap().clone();
@@ -153,6 +225,14 @@ fn report() {
         draw::UNKNOWN_VFNS.lock().unwrap().iter().map(|(slot, f)| format!("+{slot:#x}=main+{f:#x}")).collect();
     if !vf.is_empty() {
         println!("[model-draw] virtual functions met: {}", vf.join(" "));
+    }
+    let dp = dispatch::ported_report();
+    if !dp.is_empty() {
+        println!("[model-draw] dispatch targets reached: {dp}");
+    }
+    let gt = grid::report();
+    if !gt.is_empty() {
+        println!("[model-draw] grid targets left to the game: {gt}");
     }
     let dt = dispatch::report();
     if !dt.is_empty() {
@@ -165,6 +245,18 @@ fn report() {
     let dr = render_list::drawables_report();
     if !dr.is_empty() {
         println!("[model-draw] drawables left to the game: {dr}");
+    }
+    let dn = DISPATCH_CALLS.load(Ordering::Relaxed);
+    if dn != 0 {
+        let mut s = DISPATCH_STOPS.lock().unwrap().clone();
+        s.sort_by(|a, b| b.1.cmp(&a.1));
+        let stops: Vec<String> = s.iter().map(|(w, k)| format!("{w} {:.1}%", *k as f64 * 100.0 / dn as f64)).collect();
+        println!(
+            "[model-draw] dispatch draws checked by themselves: {dn}, {:.1}% identical, {} different; unported: {}",
+            DISPATCH_SAME.load(Ordering::Relaxed) as f64 * 100.0 / dn as f64,
+            DISPATCH_DIFFERENT.load(Ordering::Relaxed),
+            stops.join(", ")
+        );
     }
     println!(
         "[model-draw] {n} calls: {:.1}% identical, {diff} different; unported: {}",
@@ -188,6 +280,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_list(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
         hook(base, mem_space, LIST_SITE, LIST_SITE_INSTRUCTION, pre, post, "Render list");
+    }
+    if d.verify_render_lists {
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_dispatch(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_dispatch_end())) as usize;
+        hook(base, mem_space, DISPATCH_SITE, DISPATCH_SITE_INSTRUCTION, pre, post, "Dispatch draw");
     }
     if d.verify_render_lists || d.verify_model_draws {
         let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc(_))) as usize;
