@@ -7,6 +7,7 @@ mod dispatch;
 mod draw;
 mod mem;
 mod render_list;
+mod ring;
 mod terrain;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -60,9 +61,13 @@ pub unsafe extern "C" fn on_model_draw(d: usize, c: usize, shape: u32, flags: u3
     match result {
         Ok(()) => {
             EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            ring::watch();
             crate::nvn::api::capture_collect();
         }
-        Err(what) => note_stop(what),
+        Err(what) => {
+            ring::discard();
+            note_stop(what)
+        }
     }
     0
 }
@@ -71,6 +76,16 @@ pub unsafe extern "C" fn on_model_draw(d: usize, c: usize, shape: u32, flags: u3
 pub unsafe extern "C" fn on_model_draw_end() -> u32 {
     let Some(expected) = EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
     let got = crate::nvn::api::capture_collected();
+    let expected = match ring::resolve(expected) {
+        Ok(e) => e,
+        Err(why) => {
+            let k = DIFFERENT.fetch_add(1, Ordering::Relaxed);
+            if k < 6 {
+                println!("[model-draw] mismatch #{k}: {why}");
+            }
+            return 0;
+        }
+    };
     if expected == got {
         SAME.fetch_add(1, Ordering::Relaxed);
         return 0;
@@ -118,9 +133,13 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
     match result {
         Ok(()) => {
             EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            ring::watch();
             crate::nvn::api::capture_collect();
         }
-        Err(what) => note_stop(what),
+        Err(what) => {
+            ring::discard();
+            note_stop(what)
+        }
     }
     0
 }
@@ -169,6 +188,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_list(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
         hook(base, mem_space, LIST_SITE, LIST_SITE_INSTRUCTION, pre, post, "Render list");
+    }
+    if d.verify_render_lists || d.verify_model_draws {
+        let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc(_))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc_end())) as usize;
+        hook(base, mem_space, ring::SITE, ring::SITE_INSTRUCTION, pre, post, "Ring allocation");
     }
 }
 
