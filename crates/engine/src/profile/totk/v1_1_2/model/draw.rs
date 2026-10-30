@@ -13,6 +13,11 @@ pub(super) type R<T> = Result<T, &'static str>;
 // The game's NVN entry point variables (main+): filled through nvnDeviceGetProcAddress.
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
+const PFN_BUFFER_FINALIZE: usize = 0x466d808;
+const PFN_BUFFER_INITIALIZE: usize = 0x466d7f8;
+const PFN_BUFFER_BUILDER_SET_DEVICE: usize = 0x466d7c0;
+const PFN_BUFFER_BUILDER_SET_DEFAULTS: usize = 0x466d7c8;
+const PFN_BUFFER_BUILDER_SET_STORAGE: usize = 0x466d7d0;
 const PFN_CALL_COMMANDS: usize = 0x466df60;
 const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
 const PFN_BIND_TEXTURE: usize = 0x466e008;
@@ -70,6 +75,8 @@ pub(super) struct Port {
     pub(super) native: bool,
     /// The unit call waiting for its draws: (NVNcommandBuffer, list handle, ranges). Recorded before anything else is.
     pending: std::cell::RefCell<Option<(usize, u64, smallvec::SmallVec<[crate::nvn::cmd::ModelRange; 2]>)>>,
+    /// Predicting: NVNbuffer objects re-initialized so far, with the address they got.
+    buffers: Vec<(usize, u64)>,
 }
 
 impl Port {
@@ -78,7 +85,7 @@ impl Port {
     }
 
     pub(super) fn new(m: Mem, base: usize, native: bool) -> Self {
-        Port { m, base, native, pending: Default::default() }
+        Port { m, base, native, pending: Default::default(), buffers: Vec::new() }
     }
 
     /// Records the pending unit draw (anything recorded after it must come after it in the stream).
@@ -143,6 +150,36 @@ impl Port {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.flush();
         *self.pending.borrow_mut() = Some((cmd, self.m.r64(handles) as u64, Default::default()));
+    }
+
+    /// nvnBufferGetAddress of `buf`, as re-initialized by the prediction so far.
+    pub(super) unsafe fn buffer_address_of(&self, buf: usize) -> u64 {
+        if let Some(&(_, a)) = self.buffers.iter().rev().find(|b| b.0 == buf) {
+            return a;
+        }
+        self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[buf as u64])
+    }
+
+    /// The game's buffer re-initialization: nvnBufferFinalize of `buf` (the live buffer count at `counter` down),
+    /// nvnBufferInitialize with storage (`pool`, `offset`, `size`) (the count up). Predicting records the address.
+    pub(super) unsafe fn reinit_buffer(&mut self, buf: usize, counter: usize, pool: usize, offset: u32, size: u32) {
+        if self.m.predict() {
+            let a = crate::nvn::api::buffer_address(pool, offset as u64);
+            self.buffers.push((buf, a));
+            return;
+        }
+        use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
+        let count = &*(counter as *const AtomicI32);
+        self.call(self.pfn(PFN_BUFFER_FINALIZE), &[buf as u64]);
+        count.fetch_sub(1, SeqCst);
+        let mut builder = [0u64; 16];
+        let b = builder.as_mut_ptr() as u64;
+        let dev = self.m.r64(self.m.r64(self.m.r64(self.base + DEVICE_HOLDER)) + 0x30);
+        self.call(self.pfn(PFN_BUFFER_BUILDER_SET_DEVICE), &[b, dev as u64]);
+        self.call(self.pfn(PFN_BUFFER_BUILDER_SET_DEFAULTS), &[b]);
+        self.call(self.pfn(PFN_BUFFER_BUILDER_SET_STORAGE), &[b, pool as u64, offset as u64, size as u64]);
+        self.call(self.pfn(PFN_BUFFER_INITIALIZE), &[buf as u64, b]);
+        count.fetch_add(1, SeqCst);
     }
 
     /// main+0x96b068: a uniform block from the frame's GPU ring holding `size` bytes copied from `data`.

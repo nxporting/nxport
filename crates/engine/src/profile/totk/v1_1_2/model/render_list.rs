@@ -237,6 +237,7 @@ unsafe fn entry_state(p: &mut Port, c: usize, e: usize) -> R<()> {
             match p.delegate_target(hook) {
                 Some(None) => {}
                 Some(Some(STATE_HOOK)) => state_hook(p, p.m.r32(c + 0xb0), c + 0x128),
+                Some(Some(0x27d0464)) => {}
                 t => {
                     note_drawable(match t { Some(Some(f)) => f, _ => 0x1_0000_0000 | p.vfn(hook, 0) } | 1 << 41);
                     p.helper("render state hook", p.vfn(hook, 0), &[hook as u64, arg.as_ptr() as u64])?;

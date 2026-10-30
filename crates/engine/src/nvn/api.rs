@@ -3122,6 +3122,13 @@ pub unsafe extern "C" fn hle_nvnBufferInitialize(
     );
     1
 }
+/// The address nvnBufferInitialize gives a buffer with storage (`pool`, `offset`).
+pub unsafe fn buffer_address(pool: usize, offset: u64) -> u64 {
+    if pool == 0 {
+        return 0;
+    }
+    translate_virtual((*(pool as *const NvnMemoryPool)).memory + offset as usize) as u64
+}
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnBufferFinalize(buf: *mut NvnBuffer) {
     record_hle_call("hle_nvnBufferFinalize");

@@ -41,6 +41,9 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, lod: u32, flags: u32
         0x137c7f4 => return super::cave::target(p, this, arg.as_ptr() as usize, 2, true),
         0x137c95c => return super::cave::target(p, this, arg.as_ptr() as usize, 4, true),
         0xad2978 => return super::cave::target(p, this, arg.as_ptr() as usize, 0, false),
+        0x137c5d8 => return super::cave::chunk_target(p, this, arg.as_ptr() as usize, 1, true),
+        0x137c68c => return super::cave::chunk_target(p, this, arg.as_ptr() as usize, 2, true),
+        0x984294 => return super::cave::chunk_target(p, this, arg.as_ptr() as usize, 0, false),
         0x85ff40 => return super::cave::instanced_target(p, this, arg.as_ptr() as usize),
         0x2ad00a0 => return per_view(p, this, arg.as_ptr() as usize),
         _ => {}
