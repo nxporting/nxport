@@ -7,8 +7,27 @@ use super::draw::{self, Port, R};
 
 const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
 const MODEL_DRAW: usize = 0x688c68;
+const TERRAIN_DRAW: usize = 0x2a47078;
 const DELEGATE_INVOKE: usize = 0x27d0a6c;
 const STATE_HOOK: usize = 0x27d0468;
+
+/// Draws of drawables the port does not draw: (main+ draw function, count).
+static DRAWABLES: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
+
+fn note_drawable(f: usize) {
+    let mut g = DRAWABLES.lock().unwrap();
+    match g.iter_mut().find(|x| x.0 == f) {
+        Some(x) => x.1 += 1,
+        None => g.push((f, 1)),
+    }
+}
+
+/// The drawables the port left to the game since the last report, most frequent first.
+pub(super) fn drawables_report() -> String {
+    let mut g = std::mem::take(&mut *DRAWABLES.lock().unwrap());
+    g.sort_by(|a, b| b.1.cmp(&a.1));
+    g.iter().take(12).map(|(f, n)| format!("main+{f:#x} {n}")).collect::<Vec<_>>().join(", ")
+}
 
 /// sub_12de2a0(list, count, ctx, mask, _, flags).
 pub(super) unsafe fn draw_list(p: &mut Port, list: usize, count: u32, c: usize, mask: u32, flags: u32) -> R<()> {
@@ -23,7 +42,10 @@ pub(super) unsafe fn draw_list(p: &mut Port, list: usize, count: u32, c: usize, 
         let f = p.vfn(d, 0x60);
         if f == MODEL_DRAW {
             draw::draw(p, d, c, sub, flags)?;
+        } else if f == TERRAIN_DRAW {
+            super::terrain::draw(p, d, c, sub, flags)?;
         } else {
+            note_drawable(f);
             p.helper("drawable draw", f, &[d as u64, c as u64, sub as u64, flags as u64])?;
         }
     }

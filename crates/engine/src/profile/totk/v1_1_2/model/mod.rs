@@ -5,6 +5,7 @@
 mod draw;
 mod mem;
 mod render_list;
+mod terrain;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -131,6 +132,14 @@ fn report() {
         draw::UNKNOWN_VFNS.lock().unwrap().iter().map(|(slot, f)| format!("+{slot:#x}=main+{f:#x}")).collect();
     if !vf.is_empty() {
         println!("[model-draw] virtual functions met: {}", vf.join(" "));
+    }
+    let tv = terrain::report();
+    if !tv.is_empty() {
+        println!("[model-draw] terrain variants left to the game: {tv}");
+    }
+    let dr = render_list::drawables_report();
+    if !dr.is_empty() {
+        println!("[model-draw] drawables left to the game: {dr}");
     }
     println!(
         "[model-draw] {n} calls: {:.1}% identical, {diff} different; unported: {}",

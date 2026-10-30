@@ -120,7 +120,7 @@ impl Port {
         self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
     }
 
-    unsafe fn call_commands(&mut self, cmd: usize, handles: usize) {
+    pub(super) unsafe fn call_commands(&mut self, cmd: usize, handles: usize) {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.call(self.pfn(PFN_CALL_COMMANDS), &[cmd as u64, 1, handles as u64]);
     }
@@ -174,7 +174,7 @@ impl Port {
     }
 
     /// sub_887400: binds element `index` of uniform block object `obj` to the stages / slots packed in `slots`.
-    unsafe fn bind_uniform_block(&mut self, obj: usize, w: usize, slots: u32, index: i32) -> R<bool> {
+    pub(super) unsafe fn bind_uniform_block(&mut self, obj: usize, w: usize, slots: u32, index: i32) -> R<bool> {
         let shift = self.m.r8(obj + 0x42) >> 4;
         let mut addr = self.m.r64(obj + 0x78) as u64;
         let count = self.m.r16(obj + 0x40) as u32;
@@ -356,7 +356,7 @@ impl Port {
     }
 
     /// sub_758644: draws `count` sub-meshes of shape record `sh` from `first` as `instances` instances.
-    unsafe fn draw_shape(&mut self, sh: usize, w: usize, first: u32, count: u32, instances: i32, base_instance: i32) {
+    pub(super) unsafe fn draw_shape(&mut self, sh: usize, w: usize, first: u32, count: u32, instances: i32, base_instance: i32) {
         let last = (first as i32 + count as i32 - 1) as isize as usize;
         let (addr, n) = self.range(sh, first as usize, last);
         let (prim, itype, bv) = (self.m.r32(sh + 0x24), self.m.r32(sh + 0x28), self.m.i32(sh + 0x30));
@@ -524,10 +524,66 @@ impl Port {
 
 /// Port of main+0x688c68.
 pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u32) -> R<()> {
-    let base = p.base;
     if ((p.m.r8(d + 0x1c) >> 4) & 7) as i32 <= shape as i32 {
         return Ok(());
     }
+    if !load_resource(p, c, d)? {
+        return Ok(());
+    }
+    let w = p.m.r64(c + 0x20); // command buffer wrapper (NVNcommandBuffer* at +0xb8)
+    let mut b31 = p.m.r8(d + 0x47);
+    if ((flags & b31 as u32) >> 3) & 1 != 0 {
+        let r = p.helper("sub_68b3fc", 0x68b3fc, &[p.m.r64(d + 0x80) as u64, w as u64, p.m.i8(c + 0x30) as i64 as u64, 0])?;
+        if r & 1 == 0 {
+            return Ok(());
+        }
+        b31 = p.m.r8(d + 0x47);
+    }
+    if (b31 >> 5) & 1 != 0 {
+        p.helper("sub_68b500", 0x68b500, &[d as u64, c as u64])?;
+    }
+    b31 = p.m.r8(d + 0x47);
+    let model = p.m.r64(d + 0x68);
+    let f = b31 as u32 & flags;
+    let tris: i32;
+    if f & 0x51 == 0 {
+        let mut instances = p.m.r16(d + 0x4a);
+        let s = shape as i32 as isize as usize;
+        let list_rec = p.m.r64(model + 0x8c8) + s * 0x268;
+        let mut direct = true;
+        if instances < 2 {
+            instances = 1;
+            if p.m.r8(list_rec + 0x50) & 1 != 0 && p.m.i8(c + 0x40) < 0 {
+                let cmd = p.m.r64(w + 0xb8);
+                p.call_commands(cmd, list_rec + 0x48);
+                direct = false;
+            }
+        }
+        if direct {
+            let sh = p.m.r64(p.m.r64(model + 8) + 0x18) + s * 0x38;
+            p.draw_shape(sh, w + 8, 0, p.m.r16(sh + 0x34) as u32, instances as i32, 0);
+        }
+        tris = p.m.i32(list_rec + 0x260);
+    } else {
+        let sf = f as u8 as i8 as i32 as u32;
+        tris = if (sf >> 4) & 1 != 0 {
+            p.helper("sub_68b474", 0x68b474, &[p.m.r64(d + 0x80) as u64, w as u64, p.m.i8(c + 0x30) as i64 as u64])?;
+            p.m.i32(p.m.r64(model + 0x8c8) + shape as i32 as isize as usize * 0x268 + 0x260)
+        } else if f & 0x41 != 0 {
+            draw_culled(p, d, c, shape, sf, w)?
+        } else {
+            0
+        };
+    }
+    p.m.w::<u32>(c + 0x34, p.m.r32(c + 0x34).wrapping_add(tris as u32));
+    Ok(())
+}
+
+/// sub_7637ac(ctx, drawable): the draw context's state for the drawable (gsys::ModelRenderCache::loadResource; the
+/// model draw inlines it): pipeline, render state cache, shape program and uniform slots, texture table, per-drawable and
+/// scene uniform blocks, material display list. False when the drawable's material has no shape state.
+pub(super) unsafe fn load_resource(p: &mut Port, c: usize, d: usize) -> R<bool> {
+    let base = p.base;
     let w = p.m.r64(c + 0x20); // command buffer wrapper (NVNcommandBuffer* at +0xb8)
     let mut pass = p.m.i8(c + 0x45);
     if pass == -1 {
@@ -541,7 +597,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
     }
     let shape_state_holder = p.m.r64(mat);
     if shape_state_holder == 0 || p.m.r64(shape_state_holder) == 0 {
-        return Ok(());
+        return Ok(false);
     }
     let ss = p.m.r64(shape_state_holder + 8); // plVar29
     let mut b31 = p.m.r8(d + 0x46);
@@ -966,52 +1022,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
         }
     }
 
-    let mut b31 = p.m.r8(d + 0x47);
-    if ((flags & b31 as u32) >> 3) & 1 != 0 {
-        let r = p.helper("sub_68b3fc", 0x68b3fc, &[p.m.r64(d + 0x80) as u64, w as u64, p.m.i8(c + 0x30) as i64 as u64, 0])?;
-        if r & 1 == 0 {
-            return Ok(());
-        }
-        b31 = p.m.r8(d + 0x47);
-    }
-    if (b31 >> 5) & 1 != 0 {
-        p.helper("sub_68b500", 0x68b500, &[d as u64, c as u64])?;
-    }
-    b31 = p.m.r8(d + 0x47);
-    let model = p.m.r64(d + 0x68);
-    let f = b31 as u32 & flags;
-    let tris: i32;
-    if f & 0x51 == 0 {
-        let mut instances = p.m.r16(d + 0x4a);
-        let s = shape as i32 as isize as usize;
-        let list_rec = p.m.r64(model + 0x8c8) + s * 0x268;
-        let mut direct = true;
-        if instances < 2 {
-            instances = 1;
-            if p.m.r8(list_rec + 0x50) & 1 != 0 && p.m.i8(c + 0x40) < 0 {
-                let cmd = p.m.r64(w + 0xb8);
-                p.call_commands(cmd, list_rec + 0x48);
-                direct = false;
-            }
-        }
-        if direct {
-            let sh = p.m.r64(p.m.r64(model + 8) + 0x18) + s * 0x38;
-            p.draw_shape(sh, w + 8, 0, p.m.r16(sh + 0x34) as u32, instances as i32, 0);
-        }
-        tris = p.m.i32(list_rec + 0x260);
-    } else {
-        let sf = f as u8 as i8 as i32 as u32;
-        tris = if (sf >> 4) & 1 != 0 {
-            p.helper("sub_68b474", 0x68b474, &[p.m.r64(d + 0x80) as u64, w as u64, p.m.i8(c + 0x30) as i64 as u64])?;
-            p.m.i32(p.m.r64(model + 0x8c8) + shape as i32 as isize as usize * 0x268 + 0x260)
-        } else if f & 0x41 != 0 {
-            draw_culled(p, d, c, shape, sf, w)?
-        } else {
-            0
-        };
-    }
-    p.m.w::<u32>(c + 0x34, p.m.r32(c + 0x34).wrapping_add(tris as u32));
-    Ok(())
+    Ok(true)
 }
 
 /// The culled path: sub-meshes tested against the frustum (and the depth pyramid with flags bit 7), consecutive
