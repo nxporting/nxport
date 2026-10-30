@@ -2,6 +2,7 @@
 // each call of the game's function and compares the NVN commands the game then records with the prediction; calls
 // that reach a helper the port does not implement yet are counted by that helper.
 
+mod dispatch;
 mod draw;
 mod mem;
 mod render_list;
@@ -132,6 +133,10 @@ fn report() {
         draw::UNKNOWN_VFNS.lock().unwrap().iter().map(|(slot, f)| format!("+{slot:#x}=main+{f:#x}")).collect();
     if !vf.is_empty() {
         println!("[model-draw] virtual functions met: {}", vf.join(" "));
+    }
+    let dt = dispatch::report();
+    if !dt.is_empty() {
+        println!("[model-draw] dispatch targets left to the game: {dt}");
     }
     let tv = terrain::report();
     if !tv.is_empty() {

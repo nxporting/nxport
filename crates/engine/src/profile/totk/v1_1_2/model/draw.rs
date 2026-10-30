@@ -135,6 +135,25 @@ impl Port {
         *self.pending.borrow_mut() = Some((cmd, self.m.r64(handles) as u64, Default::default()));
     }
 
+    /// A sead::Delegate1 object's target (main+ offset): Some(None) when the delegate is empty, None when its invoke is
+    /// not sead's (each delegate type has its own copy of the invoke; copies are recognised by their code, which has no
+    /// PC-relative references: the 12 words of main+0x27d0a6c).
+    pub(super) unsafe fn delegate_target(&self, delegate: usize) -> Option<Option<usize>> {
+        const INVOKE: usize = 0x27d0a6c;
+        let invoke = self.m.r64(self.m.r64(delegate));
+        let same = (0..12).all(|k| self.m.r32(invoke + 4 * k) == self.m.r32(self.base + INVOKE + 4 * k));
+        if !same {
+            return None;
+        }
+        let obj = self.m.r64(delegate + 8);
+        let (f, adj) = (self.m.r64(delegate + 0x10), self.m.r64(delegate + 0x18));
+        if obj == 0 || (f | (adj & 1)) == 0 {
+            return Some(None);
+        }
+        let this = obj.wrapping_add(((adj as i64) >> 1) as usize);
+        Some(Some(if adj & 1 != 0 { self.m.r64(self.m.r64(this) + f) } else { f }.wrapping_sub(self.base)))
+    }
+
     /// The main+ offset of `obj`'s virtual function at vtable slot `slot`.
     pub(super) unsafe fn vfn(&self, obj: usize, slot: usize) -> usize {
         self.m.r64(self.m.r64(obj) + slot).wrapping_sub(self.base)
