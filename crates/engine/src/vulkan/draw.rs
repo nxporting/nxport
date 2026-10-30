@@ -633,18 +633,23 @@ impl Ctx {
 
     /// The descriptors of stage `key`'s bindings for this draw, added to `out`.
     unsafe fn stage_writes(&mut self, key: (u64, u64), data: u64, control: u64, stage: i32, call: &Draw, base_instance: i32, out: &mut DescWrites) {
-        let Some((bindings, base)) = self.stages.get(&key).map(|s| (s.bindings.clone(), s.base)) else { return };
+        let Some((bindings, base, reads_driver)) = self.stages.get(&key).map(|s| (s.bindings.clone(), s.base, s.reads_driver)) else { return };
         if bindings.is_empty() {
             return;
         }
-        // Only for stages that read it (most do not).
+        // Only for stages that read it (most do not), and again only when what it holds changed.
         let mut driver = std::mem::take(&mut self.driver_scratch);
-        if bindings.iter().any(|b| {
-            matches!(b.feed, Feed::Cbuf(0) | Feed::Sbuf { cb_slot: 0, .. } | Feed::Texture { cbuf_slot: 0, .. } | Feed::Image { cbuf_slot: 0, .. })
-        }) {
-            self.driver_cbuf(stage, call, base_instance, &mut driver);
-        } else {
-            driver.clear();
+        if reads_driver {
+            let base_vertex = match call {
+                Draw::Arrays { first, .. } => *first,
+                Draw::Elements { base_vertex, .. } => *base_vertex,
+            };
+            let k = (stage, base_vertex, base_instance, self.storage_gen, if stage == 5 { self.uniform_gen } else { 0 });
+            if self.driver_key != Some(k) {
+                self.driver_cbuf(stage, call, base_instance, &mut driver);
+                self.driver_key = Some(k);
+                self.driver_hash = None;
+            }
         }
         let (vw, vh) = (self.st.viewport.2.max(1) as f32, self.st.viewport.3.max(1) as f32);
         let DescWrites { buffers, images } = out;
@@ -664,16 +669,12 @@ impl Ctx {
         // Constant buffers first: the support buffer records their bound sizes.
         let mut limits: smallvec::SmallVec<[(u32, usize); 16]> = Default::default();
         // Then the sampler table (filled by the textures), then the support buffer (holding the bound sizes and the
-        // textures' table indices).
-        let mut ordered: smallvec::SmallVec<[&shader::Binding; 32]> =
-            bindings.iter().filter(|b| !matches!(b.feed, Feed::Support | Feed::SamplerTable)).collect();
-        ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::SamplerTable)));
-        ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::Support)));
+        // textures' table indices): the stage's bindings are in that order (shader.rs).
         // Sampler table: the distinct samplers, and each texture slot's index in it.
         let mut table: smallvec::SmallVec<[vk::Sampler; 16]> = Default::default();
         let mut slots: smallvec::SmallVec<[(u32, u32); 32]> = Default::default();
-        let table_size = bindings.iter().find(|b| matches!(b.feed, Feed::SamplerTable)).map_or(0, |b| b.count as usize);
-        for b in ordered {
+        let table_size = bindings.iter().rev().find(|b| matches!(b.feed, Feed::SamplerTable)).map_or(0, |b| b.count as usize);
+        for b in bindings.iter() {
             match &b.feed {
                 Feed::Support => {
                     // Its contents depend on the viewport and the bound sizes only: one copy per submit each.
@@ -711,8 +712,18 @@ impl Ctx {
                 Feed::Cbuf(slot) => {
                     // Written by GPU work earlier in this submit or by earlier submits still running: in place (the
                     // GPU reads it after those writes, in queue order; a copy now could catch them half done).
+                    let mut memo_key = None;
                     if *slot >= 3 {
                         if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
+                            let k = (addr, size, b.extent, self.ubo_epoch);
+                            if let Some(x) = self.ubo_memo.get(&k) {
+                                if let Some((buf, off, len, bound)) = *x {
+                                    limits.push((b.binding - base, bound));
+                                    buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
+                                }
+                                continue;
+                            }
+                            memo_key = Some(k);
                             let a = crate::nvn::api::translate_virtual(addr as usize);
                             let len = size.min(0x10000);
                             if a > 0x10000 && self.gpu_writes(a, a + len) {
@@ -757,7 +768,12 @@ impl Ctx {
                         // a submit (most draws differ in nothing it holds, and the same copy lets their sets be shared).
                         Some(v) => {
                             let n = if b.extent >= 0 { (b.extent as usize).max(16).min(v.len()) } else { v.len() };
-                            let key = (super::texture::hash_bytes(&v[..n]), n);
+                            let h = match self.driver_hash {
+                                Some((m, h)) if m == n => h,
+                                _ => super::texture::hash_bytes(&v[..n]),
+                            };
+                            self.driver_hash = Some((n, h));
+                            let key = (h, n);
                             match self.driver_copies.get(&key) {
                                 Some(&(b, o)) => Some((b, o, n as u64, v.len())),
                                 None => {
@@ -771,6 +787,9 @@ impl Ctx {
                         }
                         None => zero.map(|(b, o)| (b, o, 256, 256)),
                     };
+                    if let Some(k) = memo_key {
+                        self.ubo_memo.insert(k, x);
+                    }
                     if let Some((buf, off, len, bound)) = x {
                         limits.push((b.binding - base, bound));
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));

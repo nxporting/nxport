@@ -113,6 +113,8 @@ pub struct Stage {
     /// Its bindings, numbered from the stage's binding base (graphics stages share one set: vertex 0.., fragment
     /// FRAGMENT_BINDING_BASE..).
     pub bindings: std::sync::Arc<[Binding]>,
+    /// Whether a binding reads the driver constant buffer (constant buffer 0).
+    pub reads_driver: bool,
     /// A set of its bindings alone (compute).
     pub set_layout: vk::DescriptorSetLayout,
     pub stage_flags: vk::ShaderStageFlags,
@@ -345,7 +347,12 @@ unsafe fn build_stage(
             None => return Err(format!("binding {b} is not in the manifest")),
         }
     }
-    out.sort_by_key(|b| b.binding);
+    // In the order draws fill them (draw.rs stage_writes): the sampler table after the textures naming its samplers, the
+    // support buffer last (it holds the bound sizes and the textures' table indices).
+    out.sort_by_key(|b| (matches!(b.feed, Feed::SamplerTable) as u8 + 2 * matches!(b.feed, Feed::Support) as u8, b.binding));
+    let reads_driver = out.iter().any(|b| {
+        matches!(b.feed, Feed::Cbuf(0) | Feed::Sbuf { cb_slot: 0, .. } | Feed::Texture { cbuf_slot: 0, .. } | Feed::Image { cbuf_slot: 0, .. })
+    });
     let module = dev
         .device
         .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
@@ -390,6 +397,7 @@ unsafe fn build_stage(
         known,
         module,
         bindings: out.into(),
+        reads_driver,
         set_layout,
         stage_flags,
         base: binding_base,

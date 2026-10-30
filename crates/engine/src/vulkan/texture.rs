@@ -984,7 +984,7 @@ impl Textures {
         let own_layers = match t.target {
             layout::NVN_TARGET_3D => 1,
             layout::NVN_TARGET_CUBEMAP => 6,
-            _ => layout::compute_layout(&Desc::of(t).params).layers.max(1),
+            _ => layout::layer_count(&Desc::of(t).params),
         }
         .min(img.layers.saturating_sub(at.1).max(1));
         let (base_level, levels, base_layer, layers) = match view {
