@@ -1,5 +1,5 @@
 // From LAS Recomp's runtime/simd_fp.h (MIT, Copyright (c) 2026 Peiikai; see LICENSE-LASRecomp), unchanged but for this line
-// and the FPCR.FZ path without rounding-mode switches (FN(fzop), FN(vfzop)).
+// and FPCR.FZ as the host's DAZ / FTZ (FN(op), FN(vop)).
 // FP helpers for one precision; included twice by simd.h (F = s/float, d/double). No include guard.
 // Scalar entry points take/return T, vector ones VT (all lanes; callers zero the unused half for Q=0).
 
@@ -128,7 +128,7 @@ SN T FN(slow)(Cpu *c, int op, T a, T b, T d) {
     uint64_t fpcr = c->fpcr;
     if (fpcr & FPCR_FZ) a = FN(flush)(a), b = FN(flush)(b), d = FN(flush)(d);
     if (FMINMAX(op)) return FN(minmax)(c, op, a, b);
-    int old = fegetround();
+    simd_fe old = simd_fe_save();
     fesetround(simd_fe_mode(fpcr));
     volatile T va = a, vb = b, vd = d;
     volatile T vr = op == FOP_RSQRTS ? FN(rsqrts)(va, vb) : FCALC(op, va, vb, vd, K);
@@ -143,31 +143,31 @@ SN T FN(slow)(Cpu *c, int op, T a, T b, T d) {
             r = FN(fv)(FN(fb)(r) & SGN);
         }
     }
-    fesetround(old);
+    simd_fe_restore(old);
     return r;
 }
 
-// FN(op) under FPCR.FZ or RMode, out of line (one call at each FP instruction, as before). A rounding mode other than
-// nearest takes FN(slow). FZ alone, which is how games run (FZ | DN), is FN(slow) without its rounding-mode switches,
-// which cost far more than the arithmetic (a CRT call each way that translates MXCSR). Only a result of exactly the
-// smallest normal can have been tiny before rounding; FN(slow) recomputes that one toward zero.
-SN T FN(fzop)(Cpu *c, int op, T a, T b, T d) {
-    if (c->fpcr & FPCR_RM) return FN(slow)(c, op, a, b, d);
-    a = FN(flush)(a), b = FN(flush)(b), d = FN(flush)(d);
-    if (FMINMAX(op)) return FN(minmax)(c, op, a, b);
-    T r = op == FOP_RSQRTS ? FN(rsqrts)(a, b) : FCALC(op, a, b, d, K);
-    if (__builtin_expect(FBAD(op, r), 0)) r = FN(fix)(c, op, a, b, d);
-    U m = FN(fb)(r) & ~SGN;
-    if (__builtin_expect(m <= MINN && m, 0)) return m == MINN ? FN(slow)(c, op, a, b, d) : FN(fv)(FN(fb)(r) & SGN);
-    return r;
+// The ARM result where FN(op)'s host instruction may differ: a NaN result (FN(fix), operands flushed under FPCR.FZ) or a
+// result of exactly the smallest normal, which may have been tiny before rounding (x86 detects tininess after rounding,
+// ARM before): FN(slow) computes that one as ARM does.
+SN T FN(rare)(Cpu *c, int op, T a, T b, T d, T r) {
+    if ((FN(fb)(r) & ~SGN) == MINN) return FN(slow)(c, op, a, b, d);
+    if (c->fpcr & FPCR_FZ) a = FN(flush)(a), b = FN(flush)(b), d = FN(flush)(d);
+    return FN(fix)(c, op, a, b, d);
 }
 
-// Scalar FP op (constant op folds the selection).
+// Scalar FP op (constant op folds the selection): the host instruction. The thread's MXCSR has DAZ and FTZ while FPCR.FZ
+// is set (cpu.h, rt_fpcr; how games run, with DN), which flush denormal operands and tiny results. MIN/MAX return an
+// operand's bits and are flushed by hand. A rounding mode other than nearest takes FN(slow): clang compiles the native
+// expressions for round-to-nearest (it rewrites -(a * b) as -a * b, for one).
 SI T FN(op)(Cpu *c, int op, T a, T b, T d) {
-    if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) return FN(fzop)(c, op, a, b, d);
-    if (FMINMAX(op)) return FN(minmax)(c, op, a, b);
+    if (__builtin_expect(c->fpcr & FPCR_RM, 0)) return FN(slow)(c, op, a, b, d);
+    if (FMINMAX(op)) {
+        if (c->fpcr & FPCR_FZ) a = FN(flush)(a), b = FN(flush)(b);
+        return FN(minmax)(c, op, a, b);
+    }
     T r = FCALC(op, a, b, d, K);
-    if (__builtin_expect(FBAD(op, r), 0)) r = FN(fix)(c, op, a, b, d);
+    if (__builtin_expect(FBAD(op, r) | ((FN(fb)(r) & ~SGN) == MINN), 0)) r = FN(rare)(c, op, a, b, d, r);
     return r;
 }
 
@@ -185,8 +185,8 @@ SI VT FN(vflush)(VT a) {
     return (VT)FN(vsel)(den, u & SGN, u);
 }
 
-// Native lanes for FN(vop); with fz (operands already flushed) a lane with a tiny result goes the scalar way too.
-SI VT FN(vcalc)(Cpu *c, int op, VT a, VT b, VT d, int fz) {
+// Native lanes for FN(vop).
+SI VT FN(vcalc)(Cpu *c, int op, VT a, VT b, VT d) {
     VT r;
     if (FMINMAX(op)) {
         if (__builtin_expect(__builtin_reduce_or((a != a) | (b != b)) != 0, 0)) return FN(vslow)(c, op, a, b, d);
@@ -199,25 +199,18 @@ SI VT FN(vcalc)(Cpu *c, int op, VT a, VT b, VT d, int fz) {
     }
     r = FCALC(op, a, b, d, VK);
     VTS bad = FBAD(op, r);
-    if (fz) {
-        VTU m = (VTU)r & ~((VTU){} + SGN);
-        bad |= (m <= MINN) & (m != 0);
-    }
     if (__builtin_expect(__builtin_reduce_or(bad) != 0, 0)) return FN(vslow)(c, op, a, b, d);
     return r;
 }
 
-// FN(vop) under FPCR.FZ or RMode, out of line like FN(fzop): RMode reruns all lanes through the scalar path, FZ alone
-// flushes the lanes and reruns only for a NaN or a tiny result.
-SN VT FN(vfzop)(Cpu *c, int op, VT a, VT b, VT d) {
-    if (c->fpcr & FPCR_RM) return FN(vslow)(c, op, a, b, d);
-    return FN(vcalc)(c, op, FN(vflush)(a), FN(vflush)(b), FN(vflush)(d), 1);
-}
-
-// Vector FP op: native lanes, any NaN reruns all lanes through the scalar path (FPCR.FZ / RMode: FN(vfzop)).
+// Vector FP op: native lanes as for FN(op); a NaN lane (FN(vcalc)), a lane of exactly the smallest normal or a rounding
+// mode other than nearest reruns all lanes through the scalar path. MIN/MAX lanes are flushed by hand under FPCR.FZ.
 SI VT FN(vop)(Cpu *c, int op, VT a, VT b, VT d) {
-    if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) return FN(vfzop)(c, op, a, b, d);
-    return FN(vcalc)(c, op, a, b, d, 0);
+    if (__builtin_expect(c->fpcr & FPCR_RM, 0)) return FN(vslow)(c, op, a, b, d);
+    if (FMINMAX(op) && (c->fpcr & FPCR_FZ)) a = FN(vflush)(a), b = FN(vflush)(b);
+    VT r = FN(vcalc)(c, op, a, b, d);
+    if (__builtin_expect(__builtin_reduce_or(((VTU)r & ~((VTU){} + SGN)) == MINN) != 0, 0)) return FN(vslow)(c, op, a, b, d);
+    return r;
 }
 
 SI VT FN(vfz)(Cpu *c, VT a) {
@@ -295,13 +288,13 @@ SI uint64_t FN(toint)(Cpu *c, T x, int rm, int fbits, int ib, int uns) {
 // ---- integer -> FP (SCVTF/UCVTF, fixed point), rounded in the FPCR mode
 SN T FN(fromint_slow)(Cpu *c, uint64_t v, int ib, int uns, int fbits) {
 #pragma STDC FENV_ACCESS ON
-    int old = fegetround();
+    simd_fe old = simd_fe_save();
     fesetround(simd_fe_mode(c->fpcr));
     volatile uint64_t vv = v;
     volatile T r;
     if (uns) r = ib == 32 ? (T)(uint32_t)vv : (T)vv;
     else r = ib == 32 ? (T)(int32_t)vv : (T)(int64_t)vv;
-    fesetround(old);
+    simd_fe_restore(old);
     T x = r;
     if (fbits) x = x / (T)(1ull << (fbits - 1)) / K(2);
     return x;
