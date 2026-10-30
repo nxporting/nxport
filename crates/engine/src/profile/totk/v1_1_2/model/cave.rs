@@ -329,9 +329,10 @@ const STORAGE_SLOT_BY_NAME: usize = 0x1387540;
 const INSTANCE_PARAMS: usize = 0x860094;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 
-/// The delegate target main+0x85ff40: marks the instanced cave subsystem used (+0x40 bit 2) and draws it (mode 0,
-/// main+0x85ffc4 -> 0x860148), in every pass.
-pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize) -> R<()> {
+/// The instanced cave subsystem's delegate targets: main+0x85ff40 (mode 0) and 0x137c31c (mode 1) through
+/// main+0x85ffc4 (drawn while the info's +1 is set), main+0x137c4bc (mode 3, drawn while +0x1389 is set): mark the
+/// subsystem used (+0x40 bit 2), then main+0x860148 timed, in every pass.
+pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize, mode: u32) -> R<()> {
     let s = p.m.r64(this + 0x28);
     p.query(p.base + LOCK, &[(s + 0x20) as u64]);
     p.m.w::<u32>(s + 0x40, p.m.r32(s + 0x40) | 4);
@@ -340,8 +341,10 @@ pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize) -> 
     let ctx = p.m.r64(arg);
     p.m.w::<u64>(s + 0x13d0, p.m.r64(this + 0x20) as u64);
     p.m.w::<u32>(s + 0x13e0, p.m.r8(ctx + 0x30) as u32 | p.m.r32(this + 0xe00) << 8);
+    let s = p.m.r64(this + 0x28);
     let (sys, info) = (p.m.r64(s + 0x4e8), s + 5000);
-    if p.m.r8(info + 1) == 0 || p.m.r64(sys + 0x20) == 0 {
+    let on = if mode == 3 { p.m.r8(s + 0x1389) != 0 } else { p.m.r8(info + 1) != 0 };
+    if !on || p.m.r64(sys + 0x20) == 0 {
         return Ok(());
     }
     let t0 = p.query(p.base + TICK, &[]);
@@ -352,16 +355,16 @@ pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize) -> 
     params[0x18..0x1c].copy_from_slice(&0x0101_0100u32.to_le_bytes());
     params[0xa4..0xa6].copy_from_slice(&0x100u16.to_le_bytes());
     p.query(p.base + INSTANCE_PARAMS, &[t0, params.as_mut_ptr() as u64, info as u64]);
-    instanced_draw(p, p.m.r64(sys + 0x20), arg, u32::from_le_bytes(params[0x30..0x34].try_into().unwrap()))?;
+    instanced_draw(p, p.m.r64(sys + 0x20), arg, mode, u32::from_le_bytes(params[0x30..0x34].try_into().unwrap()))?;
     let t1 = p.query(p.base + TICK, &[]);
     p.m.w::<u64>(sys + 0x1f8, t1.wrapping_sub(t0).wrapping_add(p.m.r64(sys + 0x1f8) as u64));
     p.m.w::<u32>(sys + 0x200, p.m.r32(sys + 0x200).wrapping_add(1));
     Ok(())
 }
 
-/// main+0x860148 in mode 0: the named blocks and storage buffers (main+0x138b448), then the group's records
-/// (main+0x138b9d0).
-unsafe fn instanced_draw(p: &mut Port, this: usize, arg: usize, group: u32) -> R<()> {
+/// main+0x860148: the named blocks and storage buffers (main+0x138b448), then by mode the group's records
+/// (0: main+0x138b9d0, 1 / 2: main+0x138bb24 over record set 0 / 1) or its single instanced mesh (3: main+0x138bc84).
+unsafe fn instanced_draw(p: &mut Port, this: usize, arg: usize, mode: u32, group: u32) -> R<()> {
     let ctx = p.m.r64(arg);
     let w = p.m.r64(ctx + 0x20);
     load_resource(p, ctx, p.m.r64(arg + 8))?;
@@ -371,41 +374,67 @@ unsafe fn instanced_draw(p: &mut Port, this: usize, arg: usize, group: u32) -> R
     bind_named_block(p, this + 0x6808, w, p.m.r64(this + 0x6880) as u64, user0)?;
     let v = (this as i64 + view * 400) as usize;
     let big = (this as i64 + view * 0x1270) as usize;
-    for (n, obj) in [
-        (&b"cave_CaveInstanceDynamicDataSSBO\0"[..], v + 0xd0),
-        (b"cave_QuadStaticDataSSBO\0", this + 0x6998),
-        (b"cave_QuadStreamDataSSBO\0", v + 8),
-        (b"cave_QuadDynamicDataSSBO\0", big + 0x328),
-        (b"cave_PointGeometryDataSSBO\0", this + 0x6b98),
-        (b"cave_PointMaterialDataSSBO\0", this + 0x6c60),
-    ] {
+    let groups = p.m.r64(this + 0x2808);
+    let n = p.m.i32(this + 0x2814).max(0) as usize;
+    let find = |p: &Port| (0..n).map(|k| groups + k * 0x3c).find(|&g| p.m.r32(g) == group);
+    let mut storage: Vec<(&'static [u8], usize, u64)> = vec![
+        (b"cave_CaveInstanceDynamicDataSSBO\0", v + 0xd0, 0),
+        (b"cave_QuadStaticDataSSBO\0", this + 0x6998, 0),
+        (b"cave_QuadStreamDataSSBO\0", v + 8, 0),
+        (b"cave_QuadDynamicDataSSBO\0", big + 0x328, 0),
+    ];
+    match mode {
+        3 => {
+            if let Some(g) = find(p) {
+                storage.push((b"cave_VertexDynamicDataSSBO\0", big + 0x580, p.m.i32(g + 0x1c) as i64 as u64 * 0x10));
+            }
+        }
+        1 => storage.push((b"cave_EdgeDynamicDataSSBO\0", big + 0x3f0, 0)),
+        2 => storage.push((b"cave_EdgeDynamicDataSSBO\0", big + 0x4b8, 0)),
+        _ => {}
+    }
+    storage.push((b"cave_PointGeometryDataSSBO\0", this + 0x6b98, 0));
+    storage.push((b"cave_PointMaterialDataSSBO\0", this + 0x6c60, 0));
+    for (n, obj, offset) in storage {
         let slot = slot_by_name(p, STORAGE_SLOT_BY_NAME, program, n);
         if slot != 0xffff_ffff {
-            bind_named_block(p, obj + 0x40, w, p.m.r64(obj + 0xb8) as u64, slot)?;
+            bind_named_block(p, obj + 0x40, w, (p.m.r64(obj + 0xb8) as u64).wrapping_add(offset), slot)?;
         }
     }
     let user1 = slot_by_name(p, SLOT_BY_NAME, program, b"gsys_user1\0");
-    // main+0x138b9d0: the group's records {a, b, c, d}: a ring block {a, 1 << c, 1 << d, 0, 0} bound as gsys_user1,
-    // then the mesh at (d, c) drawn with b instances.
-    let groups = p.m.r64(this + 0x2808);
-    let n = p.m.i32(this + 0x2814).max(0) as usize;
-    let Some(g) = (0..n).map(|k| groups + k * 0x3c).find(|&g| p.m.r32(g) == group) else { return Ok(()) };
-    let range = p.m.r64(g + 0x24) as i64;
+    let Some(g) = find(p) else { return Ok(()) };
+    if mode == 3 {
+        let (a, b) = (p.m.i32(g + 0x1c), p.m.i32(g + 0x20));
+        let k = b.wrapping_sub(a);
+        if k != 0 && a <= b {
+            mesh_elements(p, this + 0x6578, w, 0, p.m.r32(this + 0x65a0), k as u32, 0, 0);
+        }
+        return Ok(());
+    }
+    if mode > 3 {
+        return Ok(());
+    }
+    // The group's records {a, b, c, d}: a ring block bound as gsys_user1 ({a, 1 << c, 1 << d, 0, 0} in mode 0,
+    // {a, 0, 0, 1 << c, 1 << d} in modes 1 / 2), then the mesh at (c, d) drawn with b instances.
+    let set = mode.saturating_sub(1) as usize;
+    let range = if mode == 0 { p.m.r64(g + 0x24) } else { p.m.r64(g + 0x2c + set * 8) } as i64;
     let count = range.wrapping_sub(range << 32) >> 32;
     if count == 0 {
         return Ok(());
     }
-    let first = (big as i64 + ((range << 32) >> 28) + 0x658) as usize;
-    for r in (0..count as usize).map(|k| first + k * 16) {
+    let first = if mode == 0 { big as i64 + 0x658 } else { big as i64 + set as i64 * 0x514 + 0xb6c } + ((range << 32) >> 28);
+    for r in (0..count as usize).map(|k| first as usize + k * 16) {
         let (a, b, c, d) = (p.m.r32(r), p.m.r32(r + 4), p.m.i32(r + 8), p.m.i32(r + 12));
-        let mut data = [0u32; 5];
-        data[0] = a;
-        data[1] = 1u32.wrapping_shl(c as u32);
-        data[2] = 1u32.wrapping_shl(d as u32);
+        let (pc, pd) = (1u32.wrapping_shl(c as u32), 1u32.wrapping_shl(d as u32));
+        let data: [u32; 5] = if mode == 0 { [a, pc, pd, 0, 0] } else { [a, 0, 0, pc, pd] };
         let block = p.ring_block(data.as_ptr() as usize, 0x14);
         p.bind_uniform_block(block, w, user1, 0)?;
-        let mesh = (this as i64 + d as i64 * 0x360 + c as i64 * 0x60) as usize;
-        mesh_elements(p, mesh + 0x4718, w, 0, p.m.r32(mesh + 0x4740), b, 0, 0);
+        let mesh = if mode == 0 {
+            (this as i64 + d as i64 * 0x360 + c as i64 * 0x60 + 0x4718) as usize
+        } else {
+            (this as i64 + c as i64 * 0x360 + d as i64 * 0x60 + 0x28b8) as usize
+        };
+        mesh_elements(p, mesh, w, 0, p.m.r32(mesh + 0x28), b, 0, 0);
     }
     Ok(())
 }
