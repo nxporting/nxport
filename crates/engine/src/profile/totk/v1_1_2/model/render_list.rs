@@ -8,7 +8,7 @@ use super::draw::{self, Port, R};
 const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
 const MODEL_DRAW: usize = 0x688c68;
 const TERRAIN_DRAW: usize = 0x2a47078;
-const DELEGATE_INVOKE: usize = 0x27d0a6c;
+const DISPATCH_DRAW: usize = 0x763718;
 const STATE_HOOK: usize = 0x27d0468;
 
 /// Draws of drawables the port does not draw: (main+ draw function, count).
@@ -44,6 +44,8 @@ pub(super) unsafe fn draw_list(p: &mut Port, list: usize, count: u32, c: usize, 
             draw::draw(p, d, c, sub, flags)?;
         } else if f == TERRAIN_DRAW {
             super::terrain::draw(p, d, c, sub, flags)?;
+        } else if f == DISPATCH_DRAW {
+            super::dispatch::draw(p, d, c, sub, flags)?;
         } else {
             note_drawable(f);
             p.helper("drawable draw", f, &[d as u64, c as u64, sub as u64, flags as u64])?;
@@ -180,16 +182,12 @@ unsafe fn entry_state(p: &mut Port, c: usize, e: usize) -> R<()> {
                 p.m.r64(c + 0x10) as u64,
                 0,
             ];
-            let call = p.vfn(hook, 0);
-            // The hook is a sead::Delegate1 (invoke main+0x27d0a6c): object at +8, member function at +0x10 / +0x18.
-            let obj = p.m.r64(hook + 8);
-            let (f, adj) = (p.m.r64(hook + 0x10), p.m.r64(hook + 0x18));
-            let this = obj.wrapping_add(((adj as i64) >> 1) as usize);
-            let target = if adj & 1 != 0 { p.m.r64(p.m.r64(this) + f) } else { f };
-            if call == DELEGATE_INVOKE && obj != 0 && (f | (adj & 1)) != 0 && target.wrapping_sub(p.base) == STATE_HOOK {
-                state_hook(p, p.m.r32(c + 0xb0), c + 0x128);
-            } else {
-                p.helper("render state hook", call, &[hook as u64, arg.as_ptr() as u64])?;
+            match p.delegate_target(hook) {
+                Some(None) => {}
+                Some(Some(STATE_HOOK)) => state_hook(p, p.m.r32(c + 0xb0), c + 0x128),
+                _ => {
+                    p.helper("render state hook", p.vfn(hook, 0), &[hook as u64, arg.as_ptr() as u64])?;
+                }
             }
         }
         let u13 = if p.m.r8(c + 0x31) == 8 {
