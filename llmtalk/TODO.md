@@ -46,6 +46,17 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **Vulkan recording, fourth round: work moved to vk-record** (S41L0R Windows Machine, `361a5ad`, `e3b25c9`): uniform
+  copies are made on vk-record (inline updates and reports log what they overwrite so late copies hold what their draws
+  saw; the replay differs without it), and descriptor sets are hashed, found, allocated and written there. sky2203
+  replay: whole frame 13.4 -> 11.0 ms, recording 10.2 -> 8.7 ms. **In the game nothing changed**: Great Sky Island
+  headless, --no-vsync, matrix.ps1 input script: 51.3 -> 51.2 fps (record 17.4 -> 16.7 ms), and --gpu=null gives only
+  57.1 fps. The backend costs ~2 ms of the 19.5 ms frame there; the Presentation thread idles ~20% in
+  ReceiveLightMessageQueue and guest-main waits ~38% in WaitLightEvent. More fps needs the game's CPU side (threads
+  waiting on each other's jobs; see the CPU item under Open). In-game recording also has costs the replay lacks:
+  texture refresh checks (get_desc ~10% of the Presentation thread), scan_counters ~8%, images created every frame
+  (~5%: Textures::create, Dev::alloc).
+
 - **Vulkan recording, third round** (S41L0R Windows Machine, `6a4a870`, `d3ba8b7`): uniform bindings resolved once
   per contents, driver constant buffer rebuilt only when it changes, draw states found by content across submits,
   unchanged vertex / index buffers and dynamic state not bound again. sky2203 replay, idle machine: recording 13.1 ->
