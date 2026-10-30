@@ -398,6 +398,9 @@ pub(super) unsafe fn gate(p: &mut Port, this: usize, arg: usize) -> R<()> {
     if target == 0x18ccb80 {
         return draw(p, this, arg, index as u32);
     }
+    if target == 0x18cd8b0 {
+        return draw_levels(p, this, arg, index as u32);
+    }
     {
         let mut o = OTHER.lock().unwrap();
         match o.iter_mut().find(|e| e.0 == target) {
@@ -407,4 +410,347 @@ pub(super) unsafe fn gate(p: &mut Port, this: usize, arg: usize) -> R<()> {
     }
     p.helper("grid draw", target, &[this as u64, arg as u64, index as u32 as u64])?;
     Ok(())
+}
+
+const LEVELS: usize = 0x4371d10;
+const UNITS: usize = 0x381f458;
+const LEVEL_TEXTURE_HOLDER: usize = 0x462ada0;
+const CAST_GUARD2: usize = 0x46354c0;
+const CAST_TYPE2: usize = 0x46354c8;
+const FADE_MIN_DIST: usize = 0x380f934;
+const NEAR_SCALE: usize = 0x380f42c;
+const FADE_SCALE: usize = 0x380f7ec;
+
+/// main+0x18ce420(fade, shader, w, k): the shader's index range of level k scaled by `fade`, in whole units of the
+/// level (static table main+0x381f458, 12-byte entries, unit at +8), drawn when the shader is enabled.
+unsafe fn draw_faded(p: &mut Port, s: usize, w: usize, k: u32, fade: f32) -> u32 {
+    let i = if p.m.r32(s + 0x4d0) > k { k } else { 0 } as i32 as i64;
+    let total = p.m.r32((p.m.r64(s + 0x4d8) as i64 + i * 4) as usize) as f32;
+    let unit = p.m.r32((p.base as i64 + UNITS as i64 + k as i32 as i64 * 12) as usize + 8);
+    let n = (total * fade) as u32;
+    let n = if unit == 0 { 0 } else { n / unit }.wrapping_mul(unit);
+    let j = if p.m.r32(s + 0x4c0) > k { k } else { 0 } as i32 as i64;
+    if n == 0 || p.m.r8(s + 8) & 1 == 0 {
+        return 0;
+    }
+    let first = p.m.r32((p.m.r64(s + 0x4c8) as i64 + j * 4) as usize);
+    let prim = p.m.r32(s + 0x42c) as u64;
+    let cmd = p.m.r64(w + 0xb8);
+    let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(s + 0x450) as u64]).wrapping_add(p.m.r32(s + 0x44c).wrapping_mul(first) as u64);
+    let itype = p.m.r32(s + 0x428) as u64;
+    p.m.w::<u8>(cmd + 0x10, 1);
+    p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, n as u64, addr]);
+    n
+}
+
+/// main+0x18cd8b0(this, arg, k): the grid's two static levels (main+0x4371d10, 0x40-byte entries: enabled +8, grid
+/// level +0xc, LOD +0x10, fade scale +0x18, near window +0x2c / +0x30, far window +0x34 / +0x38); per level the
+/// visible cells inside its window, faded by distance, drawn far (main+0x18ce420) or near (main+0x18ce544).
+pub(super) unsafe fn draw_levels(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()> {
+    if p.m.r8(p.m.r64(p.base + CAST_GUARD2)) & 1 == 0 {
+        p.helper("grid levels (static init)", 0x18cd8b0, &[this as u64, arg as u64, k as u64])?;
+        return Ok(());
+    }
+    let g = p.m.r64(this + 0x10);
+    let t98 = p.m.r64(this + 0x98);
+    let ri = if p.m.r32(g + 0x200) > k { k } else { 0 } as i32 as i64;
+    let recs = p.m.r64(g + 0x208);
+    let ctx = p.m.r64(arg);
+    let w = p.m.r64(ctx + 0x20);
+    let ti = if p.m.r32(this + 0x90) > k { k } else { 0 } as i32 as i64;
+    let s0 = p.m.r64(this + 0x18);
+    let shader = if s0 == 0 { 0 } else { p.query(p.base + p.vfn(s0, 0), &[s0 as u64, p.m.r64(p.base + CAST_TYPE2) as u64]) as usize };
+    let rec = (recs as i64 + ri * 0xa8) as usize;
+    let tiles = p.m.r64(rec + 0x28);
+    load_resource(p, ctx, p.m.r64(arg + 8))?;
+    bind_slot(p, w, arg, 7, p.m.r64(rec + 0x98), 0)?;
+    let mut mask = u32::MAX;
+    let mut table = [0u64; 32];
+    let role = |p: &Port, n: u32, off: usize| p.m.i32(p.m.r64(shader + 0x78) + if p.m.r32(shader + 0x70) > n { off } else { 0 }) as usize;
+    let set = |idx: usize, v: u64, mask: &mut u32, table: &mut [u64; 32]| {
+        if let Some(e) = table.get_mut(idx) {
+            if *e != v {
+                *e = v;
+                *mask |= 1u32.wrapping_shl(idx as u32);
+            }
+        }
+    };
+    let r30 = p.m.r64(rec + 0x30);
+    set(role(p, 6, 0x18), (p.m.r64(p.m.r64(r30 + 8) + 0xb8) + 0x138) as u64, &mut mask, &mut table);
+    set(role(p, 8, 0x20), (p.m.r64(p.m.r64(rec + 0x30) + 0x10) + 0xa18) as u64, &mut mask, &mut table);
+    let lod_ids = tiles + 0x9dc0;
+    let flags = p.m.r32(p.m.r64(this + 0x10) + 8);
+    if flags & 4 == 0 {
+        let v = p.query(p.base + ENV_TEXTURE, &[p.m.r64(p.m.r64(p.base + ENV_HOLDER)) as u64]);
+        set(role(p, 4, 0x10), v, &mut mask, &mut table);
+    }
+    let min_width = p.m.f32(p.base + MIN_WIDTH);
+    let min_scale = p.m.f32(p.base + MIN_SCALE);
+    let window = |a: f32, b: f32| {
+        let lo = fmax(a, 0.0);
+        let mut hi = if lo > b { lo } else { b };
+        let mut width = hi - lo;
+        if width <= 0.0 {
+            width = min_width;
+            hi = lo + width;
+        }
+        (hi, width)
+    };
+    let mut drawn = 0u32;
+    for e in 0..2usize {
+        let lv = p.base + LEVELS + e * 0x40;
+        if p.m.r8(lv + 8) == 0 {
+            continue;
+        }
+        let li = p.m.i32(lv + 0xc);
+        if p.m.r8(p.m.r64((p.m.r64(tiles + 0x58) as i64 + li as i64 * 8) as usize) + 8) & 1 == 0 {
+            continue;
+        }
+        let holder = p.m.r64(p.m.r64(p.m.r64(p.base + LEVEL_TEXTURE_HOLDER)) + 0xd0);
+        let f = p.vfn(holder, 0x210);
+        {
+            let mut o = OTHER.lock().unwrap();
+            let key = f | 1 << 40;
+            match o.iter_mut().find(|x| x.0 == key) {
+                Some(x) => x.1 += 1,
+                None => o.push((key, 1)),
+            }
+        }
+        // main+0x287bf48: the holder's +0x260 object's texture at +0x190.
+        let tex = if f == 0x287bf48 { (p.m.r64(holder + 0x260) + 0x190) as u64 } else { p.helper("level texture", f, &[holder as u64])? };
+        set(role(p, 5, 0x14), tex, &mut mask, &mut table);
+        let li = p.m.i32(lv + 0xc);
+        let t7 = if p.m.r32(tiles + 0x50) > li as u32 { p.m.r64((p.m.r64(tiles + 0x58) as i64 + li as i64 * 8) as usize) } else { 0 };
+        set(role(p, 7, 0x1c), (t7 + 0x3230) as u64, &mut mask, &mut table);
+        let g2 = p.m.r64(this + 0x10);
+        let scale0 = p.m.f32((p.m.r64(g2 + 0x208) as i64 + if p.m.r32(g2 + 0x200) > k { k } else { 0 } as i32 as i64 * 0xa8) as usize + 0x4c);
+        let (far_hi, far_w) = window(p.m.f32(lv + 0x38), p.m.f32(lv + 0x34));
+        let (near_hi, near_w) = window(p.m.f32(lv + 0x30), p.m.f32(lv + 0x2c));
+        let ratio = far_hi / far_w;
+        if ratio.is_nan() {
+            continue;
+        }
+        let s = fmax(scale0, min_scale);
+        let inv_far = 1.0 / (s * far_w);
+        if inv_far.is_nan() || (near_hi / near_w).is_nan() || (1.0 / (s * near_w)).is_nan() {
+            continue;
+        }
+        let level = p.query(p.base + GRID_LEVEL, &[tiles as u64, li as u32 as u64]) as usize;
+        let blocks = p.query(p.base + GRID_BLOCKS, &[tiles as u64, p.m.r32(lv + 0xc) as u64]) as usize;
+        let g3 = p.m.r64(this + 0x10);
+        let dist = p.m.f32(g3 + 0x210);
+        let scale = p.m.f32((p.m.r64(g3 + 0x208) as i64 + if p.m.r32(g3 + 0x200) > k { k } else { 0 } as i32 as i64 * 0xa8) as usize + 0x4c);
+        let a = p.m.f32(lv + 0x38);
+        let reach = if a <= 0.0 {
+            f32::MAX
+        } else if a == f32::MAX {
+            0.0
+        } else {
+            dist / (a * fmax(scale, min_scale))
+        };
+        let cells_i = p.m.i32(p.m.r64(level) + 0x20);
+        let cell_size = p.m.f32(tiles + 8);
+        let tb = (t98 as i64 + ti * 0x10) as usize;
+        let ei = if (e as u64) < p.m.r32(tb) as u64 { e } else { 0 };
+        bind_slot(p, w, arg, 9, p.m.r64(tb + 8) + ei * 0x80, 0)?;
+        let n = p.m.r32(level + 8) as usize;
+        if n == 0 {
+            continue;
+        }
+        let end = cell_size * cells_i as f32 + reach;
+        let near_at = dist / (fmax(scale, min_scale) * p.m.f32(p.base + NEAR_SCALE));
+        'items: for it in 0..n {
+            let l = p.m.r64(level);
+            let h = p.m.r16(level + 0xc + it * 4) as u32;
+            let (x, y) = (h & 0xff, h >> 8);
+            let ci = (p.m.r32(l + 8).wrapping_mul(y).wrapping_add(x)) as i32 as i64;
+            let c = (p.m.r64(l + 0x10) as i64 + ci * 0x14) as usize;
+            let b = p.m.r8(c + 0xc);
+            if b & 1 != 0 || p.m.r8(c + 0xe) < 5 {
+                continue;
+            }
+            let at = p.m.f32(c + 8);
+            if end < at {
+                break 'items;
+            }
+            if b & 0x10 == 0 {
+                continue;
+            }
+            let t = if at < p.m.f32(p.base + FADE_MIN_DIST) {
+                0.0
+            } else {
+                let v = ratio - inv_far * p.m.f32(p.m.r64(this + 0x10) + 0x210) / at;
+                if v < 0.0 { 0.0 } else { fmin(v, 1.0) }
+            };
+            let fade = p.m.f32(lv + 0x18) * (1.0 - t) * p.m.f32(p.base + FADE_SCALE);
+            if fade <= 0.0 {
+                continue;
+            }
+            let step = p.m.i32(l + 0x24);
+            let sh = p.m.r32(l + 0x1c) & 0x1f;
+            let tsh = p.m.r32(tiles + 0x34) & 0x1f;
+            let gx = ((x as i32).wrapping_sub(p.m.r16(l + 0x30) as i32).wrapping_add(if (x as i32) < p.m.r16(l + 0x28) as i16 as i32 { step } else { 0 })
+                << sh) as i16 as i32
+                >> tsh;
+            let ext = p.m.i32(tiles + 0x3c);
+            let (x0, y0) = (p.m.r16(tiles + 0x44) as i16 as i32, p.m.r16(tiles + 0x46) as i16 as i32);
+            if gx < x0 || gx >= ext.wrapping_add(x0) {
+                continue;
+            }
+            let gy = ((y as i32).wrapping_sub(p.m.r16(l + 0x32) as i32).wrapping_add(if (y as i32) < p.m.r16(l + 0x2a) as i16 as i32 { step } else { 0 })
+                << sh) as i16 as i32
+                >> tsh;
+            if gy < y0 || gy >= ext.wrapping_add(y0) {
+                continue;
+            }
+            let arr = p.m.r64(tiles + 0x28);
+            if arr == 0 {
+                continue;
+            }
+            let ax = (p.m.r16(tiles + 0x48) as i32).wrapping_add(gx) as i16 as i32;
+            let ay = (p.m.r16(tiles + 0x4a) as i32).wrapping_add(gy) as i16 as i32;
+            let rem = |v: i32| v.wrapping_sub(if ext == 0 { 0 } else { v.wrapping_div(ext) }.wrapping_mul(ext));
+            let cell = p.m.r32(tiles + 0x20).wrapping_mul(rem(ay) as u32).wrapping_add(rem(ax) as u32) as i32 as i64;
+            let tt = (arr as i64 + cell * 0x110) as usize;
+            if p.m.r8(tt) & 2 != 0 || p.m.i8(tt + 1) < 0 {
+                continue;
+            }
+            let present = |p: &Port, o: usize| p.query(p.base + TEXTURE_PRESENT, &[(tt + o) as u64]) & 1 != 0;
+            if !(present(p, 0x10) || present(p, 0x90)) || p.m.i8(tt + 2) < 0 {
+                continue;
+            }
+            if !(present(p, 0x30) || present(p, 0xb0)) || p.m.i8(tt + 3) < 0 {
+                continue;
+            }
+            if !(present(p, 0x50) || present(p, 0xd0)) {
+                continue;
+            }
+            for (o, alt, n, off) in [(0x10, 0x90, 1, 4), (0x30, 0xb0, 2, 8), (0x50, 0xd0, 3, 0xc)] {
+                let src = if present(p, o) { tt + o } else { tt + alt };
+                let v = p.query(p.base + TEXTURE_OF, &[src as u64]);
+                set(role(p, n, off), v, &mut mask, &mut table);
+            }
+            let row = (step as u32).wrapping_mul(y);
+            if flags & 4 != 0 {
+                let src = if present(p, 0x70) { tt + 0x70 } else { tt + 0xf0 };
+                let v = p.query(p.base + TEXTURE_OF, &[src as u64]);
+                set(role(p, 4, 0x10), v, &mut mask, &mut table);
+            }
+            if mask != 0 {
+                let m = mask;
+                mask = 0;
+                bind_texture_table(p, w, arg, &table, m)?;
+            }
+            let index = row.wrapping_add(x) as i32;
+            let lod = p.m.r32(lv + 0x10);
+            if at > near_at {
+                bind_slot(p, w, arg, 8, blocks, index)?;
+                drawn = drawn.wrapping_add(draw_faded(p, shader, w, lod, fade));
+            } else {
+                let env = p.m.r64(p.m.r64(p.base + ENV_HOLDER));
+                let id = if env != 0 && (p.m.r8(env + 9) >> 5) & 1 != 0 {
+                    0xffff
+                } else {
+                    let (cx, cy) = (p.m.r32(lod_ids), p.m.r32(lod_ids + 4));
+                    let k = if cy > y && cx > x { (cx.wrapping_mul(y) as i32 as i64 + x as i64) as usize } else { 0 };
+                    p.m.r16(p.m.r64(lod_ids + 8) + k * 0x40 + 0x3c) as u32
+                };
+                bind_slot(p, w, arg, 8, blocks, index)?;
+                drawn = drawn.wrapping_add(draw_parts(p, shader, w, lod, id, p.m.r8(c + 0x12) as u32, -1, fade));
+            }
+        }
+    }
+    p.m.w::<u32>(ctx + 0x34, p.m.r32(ctx + 0x34).wrapping_add(drawn / 3));
+    Ok(())
+}
+
+const PART_TABLE: usize = 0x381f4d0;
+
+/// The shader's draw of `count` indices from `first` (main+0x18cfb1c with one instance), when it is enabled.
+unsafe fn draw_indices(p: &mut Port, s: usize, w: usize, first: u32, count: u32) -> u32 {
+    if count == 0 || p.m.r8(s + 8) & 1 == 0 {
+        return 0;
+    }
+    let prim = p.m.r32(s + 0x42c) as u64;
+    let cmd = p.m.r64(w + 0xb8);
+    let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(s + 0x450) as u64]).wrapping_add(p.m.r32(s + 0x44c).wrapping_mul(first) as u64);
+    let itype = p.m.r32(s + 0x428) as u64;
+    p.m.w::<u8>(cmd + 0x10, 1);
+    p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, count as u64, addr]);
+    count
+}
+
+/// main+0x18ce544(fade, shader, w, k, mask, select, part): the parts of level k in `mask` (16 bits), each its range
+/// scaled by `fade` (clamped to 0..1) in whole units of the level. Parts in the order of the static table `select`
+/// (main+0x381f4d0, 16 indices per entry) unless the environment's +9 bit 6 is set; all parts unscaled: one draw of
+/// the level's whole range. `part` >= 0: only that part. Returns the indices drawn.
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_parts(p: &mut Port, s: usize, w: usize, k: u32, mask: u32, select: u32, part: i32, fade: f32) -> u32 {
+    let mut fade = fade;
+    if !(fade >= 0.0) || !(fade <= 1.0) {
+        fade = if fade < 0.0 { 0.0 } else { fmin(fade, 1.0) };
+    }
+    let env = p.m.r64(p.m.r64(p.base + ENV_HOLDER));
+    let ordered = !(env != 0 && (p.m.r8(env + 9) >> 6) & 1 != 0) && (select as i32) >= 0;
+    let m = mask & 0xffff;
+    let unit = p.m.r32((p.base as i64 + UNITS as i64 + k as i32 as i64 * 12) as usize + 8);
+    let part_draw = |p: &mut Port, j: u32| -> u32 {
+        let idx = |n: usize, t: usize| {
+            if p.m.r32(s + n) > j && p.m.r32(s + t) > k { p.m.r32(s + t).wrapping_mul(j).wrapping_add(k) as i32 as i64 } else { 0 }
+        };
+        let (ic, ifirst) = (idx(0x4f4, 0x4f0), idx(0x4e4, 0x4e0));
+        let total = p.m.r32((p.m.r64(s + 0x4f8) as i64 + ic * 4) as usize) as f32;
+        let n = (fade * total) as u32;
+        let n = if unit == 0 { 0 } else { n / unit }.wrapping_mul(unit);
+        if n == 0 || p.m.r8(s + 8) & 1 == 0 {
+            return 0;
+        }
+        let first = p.m.r32((p.m.r64(s + 0x4e8) as i64 + ifirst * 4) as usize);
+        draw_indices(p, s, w, first, n)
+    };
+    let mut drawn = 0u32;
+    if ordered {
+        let table = p.base + PART_TABLE + select as usize * 0x40;
+        for x in 0..16usize {
+            if part >= 0 && part as usize * 4 != x * 4 {
+                continue;
+            }
+            let j = p.m.r32(table + x * 4);
+            if (m >> (j & 31)) & 1 == 0 {
+                continue;
+            }
+            drawn = drawn.wrapping_add(part_draw(p, j));
+        }
+        return drawn;
+    }
+    if m == 0xffff && fade == 1.0 {
+        let f = if p.m.r32(s + 0x4e4) != 0 && p.m.r32(s + 0x4e0) > k { k } else { 0 } as i32 as i64;
+        let first = p.m.r32((p.m.r64(s + 0x4e8) as i64 + f * 4) as usize);
+        let c = if p.m.r32(s + 0x4d0) > k { k } else { 0 } as i32 as i64;
+        let count = p.m.r32((p.m.r64(s + 0x4d8) as i64 + c * 4) as usize);
+        return draw_indices(p, s, w, first, count);
+    }
+    for j in 0..16u32 {
+        if part >= 0 && part as u32 != j {
+            continue;
+        }
+        if (m >> j) & 1 == 0 {
+            continue;
+        }
+        drawn = drawn.wrapping_add(part_draw(p, j));
+    }
+    drawn
+}
+
+/// AArch64 FMIN: NaN if either is NaN, -0 below +0.
+fn fmin(a: f32, b: f32) -> f32 {
+    if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else if a == b {
+        if a.is_sign_negative() { a } else { b }
+    } else if a < b {
+        a
+    } else {
+        b
+    }
 }
