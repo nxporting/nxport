@@ -799,8 +799,12 @@ impl Ctx {
                             let key = (v.as_ptr() as usize, n, self.ubo_epoch);
                             match self.ubo_copies.get(&key) {
                                 Some(&(b, o)) => Some((b, o, n as u64, v.len())),
+                                // Copied on vk-record, before the commands after this one.
                                 None => {
-                                    let c = self.arena.copy(&self.dev, &v[..n]);
+                                    let c = self.arena.reserve(&self.dev, n).map(|(b, o, p)| {
+                                        self.rec.fill(v.as_ptr() as usize, p, n, self.ubo_epoch);
+                                        (b, o)
+                                    });
                                     if let Some(c) = c {
                                         self.ubo_copies.insert(key, c);
                                     }

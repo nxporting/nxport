@@ -26,6 +26,9 @@ pub(super) enum Op {
     DrawIndexed(u32, u32, u32, i32, u32),
     Barrier,
     Checkpoint(&'static str, Box<[u64; 4]>),
+    /// Copies guest memory (src, into dst, len bytes) as it was at uniform epoch `epoch` (Ctx::ubo_epoch), for the draws
+    /// recorded after it: copy_guest.
+    Fill(usize, usize, u32, u64),
     /// Anything else (owning what it records).
     Cmd(Box<dyn FnOnce(&Dev, vk::CommandBuffer)>),
 }
@@ -76,6 +79,11 @@ impl Recorder {
     /// A command recorded from what `f` owns.
     pub(super) fn cmd(&mut self, f: impl FnOnce(&Dev, vk::CommandBuffer) + 'static) {
         self.op(Op::Cmd(Box::new(f)));
+    }
+
+    /// Copies guest memory [src, src + len) into `dst` as it is at uniform epoch `epoch`, before the commands after it.
+    pub(super) fn fill(&mut self, src: usize, dst: *mut u8, len: usize, epoch: u64) {
+        self.op(Op::Fill(src, dst as usize, len as u32, epoch));
     }
 
     /// Binds set 0 with `offsets`.
@@ -136,6 +144,46 @@ unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, op: Op, words: &[u32], ende
         Op::DrawIndexed(n, i, first, base_vertex, base) => d.cmd_draw_indexed(c, n, i, first, base_vertex, base),
         Op::Barrier => dev.full_barrier(c),
         Op::Checkpoint(what, args) => dev.checkpoint(c, what, *args),
+        Op::Fill(src, dst, len, epoch) => copy_guest(src, dst as *mut u8, len as usize, epoch),
         Op::Cmd(f) => f(dev, c),
+    }
+}
+
+/// Bytes of guest memory the submit's own writes (inline uniform updates, reports) replaced while it was recorded:
+/// (uniform epoch the write began, address, previous contents). Copies vk-record makes later than the commands
+/// before such a write put them back. Cleared when a submit begins (vk-record finished the one before).
+static OVERWRITTEN: std::sync::Mutex<Vec<(u64, usize, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+/// The latest epoch in OVERWRITTEN (0: none), so copies made at it or later skip the lock.
+static OVERWRITTEN_LATEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Guest memory [a, a + len) is about to be written by the submit's commands, beginning uniform epoch `epoch`; its
+/// contents are read at `from` (the engine's alias of a guarded report page, else `a`).
+pub(super) unsafe fn overwriting(epoch: u64, a: usize, from: *const u8, len: usize) {
+    let old = std::slice::from_raw_parts(from, len).to_vec();
+    OVERWRITTEN.lock().unwrap().push((epoch, a, old));
+    OVERWRITTEN_LATEST.store(epoch, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// A submit begins.
+pub(super) fn clear_overwritten() {
+    OVERWRITTEN.lock().unwrap().clear();
+    OVERWRITTEN_LATEST.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// A copy of guest memory [src, src + len) at `dst` as the commands of uniform epoch `epoch` saw it: pages the game wrote
+/// since the submit began take their saved contents (guard::patch), and what the submit's own later writes replaced is
+/// put back (latest first, so the earliest of them, which held the epoch's bytes, is last).
+unsafe fn copy_guest(src: usize, dst: *mut u8, len: usize, epoch: u64) {
+    std::ptr::copy_nonoverlapping(src as *const u8, dst, len);
+    crate::vulkan::guard::patch(src, dst, len);
+    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    if OVERWRITTEN_LATEST.load(std::sync::atomic::Ordering::SeqCst) <= epoch {
+        return;
+    }
+    for (e, a, old) in OVERWRITTEN.lock().unwrap().iter().rev() {
+        let (x, y) = ((*a).max(src), (a + old.len()).min(src + len));
+        if *e > epoch && x < y {
+            std::ptr::copy_nonoverlapping(old.as_ptr().add(x - a), dst.add(x - src), y - x);
+        }
     }
 }

@@ -435,6 +435,12 @@ impl Arena {
         Some((b, off))
     }
 
+    /// Room for a copy of `len` bytes that vk-record makes (exec::record::Op::Fill).
+    unsafe fn reserve(&mut self, dev: &device::Dev, len: usize) -> Option<(vk::Buffer, u64, *mut u8)> {
+        ARENA_BYTES.fetch_add(len as u64, Ordering::Relaxed);
+        self.alloc(dev, len)
+    }
+
     /// The chunks this submit used (they stay allocated until it completed: making and zeroing 64 MB chunks for every
     /// submit was a visible part of recording).
     fn take_used(&mut self) -> Vec<device::HostBuffer> {
