@@ -330,9 +330,9 @@ const INSTANCE_PARAMS: usize = 0x860094;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 
 /// The instanced cave subsystem's delegate targets: main+0x85ff40 (mode 0) and 0x137c31c (mode 1) through
-/// main+0x85ffc4 (drawn while the info's +1 is set), main+0x137c4bc (mode 3, drawn while +0x1389 is set): mark the
-/// subsystem used (+0x40 bit 2), then main+0x860148 timed, in every pass.
-pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize, mode: u32) -> R<()> {
+/// main+0x85ffc4 (drawn while the info's +1 is set), main+0x137c3a0 / 0x137c4bc (modes 2 / 3, drawn while +0x1389 is
+/// set, `flag_gate`): mark the subsystem used (+0x40 bit 2), then main+0x860148 timed, in every pass.
+pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize, mode: u32, flag_gate: bool) -> R<()> {
     let s = p.m.r64(this + 0x28);
     p.query(p.base + LOCK, &[(s + 0x20) as u64]);
     p.m.w::<u32>(s + 0x40, p.m.r32(s + 0x40) | 4);
@@ -343,7 +343,7 @@ pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize, mod
     p.m.w::<u32>(s + 0x13e0, p.m.r8(ctx + 0x30) as u32 | p.m.r32(this + 0xe00) << 8);
     let s = p.m.r64(this + 0x28);
     let (sys, info) = (p.m.r64(s + 0x4e8), s + 5000);
-    let on = if mode == 3 { p.m.r8(s + 0x1389) != 0 } else { p.m.r8(info + 1) != 0 };
+    let on = if flag_gate { p.m.r8(s + 0x1389) != 0 } else { p.m.r8(info + 1) != 0 };
     if !on || p.m.r64(sys + 0x20) == 0 {
         return Ok(());
     }
