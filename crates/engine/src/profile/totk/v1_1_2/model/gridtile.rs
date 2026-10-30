@@ -9,8 +9,6 @@ const PFN_SET_TILED_CACHE_ACTION: usize = 0x466e138;
 const PFN_SET_TILED_CACHE_TILE_SIZE: usize = 0x466e140;
 const ENV_HOLDER: usize = 0x46353f8;
 const NVN_MGR_HOLDER: usize = 0x4635188;
-const CAST_GUARD: usize = 0x4635450;
-const CAST_TYPE: usize = 0x4635458;
 const MIN_SCALE: usize = 0x380eeb0;
 const RANGE_SCALE: usize = 0x380ea80;
 const FADE_MIN_DIST: usize = 0x380f934;
@@ -69,16 +67,90 @@ unsafe fn draw_part(p: &mut Port, s: usize, w: usize, key: [u32; 3], fade: f32, 
     draw_indices(p, s, w, start, total)
 }
 
+/// The level texture holder's texture (its virtual +0x210).
+unsafe fn level_texture(p: &mut Port) -> R<u64> {
+    let holder = p.m.r64(p.m.r64(p.m.r64(p.base + LEVEL_TEXTURE_HOLDER)) + 0xd0);
+    let f = p.vfn(holder, 0x210);
+    // main+0x287bf48: the holder's +0x260 object's texture at +0x190.
+    Ok(if f == 0x287bf48 { (p.m.r64(holder + 0x260) + 0x190) as u64 } else { p.helper("level texture", f, &[holder as u64])? })
+}
+
 /// Column (`o` 0) or row (`o` 2) `v` of level `l` relative to its origin, wrapped by its step.
 unsafe fn cell_pos(p: &Port, l: usize, v: u32, o: usize) -> i32 {
     let step = if (v as i32) < p.m.r16(l + 0x28 + o) as i16 as i32 { p.m.i32(l + 0x24) } else { 0 };
     (v as i32).wrapping_sub(p.m.r16(l + 0x30 + o) as i32).wrapping_add(step)
 }
 
-/// main+0x12e3774(this, arg, k).
-pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()> {
-    if p.m.r8(p.m.r64(p.base + CAST_GUARD)) & 1 == 0 {
-        p.helper("grid tiles (static init)", 0x12e3774, &[this as u64, arg as u64, k as u64])?;
+/// The functions sharing main+0x12e3774's code, by what differs.
+pub(super) struct Tiles {
+    target: usize,
+    /// Static guard and type token of the shader object cast.
+    guard: usize,
+    cast_type: usize,
+    /// Level 0's flag (+8) that enables the draw.
+    level_flag: u8,
+    /// The LOD record's uniform blocks.
+    lod_blocks: usize,
+    /// The LOD entry's record id and part scale.
+    lod_id: usize,
+    lod_scale: usize,
+    /// The LOD records' count (the array follows).
+    lod_count: usize,
+    /// The cell's detail level (+0xe) below which it is not drawn.
+    min_detail: u8,
+    /// Records of 0x38 bytes whose part fade this game function computes (lods, LOD row, part), drawn in the layer of
+    /// the record's bit 1 in units of this static table (12-byte entries, unit at +8); 0: records of 0x70 bytes with
+    /// the fade inline, layer 0, 12-index units.
+    lod_fade: usize,
+    layer_units: usize,
+    /// The level texture and the record's texture at roles 4 / 5.
+    level_roles: bool,
+}
+
+pub(super) const TILES_12E3774: Tiles = Tiles {
+    target: 0x12e3774,
+    guard: 0x4635450,
+    cast_type: 0x4635458,
+    level_flag: 0x40,
+    lod_blocks: 0x280,
+    lod_id: 0x11,
+    lod_scale: 0x13,
+    lod_count: 0x80,
+    min_detail: 7,
+    lod_fade: 0,
+    layer_units: 0,
+    level_roles: false,
+};
+pub(super) const TILES_113AA14: Tiles = Tiles {
+    target: 0x113aa14,
+    guard: 0x4635410,
+    cast_type: 0x4635418,
+    level_flag: 0x20,
+    lod_blocks: 0x300,
+    lod_id: 0x10,
+    lod_scale: 0x12,
+    lod_count: 0x90,
+    ..TILES_12E3774
+};
+pub(super) const TILES_1276504: Tiles = Tiles {
+    target: 0x1276504,
+    guard: 0x4635438,
+    cast_type: 0x4635440,
+    level_flag: 0x10,
+    lod_blocks: 0x200,
+    lod_id: 8,
+    lod_scale: 0,
+    lod_count: 0x70,
+    min_detail: 8,
+    lod_fade: 0xf2f438,
+    layer_units: 0x381f1c8,
+    level_roles: true,
+};
+
+/// main+0x12e3774(this, arg, k) and the functions sharing its code (`v`).
+pub(super) unsafe fn draw(p: &mut Port, v: &Tiles, this: usize, arg: usize, k: u32) -> R<()> {
+    if p.m.r8(p.m.r64(p.base + v.guard)) & 1 == 0 {
+        p.helper("grid tiles (static init)", v.target, &[this as u64, arg as u64, k as u64])?;
         return Ok(());
     }
     let ctx = p.m.r64(arg);
@@ -87,11 +159,11 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()
     let ri = if p.m.r32(g + 0x200) > k { k } else { 0 } as i32 as i64;
     let rec = (p.m.r64(g + 0x208) as i64 + ri * 0xa8) as usize;
     let s0 = p.m.r64(this + 0x18);
-    let shader = if s0 == 0 { 0 } else { p.query(p.base + p.vfn(s0, 0), &[s0 as u64, p.m.r64(p.base + CAST_TYPE) as u64]) as usize };
+    let shader = if s0 == 0 { 0 } else { p.query(p.base + p.vfn(s0, 0), &[s0 as u64, p.m.r64(p.base + v.cast_type) as u64]) as usize };
     let tiles = p.m.r64(rec + 0x28);
     let lv0 = p.m.r64(p.m.r64(tiles + 0x58));
     let (lv, level) = if p.m.r32(tiles + 0x50) == 0 { (0, 0x1058) } else { (lv0, lv0 + 0x1058) };
-    if p.m.r8(lv0 + 8) & 0x40 == 0 {
+    if p.m.r8(lv0 + 8) & v.level_flag == 0 {
         return Ok(());
     }
     let g = p.m.r64(this + 0x10);
@@ -122,10 +194,15 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()
             }
         }
     };
+    if v.level_roles {
+        let tex = level_texture(p)?;
+        set(role(p, 4, 0x10), tex, &mut mask, &mut table);
+        set(role(p, 5, 0x14), (p.m.r64(p.m.r64(p.m.r64(rec + 0x30) + 8) + 0xb8) + 0x138) as u64, &mut mask, &mut table);
+    }
     let flags = p.m.r32(p.m.r64(this + 0x10) + 8);
     if flags & 4 == 0 {
-        let v = p.query(p.base + ENV_TEXTURE, &[p.m.r64(p.m.r64(p.base + ENV_HOLDER)) as u64]);
-        set(role(p, 3, 0xc), v, &mut mask, &mut table);
+        let e = p.query(p.base + ENV_TEXTURE, &[p.m.r64(p.m.r64(p.base + ENV_HOLDER)) as u64]);
+        set(role(p, 3, 0xc), e, &mut mask, &mut table);
     }
     let n = p.m.r32(level + 8);
     let mut drawn = 0u32;
@@ -166,7 +243,7 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()
             }
             let (cx, cy) = (p.m.r32(tiles + 0x34d0), p.m.r32(tiles + 0x34d4));
             let lodk = if cy > y && cx > x { cx.wrapping_mul(y).wrapping_add(x) as i32 as i64 } else { 0 };
-            if p.m.r8(c + 0xe) < 7 {
+            if p.m.r8(c + 0xe) < v.min_detail {
                 break 'cell;
             }
             let lod_row = (p.m.r64(tiles + 0x34d8) as i64 + lodk * 0x70) as usize;
@@ -213,24 +290,38 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()
                     continue;
                 }
                 let e = lod_row + j as usize * 0x18;
-                if p.m.r8(e) & 0x20 != 0 {
-                    continue;
+                let (id, a, layer, unit);
+                if v.lod_fade != 0 {
+                    id = p.m.r8(e + v.lod_id) as u32;
+                    let li = if p.m.r32(lods + v.lod_count) > id { id } else { 0 } as usize;
+                    let rr = p.m.r64(lods + v.lod_count + 8) + li * 0x38;
+                    if p.m.r8(rr) & 1 == 0 {
+                        continue;
+                    }
+                    a = p.query_ret_f(p.base + v.lod_fade, &[lods as u64, lod_row as u64, j as u64]);
+                    layer = (p.m.r8(rr) as u32 >> 1) & 1;
+                    unit = p.m.r32((p.base as i64 + v.layer_units as i64 + layer as i32 as i64 * 12) as usize + 8);
+                } else {
+                    if p.m.r8(e) & 0x20 != 0 {
+                        continue;
+                    }
+                    id = p.m.r8(e + v.lod_id) as u32;
+                    if id == 0xff {
+                        continue;
+                    }
+                    let li = if p.m.r32(lods + v.lod_count) > id { id } else { 0 } as usize;
+                    let rr = p.m.r64(lods + v.lod_count + 8) + li * 0x70;
+                    if p.m.r8(rr + 0x64) & 1 == 0 {
+                        continue;
+                    }
+                    let sel = p.m.r8(rr + 0x65) as u32;
+                    let sel = if sel < 4 { sel as usize } else { 0 };
+                    let (lo, hi) = (p.m.f32(rr + 0x68), p.m.f32(rr + 0x6c));
+                    let x = lo + p.m.r8(e + sel + 0x14) as f32 / 255.0 * (hi - lo);
+                    a = x * (p.m.r8(e + v.lod_scale) as f32 / 255.0);
+                    (layer, unit) = (0, 12);
                 }
-                let id = p.m.r8(e + 0x11) as u32;
-                if id == 0xff {
-                    continue;
-                }
-                let li = if p.m.r32(lods + 0x80) > id { id } else { 0 } as usize;
-                let rr = p.m.r64(lods + 0x88) + li * 0x70;
-                if p.m.r8(rr + 0x64) & 1 == 0 {
-                    continue;
-                }
-                let sel = p.m.r8(rr + 0x65) as u32;
-                let sel = if sel < 4 { sel as usize } else { 0 };
-                let (lo, hi) = (p.m.f32(rr + 0x68), p.m.f32(rr + 0x6c));
-                let v = lo + p.m.r8(e + sel + 0x14) as f32 / 255.0 * (hi - lo);
-                let v = v * (p.m.r8(e + 0x13) as f32 / 255.0);
-                let f = if p.m.r8(this + 0x90) & 1 == 0 { v } else { p.m.f32(this + 0x98) };
+                let f = if p.m.r8(this + 0x90) & 1 == 0 { a } else { p.m.f32(this + 0x98) };
                 if f <= 0.0 {
                     continue;
                 }
@@ -238,11 +329,11 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize, k: u32) -> R<()
                     bind_slot(p, w, arg, 8, blocks, index)?;
                 }
                 if last_lod != id as i32 {
-                    bind_slot(p, w, arg, 9, lods + 0x280, id as i32)?;
+                    bind_slot(p, w, arg, 9, lods + v.lod_blocks, id as i32)?;
                     last_lod = id as i32;
                 }
                 key[1] = j;
-                drawn = drawn.wrapping_add(draw_part(p, shader, w, key, f, bit != 0, 0, 12));
+                drawn = drawn.wrapping_add(draw_part(p, shader, w, key, f, bit != 0, layer, unit));
                 last_index = index;
             }
         }
@@ -297,10 +388,7 @@ pub(super) unsafe fn draw_layers(p: &mut Port, this: usize, arg: usize, k: u32) 
             }
         }
     };
-    let holder = p.m.r64(p.m.r64(p.m.r64(p.base + LEVEL_TEXTURE_HOLDER)) + 0xd0);
-    let f = p.vfn(holder, 0x210);
-    // main+0x287bf48: the holder's +0x260 object's texture at +0x190.
-    let tex = if f == 0x287bf48 { (p.m.r64(holder + 0x260) + 0x190) as u64 } else { p.helper("level texture", f, &[holder as u64])? };
+    let tex = level_texture(p)?;
     set(role(p, 5, 0x14), tex, &mut mask, &mut table);
     set(role(p, 6, 0x18), (p.m.r64(p.m.r64(p.m.r64(rec + 0x30) + 8) + 0xb8) + 0x138) as u64, &mut mask, &mut table);
     let t = p.m.r64(rec + 0x28);
