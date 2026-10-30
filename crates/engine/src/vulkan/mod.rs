@@ -109,7 +109,7 @@ pub fn init(validation: bool) -> Result<(), String> {
 impl Backend for Vulkan {
     fn set_program(&self, program: usize, stages: &[ShaderStage]) {
         if let Some(c) = self.ctx.lock().unwrap().as_mut() {
-            c.programs.insert(program, stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect());
+            c.set_program(program, stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect());
         }
     }
 

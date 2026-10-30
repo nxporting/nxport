@@ -111,6 +111,9 @@ pub(super) struct DrawMemo {
     push: bool,
 }
 
+/// Draw states kept (Ctx::draw_memos) before they are dropped and worked out again.
+const DRAW_MEMOS: usize = 8192;
+
 /// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
 
 impl Ctx {
@@ -281,6 +284,33 @@ impl Ctx {
         })
     }
 
+    /// A hash of the bound state draw_state depends on (what Ctx::pipe_gen tracks), worked out once per generation.
+    fn pipe_state_hash(&mut self) -> u64 {
+        if self.memo_hashes.0 != self.pipe_gen {
+            let st = &self.st;
+            let h = hash(&(
+                (st.program, st.attribs, &st.streams, st.blend),
+                (st.color_state, st.channel_mask, st.depth_stencil, st.polygon, st.multisample, st.depth_clamp, st.prim_restart),
+            ));
+            self.memo_hashes.0 = self.pipe_gen;
+            self.memo_hashes.1 = h;
+        }
+        self.memo_hashes.1
+    }
+
+    /// A hash of the current pass's target formats (what draw_state reads of it), worked out once per pass.
+    fn pass_state_hash(&mut self) -> u64 {
+        if self.memo_hashes.2 != self.pass_gen {
+            let h = self.pass.as_ref().map(|p| {
+                let colors: smallvec::SmallVec<[Option<(i32, i32)>; 8]> = p.colors.iter().map(|c| c.map(|c| (c.1.as_raw(), c.2))).collect();
+                hash(&(colors, p.depth.map(|d| d.1.as_raw()), p.samples.as_raw()))
+            });
+            self.memo_hashes.2 = self.pass_gen;
+            self.memo_hashes.3 = h.unwrap_or(0);
+        }
+        self.memo_hashes.3
+    }
+
     pub(super) unsafe fn draw(&mut self, mode: i32, call: Draw, base_instance: i32, instances: i32) {
         // Pipelines listed by earlier sessions, made on worker threads from the first draw.
         if self.pipeline_cache.is_none() {
@@ -294,7 +324,21 @@ impl Ctx {
         let m = match &self.draw_memo {
             Some(m) if m.key == memo_key => m.clone(),
             _ => {
-                let Some(m) = self.draw_state(mode) else { return };
+                // Games switch back and forth between a few programs and state blocks, and passes follow each other with
+                // the same targets: earlier draws with the same state, by its contents, in this submit or earlier ones
+                // (sky2203: a fifth of the draws changed the generations, into some 600 states a frame).
+                let content_key = (mode, self.pipe_state_hash(), self.pass_state_hash(), memo_key.3, memo_key.4);
+                let m = match self.draw_memos.get(&content_key) {
+                    Some(m) => m.clone(),
+                    None => {
+                        let Some(m) = self.draw_state(mode) else { return };
+                        if self.draw_memos.len() >= DRAW_MEMOS {
+                            self.draw_memos.clear();
+                        }
+                        self.draw_memos.insert(content_key, m.clone());
+                        m
+                    }
+                };
                 self.draw_memo = Some(DrawMemo { key: memo_key, ..m.clone() });
                 m
             }
@@ -357,13 +401,13 @@ impl Ctx {
                         }
                     };
                     if let Some((buf, off, n)) = rewritten {
-                        self.rec.op(record::Op::IndexBuffer(buf, off, vk::IndexType::UINT32));
+                        self.index_buffer_bind(buf, off, vk::IndexType::UINT32);
                         self.rec.op(record::Op::DrawIndexed(n, instances as u32, 0, 0, base_instance.max(0) as u32));
                         return;
                     }
                 }
                 let Some((buf, off, ty)) = self.index_buffer(index_type, count, addr) else { return };
-                self.rec.op(record::Op::IndexBuffer(buf, off, ty));
+                self.index_buffer_bind(buf, off, ty);
                 self.rec.op(record::Op::DrawIndexed(count.max(0) as u32, instances as u32, 0, base_vertex, base_instance.max(0) as u32));
             }
         }
@@ -1235,8 +1279,29 @@ impl Ctx {
         crate::gpu::pipeline_list::record(e);
     }
 
+    /// Binds vertex buffer `binding` unless the command buffer has it bound already (Bound).
+    fn vertex_buffer(&mut self, binding: u32, buf: vk::Buffer, off: u64) {
+        match self.bound.vertex.get_mut(binding as usize) {
+            Some(b) if *b == (buf, off) => {}
+            b => {
+                if let Some(b) = b {
+                    *b = (buf, off);
+                }
+                self.rec.op(record::Op::VertexBuffer(binding, buf, off));
+            }
+        }
+    }
+
+    /// Binds the index buffer unless the command buffer has it bound already (Bound).
+    fn index_buffer_bind(&mut self, buf: vk::Buffer, off: u64, ty: vk::IndexType) {
+        if self.bound.index != Some((buf, off, ty)) {
+            self.bound.index = Some((buf, off, ty));
+            self.rec.op(record::Op::IndexBuffer(buf, off, ty));
+        }
+    }
+
     unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {
-        self.rec.op(record::Op::VertexBuffer(pipelines::ZERO_STREAM, self.zeros.buffer, 0));
+        self.vertex_buffer(pipelines::ZERO_STREAM, self.zeros.buffer, 0);
         for v in vl {
             let (addr, size) = self.st.vertex_buffers.get(v.stream as usize).copied().unwrap_or((0, 0));
             let a = crate::nvn::api::translate_virtual(addr as usize);
@@ -1244,16 +1309,16 @@ impl Ctx {
                 Some((self.zeros.buffer, 0))
             } else if !v.repack {
                 if let Some(&b) = self.vb_memo.get(&(a, size)) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 // What GPU work wrote: its shadow.
                 if let Some(b) = self.shadow(a, size, false) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 if let Some(b) = self.cached(a, size) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 // A copy, once per submit; never the imported pool in place. Vertex data read in place lost the device on
@@ -1292,12 +1357,12 @@ impl Ctx {
                     // Checked once per submit (guest memory does not change during one).
                     let skey = super::hash_of(&(a, size, v, n, u32::MAX - 1));
                     if let Some(&b) = self.repacked.get(&skey) {
-                        self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                        self.vertex_buffer(v.stream, b.0, b.1);
                         continue;
                     }
                     if let Some(b) = self.cached_repack(a, size, v, n) {
                         self.repacked.insert(skey, (b, 0));
-                        self.rec.op(record::Op::VertexBuffer(v.stream, b, 0));
+                        self.vertex_buffer(v.stream, b, 0);
                         continue;
                     }
                 }
@@ -1305,7 +1370,7 @@ impl Ctx {
                 // one).
                 let key = super::hash_of(&(a, size, v, n, base_instance));
                 if let Some(&b) = self.repacked.get(&key) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 let src = std::slice::from_raw_parts(a as *const u8, size);
@@ -1333,7 +1398,7 @@ impl Ctx {
                 b
             };
             if let Some((buf, off)) = bound {
-                self.rec.op(record::Op::VertexBuffer(v.stream, buf, off));
+                self.vertex_buffer(v.stream, buf, off);
             }
         }
     }
@@ -1472,6 +1537,12 @@ impl Ctx {
 
     unsafe fn dynamic_state(&mut self) {
         let Some(p) = &self.pass else { return };
+        // No command setting it since the previous draw of this pass.
+        let gen = (self.dynamic_gen, self.pass_gen, crate::nvn::api::window_origin_mode());
+        if self.dynamic_seen == Some(gen) {
+            return;
+        }
+        self.dynamic_seen = Some(gen);
         let (pw, ph) = p.extent;
         let (x, y, mut w, mut h) = self.st.viewport;
         if w <= 0 || h <= 0 {
