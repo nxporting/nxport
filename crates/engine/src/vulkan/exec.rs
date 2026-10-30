@@ -165,6 +165,13 @@ pub struct Ctx {
     pub(super) vb_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
     /// Scratch for the driver constant buffer of a draw (draw.rs driver_cbuf).
     pub(super) driver_scratch: Vec<u8>,
+    /// What driver_scratch was built for: (stage, base vertex, base instance, storage_gen, uniform_gen for compute); and
+    /// the hash of its first n bytes (n, hash) once taken.
+    pub(super) driver_key: Option<(i32, i32, i32, u64, u64)>,
+    pub(super) driver_hash: Option<(usize, u64)>,
+    /// Advanced at every storage / uniform buffer binding.
+    pub(super) storage_gen: u64,
+    pub(super) uniform_gen: u64,
     /// Descriptor sets written in this submit, by contents.
     pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
     /// What the command buffer being recorded has bound (draw.rs), so binding the same again is left out.
@@ -184,6 +191,9 @@ pub struct Ctx {
     /// Uniform buffer copies of this submit by (host address, length, epoch); the epoch advances at every write of guest
     /// memory by this submit's commands (inline uniform updates, reports).
     pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize, u64), (vk::Buffer, u64)>,
+    /// Uniform buffer bindings this submit copied, by (guest address, bound size, extent read, epoch): (buffer, offset,
+    /// range, bound size). Cleared when the submit's commands add a range they write (it may then be bound in place).
+    pub(super) ubo_memo: rustc_hash::FxHashMap<(u64, usize, i32, u64), Option<(vk::Buffer, u64, u64, usize)>>,
     /// Vertex and index data found in the device copies (vcache.rs) in this submit, by (address, length); cleared when
     /// the submit's commands add a range they write.
     pub(super) cached_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
@@ -354,6 +364,7 @@ impl Ctx {
         if !self.gpu_dirty.covers(a, b) {
             self.gpu_dirty.add(a, b);
             self.cached_memo.clear();
+            self.ubo_memo.clear();
         }
     }
 }
@@ -558,6 +569,10 @@ impl Ctx {
             max_indices: Default::default(),
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
+            driver_key: None,
+            driver_hash: None,
+            storage_gen: 0,
+            uniform_gen: 0,
             set_memo: Default::default(),
             bound: Bound::default(),
             dynamic_memo: None,
@@ -570,6 +585,7 @@ impl Ctx {
             supports: Default::default(),
             restart_memo: Default::default(),
             ubo_copies: Default::default(),
+            ubo_memo: Default::default(),
             driver_copies: Default::default(),
             cached_memo: Default::default(),
             ubo_epoch: 0,
@@ -817,6 +833,7 @@ impl Ctx {
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
+        self.ubo_memo.clear();
         self.driver_copies.clear();
         self.cached_memo.clear();
     }
@@ -1232,9 +1249,11 @@ impl Ctx {
             }
             Cmd::BindUniformBuffer { stage, index, addr, size } => {
                 self.st.uniforms.insert((*stage, *index), (*addr, *size));
+                self.uniform_gen += 1;
             }
             Cmd::BindStorageBuffer { stage, index, addr, size } => {
                 self.st.storage.insert((*stage, *index), (*addr, *size));
+                self.storage_gen += 1;
             }
             Cmd::UpdateUniformBuffer { addr, offset, data } => {
                 // In stream order: draws recorded before it took their copies already.

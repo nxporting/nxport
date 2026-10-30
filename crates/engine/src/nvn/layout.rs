@@ -228,6 +228,17 @@ pub fn sample_dims(samples: i32) -> (u32, u32) {
     }
 }
 
+/// compute_layout(p).layers, without computing the levels.
+pub fn layer_count(p: &TextureParams) -> u32 {
+    match p.target {
+        NVN_TARGET_1D_ARRAY | NVN_TARGET_2D_ARRAY | NVN_TARGET_2D_MULTISAMPLE_ARRAY | NVN_TARGET_CUBEMAP_ARRAY => {
+            p.depth.max(1) as u32
+        }
+        NVN_TARGET_CUBEMAP => 6,
+        _ => 1,
+    }
+}
+
 pub fn compute_layout(p: &TextureParams) -> TextureLayout {
     let info = format_info(p.format).unwrap_or(FormatInfo {
         block_w: 1,
