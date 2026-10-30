@@ -178,12 +178,21 @@ pub struct Ctx {
     pub(super) bound: Bound,
     /// The dynamic state set in the current pass (draw.rs dynamic_state).
     pub(super) dynamic_memo: Option<u64>,
+    /// Bumped by commands setting dynamic state; with Ctx::pass_gen and the origin mode, the generation dynamic_state
+    /// last set it at.
+    dynamic_gen: u64,
+    dynamic_seen: Option<(u64, u64, i32)>,
     /// The vertex layout of the bound attribute and stream state, and its hash (draw.rs vertex_layout).
     pub(super) vl_cache: Option<(std::sync::Arc<[draw::VStream]>, u64, u64)>,
     /// Bumped by commands changing the state pipelines are made from, and by each new pass (draw::DrawMemo).
     pipe_gen: u64,
     pass_gen: u64,
     draw_memo: Option<draw::DrawMemo>,
+    /// Draw states by (mode, bound state hash, pass formats hash, origin and depth modes), until a program's stages
+    /// change (set_program); and the hashes with the generations they were worked out at: (pipe_gen, hash, pass_gen,
+    /// hash).
+    draw_memos: HashMap<(i32, u64, u64, i32, i32), draw::DrawMemo>,
+    memo_hashes: (u64, u64, u64, u64),
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
@@ -194,9 +203,9 @@ pub struct Ctx {
     /// Uniform buffer bindings this submit copied, by (guest address, bound size, extent read, epoch): (buffer, offset,
     /// range, bound size). Cleared when the submit's commands add a range they write (it may then be bound in place).
     pub(super) ubo_memo: rustc_hash::FxHashMap<(u64, usize, i32, u64), Option<(vk::Buffer, u64, u64, usize)>>,
-    /// Vertex and index data found in the device copies (vcache.rs) in this submit, by (address, length); cleared when
-    /// the submit's commands add a range they write.
-    pub(super) cached_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
+    /// Vertex and index data found in the device copies (vcache.rs) in this epoch is used again unchecked; a new one
+    /// begins with each submit and when the submit's commands add a range they write.
+    pub(super) cached_epoch: u64,
     /// Driver constant buffer copies of this submit, by (contents hash, length).
     pub(super) driver_copies: rustc_hash::FxHashMap<(u64, usize), (vk::Buffer, u64)>,
     pub(super) ubo_epoch: u64,
@@ -264,13 +273,16 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
     std::ptr::write_unaligned((p + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
 }
 
-/// What a command buffer has bound: the graphics pipeline, and per bind point (graphics, compute) the descriptor set with
-/// its pipeline layout and dynamic offsets. The driver charges as much for binding the same again as for a change, and
-/// consecutive draws mostly use the same pipeline and set.
+/// What a command buffer has bound: the graphics pipeline, per bind point (graphics, compute) the descriptor set with
+/// its pipeline layout and dynamic offsets, the vertex buffers (NVN's 16 streams and pipelines::ZERO_STREAM) and the
+/// index buffer. The driver charges as much for binding the same again as for a change, and consecutive draws mostly
+/// use the same pipeline and set, and many the same buffers.
 #[derive(Default)]
 pub(super) struct Bound {
     pub(super) pipeline: vk::Pipeline,
     pub(super) sets: [Option<(vk::PipelineLayout, vk::DescriptorSet, smallvec::SmallVec<[u32; 32]>)>; 2],
+    pub(super) vertex: [(vk::Buffer, u64); pipelines::ZERO_STREAM as usize + 1],
+    pub(super) index: Option<(vk::Buffer, u64, vk::IndexType)>,
 }
 
 /// Disjoint address ranges [start, end), merged as they are added.
@@ -312,13 +324,19 @@ impl Ranges {
 }
 
 impl Ctx {
+    /// Program `program`'s stages: (code, control section, content hash). Draw states worked out with other stages for
+    /// it are dropped.
+    pub(super) fn set_program(&mut self, program: usize, stages: Vec<(u64, u64, u64)>) {
+        if self.programs.get(&program) != Some(&stages) {
+            self.programs.insert(program, stages);
+            self.draw_memo = None;
+            self.draw_memos.clear();
+        }
+    }
+
     /// Whether GPU work of this submit, or of earlier ones still running, writes guest memory [a, b).
     pub(super) fn gpu_writes(&self, a: usize, b: usize) -> bool {
-        if self.gpu_dirty.overlaps(a, b) {
-            return true;
-        }
-        let done = super::inflight::completed();
-        self.inflight_dirty.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
+        gpu_writes(&self.gpu_dirty, &self.inflight_dirty, a, b)
     }
 
     /// The shadow of guest memory [a, a + len) (shadow.rs) for GPU work that writes it (`write`) or reads what GPU work
@@ -338,24 +356,17 @@ impl Ctx {
     /// The device copy of vertex or index data at guest [a, a + len) (vcache.rs); None for memory GPU work writes (its
     /// shadow or guest memory is bound) or where it is not cached.
     pub(super) unsafe fn cached(&mut self, a: usize, len: usize) -> Option<(vk::Buffer, u64)> {
-        // Checked once per submit while nothing this submit's commands write is added (cached_memo).
-        if let Some(&b) = self.cached_memo.get(&(a, len)) {
-            return Some(b);
-        }
-        if self.gpu_writes(a, a + len) {
-            return None;
-        }
         let serial = super::guard::RECORDING.load(std::sync::atomic::Ordering::Relaxed);
         let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         let (dev, tex, arena) = (&self.dev, &mut self.tex, &mut self.arena);
-        let b = self.vcache.get(dev, a, len, serial, frame, &mut |dst, dst_off, src, n| {
+        let (dirty, inflight) = (&self.gpu_dirty, &self.inflight_dirty);
+        // Checked once per submit while nothing this submit's commands write is added (cached_epoch).
+        self.vcache.get(dev, a, len, serial, frame, self.cached_epoch, &|a, b| gpu_writes(dirty, inflight, a, b), &mut |dst, dst_off, src, n| {
             let Some((b, o, p)) = arena.alloc(dev, n) else { return false };
             std::ptr::copy_nonoverlapping(src, p, n);
             tex.record_copy(dev, b, o, dst, dst_off, n as u64);
             true
-        })?;
-        self.cached_memo.insert((a, len), b);
-        Some(b)
+        })
     }
 
     /// Guest memory [a, b) is written by this submit's commands: what was checked against it is checked again.
@@ -363,10 +374,19 @@ impl Ctx {
         // Draws binding the same storage buffer add it again and again: only new ranges change anything.
         if !self.gpu_dirty.covers(a, b) {
             self.gpu_dirty.add(a, b);
-            self.cached_memo.clear();
             self.ubo_memo.clear();
+            self.cached_epoch += 1;
         }
     }
+}
+
+/// Whether GPU work of this submit (`dirty`), or of earlier ones still running (`inflight`), writes guest memory [a, b).
+fn gpu_writes(dirty: &Ranges, inflight: &[(u64, Ranges)], a: usize, b: usize) -> bool {
+    if dirty.overlaps(a, b) {
+        return true;
+    }
+    let done = super::inflight::completed();
+    inflight.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
 }
 
 /// Pass-end timestamps per submit when profiling passes.
@@ -576,10 +596,14 @@ impl Ctx {
             set_memo: Default::default(),
             bound: Bound::default(),
             dynamic_memo: None,
+            dynamic_gen: 0,
+            dynamic_seen: None,
             vl_cache: None,
             pipe_gen: 0,
             pass_gen: 0,
             draw_memo: None,
+            draw_memos: HashMap::default(),
+            memo_hashes: (u64::MAX, 0, u64::MAX, 0),
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),
@@ -587,7 +611,7 @@ impl Ctx {
             ubo_copies: Default::default(),
             ubo_memo: Default::default(),
             driver_copies: Default::default(),
-            cached_memo: Default::default(),
+            cached_epoch: 1,
             ubo_epoch: 0,
             timestamps,
             timestamps_supported,
@@ -663,8 +687,6 @@ impl Ctx {
             super::inflight::watch(empty(serial));
             return;
         };
-        // Programs may have been registered again since.
-        self.draw_memo = None;
         self.bound = Bound::default();
         self.tex.begin_batch(self.pool);
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
@@ -835,7 +857,7 @@ impl Ctx {
         self.ubo_copies.clear();
         self.ubo_memo.clear();
         self.driver_copies.clear();
-        self.cached_memo.clear();
+        self.cached_epoch += 1;
     }
 
     /// The pipeline cache.
@@ -1140,6 +1162,16 @@ impl Ctx {
         };
         if changed {
             self.pipe_gen += 1;
+        } else if matches!(
+            c,
+            Cmd::SetViewport { .. }
+                | Cmd::SetScissor { .. }
+                | Cmd::SetDepthRange { .. }
+                | Cmd::SetStencilValue { .. }
+                | Cmd::SetBlendColor(_)
+                | Cmd::SetPolygonOffset { .. }
+        ) {
+            self.dynamic_gen += 1;
         } else if matches!(c, Cmd::BindVertexAttribState(_) | Cmd::BindVertexStreamState(_)) {
             // The same as bound: nothing to set (the vertex layout stays).
             return;
@@ -1487,6 +1519,7 @@ impl Ctx {
         }
         p.begun = true;
         self.dynamic_memo = None;
+        self.dynamic_seen = None;
         let ca: Vec<vk::RenderingAttachmentInfo> = p
             .colors
             .iter()

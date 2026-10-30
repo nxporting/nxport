@@ -41,6 +41,8 @@ struct Entry {
     used: u64,
     checked: u64,
     used_frame: u64,
+    /// The epoch (get) it was last found up to date and not written by GPU work in.
+    epoch: u64,
     uploads: u32,
     dynamic: bool,
 }
@@ -111,7 +113,10 @@ impl VCache {
     }
 
     /// The device copy of guest memory [a, a + len), made now if it has none or is out of date; None where it is not
-    /// cached (read it in place). `upload(dst, dst_offset, src, len)` records the copy of the contents into the block.
+    /// cached (read it in place) or GPU work writes it (`gpu_writes`). `upload(dst, dst_offset, src, len)` records the
+    /// copy of the contents into the block. A range found in `epoch` (the caller's: a new one for each submit and each
+    /// range its commands start writing) is returned as it was, unchecked: most draws of a submit bind ranges an earlier
+    /// one did.
     #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn get(
         &mut self,
@@ -120,14 +125,22 @@ impl VCache {
         len: usize,
         serial: u64,
         frame: u64,
+        epoch: u64,
+        gpu_writes: &dyn Fn(usize, usize) -> bool,
         upload: &mut dyn FnMut(vk::Buffer, u64, *const u8, usize) -> bool,
     ) -> Option<(vk::Buffer, u64)> {
-        if len == 0 || len as u64 > CHUNK {
+        let entry = self.entries.get_mut(&(a, len));
+        if let Some(e) = &entry {
+            if e.epoch == epoch {
+                return Some((self.chunks[e.chunk].buffer, e.off));
+            }
+        }
+        if len == 0 || len as u64 > CHUNK || gpu_writes(a, a + len) {
             return None;
         }
         let tracked = len >= TRACKED && crate::guest::dirty_track::trackable(a, len);
         let mut uploads = 0;
-        if let Some(e) = self.entries.get_mut(&(a, len)) {
+        if let Some(e) = entry {
             if e.dynamic {
                 return None;
             }
@@ -145,6 +158,7 @@ impl VCache {
                 e.checked = serial;
                 e.used = serial;
                 e.used_frame = frame;
+                e.epoch = epoch;
                 return Some((self.chunks[e.chunk].buffer, e.off));
             }
             // Written since it was copied: its block goes once the submits drawing from it completed.
@@ -167,7 +181,7 @@ impl VCache {
         }
         self.entries.insert(
             (a, len),
-            Entry { chunk, off, size: len as u64, token, hash, used: serial, checked: serial, used_frame: frame, uploads, dynamic: false },
+            Entry { chunk, off, size: len as u64, token, hash, used: serial, checked: serial, used_frame: frame, epoch, uploads, dynamic: false },
         );
         Some((self.chunks[chunk].buffer, off))
     }
