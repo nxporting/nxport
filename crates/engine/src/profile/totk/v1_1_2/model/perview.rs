@@ -186,6 +186,12 @@ unsafe fn draw_instance(p: &mut Port, d: &mut Draw, inst: usize) -> R<u32> {
         bind_entry(p, pb, d.w, d.defaults, &d.table, e);
     }
     let mesh = p.m.r64(d.meshes + if (p.m.r8(inst + 5) >> 2) & 1 != 0 { 8 } else { 0 });
+    let n = mesh_draw(p, mesh, d.w)?;
+    Ok(n.wrapping_sub(2))
+}
+
+/// The mesh's draw (virtual +0x28 with one instance); returns what it returns.
+unsafe fn mesh_draw(p: &mut Port, mesh: usize, w: usize) -> R<u32> {
     let f = p.vfn(mesh, 0x28);
     let n = if f == 0x2acfb44 {
         // The mesh's whole range (+0x28 indices), one instance: its virtual +0x30 (w, first, count, instances, base).
@@ -195,18 +201,18 @@ unsafe fn draw_instance(p: &mut Port, d: &mut Draw, inst: usize) -> R<u32> {
             // main+0x24454e8: the mesh's buffer at +0x10, first +0x24, base vertex +0x1c, base instance +0x18.
             if count != 0 {
                 let (bi, bv, first) = (p.m.i32(mesh + 0x18), p.m.i32(mesh + 0x1c), p.m.r32(mesh + 0x24));
-                super::cave::mesh_elements(p, p.m.r64(mesh + 0x10), d.w, first, count, 1, bv, bi);
+                super::cave::mesh_elements(p, p.m.r64(mesh + 0x10), w, first, count, 1, bv, bi);
             }
             count as u64
         } else {
             note(g, 0x30);
-            p.helper("per-view mesh range", g, &[mesh as u64, d.w as u64, 0, count as u64, 1, 0])?
+            p.helper("per-view mesh range", g, &[mesh as u64, w as u64, 0, count as u64, 1, 0])?
         }
     } else {
         note(f, 0x28);
-        p.helper("per-view mesh draw", f, &[mesh as u64, d.w as u64, 1])?
+        p.helper("per-view mesh draw", f, &[mesh as u64, w as u64, 1])?
     };
-    Ok((n as u32).wrapping_sub(2))
+    Ok(n as u32)
 }
 
 /// main+0xd7c1d8(this, slot, arg).
@@ -492,3 +498,241 @@ unsafe fn rebuild(p: &mut Port, t: usize, comp: usize, cache: usize, ctx: usize,
     Ok(())
 }
 
+
+const SCENE_CAST_GUARD: usize = 0x47254d0;
+const SCENE_CAST_TYPE: usize = 0x47254c8;
+const COMPONENT_TYPE_B: u32 = 0x24950135;
+
+/// A texture set slot of main+0x24b2a04's instance draw: when the instance's set differs from the slot's last one,
+/// the set's texture for the LOD bit goes to the table and the program entry is bound. Err when the LOD bit is
+/// missing (the game would read a null texture).
+#[allow(clippy::too_many_arguments)]
+unsafe fn set_slot(p: &mut Port, idx: i32, set: u64, lod: usize, sets: &mut [u64; 32], table: &mut [u64; 32], pb: usize, w: usize, defaults: usize, entries: &[i32; 32]) -> R<bool> {
+    if idx == -1 {
+        return Ok(false);
+    }
+    let i = idx as usize & 31;
+    if sets[i] == set {
+        return Ok(false);
+    }
+    sets[i] = set;
+    let s = set as usize;
+    let bits = p.m.r32(s + 0xc);
+    let b = p.m.r8(lod + 1) as u32 & 31;
+    if (bits >> b) & 1 == 0 {
+        return Err("per-view texture set");
+    }
+    let m = bits & !(u32::MAX << b);
+    let n = if m >= 2 { m.count_ones() } else { m };
+    let tex = p.m.r64(p.m.r64(s + 0x10) + n as usize * 8);
+    table[i] = (p.m.r64(tex + 8) + 8) as u64;
+    bind_entry(p, pb, w, defaults, table, entries[i]);
+    Ok(true)
+}
+
+/// main+0x24b2a04(this, slot, arg): as main+0xd7c1d8 with the scene's 8 tiers (+0x1244), exact LOD names
+/// (..NormalNear / NormalMiddle / NormalFar) and an inlined instance draw over seven texture set slots.
+pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) -> R<()> {
+    if !p.m.predict() {
+        p.call(p.base + 0x24b2a04, &[this as u64, slot as u64, arg as u64]);
+        return Ok(());
+    }
+    let t = p.m.r64(this + 0x18);
+    let first = p.m.r64(p.m.r64(t + 0x70));
+    if p.m.r8(p.base + SCENE_CAST_GUARD) & 1 == 0 {
+        return Err("per-view (static init)");
+    }
+    let scene = if first == 0 { 0 } else { p.query(p.base + p.vfn(first, 0), &[first as u64, (p.base + SCENE_CAST_TYPE) as u64]) as usize };
+    let vi = if p.m.r32(t + 0xea0) > slot { slot } else { 0 } as i32 as i64;
+    let ent = (p.m.r64(t + 0xea8) as i64 + vi * 0xe0) as usize;
+    let owner = p.m.r64(ent + 8);
+    let (ctx, d) = (p.m.r64(arg), p.m.r64(arg + 8));
+    let w = p.m.r64(ctx + 0x20);
+    let core = worker(p);
+    let core = if p.m.r32(this + 0x88) > core { core } else { 0 };
+    let g = p.m.r64(p.m.r64(p.base + SCENE_HOLDER));
+    if !p.m.r32(g + 0x948) & 6 != 0 || p.m.r8(g + 0x98) != 0 || p.m.r8(p.m.r64(g + 0x70) + 0x2c4) & 1 == 0 {
+        return Ok(());
+    }
+    let caches = p.m.r64(this + 0x90);
+    let x = p.m.r64(g + 0x8f8);
+    if x != 0 && (p.m.r8(x + 0x10) & 1 != 0 || p.m.r32(x + 0x58) != 0xfe) {
+        return Ok(());
+    }
+    if (p.m.r8(owner + 0x5a1) >> 2) & 1 != 0 || p.m.r64(t + 8) == 0 {
+        return Ok(());
+    }
+    let n = p.m.i32(owner + 0xf0);
+    let list = p.m.r64(owner + 0xf8);
+    let found = (0..n.max(0) as usize).map(|k| p.m.r64(list + k * 8)).find(|&c| p.m.r32(c + 0x10) == COMPONENT_TYPE_B).unwrap_or(0);
+    if p.m.r8(p.m.r64(p.base + CAST_GUARD)) & 1 == 0 {
+        return Err("per-view (static init)");
+    }
+    let comp = if found == 0 { 0 } else { p.query(p.base + p.vfn(found, 0), &[found as u64, p.m.r64(p.base + CAST_TYPE) as u64]) as usize };
+    let id = p.m.r16(d + 0x18) as u32;
+    let Some(tier) = (0..8usize).find(|&k| p.m.r32(scene + 0x1244 + k * 4) == id) else { return Ok(()) };
+    let name = p.m.r64(p.m.r64(p.m.r64(d + 0x68) + 8) + 8);
+    let kind = match p.m.r8(name + 2) {
+        b'N' => {
+            if (0..5).any(|k| p.m.r8(name + 3 + k) != b"ormal"[k]) {
+                return Ok(());
+            }
+            let rest = |s: &[u8]| (0..s.len()).all(|k| p.m.r8(name + 9 + k) == s[k]);
+            match p.m.r8(name + 8) {
+                b'N' if rest(b"ear") => 0,
+                b'M' if rest(b"iddle") => 1,
+                b'F' if rest(b"ar") => 2,
+                _ => return Ok(()),
+            }
+        }
+        b'D' => return Err("per-view degeneracy"),
+        _ => return Ok(()),
+    };
+    let record = p.m.r64(arg + 0x10);
+    if record == 0 {
+        return Ok(());
+    }
+    let prog = p.m.r64(record + 8);
+    if prog == 0 {
+        return Ok(());
+    }
+    let tail = name + 8;
+    if p.m.r8(tail) != 0 {
+        let len = strlen(p, tail + 1) + 1;
+        if len >= 10 && find(p, tail, b"Deformable", len - 9) {
+            return Err("per-view deformable");
+        }
+    }
+    let pass = p.m.r8(ctx + 0x31);
+    if pass != 3 && pass != 0 {
+        return Err("per-view other pass");
+    }
+    let occluder = p.m.r64(ent + 0xb8);
+    let cache = caches + core as usize * 0x208;
+    let frame = p.m.r32(p.m.r64(p.m.r64(p.base + FRAME_HOLDER)) + 0xc);
+    if p.m.r32(cache + 0x204) != frame {
+        p.m.w::<u32>(cache + 0x200, u32::MAX);
+        p.m.w::<u32>(cache + 0x204, frame);
+    }
+    let key = p.m.r8(ctx + 0x46) as u32 | (pass as u32) << 16;
+    if p.m.r32(cache + 0x200) != key {
+        p.m.w::<u32>(cache + 0x200, key);
+        rebuild(p, t, comp, cache, ctx, occluder)?;
+    }
+    let defaults = p.m.r64(p.m.r64(d + 8) + 0x180) + p.m.r16(d + 0x18) as usize * 0x80;
+    let mut table = [0u64; 32];
+    let mut sets = [0u64; 32];
+    let mut entries = [-1i32; 32];
+    let block_slots = |p: &Port, o: usize| p.m.r32(p.m.r64(prog) + 0x10 + p.m.i32(scene + o) as isize as usize * 4);
+    p.bind_uniform_block(ent + 0x30, w, block_slots(p, 0x13e4), 0)?;
+    let pb = p.m.r64(p.m.r64(d + 0x68) + pass as usize * 0x60 + 0x40);
+    let mut k = 0usize;
+    while (k as i32) < p.m.i32(pb + 0x308) {
+        let i = p.m.r8(pb + 0x18 + k * 0x18) as usize;
+        if i < 32 {
+            entries[i] = k as i32;
+        }
+        k += 1;
+    }
+    let row = scene + tier * 0x30;
+    let pick = |p: &Port, o: usize| {
+        let i = p.m.i32(row + o);
+        if i != -1 && entries.get(i as usize).copied().unwrap_or(-1) == -1 { -1 } else { i }
+    };
+    let (i_1b4, i_1b0, i_1ac, i_1a8) = (pick(p, 0x1264), pick(p, 0x126c), pick(p, 0x1270), pick(p, 0x1274));
+    let (i_1a4, i_1a0, i_19c) = (pick(p, 0x1278), pick(p, 0x127c), pick(p, 0x1280));
+    let lods = p.m.r64(t + 0x80);
+    let nl = p.m.i32(t + 0x78);
+    if nl == 0 {
+        return Err("per-view no LOD list");
+    }
+    let tag = |p: &Port, want: u8| {
+        (0..nl as usize).map(|k| p.m.r64(lods + k * 8)).find(|&e| rot(p.m.r8(e)) == want).unwrap_or(p.m.r64(p.base + DEFAULT_LOD))
+    };
+    let (lod_0, lod_1, lod_20, lod_50, lod_41) = (tag(p, 0), tag(p, 1), tag(p, 0x20), tag(p, 0x50), tag(p, 0x41));
+    let meshes = owner + 0x128;
+    let obj = p.m.r64(meshes);
+    let begin = p.vfn(obj, 0x38);
+    if begin == 0x2ad0f4c {
+        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 1, 0xffff]);
+    } else {
+        note(begin, 0x38);
+        p.helper("per-view begin", begin, &[obj as u64, w as u64])?;
+    }
+    if i_1ac != -1 {
+        table[i_1ac as usize & 31] = (this + 0xa0) as u64;
+        bind_entry(p, pb, w, defaults, &table, entries[i_1ac as usize & 31]);
+    }
+    let slots_a = block_slots(p, 0x13e8);
+    let n = p.m.i32(comp + 0xa0).max(0) as usize;
+    let list = p.m.r64(comp + 0xa8);
+    let mut drawn = 0u32;
+    for k in 0..n {
+        let inst = p.m.r64(list + k * 8);
+        let f = p.m.r8(inst + 5);
+        if (f >> 3) & 1 == 0 || (f & 3) as u32 != kind {
+            continue;
+        }
+        let iid = p.m.r16(inst) as usize;
+        let word = p.m.r64(cache + ((iid >> 2) & 0x3ff8)) as u64;
+        let sh = (iid << 1) & 0x3e;
+        if (word >> sh) & 1 == 0 || (word >> (sh | 1)) & 1 != 0 {
+            continue;
+        }
+        let rec = p.m.r64(inst + 0x78);
+        if rec == 0 {
+            return Err("per-view instance record");
+        }
+        p.bind_uniform_block(comp + 0x118, w, slots_a, iid as i32)?;
+        // The first slot's set is the instance's own (+0x28); the others are the record's.
+        set_slot(p, i_1b4, p.m.r64(inst + 0x28) as u64, lod_0, &mut sets, &mut table, pb, w, defaults, &entries)?;
+        set_slot(p, i_1a8, p.m.r64(rec + 0x18) as u64, lod_1, &mut sets, &mut table, pb, w, defaults, &entries)?;
+        // The first set of the chain from +0x18 (next at +0x18) of type <= 2 with a present texture for the LOD.
+        let mut c = p.m.r64(rec + 0x18);
+        while c != 0 {
+            if p.m.r8(c) & 0xf <= 2 {
+                let bits = p.m.r32(c + 0xc);
+                let b = p.m.r8(lod_1 + 1) as u32 & 31;
+                if (bits >> b) & 1 != 0 {
+                    let m = bits & !(u32::MAX << b);
+                    let nn = if m >= 2 { m.count_ones() } else { m };
+                    let tex = p.m.r64(p.m.r64(c + 0x10) + nn as usize * 8);
+                    if tex != 0 {
+                        let s18 = p.m.r32(tex + 0x18);
+                        if (p.m.r8(tex + 0x12) >> 2) & 1 != 0 || (p.m.r64(tex + 8) != 0 && s18 != 0 && s18 >> 30 == 0) {
+                            break;
+                        }
+                    }
+                }
+            }
+            c = p.m.r64(c + 0x18);
+        }
+        if i_1a4 != -1 && sets[i_1a4 as usize & 31] != c as u64 {
+            if c == 0 {
+                return Err("per-view empty set chain");
+            }
+            set_slot(p, i_1a4, c as u64, lod_1, &mut sets, &mut table, pb, w, defaults, &entries)?;
+        }
+        if set_slot(p, i_1a0, p.m.r64(rec + 0x28) as u64, lod_20, &mut sets, &mut table, pb, w, defaults, &entries)? && i_19c != -1 {
+            table[i_19c as usize & 31] = table[i_1a0 as usize & 31];
+            bind_entry(p, pb, w, defaults, &table, entries[i_19c as usize & 31]);
+        }
+        for (idx, o, lod) in [(i_1b0, 0x38, lod_41), (i_1ac, 0x48, lod_50)] {
+            let s = p.m.r64(rec + o);
+            if idx != -1 && s != 0 {
+                set_slot(p, idx, s as u64, lod, &mut sets, &mut table, pb, w, defaults, &entries)?;
+            }
+        }
+        let mesh = p.m.r64(meshes + if (f >> 2) & 1 != 0 { 8 } else { 0 });
+        drawn = drawn.wrapping_add(mesh_draw(p, mesh, w)?.wrapping_sub(2));
+    }
+    let end = p.vfn(obj, 0x40);
+    if end == 0x2ad0f68 {
+        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 0, 0]);
+    } else {
+        note(end, 0x40);
+        p.helper("per-view end", end, &[obj as u64, w as u64])?;
+    }
+    p.m.w::<u32>(ctx + 0x34, p.m.r32(ctx + 0x34).wrapping_add(drawn));
+    Ok(())
+}
