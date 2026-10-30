@@ -110,6 +110,9 @@ unsafe fn per_view(p: &mut Port, this: usize, arg: usize) -> R<()> {
         return Ok(());
     }
     let f = p.vfn(this, 0x30);
+    if f == 0xd7c1d8 {
+        return super::perview::draw(p, this, slot as i32 as u32, arg);
+    }
     note(f | 1 << 40);
     p.helper("per-view draw", f, &[this as u64, slot as i64 as u64, arg as u64])?;
     Ok(())

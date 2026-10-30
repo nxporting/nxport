@@ -1,0 +1,494 @@
+// The per-view instance renderer main+0xd7c1d8(this, slot, arg), reached through the per-view dispatch target
+// (main+0x2ad00a0 -> virtual +0x30). Instances of the drawable's component are culled once per frame, view and pass
+// into a per-worker bitset (a visible bit and a drawn bit per instance), then the visible ones of the model's LOD
+// kind draw (main+0xd7e090). Predicting only: applying lets the game draw until every path is ported (the
+// Degeneracy / Deformable paths, region lists, lazily created instance records are not).
+
+use super::draw::{Port, R};
+
+const WORKER_KEY: usize = 0x462af70;
+const TLS_GET: usize = 0x2b15be0;
+const CORE: usize = 0x2b15c10;
+const SCENE_HOLDER: usize = 0x462bc08;
+const FRAME_HOLDER: usize = 0x4631738;
+const CAST_GUARD: usize = 0x46327f0;
+const CAST_TYPE: usize = 0x46327f8;
+const LOCK: usize = 0x2b15370;
+const UNLOCK: usize = 0x2b15380;
+const VIEW_DATA: usize = 0x1a358b8;
+const OCCLUSION: usize = 0xd7ddf4;
+const DEFAULT_LOD: usize = 0x4632760;
+const DEVICE_HOLDER: usize = 0x462bbe8;
+const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
+const PFN_BIND_TEXTURE: usize = 0x466e008;
+const PFN_SET_PRIMITIVE_RESTART: usize = 0x466e050;
+const COMPONENT_TYPE: u32 = 0xd21b65b6;
+
+/// Virtual calls left to the game: (main+ function | slot << 40, count).
+static CALLS: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
+
+fn note(f: usize, slot: usize) {
+    let mut g = CALLS.lock().unwrap();
+    let k = f | slot << 40;
+    match g.iter_mut().find(|x| x.0 == k) {
+        Some(x) => x.1 += 1,
+        None => g.push((k, 1)),
+    }
+}
+
+pub(super) fn report() -> String {
+    let mut g = std::mem::take(&mut *CALLS.lock().unwrap());
+    g.sort_by(|a, b| b.1.cmp(&a.1));
+    g.iter().map(|(f, n)| format!("+{:#x} main+{:#x} {n}", f >> 40, f & ((1 << 40) - 1))).collect::<Vec<_>>().join(", ")
+}
+
+/// |v| as FCMP + FCSEL lt gives it (a NaN is negated).
+fn abs(v: f32) -> f32 {
+    if !(v >= 0.0) { -v } else { v }
+}
+
+unsafe fn worker(p: &Port) -> u32 {
+    let v = p.query(p.base + TLS_GET, &[p.m.r32(p.m.r64(p.base + WORKER_KEY)) as u64]);
+    if v == 0 { p.query(p.base + CORE, &[]) as u32 } else { (v as u32).wrapping_sub(1) }
+}
+
+/// `lit` occurs at one of the first `n` positions of `s`, a match also ending at the string's NUL (the game's search
+/// loops).
+unsafe fn find(p: &Port, s: usize, lit: &[u8], n: usize) -> bool {
+    (0..n).any(|i| {
+        for (k, &c) in lit.iter().enumerate() {
+            let b = p.m.r8(s + i + k);
+            if b != c {
+                return false;
+            }
+            if b == 0 {
+                return true;
+            }
+        }
+        true
+    })
+}
+
+unsafe fn strlen(p: &Port, s: usize) -> usize {
+    (0..0x40_0000).find(|&i| p.m.r8(s + i) == 0).unwrap_or(0x40_0000)
+}
+
+fn rot(b: u8) -> u8 {
+    b.rotate_right(3)
+}
+
+/// The LOD kind the model's name gives ("..NormalNear" 0, "..Normal..Middle.." 1, "..Normal..Far.." 2), with the
+/// name tail the "Deformable" search runs over; None: not drawn; Err: the Degeneracy names (not ported).
+unsafe fn name_kind(p: &Port, name: usize) -> R<Option<(u32, usize)>> {
+    match p.m.r8(name + 2) {
+        b'N' => {
+            if (0..5).any(|k| p.m.r8(name + 3 + k) != b"ormal"[k]) {
+                return Ok(None);
+            }
+            let tail = name + 8;
+            let c = p.m.r8(tail);
+            if c == b'N' && p.m.r8(name + 9) == b'e' && p.m.r8(name + 10) == b'a' && p.m.r8(name + 11) == b'r' {
+                return Ok(Some((0, tail)));
+            }
+            if c == 0 {
+                return Ok(None);
+            }
+            let len = strlen(p, name + 9) + 1;
+            if len >= 6 && find(p, tail, b"Middle", len - 5) {
+                return Ok(Some((1, tail)));
+            }
+            if len >= 3 && find(p, tail, b"Far", len - 2) {
+                return Ok(Some((2, tail)));
+            }
+            Ok(None)
+        }
+        b'D' => Err("per-view degeneracy"),
+        _ => Ok(None),
+    }
+}
+
+/// main+0x1891e94(pb, w, defaults, table, entry): the texture of the program's entry `entry`.
+unsafe fn bind_entry(p: &mut Port, pb: usize, w: usize, defaults: usize, table: &[u64; 32], entry: i32) {
+    let e = (pb as i64 + entry as i64 * 0x18) as usize;
+    let idx = p.m.r8(e + 0x18) as usize;
+    let mut t = table.get(idx).copied().unwrap_or(0) as usize;
+    if t == 0 {
+        t = p.m.r64(p.m.r64(defaults + 0x50) + idx * 8);
+        if t == 0 {
+            return;
+        }
+        t = p.m.r64(t + 0x40);
+        if t == 0 {
+            return;
+        }
+    }
+    let sampler = p.m.r64(p.m.r64(p.m.r64(pb) + 0x90) + idx * 8);
+    let tid = p.m.i32(t + 0x90);
+    if tid == -1 || sampler & 0xffff == 0xffff {
+        return;
+    }
+    let slots = p.m.r32(e + 8);
+    let dev = p.m.r64(p.m.r64(p.m.r64(p.base + DEVICE_HOLDER)) + 0x30);
+    let handle = p.query(p.pfn(PFN_DEVICE_GET_TEXTURE_HANDLE), &[dev as u64, tid as u32 as u64, sampler as i16 as i32 as u32 as u64]);
+    let cmd = p.m.r64(w + 0xb8) as u64;
+    for (stage, sh) in [(0u64, 0), (1, 8), (2, 16), (5, 24)] {
+        if (slots >> sh) & 0xff != 0xff {
+            p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd, stage, (slots >> sh) as i8 as i64 as u64, handle]);
+        }
+    }
+}
+
+/// What main+0xd7e090 reads from the caller's frame.
+struct Draw {
+    block: usize,
+    w: usize,
+    slots: u32,
+    idx: [i32; 2],
+    lod: [usize; 2],
+    sets: [u64; 32],
+    table: [u64; 32],
+    pb: usize,
+    defaults: usize,
+    entries: [i32; 32],
+    meshes: usize,
+}
+
+/// main+0xd7e090: one instance: its block element, its two texture sets' textures for the LOD, its mesh's draw.
+unsafe fn draw_instance(p: &mut Port, d: &mut Draw, inst: usize) -> R<u32> {
+    let rec = p.m.r64(inst + 0x78);
+    if rec == 0 {
+        return Err("per-view instance record");
+    }
+    p.bind_uniform_block(d.block, d.w, d.slots, p.m.r16(inst) as i32)?;
+    for k in 0..2 {
+        let idx = d.idx[k];
+        if idx == -1 {
+            continue;
+        }
+        let set = p.m.r64(rec + if k == 0 { 8 } else { 0x18 }) as u64;
+        let i = idx as usize & 31;
+        if d.sets[i] == set {
+            continue;
+        }
+        d.sets[i] = set;
+        let s = set as usize;
+        let bits = p.m.r32(s + 0xc);
+        let b = p.m.r8(d.lod[k] + 1) as u32 & 31;
+        if (bits >> b) & 1 == 0 {
+            return Err("per-view texture set");
+        }
+        let m = bits & !(u32::MAX << b);
+        let n = if m >= 2 { m.count_ones() } else { m };
+        let tex = p.m.r64(p.m.r64(s + 0x10) + n as usize * 8);
+        d.table[i] = (p.m.r64(tex + 8) + 8) as u64;
+        let e = d.entries[i];
+        let pb = d.pb;
+        bind_entry(p, pb, d.w, d.defaults, &d.table, e);
+    }
+    let mesh = p.m.r64(d.meshes + if (p.m.r8(inst + 5) >> 2) & 1 != 0 { 8 } else { 0 });
+    let f = p.vfn(mesh, 0x28);
+    let n = if f == 0x2acfb44 {
+        // The mesh's whole range (+0x28 indices), one instance: its virtual +0x30 (w, first, count, instances, base).
+        let g = p.vfn(mesh, 0x30);
+        let count = p.m.r32(mesh + 0x28);
+        if g == 0x24454e8 {
+            // main+0x24454e8: the mesh's buffer at +0x10, first +0x24, base vertex +0x1c, base instance +0x18.
+            if count != 0 {
+                let (bi, bv, first) = (p.m.i32(mesh + 0x18), p.m.i32(mesh + 0x1c), p.m.r32(mesh + 0x24));
+                super::cave::mesh_elements(p, p.m.r64(mesh + 0x10), d.w, first, count, 1, bv, bi);
+            }
+            count as u64
+        } else {
+            note(g, 0x30);
+            p.helper("per-view mesh range", g, &[mesh as u64, d.w as u64, 0, count as u64, 1, 0])?
+        }
+    } else {
+        note(f, 0x28);
+        p.helper("per-view mesh draw", f, &[mesh as u64, d.w as u64, 1])?
+    };
+    Ok((n as u32).wrapping_sub(2))
+}
+
+/// main+0xd7c1d8(this, slot, arg).
+pub(super) unsafe fn draw(p: &mut Port, this: usize, slot: u32, arg: usize) -> R<()> {
+    if !p.m.predict() {
+        p.call(p.base + 0xd7c1d8, &[this as u64, slot as u64, arg as u64]);
+        return Ok(());
+    }
+    let t = p.m.r64(this + 0x18);
+    let scene = p.m.r64(p.m.r64(t + 0x70) + 8);
+    let vi = if p.m.r32(t + 0xea0) > slot { slot } else { 0 } as i32 as i64;
+    let ent = (p.m.r64(t + 0xea8) as i64 + vi * 0xe0) as usize;
+    let comp_owner = p.m.r64(ent + 8);
+    let (ctx, d) = (p.m.r64(arg), p.m.r64(arg + 8));
+    let w = p.m.r64(ctx + 0x20);
+    let core = worker(p);
+    let core = if p.m.r32(this + 0x88) > core { core } else { 0 };
+    let g = p.m.r64(p.m.r64(p.base + SCENE_HOLDER));
+    if !p.m.r32(g + 0x948) & 6 != 0 || p.m.r8(g + 0x98) != 0 || p.m.r8(p.m.r64(g + 0x70) + 0x2c4) & 1 == 0 {
+        return Ok(());
+    }
+    let caches = p.m.r64(this + 0x90);
+    let x = p.m.r64(g + 0x8f8);
+    if x != 0 && ((p.m.r8(x + 0x10) >> 3) & 1 != 0 || p.m.r32(x + 0x58) != 0xfe) {
+        return Ok(());
+    }
+    if (p.m.r8(comp_owner + 0x5a1) >> 2) & 1 != 0 || p.m.r64(t + 8) == 0 {
+        return Ok(());
+    }
+    let n = p.m.i32(comp_owner + 0xf0);
+    let list = p.m.r64(comp_owner + 0xf8);
+    let found = (0..n.max(0) as usize).map(|k| p.m.r64(list + k * 8)).find(|&c| p.m.r32(c + 0x10) == COMPONENT_TYPE).unwrap_or(0);
+    if p.m.r8(p.m.r64(p.base + CAST_GUARD)) & 1 == 0 {
+        return Err("per-view (static init)");
+    }
+    let comp = if found == 0 { 0 } else { p.query(p.base + p.vfn(found, 0), &[found as u64, p.m.r64(p.base + CAST_TYPE) as u64]) as usize };
+    let id = p.m.r16(d + 0x18) as u32;
+    let Some(tier) = (0..6usize).find(|&k| p.m.r32(scene + 0xad4 + k * 4) == id) else { return Ok(()) };
+    let lock = comp_owner + 0x580;
+    p.query(p.base + LOCK, &[lock as u64]);
+    let r = locked(p, this, arg, t, scene, ent, comp_owner, comp, core, caches, ctx, d, w, tier);
+    p.query(p.base + UNLOCK, &[lock as u64]);
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn locked(
+    p: &mut Port,
+    this: usize,
+    arg: usize,
+    t: usize,
+    scene: usize,
+    ent: usize,
+    owner: usize,
+    comp: usize,
+    core: u32,
+    caches: usize,
+    ctx: usize,
+    d: usize,
+    w: usize,
+    tier: usize,
+) -> R<()> {
+    let name = p.m.r64(p.m.r64(p.m.r64(d + 0x68) + 8) + 8);
+    let Some((kind, tail)) = name_kind(p, name)? else { return Ok(()) };
+    let record = p.m.r64(arg + 0x10);
+    if record == 0 {
+        return Ok(());
+    }
+    let prog = p.m.r64(record + 8);
+    if prog == 0 {
+        return Ok(());
+    }
+    if p.m.r8(tail) != 0 {
+        let len = strlen(p, tail + 1) + 1;
+        if len >= 10 && find(p, tail, b"Deformable", len - 9) {
+            return Err("per-view deformable");
+        }
+    }
+    let pass = p.m.r8(ctx + 0x31);
+    if pass != 3 && pass != 0 {
+        return Err("per-view other pass");
+    }
+    let occluder = p.m.r64(ent + 0xb8);
+    // The worker's cache: frame stamp, view | pass << 16 key, then the bit pairs.
+    let cache = caches + core as usize * 0x208;
+    let frame = p.m.r32(p.m.r64(p.m.r64(p.base + FRAME_HOLDER)) + 0xc);
+    if p.m.r32(cache + 0x204) != frame {
+        p.m.w::<u32>(cache + 0x204, frame);
+        p.m.w::<u32>(cache + 0x200, u32::MAX);
+    }
+    let key = p.m.r8(ctx + 0x46) as u32 | (pass as u32) << 16;
+    if p.m.r32(cache + 0x200) != key {
+        p.m.w::<u32>(cache + 0x200, key);
+        rebuild(p, t, comp, cache, ctx, occluder)?;
+    }
+    let defaults = p.m.r64(p.m.r64(d + 8) + 0x180) + p.m.r16(d + 0x18) as usize * 0x80;
+    let mut table = [0u64; 32];
+    let mut sets = [0u64; 32];
+    let mut entries = [-1i32; 32];
+    let block_slots = |p: &Port, o: usize| p.m.r32(p.m.r64(prog) + 0x10 + p.m.i32(scene + o) as isize as usize * 4);
+    p.bind_uniform_block(ent + 0x30, w, block_slots(p, 0xbac), 0)?;
+    p.bind_uniform_block(scene + 0xa50, w, block_slots(p, 0xbb4), 0)?;
+    let pb = p.m.r64(p.m.r64(d + 0x68) + p.m.r8(ctx + 0x31) as usize * 0x60 + 0x40);
+    let mut k = 0usize;
+    while (k as i32) < p.m.i32(pb + 0x308) {
+        let i = p.m.r8(pb + 0x18 + k * 0x18) as usize;
+        if i < 32 {
+            entries[i] = k as i32;
+        }
+        k += 1;
+    }
+    let row = scene + tier * 0x20;
+    let pick = |p: &Port, o: usize| {
+        let i = p.m.i32(row + o);
+        if i != -1 && entries.get(i as usize).copied().unwrap_or(-1) == -1 { -1 } else { i }
+    };
+    let (i_a, _i_b, i_c, i_d) = (pick(p, 0xaec), pick(p, 0xaf0), pick(p, 0xaf4), pick(p, 0xaf8));
+    let _i_e = pick(p, 0xb08);
+    let slots_a = block_slots(p, 0xbb0);
+    // The LOD records: the first of t+0x80 whose tag rotates to 0x41, and the first rotating to 0.
+    let lods = p.m.r64(t + 0x80);
+    let nl = p.m.i32(t + 0x78);
+    if nl == 0 {
+        return Err("per-view no LOD list");
+    }
+    let tag = |p: &Port, want: u8| {
+        (0..nl as usize).map(|k| p.m.r64(lods + k * 8)).find(|&e| rot(p.m.r8(e)) == want).unwrap_or(p.m.r64(p.base + DEFAULT_LOD))
+    };
+    let (lod_a, lod_b) = (tag(p, 0x41), tag(p, 0));
+    let meshes = owner + 0x128;
+    let obj = p.m.r64(meshes);
+    let begin = p.vfn(obj, 0x38);
+    if begin == 0x2ad0f4c {
+        // Primitive restart on, index 0xffff.
+        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 1, 0xffff]);
+    } else {
+        note(begin, 0x38);
+        p.helper("per-view begin", begin, &[obj as u64, w as u64])?;
+    }
+    for i in [i_c, i_d] {
+        if i != -1 {
+            if let Some(e) = table.get_mut(i as usize) {
+                *e = (this + 0xa0) as u64;
+            }
+            bind_entry(p, pb, w, defaults, &table, entries[i as usize & 31]);
+        }
+    }
+    let _ = lod_b;
+    let mut dr = Draw {
+        block: comp + 0x118,
+        w,
+        slots: slots_a,
+        idx: [i_a, pick(p, 0xaf4)],
+        lod: [lod_a, lod_b],
+        sets,
+        table,
+        pb,
+        defaults,
+        entries,
+        meshes,
+    };
+    sets = dr.sets;
+    let _ = sets;
+    let n = p.m.i32(comp + 0xa0).max(0) as usize;
+    let list = p.m.r64(comp + 0xa8);
+    let mut drawn = 0u32;
+    for k in 0..n {
+        let inst = p.m.r64(list + k * 8);
+        let f = p.m.r8(inst + 5);
+        if (f >> 3) & 1 == 0 || (f & 3) as u32 != kind {
+            continue;
+        }
+        let id = p.m.r16(inst) as usize;
+        let word = p.m.r64(cache + ((id >> 2) & 0x3ff8)) as u64;
+        let sh = (id << 1) & 0x3e;
+        if (word >> sh) & 1 == 0 || (word >> (sh | 1)) & 1 != 0 {
+            continue;
+        }
+        drawn = drawn.wrapping_add(draw_instance(p, &mut dr, inst)?);
+    }
+    let end = p.vfn(obj, 0x40);
+    if end == 0x2ad0f68 {
+        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 0, 0]);
+    } else {
+        note(end, 0x40);
+        p.helper("per-view end", end, &[obj as u64, w as u64])?;
+    }
+    p.m.w::<u32>(ctx + 0x34, p.m.r32(ctx + 0x34).wrapping_add(drawn));
+    Ok(())
+}
+
+/// The cache rebuild (main+0xd7d2a8): cleared, view data (main+0x1a358b8), then every instance from last to first:
+/// one whose group bit (u16 at +2) is set and whose box passes the view's tests marks its own pair (u16 at +0)
+/// visible and not drawn.
+unsafe fn rebuild(p: &mut Port, t: usize, comp: usize, cache: usize, ctx: usize, occ: usize) -> R<()> {
+    let n = p.m.r32(comp + 0xa0);
+    let bytes = ((n.wrapping_mul(2).wrapping_add(7)) >> 3) as usize;
+    for k in 0..bytes {
+        p.m.w::<u8>(cache + k, 0);
+    }
+    let mut view = [0u8; 0x120];
+    p.query_f(p.base + VIEW_DATA, &[view.as_mut_ptr() as u64, ctx as u64], &[-1.0]);
+    if p.m.r32(t + 0x1df8) != 0 {
+        return Err("per-view regions");
+    }
+    let (lo_off, hi_off) = (0.0f32, 0.0f32);
+    p.m.w::<u64>(cache, p.m.r64(cache) as u64 | 3);
+    if n == 0 {
+        return Ok(());
+    }
+    let v = view.as_ptr() as usize;
+    let list = p.m.r64(comp + 0xa8);
+    for k in (0..n as usize).rev() {
+        let inst = p.m.r64(list + k * 8);
+        let h = p.m.r16(inst + 2) as usize;
+        let word = p.m.r64(cache + ((h >> 2) & 0x3ff8)) as u64;
+        if (word >> ((h << 1) & 0x3e)) & 1 == 0 {
+            continue;
+        }
+        let half = p.m.f32(inst + 0x10) * 0.5;
+        let (cx, cz) = (p.m.f32(inst + 8), p.m.f32(inst + 0xc));
+        let y0 = lo_off + p.m.f32(inst + 0x14);
+        let (x0, z0, x1) = (cx - half, cz - half, cx + half);
+        let y1 = hi_off + p.m.f32(inst + 0x18);
+        let z1 = cz + half;
+        let plane = |p: &Port, pl: usize, sub: bool| {
+            let (nx, ny, nz, d) = (p.m.f32(pl), p.m.f32(pl + 4), p.m.f32(pl + 8), p.m.f32(pl + 0xc));
+            let s = nx * if nx > 0.0 { x0 } else { x1 } + ny * if ny > 0.0 { y0 } else { y1 } + nz * if nz > 0.0 { z0 } else { z1 };
+            let _ = sub;
+            s - d > 0.0
+        };
+        let culled = if p.m.r8(v) == 0 {
+            let c = p.m.r64(v + 0xe0);
+            let ci = p.m.i8(v + 2) as i32;
+            let ci = if p.m.r32(c + 0x360) > ci as u32 { ci } else { 0 } as i64;
+            let planes = (p.m.r64(c + 0x368) as i64 + ci * 0x590) as usize;
+            let np = p.m.i32(planes + 0x3f8);
+            (0..np.max(0) as usize).any(|k| plane(p, planes + (if k < 0x18 { k } else { 0 }) * 0x10 + 0x3fc, true))
+        } else {
+            if p.m.r8(v + 1) != 0 {
+                let f = |o: usize| p.m.f32(v + o);
+                let inside = x0 <= f(0xd0) && f(0xc4) <= x1 && y0 <= f(0xd4) && f(0xc8) <= y1 && z0 <= f(0xd8) && f(0xcc) <= z1;
+                if !inside {
+                    continue;
+                }
+            }
+            let np = p.m.r8(v + 3) as usize;
+            (0..np).any(|k| plane(p, v + 4 + k * 0x10, false))
+        };
+        if culled {
+            continue;
+        }
+        if occ != 0 && !p.m.r32(occ) & 0x440 == 0 {
+            let (ex, ey, ez) = ((x1 - x0) * 0.5, (y1 - y0) * 0.5, (z1 - z0) * 0.5);
+            let (mx, my, mz) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5);
+            let o = |k: usize| p.m.f32(occ + k);
+            let dist = o(0x78) + (mx * o(0x6c) + my * o(0x70) + mz * o(0x74));
+            let ext = abs(ex * o(0x6c)) + abs(ey * o(0x70)) + abs(ez * o(0x74));
+            let near = -dist - ext;
+            if !(o(0x160) > near) {
+                let a = o(0x58) + (mx * o(0x4c) + my * o(0x50) + mz * o(0x54));
+                let b = o(0x68) + (mx * o(0x5c) + my * o(0x60) + mz * o(0x64));
+                let ea = abs(ex * o(0x4c)) + abs(ey * o(0x50)) + abs(ez * o(0x54));
+                let eb = abs(ex * o(0x5c)) + abs(ey * o(0x60)) + abs(ez * o(0x64));
+                // s5 / s6 still hold the extent and the near distance of the test above.
+                let r = p.query_f(p.base + OCCLUSION, &[occ as u64], &[a, b, dist, ea, eb, ext, near]);
+                if r & 7 == 1 {
+                    continue;
+                }
+            }
+        }
+        let id = p.m.r16(inst) as usize;
+        if id <= 0x7ff {
+            let a = cache + ((id >> 2) & 0x3ff8);
+            p.m.w::<u64>(a, p.m.r64(a) as u64 | 1u64 << ((id << 1) & 0x3e));
+        }
+        let bit = 1 | id << 1;
+        if bit <= 0xfff {
+            let a = cache + (id >> 5) * 8;
+            p.m.w::<u64>(a, p.m.r64(a) as u64 & !(1u64 << (bit & 63)));
+        }
+    }
+    Ok(())
+}
+
