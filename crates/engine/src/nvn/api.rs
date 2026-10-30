@@ -2719,7 +2719,16 @@ unsafe fn record_generic(
     ) {
         return;
     }
-    if capture(|| format!("{name} {a1:#x} {a2:#x} {a3:#x} {a4:#x} {a5:#x}")) {
+    if capture(|| {
+        // Registers past a call's arguments hold whatever the caller left there.
+        let n = match name {
+            "nvnCommandBufferSetTiledCacheAction" => 1,
+            "nvnCommandBufferSetTiledCacheTileSize" => 2,
+            _ => 5,
+        };
+        let a = [a1, a2, a3, a4, a5];
+        std::iter::once(name.to_string()).chain(a[..n].iter().map(|v| format!("{v:#x}"))).collect::<Vec<_>>().join(" ")
+    }) {
         return;
     }
     let ops_vec = &mut *((*cmd).ops as *mut Vec<RecordedNvnCommand>);
