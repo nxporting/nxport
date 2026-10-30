@@ -68,6 +68,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, lod: u32, flags: u32
         0x137ca10 => return super::cave::target(p, this, arg.as_ptr() as usize, 5, true),
         0x2ad00a0 => return per_view(p, this, arg.as_ptr() as usize),
         0x27da4cc => return super::grid::gate(p, this, arg.as_ptr() as usize),
+        0x886c90 => return super::cells::draw(p, this, arg.as_ptr() as usize),
         _ => {}
     }
     note(target);

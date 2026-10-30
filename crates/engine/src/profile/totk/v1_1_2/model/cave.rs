@@ -448,7 +448,7 @@ unsafe fn slot_by_name(p: &mut Port, f: usize, program: usize, n: &'static [u8])
 
 /// main+0x13878e4(mesh, w, first, count, instances, base vertex, base instance).
 #[allow(clippy::too_many_arguments)]
-unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u32, count: u32, instances: u32, base_vertex: i32, base_instance: i32) {
+pub(super) unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u32, count: u32, instances: u32, base_vertex: i32, base_instance: i32) {
     if count == 0 {
         return;
     }

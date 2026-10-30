@@ -3,6 +3,7 @@
 // that reach a helper the port does not implement yet are counted by that helper.
 
 mod cave;
+mod cells;
 mod dispatch;
 mod draw;
 mod grid;
@@ -229,6 +230,10 @@ fn report() {
     let dp = dispatch::ported_report();
     if !dp.is_empty() {
         println!("[model-draw] dispatch targets reached: {dp}");
+    }
+    let cl = cells::report();
+    if !cl.is_empty() {
+        println!("[model-draw] cell renderer calls left to the game: {cl}");
     }
     let gt = grid::report();
     if !gt.is_empty() {
