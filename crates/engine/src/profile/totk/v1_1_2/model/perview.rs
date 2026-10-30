@@ -291,11 +291,11 @@ unsafe fn locked(
             return Err("per-view deformable");
         }
     }
+    // Passes other than 0 / 3 cull without the occluder; pass 7 with the scene's view scale.
     let pass = p.m.r8(ctx + 0x31);
-    if pass != 3 && pass != 0 {
-        return Err("per-view other pass");
-    }
-    let occluder = p.m.r64(ent + 0xb8);
+    let main = pass == 3 || pass == 0;
+    let occluder = if main { p.m.r64(ent + 0xb8) } else { 0 };
+    let scale = if pass == 7 { p.m.f32(scene + 0xbbc) } else { -1.0 };
     // The worker's cache: frame stamp, view | pass << 16 key, then the bit pairs.
     let cache = caches + core as usize * 0x208;
     let frame = p.m.r32(p.m.r64(p.m.r64(p.base + FRAME_HOLDER)) + 0xc);
@@ -306,7 +306,7 @@ unsafe fn locked(
     let key = p.m.r8(ctx + 0x46) as u32 | (pass as u32) << 16;
     if p.m.r32(cache + 0x200) != key {
         p.m.w::<u32>(cache + 0x200, key);
-        rebuild(p, t, comp, cache, ctx, occluder)?;
+        rebuild(p, t, comp, cache, ctx, occluder, scale)?;
     }
     let defaults = p.m.r64(p.m.r64(d + 8) + 0x180) + p.m.r16(d + 0x18) as usize * 0x80;
     let mut table = [0u64; 32];
@@ -407,14 +407,14 @@ unsafe fn locked(
 /// The cache rebuild (main+0xd7d2a8): cleared, view data (main+0x1a358b8), then every instance from last to first:
 /// one whose group bit (u16 at +2) is set and whose box passes the view's tests marks its own pair (u16 at +0)
 /// visible and not drawn.
-unsafe fn rebuild(p: &mut Port, t: usize, comp: usize, cache: usize, ctx: usize, occ: usize) -> R<()> {
+unsafe fn rebuild(p: &mut Port, t: usize, comp: usize, cache: usize, ctx: usize, occ: usize, scale: f32) -> R<()> {
     let n = p.m.r32(comp + 0xa0);
     let bytes = ((n.wrapping_mul(2).wrapping_add(7)) >> 3) as usize;
     for k in 0..bytes {
         p.m.w::<u8>(cache + k, 0);
     }
     let mut view = [0u8; 0x120];
-    p.query_f(p.base + VIEW_DATA, &[view.as_mut_ptr() as u64, ctx as u64], &[-1.0]);
+    p.query_f(p.base + VIEW_DATA, &[view.as_mut_ptr() as u64, ctx as u64], &[scale]);
     if p.m.r32(t + 0x1df8) != 0 {
         return Err("per-view regions");
     }
@@ -604,10 +604,9 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
         }
     }
     let pass = p.m.r8(ctx + 0x31);
-    if pass != 3 && pass != 0 {
-        return Err("per-view other pass");
-    }
-    let occluder = p.m.r64(ent + 0xb8);
+    let main = pass == 3 || pass == 0;
+    let occluder = if main { p.m.r64(ent + 0xb8) } else { 0 };
+    let scale = if pass == 7 { p.m.f32(scene + 0x13f0) } else { -1.0 };
     let cache = caches + core as usize * 0x208;
     let frame = p.m.r32(p.m.r64(p.m.r64(p.base + FRAME_HOLDER)) + 0xc);
     if p.m.r32(cache + 0x204) != frame {
@@ -617,7 +616,7 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
     let key = p.m.r8(ctx + 0x46) as u32 | (pass as u32) << 16;
     if p.m.r32(cache + 0x200) != key {
         p.m.w::<u32>(cache + 0x200, key);
-        rebuild(p, t, comp, cache, ctx, occluder)?;
+        rebuild(p, t, comp, cache, ctx, occluder, scale)?;
     }
     let defaults = p.m.r64(p.m.r64(d + 8) + 0x180) + p.m.r16(d + 0x18) as usize * 0x80;
     let mut table = [0u64; 32];
