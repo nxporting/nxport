@@ -135,6 +135,16 @@ impl Port {
         *self.pending.borrow_mut() = Some((cmd, self.m.r64(handles) as u64, Default::default()));
     }
 
+    /// main+0x96b068: a uniform block from the frame's GPU ring holding `size` bytes copied from `data`.
+    pub(super) unsafe fn ring_block(&mut self, data: usize, size: usize) -> usize {
+        if self.m.predict() {
+            return super::ring::predict(self.base, data, size);
+        }
+        let mut out = 0usize;
+        self.call(self.base + super::ring::SITE, &[(&mut out) as *mut usize as u64, data as u64, size as u64]);
+        out
+    }
+
     /// A sead::Delegate1 object's target (main+ offset): Some(None) when the delegate is empty, None when its invoke is
     /// not sead's (each delegate type has its own copy of the invoke; copies are recognised by their code, which has no
     /// PC-relative references: the 12 words of main+0x27d0a6c).

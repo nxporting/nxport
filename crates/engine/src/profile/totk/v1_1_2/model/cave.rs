@@ -321,3 +321,120 @@ unsafe fn bind_texture(p: &mut Port, w: usize, slots: u32, tid: usize, sid: usiz
         }
     }
 }
+
+const STORAGE_SLOT_BY_NAME: usize = 0x1387540;
+const INSTANCE_PARAMS: usize = 0x860094;
+const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
+
+/// The delegate target main+0x85ff40: marks the instanced cave subsystem used (+0x40 bit 2) and draws it (mode 0,
+/// main+0x85ffc4 -> 0x860148), in every pass.
+pub(super) unsafe fn instanced_target(p: &mut Port, this: usize, arg: usize) -> R<()> {
+    let s = p.m.r64(this + 0x28);
+    p.query(p.base + LOCK, &[(s + 0x20) as u64]);
+    p.m.w::<u32>(s + 0x40, p.m.r32(s + 0x40) | 4);
+    p.query(p.base + UNLOCK, &[(s + 0x20) as u64]);
+    let s = p.m.r64(this + 0x28);
+    let ctx = p.m.r64(arg);
+    p.m.w::<u64>(s + 0x13d0, p.m.r64(this + 0x20) as u64);
+    p.m.w::<u32>(s + 0x13e0, p.m.r8(ctx + 0x30) as u32 | p.m.r32(this + 0xe00) << 8);
+    let (sys, info) = (p.m.r64(s + 0x4e8), s + 5000);
+    if p.m.r8(info + 1) == 0 || p.m.r64(sys + 0x20) == 0 {
+        return Ok(());
+    }
+    let t0 = p.query(p.base + TICK, &[]);
+    let mut params = [0u8; 0xb0];
+    params[0..8].copy_from_slice(&0x3d4c_cccd_0000_0001u64.to_le_bytes());
+    params[8..0x10].copy_from_slice(&0x3f80_0000_3f80_0000u64.to_le_bytes());
+    params[0x10..0x18].copy_from_slice(&0x7f80_0000_0000_0000u64.to_le_bytes());
+    params[0x18..0x1c].copy_from_slice(&0x0101_0100u32.to_le_bytes());
+    params[0xa4..0xa6].copy_from_slice(&0x100u16.to_le_bytes());
+    p.query(p.base + INSTANCE_PARAMS, &[t0, params.as_mut_ptr() as u64, info as u64]);
+    instanced_draw(p, p.m.r64(sys + 0x20), arg, u32::from_le_bytes(params[0x30..0x34].try_into().unwrap()))?;
+    let t1 = p.query(p.base + TICK, &[]);
+    p.m.w::<u64>(sys + 0x1f8, t1.wrapping_sub(t0).wrapping_add(p.m.r64(sys + 0x1f8) as u64));
+    p.m.w::<u32>(sys + 0x200, p.m.r32(sys + 0x200).wrapping_add(1));
+    Ok(())
+}
+
+/// main+0x860148 in mode 0: the named blocks and storage buffers (main+0x138b448), then the group's records
+/// (main+0x138b9d0).
+unsafe fn instanced_draw(p: &mut Port, this: usize, arg: usize, group: u32) -> R<()> {
+    let ctx = p.m.r64(arg);
+    let w = p.m.r64(ctx + 0x20);
+    load_resource(p, ctx, p.m.r64(arg + 8))?;
+    let program = p.m.r64(p.m.r64(arg + 0x10));
+    let view = p.m.i32(this + 4) as i64;
+    let user0 = slot_by_name(p, SLOT_BY_NAME, program, b"gsys_user0\0");
+    bind_named_block(p, this + 0x6808, w, p.m.r64(this + 0x6880) as u64, user0)?;
+    let v = (this as i64 + view * 400) as usize;
+    let big = (this as i64 + view * 0x1270) as usize;
+    for (n, obj) in [
+        (&b"cave_CaveInstanceDynamicDataSSBO\0"[..], v + 0xd0),
+        (b"cave_QuadStaticDataSSBO\0", this + 0x6998),
+        (b"cave_QuadStreamDataSSBO\0", v + 8),
+        (b"cave_QuadDynamicDataSSBO\0", big + 0x328),
+        (b"cave_PointGeometryDataSSBO\0", this + 0x6b98),
+        (b"cave_PointMaterialDataSSBO\0", this + 0x6c60),
+    ] {
+        let slot = slot_by_name(p, STORAGE_SLOT_BY_NAME, program, n);
+        if slot != 0xffff_ffff {
+            bind_named_block(p, obj + 0x40, w, p.m.r64(obj + 0xb8) as u64, slot)?;
+        }
+    }
+    let user1 = slot_by_name(p, SLOT_BY_NAME, program, b"gsys_user1\0");
+    // main+0x138b9d0: the group's records {a, b, c, d}: a ring block {a, 1 << c, 1 << d, 0, 0} bound as gsys_user1,
+    // then the mesh at (d, c) drawn with b instances.
+    let groups = p.m.r64(this + 0x2808);
+    let n = p.m.i32(this + 0x2814).max(0) as usize;
+    let Some(g) = (0..n).map(|k| groups + k * 0x3c).find(|&g| p.m.r32(g) == group) else { return Ok(()) };
+    let range = p.m.r64(g + 0x24) as i64;
+    let count = range.wrapping_sub(range << 32) >> 32;
+    if count == 0 {
+        return Ok(());
+    }
+    let first = (big as i64 + ((range << 32) >> 28) + 0x658) as usize;
+    for r in (0..count as usize).map(|k| first + k * 16) {
+        let (a, b, c, d) = (p.m.r32(r), p.m.r32(r + 4), p.m.i32(r + 8), p.m.i32(r + 12));
+        let mut data = [0u32; 5];
+        data[0] = a;
+        data[1] = 1u32.wrapping_shl(c as u32);
+        data[2] = 1u32.wrapping_shl(d as u32);
+        let block = p.ring_block(data.as_ptr() as usize, 0x14);
+        p.bind_uniform_block(block, w, user1, 0)?;
+        let mesh = (this as i64 + d as i64 * 0x360 + c as i64 * 0x60) as usize;
+        mesh_elements(p, mesh + 0x4718, w, 0, p.m.r32(mesh + 0x4740), b, 0, 0);
+    }
+    Ok(())
+}
+
+unsafe fn slot_by_name(p: &mut Port, f: usize, program: usize, n: &'static [u8]) -> u32 {
+    let nm = name(n);
+    let mut slot = 0xffff_ffffu32;
+    p.query(p.base + f, &[(&mut slot) as *mut u32 as u64, program as u64, nm.as_ptr() as u64]);
+    slot
+}
+
+/// main+0x13878e4(mesh, w, first, count, instances, base vertex, base instance).
+#[allow(clippy::too_many_arguments)]
+unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u32, count: u32, instances: u32, base_vertex: i32, base_instance: i32) {
+    if count == 0 {
+        return;
+    }
+    let prim = p.m.r32(mesh + 0xc) as u64;
+    let cmd = p.m.r64(w + 0xb8);
+    let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(mesh + 0x30) as u64]).wrapping_add(p.m.r32(mesh + 0x2c).wrapping_mul(first) as u64);
+    let itype = p.m.r32(mesh + 8) as u64;
+    if instances < 2 && base_instance == 0 {
+        if base_vertex != 0 {
+            p.call(p.pfn(PFN_DRAW_ELEMENTS_BASE_VERTEX), &[cmd as u64, prim, itype, count as u64, addr, base_vertex as u32 as u64]);
+            return;
+        }
+        p.m.w::<u8>(cmd + 0x10, 1);
+        p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, count as u64, addr]);
+        return;
+    }
+    p.call(
+        p.pfn(PFN_DRAW_ELEMENTS_INSTANCED),
+        &[cmd as u64, prim, itype, count as u64, addr, base_vertex as u32 as u64, base_instance as u32 as u64, instances as u64],
+    );
+}
