@@ -70,6 +70,13 @@ unsafe fn run_callback(p: &mut Port, f: usize, i: &Info) -> R<bool> {
         0xd61360 => render_state_basic2(p, i, true),
         0x2e24c => repeated_draw(p, i).map(|_| true),
         0x13e0170 => scene_params(p, i),
+        0x291e8 => {
+            let on = (p.m.r32(i.em + 0x30) >> 14) & 1 != 0;
+            if on {
+                strip_draw(p, i)?;
+            }
+            Ok(on)
+        }
         0x780f80 => {
             render_state_blend(p, i);
             Ok(true)
@@ -78,6 +85,89 @@ unsafe fn run_callback(p: &mut Port, f: usize, i: &Info) -> R<bool> {
         0x1f73c => Ok(p.m.r8(i.dp + 0x4d) & 1 != 0),
         _ => callback(f, p.base).map(|_| false),
     }
+}
+
+/// main+0x231e4(g, em, path, sh, a3, params, cache): the emitter's shader, blend / depth / rasterizer states,
+/// vertex state of the params' path, textures, blocks and callbacks (their result), when the params have no
+/// override (+0x24 = -1).
+#[allow(clippy::too_many_arguments)]
+unsafe fn shader_setup(p: &mut Port, g: usize, em: usize, path: u8, sh: usize, a3: usize, dp: usize, cache: usize) -> R<bool> {
+    if p.m.i32(dp + 0x24) != -1 {
+        return Ok(false);
+    }
+    p.set_shader(g, p.m.r64(sh), 0x3f);
+    let res = p.m.r64(em + 0x40);
+    set_blend_state(p, g, res + 0x1e8);
+    set_depth_stencil_state(p, g, res + 0x210);
+    set_rasterizer_state(p, g, res + 0x22c);
+    bind_vertex_state(p, g, p.m.r64(em + 0x40) + p.m.r8(dp + 0x2c) as usize * 0x20 + 0xc8);
+    bind_textures(p, p.m.r64(em + 0x50), g, em, sh, dp, cache);
+    bind_blocks(p, g, em, sh);
+    callbacks(p, em, g, path, a3, dp)
+}
+
+const GOT_DRAW_ARRAYS: usize = 0x4613b80;
+const STRIP_COLOR: usize = 0x4613b10;
+
+/// main+0x2de1c (through the emitter callback main+0x291e8 when the emitter's +0x30 bit 14 is set): a strip of
+/// [em+0x3a8]+0x20 vertices drawn after the shader setup: the strip's vertex buffer (the attribute at +0x660,
+/// layer [..]+0x24) at the resource's slot +0xb3 with [em+0x698] bytes, a 0x60-byte block from the params' allocator
+/// (+0x18) at the path shader's slots +0x3d / +0x7f (the strip's two rows swapped, a global colour twice, the
+/// emitter's +0x28, half the vertex count, the side, the resource's +0xc0 count), draw arrays with topology 4;
+/// once more for the back side when [res+0x128]+2 is 1.
+unsafe fn strip_draw(p: &mut Port, i: &Info) -> R<()> {
+    let em = i.em;
+    let strip = p.m.r64(em + 0x3a8);
+    if p.m.r32(strip + 0x20) == 0 {
+        return Ok(());
+    }
+    let res = p.m.r64(em + 0x40);
+    let sh = if i.path == 3 { 0 } else { p.m.r64(res + 0x10 + i.path as usize * 8) };
+    let sides = p.m.r64(res + 0x128);
+    let rec = p.m.r64(i.dp + 0x18);
+    if !shader_setup(p, i.g, em, i.path, sh, i.a3, i.dp, i.cache)? {
+        return Ok(());
+    }
+    let res = p.m.r64(em + 0x40);
+    let a = em + 0x660;
+    let mut addr = 0u64;
+    if p.m.r8(a) != 0 {
+        addr = attribute_address(p, a, p.m.r8(strip + 0x24) as usize, p.m.r64(em + 0x658))?;
+    }
+    bind_vertex_buffer(p, i.g, p.m.i8(res + 0xb3) as i32, addr, p.m.r64(em + 0x698) as u64);
+    let color = p.m.r64(p.base + STRIP_COLOR);
+    for side in 0..2 {
+        if side == 1 && p.m.r8(sides + 2) != 1 {
+            break;
+        }
+        let res = p.m.r64(em + 0x40);
+        let n = p.m.i32(strip + 0x20);
+        if let Some((cpu, gpu)) = bump(p, rec, 0x60) {
+            let mut b = [0u8; 0x50];
+            for k in 0..0x10 {
+                b[k] = p.m.r8(strip + 0x10 + k);
+                b[0x10 + k] = p.m.r8(strip + k);
+                b[0x20 + k] = p.m.r8(color + k);
+                b[0x30 + k] = p.m.r8(color + k);
+            }
+            b[0x40..0x44].copy_from_slice(&p.m.r32(em + 0x28).to_le_bytes());
+            b[0x44..0x48].copy_from_slice(&((n as f64 * 0.5) as f32).to_le_bytes());
+            b[0x48..0x4c].copy_from_slice(&(side as f32).to_le_bytes());
+            b[0x4c..0x50].copy_from_slice(&(p.m.i32(res + 0xc0) as f32).to_le_bytes());
+            copy_into(p, cpu, &b, true);
+            let (v, f) = (p.m.i8(sh + 0x3d), p.m.i8(sh + 0x7f));
+            if v != -1 {
+                bind_uniform(p, i.g, v as i32, 0, gpu, 0x60);
+            }
+            if f != -1 {
+                bind_uniform(p, i.g, f as i32, 4, gpu, 0x60);
+            }
+            let cmd = p.m.r64(i.g + 0xb0) as u64;
+            let mode = p.m.r32(p.base + TOPOLOGY_TABLE + 4 * 4) as u64;
+            p.call(got(p, GOT_DRAW_ARRAYS), &[cmd, mode, 0, p.m.r32(strip + 0x20) as u64]);
+        }
+    }
+    Ok(())
 }
 
 /// main+0x13e0170: the custom block, the scene's texture 10 (or, drawing into the render context's own targets, its
