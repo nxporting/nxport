@@ -104,13 +104,24 @@ pub(super) struct Tiles {
     lod_count: usize,
     /// The cell's detail level (+0xe) below which it is not drawn.
     min_detail: u8,
-    /// Records of 0x38 bytes whose part fade this game function computes (lods, LOD row, part), drawn in the layer of
-    /// the record's bit 1 in units of this static table (12-byte entries, unit at +8); 0: records of 0x70 bytes with
-    /// the fade inline, layer 0, 12-index units.
-    lod_fade: usize,
+    /// How LOD records give a part's fade, layer and units.
+    lod: Lod,
+    /// Units per layer (static table, 12-byte entries, unit at +8).
     layer_units: usize,
     /// The level texture and the record's texture at roles 4 / 5.
     level_roles: bool,
+    /// Draws between tiled caching on and off.
+    tiled: bool,
+}
+
+pub(super) enum Lod {
+    /// 0x70-byte records, the fade inline, layer 0, 12-index units.
+    Inline,
+    /// 0x38-byte records whose part fade this game function computes (lods, LOD row, part); layer = record bit 1.
+    Fade(usize),
+    /// 0x58-byte records, the fade inline times 0.8; layer 1 when the record's bit 1 is clear, or forced by this+0x90
+    /// bit 1 (0) / bit 2 (1).
+    Scaled,
 }
 
 pub(super) const TILES_12E3774: Tiles = Tiles {
@@ -123,9 +134,10 @@ pub(super) const TILES_12E3774: Tiles = Tiles {
     lod_scale: 0x13,
     lod_count: 0x80,
     min_detail: 7,
-    lod_fade: 0,
+    lod: Lod::Inline,
     layer_units: 0,
     level_roles: false,
+    tiled: true,
 };
 pub(super) const TILES_113AA14: Tiles = Tiles {
     target: 0x113aa14,
@@ -148,9 +160,25 @@ pub(super) const TILES_1276504: Tiles = Tiles {
     lod_scale: 0,
     lod_count: 0x70,
     min_detail: 8,
-    lod_fade: 0xf2f438,
+    lod: Lod::Fade(0xf2f438),
     layer_units: 0x381f1c8,
     level_roles: true,
+    tiled: true,
+};
+pub(super) const TILES_744C7C: Tiles = Tiles {
+    target: 0x744c7c,
+    guard: 0x4635460,
+    cast_type: 0x4635468,
+    level_flag: 8,
+    lod_blocks: 0x180,
+    lod_id: 7,
+    lod_scale: 0xc,
+    lod_count: 0x60,
+    min_detail: 7,
+    lod: Lod::Scaled,
+    layer_units: 0x381f1f8,
+    level_roles: false,
+    tiled: false,
 };
 
 /// main+0x12e3774(this, arg, k) and the functions sharing its code (`v`).
@@ -184,7 +212,7 @@ pub(super) unsafe fn draw(p: &mut Port, v: &Tiles, this: usize, arg: usize, k: u
         let env = p.m.r64(p.m.r64(p.base + ENV_HOLDER));
         env == 0 || p.m.r8(env + 9) & 2 == 0
     };
-    if env_on(p) {
+    if v.tiled && env_on(p) {
         tiled_caching(p, w, true);
     }
     load_resource(p, ctx, p.m.r64(arg + 8))?;
@@ -296,38 +324,58 @@ pub(super) unsafe fn draw(p: &mut Port, v: &Tiles, this: usize, arg: usize, k: u
                     continue;
                 }
                 let e = lod_row + j as usize * 0x18;
-                let (id, a, layer, unit);
-                if v.lod_fade != 0 {
-                    id = p.m.r8(e + v.lod_id) as u32;
-                    let li = if p.m.r32(lods + v.lod_count) > id { id } else { 0 } as usize;
-                    let rr = p.m.r64(lods + v.lod_count + 8) + li * 0x38;
-                    if p.m.r8(rr) & 1 == 0 {
-                        continue;
+                let units = |p: &Port, layer: u32| p.m.r32((p.base as i64 + v.layer_units as i64 + layer as i32 as i64 * 12) as usize + 8);
+                let fl = p.m.r32(this + 0x90);
+                let (id, f, layer, unit);
+                match v.lod {
+                    Lod::Fade(fade) => {
+                        id = p.m.r8(e + v.lod_id) as u32;
+                        let li = if p.m.r32(lods + v.lod_count) > id { id } else { 0 } as usize;
+                        let rr = p.m.r64(lods + v.lod_count + 8) + li * 0x38;
+                        if p.m.r8(rr) & 1 == 0 {
+                            continue;
+                        }
+                        let a = p.query_ret_f(p.base + fade, &[lods as u64, lod_row as u64, j as u64]);
+                        f = if fl & 1 == 0 { a } else { p.m.f32(this + 0x98) };
+                        layer = (p.m.r8(rr) as u32 >> 1) & 1;
+                        unit = units(p, layer);
                     }
-                    a = p.query_ret_f(p.base + v.lod_fade, &[lods as u64, lod_row as u64, j as u64]);
-                    layer = (p.m.r8(rr) as u32 >> 1) & 1;
-                    unit = p.m.r32((p.base as i64 + v.layer_units as i64 + layer as i32 as i64 * 12) as usize + 8);
-                } else {
-                    if p.m.r8(e) & 0x20 != 0 {
-                        continue;
+                    Lod::Inline | Lod::Scaled => {
+                        if p.m.r8(e) & 0x20 != 0 {
+                            continue;
+                        }
+                        id = p.m.r8(e + v.lod_id) as u32;
+                        let inline = matches!(v.lod, Lod::Inline);
+                        if inline && id == 0xff {
+                            continue;
+                        }
+                        let li = if p.m.r32(lods + v.lod_count) > id { id } else { 0 } as usize;
+                        let (stride, at) = if inline { (0x70, 0x64) } else { (0x58, 0) };
+                        let rr = p.m.r64(lods + v.lod_count + 8) + li * stride + at;
+                        if p.m.r8(rr) & 1 == 0 {
+                            continue;
+                        }
+                        let sel = p.m.r8(rr + 1) as u32;
+                        let sel = if sel < 4 { sel as usize } else { 0 };
+                        let (lo, hi) = (p.m.f32(rr + 4), p.m.f32(rr + 8));
+                        let x = lo + p.m.r8(e + sel + 0x14) as f32 / 255.0 * (hi - lo);
+                        let a = x * (p.m.r8(e + v.lod_scale) as f32 / 255.0);
+                        let a = if fl & 1 == 0 { a } else { p.m.f32(this + 0x98) };
+                        if inline {
+                            (f, layer, unit) = (a, 0, 12);
+                        } else {
+                            f = a * f32::from_bits(0x3f4ccccd);
+                            layer = if fl & 2 != 0 {
+                                0
+                            } else if fl & 4 != 0 {
+                                1
+                            } else {
+                                !(p.m.r8(rr) as u32 >> 1) & 1
+                            };
+                            unit = units(p, layer);
+                        }
                     }
-                    id = p.m.r8(e + v.lod_id) as u32;
-                    if id == 0xff {
-                        continue;
-                    }
-                    let li = if p.m.r32(lods + v.lod_count) > id { id } else { 0 } as usize;
-                    let rr = p.m.r64(lods + v.lod_count + 8) + li * 0x70;
-                    if p.m.r8(rr + 0x64) & 1 == 0 {
-                        continue;
-                    }
-                    let sel = p.m.r8(rr + 0x65) as u32;
-                    let sel = if sel < 4 { sel as usize } else { 0 };
-                    let (lo, hi) = (p.m.f32(rr + 0x68), p.m.f32(rr + 0x6c));
-                    let x = lo + p.m.r8(e + sel + 0x14) as f32 / 255.0 * (hi - lo);
-                    a = x * (p.m.r8(e + v.lod_scale) as f32 / 255.0);
-                    (layer, unit) = (0, 12);
                 }
-                let f = if p.m.r8(this + 0x90) & 1 == 0 { a } else { p.m.f32(this + 0x98) };
                 if f <= 0.0 {
                     continue;
                 }
@@ -346,7 +394,7 @@ pub(super) unsafe fn draw(p: &mut Port, v: &Tiles, this: usize, arg: usize, k: u
         it += 1;
     }
     p.m.w::<u32>(ctx + 0x34, p.m.r32(ctx + 0x34).wrapping_add(drawn / 3));
-    if env_on(p) {
+    if v.tiled && env_on(p) {
         tiled_caching(p, w, false);
     }
     Ok(())
