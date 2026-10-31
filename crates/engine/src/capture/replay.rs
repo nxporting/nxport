@@ -110,6 +110,16 @@ fn flatten(
                             typed: Some(Cmd::BindTexturesDeferred { stage: *stage, first: *first, count: *count, handles: *handles }),
                             args: None,
                         }),
+                        crate::nvn::cmd::ModelItem::Viewport { x, y, w, h, near, far } => {
+                            let r = (*x, *y, *w, *h);
+                            for (name, t) in [
+                                ("nvnCommandBufferSetScissor", Cmd::SetScissor { x: r.0, y: r.1, w: r.2, h: r.3 }),
+                                ("nvnCommandBufferSetViewport", Cmd::SetViewport { x: r.0, y: r.1, w: r.2, h: r.3 }),
+                                ("nvnCommandBufferSetDepthRange", Cmd::SetDepthRange { near: *near, far: *far }),
+                            ] {
+                                out.push(Op { name: name.into(), typed: Some(t), args: None });
+                            }
+                        }
                         crate::nvn::cmd::ModelItem::RenderState(r) => out.push(Op {
                             name: "nvnCommandBufferRenderState".into(),
                             typed: Some(Cmd::RenderState(r.clone())),
