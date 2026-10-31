@@ -201,6 +201,21 @@ impl Port {
         }
     }
 
+    /// nvnCommandBufferBindTexturesDeferred: the handles at `handles` are read when the commands run.
+    pub(super) unsafe fn bind_textures_deferred(&mut self, cmd: usize, stage: i32, first: i32, count: i32, handles: u64) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::TexturesDeferred { stage, first, count, handles });
+        }
+        self.call(self.pfn(PFN_BIND_TEXTURES_DEFERRED), &[cmd as u64, stage as u64, first as u64, count as u64, handles]);
+    }
+
+    /// A uniform buffer bind that leaves the command buffer's +0x10 flag alone (nn::gfx's own binders).
+    pub(super) unsafe fn bind_uniform(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
+        if !self.join(cmd, stage, slot, crate::nvn::cmd::ModelBindKind::Uniform { addr, size: size as usize }) {
+            self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
+        }
+    }
+
     /// nvnCommandBufferDrawElements (natively a native draw).
     pub(super) unsafe fn draw_elements(&mut self, cmd: usize, mode: i32, index_type: i32, count: i32, addr: u64) {
         if self.native {
@@ -254,15 +269,15 @@ impl Port {
         }
         use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
         let count = &*(counter as *const AtomicI32);
-        self.call(self.pfn(PFN_BUFFER_FINALIZE), &[buf as u64]);
+        self.query(self.pfn(PFN_BUFFER_FINALIZE), &[buf as u64]);
         count.fetch_sub(1, SeqCst);
         let mut builder = [0u64; 16];
         let b = builder.as_mut_ptr() as u64;
         let dev = self.m.r64(self.m.r64(self.m.r64(self.base + DEVICE_HOLDER)) + 0x30);
-        self.call(self.pfn(PFN_BUFFER_BUILDER_SET_DEVICE), &[b, dev as u64]);
-        self.call(self.pfn(PFN_BUFFER_BUILDER_SET_DEFAULTS), &[b]);
-        self.call(self.pfn(PFN_BUFFER_BUILDER_SET_STORAGE), &[b, pool as u64, offset as u64, size as u64]);
-        self.call(self.pfn(PFN_BUFFER_INITIALIZE), &[buf as u64, b]);
+        self.query(self.pfn(PFN_BUFFER_BUILDER_SET_DEVICE), &[b, dev as u64]);
+        self.query(self.pfn(PFN_BUFFER_BUILDER_SET_DEFAULTS), &[b]);
+        self.query(self.pfn(PFN_BUFFER_BUILDER_SET_STORAGE), &[b, pool as u64, offset as u64, size as u64]);
+        self.query(self.pfn(PFN_BUFFER_INITIALIZE), &[buf as u64, b]);
         count.fetch_add(1, SeqCst);
     }
 
@@ -405,6 +420,9 @@ impl Port {
         } else {
             (self.m.r64(shader + 8), Self::nvn_stage_bits(stages))
         };
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Program { program, stages: bits as i32 });
+        }
         self.call(self.pfn(PFN_BIND_PROGRAM), &[cmd as u64, program as u64, bits as u64]);
     }
 
@@ -1222,10 +1240,7 @@ pub(super) unsafe fn load_resource(p: &mut Port, c: usize, d: usize) -> R<bool> 
                         for (stage, sh) in [(0u64, 0), (1, 8), (2, 16), (5, 24)] {
                             if (slots >> sh) & 0xff != 0xff {
                                 p.m.w::<u8>(cmd + 0x10, 1);
-                                p.call(
-                                    p.pfn(PFN_BIND_TEXTURES_DEFERRED),
-                                    &[cmd as u64, stage, ((slots >> sh) as i8) as i64 as u64, 1, handles as u64],
-                                );
+                                p.bind_textures_deferred(cmd, stage as i32, (slots >> sh) as i8 as i32, 1, handles as u64);
                             }
                         }
                     }

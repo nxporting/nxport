@@ -316,7 +316,7 @@ unsafe fn bind_texture(p: &mut Port, g: usize, slot: i32, st: u32, tex: usize, s
 /// main+0x30274: a uniform block (GPU address *addr) of `size` bytes bound to `slot` of `st`.
 unsafe fn bind_uniform(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, size: u64) {
     let cmd = p.m.r64(g + 0xb0) as u64;
-    p.call(p.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd, stage(p, st), slot as u32 as u64, addr, size]);
+    p.bind_uniform(cmd as usize, stage(p, st) as i32, slot, addr, size);
 }
 
 /// main+0x302e0: a storage buffer bound to `slot` of `st`.

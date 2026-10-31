@@ -2865,16 +2865,7 @@ impl Gfx {
                     first,
                     count,
                     handles,
-                } => {
-                    for i in 0..(*count).clamp(0, 32) {
-                        let h = if *handles > 0x10000 {
-                            std::ptr::read_unaligned((*handles as *const u64).add(i as usize))
-                        } else {
-                            0
-                        };
-                        st.textures_bound.insert((*stage, *first + i), h);
-                    }
-                }
+                } => apply_textures_deferred(st, *stage, *first, *count, *handles),
                 Cmd::SetRenderTargets { colors, depth } => {
                     let resolve = |r: &crate::nvn::cmd::RtRef| crate::nvn::cmd::RtRef {
                         texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen),
@@ -3001,15 +2992,7 @@ impl Gfx {
                     st.stats.clears += 1;
                     self.clear_depth(st, cb, *depth, *depth_mask, *stencil, *stencil_mask);
                 }
-                Cmd::BindProgram { program, stages } => {
-                    // NVN_SHADER_STAGE_COMPUTE_BIT: compute and graphics programs are bound independently.
-                    if *stages & 0x20 != 0 {
-                        st.compute_program = Some(*program);
-                    }
-                    if *stages & 0x1F != 0 || *stages == 0 {
-                        st.program = Some(*program);
-                    }
-                }
+                Cmd::BindProgram { program, stages } => apply_program(st, *program, *stages),
                 Cmd::DispatchCompute { x, y, z } => {
                     if translated::enabled() {
                         self.end_encoder(st);
@@ -3391,6 +3374,10 @@ impl Gfx {
                             }
                             ModelItem::Bind { stage, index, kind } => apply_model_bind(st, *stage, *index, *kind),
                             ModelItem::RenderState(r) => apply_render_state(st, r),
+                            ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
+                            ModelItem::TexturesDeferred { stage, first, count, handles } => {
+                                apply_textures_deferred(st, *stage, *first, *count, *handles)
+                            }
                             ModelItem::Draw(r) => {
                                 st.cur_caller = 0;
                                 st.stats.draws += 1;
@@ -8340,5 +8327,22 @@ fn apply_model_bind(st: &mut State, stage: i32, index: i32, kind: crate::nvn::cm
         ModelBindKind::Texture(handle) => {
             st.textures_bound.insert((stage, index), handle);
         }
+    }
+}
+
+fn apply_program(st: &mut State, program: usize, stages: i32) {
+    // NVN_SHADER_STAGE_COMPUTE_BIT: compute and graphics programs are bound independently.
+    if stages & 0x20 != 0 {
+        st.compute_program = Some(program);
+    }
+    if stages & 0x1F != 0 || stages == 0 {
+        st.program = Some(program);
+    }
+}
+
+unsafe fn apply_textures_deferred(st: &mut State, stage: i32, first: i32, count: i32, handles: u64) {
+    for i in 0..count.clamp(0, 32) {
+        let h = if handles > 0x10000 { std::ptr::read_unaligned((handles as *const u64).add(i as usize)) } else { 0 };
+        st.textures_bound.insert((stage, first + i), h);
     }
 }
