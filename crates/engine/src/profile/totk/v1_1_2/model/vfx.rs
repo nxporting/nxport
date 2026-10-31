@@ -1200,12 +1200,36 @@ unsafe fn draw_set(p: &mut Port, s: usize, set: usize, g8: usize, prio: u32, a3:
     let mut em = p.m.r64(set + 8);
     while em != 0 {
         let next = p.m.r64(em + 8);
-        let children = (p.m.r8(em + 0x30) >> 4) & 1 != 0 && p.m.r8(p.m.r64(em + 0x40) + 0xb5) != 0;
+        let children = (p.m.r8(em + 0x30) >> 4) & 1 != 0;
         if children {
-            return Err("vfx child emitters");
+            draw_children(p, s, set, g8, em, prio, a3, st, cache, true)?;
         }
         draw_candidate(p, s, set, g8, em, prio, a3, st, cache)?;
+        if children {
+            draw_children(p, s, set, g8, em, prio, a3, st, cache, false)?;
+        }
         em = next;
+    }
+    Ok(())
+}
+
+/// main+0xa018: the emitter's child emitters drawn before (`before`) or after it: per child slot (resource +0xb5 of
+/// them) whose child resource (+0x270 table, [..]+0xd39) is drawn on that side, the slot's emitter list
+/// ([em+0x58] + slot * 8 + 0x80) drawn like candidates.
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_children(p: &mut Port, s: usize, set: usize, g8: usize, em: usize, prio: u32, a3: usize, st: usize, cache: usize, before: bool) -> R<()> {
+    let res = p.m.r64(em + 0x40);
+    for k in 0..p.m.r8(res + 0xb5) as usize {
+        let side = p.m.r8(p.m.r64(p.m.r64(res + 0x270 + k * 8)) + 0xd39);
+        if side != before as u8 {
+            continue;
+        }
+        let mut c = p.m.r64(p.m.r64(em + 0x58) + k * 8 + 0x80);
+        while c != 0 {
+            let next = p.m.r64(c + 8);
+            draw_candidate(p, s, set, g8, c, prio, a3, st, cache)?;
+            c = next;
+        }
     }
     Ok(())
 }
