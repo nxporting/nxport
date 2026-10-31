@@ -22,6 +22,19 @@ const DEVICE_HOLDER: usize = 0x462bbe8;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
 const PFN_SET_PRIMITIVE_RESTART: usize = 0x466e050;
 const COMPONENT_TYPE: u32 = 0xd21b65b6;
+/// main+0xd7e8c4(component, record, instance): a new record's contents; main+0x85d284(data + 0x50, instance, record,
+/// component + 0x218): its uniform data's texture coordinates.
+const RECORD_FILL: usize = 0xd7e8c4;
+const UNIFORM_FILL: usize = 0x85d284;
+/// main+0x24b7758(component, instance): main+0x24b2a04's record creation (inlined in its instance loop, called for
+/// pairs): the record, then its uniform data.
+const RECORD_B: usize = 0x24b7758;
+/// main+0x24b8774(component, instance, &&scale): an instance record for a pair (main+0xd7c1d8); main+0x24b8980(data,
+/// pair, pair record, component + 0x218): the pair's uniform data.
+const PAIR_INSTANCE: usize = 0x24b8774;
+const PAIR_UNIFORM: usize = 0x24b8980;
+/// main+0x85d0f0(data, pair, pair record, component + 0x218): main+0x24b2a04's pair uniform data.
+const PAIR_UNIFORM_B: usize = 0x85d0f0;
 
 /// Virtual calls left to the game: (main+ function | slot << 40, count).
 static CALLS: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -157,6 +170,8 @@ struct Draw {
     defaults: usize,
     entries: [i32; 32],
     meshes: usize,
+    /// main+0xd7c1d8's 0.5 / (LOD B's +2 + 2 * its +4), stored with a new record's uniform data.
+    scale: f32,
 }
 
 /// The instance's record, created by main+0xd7e090 on its first draw (into the overlay; the game's own call creates
@@ -192,6 +207,115 @@ unsafe fn loaded(p: &Port, tex: usize) -> R<u64> {
         return Err("per-view texture load");
     }
     Ok((p.m.r64(tex + 8) + 8) as u64)
+}
+
+/// Applying: the record as main+0xd7e090 creates it: the next record (atomic counter +0x110) filled by main+0xd7e8c4,
+/// published at the instance's +0x78 unless another thread was first, then its uniform data (the component's
+/// +0x148 buffer, element = instance id + +0x158 * (+0x15a >> 4), stride from the +0x118 block): bounds, scales and
+/// tables of the component, main+0x85d284's texture coordinates and `scale`. These writes are the game's lazy setup:
+/// not undone with the list.
+unsafe fn create_record_applied(p: &mut Port, comp: usize, inst: usize, scale: f32) -> R<usize> {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    let n = (*((comp + 0x110) as *const AtomicU32)).fetch_add(1, Ordering::AcqRel);
+    if p.m.r32(comp + 0xf0) <= n {
+        return Ok(0);
+    }
+    let rec = (p.m.r64(comp + 0xf8) as i64 + n as i32 as i64 * 0x50) as usize;
+    p.query(p.base + RECORD_FILL, &[comp as u64, rec as u64, inst as u64]);
+    std::sync::atomic::fence(Ordering::SeqCst);
+    let slot = &*((inst + 0x78) as *const AtomicU64);
+    if let Err(other) = slot.compare_exchange(0, rec as u64, Ordering::AcqRel, Ordering::Acquire) {
+        return Ok(other as usize);
+    }
+    let a = p.block_alignment(comp + 0x118)?;
+    let b = p.block_alignment(comp + 0x118)?;
+    let mut pf = 0usize;
+    let o = p.m.r64(comp + 0x148);
+    if o != 0 && p.m.r64(o + 0x10) != 0 && p.m.r64(p.m.r64(o + 0x10) + 0x100) != 0 {
+        let stride = (p.m.i32(comp + 0x150).wrapping_add(a).wrapping_sub(1) as u32) & (b.wrapping_neg() as u32);
+        let k = (p.m.r16(inst) as u32).wrapping_add(p.m.r16(comp + 0x158) as u32 * (p.m.r8(comp + 0x15a) >> 4) as u32);
+        pf = p.m.r64(p.m.r64(o + 0x10) + 0x100) + (p.m.i32(comp + 0x138) as u32).wrapping_add(stride.wrapping_mul(k)) as usize;
+    }
+    if pf == 0 {
+        return Err("per-view record without uniform data");
+    }
+    let f = |o: usize| p.m.f32(o);
+    let put = |i: usize, v: f32| std::ptr::write_unaligned((pf + i * 4) as *mut f32, v);
+    let copy = |i: usize, from: usize, n: usize| std::ptr::copy_nonoverlapping(from as *const u8, (pf + i * 4) as *mut u8, n);
+    let size = f(inst + 0x10);
+    put(0, size);
+    put(1, size);
+    put(2, f(inst + 8) - size * 0.5);
+    put(3, f(inst + 0xc) - size * 0.5);
+    copy(0xc, inst + 0x48, 8);
+    put(0xe, f(inst + 0x50));
+    put(0xf, f(inst + 0x54));
+    let flags = p.m.r8(inst + 5);
+    copy(8, comp + if (flags >> 2) & 1 == 0 { 0x360 } else { 0x370 }, 16);
+    copy(0x10, comp + 0x218 + (flags & 3) as usize * 0x10 + 0x100, 16);
+    put(0x10, f(comp + 0x34c));
+    let t = p.m.r8(inst + 4) as usize;
+    put(4, t as f32);
+    put(5, p.m.r32(comp + 0x35c) as f32);
+    put(6, f(comp + 0x218 + t * 0x10 + 8));
+    put(7, f(comp + 0x218 + t * 0x10 + 0xc));
+    p.query(p.base + UNIFORM_FILL, &[(pf + 0x50) as u64, inst as u64, rec as u64, (comp + 0x218) as u64]);
+    put(0x47, 0.0);
+    put(0x45, 0.0);
+    put(0x46, 0.0);
+    put(0x44, scale);
+    Ok(rec)
+}
+
+/// Applying: the pair's record as main+0xd7c1d8 creates it: the next pair record (atomic counter +0x114, array
+/// +0x108), its instances' records created where missing (main+0x24b8774 with the scale), published at the pair's +0x18
+/// unless another thread was first, then its uniform data (the component's +0x1c8 buffer, element = the pair's +4, stride
+/// from the +0x198 block) by main+0x24b8980 with the scale at +0x110 and zeros at +0x114..+0x120.
+/// `scale` None: main+0x24b2a04's pairs (instances by main+0x24b7758, uniform data by main+0x85d0f0 alone).
+unsafe fn create_pair_applied(p: &mut Port, comp: usize, e: usize, scale: Option<f32>) -> R<usize> {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    let n = (*((comp + 0x114) as *const AtomicU32)).fetch_add(1, Ordering::AcqRel);
+    if p.m.r32(comp + 0x100) <= n {
+        return Ok(0);
+    }
+    let rec = (p.m.r64(comp + 0x108) as i64 + n as i32 as i64 * 16) as usize;
+    let (a, b) = (p.m.r64(e + 8), p.m.r64(e + 0x10));
+    let (x, y) = if p.m.r32(e) & !1 == 2 { (a, b) } else { (b, a) };
+    let cell = scale.unwrap_or(0.0);
+    let at = &cell as *const f32 as u64;
+    for i in [x, y] {
+        if p.m.r64(i + 0x78) == 0 {
+            match scale {
+                Some(_) => p.query(p.base + PAIR_INSTANCE, &[comp as u64, i as u64, &at as *const u64 as u64]),
+                None => p.query(p.base + RECORD_B, &[comp as u64, i as u64]),
+            };
+        }
+    }
+    std::ptr::write_unaligned(rec as *mut u64, p.m.r64(x + 0x78) as u64);
+    std::ptr::write_unaligned((rec + 8) as *mut u64, p.m.r64(y + 0x78) as u64);
+    std::sync::atomic::fence(Ordering::SeqCst);
+    let slot = &*((e + 0x18) as *const AtomicU64);
+    if let Err(other) = slot.compare_exchange(0, rec as u64, Ordering::AcqRel, Ordering::Acquire) {
+        return Ok(other as usize);
+    }
+    let al = p.block_alignment(comp + 0x198)?;
+    let bl = p.block_alignment(comp + 0x198)?;
+    let o = p.m.r64(comp + 0x1c8);
+    if o == 0 || p.m.r64(o + 0x10) == 0 || p.m.r64(p.m.r64(o + 0x10) + 0x100) == 0 {
+        return Err("per-view pair without uniform data");
+    }
+    let stride = (p.m.i32(comp + 0x1d0).wrapping_add(al).wrapping_sub(1) as u32) & (bl.wrapping_neg() as u32);
+    let k = (p.m.r16(e + 4) as u32).wrapping_add(p.m.r16(comp + 0x1d8) as u32 * (p.m.r8(comp + 0x1da) >> 4) as u32);
+    let pf = p.m.r64(p.m.r64(o + 0x10) + 0x100) + (p.m.i32(comp + 0x1b8) as u32).wrapping_add(stride.wrapping_mul(k)) as usize;
+    let Some(scale) = scale else {
+        p.query(p.base + PAIR_UNIFORM_B, &[pf as u64, e as u64, rec as u64, (comp + 0x218) as u64]);
+        return Ok(rec);
+    };
+    p.query(p.base + PAIR_UNIFORM, &[pf as u64, e as u64, rec as u64, (comp + 0x218) as u64]);
+    std::ptr::write_unaligned((pf + 0x11c) as *mut u32, 0);
+    std::ptr::write_unaligned((pf + 0x114) as *mut u64, 0);
+    std::ptr::write_unaligned((pf + 0x110) as *mut f32, scale);
+    Ok(rec)
 }
 
 /// main+0xd7e8c4's set for slot k: the first set in the instance's chain with the slot's LOD and a usable texture.
@@ -252,7 +376,7 @@ unsafe fn create_pair(p: &mut Port, comp: usize, e: usize) -> usize {
 unsafe fn draw_instance(p: &mut Port, d: &mut Draw, inst: usize) -> R<u32> {
     let mut rec = p.m.r64(inst + 0x78);
     if rec == 0 {
-        rec = create_record(p, d.block - 0x118, inst);
+        rec = if p.m.predict() { create_record(p, d.block - 0x118, inst) } else { create_record_applied(p, d.block - 0x118, inst, d.scale)? };
         if rec == 0 {
             return Err("per-view instance record");
         }
@@ -467,6 +591,7 @@ unsafe fn locked(
         defaults,
         entries,
         meshes,
+        scale: 0.5 / (p.m.r16(lod_b + 2) as u32 + p.m.r8(lod_b + 4) as u32 * 2) as f32,
     };
     sets = dr.sets;
     let _ = sets;
@@ -489,7 +614,7 @@ unsafe fn locked(
             }
             let mut prec = p.m.r64(e + 0x18);
             if prec == 0 {
-                prec = create_pair(p, comp, e);
+                prec = if p.m.predict() { create_pair(p, comp, e) } else { create_pair_applied(p, comp, e, Some(dr.scale))? };
                 if prec == 0 {
                     return Err("per-view pair record");
                 }
@@ -843,7 +968,7 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
             }
             let mut prec = p.m.r64(e + 0x18);
             if prec == 0 {
-                prec = create_pair(p, comp, e);
+                prec = if p.m.predict() { create_pair(p, comp, e) } else { create_pair_applied(p, comp, e, None)? };
                 if prec == 0 {
                     return Err("per-view pair record");
                 }
@@ -892,7 +1017,13 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
         }
         let mut rec = p.m.r64(inst + 0x78);
         if rec == 0 {
-            rec = create_record(p, comp, inst);
+            rec = if p.m.predict() {
+                create_record(p, comp, inst)
+            } else {
+                // Applying: the game's own creation for this renderer (record and uniform data).
+                p.query(p.base + RECORD_B, &[comp as u64, inst as u64]);
+                p.m.r64(inst + 0x78)
+            };
             if rec == 0 {
                 return Err("per-view instance record");
             }
