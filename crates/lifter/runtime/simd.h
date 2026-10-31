@@ -56,6 +56,8 @@ typedef u128 __attribute__((aligned(1), may_alias)) u128u;
 
 enum { FOP_ADD, FOP_SUB, FOP_MUL, FOP_MULX, FOP_NMUL, FOP_DIV, FOP_ABD, FOP_SQRT, FOP_MADD, FOP_RECPS, FOP_RSQRTS,
        FOP_MAX, FOP_MIN, FOP_MAXNM, FOP_MINNM };
+// A64 conditions, for cc_s / cc_d (an FCMP fused with the one condition that reads it).
+enum { FCC_EQ, FCC_NE, FCC_CS, FCC_CC, FCC_MI, FCC_PL, FCC_VS, FCC_VC, FCC_HI, FCC_LS, FCC_GE, FCC_LT, FCC_GT, FCC_LE };
 
 static const uint8_t simd_recip_tab[256] = {
     255, 253, 251, 249, 247, 245, 243, 241, 240, 238, 236, 234, 232, 230, 229, 227,

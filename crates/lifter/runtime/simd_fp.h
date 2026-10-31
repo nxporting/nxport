@@ -223,6 +223,24 @@ SI uint64_t FN(cmp)(Cpu *c, T a, T b) { // FCMP NZCV
     a = FN(fz)(c, a), b = FN(fz)(c, b);
     return a == b ? 0x60000000ull : a < b ? 0x80000000ull : a > b ? 0x20000000ull : 0x30000000ull;
 }
+// Condition cc (FCC_*, an A64 condition) of FCMP a, b without NZCV: equal 0110, less 1000, greater 0010, unordered 0011.
+SI int FN(cc)(Cpu *c, T a, T b, int cc) {
+    a = FN(fz)(c, a), b = FN(fz)(c, b);
+    switch (cc) {
+    case FCC_EQ: return a == b;
+    case FCC_NE: return !(a == b);
+    case FCC_CS: case FCC_PL: return !(a < b);
+    case FCC_CC: case FCC_MI: return a < b;
+    case FCC_VS: return __builtin_isunordered(a, b);
+    case FCC_VC: return !__builtin_isunordered(a, b);
+    case FCC_HI: return !(a <= b);
+    case FCC_LS: return a <= b;
+    case FCC_GE: return a >= b;
+    case FCC_LT: return !(a >= b);
+    case FCC_GT: return a > b;
+    default: return !(a > b); // FCC_LE
+    }
+}
 // FCMEQ/FCMGE/FCMGT/FACGE/FACGT (op 0..4)
 SI VTU FN(vcmp)(Cpu *c, int op, VT a, VT b) {
     a = FN(vfz)(c, a), b = FN(vfz)(c, b);
