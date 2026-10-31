@@ -76,7 +76,7 @@ impl std::fmt::Debug for AttribState {
 pub enum Cmd {
     SetRenderTargets {
         colors: Vec<RtRef>,
-        depth: Option<RtRef>,
+        depth: Option<Box<RtRef>>,
     },
     ClearColor {
         index: i32,
@@ -140,7 +140,7 @@ pub enum Cmd {
         addr: u64,
         size: usize,
     },
-    BindVertexAttribState(AttribState),
+    BindVertexAttribState(Box<AttribState>),
     BindVertexStreamState(Vec<u64>),
     BindBlendState(u64),
     BindColorState(u32),
@@ -253,14 +253,14 @@ pub enum Cmd {
     },
     CopyBufferToTexture {
         src: u64,
-        dst: TexRef,
-        region: Region,
+        dst: Box<TexRef>,
+        region: Box<Region>,
         row_stride: isize,
         image_stride: isize,
     },
     CopyTextureToBuffer {
-        src: TexRef,
-        region: Region,
+        src: Box<TexRef>,
+        region: Box<Region>,
         dst: u64,
         row_stride: isize,
         image_stride: isize,
@@ -446,14 +446,14 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
             colors: rt_list(colors, color_views, num.max(0) as usize),
             depth: if depth != 0 {
                 let (view_format, view_target) = view_format_target(depth_view);
-                Some(RtRef {
+                Some(Box::new(RtRef {
                     texture: depth,
                     gen: crate::nvn::api::texture_ref_gen(depth),
                     level: dl,
                     layer: dy,
                     view_format,
                     view_target,
-                })
+                }))
             } else {
                 None
             },
@@ -731,7 +731,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindVertexAttribState(
     rec!(
         "nvnCommandBufferBindVertexAttribState",
         cmd,
-        Cmd::BindVertexAttribState(v)
+        Cmd::BindVertexAttribState(Box::new(v))
     );
 }
 #[no_mangle]
@@ -1641,8 +1641,8 @@ pub unsafe extern "C" fn hle_typed_cb_CopyBufferToTexture(
         cmd,
         Cmd::CopyBufferToTexture {
             src,
-            dst: tex_ref(dst, dst_view),
-            region: region(dst_region),
+            dst: Box::new(tex_ref(dst, dst_view)),
+            region: Box::new(region(dst_region)),
             row_stride,
             image_stride,
         }
@@ -1662,8 +1662,8 @@ pub unsafe extern "C" fn hle_typed_cb_CopyTextureToBuffer(
         "nvnCommandBufferCopyTextureToBuffer",
         cmd,
         Cmd::CopyTextureToBuffer {
-            src: tex_ref(src, src_view),
-            region: region(src_region),
+            src: Box::new(tex_ref(src, src_view)),
+            region: Box::new(region(src_region)),
             dst,
             row_stride,
             image_stride,
@@ -1871,6 +1871,6 @@ pub fn lookup(name: &str) -> Option<usize> {
 }
 
 const _: () = assert!(
-    std::mem::size_of::<Cmd>() <= 72,
+    std::mem::size_of::<Cmd>() <= 48,
     "Cmd grew: keep large payloads out of line"
 );

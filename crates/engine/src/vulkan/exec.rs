@@ -1189,7 +1189,7 @@ impl Ctx {
             Cmd::SetDepthClamp(e) => st.depth_clamp != *e,
             Cmd::SetPrimitiveRestart { enable, index } => st.prim_restart != enable.then_some(*index),
             Cmd::BindProgram { program, stages } => (stages & 0x1F != 0 || *stages == 0) && st.program != *program,
-            Cmd::BindVertexAttribState(a) => st.attribs != *a,
+            Cmd::BindVertexAttribState(a) => st.attribs != **a,
             Cmd::BindVertexStreamState(s) => st.streams != *s,
             Cmd::BindBlendState(b) => st.blend.get((b & 0xF) as usize).is_some_and(|o| o != b),
             Cmd::BindColorState(v) => st.color_state != *v,
@@ -1219,7 +1219,7 @@ impl Ctx {
             Cmd::SetRenderTargets { colors, depth } => {
                 self.end_pass();
                 self.st.colors = colors.clone();
-                self.st.depth = *depth;
+                self.st.depth = depth.as_deref().copied();
             }
             Cmd::ClearColor { index, rgba, mask } => self.clear_color(*index, *rgba, *mask),
             Cmd::ClearDepthStencil { depth, depth_mask, stencil, stencil_mask } => {
@@ -1261,7 +1261,7 @@ impl Ctx {
                 }
             }
             Cmd::BindVertexAttribState(a) => {
-                self.st.attribs = *a;
+                self.st.attribs = **a;
                 self.vl_cache = None;
             }
             Cmd::BindVertexStreamState(s) => {
