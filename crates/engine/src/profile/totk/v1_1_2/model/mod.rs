@@ -25,6 +25,8 @@ const LIST_SITE: usize = 0x12de2a0;
 const LIST_SITE_INSTRUCTION: u32 = 0xd10183ff; // sub sp, sp, #0x60
 /// The dispatch drawable's draw (dispatch.rs), checked by itself when no enclosing render list is.
 const DISPATCH_SITE: usize = 0x763718;
+const VFX_VIEW_SITE: usize = 0xa41a38;
+const VFX_VIEW_SITE_INSTRUCTION: u32 = 0xa9ba7bfd; // stp x29, x30, [sp, #-0x60]!
 const VFX_SITE: usize = 0x843c;
 const VFX_SITE_INSTRUCTION: u32 = 0xd10243ff; // sub sp, sp, #0x90
 const DISPATCH_SITE_INSTRUCTION: u32 = 0xd10143ff; // sub sp, sp, #0x50
@@ -260,6 +262,75 @@ pub unsafe extern "C" fn on_vfx(sys: usize, g: usize, em: usize, a3: usize, dp: 
     0
 }
 
+static VFXV_CALLS: AtomicU64 = AtomicU64::new(0);
+static VFXV_SAME: AtomicU64 = AtomicU64::new(0);
+static VFXV_DIFFERENT: AtomicU64 = AtomicU64::new(0);
+static VFXV_STOPS: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static VFXV_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// --verify-render-lists: the effect system's draw for a view (main+0xa41a38) predicted by itself.
+#[no_mangle]
+pub unsafe extern "C" fn on_vfx_view(sys0: usize, g: usize, groups: usize, n: u32, mask: u32, a3: usize, flags: u32) -> u32 {
+    if crate::nvn::api::capturing() {
+        return 0;
+    }
+    VFXV_CALLS.fetch_add(1, Ordering::Relaxed);
+    let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+    let mut result = Ok(());
+    let expected = crate::nvn::api::capture_dry(|| result = vfx::draw_view(&mut port, sys0, g, groups, n, mask, a3, flags));
+    match result {
+        Ok(()) => {
+            VFXV_EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            ring::watch();
+            crate::nvn::api::capture_collect();
+        }
+        Err(what) => {
+            ring::discard();
+            vfx::discard_blocks();
+            let mut s = VFXV_STOPS.lock().unwrap();
+            match s.iter_mut().find(|x| x.0 == what) {
+                Some(x) => x.1 += 1,
+                None => s.push((what, 1)),
+            }
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_vfx_view_end() -> u32 {
+    let Some(expected) = VFXV_EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
+    let got = crate::nvn::api::capture_collected();
+    let why = vfx::check_blocks();
+    let expected = match ring::resolve(expected) {
+        Ok(e) => e,
+        Err(why) => {
+            VFXV_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+            println!("[model-draw] vfx view mismatch: {why}");
+            return 0;
+        }
+    };
+    if expected == got && why.is_none() {
+        VFXV_SAME.fetch_add(1, Ordering::Relaxed);
+        return 0;
+    }
+    let k = VFXV_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+    if k < 6 {
+        println!("[model-draw] vfx view mismatch #{k}: {}", why.unwrap_or_default());
+        for i in 0..expected.len().max(got.len()) {
+            let (e, g) = (expected.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
+            if e != g {
+                println!("[model-draw]   ! port: {e}");
+                println!("[model-draw]     game: {g}");
+            }
+        }
+    }
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn on_vfx_end() -> u32 {
     let Some(expected) = VFX_EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
@@ -335,6 +406,18 @@ fn report() {
     if !dr.is_empty() {
         println!("[model-draw] drawables left to the game: {dr}");
     }
+    let wn = VFXV_CALLS.load(Ordering::Relaxed);
+    if wn != 0 {
+        let mut s = VFXV_STOPS.lock().unwrap().clone();
+        s.sort_by(|a, b| b.1.cmp(&a.1));
+        let stops: Vec<String> = s.iter().map(|(w, k)| format!("{w} {:.1}%", *k as f64 * 100.0 / wn as f64)).collect();
+        println!(
+            "[model-draw] vfx views checked by themselves: {wn}, {:.1}% identical, {} different; unported: {}",
+            VFXV_SAME.load(Ordering::Relaxed) as f64 * 100.0 / wn as f64,
+            VFXV_DIFFERENT.load(Ordering::Relaxed),
+            stops.join(", ")
+        );
+    }
     let vn = VFX_CALLS.load(Ordering::Relaxed);
     if vn != 0 {
         let mut s = VFX_STOPS.lock().unwrap().clone();
@@ -390,6 +473,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_end())) as usize;
         hook(base, mem_space, VFX_SITE, VFX_SITE_INSTRUCTION, pre, post, "Vfx emitter draw");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx_view(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_view_end())) as usize;
+        hook(base, mem_space, VFX_VIEW_SITE, VFX_VIEW_SITE_INSTRUCTION, pre, post, "Vfx view draw");
     }
     if d.verify_render_lists || d.verify_model_draws {
         let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc(_))) as usize;

@@ -520,6 +520,11 @@ unsafe fn ring_alloc(p: &mut Port, a: usize, core: i32, size: usize) -> Option<(
 
 /// main+0x2ebb8: `size` bytes from bump allocator `r` (into the overlay): (CPU address, GPU address).
 unsafe fn bump(p: &mut Port, r: usize, size: usize) -> Option<(usize, u64)> {
+    bump_into(p, r, size, 0)
+}
+
+/// main+0x2ebb8 with its GPU address struct `out` (in game memory: written to the overlay) when nonzero.
+unsafe fn bump_into(p: &mut Port, r: usize, size: usize, out: usize) -> Option<(usize, u64)> {
     if p.m.r8(r + 0x52d) == 0 || size == 0 {
         return None;
     }
@@ -539,6 +544,10 @@ unsafe fn bump(p: &mut Port, r: usize, size: usize) -> Option<(usize, u64)> {
     }
     let cpu = base.wrapping_add(off);
     let gpu = cpu.wrapping_sub(base).wrapping_add(p.m.r64(e + 0x188)) as u64;
+    if out != 0 {
+        p.m.w::<u64>(out, gpu);
+        p.m.w::<u64>(out + 8, p.m.r64(e + 0x190) as u64);
+    }
     let stat = (r as i64 + i * 8) as usize + 0x508;
     p.m.w::<u64>(stat, p.m.r64(stat).wrapping_add(step) as u64);
     Some((cpu, gpu))
@@ -812,9 +821,13 @@ unsafe fn sorted(p: &mut Port, g: usize, em: usize, prim: usize, dp: usize, lod:
     let mut list = 0u64;
     let mut n = 0u32;
     let t = p.m.f32(em + 0x28) - p.m.f32(em + 0x2c);
+    // The sort reads the view's depth row (+0x20..0x30) behind dp+0x10, which may be data the prediction wrote (the
+    // core's view constants): a copy through the overlay.
+    let v = p.m.r64(dp + 0x10);
+    let view: Vec<u8> = (0..0x30).map(|i| p.m.r8(v + i)).collect();
     p.query_f(
         p.base + SORT_PARTICLES,
-        &[em as u64, (&mut list) as *mut u64 as u64, (&mut n) as *mut u32 as u64, kind as u64, p.m.i32(dp + 0x20) as u32 as u64, p.m.r64(dp + 0x10) as u64],
+        &[em as u64, (&mut list) as *mut u64 as u64, (&mut n) as *mut u32 as u64, kind as u64, p.m.i32(dp + 0x20) as u32 as u64, view.as_ptr() as u64],
         &[t],
     );
     for k in 0..n as i32 as i64 {
@@ -864,6 +877,419 @@ unsafe fn repeated_draw(p: &mut Port, i: &Info) -> R<()> {
             bind_uniform(p, i.g, f as i32, 4, gpu, 0xc0);
         }
         draw_shaded(p, sys, i.g, em, sh, i.a3, i.dp, i.cache)?;
+    }
+    Ok(())
+}
+
+const VIEW_CONSTANTS: usize = 0xa426f8;
+const DEPTH_KEY: usize = 0x167d0;
+const SORT_SETS: usize = 0x296c0;
+const TICK: usize = 0x2b15810;
+const EXTRA_BLOCK_SLOTS: usize = 0x37ff704;
+const DRAW_HOOK: usize = 0x74b610;
+const VIEW_SCALE: usize = 0x463a288;
+const PFN_BIND_TEXTURES_DEFERRED: usize = 0x466e018;
+
+/// Copies `n` bytes into the overlay (and keeps them for the data check when `check`).
+unsafe fn copy_into(p: &mut Port, dst: usize, src: &[u8], check: bool) {
+    for (k, b) in src.iter().enumerate() {
+        p.m.w::<u8>(dst + k, *b);
+    }
+    if check {
+        BLOCKS.with(|bl| bl.borrow_mut().push((dst, src.to_vec())));
+    }
+}
+
+/// main+0xa41a38(sys0, g, groups, n, mask, a3, flags): the effect system's draw for one view: the view constants
+/// (main+0xa426f8, called) uploaded with the per-core extra blocks (main+0xa42240), the emitter sets of the groups
+/// collected with their depth keys (main+0xa41e1c), sorted and drawn (main+0xa4203c).
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn draw_view(p: &mut Port, sys0: usize, g: usize, groups: usize, n: u32, mask: u32, a3: usize, flags: u32) -> R<()> {
+    if (p.m.r8(sys0 + 0x378) >> 1) & 1 != 0 {
+        return Ok(());
+    }
+    let c = core(p);
+    let ci = c as i64 as usize;
+    let timed = p.m.r8(sys0 + ci + 0x194c) == 0;
+    if timed {
+        p.m.w::<u32>(sys0 + ci * 4 + 0x1940, 2);
+        let t = p.query(p.base + TICK, &[]);
+        p.m.w::<u64>(sys0 + ci * 8 + 0x1928, t);
+    }
+    let s = p.m.r64(sys0 + 0x18);
+    let r = p.m.r64(s + 0x98) + ci * 0x828;
+    if c < p.m.i32(s + 0x2f38) {
+        p.m.w::<u32>(r + 0x81c, 1u32.wrapping_shl(p.m.r32(a3 + 0xb8) & 31));
+    }
+    if p.m.i32(sys0 + 0x3b8) != -1 {
+        return Err("vfx view path override");
+    }
+    let v = p.m.r32(a3 + 0xc0);
+    if v != 0 && c < p.m.i32(s + 0x2f38) && (v & 0xff) < 3 {
+        p.m.w::<u8>(r + 0x821, v as u8);
+    }
+    let cb = p.m.r64(sys0 + 0x380);
+    let mut unknown = 0usize;
+    if cb == p.base + VIEW_TEXTURES {
+        unknown = view_textures(p, s, a3)?;
+    } else if cb != 0 {
+        return callback(cb, p.base);
+    }
+    let g8 = g + 8;
+    if (p.m.r8(sys0 + 0x37a) >> 1) & 1 != 0 {
+        return Err("vfx view constants (other path)");
+    }
+    // The view (3x4 at a3+0, transposed with a zero row), the projection (4x4 at a3+0x30, transposed), a vector
+    // (a3+0x70, w from +0x78) and five scalars.
+    let f = |o: usize| p.m.r32(a3 + o);
+    let mut va = [0u32; 16];
+    let mut vb = [0u32; 16];
+    for k in 0..4 {
+        for row in 0..3 {
+            va[k * 4 + row] = f(row * 16 + k * 4);
+        }
+        for row in 0..4 {
+            vb[k * 4 + row] = f(0x30 + row * 16 + k * 4);
+        }
+    }
+    let vc = [f(0x70), f(0x74), f(0x78), 0];
+    let mut out = vec![0u8; 0x300];
+    let scale = p.m.f32(p.m.r64(p.base + VIEW_SCALE));
+    p.query_f(
+        p.base + VIEW_CONSTANTS,
+        &[out.as_mut_ptr() as u64, va.as_ptr() as u64, vb.as_ptr() as u64, vc.as_ptr() as u64],
+        &[p.m.f32(a3 + 0x84), p.m.f32(a3 + 0x88), p.m.f32(s + 0x4000), p.m.f32(a3 + 0x90), scale],
+    );
+    // main+0xa42240(s, core, g8, constants, 1).
+    copy_into(p, r + 0x530, &out[..0x250], false);
+    if let Some((blk, gpu)) = bump_into(p, r, 0x250, r + 0x780) {
+        let q = |p: &Port, o: usize| p.m.r64(s + o).to_le_bytes();
+        for (dst, src) in [(0x200, 0x7c), (0x208, 0x84), (0x210, 0x910), (0x218, 0x918), (0x220, 0x920), (0x228, 0x928), (0x230, 0x930), (0x238, 0x938), (0x240, 0x940), (0x248, 0x948)] {
+            out[dst..dst + 8].copy_from_slice(&q(p, src));
+        }
+        copy_into(p, blk, &out[..0x250], true);
+        for st in [0, 4, 5] {
+            bind_uniform(p, g8, 5, st, gpu, 0x250);
+        }
+    }
+    let extra = p.m.r64(s + 0x8c8) + ci * 0xc0;
+    for k in 0..6usize {
+        let src = p.m.r64(extra + k * 8);
+        if src == 0 {
+            continue;
+        }
+        let size = p.m.r64(extra + 0x30 + k * 8);
+        if let Some((blk, gpu)) = bump_into(p, r, size, r + 0x790 + k * 0x10) {
+            let bytes: Vec<u8> = (0..size).map(|i| p.m.r8(src + i)).collect();
+            copy_into(p, blk, &bytes, src != unknown);
+            let slot = p.m.r32(p.base + EXTRA_BLOCK_SLOTS + k * 4) as i32;
+            for st in [0, 4, 5] {
+                bind_uniform(p, g8, slot, st, gpu, size as u64);
+            }
+        }
+    }
+    let consts = out.as_ptr() as usize;
+    for k in 0..n.min(i32::MAX as u32) as usize {
+        collect(p, s, c, p.m.i32(groups + k * 4), mask, sys0 + 0x370, consts)?;
+    }
+    if flags & 1 != 0 {
+        collect(p, s, c, 0x3f, mask, sys0 + 0x370, consts)?;
+    }
+    p.m.w::<u64>(s + 0x968, (p.base + DRAW_HOOK) as u64);
+    draw_sets(p, s, c, g8, sys0 + 0x1998, a3)?;
+    if c < p.m.i32(s + 0x2f38) {
+        p.m.w::<u8>(r + 0x821, 0);
+    }
+    if timed {
+        let t = p.query(p.base + TICK, &[]);
+        let slot = sys0 + p.m.i32(sys0 + ci * 4 + 0x1940) as i64 as usize * 8 + 0x18d8;
+        let start = p.m.r64(sys0 + ci * 8 + 0x1928) as u64;
+        p.m.w::<u64>(slot, (t.wrapping_sub(start)).wrapping_add(p.m.r64(slot) as u64));
+        p.m.w::<u32>(sys0 + ci * 4 + 0x1940, u32::MAX);
+    }
+    Ok(())
+}
+
+/// main+0xa41e1c(s, core, group, mask, filter): the group's emitter sets in the view (core's view bits +0x81c, the
+/// mask, the filter, no owner +0x28) appended to the core's draw list with their sort keys: the system's key
+/// callback (+0x990; TotK's main+0x26a7c00, distance from the camera, called with `consts`, a copy of the core's view
+/// constants +0x530), else the depth along the view.
+#[allow(clippy::too_many_arguments)]
+unsafe fn collect(p: &mut Port, s: usize, c: i32, group: i32, mask: u32, filter: usize, consts: usize) -> R<()> {
+    let mut set = p.m.r64((s as i64 + group as i64 * 8) as usize + 0xb8);
+    if set == 0 {
+        return Ok(());
+    }
+    let key_cb = p.m.r64(s + 0x990);
+    if key_cb != 0 && key_cb != p.base + DISTANCE_KEY {
+        return callback(key_cb, p.base);
+    }
+    let r = p.m.r64(s + 0x98) + c as i64 as usize * 0x828;
+    while set != 0 {
+        let next = p.m.r64(set);
+        if p.m.r32(r + 0x81c) & p.m.r32(set + 0x34) != 0
+            && p.m.r32(set + 0x30) & mask != 0
+            && p.m.r64(filter) & p.m.r64(set + 0x20) != 0
+            && p.m.r64(set + 0x28) as i64 == -1
+        {
+            let list = p.m.r64(r + 0x808);
+            let n = p.m.i32(r + 0x814) as i64;
+            let e = (list as i64 + n * 16) as usize;
+            p.m.w::<u64>(e, set as u64);
+            if key_cb != 0 {
+                let key = p.query(key_cb, &[set as u64, consts as u64]) as u32;
+                p.m.w::<u32>(e + 8, key);
+                p.m.w::<i32>(r + 0x814, n as i32 + 1);
+                set = next;
+                continue;
+            }
+            let a = [p.m.f32(set + 0x130), p.m.f32(set + 0x134), p.m.f32(set + 0x138), p.m.f32(set + 0x13c)];
+            let b = [p.m.f32(r + 0x550), p.m.f32(r + 0x554), p.m.f32(r + 0x558), 0.0];
+            let m = [a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3]];
+            let mut d = (m[0] + m[2]) + (m[1] + m[3]);
+            d += p.m.f32(r + 0x55c);
+            d = p.m.f32(p.m.r64(p.m.r64(set + 0x10)) + 0xa4) + d;
+            d = p.m.f32(set + 0x260) + d;
+            d = super::grid::fmin(d, 0.0);
+            let key = p.query_f(p.base + DEPTH_KEY, &[], &[d]) as u32 | (p.m.r8(set + 0x66) as u32) << 24;
+            p.m.w::<u32>(e + 8, key);
+            p.m.w::<i32>(r + 0x814, n as i32 + 1);
+        }
+        set = next;
+    }
+    p.m.w::<u32>(r + 0x818, p.m.r32(r + 0x818) | mask);
+    Ok(())
+}
+
+/// The core's view state block (s+0xa0, 0x30 bytes per core) refreshed from its per-core state.
+unsafe fn view_state(p: &mut Port, s: usize, c: i32) -> usize {
+    if c >= p.m.i32(s + 0x2f38) {
+        return 0;
+    }
+    let r = p.m.r64(s + 0x98) + c as i64 as usize * 0x828;
+    let st = p.m.r64(s + 0xa0) + c as i64 as usize * 0x30;
+    p.m.w::<u32>(st + 0x28, p.m.r32(r + 0x81c));
+    p.m.w::<u8>(st + 0x2c, p.m.r8(r + 0x821));
+    p.m.w::<u32>(st + 0x24, p.m.r32(r + 0x810));
+    p.m.w::<u64>(st, p.m.r64(r + 0x7f0) as u64);
+    p.m.w::<u64>(st + 8, p.m.r64(r + 0x7f8) as u64);
+    st
+}
+
+/// main+0xa4203c(s, core, g8, cache, 1, a3): the core's draw list sorted (main+0x296c0, run on a copy) and each set
+/// drawn (main+0xa3a8); the list and the view's group bits cleared.
+unsafe fn draw_sets(p: &mut Port, s: usize, c: i32, g8: usize, cache: usize, a3: usize) -> R<()> {
+    let r = p.m.r64(s + 0x98) + c as i64 as usize * 0x828;
+    let n = p.m.i32(r + 0x814);
+    if n != 0 {
+        let list = p.m.r64(r + 0x808);
+        let mut v: Vec<[u64; 2]> = (0..n.max(0) as usize).map(|k| [p.m.r64(list + k * 16) as u64, p.m.r64(list + k * 16 + 8) as u64]).collect();
+        let functor = [0u64; 2];
+        let b = v.as_mut_ptr() as u64;
+        p.query(p.base + SORT_SETS, &[b, b + v.len() as u64 * 16, functor.as_ptr() as u64]);
+        for (k, e) in v.iter().enumerate() {
+            p.m.w::<u64>(list + k * 16, e[0]);
+            p.m.w::<u64>(list + k * 16 + 8, e[1]);
+        }
+        let st = view_state(p, s, c);
+        let mut k = 0usize;
+        while (k as i64) < p.m.i32(r + 0x814) as i64 {
+            let set = p.m.r64(p.m.r64(r + 0x808) + k * 16);
+            k += 1;
+            draw_set(p, s, set, g8, p.m.r32(r + 0x818), a3, st, cache)?;
+        }
+        p.m.w::<i32>(r + 0x814, 0);
+    }
+    p.m.w::<u32>(r + 0x818, 0);
+    Ok(())
+}
+
+/// main+0xa3a8: a set's emitters (from +8, next +8), each through main+0xa238.
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_set(p: &mut Port, s: usize, set: usize, g8: usize, prio: u32, a3: usize, st: usize, cache: usize) -> R<()> {
+    if p.m.r8(p.m.r64(set + 0x10) + 0x23) == 0 && p.m.r8(set + 0x65) == 0x3f {
+        return Ok(());
+    }
+    if p.m.f32(set + 0x4c).abs() <= 1.1920929e-07 {
+        return Ok(());
+    }
+    let cull = p.m.r64(s + 0x988);
+    if cull != 0 {
+        if cull != p.base + SET_CULL {
+            return callback(cull, p.base);
+        }
+        // TotK's set cull (bounds against the view): reads only, called with {set, a3}.
+        let info = [set as u64, a3 as u64];
+        if p.query(cull, &[info.as_ptr() as u64]) & 1 == 0 {
+            return Ok(());
+        }
+    }
+    let mut em = p.m.r64(set + 8);
+    while em != 0 {
+        let next = p.m.r64(em + 8);
+        let children = (p.m.r8(em + 0x30) >> 4) & 1 != 0 && p.m.r8(p.m.r64(em + 0x40) + 0xb5) != 0;
+        if children {
+            return Err("vfx child emitters");
+        }
+        draw_candidate(p, s, set, g8, em, prio, a3, st, cache)?;
+        em = next;
+    }
+    Ok(())
+}
+
+/// main+0x4108: whether the emitter is past its life.
+unsafe fn expired(p: &Port, em: usize) -> bool {
+    let f = p.m.r32(em + 0x30);
+    if (f >> 19) & 1 == 0 {
+        f & 2 == 0 || p.m.f32(em + 0xa8) + (p.m.i32(p.m.r64(em + 0x40) + 0xc0) as f32) < p.m.f32(em + 0x28) - p.m.f32(em + 0x2c)
+    } else {
+        f & 2 == 0
+    }
+}
+
+/// main+0xa238: the emitter drawn through the system's draw hook (main+0x74b610) when it is live, in the view's bits,
+/// its priority group, and has particles.
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_candidate(p: &mut Port, s: usize, set: usize, g8: usize, em: usize, prio: u32, a3: usize, st: usize, cache: usize) -> R<()> {
+    let cnt = p.m.i32(em + 0x98);
+    let skip = !p.m.r32(em + 0x30) & 0x2004 != 0
+        || expired(p, em)
+        || p.m.f32(em + 0x80) <= 0.0
+        || (cnt < 1 && (cnt != 0 || (p.m.r8(p.m.r64(em + 0x40) + 0xb6) as u32).wrapping_sub(1) > 2));
+    if p.m.r64(em + 0x50) == 0 || skip {
+        return Ok(());
+    }
+    if p.m.r32(st + 0x28) & p.m.r32(em + 0x3c) == 0 || 1u32.wrapping_shl(p.m.r32(em + 0x38) & 31) & prio == 0 {
+        return Ok(());
+    }
+    if p.m.r64(s + 0x978) != 0 {
+        return callback(p.m.r64(s + 0x978), p.base);
+    }
+    let hook = p.m.r64(s + 0x968);
+    if hook != p.base + DRAW_HOOK {
+        return callback(hook, p.base);
+    }
+    // main+0x74b610 with {g8, s, 0, em, a3, st, cache, set+0x50, path st+0x2c, 1, 0}.
+    let path = p.m.r8(st + 0x2c);
+    let w = p.m.r64(a3 + 0xb0);
+    let c = core(p);
+    let st2 = view_state(p, s, c);
+    let sh = if path == 3 { 0 } else { p.m.r64(p.m.r64(em + 0x40) + path as usize * 8 + 0x10) };
+    if sh == 0 {
+        return Err("vfx draw hook without shader");
+    }
+    p.set_shader(w + 8, p.m.r64(sh), 0);
+    for (o, lo, hi, k) in [(0xd0usize, 0xe, 0x50, 0usize), (0xd4, 0xf, 0x51, 8)] {
+        let idx = p.m.i32(a3 + o);
+        if idx == -1 {
+            continue;
+        }
+        let m = p.m.r8(sh + lo) as u32 | (p.m.r8(sh + hi) as u32) << 8 | 0xffff_0000;
+        if bind_deferred(p, w, p.m.r64(a3 + 200), idx, m) {
+            p.m.w::<u64>(st2 + k, u64::MAX);
+        }
+    }
+    let _ = (set, g8);
+    // main+0x4248(em, w+8, 1, a3, st2, s+0x78, s+0x7c, cache).
+    let p7 = s + 0x7c;
+    if p.m.r8(em + 0x32) & 1 != 0 && p.m.r8(p7 + 0x11) == 0 && p.m.r8(p7 + 0x10) != 0 {
+        return Err("vfx emitter shadow path");
+    }
+    if p.m.r8(s + 0x78) != 0 {
+        draw_emitter(p, p.m.r64(em + 0x50), w + 8, em, a3, st2, cache)?;
+    }
+    Ok(())
+}
+
+/// main+0x74fd08(w, table, index, mask): the deferred texture table entry bound to the mask's slots of stages 0, 1,
+/// 2 and 5; whether the mask was not all 0xff.
+unsafe fn bind_deferred(p: &mut Port, w: usize, table: usize, index: i32, mask: u32) -> bool {
+    if mask == u32::MAX {
+        return false;
+    }
+    let cmd = p.m.r64(w + 0xb8);
+    let e = (table as i64 + index as i64 * 8) as u64;
+    for (k, st) in [(0, 0u64), (1, 1), (2, 2), (3, 5)] {
+        let b = (mask >> (k * 8)) & 0xff;
+        if b != 0xff {
+            p.m.w::<u8>(cmd + 0x10, 1);
+            p.call(p.pfn(PFN_BIND_TEXTURES_DEFERRED), &[cmd as u64, st, b as u8 as i8 as i64 as u64, 1, e]);
+        }
+    }
+    true
+}
+
+const VIEW_TEXTURES: usize = 0x74e8f0;
+const DISTANCE_KEY: usize = 0x26a7c00;
+const SET_CULL: usize = 0x1307170;
+const RENDER_SCENE: usize = 0x462bf00;
+
+/// main+0x74e8f0 (the system's per-view callback): the scene's effect parameter block (main+0x74eee8: 0x3e0 bytes from
+/// the core's allocator registered as the core's extra block 1; its contents, main+0x74f158, are the game's: the
+/// returned address is excluded from the data check) and the scene's effect textures, bound directly
+/// (main+0x74ec98) or through the deferred texture table.
+unsafe fn view_textures(p: &mut Port, s: usize, a3: usize) -> R<usize> {
+    let gr = p.m.r64(p.m.r64(p.base + RENDER_GLOBALS));
+    let s2 = p.m.r64(gr + 0x18);
+    let c = core(p);
+    let Some((blk, _)) = ring_alloc(p, s2, c, 0x3e0) else { return Err("vfx scene block allocation") };
+    if (p.m.r8(gr + 0x37a) >> 1) & 1 != 0 {
+        return Err("vfx scene block (other path)");
+    }
+    let e = p.m.r64(s2 + 0x8c8) + c as i64 as usize * 0xc0;
+    p.m.w::<u64>(e + 8, blk as u64);
+    p.m.w::<u64>(e + 0x38, 0x3e0);
+    let sg = p.m.r64(p.m.r64(p.base + SCENE_GLOBALS));
+    if p.m.i32(sg + 0x2ec) < 0 {
+        return Err("vfx view adjust");
+    }
+    let rs = p.m.r64(p.m.r64(p.base + RENDER_SCENE));
+    p.m.w::<u64>(rs + 0x64e74, 0);
+    p.m.w::<u32>(rs + 0x64e7c, 0);
+    let w = p.m.r64(a3 + 0xb0);
+    let d8 = p.m.r64(a3 + 0xd8);
+    let l2 = p.m.r64(d8 + 8);
+    if l2 == 0 {
+        return Ok(blk);
+    }
+    let l3 = p.m.r64(d8 + 0x100);
+    if l3 != 0 {
+        for (o, slot) in [(0xe0usize, 9), (0x110, -1), (0xf0, 0x13), (0x100, 0xd), (0x108, 0xe), (0xd8, 0x12)] {
+            let t = p.m.r64(l3 + o);
+            if t == 0 {
+                continue;
+            }
+            if slot == -1 {
+                // main+0x74efd4: the scene's uniform block object, element 0, at slot 4 of stages 0, 1, 2 and 5.
+                p.bind_uniform_block(t, w, 0x0404_0404, 0)?;
+                continue;
+            }
+            scene_texture(p, w, slot, t)?;
+        }
+    }
+    let e0 = p.m.r64(a3 + 0xe0);
+    if e0 == 0 || (p.m.r8(e0 + 0x41) >> 1) & 1 == 0 {
+        for (slot, o) in [(0xc, 0x28usize), (7, 0x58), (6, 0xb8), (0xf, 0x80), (0x10, 0xa8), (0x11, 0x60), (0x14, 0x30)] {
+            scene_texture(p, w, slot, p.m.r64(l2 + o))?;
+        }
+    } else {
+        for (o, m) in [(0x199usize, 0xffff0c0cu32), (0x1f9, 0xffff0707), (0x2b9, 0xffff0606), (0x249, 0xffff0f0f), (0x299, 0xffff1010), (0x209, 0xffff1111), (0x1a9, 0xffff1414)] {
+            bind_deferred(p, w, p.m.r64(a3 + 200), p.m.i8(l2 + o) as i32, m);
+        }
+    }
+    Ok(blk)
+}
+
+/// main+0x74ec98(w, slot, tex): the texture (id +0x58, sampler +0xea) at `slot` of stages 0, 4 and 5, when it is ready
+/// (a load the game finishes there is not predicted).
+unsafe fn scene_texture(p: &mut Port, w: usize, slot: i32, tex: usize) -> R<()> {
+    if p.m.r32(tex + 0xe4) != 0 {
+        return Err("vfx texture still loading");
+    }
+    let id = [p.m.i32(tex + 0x58) as u32, 0];
+    let smp = [p.m.r16(tex + 0xea) as i16 as i32 as u32, 0];
+    for st in [0, 4, 5] {
+        bind_texture(p, w + 8, slot, st, id.as_ptr() as usize, smp.as_ptr() as usize);
     }
     Ok(())
 }
