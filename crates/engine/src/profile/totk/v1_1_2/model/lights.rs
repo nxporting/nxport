@@ -6,8 +6,8 @@ use super::draw::{Port, R};
 use super::vfx::{program_apply, program_block, shape_draw};
 
 /// Pointer to the volume shapes (vertex states and buffers, 0x5a8 apart from +8) and to their index streams.
-const SHAPES: usize = 0x46323a0;
-const STREAMS: usize = 0x46323a8;
+pub(super) const SHAPES: usize = 0x46323a0;
+pub(super) const STREAMS: usize = 0x46323a8;
 
 pub(super) unsafe fn draw(p: &mut Port, obj: usize, w: usize, view: u32, arg: usize) -> R<()> {
     let v = if p.m.r32(obj + 0x38) <= view { 0 } else { view } as usize;
@@ -69,7 +69,7 @@ unsafe fn light(p: &mut Port, prog: usize, w: usize, record: usize) -> R<()> {
 }
 
 /// The shape's vertex states and buffers (main+0xf216b4 with the states before it).
-unsafe fn shape_state(p: &mut Port, shape: usize, w: usize) {
+pub(super) unsafe fn shape_state(p: &mut Port, shape: usize, w: usize) {
     let cmd = p.m.r64(w + 0xb8);
     p.bind_vertex_attribs(cmd, 0x10, shape + 0x11c);
     p.bind_vertex_streams(cmd, 0x10, shape + 0x160);
@@ -86,7 +86,7 @@ unsafe fn shape_state(p: &mut Port, shape: usize, w: usize) {
 }
 
 /// main+0x966e70(stream, w, 1): the index stream's draw (prim +0xc, type +8, count +0x28, buffer +0x30).
-unsafe fn stream_draw(p: &mut Port, stream: usize, w: usize) {
+pub(super) unsafe fn stream_draw(p: &mut Port, stream: usize, w: usize) {
     let count = p.m.i32(stream + 0x28);
     if count == 0 {
         return;
