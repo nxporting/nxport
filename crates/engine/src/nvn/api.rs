@@ -2730,6 +2730,9 @@ unsafe fn record_generic(
     ) {
         return;
     }
+    if buffer(cmd as usize, || RecordedNvnCommand { name, typed: None, args: Some(Box::new([a1, a2, a3, a4, a5])) }) {
+        return;
+    }
     if capture(|| {
         // Registers past a call's arguments hold whatever the caller left there.
         let n = match name {
@@ -2776,8 +2779,44 @@ enum Capture {
     Collect(Vec<String>),
     /// Typed commands are collected and not recorded (`ok` false once an untyped command came).
     Typed { cmds: Vec<crate::nvn::cmd::Cmd>, ok: bool },
-    /// Commands are neither recorded nor collected.
-    Discard,
+    /// Commands are kept, with their command buffer, to be recorded later (commit_buffered) or dropped.
+    Buffer(Vec<(usize, RecordedNvnCommand)>),
+}
+
+/// Commands kept by capture_buffered.
+pub(crate) struct Buffered(Vec<(usize, RecordedNvnCommand)>);
+
+/// Runs `f` with this thread's commands kept instead of recorded.
+pub(crate) fn capture_buffered<R>(f: impl FnOnce() -> R) -> (R, Buffered) {
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Buffer(Vec::new())));
+    let r = f();
+    match CAPTURE.with(|c| c.borrow_mut().take()) {
+        Some(Capture::Buffer(v)) => (r, Buffered(v)),
+        _ => (r, Buffered(Vec::new())),
+    }
+}
+
+/// Records commands kept by capture_buffered, in order.
+pub(crate) unsafe fn commit_buffered(b: Buffered) {
+    for (cmd, op) in b.0 {
+        let cmd = cmd as *mut NvnCommandBuffer;
+        if cmd.is_null() || (*cmd).ops == 0 {
+            continue;
+        }
+        (*((*cmd).ops as *mut Vec<RecordedNvnCommand>)).push(op);
+        (*cmd).command_used += 32;
+    }
+}
+
+/// Keeps the command for capture_buffered (true) when this thread is buffering.
+fn buffer(cmd: usize, op: impl FnOnce() -> RecordedNvnCommand) -> bool {
+    CAPTURE.with(|c| match c.borrow_mut().as_mut() {
+        Some(Capture::Buffer(v)) => {
+            v.push((cmd, op()));
+            true
+        }
+        _ => false,
+    })
 }
 
 thread_local! {
@@ -2792,13 +2831,6 @@ pub fn capture_dry(f: impl FnOnce()) -> Vec<String> {
         Some(Capture::Dry(v)) => v,
         _ => Vec::new(),
     }
-}
-
-/// Runs `f` with this thread's commands dropped (neither recorded nor collected).
-pub fn capture_discard(f: impl FnOnce()) {
-    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Discard));
-    f();
-    CAPTURE.with(|c| *c.borrow_mut() = None);
 }
 
 /// `capture_dry` inside another capture of this thread (which it leaves as it was).
@@ -2894,7 +2926,7 @@ fn capture(text: impl FnOnce() -> String) -> bool {
                 *ok = false;
                 true
             }
-            Some(Capture::Discard) => true,
+            Some(Capture::Buffer(_)) => true,
             Some(Capture::Watch { expected, got, .. }) => {
                 got.push(text());
                 if got.len() == expected.len() {
@@ -2933,6 +2965,11 @@ pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::
     if typed_capture {
         return;
     }
+    let mut typed = Some(typed);
+    if buffer(cmd, || RecordedNvnCommand { name, typed: typed.take(), args: None }) {
+        return;
+    }
+    let typed = typed.unwrap();
     if capture(|| {
         let mut t = typed.clone();
         if let crate::nvn::cmd::Cmd::DrawElementsInstanced { caller, .. } = &mut t {
