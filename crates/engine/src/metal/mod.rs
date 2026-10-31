@@ -3353,18 +3353,30 @@ impl Gfx {
                 Cmd::SetBlendColor(c) => {
                     st.blend_color = *c;
                 }
+                Cmd::RenderState(r) => {
+                    for &b in &r.blend {
+                        st.blend_states[(b & 7) as usize] = b;
+                    }
+                    st.color_state = r.color;
+                    st.channel_mask = r.channel_mask;
+                    st.blend_color = r.blend_color;
+                    st.depth_stencil = r.depth_stencil;
+                    if let Some((mask, reference)) = r.stencil {
+                        st.stencil = [[reference; 2], [mask; 2], [0xff; 2]];
+                    }
+                    st.polygon = r.polygon;
+                    st.polygon_offset = r.polygon_offset;
+                    st.depth_clamp = r.depth_clamp;
+                }
+                Cmd::VertexInput(v) => apply_vertex_input(st, v),
                 Cmd::ModelDraw(m) => {
                     match &m.material {
-                        // The material from the game's objects: its program list, then its bindings (replay side B
-                        // runs the recorded list instead).
+                        // The material from the game's objects: the model's vertex input, then the material's
+                        // bindings (replay side B runs the recorded list instead).
                         Some(mat) if !replay_b() => {
                             for c in mat.iter() {
                                 match c {
-                                    Cmd::CallCommands(hs) => {
-                                        for h in hs {
-                                            self.run_list(st, cb, *h, depth + 1);
-                                        }
-                                    }
+                                    Cmd::VertexInput(v) => apply_vertex_input(st, v),
                                     Cmd::BindTexture { stage, index, handle } => {
                                         st.textures_bound.insert((*stage, *index), *handle);
                                     }
@@ -8293,5 +8305,13 @@ fn dump_main_image() {
             path.display()
         ),
         Err(e) => println!("[!] main image dump to {} failed: {}", path.display(), e),
+    }
+}
+
+fn apply_vertex_input(st: &mut State, v: &crate::nvn::cmd::VertexInput) {
+    st.vertex_attribs = v.attribs;
+    st.vertex_streams.clone_from(&v.streams);
+    for &(i, a, n) in &v.buffers {
+        st.vertex_buffers.insert(i, (a, n));
     }
 }

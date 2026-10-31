@@ -281,14 +281,42 @@ pub enum Cmd {
     /// A render unit of TotK's model renderer (the port, --native-model-draws): its list called, then its index ranges
     /// drawn, as CallCommands([unit]) followed by DrawElementsInstanced per range.
     ModelDraw(Box<ModelDraw>),
+    /// A whole render state from TotK's graphics context in one command (the port, --native-model-draws), in place of
+    /// the state object binds sead::GraphicsContext::apply records.
+    RenderState(Box<RenderState>),
+    /// A TotK model's vertex input (the port, --native-model-draws): attribute and stream states and vertex buffers.
+    VertexInput(Box<VertexInput>),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VertexInput {
+    pub attribs: AttribState,
+    pub streams: Vec<u64>,
+    /// (index, address, size)
+    pub buffers: smallvec::SmallVec<[(i32, u64, usize); 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RenderState {
+    /// Blend states of the targets that blend (target index in bits 0..4).
+    pub blend: smallvec::SmallVec<[u64; 4]>,
+    pub color: u32,
+    pub channel_mask: u32,
+    pub blend_color: [f32; 4],
+    pub depth_stencil: u64,
+    /// Stencil value mask and reference for both faces (write mask 0xff), when the stencil test is on.
+    pub stencil: Option<(u8, u8)>,
+    pub polygon: u32,
+    pub polygon_offset: (f32, f32, f32),
+    pub depth_clamp: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ModelDraw {
     pub unit: u64,
     pub ranges: smallvec::SmallVec<[ModelRange; 2]>,
-    /// The unit's material, from the game's objects (in place of running `unit`): its bindings and the program
-    /// list it calls. Captures keep only `unit`.
+    /// The unit's material, from the game's objects (in place of running `unit`): the model's vertex input and the
+    /// material's bindings. Captures keep only `unit`.
     #[serde(skip)]
     pub material: Option<std::sync::Arc<Vec<Cmd>>>,
 }

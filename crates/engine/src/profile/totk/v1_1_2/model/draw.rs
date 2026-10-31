@@ -396,6 +396,12 @@ impl Port {
     /// sead::GraphicsContext::apply (main+0x74d980): `g` is the context's render state, `w` the command buffer wrapper.
     pub(super) unsafe fn apply_graphics_context(&mut self, g: usize, w: usize) {
         let cmd = self.m.r64(w + 0xb8) as u64;
+        if self.native {
+            let r = self.render_state(g);
+            self.flush();
+            crate::nvn::api::record_typed("nvnCommandBufferRenderState", cmd as usize, crate::nvn::cmd::Cmd::RenderState(Box::new(r)));
+            return;
+        }
         let mut blend = [0u64; 8];
         let mut color = [0u64; 8];
         let mut mask = [0u64; 8];
@@ -459,6 +465,88 @@ impl Port {
         clamp(cmd, self.m.f32(g + 0x58), self.m.f32(g + 0x5c), self.m.f32(g + 0x60));
         self.call(f(self, PFN_SET_DEPTH_CLAMP), &[cmd, b(0x6e)]);
         let _ = (&mut blend, &mut color, &mut mask, &mut ds, &mut poly);
+    }
+
+    /// The vertex input sub_764f4c binds for model `m` (when its +0xaf9 is set): the attribute and stream states of
+    /// its +0xa58 record, then each vertex buffer record (+0x8d8, 0x18 bytes: buffer object, size at +0xc).
+    pub(super) unsafe fn vertex_input(&self, m: usize) -> Option<crate::nvn::cmd::VertexInput> {
+        if self.m.r8(m + 0xaf9) == 0 {
+            return None;
+        }
+        let r = m + 0xa58;
+        let mut attribs = crate::nvn::cmd::AttribState::default();
+        let n = self.m.i32(r + 8).clamp(0, crate::nvn::cmd::AttribState::MAX as i32) as usize;
+        attribs.n = n as u8;
+        let a = self.m.r64(r + 0x18);
+        for i in 0..n {
+            attribs.v[i] = self.m.r32(a + i * 4);
+        }
+        let s = self.m.r64(r + 0x10);
+        let streams = (0..self.m.i32(r + 4).max(0) as usize).map(|i| self.m.r64(s + i * 8) as u64).collect();
+        let buffers = (0..self.m.r8(m + 0x8d0) as usize)
+            .map(|i| {
+                let e = m + 0x8d8 + i * 0x18;
+                let addr = self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[self.m.r64(self.m.r64(e) + 8) as u64]);
+                (i as i32, addr, self.m.r32(e + 0xc) as usize)
+            })
+            .collect();
+        Some(crate::nvn::cmd::VertexInput { attribs, streams, buffers })
+    }
+
+    /// The render state apply_graphics_context binds, packed as the state objects it fills (same calls, same order).
+    unsafe fn render_state(&self, g: usize) -> crate::nvn::cmd::RenderState {
+        use crate::nvn::state::*;
+        let b = |o: usize| self.m.r8(g + o);
+        let mut blend = smallvec::SmallVec::new();
+        let mut bs = 0u64;
+        let mut color = 0u32;
+        hle_nvnBlendStateSetDefaults(&mut bs as *mut u64 as *mut BlendState);
+        hle_nvnColorStateSetDefaults(&mut color as *mut u32 as *mut ColorState);
+        let targets = self.m.r32(g + 4);
+        for i in 0..8 {
+            if (targets >> i) & 1 == 0 {
+                continue;
+            }
+            let t = |o: usize| b(i * 6 + o) as i32;
+            let s = &mut bs as *mut u64 as *mut BlendState;
+            hle_nvnColorStateSetBlendEnable(&mut color as *mut u32 as *mut ColorState, i as i32, 1);
+            hle_nvnBlendStateSetBlendTarget(s, i as i32);
+            hle_nvnBlendStateSetBlendFunc(s, t(0x28), t(0x2a), t(0x29), t(0x2b));
+            hle_nvnBlendStateSetBlendEquation(s, t(0x2c), t(0x2d));
+            blend.push(bs);
+        }
+        hle_nvnColorStateSetLogicOp(&mut color as *mut u32 as *mut ColorState, 3);
+        let mut mask = 0u32;
+        let cm = self.m.r32(g + 0x1c);
+        for i in 0..8 {
+            let v = (cm >> (i * 4)) as u8;
+            hle_nvnChannelMaskStateSetChannelMask(&mut mask as *mut u32 as *mut ChannelMaskState, i, v & 1, (v >> 1) & 1, (v >> 2) & 1, (v >> 3) & 1);
+        }
+        let mut ds = 0u64;
+        let d = &mut ds as *mut u64 as *mut DepthStencilState;
+        hle_nvnDepthStencilStateSetDepthTestEnable(d, b(0));
+        hle_nvnDepthStencilStateSetDepthWriteEnable(d, b(1));
+        hle_nvnDepthStencilStateSetDepthFunc(d, b(0x64) as i32);
+        hle_nvnDepthStencilStateSetStencilTestEnable(d, b(3));
+        hle_nvnDepthStencilStateSetStencilFunc(d, 3, b(0x6a) as i32);
+        hle_nvnDepthStencilStateSetStencilOp(d, 3, b(0x67) as i32, b(0x68) as i32, b(0x69) as i32);
+        let mut poly = 0u32;
+        let pp = &mut poly as *mut u32 as *mut PolygonState;
+        hle_nvnPolygonStateSetCullFace(pp, b(0x65) as i32);
+        hle_nvnPolygonStateSetFrontFace(pp, 1);
+        hle_nvnPolygonStateSetPolygonMode(pp, b(0x6b) as i32);
+        hle_nvnPolygonStateSetPolygonOffsetEnables(pp, ((b(0x6d) & 1) as i32).wrapping_neg() & 7);
+        crate::nvn::cmd::RenderState {
+            blend,
+            color,
+            channel_mask: mask,
+            blend_color: [self.m.f32(g + 8), self.m.f32(g + 12), self.m.f32(g + 16), self.m.f32(g + 20)],
+            depth_stencil: ds,
+            stencil: (b(3) != 0).then(|| (self.m.r32(g + 0x24) as u8, self.m.r32(g + 0x20) as u8)),
+            polygon: poly,
+            polygon_offset: (self.m.f32(g + 0x58), self.m.f32(g + 0x5c), self.m.f32(g + 0x60)),
+            depth_clamp: b(0x6e) != 0,
+        }
     }
 
     /// A texture whose setup is pending (+0xe4: flags, bit 31 a lock) before it is bound: Err when predicting; the dry
@@ -749,8 +837,13 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, shape: u32, flags: u
         if instances < 2 {
             instances = 1;
             if p.m.r8(list_rec + 0x50) & 1 != 0 && p.m.i8(c + 0x40) < 0 {
-                let cmd = p.m.r64(w + 0xb8);
-                p.call_commands(cmd, list_rec + 0x48);
+                // The shape's list (sub_758644's draw of all its sub-meshes, recorded at load): natively that draw.
+                if p.native {
+                    let sh = p.m.r64(p.m.r64(model + 8) + 0x18) + s * 0x38;
+                    p.draw_shape(sh, w + 8, 0, p.m.r16(sh + 0x34) as u32, 1, 0);
+                } else {
+                    p.call_commands(p.m.r64(w + 0xb8), list_rec + 0x48);
+                }
                 direct = false;
             }
         }

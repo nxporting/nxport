@@ -167,18 +167,26 @@ pub(super) unsafe fn check_list(p: &Port, d: usize, w: usize, pass: usize, b: i3
 type Description = std::sync::Arc<Vec<crate::nvn::cmd::Cmd>>;
 type Recording = std::sync::Weak<crate::nvn::api::RecordedCommandList>;
 
-/// Native material descriptions by list handle, with the recording they describe (the game records a changed
-/// material again at the same command memory, which keeps the handle).
-static DESCRIBED: std::sync::Mutex<Option<std::collections::HashMap<u64, (Recording, Description)>>> =
+/// Is `rec` still the recording list `handle` refers to?
+fn current(handle: u64, rec: &Recording) -> bool {
+    crate::nvn::api::command_list_peek(handle).is_some_and(|r| rec.upgrade().is_some_and(|w| std::sync::Arc::ptr_eq(&r, &w)))
+}
+
+/// Native material descriptions by list handle, with the recording they describe and the pass's program list (the
+/// game records a changed material or vertex input again at the same command memory, which keeps the handle).
+static DESCRIBED: std::sync::Mutex<Option<std::collections::HashMap<u64, (Recording, Option<(u64, Recording)>, Description)>>> =
     std::sync::Mutex::new(None);
 
-/// The material list `handle` (pass `pass`, slot `b` of unit `d`) described from the game's objects: the pass's
-/// program list call, then the bind's typed commands. Rebuilt when the game records the list again. None when a
+/// The material list `handle` (pass `pass`, slot `b` of unit `d`) described from the game's objects: the model's
+/// vertex input (the pass's program list), then the bind's typed commands. Rebuilt when the game records either list
+/// again. None when a
 /// command is not of the kinds the executor applies (the list is run instead).
 pub(super) unsafe fn described(p: &Port, handle: u64, d: usize, w: usize, pass: usize, b: i32) -> Option<Description> {
     let recording = crate::nvn::api::command_list_peek(handle)?;
-    if let Some((rec, m)) = DESCRIBED.lock().unwrap().get_or_insert_with(Default::default).get(&handle) {
-        if rec.upgrade().is_some_and(|r| std::sync::Arc::ptr_eq(&r, &recording)) {
+    if let Some((rec, program, m)) = DESCRIBED.lock().unwrap().get_or_insert_with(Default::default).get(&handle) {
+        if rec.upgrade().is_some_and(|r| std::sync::Arc::ptr_eq(&r, &recording))
+            && program.as_ref().is_none_or(|(h, p)| current(*h, p))
+        {
             return Some(m.clone());
         }
     }
@@ -193,17 +201,23 @@ pub(super) unsafe fn described(p: &Port, handle: u64, d: usize, w: usize, pass: 
         return None;
     }
     let mut all = Vec::with_capacity(cmds.len() + 1);
+    let mut program = None;
     let prog = p.m.r64(e + 0x28);
     if prog != 0 && p.m.r8(prog + 0x50) & 1 != 0 {
-        all.push(Cmd::CallCommands(smallvec::smallvec![p.m.r64(prog + 0x48) as u64]));
+        // The pass's program list: the model's vertex input as sub_764f4c binds it.
+        let list = p.m.r64(prog + 0x48) as u64;
+        program = Some((list, std::sync::Arc::downgrade(&crate::nvn::api::command_list_peek(list)?)));
+        if let Some(v) = p.vertex_input(p.m.r64(d + 0x68)) {
+            all.push(Cmd::VertexInput(Box::new(v)));
+        }
     }
     all.extend(cmds);
     let m = std::sync::Arc::new(all);
     let mut g = DESCRIBED.lock().unwrap();
     let map = g.get_or_insert_with(Default::default);
     if map.len() > 1 << 17 {
-        map.retain(|_, (rec, _)| rec.strong_count() > 0);
+        map.retain(|_, (rec, _, _)| rec.strong_count() > 0);
     }
-    map.insert(handle, (std::sync::Arc::downgrade(&recording), m.clone()));
+    map.insert(handle, (std::sync::Arc::downgrade(&recording), program, m.clone()));
     Some(m)
 }
