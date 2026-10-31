@@ -287,6 +287,10 @@ pub enum Cmd {
 pub struct ModelDraw {
     pub unit: u64,
     pub ranges: smallvec::SmallVec<[ModelRange; 2]>,
+    /// The unit's material, from the game's objects (in place of running `unit`): its bindings and the program
+    /// list it calls. Captures keep only `unit`.
+    #[serde(skip)]
+    pub material: Option<std::sync::Arc<Vec<Cmd>>>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
