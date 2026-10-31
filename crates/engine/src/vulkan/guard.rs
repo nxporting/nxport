@@ -368,6 +368,17 @@ unsafe fn release_slot(gen: usize, i: usize) {
 /// Signal-handler hook: a fault at `addr`. True if it is a page held here (after waiting for the GPU work reading it
 /// and making it writable): the access is retried.
 pub(super) unsafe fn fault(addr: usize) -> bool {
+    let handled = fault_held(addr);
+    // The watcher (write-backs) leaves with the page open whatever held it: every submit waits for it, so a page left
+    // read-only under it (a race with a protect, a hot page) faulted forever and the game stopped.
+    if handled && WATCHER.with(|w| w.get()) {
+        set_prot(addr & !(PAGE - 1), PAGE, true);
+        crate::guest::dirty_track::handle_fault(addr);
+    }
+    handled
+}
+
+unsafe fn fault_held(addr: usize) -> bool {
     if !enabled() {
         return false;
     }
@@ -453,6 +464,10 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
 /// running submit reads in place (they read the shadow, shadow.rs); a write that faulted would wait for submits only
 /// this thread sees complete.
 pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
+    // No table is rebuilt meanwhile (protect, release_all): a page checked as held and released by a rebuild before the
+    // copy was made read-only again here with no table holding it, and every later write to it, the watcher's and the
+    // game's, faulted forever (the write tracking takes such a page for one already opened).
+    let _records = RECORDS.lock().unwrap();
     let mut at = addr;
     while at < addr + len {
         let page = at & !(PAGE - 1);
@@ -462,7 +477,8 @@ pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
             let _ = crate::os::protect(page, PAGE, crate::os::Prot::ReadWrite);
         }
         std::ptr::copy_nonoverlapping(src.add(at - addr), at as *mut u8, n);
-        if held {
+        // Unless a fault released it meanwhile (it stays open then, as release_slot left it).
+        if held && holds(at) {
             let _ = crate::os::protect(page, PAGE, crate::os::Prot::Read);
         }
         at += n;
