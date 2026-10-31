@@ -102,6 +102,11 @@ impl Port {
         }
     }
 
+    /// Drops the pending native commands (a dry run's).
+    pub(super) fn discard(&self) {
+        self.pending.borrow_mut().take();
+    }
+
     /// A call into the game or an NVN entry point that may record commands.
     pub(super) unsafe fn call(&self, f: usize, args: &[u64]) -> u64 {
         self.flush();

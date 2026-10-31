@@ -2776,6 +2776,8 @@ enum Capture {
     Collect(Vec<String>),
     /// Typed commands are collected and not recorded (`ok` false once an untyped command came).
     Typed { cmds: Vec<crate::nvn::cmd::Cmd>, ok: bool },
+    /// Commands are neither recorded nor collected.
+    Discard,
 }
 
 thread_local! {
@@ -2790,6 +2792,13 @@ pub fn capture_dry(f: impl FnOnce()) -> Vec<String> {
         Some(Capture::Dry(v)) => v,
         _ => Vec::new(),
     }
+}
+
+/// Runs `f` with this thread's commands dropped (neither recorded nor collected).
+pub fn capture_discard(f: impl FnOnce()) {
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Discard));
+    f();
+    CAPTURE.with(|c| *c.borrow_mut() = None);
 }
 
 /// `capture_dry` inside another capture of this thread (which it leaves as it was).
@@ -2885,6 +2894,7 @@ fn capture(text: impl FnOnce() -> String) -> bool {
                 *ok = false;
                 true
             }
+            Some(Capture::Discard) => true,
             Some(Capture::Watch { expected, got, .. }) => {
                 got.push(text());
                 if got.len() == expected.len() {
