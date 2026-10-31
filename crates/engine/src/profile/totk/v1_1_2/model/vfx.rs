@@ -1427,12 +1427,6 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
     if p.m.r8(obj + 0x1a4) & 1 == 0 || pass > 7 {
         return Ok(());
     }
-    // Applying leaves pass 6 (the cascade passes and decals) to the game: the decals' blocks get their transforms
-    // there (not ported), and with the port a game heap ran out within a minute (allocation failure at main+0x759068).
-    if pass == 6 && !p.m.predict() {
-        p.call(p.base + 0x9c8d00, &[obj as u64, pass as u64, c as u64]);
-        return Ok(());
-    }
     let views = p.m.r64(p.m.r64(obj + 0x198) + 0x1ec0);
     let (w, o) = (p.m.r64(c + 0x20), p.m.r64(c + 0x10));
     let id = match pass {
