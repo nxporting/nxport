@@ -2779,6 +2779,28 @@ pub fn capture_dry(f: impl FnOnce()) -> Vec<String> {
     }
 }
 
+/// `capture_dry` inside another capture of this thread (which it leaves as it was).
+pub fn capture_dry_nested(f: impl FnOnce()) -> Vec<String> {
+    let outer = CAPTURE.with(|c| c.borrow_mut().take());
+    let v = capture_dry(f);
+    CAPTURE.with(|c| *c.borrow_mut() = outer);
+    v
+}
+
+/// A recorded list's commands as captures show them (None for an unknown handle).
+pub(crate) fn list_texts(handle: u64) -> Option<Vec<String>> {
+    let list = COMMAND_LISTS.lock().unwrap().get(&handle).map(|e| e.0.clone())?;
+    Some(
+        list.ops
+            .iter()
+            .map(|op| match &op.typed {
+                Some(t) => format!("{} {t:?}", op.name),
+                None => op.name.to_string(),
+            })
+            .collect(),
+    )
+}
+
 /// Collects this thread's next `expected.len()` commands (recorded as usual), then calls `report(expected, got)`.
 pub fn capture_watch(expected: Vec<String>, report: fn(&[String], &[String])) {
     if expected.is_empty() {

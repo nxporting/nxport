@@ -1184,6 +1184,9 @@ pub(super) unsafe fn load_resource(p: &mut Port, c: usize, d: usize) -> R<bool> 
     } else {
         if p.m.r8(mat_rec) & 1 != 0 {
             let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
+            if p.m.predict() && pass >= 0 {
+                super::material::check_list(p, d, w, pass as usize, u59 as i32, mat + u59 * 0x58 + 0x50);
+            }
             p.call_unit(cmd, mat + u59 * 0x58 + 0x50);
         }
         if p.m.r8(c + 0x30) != 0 && (p.m.r8(d + 0x47) >> 2) & 1 != 0 {
