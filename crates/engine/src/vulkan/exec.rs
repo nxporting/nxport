@@ -1143,11 +1143,13 @@ impl Ctx {
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
         // The pre-scan visited the lists in this order: the next one is this one (held in self.lists until the submit
         // ended, so it is borrowed rather than counted again for each of a submit's ~7,500 runs, nor looked up again).
-        let next = self.list_order.get(self.list_at).copied().unwrap_or(std::ptr::null());
+        let next = self.list_order.get(self.list_at).copied();
         self.list_at += 1;
         let held;
-        let list: &crate::nvn::api::RecordedCommandList = match next.as_ref() {
-            Some(l) => l,
+        let list: &crate::nvn::api::RecordedCommandList = match next.map(|p| p.as_ref()) {
+            Some(Some(l)) => l,
+            // Missing at the pre-scan: left out here too (the lists after it are still the ones it visited next).
+            Some(None) => return,
             None => match crate::nvn::api::command_list(handle, depth > 0) {
                 Some(l) => {
                     held = l;
