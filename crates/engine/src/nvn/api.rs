@@ -2087,25 +2087,11 @@ pub(crate) struct RecordedNvnCommand {
 }
 
 
-/// What a list contributes to a submit's pre-scan (vulkan exec::Ctx::scan_counters), in stream order: its commands other
-/// than calls (`ops`) and, at each occlusion counter reset (false) or SAMPLES_PASSED report (true), guest memory write by a
-/// command (uniform update, report; address untranslated) and call, the number of those commands before it.
-pub(crate) struct ListEvents {
-    pub(crate) ops: u64,
-    pub(crate) items: Vec<(u64, ListEvent)>,
-}
-
-pub(crate) enum ListEvent {
-    Counter(bool),
-    Write(u64, usize),
-    Call(Box<[u64]>),
-}
 pub(crate) struct RecordedCommandList {
     pub(crate) ops: Vec<RecordedNvnCommand>,
     /// (ranges written by UpdateUniformBuffer, handles called), computed on first use (see metal::ubo_updated_ranges).
     /// Ranges its uniform updates and reports write, the lists it calls, its SAMPLES_PASSED report addresses.
     pub(crate) summary: std::sync::OnceLock<(Vec<(u64, u64)>, Vec<u64>, Vec<u64>)>,
-    pub(crate) events: std::sync::OnceLock<ListEvents>,
     /// Frames presented when it was recorded (diagnostics: replayed lists vs. lists recorded this frame).
     pub(crate) recorded_frame: u64,
     /// Stamp of the last walk_command_lists that visited it.
@@ -2113,55 +2099,6 @@ pub(crate) struct RecordedCommandList {
 }
 
 impl RecordedCommandList {
-    /// Makes the summary and the events in one pass over the commands (EndRecording, on the game's recording thread).
-    fn index(&self) {
-        use crate::nvn::cmd::Cmd;
-        if self.summary.get().is_some() || self.events.get().is_some() {
-            self.summary();
-            self.events();
-            return;
-        }
-        let (mut ranges, mut calls, mut samples) = (Vec::new(), Vec::new(), Vec::new());
-        let mut e = ListEvents { ops: 0, items: Vec::new() };
-        for op in &self.ops {
-            match &op.typed {
-                Some(Cmd::CallCommands(h)) => {
-                    calls.extend_from_slice(h.as_slice());
-                    e.items.push((e.ops, ListEvent::Call(h.as_slice().into())));
-                    continue;
-                }
-                Some(Cmd::ResetCounter { counter: 1 }) => e.items.push((e.ops, ListEvent::Counter(false))),
-                Some(Cmd::ReportCounter { counter, addr }) => {
-                    if *addr > 0x10000 {
-                        ranges.push((*addr, *addr + 16));
-                        if *counter == 1 {
-                            samples.push(*addr);
-                        }
-                    }
-                    if *counter == 1 {
-                        e.items.push((e.ops, ListEvent::Counter(true)));
-                    }
-                    e.items.push((e.ops, ListEvent::Write(*addr, 16)));
-                }
-                Some(Cmd::ReportValue { addr, .. }) => {
-                    if *addr > 0x10000 {
-                        ranges.push((*addr, *addr + 16));
-                    }
-                    e.items.push((e.ops, ListEvent::Write(*addr, 16)));
-                }
-                Some(Cmd::UpdateUniformBuffer { addr, offset, data }) => {
-                    let a = (*addr as i64 + *offset as i64) as u64;
-                    ranges.push((a, a + data.len() as u64));
-                    e.items.push((e.ops, ListEvent::Write(a, data.len())));
-                }
-                _ => {}
-            }
-            e.ops += 1;
-        }
-        let _ = self.summary.set((ranges, calls, samples));
-        let _ = self.events.set(e);
-    }
-
     pub(crate) fn summary(&self) -> &(Vec<(u64, u64)>, Vec<u64>, Vec<u64>) {
         self.summary.get_or_init(|| {
             let (mut ranges, mut calls, mut samples) = (Vec::new(), Vec::new(), Vec::new());
@@ -2193,34 +2130,6 @@ impl RecordedCommandList {
         })
     }
 
-    pub(crate) fn events(&self) -> &ListEvents {
-        use crate::nvn::cmd::Cmd;
-        self.events.get_or_init(|| {
-            let mut e = ListEvents { ops: 0, items: Vec::new() };
-            for op in &self.ops {
-                match &op.typed {
-                    Some(Cmd::CallCommands(h)) => {
-                        e.items.push((e.ops, ListEvent::Call(h.as_slice().into())));
-                        continue;
-                    }
-                    Some(Cmd::ResetCounter { counter: 1 }) => e.items.push((e.ops, ListEvent::Counter(false))),
-                    Some(Cmd::ReportCounter { counter, addr }) => {
-                        if *counter == 1 {
-                            e.items.push((e.ops, ListEvent::Counter(true)));
-                        }
-                        e.items.push((e.ops, ListEvent::Write(*addr, 16)));
-                    }
-                    Some(Cmd::ReportValue { addr, .. }) => e.items.push((e.ops, ListEvent::Write(*addr, 16))),
-                    Some(Cmd::UpdateUniformBuffer { addr, offset, data }) => {
-                        e.items.push((e.ops, ListEvent::Write((*addr as i64 + *offset as i64) as u64, data.len())))
-                    }
-                    _ => {}
-                }
-                e.ops += 1;
-            }
-            e
-        })
-    }
 }
 
 /// Drops `l` on a thread of its own (nvn-free): the last reference to a replaced list frees all its commands.
@@ -2571,12 +2480,11 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         // short) and made the next BeginRecording allocate it again.
         ops: ops_vec.drain(..).collect(),
         summary: std::sync::OnceLock::new(),
-        events: std::sync::OnceLock::new(),
         recorded_frame: crate::gpu::backend().presented_frames(),
         visit: std::sync::atomic::AtomicU64::new(0),
     });
     // Here on the recording thread rather than on the Presentation Thread at submit (they scan every op).
-    snapshot.index();
+    snapshot.summary();
     // An NVN command handle is the GPU address of the command set: recording again at the same place in command memory
     // yields the same handle, and the game may keep calling the one it stored first. Same location, same handle here.
     let handle = match command_list_location(cmd as usize) {
@@ -7043,7 +6951,6 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
     let list = std::sync::Arc::new(RecordedCommandList {
         ops,
         summary: std::sync::OnceLock::new(),
-        events: std::sync::OnceLock::new(),
         recorded_frame: 0,
         visit: std::sync::atomic::AtomicU64::new(0),
     });
