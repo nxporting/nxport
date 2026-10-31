@@ -38,7 +38,7 @@ const GLOBAL_TEXTURES: usize = 0x4613830;
 pub(super) static OTHER: std::sync::Mutex<Vec<(usize, u64)>> = std::sync::Mutex::new(Vec::new());
 
 /// A callback the port does not implement: counted by address, predicting stops.
-fn callback(f: usize, base: usize) -> R<()> {
+pub(super) fn callback(f: usize, base: usize) -> R<()> {
     let off = f.wrapping_sub(base);
     let mut o = OTHER.lock().unwrap();
     match o.iter_mut().find(|e| e.0 == off) {
@@ -485,11 +485,20 @@ thread_local! {
 /// The predicted uniform blocks against the game's: None when equal.
 pub(super) unsafe fn check_blocks() -> Option<String> {
     let v = BLOCKS.with(|b| std::mem::take(&mut *b.borrow_mut()));
-    for (a, bytes) in v {
+    let n = v.len();
+    for (k, (a, bytes)) in v.into_iter().enumerate() {
         let real = std::slice::from_raw_parts(a as *const u8, bytes.len());
         if real != bytes.as_slice() {
-            let i = (0..bytes.len()).find(|&i| real[i] != bytes[i]).unwrap_or(0);
-            return Some(format!("vfx uniform block {a:#x}: byte {i:#x} port {:#x} game {:#x}", bytes[i], real[i]));
+            let words: Vec<usize> = (0..bytes.len() / 4).filter(|&w| real[w * 4..w * 4 + 4] != bytes[w * 4..w * 4 + 4]).collect();
+            let f = |b: &[u8], w: usize| f32::from_le_bytes(b[w * 4..w * 4 + 4].try_into().unwrap());
+            let shown: Vec<String> =
+                words.iter().take(6).map(|&w| format!("+{:#x} {} / {}", w * 4, f(&bytes, w), f(real, w))).collect();
+            return Some(format!(
+                "vfx uniform block {k} of {n} at {a:#x} ({:#x} bytes): {} words differ, port / game: {}",
+                bytes.len(),
+                words.len(),
+                shown.join(", ")
+            ));
         }
     }
     None
@@ -882,6 +891,7 @@ unsafe fn repeated_draw(p: &mut Port, i: &Info) -> R<()> {
 }
 
 const VIEW_CONSTANTS: usize = 0xa426f8;
+const SCENE_BLOCK_FILL: usize = 0x74f158;
 const DEPTH_KEY: usize = 0x167d0;
 const SORT_SETS: usize = 0x296c0;
 const TICK: usize = 0x2b15810;
@@ -929,9 +939,9 @@ pub(super) unsafe fn draw_view(p: &mut Port, sys0: usize, g: usize, groups: usiz
         p.m.w::<u8>(r + 0x821, v as u8);
     }
     let cb = p.m.r64(sys0 + 0x380);
-    let mut unknown = 0usize;
+
     if cb == p.base + VIEW_TEXTURES {
-        unknown = view_textures(p, s, a3)?;
+        view_textures(p, s, a3)?;
     } else if cb != 0 {
         return callback(cb, p.base);
     }
@@ -981,7 +991,7 @@ pub(super) unsafe fn draw_view(p: &mut Port, sys0: usize, g: usize, groups: usiz
         let size = p.m.r64(extra + 0x30 + k * 8);
         if let Some((blk, gpu)) = bump_into(p, r, size, r + 0x790 + k * 0x10) {
             let bytes: Vec<u8> = (0..size).map(|i| p.m.r8(src + i)).collect();
-            copy_into(p, blk, &bytes, src != unknown);
+            copy_into(p, blk, &bytes, true);
             let slot = p.m.r32(p.base + EXTRA_BLOCK_SLOTS + k * 4) as i32;
             for st in [0, 4, 5] {
                 bind_uniform(p, g8, slot, st, gpu, size as u64);
@@ -1235,6 +1245,14 @@ unsafe fn view_textures(p: &mut Port, s: usize, a3: usize) -> R<usize> {
     let Some((blk, _)) = ring_alloc(p, s2, c, 0x3e0) else { return Err("vfx scene block allocation") };
     if (p.m.r8(gr + 0x37a) >> 1) & 1 != 0 {
         return Err("vfx scene block (other path)");
+    }
+    // main+0x74f158(_, block, a3): the scene block's contents (reads game state only; takes and drops a reference).
+    if p.m.predict() {
+        let mut host = vec![0u8; 0x3e0];
+        p.query(p.base + SCENE_BLOCK_FILL, &[s2 as u64, host.as_mut_ptr() as u64, a3 as u64]);
+        copy_into(p, blk, &host, false);
+    } else {
+        p.query(p.base + SCENE_BLOCK_FILL, &[s2 as u64, blk as u64, a3 as u64]);
     }
     let e = p.m.r64(s2 + 0x8c8) + c as i64 as usize * 0xc0;
     p.m.w::<u64>(e + 8, blk as u64);
@@ -1879,13 +1897,16 @@ unsafe fn xlu_z_prepass(p: &mut Port, x: usize, w: usize, v: usize, mode: u32, f
     Ok(())
 }
 
-/// main+0xed8070(renderer, w, args, view, flag, out, user): one model pass, between listener events unless `flag`.
+/// main+0xed8070(renderer, w, args, view, flag, out, user): one model pass, between pass events 0 and 4 unless `flag`.
 unsafe fn prepass_pass(p: &mut Port, r: usize, w: usize, a: usize, v: usize, flag: u32, user: u64) -> R<()> {
-    let l = v + 0x570;
-    if flag & 1 == 0 && p.query(p.base + p.vfn(l, 0x10), &[l as u64]) & 1 != 0 {
-        return Err("model pass listener");
+    if flag & 1 == 0 {
+        super::render_list::pass_event(p, v)?;
     }
-    super::render_list::model_pass(p, r, w, a, v, 0, -1, flag & 1, 0, user)
+    super::render_list::model_pass(p, r, w, a, v, 0, -1, flag & 1, 0, user)?;
+    if flag & 1 == 0 {
+        super::render_list::pass_event(p, v)?;
+    }
+    Ok(())
 }
 
 /// main+0xa6c318 -> main+0xa6c3a4(q, w, view, 1): a graphics context for occlusion boxes (no color writes unless
