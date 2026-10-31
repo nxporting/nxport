@@ -105,11 +105,6 @@ fn flatten(
                 for item in &m.items {
                     match item {
                         crate::nvn::cmd::ModelItem::Unit { list, .. } => flatten(lists, *list, depth + 1, out, missing),
-                        crate::nvn::cmd::ModelItem::Program { program, stages } => out.push(Op {
-                            name: "nvnCommandBufferBindProgram".into(),
-                            typed: Some(Cmd::BindProgram { program: *program, stages: *stages }),
-                            args: None,
-                        }),
                         crate::nvn::cmd::ModelItem::TexturesDeferred { stage, first, count, handles } => out.push(Op {
                             name: "nvnCommandBufferBindTexturesDeferred".into(),
                             typed: Some(Cmd::BindTexturesDeferred { stage: *stage, first: *first, count: *count, handles: *handles }),
@@ -127,6 +122,10 @@ fn flatten(
                                 Cmd::BindStorageBuffer { .. } => "nvnCommandBufferBindStorageBuffer",
                                 Cmd::BindTexture { .. } => "nvnCommandBufferBindTexture",
                                 Cmd::DrawArraysInstanced { .. } => "nvnCommandBufferDrawArraysInstanced",
+                                Cmd::BindVertexBuffer { .. } => "nvnCommandBufferBindVertexBuffer",
+                                Cmd::BindVertexAttribState(_) => "nvnCommandBufferBindVertexAttribState",
+                                Cmd::BindVertexStreamState(_) => "nvnCommandBufferBindVertexStreamState",
+                                Cmd::BindProgram { .. } => "nvnCommandBufferBindProgram",
                                 _ => "nvnCommandBufferDrawElementsInstanced",
                             };
                             out.push(Op { name: name.into(), typed: Some(t), args: None });

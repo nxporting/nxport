@@ -27,6 +27,9 @@ const PFN_DRAW_ELEMENTS: usize = 0x466e088;
 const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
+const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
+const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
+const PFN_BIND_VERTEX_BUFFER: usize = 0x466dfb8;
 const PFN_BLEND_STATE_SET_DEFAULTS: usize = 0x466dc58;
 const PFN_COLOR_STATE_SET_DEFAULTS: usize = 0x466dcd0;
 const PFN_COLOR_STATE_SET_BLEND_ENABLE: usize = 0x466dcd8;
@@ -205,6 +208,43 @@ impl Port {
         }
     }
 
+    /// nvnCommandBufferBindProgram.
+    pub(super) unsafe fn bind_program(&mut self, cmd: usize, program: usize, stages: u32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Program { program, stages: stages as i32 });
+        }
+        self.call(self.pfn(PFN_BIND_PROGRAM), &[cmd as u64, program as u64, stages as u64]);
+    }
+
+    /// nvnCommandBufferBindVertexAttribState(`n` states at `states`).
+    pub(super) unsafe fn bind_vertex_attribs(&mut self, cmd: usize, n: i32, states: usize) {
+        if self.native {
+            let mut a = crate::nvn::cmd::AttribState::default();
+            a.n = n.clamp(0, crate::nvn::cmd::AttribState::MAX as i32) as u8;
+            for i in 0..a.n as usize {
+                a.v[i] = self.m.r32(states + i * 4);
+            }
+            return self.push(cmd, crate::nvn::cmd::ModelItem::VertexAttribs(a));
+        }
+        self.call(self.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd as u64, n as u64, states as u64]);
+    }
+
+    /// nvnCommandBufferBindVertexStreamState(`n` states at `states`).
+    pub(super) unsafe fn bind_vertex_streams(&mut self, cmd: usize, n: i32, states: usize) {
+        if self.native {
+            let v = (0..n.max(0) as usize).map(|i| self.m.r64(states + i * 8) as u64).collect();
+            return self.push(cmd, crate::nvn::cmd::ModelItem::VertexStreams(v));
+        }
+        self.call(self.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd as u64, n as u64, states as u64]);
+    }
+
+    /// nvnCommandBufferBindVertexBuffer.
+    pub(super) unsafe fn bind_vertex_buffer(&mut self, cmd: usize, index: i32, addr: u64, size: usize) {
+        if !self.join(cmd, 0, index, crate::nvn::cmd::ModelBindKind::Vertex { addr, size }) {
+            self.call(self.pfn(PFN_BIND_VERTEX_BUFFER), &[cmd as u64, index as u64, addr, size as u64]);
+        }
+    }
+
     /// nvnCommandBufferBindTexturesDeferred: the handles at `handles` are read when the commands run.
     pub(super) unsafe fn bind_textures_deferred(&mut self, cmd: usize, stage: i32, first: i32, count: i32, handles: u64) {
         if self.native {
@@ -334,6 +374,14 @@ impl Port {
     }
 
     /// main+0x960088: the same allocation, called with the ring and returning the block.
+    /// ring_block where the game inlines the allocator (main+0x96b068's body).
+    pub(super) unsafe fn ring_block_inline(&mut self, data: usize, size: usize) -> usize {
+        if self.m.predict() {
+            return super::ring::predict_inline(self.base, data, size);
+        }
+        self.ring_block(data, size)
+    }
+
     pub(super) unsafe fn ring_block_direct(&mut self, data: usize, size: usize) -> usize {
         if self.m.predict() {
             return super::ring::predict(self.base, data, size);
@@ -462,10 +510,7 @@ impl Port {
         } else {
             (self.m.r64(shader + 8), Self::nvn_stage_bits(stages))
         };
-        if self.native {
-            return self.push(cmd, crate::nvn::cmd::ModelItem::Program { program, stages: bits as i32 });
-        }
-        self.call(self.pfn(PFN_BIND_PROGRAM), &[cmd as u64, program as u64, bits as u64]);
+        self.bind_program(cmd, program, bits);
     }
 
     /// sub_764efc: binds the program the shape state's flags select (+0x34 bits 2 / 4 / 3) from its program set.
