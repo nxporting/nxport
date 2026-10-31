@@ -457,6 +457,21 @@ fn fused_cond(cond: &str, sub: bool, bits: u32, args: &[&str]) -> Option<String>
 /// in `code`, when that is all that reads the flags `code` sets.
 fn fuse(code: &str, next: &str) -> Option<String> {
     let code = code.trim();
+    // FCMP: the condition is cc_s / cc_d over the operands (unordered as FCMP's flags give it).
+    if let Some((f, rest)) = ["s", "d"].iter().find_map(|f| code.strip_prefix(&format!("c->nzcv = cmp_{f}(c, ")).map(|r| (*f, r))) {
+        let call = format!("({rest}");
+        let (args, tail) = call_args(&call)?;
+        let uses: Vec<_> = next.match_indices("COND_").collect();
+        if tail != ";" || args.len() != 2 || uses.len() != 1 || next.contains("FLAG_") || next.contains("c->nzcv") {
+            return None;
+        }
+        let j = uses[0].0;
+        let name = next.get(j + 5..j + 7)?;
+        if !next[j + 7..].starts_with("(c)") || name == "AL" || name == "NV" {
+            return None;
+        }
+        return Some(format!("{}cc_{f}(c, {}, {}, FCC_{name}){}", &next[..j], args[0], args[1], &next[j + 10..]));
+    }
     let forms = [(true, 32, "(void)(subs32(c, "), (true, 64, "(void)(subs64(c, "), (false, 32, "(void)(logic32(c, "), (false, 64, "(void)(logic64(c, ")];
     let (sub, bits, f) = forms.into_iter().find(|(_, _, f)| code.starts_with(f))?;
     // "(void)(subs32(c, A, B));": the arguments after `c`.
@@ -534,6 +549,15 @@ fn optimize_flags(lines: &mut [Line]) {
         }
         // Flags never read: the result alone.
         if !live_out[i] && !reads[i] {
+            // An FCMP or flag constant has nothing else to compute.
+            let code = lines[i].code.trim();
+            if (code.starts_with("c->nzcv = cmp_s(c, ") || code.starts_with("c->nzcv = cmp_d(c, ") || code.starts_with("c->nzcv = 0x"))
+                && code.ends_with(';')
+                && code.matches(';').count() == 1
+            {
+                lines[i].code = String::new();
+                continue;
+            }
             for (h, nf) in FLAG_HELPERS {
                 if lines[i].code.contains(h) {
                     lines[i].code = lines[i].code.replace(h, nf);
@@ -1266,6 +1290,19 @@ mod tests {
         touch.remove("fp_op_s");
         touch.remove("fp_op_d");
         assert_eq!(touch, V_HELPERS.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
+    }
+
+    #[test]
+    fn fcmp_fused() {
+        // 0x1000: fcmp s0, s1; b.gt 0x100c; ret; 0x100c: ret
+        let mut img = Vec::new();
+        for w in [0x1e212000u32, 0x5400004c, 0xd65f03c0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1010, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert!(body.contains("if (cc_s(c, (*(saf32 *)&gv0), (*(saf32 *)&gv1), FCC_GT))"), "{body}");
+        assert!(!body.contains("nzcv"), "{body}");
     }
 
     #[test]
