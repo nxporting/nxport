@@ -345,7 +345,7 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
     }
     let mut buf = vec![0u64; 0x1c0 / 8];
     let c = buf.as_mut_ptr() as usize;
-    p.m.forget(c, 0x1c0);
+    p.m.own(c, 0x1c0);
     let m = &mut p.m;
     m.w::<u32>(c, fl);
     m.w::<u32>(c + 4, m.r32(a));
@@ -512,7 +512,7 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
     };
     let drawn = draw_list_of(p, p.m.r64(r + 0x20) + start as usize * 8, count, c, p.m.r32(a), only, lf);
     let (count_out, enable) = (p.m.r32(c + 0x34), p.m.r64(c + 0x100));
-    p.m.forget(c, 0x1c0);
+    p.m.disown(c);
     drop(buf);
     drawn?;
     pass_event(p, v)?;
