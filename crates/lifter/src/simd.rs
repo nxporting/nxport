@@ -1703,7 +1703,20 @@ fn ldst_struct(w: u32) -> R {
                 }
             };
             total = selem << scale;
-            acc = format!("sl_{}(c, {scale}, {selem}, {idx}, {rt}, ea);", if l != 0 { "lds" } else { "sts" });
+            // Lane by lane, as c->v[N] lane accesses: a vector register kept in a local stays there (sl_lds / sl_sts,
+            // which take the register by number, made every kept register go to the Cpu and back).
+            let (ty, bits) = [("uint8_t", 8), ("sa16", 16), ("sa32", 32), ("sa64", 64)][scale as usize];
+            acc = (0..selem)
+                .map(|s| {
+                    let (r, off) = ((rt + s) & 31, s << scale);
+                    if l != 0 {
+                        format!("(({ty} *)&c->v[{r}])[{idx}] = LD{bits}(ea + {off});")
+                    } else {
+                        format!("ST{bits}(ea + {off}, (({ty} *)&c->v[{r}])[{idx}]);")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
         }
     }
     let mut parts = vec![format!("uint64_t ea = {base};"), acc];
