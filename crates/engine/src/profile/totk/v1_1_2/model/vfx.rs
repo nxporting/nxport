@@ -1731,3 +1731,59 @@ unsafe fn cascade_decals(p: &mut Port, w: usize, view: u32, cascade: u32) -> R<(
     }
     Ok(())
 }
+
+const PFN_SET_POINT_SIZE: usize = 0x466e198;
+const PFN_RESET_COUNTER: usize = 0x466e238;
+
+/// main+0xed7a84(obj, pass, ctx): the gsys decal / occlusion drawable. Pass 0, once per view (the view's +10 bit 0):
+/// the occlusion queries of main+0xa6c318. Pass 1 (the decal drawer agl::fx::DecalDrawer and the translucent Z
+/// pre-pass) is not ported.
+pub(super) unsafe fn decal_forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R<()> {
+    let bv = p.m.r8(c + 0x30) as u32;
+    let vi = if p.m.r32(obj + 0x1a0) > bv { bv } else { 0 } as usize;
+    let w = p.m.r64(c + 0x20);
+    match pass {
+        1 => Err("decal drawer"),
+        0 => {
+            let v = p.m.r64(obj + 0x1a8) + vi * 0x19f0;
+            if p.m.r8(v + 10) & 1 != 0 {
+                return Ok(());
+            }
+            occlusion_queries(p, p.m.r64(obj + 0x4a10), w, p.m.r8(v + 8) as u32)?;
+            p.m.w::<u8>(v + 10, p.m.r8(v + 10) | 1);
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// main+0xa6c318 -> main+0xa6c3a4(q, w, view, 1): a graphics context for occlusion boxes (no color writes unless
+/// +0 bit 5), the point size, per item visible in the view its samples-passed counter reset, its test / draw (the
+/// item's virtual functions: not ported yet, reported) and the counter reported; a barrier after.
+unsafe fn occlusion_queries(p: &mut Port, q: usize, w: usize, view: u32) -> R<()> {
+    let f0 = p.m.r32(q);
+    if !f0 & 3 != 0 {
+        return Ok(());
+    }
+    let mut gc = vec![0u8; 0x100];
+    p.query(p.base + GRAPHICS_CONTEXT_INIT, &[gc.as_mut_ptr() as u64]);
+    gc[0..2].copy_from_slice(&1u16.to_le_bytes());
+    gc[4..8].copy_from_slice(&0u32.to_le_bytes());
+    gc[0x6e] = 1;
+    gc[0x1c..0x20].copy_from_slice(&((0u32.wrapping_sub((f0 >> 5) & 1)) & 0xf).to_le_bytes());
+    p.apply_graphics_context(gc.as_ptr() as usize, w);
+    let cmd = p.m.r64(w + 0xb8) as u64;
+    p.flush();
+    p.query_f(p.pfn(PFN_SET_POINT_SIZE), &[cmd], &[p.m.f32(q + 0xa8)]);
+    let items = p.m.r64(q + 0x10);
+    for i in 0..p.m.i32(q + 8).max(0) as usize {
+        let it = p.m.r64(items + i * 8);
+        if 1u32.wrapping_shl(view & 31) & p.m.r16(it + 10) as u32 == 0 {
+            continue;
+        }
+        p.call(p.pfn(PFN_RESET_COUNTER), &[cmd, 1]);
+        return callback(p.base + p.vfn(it, 0x28), p.base);
+    }
+    p.call(p.pfn(super::render_list::PFN_BARRIER), &[cmd, 1]);
+    Ok(())
+}
