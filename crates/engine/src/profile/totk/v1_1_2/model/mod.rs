@@ -397,7 +397,7 @@ thread_local! {
     static OCCL_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The occlusion items main+0x9777c4: --verify-render-lists predicts and compares them; --native-render-lists draws
+/// The occlusion query items main+0xa6c3a4: --verify-render-lists predicts and compares them; --native-render-lists draws
 /// them (undoably, left to the game where the port stops).
 #[no_mangle]
 pub unsafe extern "C" fn on_occlusion(q: usize, w: usize, view: u32, flags: u64) -> u32 {
