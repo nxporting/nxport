@@ -1919,8 +1919,6 @@ unsafe fn cascade_decals(p: &mut Port, w: usize, view: u32, cascade: u32) -> R<(
     Ok(())
 }
 
-const PFN_SET_POINT_SIZE: usize = 0x466e198;
-const PFN_RESET_COUNTER: usize = 0x466e238;
 
 /// main+0xed7a84(obj, pass, ctx): the gsys decal / occlusion drawable. Pass 0, once per view (the view's +10 bit 0):
 /// the occlusion queries of main+0xa6c318. Pass 1: the decal drawers (agl::fx::DecalDrawer, main+0xed81a0) and the
@@ -2086,20 +2084,7 @@ unsafe fn occlusion_queries(p: &mut Port, q: usize, w: usize, view: u32) -> R<()
     gc[0x6e] = 1;
     gc[0x1c..0x20].copy_from_slice(&((0u32.wrapping_sub((f0 >> 5) & 1)) & 0xf).to_le_bytes());
     p.apply_graphics_context(gc.as_ptr() as usize, w);
-    let cmd = p.m.r64(w + 0xb8) as u64;
-    p.flush();
-    p.query_f(p.pfn(PFN_SET_POINT_SIZE), &[cmd], &[p.m.f32(q + 0xa8)]);
-    let items = p.m.r64(q + 0x10);
-    for i in 0..p.m.i32(q + 8).max(0) as usize {
-        let it = p.m.r64(items + i * 8);
-        if 1u32.wrapping_shl(view & 31) & p.m.r16(it + 10) as u32 == 0 {
-            continue;
-        }
-        p.call(p.pfn(PFN_RESET_COUNTER), &[cmd, 1]);
-        return callback(p.base + p.vfn(it, 0x28), p.base);
-    }
-    p.call(p.pfn(super::render_list::PFN_BARRIER), &[cmd, 1]);
-    Ok(())
+    super::occlusion::draw(p, q, w, view, 1)
 }
 
 /// A pass-3 callback of the view pass's effect drawable, (w, views, scene view, view, ctx); empty ones skipped.
