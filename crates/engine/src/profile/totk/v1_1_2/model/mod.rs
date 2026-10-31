@@ -179,19 +179,21 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
     if d.native_render_lists {
         // A dry prediction first: a list the port would stop in is left whole to the game (applying cannot stop
         // halfway, and the game's own call does the lazy setup the port leaves to it).
-        let mut trial = draw::Port::new(mem::Mem::predicting(), base, false);
+        static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
+        let native = metal && d.native_model_draws;
+        let mut trial = draw::Port::new(mem::Mem::predicting(), base, native);
         trial.trial = true;
         let mut tried = Ok(());
-        crate::nvn::api::capture_dry(|| tried = render_list::draw_list(&mut trial, list, count, c, mask, flags));
+        crate::nvn::api::capture_discard(|| tried = render_list::draw_list(&mut trial, list, count, c, mask, flags));
+        trial.discard();
         ring::discard();
         vfx::discard_blocks();
         if let Err(what) = tried {
             note_stop(what);
             return 0;
         }
-        static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
-        let mut port = draw::Port::new(mem::Mem::applying(), base, metal && d.native_model_draws);
+        let mut port = draw::Port::new(mem::Mem::applying(), base, native);
         let r = render_list::draw_list(&mut port, list, count, c, mask, flags);
         port.flush();
         if let Err(what) = r {
