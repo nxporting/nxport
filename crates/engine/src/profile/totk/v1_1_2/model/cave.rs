@@ -6,7 +6,6 @@
 use super::draw::{load_resource, Port, R};
 
 const PFN_UPDATE_UNIFORM_BUFFER: usize = 0x466e228;
-const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
 const DEVICE_HOLDER: usize = 0x462bbe8;
@@ -277,10 +276,7 @@ unsafe fn instances(
                         p.m.w::<u8>(cmd + 0x10, 1);
                         p.draw_elements(cmd as usize, prim as i32, itype as i32, count as i32, addr as u64);
                     } else {
-                        p.call(
-                            p.pfn(PFN_DRAW_ELEMENTS_BASE_VERTEX),
-                            &[cmd as u64, prim, itype, count as u32 as u64, addr, base_vertex as u32 as u64],
-                        );
+                        p.draw_elements_base_vertex(cmd as usize, prim as i32, itype as i32, count as i32, addr, base_vertex as i32);
                     }
                 }
                 drawn = drawn.wrapping_add(count as u32);
@@ -336,7 +332,6 @@ unsafe fn bind_texture(p: &mut Port, w: usize, slots: u32, tid: usize, sid: usiz
 
 const STORAGE_SLOT_BY_NAME: usize = 0x1387540;
 const INSTANCE_PARAMS: usize = 0x860094;
-const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 
 /// The instanced cave subsystem's delegate targets: main+0x85ff40 (mode 0) and 0x137c31c (mode 1) through
 /// main+0x85ffc4 (drawn while the info's +1 is set), main+0x137c3a0 / 0x137c4bc (modes 2 / 3, drawn while +0x1389 is
@@ -467,17 +462,14 @@ pub(super) unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u
     let itype = p.m.r32(mesh + 8) as u64;
     if instances < 2 && base_instance == 0 {
         if base_vertex != 0 {
-            p.call(p.pfn(PFN_DRAW_ELEMENTS_BASE_VERTEX), &[cmd as u64, prim, itype, count as u64, addr, base_vertex as u32 as u64]);
+            p.draw_elements_base_vertex(cmd as usize, prim as i32, itype as i32, count as i32, addr, base_vertex);
             return;
         }
         p.m.w::<u8>(cmd + 0x10, 1);
         p.draw_elements(cmd as usize, prim as i32, itype as i32, count as i32, addr as u64);
         return;
     }
-    p.call(
-        p.pfn(PFN_DRAW_ELEMENTS_INSTANCED),
-        &[cmd as u64, prim, itype, count as u64, addr, base_vertex as u32 as u64, base_instance as u32 as u64, instances as u64],
-    );
+    p.draw_elements_instanced(cmd as usize, prim as i32, itype as i32, count as i32, addr, base_vertex, base_instance, instances as i32);
 }
 
 const PFN_BIND_VERTEX_BUFFER: usize = 0x466dfb8;

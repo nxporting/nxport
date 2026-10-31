@@ -3378,6 +3378,20 @@ impl Gfx {
                             ModelItem::TexturesDeferred { stage, first, count, handles } => {
                                 apply_textures_deferred(st, *stage, *first, *count, *handles)
                             }
+                            // Conditional rendering off: draws are skipped as the commands' are.
+                            ModelItem::Draw(_) | ModelItem::DrawArrays { .. } if !st.render_enabled => {
+                                journal(|| format!("  cond-skip program {:#x}", st.program.unwrap_or(0)));
+                            }
+                            ModelItem::DrawArrays { mode, first, count, base_instance, instances } => {
+                                st.cur_caller = 0;
+                                st.stats.draws += 1;
+                                if st.occl.counting {
+                                    st.occl.draws_seen += 1;
+                                }
+                                if gfx_mode() >= GfxMode::Draws || gfx_mode() == GfxMode::Dry {
+                                    self.draw_arrays(st, &cur, *mode, *first, *count, *base_instance, *instances);
+                                }
+                            }
                             ModelItem::Draw(r) => {
                                 st.cur_caller = 0;
                                 st.stats.draws += 1;
