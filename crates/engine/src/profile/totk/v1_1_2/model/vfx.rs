@@ -828,7 +828,16 @@ unsafe fn render_state_basic2(p: &mut Port, i: &Info, alt: bool) -> R<bool> {
     if alt {
         channel_mask(p, w + 8, if p.m.i32(a3 + 0xbc) == 0x19 { 0xf0f0f1 } else { 0xf0f0ff });
         if p.m.i32(a3 + 0xc4) == 4 {
-            return Err("vfx effect pass 4 state");
+            // main+0x13dfe70: cull face from the emitter's +0xdef (0, 2, 1), front face 1, polygon mode 2, offset
+            // enables 4, and the cascade entry's polygon offset (+0x504 factor, +0x500 units).
+            let k = p.m.r8(p.m.r64(em + 0x48) + 0xdef) as usize;
+            if k >= 3 {
+                return Err("vfx effect polygon mode");
+            }
+            let e = (p.m.r64(p.m.r64(a3 + 0xd8) + 8) as i64 + p.m.i32(a3 + 0xa8) as i64 * 8) as usize;
+            let cmd = p.m.r64(w + 8 + 0xb0) as u64;
+            let offset = [p.m.f32(e + 0x504), p.m.f32(e + 0x500), 0.0];
+            p.polygon_state(cmd, [0, 2, 1][k], 1, 2, 4, offset);
         }
     } else if p.m.i32(a3 + 0xbc) == 0x18 {
         channel_mask(p, w + 8, 0xf0f0fd);
