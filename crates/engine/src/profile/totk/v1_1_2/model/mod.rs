@@ -567,6 +567,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc(_))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc_end())) as usize;
         hook(base, mem_space, ring::SITE, ring::SITE_INSTRUCTION, pre, post, "Ring allocation");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_block())) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_block_end(_))) as usize;
+        hook(base, mem_space, ring::BLOCK_SITE, ring::BLOCK_SITE_INSTRUCTION, pre, post, "Ring block allocation");
     }
 }
 

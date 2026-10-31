@@ -1404,8 +1404,7 @@ pub(super) unsafe fn draw_pass(p: &mut Port, obj: usize, w: usize, views: usize,
 }
 
 /// main+0x9c8d00(obj, pass, ctx): the gsys view pass's effect drawable: per render pass the scene view's effect
-/// passes (main+0xa414ac with the render context as its override object). Not ported: the pass-3 callbacks
-/// (obj+0x1a8 / +0x1b0), pass 5's shadow cascades (ctx+0xb0 2 / 3) and pass 6's cascade passes.
+/// passes (main+0xa414ac with the render context as its override object). Not ported: pass 5's shadow systems.
 pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R<()> {
     if p.m.r8(obj + 0x1a4) & 1 == 0 || pass > 7 {
         return Ok(());
@@ -1419,12 +1418,14 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
         4 => 0x17,
         7 => 0x13,
         3 => {
-            if p.m.r64(obj + 0x1a8) != 0 {
-                return callback(p.m.r64(obj + 0x1a8), p.base);
+            let cb = p.m.r64(obj + 0x1a8);
+            if cb != 0 {
+                view_callback(p, cb, w, views, o, c)?;
             }
             draw_pass(p, o, w, views, 8, 0, c, 0)?;
-            if p.m.r64(obj + 0x1b0) != 0 {
-                return callback(p.m.r64(obj + 0x1b0), p.base);
+            let cb = p.m.r64(obj + 0x1b0);
+            if cb != 0 {
+                view_callback(p, cb, w, views, o, c)?;
             }
             return Ok(());
         }
@@ -1910,4 +1911,189 @@ unsafe fn occlusion_queries(p: &mut Port, q: usize, w: usize, view: u32) -> R<()
     }
     p.call(p.pfn(super::render_list::PFN_BARRIER), &[cmd, 1]);
     Ok(())
+}
+
+/// A pass-3 callback of the view pass's effect drawable, (w, views, scene view, view, ctx); empty ones skipped.
+unsafe fn view_callback(p: &mut Port, cb: usize, w: usize, views: usize, o: usize, c: usize) -> R<()> {
+    const RET: u32 = 0xd65f03c0;
+    if p.m.r32(cb) == RET {
+        return Ok(());
+    }
+    match cb.wrapping_sub(p.base) {
+        0x122f360 => screen_effects(p, w, views, o, c),
+        _ => callback(cb, p.base),
+    }
+}
+
+/// main+0x122f360(w, views, scene view, view, ctx): the scene's full-screen effect renderer (+0x128 -> +0xb38) around
+/// effect pass 0x1c: its passes 0, 1 and 2 (main+0x95f810) when enabled (+0x210), then its image filter (+0x3d0, not
+/// ported).
+unsafe fn screen_effects(p: &mut Port, w: usize, views: usize, o: usize, c: usize) -> R<()> {
+    let r = p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.base + DECAL_SYSTEM)) + 0x128) + 0xb38);
+    if r == 0 {
+        return Ok(());
+    }
+    let view = p.m.r8(o + 8) as u32;
+    let on = p.m.r8(r + 0x210) != 0;
+    if on {
+        screen_pass(p, r, w, view, 0, 0)?;
+    }
+    draw_pass(p, o, w, views, 0x1c, 0, c, 0)?;
+    if on {
+        screen_pass(p, r, w, view, 1, 0)?;
+        screen_pass(p, r, w, view, 2, 0)?;
+    }
+    if p.m.r8(r + 0x3d0) != 0 {
+        return Err("screen effect image filter");
+    }
+    Ok(())
+}
+
+const SCREEN_PROGRAMS: usize = 0x4634e40;
+const SCREEN_SHAPES: usize = 0x46323a0;
+
+/// main+0x95f810(r, w, view, pass, flag): one full-screen pass of the renderer `r` (per pass 0x1298 bytes from r):
+/// when enabled (+0x1518) and visible (+0x1938 > 0), a graphics context (depth func / blend from the renderer),
+/// the program variant chosen by the pass's features, the full-screen shape's vertex buffers, the view's 0xd0-byte
+/// block from the ring and the pass's block, its textures, and the indexed draw of one of two shapes.
+unsafe fn screen_pass(p: &mut Port, r: usize, w: usize, view: u32, pass: usize, flag: u32) -> R<()> {
+    let vi = if p.m.r32(r + 0x3e0) > view { view } else { 0 } as usize;
+    if p.m.r8(r + 0x210) == 0 {
+        return Ok(());
+    }
+    let pp = r + pass * 0x1298;
+    if p.m.r8(pp + 0x1518) == 0 || !(p.m.f32(pp + 0x1938) > 0.0) {
+        return Ok(());
+    }
+    let fade_on = p.m.r8(pp + 0x1578) != 0;
+    let fade = p.m.f32(pp + 0x1598);
+    let mut feat = (p.m.r8(pp + 0x1dd8) != 0) as u32;
+    if p.m.r8(pp + 0x2058) != 0 {
+        feat |= 2;
+    }
+    if p.m.r8(pp + 0x2038) != 0 || p.m.r32(r + 0x5780) == 0 {
+        feat |= 4;
+    }
+    if (p.m.r8(pp + 0x2078) != 0) as u32 | flag & 1 != 0 {
+        feat |= 8;
+    }
+    if fade_on && fade > 0.0 && fade < 1.0 {
+        feat |= 0x10;
+    }
+    let mut gc = vec![0u8; 0x100];
+    p.query(p.base + GRAPHICS_CONTEXT_INIT, &[gc.as_mut_ptr() as u64]);
+    gc[0x2a] = if flag & 1 != 0 { 2 } else { 6 };
+    gc[0x65] = 0;
+    gc[0x60..0x64].copy_from_slice(&0u32.to_le_bytes());
+    gc[0x6d] |= 1;
+    gc[0x58..0x5c].copy_from_slice(&p.m.f32(r + 0x57ac).to_le_bytes());
+    gc[0x5c..0x60].copy_from_slice(&p.m.f32(r + 0x57b0).to_le_bytes());
+    gc[0x28] = 5;
+    gc[0x29] = if p.m.r8(r + 0x230) != 0 || p.m.r8(r + 0x3d0) != 0 { 1 } else { 5 };
+    gc[0x2b] = 6;
+    gc[1] = 0;
+    gc[0] = (p.m.r8(r + 0x270) == 0 && flag & 1 == 0) as u8;
+    let m = u32::from_le_bytes(gc[0x1c..0x20].try_into().unwrap()) | 0xf;
+    gc[0x1c..0x20].copy_from_slice(&m.to_le_bytes());
+    p.apply_graphics_context(gc.as_ptr() as usize, w);
+    let x = p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.base + SCREEN_PROGRAMS)) + 0x10) + 0x5f8) + 8) + 0x10) + 8);
+    let prog = if feat as i32 <= 0 {
+        p.m.r64(x + 0x10)
+    } else {
+        let k = feat - 1;
+        p.m.r64(x + 0x20) + (if p.m.r32(x + 0x18) > k { k } else { 0 }) as usize * 0x158
+    };
+    program_apply(p, prog, w)?;
+    let cmd = p.m.r64(w + 0xb8);
+    let shapes = p.m.r64(p.m.r64(p.base + SCREEN_SHAPES));
+    vertex_buffers(p, cmd, shapes + 0x13e4, shapes + 0x1428, shapes + 0x13d0);
+    let vb = p.m.r64(r + 0x3e8) + vi * 0x720;
+    let block = p.ring_block_direct(vb + pass * 0xd0 + 0x180, 0xd0);
+    program_block(p, prog, w, 0, block, 0)?;
+    program_block(p, prog, w, 1, vb + pass * 0x80, 0)?;
+    let slots: &[(u32, usize)] = if fade_on && fade >= 1.0 {
+        &[(0, 0x22a0), (1, 0x2390)]
+    } else if fade_on {
+        &[(0, 0x20c0), (1, 0x21b0), (2, 0x22a0), (3, 0x2390)]
+    } else {
+        &[(0, 0x20c0), (1, 0x21b0)]
+    };
+    for &(slot, off) in slots {
+        program_texture(p, prog, w, slot, pp + off)?;
+    }
+    if p.m.r8(pp + 0x2058) != 0 && p.m.r64(r + 0x3c0) != 0 {
+        program_texture(p, prog, w, 4, p.m.r64(r + 0x3c0))?;
+    }
+    if p.m.r64(r + 0x3c8) != 0 {
+        program_texture(p, prog, w, 5, p.m.r64(r + 0x3c8))?;
+    }
+    if flag & 1 != 0 {
+        return Err("screen pass shape");
+    }
+    // The renderer's two full-screen meshes (+0x4be0 / +0x4dc0: vertex buffer count +0, buffers +8, states +0x14 /
+    // +0x58) and their index buffers (+0x4ea0 / +0x4f00: type +0, prim +4, count +0x20, buffer +0x28); the second for
+    // passes with +0x20b8.
+    let sel = (p.m.r8(pp + 0x20b8) != 0) as usize;
+    let s = r + 0x4be0 + sel * 0x1e0;
+    vertex_buffers(p, cmd, s + 0x14, s + 0x58, s);
+    let ib = r + 0x4ea0 + sel * 0x60;
+    let count = p.m.r32(ib + 0x20);
+    if count == 0 {
+        return Ok(());
+    }
+    let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(ib + 0x28) as u64]);
+    p.m.w::<u8>(cmd + 0x10, 1);
+    p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, p.m.r32(ib + 4) as u64, p.m.r32(ib) as u64, count as u64, addr]);
+    Ok(())
+}
+
+/// Vertex attribute / stream states (16 each) and the vertex buffers of a list (count at `list`, buffers at +8:
+/// address of buffer +8, size +0x118).
+unsafe fn vertex_buffers(p: &mut Port, cmd: usize, attribs: usize, streams: usize, list: usize) {
+    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd as u64, 0x10, attribs as u64]);
+    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd as u64, 0x10, streams as u64]);
+    let bufs = p.m.r64(list + 8);
+    for i in 0..p.m.r32(list) as usize {
+        let b = p.m.r64(bufs + i * 8);
+        if b == 0 {
+            continue;
+        }
+        let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(b + 8) as u64]);
+        p.m.w::<u8>(cmd + 0x10, 1);
+        p.call(p.pfn(PFN_BIND_VERTEX_BUFFER_), &[cmd as u64, i as u64, addr, p.m.r32(b + 0x118) as u64]);
+    }
+}
+
+const DEVICE_HOLDER: usize = 0x462bbe8;
+
+/// main+0x96ac04(prog, w, slot, texture): the texture (+0x58 id, +0xea sampler) at the program's slots for `slot`
+/// (+0x70 table, 16-byte entries, count +0x68; bytes for stages 0, 1, 2 and 5); whether the program has them. A
+/// texture the game is still finishing (+0xe4) is not predicted.
+unsafe fn program_texture(p: &mut Port, prog: usize, w: usize, slot: u32, tex: usize) -> R<bool> {
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let i = if p.m.r32(prog + 0x68) > slot { slot } else { 0 } as usize;
+    let slots = p.m.r32(p.m.r64(prog + 0x70) + i * 16);
+    if slots == u32::MAX {
+        return Ok(false);
+    }
+    if p.m.r32(tex + 0xe4) != 0 {
+        return Err("agl texture still finishing");
+    }
+    let id = p.m.i32(tex + 0x58);
+    let smp = p.m.r16(tex + 0xea) as i16 as i32;
+    if id == -1 || smp == -1 {
+        return Ok(false);
+    }
+    let dev = p.m.r64(p.m.r64(p.m.r64(p.base + DEVICE_HOLDER)) + 0x30);
+    let h = p.query(p.pfn(PFN_DEVICE_GET_TEXTURE_HANDLE), &[dev as u64, id as u32 as u64, smp as u32 as u64]);
+    let cmd = p.m.r64(w + 0xb8) as u64;
+    for (k, stage) in [(0, 0u64), (1, 1), (2, 2), (3, 5)] {
+        let b = (slots >> (k * 8)) as u8;
+        if b != 0xff {
+            p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd, stage, b as i8 as i64 as u64, h]);
+        }
+    }
+    Ok(true)
 }

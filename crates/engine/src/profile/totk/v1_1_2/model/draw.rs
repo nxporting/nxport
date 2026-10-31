@@ -224,6 +224,15 @@ impl Port {
         out
     }
 
+    /// main+0x960088: the same allocation, called with the ring and returning the block.
+    pub(super) unsafe fn ring_block_direct(&mut self, data: usize, size: usize) -> usize {
+        if self.m.predict() {
+            return super::ring::predict(self.base, data, size);
+        }
+        let ring = self.m.r64(self.m.r64(self.base + super::ring::RING_HOLDER));
+        self.call(self.base + super::ring::BLOCK_SITE, &[ring as u64, data as u64, size as u64]) as usize
+    }
+
     /// A sead::Delegate1 object's target (main+ offset): Some(None) when the delegate is empty, None when its invoke is
     /// not sead's (each delegate type has its own copy of the invoke; copies are recognised by their code, which has no
     /// PC-relative references: the 12 words of main+0x27d0a6c).

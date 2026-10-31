@@ -8,7 +8,10 @@ use std::cell::RefCell;
 
 pub(super) const SITE: usize = 0x96b068;
 pub(super) const SITE_INSTRUCTION: u32 = 0xd103c3ff; // sub sp, sp, #0xf0
-const RING_HOLDER: usize = 0x4634f48;
+/// main+0x960088(ring, data, size): the same allocation returning the block.
+pub(super) const BLOCK_SITE: usize = 0x960088;
+pub(super) const BLOCK_SITE_INSTRUCTION: u32 = 0xd10383ff; // sub sp, sp, #0xe0
+pub(super) const RING_HOLDER: usize = 0x4634f48;
 /// Symbolic GPU addresses: placeholder k at SYMBOLIC + k * SPAN.
 const SYMBOLIC: u64 = 0x7e57_0000_0000;
 const SPAN: u64 = 1 << 24;
@@ -134,4 +137,20 @@ pub unsafe extern "C" fn on_ring_alloc_end() -> u32 {
         }
     });
     0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_ring_block() -> u32 {
+    0
+}
+
+/// The block main+0x960088 returns (passed back as its return value).
+#[no_mangle]
+pub unsafe extern "C" fn on_ring_block_end(block: usize) -> usize {
+    ALLOCATED.with(|a| {
+        if let Some(a) = a.borrow_mut().as_mut() {
+            a.push(block);
+        }
+    });
+    block
 }
