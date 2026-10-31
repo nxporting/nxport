@@ -1915,7 +1915,7 @@ unsafe fn xlu_z_prepass(p: &mut Port, x: usize, w: usize, v: usize, mode: u32, f
         for &kind in order {
             let mut a = [0u64; 0x88 / 8];
             let b = a.as_mut_ptr() as usize;
-            p.m.forget(b, 0x88);
+            p.m.own(b, 0x88);
             let m = &mut p.m;
             let zonly = mode == 0x4000;
             m.w::<u32>(b, match kind {
@@ -1940,7 +1940,7 @@ unsafe fn xlu_z_prepass(p: &mut Port, x: usize, w: usize, v: usize, mode: u32, f
             m.w::<u64>(b + 0x70, (p.base + PREPASS_NAMES[kind]) as u64);
             let r = p.m.r64(x + if kind < 2 { 8 } else { 0x10 });
             let done = prepass_pass(p, r, w, b, v, flag, user);
-            p.m.forget(b, 0x88);
+            p.m.disown(b);
             done?;
         }
     }

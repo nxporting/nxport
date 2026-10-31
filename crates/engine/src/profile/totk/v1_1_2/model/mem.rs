@@ -5,15 +5,17 @@ use rustc_hash::FxHashMap as HashMap;
 
 pub(super) struct Mem {
     overlay: Option<HashMap<usize, u8>>,
+    /// Host buffers the port builds and hands to game code (start, length): written directly, never overlaid.
+    owned: Vec<(usize, usize)>,
 }
 
 impl Mem {
     pub(super) fn predicting() -> Self {
-        Mem { overlay: Some(HashMap::default()) }
+        Mem { overlay: Some(HashMap::default()), owned: Vec::new() }
     }
 
     pub(super) fn applying() -> Self {
-        Mem { overlay: None }
+        Mem { overlay: None, owned: Vec::new() }
     }
 
     pub(super) fn predict(&self) -> bool {
@@ -37,6 +39,9 @@ impl Mem {
     }
 
     pub(super) unsafe fn w<T: Copy>(&mut self, a: usize, v: T) {
+        if self.owned.iter().any(|&(s, n)| a >= s && a < s + n) {
+            return std::ptr::write_unaligned(a as *mut T, v);
+        }
         match &mut self.overlay {
             None => std::ptr::write_unaligned(a as *mut T, v),
             Some(o) => {
@@ -48,8 +53,19 @@ impl Mem {
         }
     }
 
-    /// Drops predicted writes to `a..a + len` (host buffers the port reuses).
-    pub(super) fn forget(&mut self, a: usize, len: usize) {
+    /// A host buffer of the port's (`a..a + len`) that game code may read: written directly from now on (game code
+    /// called with it sees what the port wrote).
+    pub(super) fn own(&mut self, a: usize, len: usize) {
+        self.forget(a, len);
+        self.owned.push((a, len));
+    }
+
+    /// The end of a buffer given to `own`.
+    pub(super) fn disown(&mut self, a: usize) {
+        self.owned.retain(|e| e.0 != a);
+    }
+
+    fn forget(&mut self, a: usize, len: usize) {
         if let Some(o) = &mut self.overlay {
             if !o.is_empty() {
                 for k in a..a + len {

@@ -89,6 +89,23 @@ pub unsafe extern "C" fn on_model_draw(d: usize, c: usize, shape: u32, flags: u3
 thread_local! {
     /// The view (+0x30) and pass kind (+0xb0) of the render list being checked.
     static LIST_KEY: std::cell::Cell<Option<(u8, u32)>> = const { std::cell::Cell::new(None) };
+    /// The render list being checked (list, count, ctx, mask, flags), for the second prediction after the game's call.
+    static LIST_ARGS: std::cell::Cell<Option<(usize, u32, usize, u32, u32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Render-list differences the second prediction reproduced (the port read state that changed during the game's call).
+static MOVED: AtomicU64 = AtomicU64::new(0);
+
+/// A render list that differed predicted again after the game's call: whether the game's command at the first
+/// difference `i` is now predicted.
+unsafe fn moved_during_call(got: &[String], i: usize) -> bool {
+    let Some((list, count, c, mask, flags)) = LIST_ARGS.with(|a| a.take()) else { return false };
+    let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+    let mut result = Ok(());
+    let again = crate::nvn::api::capture_dry(|| result = render_list::draw_list(&mut port, list, count, c, mask, flags));
+    ring::discard();
+    vfx::discard_blocks();
+    result.is_ok() && again.get(i).is_some() && again.get(i) == got.get(i)
 }
 
 /// Render-list checks by (view, pass kind): (same, different).
@@ -123,8 +140,13 @@ pub unsafe extern "C" fn on_model_draw_end() -> u32 {
     };
     tally_view(expected == got);
     if expected == got {
+        LIST_ARGS.with(|a| a.set(None));
         SAME.fetch_add(1, Ordering::Relaxed);
         return 0;
+    }
+    let first = (0..expected.len().max(got.len())).find(|&i| expected.get(i) != got.get(i)).unwrap_or(0);
+    if moved_during_call(&got, first) {
+        MOVED.fetch_add(1, Ordering::Relaxed);
     }
     let k = DIFFERENT.fetch_add(1, Ordering::Relaxed);
     if k < 6 {
@@ -180,6 +202,7 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
     match result {
         Ok(()) => {
             LIST_KEY.with(|k| k.set(Some((*((c + 0x30) as *const u8), *((c + 0xb0) as *const u32)))));
+            LIST_ARGS.with(|a| a.set(Some((list, count, c, mask, flags))));
             EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
             ring::watch();
             crate::nvn::api::capture_collect();
@@ -571,8 +594,10 @@ fn report() {
         );
     }
     println!(
-        "[model-draw] {n} calls: {:.1}% identical, {diff} different; unported: {}",
+        "[model-draw] {n} calls: {:.1}% identical, {diff} different ({} reproduced by predicting again after the game's \
+         call); unported: {}",
         same as f64 * 100.0 / n as f64,
+        MOVED.load(Ordering::Relaxed),
         stops.join(", ")
     );
 }
