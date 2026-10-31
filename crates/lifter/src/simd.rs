@@ -1326,7 +1326,9 @@ fn fp_dp2(w: u32) -> R {
     const OPS: [&str; 9] =
         ["FOP_MUL", "FOP_DIV", "FOP_ADD", "FOP_SUB", "FOP_MAX", "FOP_MIN", "FOP_MAXNM", "FOP_MINNM", "FOP_NMUL"];
     let Some(fop) = OPS.get(opc as usize) else { return un("fp dp2") };
-    Ok(format!("fp_op_{}(c, {fop}, {d}, {n}, {m});", FT[t as usize].f))
+    // fp_op_s / fp_op_d spelled out: the registers appear in the text, so the lifter can keep them in locals.
+    let ft = &FT[t as usize];
+    Ok(format!("{}({d}, op_{}(c, {fop}, {}({n}), {}({m}), 0));", ft.set, ft.f, ft.sf, ft.sf))
 }
 
 fn fp_dp1(w: u32) -> R {
@@ -1350,7 +1352,7 @@ fn fp_dp1(w: u32) -> R {
         0 => format!("c->v[{d}] = {su}({n});"),
         1 => format!("c->v[{d}] = {su}({n}) & ~{sign};"),
         2 => format!("c->v[{d}] = {su}({n}) ^ {sign};"),
-        3 => format!("fp_op_{f}(c, FOP_SQRT, {d}, {n}, {n});"),
+        3 => format!("{set}({d}, op_{f}(c, FOP_SQRT, {sf}({n}), {sf}({n}), 0));"),
         4 | 5 | 7 => {
             let to = match opc {
                 4 => 0,
