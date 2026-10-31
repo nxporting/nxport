@@ -1736,14 +1736,35 @@ const PFN_SET_POINT_SIZE: usize = 0x466e198;
 const PFN_RESET_COUNTER: usize = 0x466e238;
 
 /// main+0xed7a84(obj, pass, ctx): the gsys decal / occlusion drawable. Pass 0, once per view (the view's +10 bit 0):
-/// the occlusion queries of main+0xa6c318. Pass 1 (the decal drawer agl::fx::DecalDrawer and the translucent Z
-/// pre-pass) is not ported.
+/// the occlusion queries of main+0xa6c318. Pass 1: the decal drawers (agl::fx::DecalDrawer, main+0xed81a0) and the
+/// translucent Z pre-pass (gsys::XluZPrePass, main+0xed7cd8).
 pub(super) unsafe fn decal_forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R<()> {
     let bv = p.m.r8(c + 0x30) as u32;
     let vi = if p.m.r32(obj + 0x1a0) > bv { bv } else { 0 } as usize;
     let w = p.m.r64(c + 0x20);
     match pass {
-        1 => Err("decal drawer"),
+        1 => {
+            let dd = p.m.r64(obj + 0x1e60);
+            if dd != 0 {
+                let g = p.m.r64(obj + 0x1df8);
+                if p.m.r8(g + 0x1458) != 0 && p.m.r8(g + 0x610) != 0 && p.m.r8(dd + 0x1d4) & 2 == 0 {
+                    decal_drawers(p, obj, w, bv)?;
+                }
+            }
+            let vi = if p.m.r32(obj + 0x1a0) > p.m.r8(c + 0x30) as u32 { p.m.r8(c + 0x30) } else { 0 } as usize;
+            if p.m.r8(p.m.r64(obj + 0x1d8) + 0x830) == 0 {
+                return Ok(());
+            }
+            let v = p.m.r64(obj + 0x1a8) + vi * 0x19f0;
+            let i = p.m.r8(v + 0x64b) as i8 as i32;
+            let i = if p.m.i32(obj + 0x42e8) as u32 > i as u32 { i } else { 0 };
+            let t = p.m.r64(obj + 0x42f0).wrapping_add((i as i64 * 0x748) as usize);
+            let live = |p: &Port, q: usize| p.m.i32(q + 0x2c) >= 1 && p.m.r32(q + 0x14) & 0xc000 != 0;
+            if !live(p, p.m.r64(t + 0x6f0)) && !live(p, p.m.r64(t + 0x6f8)) {
+                return Ok(());
+            }
+            xlu_z_prepass(p, t + 0x6e8, w, v, 0x4000, (p.m.r16(c + 0x40) >> 9) as u32 & 1, p.m.r64(c + 0x1b0) as u64)
+        }
         0 => {
             let v = p.m.r64(obj + 0x1a8) + vi * 0x19f0;
             if p.m.r8(v + 10) & 1 != 0 {
@@ -1755,6 +1776,109 @@ pub(super) unsafe fn decal_forward(p: &mut Port, obj: usize, pass: u32, c: usize
         }
         _ => Ok(()),
     }
+}
+
+/// The decal drawer loop of main+0xed7a84: agl::fx::DecalDrawer::draw(drawer, w, view, ..., decal, 1) per decal. A
+/// drawer with a shadow mask copies its offscreen buffer setup (agl::sdw::ShadowMask::setupOffscrBuffer) first; the
+/// decals' own draws (virtual +0x10) are not ported.
+unsafe fn decal_drawers(p: &mut Port, obj: usize, w: usize, view: u32) -> R<()> {
+    let dd = p.m.r64(obj + 0x1e60);
+    let n = p.m.i32(dd + 0x210);
+    if n < 1 {
+        return Ok(());
+    }
+    let drawer = p.m.r64(obj + 0x1e50);
+    let views = p.m.r64(obj + 0x1ec0);
+    let vk = if p.m.r32(views + 8) > view { view } else { 0 } as usize;
+    let rec = p.m.r64(views + 0x10) + vk * 0x21b0 + (p.m.r32(drawer + 0x240) == 1) as usize * 0x740;
+    for i in 0..n as usize {
+        let d = p.m.r64(p.m.r64(dd + 0x218) + i * 8);
+        if p.m.r8(drawer + 0x220) == 0 {
+            continue;
+        }
+        let k = if p.m.r32(drawer + 0x1c0) > view { view } else { 0 } as usize;
+        let mask = p.m.r64(drawer + 0x1c8) + k * 0x440;
+        shadow_mask_setup(p, mask, rec + 0x700)?;
+        if d != 0 {
+            return callback(p.base + p.vfn(d, 0x10), p.base);
+        }
+    }
+    Ok(())
+}
+
+/// agl::sdw::ShadowMask::setupOffscrBuffer(mask, src) (main+0xff07a0): copies the offscreen buffer description, moving
+/// the texture descriptor slot references (+0x58) from the old to the new slot. Predicting only copies the bytes; the
+/// references are the game's to move.
+unsafe fn shadow_mask_setup(p: &mut Port, mask: usize, src: usize) -> R<()> {
+    if !p.m.predict() {
+        p.call(p.base + 0xff07a0, &[mask as u64, src as u64]);
+        return Ok(());
+    }
+    for o in (0..0x58).step_by(4) {
+        p.m.w::<u32>(mask + o, p.m.r32(src + o));
+    }
+    for o in (0x60..0xb0).step_by(4) {
+        p.m.w::<u32>(mask + o, p.m.r32(src + o));
+    }
+    p.m.w::<u32>(mask + 0x58, p.m.r32(src + 0x58));
+    p.m.w::<u32>(mask + 0xe4, p.m.r32(mask + 0xe4) | 1);
+    Ok(())
+}
+
+const PREPASS_ARG_VTABLE: usize = 0x4634f18;
+const PREPASS_NAMES: [usize; 4] = [0x37d5dcd, 0x37a450f, 0x37b4f69, 0x37a4530];
+
+/// gsys::XluZPrePass::draw(x, w, view, mode, flag, user) (main+0xed7cd8): per model x+0x20[k] four model passes of
+/// the renderers x+8 (opaque: Z only, alpha mask) and x+0x10 (translucent: Z only, colour); with x+0x38 bit 0 the
+/// translucent Z-only pass runs right after the opaque Z-only one (main+0xed8268).
+unsafe fn xlu_z_prepass(p: &mut Port, x: usize, w: usize, v: usize, mode: u32, flag: u32, user: u64) -> R<()> {
+    let n = p.m.i32(x + 0x18).max(0) as usize;
+    let early = p.m.r8(x + 0x38) & 1 != 0;
+    for k in 0..n {
+        let e = p.m.r64(p.m.r64(x + 0x20) + k * 8);
+        let order: &[usize] = if early { &[0, 2, 1, 3] } else { &[0, 1, 2, 3] };
+        for &kind in order {
+            let mut a = [0u64; 0x88 / 8];
+            let b = a.as_mut_ptr() as usize;
+            p.m.forget(b, 0x88);
+            let m = &mut p.m;
+            let zonly = mode == 0x4000;
+            m.w::<u32>(b, match kind {
+                2 => if zonly { 0x8000 } else { 0x10000 },
+                _ => mode,
+            });
+            m.w::<u32>(b + 4, if kind & 1 == 0 { 1 } else { 9 });
+            m.w::<u32>(b + 0xc, [0x40_0001, 0x40_0800, 0x40_0001, 0x42_0800][kind]);
+            m.w::<i32>(b + 0x10, m.r16(e + 4) as i16 as i32);
+            m.w::<u32>(b + 0x14, 4);
+            m.w::<u32>(b + 0x18, if zonly { 0x14 } else { 0x1b });
+            m.w::<i32>(b + 0x1c, -1);
+            m.w::<u32>(b + 0x24, 1);
+            m.w::<i32>(b + 0x2c, -1);
+            m.w::<u32>(b + 0x30, [13, 15, 14, 16][kind]);
+            for o in [0x38, 0x3c, 0x40, 0x44] {
+                m.w::<f32>(b + o, 1.0);
+            }
+            m.w::<u32>(b + 0x48, if kind == 1 { mode } else { 0 });
+            m.w::<i32>(b + 0x4c, -1);
+            m.w::<u64>(b + 0x50, m.r64(p.base + PREPASS_ARG_VTABLE) as u64 + 0x10);
+            m.w::<u64>(b + 0x70, (p.base + PREPASS_NAMES[kind]) as u64);
+            let r = p.m.r64(x + if kind < 2 { 8 } else { 0x10 });
+            let done = prepass_pass(p, r, w, b, v, flag, user);
+            p.m.forget(b, 0x88);
+            done?;
+        }
+    }
+    Ok(())
+}
+
+/// main+0xed8070(renderer, w, args, view, flag, out, user): one model pass, between listener events unless `flag`.
+unsafe fn prepass_pass(p: &mut Port, r: usize, w: usize, a: usize, v: usize, flag: u32, user: u64) -> R<()> {
+    let l = v + 0x570;
+    if flag & 1 == 0 && p.query(p.base + p.vfn(l, 0x10), &[l as u64]) & 1 != 0 {
+        return Err("model pass listener");
+    }
+    super::render_list::model_pass(p, r, w, a, v, 0, -1, flag & 1, 0, user)
 }
 
 /// main+0xa6c318 -> main+0xa6c3a4(q, w, view, 1): a graphics context for occlusion boxes (no color writes unless

@@ -47,7 +47,7 @@ fn abs(v: f32) -> f32 {
     if !(v >= 0.0) { -v } else { v }
 }
 
-unsafe fn worker(p: &Port) -> u32 {
+pub(super) unsafe fn worker(p: &Port) -> u32 {
     let v = p.query(p.base + TLS_GET, &[p.m.r32(p.m.r64(p.base + WORKER_KEY)) as u64]);
     if v == 0 { p.query(p.base + CORE, &[]) as u32 } else { (v as u32).wrapping_sub(1) }
 }
