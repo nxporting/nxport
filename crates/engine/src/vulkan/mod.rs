@@ -114,6 +114,16 @@ impl Backend for Vulkan {
     }
 
     fn submit(&self, lists: &[u64]) {
+        // The thread submitting (the game's Presentation Thread) and vk-record share one L3 cache from the first submit.
+        static PINNED: std::sync::Once = std::sync::Once::new();
+        PINNED.call_once(|| {
+            let mask = unsafe { recording_affinity() };
+            if mask != 0 {
+                println!("[vulkan] recording threads on processors {mask:#x} (one L3 cache)");
+            }
+            REC_AFFINITY.store(mask, Ordering::Release);
+            unsafe { pin_current_thread(mask) };
+        });
         let guard_on = crate::gpu::report_guard::mode() != crate::settings::ReportGuard::Off;
         // Every list the submit reaches, fetched under one lock (a submit reaches ~3,000; one lock each was ~5% of
         // recording) for the executor too.
@@ -312,6 +322,77 @@ impl Backend for Vulkan {
         let Some(c) = g.as_mut() else { return 0 };
         unsafe { c.gpu_only_textures(f) }
     }
+}
+
+/// The processors (mask) the recording threads run on, 0 until the first submit chose them, or for none in particular.
+/// Recording hands most of what it works out to vk-record (record.rs): batches of commands, descriptors, uniform copies.
+/// On a CPU with several L3 caches (Zen 2's core complexes) the two threads landed on different ones much of the time and
+/// every handover was a cross-complex cache miss. On the first complex TotK on Great Sky Island went 56.7-61.9 -> 66.5-70.5
+/// fps (Ryzen 7 3700X); on the second, 62.8-64.9 (the first L3 is taken, whatever the thread ran on before).
+static REC_AFFINITY: AtomicU64 = AtomicU64::new(0);
+
+/// The processors sharing the first L3 cache (the one of the lowest-numbered processor; 0: one L3 for all of them, or
+/// unknown).
+#[cfg(windows)]
+unsafe fn recording_affinity() -> u64 {
+    extern "system" {
+        fn GetLogicalProcessorInformationEx(relation: u32, buf: *mut u8, len: *mut u32) -> i32;
+    }
+    let mut len = 0u32;
+    GetLogicalProcessorInformationEx(2, std::ptr::null_mut(), &mut len);
+    let mut buf = vec![0u8; len as usize];
+    // RelationCache: SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX records with a CACHE_RELATIONSHIP each.
+    if len == 0 || GetLogicalProcessorInformationEx(2, buf.as_mut_ptr(), &mut len) == 0 {
+        return 0;
+    }
+    let (mut at, mut l3s, mut mine) = (0usize, 0, 0u64);
+    while at + 56 <= len as usize {
+        let r = &buf[at..];
+        let size = u32::from_le_bytes(r[4..8].try_into().unwrap()) as usize;
+        // Level, then the first GROUP_AFFINITY (mask, group) at 40.
+        let (level, mask, group) = (r[8], u64::from_le_bytes(r[40..48].try_into().unwrap()), u16::from_le_bytes(r[48..50].try_into().unwrap()));
+        if level == 3 && group == 0 {
+            l3s += 1;
+            if mine == 0 || (mask != 0 && mask.trailing_zeros() < mine.trailing_zeros()) {
+                mine = mask;
+            }
+        }
+        if size == 0 {
+            break;
+        }
+        at += size;
+    }
+    if l3s > 1 {
+        mine
+    } else {
+        0
+    }
+}
+
+#[cfg(not(windows))]
+unsafe fn recording_affinity() -> u64 {
+    0
+}
+
+/// Keeps the calling thread on processors `mask` (0: leaves it as it is).
+pub(crate) unsafe fn pin_current_thread(mask: u64) {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadAffinityMask(thread: *mut std::ffi::c_void, mask: usize) -> usize;
+        }
+        if mask != 0 {
+            SetThreadAffinityMask(GetCurrentThread(), mask as usize);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = mask;
+}
+
+/// The recording threads' processors, once chosen (vk-record follows them).
+pub(crate) fn rec_affinity() -> u64 {
+    REC_AFFINITY.load(Ordering::Acquire)
 }
 
 fn on_guest_main() -> bool {

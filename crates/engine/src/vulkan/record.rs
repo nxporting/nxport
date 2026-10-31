@@ -82,7 +82,16 @@ impl Recorder {
             .spawn(move || {
                 let mut cb = vk::CommandBuffer::null();
                 let mut sets = Sets::default();
+                let mut pinned = false;
                 while let Ok(mut b) = rx.recv() {
+                    // On the Presentation Thread's L3 cache once its first submit chose it (vulkan::REC_AFFINITY).
+                    if !pinned {
+                        let mask = crate::vulkan::rec_affinity();
+                        if mask != 0 {
+                            unsafe { crate::vulkan::pin_current_thread(mask) };
+                            pinned = true;
+                        }
+                    }
                     for op in b.ops.drain(..) {
                         match op {
                             Op::Bind(mut j) => unsafe {
