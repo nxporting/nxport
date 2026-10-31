@@ -11,7 +11,7 @@ const TERRAIN_DRAW: usize = 0x2a47078;
 const DISPATCH_DRAW: usize = 0x763718;
 const FORWARD_DRAW: usize = 0x2a3f77c;
 const STATE_HOOK: usize = 0x27d0468;
-const PFN_BARRIER: usize = 0x466e290;
+pub(super) const PFN_BARRIER: usize = 0x466e290;
 /// Holders of global game objects (pointers to the pointer).
 const GRAPHICS_FLAGS_HOLDER: usize = 0x462bbf0;
 pub(super) const SCENE_HOLDER: usize = 0x462bc08;
@@ -77,6 +77,7 @@ unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) ->
     match f {
         0x27e04b8 | 0x26ae888 => {}
         0x9c8d00 => super::vfx::forward(p, obj, index, c)?,
+        0xed7a84 => super::vfx::decal_forward(p, obj, index, c)?,
         // A barrier before the first four views (ORDER_FRAGMENTS | INVALIDATE_TEXTURE, + INVALIDATE_SHADER with a
         // graphics flag).
         0x27d0104 => {
