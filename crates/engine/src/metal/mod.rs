@@ -3375,6 +3375,8 @@ impl Gfx {
                             ModelItem::Bind { stage, index, kind } => apply_model_bind(st, *stage, *index, *kind),
                             ModelItem::RenderState(r) => apply_render_state(st, r),
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
+                            ModelItem::VertexAttribs(a) => st.vertex_attribs = *a,
+                            ModelItem::VertexStreams(v) => st.vertex_streams.clone_from(v),
                             ModelItem::TexturesDeferred { stage, first, count, handles } => {
                                 apply_textures_deferred(st, *stage, *first, *count, *handles)
                             }
@@ -8340,6 +8342,9 @@ fn apply_model_bind(st: &mut State, stage: i32, index: i32, kind: crate::nvn::cm
         }
         ModelBindKind::Texture(handle) => {
             st.textures_bound.insert((stage, index), handle);
+        }
+        ModelBindKind::Vertex { addr, size } => {
+            st.vertex_buffers.insert(index, (addr, size));
         }
     }
 }

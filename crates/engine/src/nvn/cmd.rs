@@ -329,6 +329,8 @@ pub enum ModelItem {
     Draw(ModelRange),
     RenderState(Box<RenderState>),
     Program { program: usize, stages: i32 },
+    VertexAttribs(AttribState),
+    VertexStreams(Vec<u64>),
     DrawArrays { mode: i32, first: i32, count: i32, base_instance: i32, instances: i32 },
     /// Texture handles read from guest memory when the commands run (the game fills the table later).
     TexturesDeferred { stage: i32, first: i32, count: i32, handles: u64 },
@@ -342,7 +344,11 @@ impl ModelItem {
                 ModelBindKind::Uniform { addr, size } => Cmd::BindUniformBuffer { stage, index, addr, size },
                 ModelBindKind::Storage { addr, size } => Cmd::BindStorageBuffer { stage, index, addr, size },
                 ModelBindKind::Texture(handle) => Cmd::BindTexture { stage, index, handle },
+                ModelBindKind::Vertex { addr, size } => Cmd::BindVertexBuffer { index, addr, size },
             },
+            ModelItem::VertexAttribs(a) => Cmd::BindVertexAttribState(a),
+            ModelItem::VertexStreams(ref v) => Cmd::BindVertexStreamState(v.clone()),
+            ModelItem::Program { program, stages } => Cmd::BindProgram { program, stages },
             ModelItem::Draw(r) => Cmd::DrawElementsInstanced {
                 mode: r.mode,
                 index_type: r.index_type,
@@ -366,6 +372,8 @@ pub enum ModelBindKind {
     Uniform { addr: u64, size: usize },
     Storage { addr: u64, size: usize },
     Texture(u64),
+    /// A vertex buffer (`index` is the stream).
+    Vertex { addr: u64, size: usize },
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]

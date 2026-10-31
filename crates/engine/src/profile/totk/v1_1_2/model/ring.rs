@@ -19,6 +19,8 @@ const SPAN: u64 = 1 << 24;
 struct Placeholder {
     obj: Box<[u8; 0x88]>,
     data: Vec<u8>,
+    /// Allocated by code the game inlined (the hooks do not see it): resolved from the game's commands.
+    inline: bool,
 }
 
 thread_local! {
@@ -31,6 +33,15 @@ thread_local! {
 
 /// A predicted allocation: `data` (`size` bytes) -> the placeholder block object.
 pub(super) unsafe fn predict(base: usize, data: usize, size: usize) -> usize {
+    predict_as(base, data, size, false)
+}
+
+/// A predicted allocation the game makes with an inlined copy of the allocator.
+pub(super) unsafe fn predict_inline(base: usize, data: usize, size: usize) -> usize {
+    predict_as(base, data, size, true)
+}
+
+unsafe fn predict_as(base: usize, data: usize, size: usize, inline: bool) -> usize {
     let ring = *(((*((base + RING_HOLDER) as *const usize)) as *const usize));
     let template = *((ring + 0x50) as *const usize);
     let mut obj = Box::new([0u8; 0x88]);
@@ -46,7 +57,7 @@ pub(super) unsafe fn predict(base: usize, data: usize, size: usize) -> usize {
         obj[0x38..0x3c].copy_from_slice(&rounded.to_le_bytes());
         obj[0x3c..0x40].copy_from_slice(&rounded.to_le_bytes());
         let a = obj.as_ptr() as usize;
-        p.push(Placeholder { obj, data });
+        p.push(Placeholder { obj, data, inline });
         a
     })
 }
@@ -63,17 +74,32 @@ pub(super) fn watch() {
 }
 
 /// Resolves the predicted commands against the game's allocations: Ok(expected with real addresses), Err(reason).
-pub(super) unsafe fn resolve(mut expected: Vec<String>) -> Result<Vec<String>, String> {
+pub(super) unsafe fn resolve(expected: Vec<String>) -> Result<Vec<String>, String> {
+    resolve_with(expected, &[])
+}
+
+/// As resolve; inline allocations are found in the game's commands `got` (the address at the same place of the same
+/// command), their contents checked there.
+pub(super) unsafe fn resolve_with(mut expected: Vec<String>, got: &[String]) -> Result<Vec<String>, String> {
     let predicted = PREDICTED.with(|p| std::mem::take(&mut *p.borrow_mut()));
     let allocated = ALLOCATED.with(|a| a.borrow_mut().take());
     if predicted.is_empty() {
         return Ok(expected);
     }
     let allocated = allocated.unwrap_or_default();
-    if allocated.len() != predicted.len() {
-        return Err(format!("ring allocations: port {}, game {}", predicted.len(), allocated.len()));
+    let hooked: Vec<usize> = (0..predicted.len()).filter(|&k| !predicted[k].inline).collect();
+    if allocated.len() != hooked.len() {
+        return Err(format!("ring allocations: port {}, game {}", hooked.len(), allocated.len()));
     }
-    for (k, (p, &real)) in predicted.iter().zip(&allocated).enumerate() {
+    let mut addrs = vec![0u64; predicted.len()];
+    for (&k, &b) in hooked.iter().zip(&allocated) {
+        addrs[k] = *((b + 0x78) as *const u64);
+    }
+    if hooked.len() != predicted.len() {
+        inline_addresses(&predicted, &expected, got, &mut addrs)?;
+    }
+    for (&k, &real) in hooked.iter().zip(&allocated) {
+        let p = &predicted[k];
         // The fields a binding reads (vtable, size, count, shift) are the template's: they must be the block's.
         let r = std::slice::from_raw_parts(real as *const u8, 0x88);
         for o in (0..8).chain(0x38..0x43) {
@@ -86,11 +112,55 @@ pub(super) unsafe fn resolve(mut expected: Vec<String>) -> Result<Vec<String>, S
             return Err(format!("ring block {k}: data differs"));
         }
     }
-    let real: Vec<u64> = allocated.iter().map(|&b| *((b + 0x78) as *const u64)).collect();
     for s in expected.iter_mut() {
-        *s = substitute(s, &real);
+        *s = substitute(s, &addrs);
     }
     Ok(expected)
+}
+
+/// The numbers of `s` (decimal or 0x hex) in order.
+fn numbers(s: &str) -> Vec<u64> {
+    let b = s.as_bytes();
+    let mut v = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() && (i == 0 || !b[i - 1].is_ascii_alphanumeric()) {
+            let hex = b[i] == b'0' && b.get(i + 1) == Some(&b'x');
+            let d = if hex { i + 2 } else { i };
+            let mut j = d;
+            while j < b.len() && (if hex { b[j].is_ascii_hexdigit() } else { b[j].is_ascii_digit() }) {
+                j += 1;
+            }
+            v.push(u64::from_str_radix(&s[d..j], if hex { 16 } else { 10 }).unwrap_or(0));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    v
+}
+
+/// Addresses of inline allocations: the number of the game's command at the place of the symbolic one, with the
+/// placeholder's data found at that address.
+unsafe fn inline_addresses(predicted: &[Placeholder], expected: &[String], got: &[String], addrs: &mut [u64]) -> Result<(), String> {
+    for (i, e) in expected.iter().enumerate() {
+        let gn = got.get(i).map(|g| numbers(g)).unwrap_or_default();
+        for (j, v) in numbers(e).into_iter().enumerate() {
+            let k = v.wrapping_sub(SYMBOLIC) / SPAN;
+            if v < SYMBOLIC || k as usize >= predicted.len() || !predicted[k as usize].inline || addrs[k as usize] != 0 {
+                continue;
+            }
+            let Some(&r) = gn.get(j) else { return Err(format!("ring block {k}: no address in the game's command")) };
+            let base = r.wrapping_sub(v - SYMBOLIC - k * SPAN);
+            let p = &predicted[k as usize];
+            let cpu = crate::nvn::api::translate_virtual(base as usize);
+            if !p.data.is_empty() && (cpu == 0 || std::slice::from_raw_parts(cpu as *const u8, p.data.len()) != p.data.as_slice()) {
+                return Err(format!("ring block {k} (inline): data differs"));
+            }
+            addrs[k as usize] = base;
+        }
+    }
+    Ok(())
 }
 
 /// Every number in `s` (decimal or 0x hex) inside a symbolic range, replaced by the real address in the same notation.

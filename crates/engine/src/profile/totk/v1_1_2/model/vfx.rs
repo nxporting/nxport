@@ -11,7 +11,6 @@ const PFN_BIND_CHANNEL_MASK_STATE: usize = 0x466df78;
 const PFN_BIND_COLOR_STATE: usize = 0x466df80;
 const PFN_SET_BLEND_COLOR: usize = 0x466e190;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
-const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
 const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
 const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
 const GOT_DRAW_ARRAYS_INSTANCED: usize = 0x4613b88;
@@ -341,8 +340,8 @@ unsafe fn draw_arrays(p: &mut Port, g: usize, topology: u32, count: u32, first: 
 /// main+0x7650f4: vertex attribute and stream states.
 unsafe fn bind_vertex_state(p: &mut Port, g: usize, s: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
-    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd, p.m.r32(s + 8) as u64, p.m.r64(s + 0x18) as u64]);
-    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd, p.m.r32(s + 4) as u64, p.m.r64(s + 0x10) as u64]);
+    p.bind_vertex_attribs(cmd as usize, p.m.r32(s + 8) as i32, p.m.r64(s + 0x18));
+    p.bind_vertex_streams(cmd as usize, p.m.r32(s + 4) as i32, p.m.r64(s + 0x10));
 }
 
 /// main+0x843c(sys, g, emitter, a3, params, cache): returns whether the emitter was drawn (sets its +0x30 bit 7).
@@ -1776,7 +1775,6 @@ unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32,
     draw_view(p, gr, w, l + 0x78, n as u32, bit, a3.as_ptr() as usize, (fl >> 2) & 1)
 }
 
-const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
 const PFN_BIND_VERTEX_BUFFER_: usize = 0x466dfb8;
 const PROGRAM_BLOCK: usize = 0x4632818;
@@ -1788,7 +1786,7 @@ const DECAL_KINDS: usize = 0x462c1a8;
 /// main+0x7ef4b8: a shader program applied: when enabled (+0x20 bit 0) its program (+200, all stages) and, with
 /// +0x18 set, the shared block (global +0x78, size +0x38) at the slots +0x1c..+0x1f of stages 0, 1, 2 and 5. A program
 /// still being set up (+0x10) is not predicted.
-unsafe fn program_apply(p: &mut Port, prog: usize, w: usize) -> R<()> {
+pub(super) unsafe fn program_apply(p: &mut Port, prog: usize, w: usize) -> R<()> {
     if p.m.r32(prog + 0x10) != 0 {
         return Err("agl program setup pending");
     }
@@ -1796,7 +1794,7 @@ unsafe fn program_apply(p: &mut Port, prog: usize, w: usize) -> R<()> {
         return Ok(());
     }
     let cmd = p.m.r64(w + 0xb8) as u64;
-    p.call(p.pfn(PFN_BIND_PROGRAM), &[cmd, (prog + 200) as u64, 0x3f]);
+    p.bind_program(cmd as usize, prog + 200, 0x3f);
     if p.m.r32(prog + 0x18) == 0 {
         return Ok(());
     }
@@ -1804,8 +1802,7 @@ unsafe fn program_apply(p: &mut Port, prog: usize, w: usize) -> R<()> {
     for (k, st) in [(0usize, 0u64), (1, 1), (2, 2), (3, 5)] {
         let slot = p.m.i8(prog + 0x1c + k);
         if slot != -1 {
-            p.m.w::<u8>(cmd as usize + 0x10, 1);
-            p.call(p.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd, st, slot as i64 as u64, p.m.r64(g + 0x78) as u64, p.m.r64(g + 0x38) as u64]);
+            p.bind_uniform_buffer(cmd as usize, st as i32, slot as i32, p.m.r64(g + 0x78) as u64, p.m.r64(g + 0x38) as u64);
         }
     }
     Ok(())
@@ -1814,7 +1811,7 @@ unsafe fn program_apply(p: &mut Port, prog: usize, w: usize) -> R<()> {
 /// main+0x96306c(prog, w, index, block, element): the uniform block's element at the program's slots for `index`
 /// (+0x50 table, 16-byte entries, count +0x48); whether the program has them. A program still being set up (+0x14) is
 /// not predicted.
-unsafe fn program_block(p: &mut Port, prog: usize, w: usize, index: u32, block: usize, element: i32) -> R<bool> {
+pub(super) unsafe fn program_block(p: &mut Port, prog: usize, w: usize, index: u32, block: usize, element: i32) -> R<bool> {
     if p.m.r32(prog + 0x14) != 0 {
         return Err("agl program setup pending");
     }
@@ -1826,10 +1823,10 @@ unsafe fn program_block(p: &mut Port, prog: usize, w: usize, index: u32, block: 
 /// main+0x978ba4 / main+0xf216b4 / main+0x966e70: a shape's vertex states (+0x11c / +0x160), its vertex buffers (+0x108
 /// count, +0x110 buffers: address, size +0x118) and its indexed draw (+0x180 relative: prim +0xc, type +8, count
 /// +0x28, index buffer +0x30), `instances` times.
-unsafe fn shape_draw(p: &mut Port, shape: usize, mesh: usize, w: usize, instances: u32) {
+pub(super) unsafe fn shape_draw(p: &mut Port, shape: usize, mesh: usize, w: usize, instances: u32) {
     let cmd = p.m.r64(w + 0xb8) as u64;
-    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd, 0x10, (shape + 0x11c) as u64]);
-    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd, 0x10, (shape + 0x160) as u64]);
+    p.bind_vertex_attribs(cmd as usize, 0x10, shape + 0x11c);
+    p.bind_vertex_streams(cmd as usize, 0x10, shape + 0x160);
     let bufs = p.m.r64(shape + 0x110);
     for i in 0..p.m.r32(shape + 0x108) as usize {
         let b = p.m.r64(bufs + i * 8);
@@ -1838,7 +1835,7 @@ unsafe fn shape_draw(p: &mut Port, shape: usize, mesh: usize, w: usize, instance
         }
         let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(b + 8) as u64]);
         p.m.w::<u8>(cmd as usize + 0x10, 1);
-        p.call(p.pfn(PFN_BIND_VERTEX_BUFFER_), &[cmd, i as u64, addr, p.m.r32(b + 0x118) as u64]);
+        p.bind_vertex_buffer(cmd as usize, i as i32, addr, p.m.r32(b + 0x118) as usize);
     }
     let count = p.m.i32(mesh + 0x28);
     if count == 0 {

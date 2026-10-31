@@ -7,6 +7,7 @@ mod cells;
 mod dispatch;
 mod draw;
 mod grid;
+mod lights;
 mod gridtile;
 mod material;
 mod mem;
@@ -25,6 +26,8 @@ const SITE_INSTRUCTION: u32 = 0xd10383ff; // sub sp, sp, #0xe0
 const LIST_SITE: usize = 0x12de2a0;
 const LIST_SITE_INSTRUCTION: u32 = 0xd10183ff; // sub sp, sp, #0x60
 /// The dispatch drawable's draw (dispatch.rs), checked by itself when no enclosing render list is.
+const LIGHTS_SITE: usize = 0x9777c4;
+const LIGHTS_SITE_INSTRUCTION: u32 = 0xd10743ff; // sub sp, sp, #0x1d0
 const DISPATCH_SITE: usize = 0x763718;
 const MATERIAL_SITE: usize = 0x7b42f0;
 const MATERIAL_SITE_INSTRUCTION: u32 = 0xd10243ff; // sub sp, sp, #0x90
@@ -277,6 +280,100 @@ pub unsafe extern "C" fn on_dispatch_end() -> u32 {
     let k = DISPATCH_DIFFERENT.fetch_add(1, Ordering::Relaxed);
     if k < 6 {
         println!("[model-draw] dispatch mismatch #{k}:");
+        for i in 0..expected.len().max(got.len()) {
+            let (e, g) = (expected.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
+            println!("[model-draw]   {} port: {e}", if e == g { " " } else { "!" });
+            if e != g {
+                println!("[model-draw]     game: {g}");
+            }
+        }
+    }
+    0
+}
+
+static LIGHT_CALLS: AtomicU64 = AtomicU64::new(0);
+static LIGHT_SAME: AtomicU64 = AtomicU64::new(0);
+static LIGHT_DIFFERENT: AtomicU64 = AtomicU64::new(0);
+static LIGHT_STOPS: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static LIGHT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The light volumes main+0x9777c4: --verify-render-lists predicts and compares them; --native-render-lists draws
+/// them (undoably, left to the game where the port stops).
+#[no_mangle]
+pub unsafe extern "C" fn on_lights(obj: usize, w: usize, view: u32, arg: usize) -> u32 {
+    if crate::nvn::api::capturing() {
+        return 0;
+    }
+    LIGHT_CALLS.fetch_add(1, Ordering::Relaxed);
+    let base = crate::guest::loader::main_base();
+    let d = &crate::settings::get().totk.diagnostics;
+    let stop = |what: &'static str| {
+        let mut s = LIGHT_STOPS.lock().unwrap();
+        match s.iter_mut().find(|x| x.0 == what) {
+            Some(x) => x.1 += 1,
+            None => s.push((what, 1)),
+        }
+    };
+    if d.native_render_lists {
+        static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
+        let mut port = draw::Port::new(mem::Mem::applying_undoably(), base, metal && d.native_model_draws);
+        let (r, commands) = crate::nvn::api::capture_buffered(|| {
+            let r = lights::draw(&mut port, obj, w, view, arg);
+            if r.is_ok() {
+                port.flush();
+            }
+            r
+        });
+        ring::discard();
+        if let Err(what) = r {
+            port.discard();
+            port.m.rollback();
+            stop(what);
+            return 0;
+        }
+        crate::nvn::api::commit_buffered(commands);
+        return 1;
+    }
+    let mut port = draw::Port::new(mem::Mem::predicting(), base, false);
+    let mut result = Ok(());
+    let expected = crate::nvn::api::capture_dry(|| result = lights::draw(&mut port, obj, w, view, arg));
+    match result {
+        Ok(()) => {
+            LIGHT_EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            ring::watch();
+            crate::nvn::api::capture_collect();
+        }
+        Err(what) => {
+            ring::discard();
+            stop(what);
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_lights_end() -> u32 {
+    let Some(expected) = LIGHT_EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
+    let got = crate::nvn::api::capture_collected();
+    let expected = match ring::resolve_with(expected, &got) {
+        Ok(e) => e,
+        Err(why) => {
+            LIGHT_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+            println!("[model-draw] light volumes mismatch: {why}");
+            return 0;
+        }
+    };
+    if expected == got {
+        LIGHT_SAME.fetch_add(1, Ordering::Relaxed);
+        return 0;
+    }
+    let k = LIGHT_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+    if k < 4 {
+        println!("[model-draw] light volumes mismatch #{k}:");
         for i in 0..expected.len().max(got.len()) {
             let (e, g) = (expected.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
             println!("[model-draw]   {} port: {e}", if e == g { " " } else { "!" });
@@ -661,6 +758,17 @@ fn report() {
             vfx::report()
         );
     }
+    let ln = LIGHT_CALLS.load(Ordering::Relaxed);
+    if ln != 0 {
+        let s = LIGHT_STOPS.lock().unwrap().clone();
+        let stops: Vec<String> = s.iter().map(|(w, k)| format!("{w} {:.1}%", *k as f64 * 100.0 / ln as f64)).collect();
+        println!(
+            "[model-draw] light volumes: {ln} calls, {} identical, {} different; stops: {}",
+            LIGHT_SAME.load(Ordering::Relaxed),
+            LIGHT_DIFFERENT.load(Ordering::Relaxed),
+            stops.join(", ")
+        );
+    }
     let dn = DISPATCH_CALLS.load(Ordering::Relaxed);
     if dn != 0 {
         let mut s = DISPATCH_STOPS.lock().unwrap().clone();
@@ -697,6 +805,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_list(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
         hook(base, mem_space, LIST_SITE, LIST_SITE_INSTRUCTION, pre, post, "Render list");
+    }
+    if d.verify_render_lists || d.native_render_lists {
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_lights(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_lights_end())) as usize;
+        hook(base, mem_space, LIGHTS_SITE, LIGHTS_SITE_INSTRUCTION, pre, post, "Light volumes");
     }
     if d.verify_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_dispatch(_, _, _, _))) as usize;

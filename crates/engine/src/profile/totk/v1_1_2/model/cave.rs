@@ -472,9 +472,6 @@ pub(super) unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u
     p.draw_elements_instanced(cmd as usize, prim as i32, itype as i32, count as i32, addr, base_vertex, base_instance, instances as i32);
 }
 
-const PFN_BIND_VERTEX_BUFFER: usize = 0x466dfb8;
-const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
-const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
 const GRAPHICS_HOLDER: usize = 0x462bbf0;
 const WORKER_KEY: usize = 0x462af70;
 const TLS_GET: usize = 0x2b15be0;
@@ -573,8 +570,8 @@ unsafe fn chunks(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) 
     let core = worker(p);
     let pick = |p: &Port, n: usize| if p.m.r32(this + n) > core { core } else { 0 };
     let pc = (p.m.r64(this + 0x5a0) as i64 + pick(p, 0x598) as i32 as i64 * 0x340) as usize;
-    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd as u64, 0x10, (pc + 0x27c) as u64]);
-    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd as u64, 0x10, (pc + 0x2c0) as u64]);
+    p.bind_vertex_attribs(cmd as usize, 0x10, pc + 0x27c);
+    p.bind_vertex_streams(cmd as usize, 0x10, pc + 0x2c0);
     let view = p.m.r8(ctx + 0x46) as usize;
     let frustum = p.m.r64(p.m.r64(ctx + 0x10) + 0x18) + view * 0x430 + 0x60;
     let shadow = p.m.r64(info + 0x30);
@@ -705,7 +702,7 @@ unsafe fn chunks(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) 
                 let a = p.buffer_address_of(e + 8);
                 let size = p.m.r32(e + 0x118);
                 p.m.w::<u8>(cmd + 0x10, 1);
-                p.call(p.pfn(PFN_BIND_VERTEX_BUFFER), &[cmd as u64, k as u64, a, size as u64]);
+                p.bind_vertex_buffer(cmd as usize, k as i32, a, size as usize);
             }
             // The worker's index buffer over the same storage (+0x28: half the record's size, in elements of +0x2c).
             p.m.w::<u32>(ib + 0x10, p.m.r32(rec));
