@@ -82,6 +82,13 @@ static SAVED_POOL: std::sync::atomic::AtomicPtr<u8> = std::sync::atomic::AtomicP
 static SAVE_LOCK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 thread_local! {
     static RECORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WATCHER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks this thread as the one that completes submits (inflight.rs): it never waits for a submit to complete.
+pub(super) fn watcher_thread() {
+    engine_thread();
+    WATCHER.with(|w| w.set(true));
 }
 
 /// Marks this thread as one of the backend's own (its writes to held hot pages are not saved).
@@ -345,7 +352,11 @@ unsafe fn release_slot(gen: usize, i: usize) {
         return;
     }
     let (s, e, serial) = (t.start[i].load(Ordering::Acquire), t.end[i].load(Ordering::Acquire), t.serial[i].load(Ordering::Acquire));
-    wait_done(serial);
+    // The watcher writing back an earlier submit's results cannot wait for a later one (it completes them itself: each
+    // such fault waited out the 2 s timeout).
+    if !WATCHER.with(|w| w.get()) {
+        wait_done(serial);
+    }
     if ACTIVE.load(Ordering::Acquire) != gen {
         return; // rebuilt meanwhile: that unprotected this generation's ranges
     }
@@ -382,6 +393,10 @@ pub(super) unsafe fn fault(addr: usize) -> bool {
         return true;
     }
     if find(&TABLES[(gen + 1) & 1], addr).is_some() {
+        // Possibly a hot page held while a submit is recorded too: opened for the backend's threads as below. Left
+        // read-only, the watcher's write-back faulted until the recording ended, and the recording was waiting for the
+        // watcher (three submits in flight): the game hung.
+        hot_fault(addr);
         crate::guest::dirty_track::handle_fault(addr);
         return true;
     }
