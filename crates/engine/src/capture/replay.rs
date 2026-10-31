@@ -110,6 +110,11 @@ fn flatten(
                             typed: Some(Cmd::BindTexturesDeferred { stage: *stage, first: *first, count: *count, handles: *handles }),
                             args: None,
                         }),
+                        crate::nvn::cmd::ModelItem::Targets { colors, depth } => out.push(Op {
+                            name: "nvnCommandBufferSetRenderTargets".into(),
+                            typed: Some(Cmd::SetRenderTargets { colors: colors.clone(), depth: *depth }),
+                            args: None,
+                        }),
                         crate::nvn::cmd::ModelItem::Viewport { x, y, w, h, near, far } => {
                             let r = (*x, *y, *w, *h);
                             for (name, t) in [
