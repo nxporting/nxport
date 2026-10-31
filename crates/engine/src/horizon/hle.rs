@@ -193,7 +193,7 @@ pub unsafe extern "C" fn hle_strlen(s: *const c_char) -> usize {
 
 // 4. Horizon OS Thread & Mutex implementation (backed by thread-aware recursive lock)
 use std::cell::RefCell;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // Layout of nn::os::ThreadType (0x1B8 bytes in current titles; no `_lockHistory` field).
 //
@@ -687,39 +687,93 @@ pub unsafe extern "C" fn hle_nn_vi_GetNativeWindow(
 // and the "we don't have call-time visibility" gap were really the same
 // problem, just found from two different angles this session.
 const HLE_CALL_HISTORY_SIZE: usize = 4096;
-// Names are mostly literals: Cow keeps recording allocation-free (a String per call was ~9% of guest-main).
-type HleCallRing = StdMutex<std::collections::VecDeque<(u64, std::borrow::Cow<'static, str>)>>;
-// Each thread records into a ring of its own, whose lock only readers share: one ring for all threads had its lock
-// contended by every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime).
-// Readers merge the rings by sequence number.
-static HLE_CALL_RINGS: StdMutex<Vec<Arc<HleCallRing>>> = StdMutex::new(Vec::new());
-static HLE_CALL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Each thread records into a ring of its own, with plain stores: one ring for all threads had its lock contended by
+// every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime), and a lock per
+// thread (and a shared sequence counter) still cost 4-5% of the busy time of guest-main and the module workers.
+// Readers merge the rings by sequence number (on x86-64 the time stamp counter, synchronized across cores) and skip a
+// slot written while they read it. Names are 'static (literals,
+// and the rare formatted name interned once), so a slot is a sequence number and a str's pointer and length.
+const HLE_CALL_RING_SIZE: usize = 1024;
+struct HleCallSlot {
+    seq: AtomicU64, // 0: empty or being written
+    ptr: AtomicUsize,
+    len: AtomicUsize,
+}
+struct HleCallRing {
+    next: AtomicUsize,
+    slots: [HleCallSlot; HLE_CALL_RING_SIZE],
+}
+static HLE_CALL_RINGS: StdMutex<Vec<&'static HleCallRing>> = StdMutex::new(Vec::new());
+#[cfg(not(target_arch = "x86_64"))]
+static HLE_CALL_SEQ: AtomicU64 = AtomicU64::new(1);
 thread_local! {
-    static HLE_CALL_RING: Arc<HleCallRing> = {
-        let ring = Arc::new(HleCallRing::default());
-        HLE_CALL_RINGS.lock().unwrap().push(ring.clone());
-        ring
-    };
+    // Rings outlive their threads (HLE calls from TLS destructors still record), so the slot needs no destructor.
+    static HLE_CALL_RING: std::cell::Cell<Option<&'static HleCallRing>> = const { std::cell::Cell::new(None) };
+}
+
+fn intern_hle_call_name(name: String) -> &'static str {
+    static NAMES: StdMutex<Option<std::collections::HashSet<&'static str>>> = StdMutex::new(None);
+    let mut names = NAMES.lock().unwrap();
+    let names = names.get_or_insert_with(Default::default);
+    match names.get(name.as_str()) {
+        Some(&n) => n,
+        None => {
+            let n: &'static str = Box::leak(name.into_boxed_str());
+            names.insert(n);
+            n
+        }
+    }
 }
 
 pub fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
-    let seq = HLE_CALL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = name.into();
-    // Not once the thread's locals are gone (an HLE call from a TLS destructor).
-    let _ = HLE_CALL_RING.try_with(|ring| {
-        let mut hist = ring.lock().unwrap();
-        if hist.len() >= HLE_CALL_HISTORY_SIZE {
-            hist.pop_front();
-        }
-        hist.push_back((seq, name));
+    let name: &'static str = match name.into() {
+        std::borrow::Cow::Borrowed(n) => n,
+        std::borrow::Cow::Owned(n) => intern_hle_call_name(n),
+    };
+    let ring = HLE_CALL_RING.with(|r| {
+        r.get().unwrap_or_else(|| {
+            let ring: &'static HleCallRing = Box::leak(Box::new(HleCallRing {
+                next: AtomicUsize::new(0),
+                slots: std::array::from_fn(|_| HleCallSlot {
+                    seq: AtomicU64::new(0),
+                    ptr: AtomicUsize::new(0),
+                    len: AtomicUsize::new(0),
+                }),
+            }));
+            HLE_CALL_RINGS.lock().unwrap().push(ring);
+            r.set(Some(ring));
+            ring
+        })
     });
+    #[cfg(target_arch = "x86_64")]
+    let seq = unsafe { core::arch::x86_64::_rdtsc() };
+    #[cfg(not(target_arch = "x86_64"))]
+    let seq = HLE_CALL_SEQ.fetch_add(1, Ordering::Relaxed);
+    let i = ring.next.load(Ordering::Relaxed);
+    ring.next.store((i + 1) % HLE_CALL_RING_SIZE, Ordering::Relaxed);
+    let slot = &ring.slots[i];
+    slot.seq.store(0, Ordering::Relaxed);
+    std::sync::atomic::fence(Ordering::Release);
+    slot.ptr.store(name.as_ptr() as usize, Ordering::Relaxed);
+    slot.len.store(name.len(), Ordering::Relaxed);
+    slot.seq.store(seq, Ordering::Release);
 }
 
 /// The last HLE_CALL_HISTORY_SIZE recorded calls of all threads, oldest first.
 fn hle_call_history() -> Vec<(u64, std::borrow::Cow<'static, str>)> {
     let mut all = Vec::new();
     for ring in HLE_CALL_RINGS.lock().unwrap().iter() {
-        all.extend(ring.lock().unwrap().iter().cloned());
+        for slot in &ring.slots {
+            let seq = slot.seq.load(Ordering::Acquire);
+            let (ptr, len) = (slot.ptr.load(Ordering::Relaxed), slot.len.load(Ordering::Relaxed));
+            std::sync::atomic::fence(Ordering::Acquire);
+            if seq != 0 && slot.seq.load(Ordering::Relaxed) == seq {
+                // The pointer and length of a 'static str, stored together under `seq`.
+                let name: &'static str =
+                    unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr as *const u8, len)) };
+                all.push((seq, std::borrow::Cow::Borrowed(name)));
+            }
+        }
     }
     all.sort_unstable_by_key(|e| e.0);
     all.drain(..all.len().saturating_sub(HLE_CALL_HISTORY_SIZE));
