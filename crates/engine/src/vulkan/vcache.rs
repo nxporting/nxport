@@ -22,6 +22,8 @@ const MAX_UPLOADS: u32 = 4;
 const TRACKED: usize = 0x2000;
 /// Frames a range may go undrawn before its block is freed.
 const IDLE_FRAMES: u64 = 600;
+/// Ranges drawn from unchecked that go to a hashing thread at a time, as recording finds them (verify collects the hashes).
+const HASH_BATCH: usize = 128;
 
 struct Chunk {
     buffer: vk::Buffer,
@@ -56,6 +58,10 @@ pub(crate) struct VCache {
     swept_frame: u64,
     /// Small ranges drawn from this submit before their hash was checked (verify).
     unverified: Vec<(usize, usize)>,
+    /// Batches of them handed to the hashing threads while recording goes on: (ranges, thread), in the order sent.
+    hashing: Vec<(Vec<(usize, usize)>, usize)>,
+    /// The hashing thread the next batch goes to.
+    next_worker: usize,
 }
 
 impl VCache {
@@ -159,7 +165,11 @@ impl VCache {
                 e.used = serial;
                 e.used_frame = frame;
                 e.epoch = epoch;
-                return Some((self.chunks[e.chunk].buffer, e.off));
+                let r = Some((self.chunks[e.chunk].buffer, e.off));
+                if self.unverified.len() >= HASH_BATCH {
+                    self.send_unverified();
+                }
+                return r;
             }
             // Written since it was copied: its block goes once the submits drawing from it completed.
             let e = self.entries.remove(&(a, len)).unwrap();
@@ -190,8 +200,21 @@ impl VCache {
     /// `upload` ahead of the draws (the uploads run first in the queue, after what earlier submits read there). Before
     /// anything recorded since the last call is submitted.
     pub(super) unsafe fn verify(&mut self, serial: u64, upload: &mut dyn FnMut(vk::Buffer, u64, *const u8, usize) -> bool) {
-        if self.unverified.is_empty() {
+        if self.unverified.is_empty() && self.hashing.is_empty() {
             return;
+        }
+        // The batches the hashing threads took while recording went on first (each thread answers in the order it was
+        // sent them): waiting for all of them here, at every chunk, was ~8% of the Presentation Thread.
+        let (mut done, mut done_hashes): (Vec<(usize, usize)>, Vec<u64>) = (Vec::new(), Vec::new());
+        if !self.hashing.is_empty() {
+            let pool = hash_pool().lock().ok();
+            for (batch, w) in self.hashing.drain(..) {
+                match pool.as_ref().and_then(|p| p.get(w)).and_then(|(_, rx)| rx.recv().ok()) {
+                    Some(h) if h.len() == batch.len() => done_hashes.extend(h),
+                    _ => done_hashes.extend(batch.iter().map(|r| hash_range(r))),
+                }
+                done.extend(batch);
+            }
         }
         let ranges = std::mem::take(&mut self.unverified);
         let bytes: usize = ranges.iter().map(|r| r.1).sum();
@@ -215,7 +238,7 @@ impl VCache {
                 hashes
             }
         };
-        for (&(a, len), h) in ranges.iter().zip(hashes) {
+        for (&(a, len), h) in done.iter().chain(&ranges).zip(done_hashes.into_iter().chain(hashes)) {
             let Some(e) = self.entries.get_mut(&(a, len)) else { continue };
             if e.hash == h || e.dynamic {
                 continue;
@@ -232,6 +255,23 @@ impl VCache {
                 let (chunk, off, size) = (e.chunk, e.off, e.size);
                 self.retired.push((serial, chunk, off, size));
             }
+        }
+    }
+
+    /// Hands the ranges drawn from unchecked so far to a hashing thread (verify collects the hashes).
+    fn send_unverified(&mut self) {
+        let Ok(pool) = hash_pool().lock() else { return };
+        if pool.is_empty() {
+            return;
+        }
+        let w = self.next_worker % pool.len();
+        self.next_worker = self.next_worker.wrapping_add(1);
+        let batch = std::mem::take(&mut self.unverified);
+        // The batch stays in `hashing` (unmoved, its memory in place) until verify has the hashes.
+        if pool[w].0.send(HashJob(batch.as_ptr(), batch.len())).is_ok() {
+            self.hashing.push((batch, w));
+        } else {
+            self.unverified = batch;
         }
     }
 
