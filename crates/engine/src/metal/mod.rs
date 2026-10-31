@@ -3399,7 +3399,11 @@ impl Gfx {
                             cur = new_cb.clone();
                         }
                     }
-                    for r in &m.ranges {
+                    let mut uniforms = m.uniforms.iter().peekable();
+                    for (i, r) in m.ranges.iter().enumerate() {
+                        while let Some(u) = uniforms.next_if(|u| u.at as usize <= i) {
+                            st.uniform_buffers.insert((u.stage, u.index), (u.addr, u.size));
+                        }
                         st.cur_caller = 0;
                         st.stats.draws += 1;
                         if st.occl.counting {
@@ -3418,6 +3422,9 @@ impl Gfx {
                                 r.instances,
                             );
                         }
+                    }
+                    for u in uniforms {
+                        st.uniform_buffers.insert((u.stage, u.index), (u.addr, u.size));
                     }
                 }
                 Cmd::CallCommands(handles) => {

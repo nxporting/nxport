@@ -68,8 +68,8 @@ const INDEX_TYPE_TABLE: usize = 0x37ffa0c; // nn::gfx index format -> NVN index 
 /// Virtual functions the port met but does not implement: (vtable slot, main+ offset).
 pub(super) static UNKNOWN_VFNS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
 
-/// A unit call waiting for its draws: (NVNcommandBuffer, list handle, ranges, the native material in its place).
-type Pending = (usize, u64, smallvec::SmallVec<[crate::nvn::cmd::ModelRange; 2]>, Option<std::sync::Arc<Vec<crate::nvn::cmd::Cmd>>>);
+/// A unit call waiting for its draws: (NVNcommandBuffer, the draw).
+type Pending = (usize, crate::nvn::cmd::ModelDraw);
 
 pub(super) struct Port {
     pub(super) m: Mem,
@@ -96,12 +96,8 @@ impl Port {
 
     /// Records the pending unit draw (anything recorded after it must come after it in the stream).
     pub(super) unsafe fn flush(&self) {
-        if let Some((cmd, unit, ranges, material)) = self.pending.borrow_mut().take() {
-            crate::nvn::api::record_typed(
-                "nvnCommandBufferModelDraw",
-                cmd,
-                crate::nvn::cmd::Cmd::ModelDraw(Box::new(crate::nvn::cmd::ModelDraw { unit, ranges, material })),
-            );
+        if let Some((cmd, draw)) = self.pending.borrow_mut().take() {
+            crate::nvn::api::record_typed("nvnCommandBufferModelDraw", cmd, crate::nvn::cmd::Cmd::ModelDraw(Box::new(draw)));
         }
     }
 
@@ -171,6 +167,14 @@ impl Port {
 
     pub(super) unsafe fn bind_uniform_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
         self.m.w::<u8>(cmd + 0x10, 1);
+        // Between a unit's draws: part of its draw.
+        if let Some((pcmd, d)) = self.pending.borrow_mut().as_mut() {
+            if *pcmd == cmd {
+                let at = d.ranges.len() as u32;
+                d.uniforms.push(crate::nvn::cmd::ModelUniform { at, stage, index: slot, addr, size: size as usize });
+                return;
+            }
+        }
         self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
     }
 
@@ -186,7 +190,9 @@ impl Port {
         }
         self.m.w::<u8>(cmd + 0x10, 1);
         self.flush();
-        *self.pending.borrow_mut() = Some((cmd, self.m.r64(handles) as u64, Default::default(), None));
+        let unit = self.m.r64(handles) as u64;
+        let draw = crate::nvn::cmd::ModelDraw { unit, ranges: Default::default(), material: None, uniforms: Default::default() };
+        *self.pending.borrow_mut() = Some((cmd, draw));
     }
 
     /// A unit's material list (at `handles`, recorded by main+0x7b3c80 for `pass`, slot `b`): natively, the material's
@@ -199,8 +205,8 @@ impl Port {
         let handle = self.m.r64(handles) as u64;
         let material = super::material::described(self, handle, d, w, pass, b);
         self.call_unit(cmd, handles);
-        if let Some((_, _, _, m)) = self.pending.borrow_mut().as_mut() {
-            *m = material;
+        if let Some((_, d)) = self.pending.borrow_mut().as_mut() {
+            d.material = material;
         }
     }
 
@@ -601,9 +607,9 @@ impl Port {
         let cmd = self.m.r64(w + 0xb0);
         let mode = self.m.r32(self.base + PRIMITIVE_TABLE + prim as usize * 4);
         let ty = self.m.r32(self.base + INDEX_TYPE_TABLE + itype as usize * 4);
-        if let Some((pcmd, _, ranges, _)) = self.pending.borrow_mut().as_mut() {
+        if let Some((pcmd, d)) = self.pending.borrow_mut().as_mut() {
             if *pcmd == cmd {
-                ranges.push(crate::nvn::cmd::ModelRange {
+                d.ranges.push(crate::nvn::cmd::ModelRange {
                     mode: mode as i32,
                     index_type: ty as i32,
                     count,
