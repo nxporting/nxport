@@ -2094,8 +2094,6 @@ pub(crate) struct RecordedCommandList {
     pub(crate) summary: std::sync::OnceLock<(Vec<(u64, u64)>, Vec<u64>, Vec<u64>)>,
     /// Frames presented when it was recorded (diagnostics: replayed lists vs. lists recorded this frame).
     pub(crate) recorded_frame: u64,
-    /// Stamp of the last walk_command_lists that visited it.
-    visit: std::sync::atomic::AtomicU64,
 }
 
 impl RecordedCommandList {
@@ -2146,16 +2144,20 @@ fn free_later(l: std::sync::Arc<RecordedCommandList>) {
 }
 
 /// The recorded list for `handle` without touching its eviction bookkeeping.
-/// Visits every list reachable from `handles` through CallCommands once (under one lock: a submit reaches ~3,000 lists),
+/// Visits every list reachable from `handles` through CallCommands once (under one lock: a submit reaches ~4,500 lists),
 /// returning the number of distinct lists.
+///
+/// The walk is on the Presentation Thread before recording starts, and the lists were made on the game's threads (another
+/// L3 cache on Zen 2): it is cache misses, a few per list. So it touches the map entry and the list's reference count
+/// only: the entry's last use (unique to this walk, written under the lock) says it was visited, and the entry carries
+/// the handles the list calls. A visit stamp in the list and its summary read there were two lines more per list:
+/// TotK on Great Sky Island 1.03 -> 0.62 ms a frame for 4,460 lists (Ryzen 7 3700X).
 pub(crate) fn walk_command_lists(
     handles: &[u64],
     stack: &mut Vec<u64>,
     cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>,
     mut f: impl FnMut(&RecordedCommandList),
 ) -> usize {
-    static STAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let stamp = STAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut map = COMMAND_LISTS.lock().unwrap();
     stack.clear();
@@ -2163,19 +2165,18 @@ pub(crate) fn walk_command_lists(
     let mut n = 0;
     while let Some(h) = stack.pop() {
         let Some(e) = map.get_mut(&h) else { continue };
+        // Lists called again (a mesh's list, once per pass drawing it) are in `cache` already.
+        if e.1 == now {
+            continue;
+        }
         e.1 = now;
         if e.2 == LIST_NEW {
             e.2 = LIST_CALLED;
         }
-        // Lists called again (a mesh's list, once per pass drawing it) are in `cache` already.
-        let l = &e.0;
-        if l.visit.swap(stamp, std::sync::atomic::Ordering::Relaxed) == stamp {
-            continue;
-        }
-        cache.insert(h, l.clone());
+        cache.insert(h, e.0.clone());
         n += 1;
-        f(l);
-        stack.extend_from_slice(&l.summary().1);
+        f(&e.0);
+        stack.extend_from_slice(&e.4);
     }
     n
 }
@@ -2186,7 +2187,7 @@ pub(crate) fn walk_command_lists(
 // into the live, mutable buffer.
 // Handle -> list, bounded: handles can be re-submitted or CallCommands'd several times, so lists are
 // not removed on use; the oldest are evicted instead of leaking forever.
-/// Recorded command lists by handle. Value: (list, last use, eviction class, estimated bytes). Bounded by memory: past
+/// Recorded command lists by handle. Value: (list, last use, eviction class, estimated bytes, handles it calls). Bounded by memory: past
 /// the budget, lists are evicted by class, then least-recently-used:
 ///   LIST_DEAD       its command memory was handed out again (invalid in NVN too),
 ///   LIST_SUBMITTED  submitted to a queue and never called: the per-frame lists, one-shot in practice,
@@ -2196,7 +2197,7 @@ pub(crate) fn walk_command_lists(
 /// Plain LRU evicted the per-mesh lists of everything out of view; looking back drew those meshes with the previous
 /// draw's vertex buffers (geometry streaks that accumulated while moving the camera).
 static COMMAND_LISTS: std::sync::LazyLock<
-    StdMutex<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize)>>,
+    StdMutex<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize, Box<[u64]>)>>,
 > = std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
 static COMMAND_LIST_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 const COMMAND_LIST_BUDGET: usize = 512 << 20;
@@ -2481,7 +2482,6 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         ops: ops_vec.drain(..).collect(),
         summary: std::sync::OnceLock::new(),
         recorded_frame: crate::gpu::backend().presented_frames(),
-        visit: std::sync::atomic::AtomicU64::new(0),
     });
     // Here on the recording thread rather than on the Presentation Thread at submit (they scan every op).
     snapshot.summary();
@@ -2500,10 +2500,11 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
     {
         let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bytes = recorded_list_bytes(&snapshot);
+        let calls = snapshot.summary().1.clone().into_boxed_slice();
         let mut g = COMMAND_LISTS.lock().unwrap();
         let old = g.insert(
             handle,
-            (std::sync::Arc::from(snapshot), now, LIST_NEW, bytes),
+            (std::sync::Arc::from(snapshot), now, LIST_NEW, bytes, calls),
         );
         drop(g);
         if let Some(old) = old {
@@ -6952,10 +6953,10 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
         ops,
         summary: std::sync::OnceLock::new(),
         recorded_frame: 0,
-        visit: std::sync::atomic::AtomicU64::new(0),
     });
     let bytes = recorded_list_bytes(&list);
-    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes));
+    let calls = list.summary().1.clone().into_boxed_slice();
+    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes, calls));
     COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
     NEXT_COMMAND_HANDLE.fetch_max(handle + 1, std::sync::atomic::Ordering::Relaxed);
 }
