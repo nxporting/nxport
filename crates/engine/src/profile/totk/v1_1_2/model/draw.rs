@@ -441,6 +441,22 @@ impl Port {
         let _ = (&mut blend, &mut color, &mut mask, &mut ds, &mut poly);
     }
 
+    /// A polygon state built from defaults-free setters (cull face, front face, polygon mode, offset enables), bound,
+    /// then the polygon offset (factor, units, clamp).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn polygon_state(&mut self, cmd: u64, cull: u64, front: u64, mode: u64, enables: u64, offset: [f32; 3]) {
+        let mut poly = [0u64; 1];
+        let pp = poly.as_mut_ptr() as u64;
+        self.query(self.pfn(PFN_POLYGON_STATE_SET_CULL_FACE), &[pp, cull]);
+        self.query(self.pfn(PFN_POLYGON_STATE_SET_FRONT_FACE), &[pp, front]);
+        self.query(self.pfn(PFN_POLYGON_STATE_SET_POLYGON_MODE), &[pp, mode]);
+        self.query(self.pfn(PFN_POLYGON_STATE_SET_POLYGON_OFFSET_ENABLES), &[pp, enables]);
+        self.call(self.pfn(PFN_BIND_POLYGON_STATE), &[cmd, pp]);
+        self.flush();
+        self.query_f(self.pfn(PFN_SET_POLYGON_OFFSET_CLAMP), &[cmd], &offset);
+        let _ = &mut poly;
+    }
+
     /// sub_68b1d8: the GPU address of an nn::gfx buffer (its NVNbuffer at +8).
     pub(super) unsafe fn gfx_buffer_address(&self, gfx_buffer: usize) -> u64 {
         self.buffer_address(self.m.r64(gfx_buffer + 8))
