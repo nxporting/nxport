@@ -624,9 +624,7 @@ unsafe fn effect_texture(p: &mut Port, w: usize, sys_cb: usize, k: usize, tex: u
     if tex == 0 {
         return Ok(());
     }
-    if p.m.r32(tex + 0xe4) != 0 {
-        return Err("vfx texture still loading");
-    }
+    p.texture_ready(tex, "vfx texture still loading")?;
     let c = core(p);
     let sh = p.m.r64(p.m.r64(sys_cb + 0x98) + c as i64 as usize * 0x828 + 0x800);
     if sh == 0 {
@@ -1366,9 +1364,7 @@ unsafe fn view_textures(p: &mut Port, s: usize, a3: usize) -> R<usize> {
 /// main+0x74ec98(w, slot, tex): the texture (id +0x58, sampler +0xea) at `slot` of stages 0, 4 and 5, when it is ready
 /// (a load the game finishes there is not predicted).
 unsafe fn scene_texture(p: &mut Port, w: usize, slot: i32, tex: usize) -> R<()> {
-    if p.m.r32(tex + 0xe4) != 0 {
-        return Err("vfx texture still loading");
-    }
+    p.texture_ready(tex, "vfx texture still loading")?;
     let id = [p.m.i32(tex + 0x58) as u32, 0];
     let smp = [p.m.r16(tex + 0xea) as i16 as i32 as u32, 0];
     for st in [0, 4, 5] {
@@ -2164,9 +2160,7 @@ unsafe fn program_texture(p: &mut Port, prog: usize, w: usize, slot: u32, tex: u
     if slots == u32::MAX {
         return Ok(false);
     }
-    if p.m.r32(tex + 0xe4) != 0 {
-        return Err("agl texture still finishing");
-    }
+    p.texture_ready(tex, "agl texture still finishing")?;
     let id = p.m.i32(tex + 0x58);
     let smp = p.m.r16(tex + 0xea) as i16 as i32;
     if id == -1 || smp == -1 {
