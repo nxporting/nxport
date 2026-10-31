@@ -64,7 +64,8 @@ unsafe fn run_callback(p: &mut Port, f: usize, i: &Info) -> R<bool> {
         // Returns true.
         0x26a6eb0 => Ok(true),
         0x7c4bf0 => Ok(custom_block(p, i)),
-        0x7c4440 => render_state_basic2(p, i),
+        0x7c4440 => render_state_basic2(p, i, false),
+        0xd61360 => render_state_basic2(p, i, true),
         0x780f80 => {
             render_state_blend(p, i);
             Ok(true)
@@ -290,11 +291,12 @@ unsafe fn draw_shaded(p: &mut Port, sys: usize, g: usize, em: usize, sh: usize, 
     if p.m.i32(dp + 0x24) == -1 {
         bind_vertex_state(p, g, p.m.r64(em + 0x40) + p.m.r8(dp + 0x2c) as usize * 0x20 + 200);
     }
+    let lod = p.m.r8(em + 0xac) as i32;
     if p.m.r8(p.m.r64(em + 0x48) + 0xca1) != 0 {
-        return Err("vfx sorted draw");
+        sorted(p, g, em, prim, dp, lod)?;
+        return Ok(true);
     }
     let count = p.m.i32(em + 0x98) as u32;
-    let lod = p.m.r8(em + 0xac) as i32;
     if (p.m.r8(em + 0x31) >> 4) & 1 == 0 {
         if prim != 0 {
             draw_primitive(p, prim, g, count, 0, lod);
@@ -565,8 +567,9 @@ unsafe fn effect_texture(p: &mut Port, w: usize, sys_cb: usize, k: usize, tex: u
 
 /// main+0x7c4440 (TotK's CallbackRenderStateSet_Basic2): the custom block, effect textures, a 0xd0-byte block of
 /// per-emitter parameters from the core's allocator bound at the shader's third block slots, the emitter's
-/// previous position updated.
-unsafe fn render_state_basic2(p: &mut Port, i: &Info) -> R<bool> {
+/// previous position updated. `alt`: main+0xd61360, the same without the slot 8 texture, with word 0x27 set from
+/// the source's +0xb bit 5 and its own channel mask.
+unsafe fn render_state_basic2(p: &mut Port, i: &Info, alt: bool) -> R<bool> {
     if i.path == 3 {
         return Ok(true);
     }
@@ -654,7 +657,7 @@ unsafe fn render_state_basic2(p: &mut Port, i: &Info) -> R<bool> {
             if u13 & 0x600000 != 0 && p.m.r64(l14 + 0xe0) != 0 {
                 effect_texture(p, w, sys_cb, 3, p.m.r64(l14 + 0xe0))?;
             }
-            if (u19 >> 32) & 1 != 0 && p.m.r64(l14 + 0xf8) != 0 {
+            if !alt && (u19 >> 32) & 1 != 0 && p.m.r64(l14 + 0xf8) != 0 {
                 effect_texture(p, w, sys_cb, 8, p.m.r64(l14 + 0xf8))?;
             }
             if (u13 & 0xc0000 != 0 || u19 & 0x4_0000_0000 != 0) && p.m.r64(l14 + 0xe8) != 0 {
@@ -707,6 +710,9 @@ unsafe fn render_state_basic2(p: &mut Port, i: &Info) -> R<bool> {
         p.m.w::<u64>(ud + 0x18, p.m.r64(em + 0x170) as u64);
         let m = p.m.r64(p.m.r64(em) + 0x98);
         if m != 0 {
+            if alt && (p.m.r8(m + 0xb) >> 5) & 1 == 0 {
+                wf(&mut b, 0x27, 1.0);
+            }
             for k in 0..8 {
                 b[0x1c + k] = p.m.r32(m + 0x20 + k * 4);
             }
@@ -739,20 +745,28 @@ unsafe fn render_state_basic2(p: &mut Port, i: &Info) -> R<bool> {
             bind_uniform(p, w + 8, f as i32, 4, gpu, 0xd0);
         }
     }
-    if p.m.i32(a3 + 0xbc) == 0x18 {
-        // main+0xd61a60: channel mask 0xf0f0fd.
-        let mut st = [0u64; 4];
-        let sp = st.as_mut_ptr() as u64;
-        let mask = 0xf0f0fdu32;
-        for t in 0..8u64 {
-            let m = mask >> (t * 4);
-            p.query(p.pfn(PFN_SET_CHANNEL_MASK), &[sp, t, (m & 1) as u64, ((m >> 1) & 1) as u64, ((m >> 2) & 1) as u64, ((m >> 3) & 1) as u64]);
+    if alt {
+        channel_mask(p, w + 8, if p.m.i32(a3 + 0xbc) == 0x19 { 0xf0f0f1 } else { 0xf0f0ff });
+        if p.m.i32(a3 + 0xc4) == 4 {
+            return Err("vfx effect pass 4 state");
         }
-        let cmd = p.m.r64(w + 8 + 0xb0) as u64;
-        p.call(p.pfn(PFN_BIND_CHANNEL_MASK_STATE_), &[cmd, sp]);
-        let _ = &mut st;
+    } else if p.m.i32(a3 + 0xbc) == 0x18 {
+        channel_mask(p, w + 8, 0xf0f0fd);
     }
     Ok(true)
+}
+
+/// main+0xd61a60: a channel mask state from 4 bits per target, bound.
+unsafe fn channel_mask(p: &mut Port, g: usize, mask: u32) {
+    let mut st = [0u64; 4];
+    let sp = st.as_mut_ptr() as u64;
+    for t in 0..8u64 {
+        let m = mask >> (t * 4);
+        p.query(p.pfn(PFN_SET_CHANNEL_MASK), &[sp, t, (m & 1) as u64, ((m >> 1) & 1) as u64, ((m >> 2) & 1) as u64, ((m >> 3) & 1) as u64]);
+    }
+    let cmd = p.m.r64(g + 0xb0) as u64;
+    p.call(p.pfn(PFN_BIND_CHANNEL_MASK_STATE_), &[cmd, sp]);
+    let _ = &mut st;
 }
 
 const RENDER_GLOBALS: usize = 0x462c4a8;
@@ -777,4 +791,41 @@ unsafe fn render_state_blend(p: &mut Port, i: &Info) {
         let sg = p.m.r64(p.m.r64(p.base + SCENE_GLOBALS));
         set_blend_state(p, w8, sg + 0x9eb8);
     }
+}
+
+const SORT_PARTICLES: usize = 0x43f4;
+
+/// main+0x8d30: particles drawn one by one in the order main+0x43f4 sorts them into the emitter's per-core sort
+/// buffer (called: deterministic, it writes only that buffer, which the game's own call rewrites the same), the live
+/// ones (age at most the life, life positive, nonzero) only.
+unsafe fn sorted(p: &mut Port, g: usize, em: usize, prim: usize, dp: usize, lod: i32) -> R<()> {
+    let kind = p.m.r8(p.m.r64(em + 0x48) + 0xca1);
+    if kind == 4 {
+        return Err("vfx custom particle sort");
+    }
+    let mut list = 0u64;
+    let mut n = 0u32;
+    let t = p.m.f32(em + 0x28) - p.m.f32(em + 0x2c);
+    p.query_f(
+        p.base + SORT_PARTICLES,
+        &[em as u64, (&mut list) as *mut u64 as u64, (&mut n) as *mut u32 as u64, kind as u64, p.m.i32(dp + 0x20) as u32 as u64, p.m.r64(dp + 0x10) as u64],
+        &[t],
+    );
+    for k in 0..n as i32 as i64 {
+        if k < 0 {
+            break;
+        }
+        let idx = p.m.i32(list as usize + k as usize * 8 + 4);
+        let pt = (p.m.r64(em + 0x68) as i64 + idx as i64 * 0x20) as usize;
+        let life = p.m.f32(pt + 0xc);
+        if !(p.m.f32(em + 0x28) - p.m.f32(pt + 8) <= life) || p.m.r32(pt) == 0 || !(life > 0.0) {
+            continue;
+        }
+        if prim != 0 {
+            draw_primitive(p, prim, g, 1, idx as u32, lod);
+        } else {
+            draw_arrays(p, g, 4, 4, 0, 1, idx as u32);
+        }
+    }
+    Ok(())
 }
