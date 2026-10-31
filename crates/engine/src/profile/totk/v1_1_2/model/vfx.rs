@@ -11,9 +11,7 @@ const PFN_BIND_CHANNEL_MASK_STATE: usize = 0x466df78;
 const PFN_BIND_COLOR_STATE: usize = 0x466df80;
 const PFN_SET_BLEND_COLOR: usize = 0x466e190;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
-const PFN_BIND_TEXTURE: usize = 0x466e008;
 const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
-const PFN_BIND_STORAGE_BUFFER: usize = 0x466dff0;
 const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
 const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
 const GOT_DRAW_ARRAYS_INSTANCED: usize = 0x4613b88;
@@ -312,7 +310,7 @@ unsafe fn bind_texture(p: &mut Port, g: usize, slot: i32, st: u32, tex: usize, s
     let pfn = p.pfn(PFN_DEVICE_GET_TEXTURE_HANDLE);
     let handle = p.query(pfn, &[dev, p.m.r32(tex) as u64, p.m.r32(smp) as u64]);
     let cmd = p.m.r64(g + 0xb0) as u64;
-    p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd, stage(p, st), slot as u32 as u64, handle]);
+    p.bind_texture(cmd as usize, stage(p, st) as i32, slot, handle as u64);
 }
 
 /// main+0x30274: a uniform block (GPU address *addr) of `size` bytes bound to `slot` of `st`.
@@ -324,7 +322,7 @@ unsafe fn bind_uniform(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, si
 /// main+0x302e0: a storage buffer bound to `slot` of `st`.
 unsafe fn bind_storage(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, size: u64) {
     let cmd = p.m.r64(g + 0xb0) as u64;
-    p.call(p.pfn(PFN_BIND_STORAGE_BUFFER), &[cmd, stage(p, st), slot as u32 as u64, addr, size]);
+    p.bind_storage_buffer(cmd as usize, stage(p, st) as i32, slot, addr as u64, size as usize);
 }
 
 /// main+0x7650a4: vertex buffer `index` at `addr`, `size` bytes.
@@ -1780,7 +1778,6 @@ unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32,
 
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
-const PFN_DRAW_ELEMENTS: usize = 0x466e088;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_VERTEX_BUFFER_: usize = 0x466dfb8;
 const PROGRAM_BLOCK: usize = 0x4632818;
@@ -1852,7 +1849,7 @@ unsafe fn shape_draw(p: &mut Port, shape: usize, mesh: usize, w: usize, instance
     let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(mesh + 0x30) as u64]);
     p.m.w::<u8>(cmd as usize + 0x10, 1);
     if instances < 2 {
-        p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd, prim, ty, count as u32 as u64, addr]);
+        p.draw_elements(cmd as usize, prim as i32, ty as i32, count as i32, addr as u64);
     } else {
         p.call(p.pfn(PFN_DRAW_ELEMENTS_INSTANCED), &[cmd, prim, ty, count as u32 as u64, addr, 0, 0, instances as u64]);
     }
@@ -2239,7 +2236,7 @@ unsafe fn screen_pass(p: &mut Port, r: usize, w: usize, view: u32, pass: usize, 
     }
     let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(ib + 0x28) as u64]);
     p.m.w::<u8>(cmd + 0x10, 1);
-    p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, p.m.r32(ib + 4) as u64, p.m.r32(ib) as u64, count as u64, addr]);
+    p.draw_elements(cmd as usize, p.m.r32(ib + 4) as i32, p.m.r32(ib) as i32, count as i32, addr as u64);
     Ok(())
 }
 
@@ -2286,7 +2283,7 @@ unsafe fn program_texture(p: &mut Port, prog: usize, w: usize, slot: u32, tex: u
     for (k, stage) in [(0, 0u64), (1, 1), (2, 2), (3, 5)] {
         let b = (slots >> (k * 8)) as u8;
         if b != 0xff {
-            p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd, stage, b as i8 as i64 as u64, h]);
+            p.bind_texture(cmd as usize, stage as i32, b as i8 as i32, h as u64);
         }
     }
     Ok(true)

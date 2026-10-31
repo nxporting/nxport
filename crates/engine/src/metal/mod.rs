@@ -3399,10 +3399,10 @@ impl Gfx {
                             cur = new_cb.clone();
                         }
                     }
-                    let mut uniforms = m.uniforms.iter().peekable();
+                    let mut binds = m.binds.iter().peekable();
                     for (i, r) in m.ranges.iter().enumerate() {
-                        while let Some(u) = uniforms.next_if(|u| u.at as usize <= i) {
-                            st.uniform_buffers.insert((u.stage, u.index), (u.addr, u.size));
+                        while let Some(b) = binds.next_if(|b| b.at as usize <= i) {
+                            apply_model_bind(st, b);
                         }
                         st.cur_caller = 0;
                         st.stats.draws += 1;
@@ -3423,8 +3423,8 @@ impl Gfx {
                             );
                         }
                     }
-                    for u in uniforms {
-                        st.uniform_buffers.insert((u.stage, u.index), (u.addr, u.size));
+                    for b in binds {
+                        apply_model_bind(st, b);
                     }
                 }
                 Cmd::CallCommands(handles) => {
@@ -8320,5 +8320,22 @@ fn apply_vertex_input(st: &mut State, v: &crate::nvn::cmd::VertexInput) {
     st.vertex_streams.clone_from(&v.streams);
     for &(i, a, n) in &v.buffers {
         st.vertex_buffers.insert(i, (a, n));
+    }
+}
+
+fn apply_model_bind(st: &mut State, b: &crate::nvn::cmd::ModelBind) {
+    use crate::nvn::cmd::ModelBindKind;
+    match b.kind {
+        ModelBindKind::Uniform { addr, size } => {
+            st.uniform_buffers.insert((b.stage, b.index), (addr, size));
+        }
+        ModelBindKind::Storage { addr, size } => {
+            if (0..6).contains(&b.stage) && (0..16).contains(&b.index) {
+                st.storage_buffers[b.stage as usize][b.index as usize] = (addr, size);
+            }
+        }
+        ModelBindKind::Texture(handle) => {
+            st.textures_bound.insert((b.stage, b.index), handle);
+        }
     }
 }

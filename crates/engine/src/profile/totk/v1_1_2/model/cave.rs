@@ -6,11 +6,9 @@
 use super::draw::{load_resource, Port, R};
 
 const PFN_UPDATE_UNIFORM_BUFFER: usize = 0x466e228;
-const PFN_DRAW_ELEMENTS: usize = 0x466e088;
 const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
-const PFN_BIND_TEXTURE: usize = 0x466e008;
 const DEVICE_HOLDER: usize = 0x462bbe8;
 const TICK_HOLDER: usize = 0x462ab50;
 const LOCK: usize = 0x2b15370;
@@ -277,7 +275,7 @@ unsafe fn instances(
                     let itype = p.m.r32(this + 0x580) as u64;
                     if base_vertex == 0 {
                         p.m.w::<u8>(cmd + 0x10, 1);
-                        p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, count as u32 as u64, addr]);
+                        p.draw_elements(cmd as usize, prim as i32, itype as i32, count as i32, addr as u64);
                     } else {
                         p.call(
                             p.pfn(PFN_DRAW_ELEMENTS_BASE_VERTEX),
@@ -331,7 +329,7 @@ unsafe fn bind_texture(p: &mut Port, w: usize, slots: u32, tid: usize, sid: usiz
     let cmd = p.m.r64(w + 0xb8) as u64;
     for (stage, sh) in [(0u64, 0), (1, 8), (2, 16), (5, 24)] {
         if (slots >> sh) & 0xff != 0xff {
-            p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd, stage, (slots >> sh) as i8 as i64 as u64, handle]);
+            p.bind_texture(cmd as usize, stage as i32, (slots >> sh) as i8 as i32, handle as u64);
         }
     }
 }
@@ -473,7 +471,7 @@ pub(super) unsafe fn mesh_elements(p: &mut Port, mesh: usize, w: usize, first: u
             return;
         }
         p.m.w::<u8>(cmd + 0x10, 1);
-        p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, count as u64, addr]);
+        p.draw_elements(cmd as usize, prim as i32, itype as i32, count as i32, addr as u64);
         return;
     }
     p.call(
@@ -731,7 +729,7 @@ unsafe fn chunks(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) 
                 let addr = p.buffer_address_of(ib + 0x30).wrapping_add(p.m.r32(ib + 0x2c).wrapping_mul(first) as u64);
                 let itype = p.m.r32(ib + 8) as u64;
                 p.m.w::<u8>(cmd + 0x10, 1);
-                p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, prim, itype, count as u64, addr]);
+                p.draw_elements(cmd as usize, prim as i32, itype as i32, count as i32, addr as u64);
             }
             drawn = drawn.wrapping_add(p.m.r32(rec + 0x24));
         }

@@ -319,17 +319,35 @@ pub struct ModelDraw {
     /// material's bindings. Captures keep only `unit`.
     #[serde(skip)]
     pub material: Option<std::sync::Arc<Vec<Cmd>>>,
-    /// Uniform buffers bound between the ranges (each before range `at`; `at` = ranges.len(): after the last).
-    pub uniforms: smallvec::SmallVec<[ModelUniform; 2]>,
+    /// Bindings made between the ranges (each before range `at`; `at` = ranges.len(): after the last).
+    pub binds: smallvec::SmallVec<[ModelBind; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ModelUniform {
+pub struct ModelBind {
     pub at: u32,
     pub stage: i32,
     pub index: i32,
-    pub addr: u64,
-    pub size: usize,
+    pub kind: ModelBindKind,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ModelBindKind {
+    Uniform { addr: u64, size: usize },
+    Storage { addr: u64, size: usize },
+    Texture(u64),
+}
+
+impl ModelBind {
+    /// The same binding as a command.
+    pub fn cmd(&self) -> Cmd {
+        let (stage, index) = (self.stage, self.index);
+        match self.kind {
+            ModelBindKind::Uniform { addr, size } => Cmd::BindUniformBuffer { stage, index, addr, size },
+            ModelBindKind::Storage { addr, size } => Cmd::BindStorageBuffer { stage, index, addr, size },
+            ModelBindKind::Texture(handle) => Cmd::BindTexture { stage, index, handle },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]

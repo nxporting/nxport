@@ -23,6 +23,7 @@ const PFN_CALL_COMMANDS: usize = 0x466df60;
 const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
 const PFN_BIND_TEXTURE: usize = 0x466e008;
 const PFN_BIND_TEXTURES_DEFERRED: usize = 0x466e018;
+const PFN_DRAW_ELEMENTS: usize = 0x466e088;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_BLEND_STATE_SET_DEFAULTS: usize = 0x466dc58;
@@ -165,17 +166,47 @@ impl Port {
         self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[nvn_buffer as u64])
     }
 
+    /// Adds `bind` to the pending unit draw when it is on `cmd` (bindings between a unit's draws are part of it).
+    fn join(&self, cmd: usize, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) -> bool {
+        match self.pending.borrow_mut().as_mut() {
+            Some((pcmd, d)) if *pcmd == cmd => {
+                let at = d.ranges.len() as u32;
+                d.binds.push(crate::nvn::cmd::ModelBind { at, stage, index, kind });
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(super) unsafe fn bind_uniform_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
         self.m.w::<u8>(cmd + 0x10, 1);
-        // Between a unit's draws: part of its draw.
+        if !self.join(cmd, stage, slot, crate::nvn::cmd::ModelBindKind::Uniform { addr, size: size as usize }) {
+            self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
+        }
+    }
+
+    pub(super) unsafe fn bind_storage_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: usize) {
+        if !self.join(cmd, stage, slot, crate::nvn::cmd::ModelBindKind::Storage { addr, size }) {
+            self.call(self.pfn(PFN_BIND_STORAGE_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size as u64]);
+        }
+    }
+
+    pub(super) unsafe fn bind_texture(&mut self, cmd: usize, stage: i32, slot: i32, handle: u64) {
+        if !self.join(cmd, stage, slot, crate::nvn::cmd::ModelBindKind::Texture(handle)) {
+            self.call(self.pfn(PFN_BIND_TEXTURE), &[cmd as u64, stage as u64, slot as u64, handle]);
+        }
+    }
+
+    /// nvnCommandBufferDrawElements: one of the pending unit's draws when it is on `cmd`.
+    pub(super) unsafe fn draw_elements(&mut self, cmd: usize, mode: i32, index_type: i32, count: i32, addr: u64) {
         if let Some((pcmd, d)) = self.pending.borrow_mut().as_mut() {
             if *pcmd == cmd {
-                let at = d.ranges.len() as u32;
-                d.uniforms.push(crate::nvn::cmd::ModelUniform { at, stage, index: slot, addr, size: size as usize });
+                let r = crate::nvn::cmd::ModelRange { mode, index_type, count, index_addr: addr, base_vertex: 0, base_instance: 0, instances: 1 };
+                d.ranges.push(r);
                 return;
             }
         }
-        self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
+        self.call(self.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, mode as u64, index_type as u64, count as u64, addr]);
     }
 
     pub(super) unsafe fn call_commands(&mut self, cmd: usize, handles: usize) {
@@ -191,7 +222,7 @@ impl Port {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.flush();
         let unit = self.m.r64(handles) as u64;
-        let draw = crate::nvn::cmd::ModelDraw { unit, ranges: Default::default(), material: None, uniforms: Default::default() };
+        let draw = crate::nvn::cmd::ModelDraw { unit, ranges: Default::default(), material: None, binds: Default::default() };
         *self.pending.borrow_mut() = Some((cmd, draw));
     }
 
@@ -322,7 +353,7 @@ impl Port {
             }
             // Storage blocks: nvnCommandBufferBindStorageBuffer.
             0x2a2c078 => {
-                self.call(self.pfn(PFN_BIND_STORAGE_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size as u64]);
+                self.bind_storage_buffer(cmd as usize, stage as i32, slot as i32, addr as u64, size as usize);
                 Ok(())
             }
             f if self.m.predict() => Err(self.unknown_vfn(0x48, f)),
@@ -1198,7 +1229,7 @@ pub(super) unsafe fn load_resource(p: &mut Port, c: usize, d: usize) -> R<bool> 
                         let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8);
                         for (stage, sh) in [(0u64, 0), (1, 8), (2, 16), (5, 24)] {
                             if (slots >> sh) & 0xff != 0xff {
-                                p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd as u64, stage, ((slots >> sh) as i8) as i64 as u64, handle]);
+                                p.bind_texture(cmd as usize, stage as i32, (slots >> sh) as i8 as i32, handle);
                             }
                         }
                     } else {

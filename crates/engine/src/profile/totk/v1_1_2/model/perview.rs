@@ -20,7 +20,6 @@ const OCCLUSION: usize = 0xd7ddf4;
 const DEFAULT_LOD: usize = 0x4632760;
 const DEVICE_HOLDER: usize = 0x462bbe8;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
-const PFN_BIND_TEXTURE: usize = 0x466e008;
 const PFN_SET_PRIMITIVE_RESTART: usize = 0x466e050;
 const COMPONENT_TYPE: u32 = 0xd21b65b6;
 
@@ -140,7 +139,7 @@ unsafe fn bind_entry(p: &mut Port, pb: usize, w: usize, defaults: usize, table: 
     let cmd = p.m.r64(w + 0xb8) as u64;
     for (stage, sh) in [(0u64, 0), (1, 8), (2, 16), (5, 24)] {
         if (slots >> sh) & 0xff != 0xff {
-            p.call(p.pfn(PFN_BIND_TEXTURE), &[cmd, stage, (slots >> sh) as i8 as i64 as u64, handle]);
+            p.bind_texture(cmd as usize, stage as i32, (slots >> sh) as i8 as i32, handle as u64);
         }
     }
 }
