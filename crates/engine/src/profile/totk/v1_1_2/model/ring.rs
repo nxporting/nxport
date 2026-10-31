@@ -41,6 +41,10 @@ pub(super) unsafe fn predict(base: usize, data: usize, size: usize) -> usize {
         let addr = SYMBOLIC + p.len() as u64 * SPAN;
         obj[0x78..0x80].copy_from_slice(&addr.to_le_bytes());
         obj[0x18..0x20].copy_from_slice(&0u64.to_le_bytes());
+        // The block's size (+0x38, again at +0x3c): the data size rounded up to 0x100 (ring offsets stay aligned).
+        let rounded = ((size + 0xff) & !0xff) as u32;
+        obj[0x38..0x3c].copy_from_slice(&rounded.to_le_bytes());
+        obj[0x3c..0x40].copy_from_slice(&rounded.to_le_bytes());
         let a = obj.as_ptr() as usize;
         p.push(Placeholder { obj, data });
         a

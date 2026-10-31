@@ -61,13 +61,15 @@ struct Info {
 
 /// An emitter callback at absolute address `f`: Some(result) when ported.
 unsafe fn run_callback(p: &mut Port, f: usize, i: &Info) -> R<bool> {
+    if let Some(v) = p.constant_result(f.wrapping_sub(p.base)) {
+        return Ok(v != 0);
+    }
     match f.wrapping_sub(p.base) {
-        // Returns true.
-        0x26a6eb0 => Ok(true),
         0x7c4bf0 => Ok(custom_block(p, i)),
         0x7c4440 => render_state_basic2(p, i, false),
         0xd61360 => render_state_basic2(p, i, true),
         0x2e24c => repeated_draw(p, i).map(|_| true),
+        0x13e0170 => scene_params(p, i),
         0x780f80 => {
             render_state_blend(p, i);
             Ok(true)
@@ -76,6 +78,60 @@ unsafe fn run_callback(p: &mut Port, f: usize, i: &Info) -> R<bool> {
         0x1f73c => Ok(p.m.r8(i.dp + 0x4d) & 1 != 0),
         _ => callback(f, p.base).map(|_| false),
     }
+}
+
+/// main+0x13e0170: the custom block, the scene's texture 10 (or, drawing into the render context's own targets, its
+/// deferred texture +0x279 at the path shader's slots +0x1b / +0x5d), and a 0x20-byte block from the core's allocator
+/// at the path-0 shader's block slots 2: the scene object's (+0x128 -> +0xa18) count +0x720 as a float, +0x788,
+/// +0x78c, 0, the scene globals' +0x46c / +0x474 (0 without them), the object's +0xac0 / +0xac4 (all 0 without it).
+unsafe fn scene_params(p: &mut Port, i: &Info) -> R<bool> {
+    let em = i.em;
+    if em == 0 || p.m.r64(em + 0x40) == 0 {
+        return Ok(true);
+    }
+    let res = p.m.r64(em + 0x40);
+    let sh0 = p.m.r64(res + 0x10);
+    let sys_cb = p.m.r64(p.m.r64(em) + 0x68);
+    let a3 = i.a3;
+    let w = p.m.r64(a3 + 0xb0);
+    custom_block(p, i);
+    let l2 = p.m.r64(p.m.r64(a3 + 0xd8) + 8);
+    if l2 != 0 {
+        let e0 = p.m.r64(a3 + 0xe0);
+        if e0 != 0 && (p.m.r8(e0 + 0x41) >> 1) & 1 != 0 {
+            let sh = if i.path == 3 { 0 } else { p.m.r64(res + i.path as usize * 8 + 0x10) };
+            let mask = 0xffff_0000 | (p.m.r8(sh + 0x5d) as u32) << 8 | p.m.r8(sh + 0x1b) as u32;
+            bind_deferred(p, w, p.m.r64(a3 + 0xc8), p.m.i8(l2 + 0x279) as i32, mask);
+        } else {
+            effect_texture(p, w, sys_cb, 10, p.m.r64(l2 + 0x98))?;
+        }
+    }
+    let Some((cpu, gpu)) = ring_alloc(p, sys_cb, core(p), 0x20) else { return Ok(true) };
+    let mut b = [0u32; 8];
+    let scene = p.m.r64(p.m.r64(p.m.r64(p.base + DECAL_SYSTEM)) + 0x128);
+    let o = if scene != 0 { p.m.r64(scene + 0xa18) } else { 0 };
+    if o != 0 {
+        b[0] = (p.m.i32(o + 0x720) as f32).to_bits();
+        b[1] = p.m.r32(o + 0x788);
+        b[2] = p.m.r32(o + 0x78c);
+        let g = p.m.r64(p.m.r64(p.base + SCENE_GLOBALS));
+        if g != 0 {
+            b[4] = p.m.r32(g + 0x46c);
+            b[5] = p.m.r32(g + 0x474);
+        }
+        b[6] = p.m.r32(o + 0xac0);
+        b[7] = p.m.r32(o + 0xac4);
+    }
+    let bytes: Vec<u8> = b.iter().flat_map(|v| v.to_le_bytes()).collect();
+    copy_into(p, cpu, &bytes, true);
+    let (v, f) = (p.m.i8(sh0 + 2 + 0x3f), p.m.i8(sh0 + 2 + 0x81));
+    if v != -1 {
+        bind_uniform(p, i.g, v as i32, 0, gpu, 0x20);
+    }
+    if f != -1 {
+        bind_uniform(p, i.g, f as i32, 4, gpu, 0x20);
+    }
+    Ok(true)
 }
 
 /// main+0x7c4bf0: the resource's custom shader uniform block (+0x3b8 set; [+0x40]+0x188 + [+0x3f0], [+0x3f8] bytes) to
