@@ -48,6 +48,17 @@ impl Mem {
         }
     }
 
+    /// Drops predicted writes to `a..a + len` (host buffers the port reuses).
+    pub(super) fn forget(&mut self, a: usize, len: usize) {
+        if let Some(o) = &mut self.overlay {
+            if !o.is_empty() {
+                for k in a..a + len {
+                    o.remove(&k);
+                }
+            }
+        }
+    }
+
     pub(super) unsafe fn r8(&self, a: usize) -> u8 {
         self.r(a)
     }
