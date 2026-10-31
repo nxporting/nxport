@@ -329,6 +329,8 @@ pub enum ModelItem {
     Draw(ModelRange),
     RenderState(Box<RenderState>),
     Program { program: usize, stages: i32 },
+    /// Render targets (agl::RenderBuffer::bind).
+    Targets { colors: Vec<RtRef>, depth: Option<RtRef> },
     /// sead::Viewport::apply: the same rectangle as scissor and viewport, then the depth range.
     Viewport { x: i32, y: i32, w: i32, h: i32, near: f32, far: f32 },
     VertexAttribs(AttribState),
@@ -546,28 +548,34 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
             println!("[rt-caller]   chain (base+): {}", chain.join(" <- "));
         }
     }
+    let (colors, depth) = render_targets(num, colors, color_views, depth, depth_view);
+    rec!("nvnCommandBufferSetRenderTargets", cmd, Cmd::SetRenderTargets { colors, depth });
+}
+
+/// The references SetRenderTargets records: `num` colour textures with their views, the depth texture and view.
+pub(crate) unsafe fn render_targets(
+    num: c_int,
+    colors: *const usize,
+    color_views: *const usize,
+    depth: usize,
+    depth_view: *const u8,
+) -> (Vec<RtRef>, Option<RtRef>) {
     let (dl, dy) = view_level_layer(depth_view);
     crate::nvn::api::capture_texture(depth);
-    rec!(
-        "nvnCommandBufferSetRenderTargets",
-        cmd,
-        Cmd::SetRenderTargets {
-            colors: rt_list(colors, color_views, num.max(0) as usize),
-            depth: if depth != 0 {
-                let (view_format, view_target) = view_format_target(depth_view);
-                Some(RtRef {
-                    texture: depth,
-                    gen: crate::nvn::api::texture_ref_gen(depth),
-                    level: dl,
-                    layer: dy,
-                    view_format,
-                    view_target,
-                })
-            } else {
-                None
-            },
-        }
-    );
+    let depth = if depth != 0 {
+        let (view_format, view_target) = view_format_target(depth_view);
+        Some(RtRef {
+            texture: depth,
+            gen: crate::nvn::api::texture_ref_gen(depth),
+            level: dl,
+            layer: dy,
+            view_format,
+            view_target,
+        })
+    } else {
+        None
+    };
+    (rt_list(colors, color_views, num.max(0) as usize), depth)
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferClearColor(

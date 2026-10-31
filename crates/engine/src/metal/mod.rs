@@ -2866,115 +2866,7 @@ impl Gfx {
                     count,
                     handles,
                 } => apply_textures_deferred(st, *stage, *first, *count, *handles),
-                Cmd::SetRenderTargets { colors, depth } => {
-                    let resolve = |r: &crate::nvn::cmd::RtRef| crate::nvn::cmd::RtRef {
-                        texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen),
-                        ..*r
-                    };
-                    let colors: Vec<crate::nvn::cmd::RtRef> = colors.iter().map(resolve).collect();
-                    let depth = depth.as_ref().map(resolve);
-                    if let Some(w) = watch_storage() {
-                        for (i, c) in colors.iter().enumerate() {
-                            if tex_info(c.texture).is_some_and(|(_, t)| t.storage == w) {
-                                println!("[watch] f{} render target c{} = texture 0x{:x} (storage {:#x})", presented_frames() + 1, i, c.texture, w);
-                                // --watch-trace: trace the rest of this frame (and --trace-trigger-frames after it).
-                                if crate::settings::get().trace.watch_trace
-                                    && TRACE_TRIGGERED_FRAME
-                                        .load(std::sync::atomic::Ordering::Relaxed)
-                                        == 0
-                                {
-                                    TRACE_TRIGGERED_FRAME.store(
-                                        presented_frames() + 1,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    // Debug: --log-rt-frames=a-b logs every render-target bind (storage, size, format) in frames a..b.
-                    if let Some(crate::settings::Span {
-                        first: fa,
-                        last: fb,
-                    }) = crate::settings::get().log.log_rt_frames
-                    {
-                        let f = presented_frames() + 1;
-                        if (fa..=fb).contains(&f) {
-                            for (i, c) in colors.iter().enumerate() {
-                                if let Some((_, t)) = tex_info(c.texture) {
-                                    println!("[rt-log] f{} c{} storage {:#x} {}x{}x{} fmt {} levels {} level {} layer {} view_format {}", f, i, t.storage, t.width, t.height, t.depth, t.format, t.levels, c.level, c.layer, c.view_format);
-                                }
-                            }
-                        }
-                    }
-                    // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
-                    // Every target (depth too) ends older holds on its memory.
-                    if rt_guard::enabled() {
-                        for c in colors.iter().chain(depth.iter()) {
-                            let Some((_, t)) = tex_info(c.texture) else { continue };
-                            if let Some(tex) = self.texture(&mut st.tc, c.texture) {
-                                rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
-                            }
-                        }
-                    }
-                    if rt_writeback_enabled() {
-                        let f = presented_frames() + 1;
-                        for c in colors.iter() {
-                            let Some((_, t)) = tex_info(c.texture) else {
-                                continue;
-                            };
-                            // The guard covers targets in CPU-visible pools (rt_guard::hold); the rest keep this.
-                            if rt_guard::enabled() && crate::nvn::api::memory_pool_cpu_writable(t.storage) {
-                                continue;
-                            }
-                            // Only targets not rendered in the previous 4 frames: per-frame targets, swapchain images and
-                            // ping-pong pairs are skipped after their first use, textures rendered once (generated maps)
-                            // are written back.
-                            let prev = st.rt_history.insert(t.storage, f);
-                            if prev.map_or(true, |p| p + 4 < f) {
-                                st.writeback.0.insert(c.texture, f);
-                            }
-                        }
-                        if st.rt_history.len() > 1 << 14 {
-                            st.rt_history.retain(|_, &mut v| v + 600 > f);
-                        }
-                    }
-                    if let Some((ww, wh)) = watch_size() {
-                        for (i, c) in colors.iter().enumerate() {
-                            if let Some((_, t)) = tex_info(c.texture)
-                                .filter(|(_, t)| t.width as u32 == ww && t.height as u32 == wh)
-                            {
-                                println!("[watch-size] f{} render target c{} = texture {:#x} storage {:#x} fmt {} levels {} view {:?}",
-                                    presented_frames() + 1, i, c.texture, t.storage, t.format, t.levels, c);
-                            }
-                        }
-                    }
-                    // Two slots naming one surface (same storage, level and layer): on the GPU both write the same
-                    // memory and a slot a shader does not write leaves it alone. Two Metal attachments of one texture
-                    // each store their own tile at the end of the pass, so an unwritten slot stored its stale tile over
-                    // the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
-                    // only 3: the G-buffer came out empty). The later slot stays unattached; its clears go to the earlier
-                    // one.
-                    let mut colors = colors;
-                    let surface = |c: &crate::nvn::cmd::RtRef| {
-                        tex_info(c.texture).map(|(_, t)| (t.storage, c.level, c.layer))
-                    };
-                    let surfaces: Vec<_> = colors.iter().map(surface).collect();
-                    st.color_dups = (0..colors.len())
-                        .map(|j| match surfaces[j] {
-                            Some(s) if s.0 != 0 => (0..j).find(|&i| surfaces[i] == Some(s)),
-                            _ => None,
-                        })
-                        .collect();
-                    for (j, d) in st.color_dups.iter().enumerate() {
-                        if d.is_some() {
-                            colors[j] = crate::nvn::cmd::RtRef::default();
-                        }
-                    }
-                    st.colors = colors;
-                    st.depth = depth;
-                    st.rts_dirty = true;
-                    st.cached_rts = None;
-                }
+                Cmd::SetRenderTargets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
                 Cmd::ClearColor { index, rgba, mask } => {
                     st.stats.clears += 1;
                     let index = match st.color_dups.get(*index as usize) {
@@ -3366,6 +3258,7 @@ impl Gfx {
                             ModelItem::Bind { stage, index, kind } => apply_model_bind(st, *stage, *index, *kind),
                             ModelItem::RenderState(r) => apply_render_state(st, r),
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
+                            ModelItem::Targets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
                             ModelItem::Viewport { x, y, w, h, near, far } => {
                                 st.scissor = Some((*x, *y, *w, *h));
                                 set_viewport(st, *x, *y, *w, *h);
@@ -3438,6 +3331,117 @@ impl Gfx {
         if let Some((n, t)) = cmd_t {
             note_cmd_time(n, t.elapsed().as_nanos() as u64);
         }
+    }
+
+    /// nvnCommandBufferSetRenderTargets (and the native targets item): the pass's render targets.
+    unsafe fn set_render_targets(&self, st: &mut State, colors: &[crate::nvn::cmd::RtRef], depth: Option<&crate::nvn::cmd::RtRef>) {
+        let resolve = |r: &crate::nvn::cmd::RtRef| crate::nvn::cmd::RtRef {
+            texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen),
+            ..*r
+        };
+        let colors: Vec<crate::nvn::cmd::RtRef> = colors.iter().map(resolve).collect();
+        let depth = depth.map(resolve);
+        if let Some(w) = watch_storage() {
+            for (i, c) in colors.iter().enumerate() {
+                if tex_info(c.texture).is_some_and(|(_, t)| t.storage == w) {
+                    println!("[watch] f{} render target c{} = texture 0x{:x} (storage {:#x})", presented_frames() + 1, i, c.texture, w);
+                    // --watch-trace: trace the rest of this frame (and --trace-trigger-frames after it).
+                    if crate::settings::get().trace.watch_trace
+                        && TRACE_TRIGGERED_FRAME
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            == 0
+                    {
+                        TRACE_TRIGGERED_FRAME.store(
+                            presented_frames() + 1,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
+                }
+            }
+        }
+        // Debug: --log-rt-frames=a-b logs every render-target bind (storage, size, format) in frames a..b.
+        if let Some(crate::settings::Span {
+            first: fa,
+            last: fb,
+        }) = crate::settings::get().log.log_rt_frames
+        {
+            let f = presented_frames() + 1;
+            if (fa..=fb).contains(&f) {
+                for (i, c) in colors.iter().enumerate() {
+                    if let Some((_, t)) = tex_info(c.texture) {
+                        println!("[rt-log] f{} c{} storage {:#x} {}x{}x{} fmt {} levels {} level {} layer {} view_format {}", f, i, t.storage, t.width, t.height, t.depth, t.format, t.levels, c.level, c.layer, c.view_format);
+                    }
+                }
+            }
+        }
+        // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
+        // Every target (depth too) ends older holds on its memory.
+        if rt_guard::enabled() {
+            for c in colors.iter().chain(depth.iter()) {
+                let Some((_, t)) = tex_info(c.texture) else { continue };
+                if let Some(tex) = self.texture(&mut st.tc, c.texture) {
+                    rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
+                }
+            }
+        }
+        if rt_writeback_enabled() {
+            let f = presented_frames() + 1;
+            for c in colors.iter() {
+                let Some((_, t)) = tex_info(c.texture) else {
+                    continue;
+                };
+                // The guard covers targets in CPU-visible pools (rt_guard::hold); the rest keep this.
+                if rt_guard::enabled() && crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+                    continue;
+                }
+                // Only targets not rendered in the previous 4 frames: per-frame targets, swapchain images and
+                // ping-pong pairs are skipped after their first use, textures rendered once (generated maps)
+                // are written back.
+                let prev = st.rt_history.insert(t.storage, f);
+                if prev.map_or(true, |p| p + 4 < f) {
+                    st.writeback.0.insert(c.texture, f);
+                }
+            }
+            if st.rt_history.len() > 1 << 14 {
+                st.rt_history.retain(|_, &mut v| v + 600 > f);
+            }
+        }
+        if let Some((ww, wh)) = watch_size() {
+            for (i, c) in colors.iter().enumerate() {
+                if let Some((_, t)) = tex_info(c.texture)
+                    .filter(|(_, t)| t.width as u32 == ww && t.height as u32 == wh)
+                {
+                    println!("[watch-size] f{} render target c{} = texture {:#x} storage {:#x} fmt {} levels {} view {:?}",
+                        presented_frames() + 1, i, c.texture, t.storage, t.format, t.levels, c);
+                }
+            }
+        }
+        // Two slots naming one surface (same storage, level and layer): on the GPU both write the same
+        // memory and a slot a shader does not write leaves it alone. Two Metal attachments of one texture
+        // each store their own tile at the end of the pass, so an unwritten slot stored its stale tile over
+        // the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
+        // only 3: the G-buffer came out empty). The later slot stays unattached; its clears go to the earlier
+        // one.
+        let mut colors = colors;
+        let surface = |c: &crate::nvn::cmd::RtRef| {
+            tex_info(c.texture).map(|(_, t)| (t.storage, c.level, c.layer))
+        };
+        let surfaces: Vec<_> = colors.iter().map(surface).collect();
+        st.color_dups = (0..colors.len())
+            .map(|j| match surfaces[j] {
+                Some(s) if s.0 != 0 => (0..j).find(|&i| surfaces[i] == Some(s)),
+                _ => None,
+            })
+            .collect();
+        for (j, d) in st.color_dups.iter().enumerate() {
+            if d.is_some() {
+                colors[j] = crate::nvn::cmd::RtRef::default();
+            }
+        }
+        st.colors = colors;
+        st.depth = depth;
+        st.rts_dirty = true;
+        st.cached_rts = None;
     }
 
     unsafe fn draw_elements(

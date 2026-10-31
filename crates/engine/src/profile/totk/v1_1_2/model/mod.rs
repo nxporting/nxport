@@ -15,6 +15,7 @@ mod mem;
 mod perview;
 mod render_list;
 mod ring;
+mod targets;
 mod terrain;
 mod vfx;
 mod viewport;
@@ -37,6 +38,7 @@ const STREAM_DRAW: (usize, u32) = (0x966e70, 0xa9bc7bfd);
 const SHAPE_BUFFERS: (usize, u32) = (0xf216b4, 0xa9ba7bfd);
 const SHAPE_STATES: (usize, u32) = (0x978ba4, 0xa9be7bfd);
 const VIEWPORT_APPLY: (usize, u32) = (0x74474c, 0xa9bc7bfd); // sead::Viewport::apply
+const RENDER_BUFFER_BIND: (usize, u32) = (0x7ab9a4, 0xd103c3ff); // agl::RenderBuffer::bind
 const OCCLUSION_SITE: usize = 0xa6c3a4;
 const OCCLUSION_SITE_INSTRUCTION: u32 = 0xd10203ff; // sub sp, sp, #0x80
 const LIGHTS_SITE: usize = 0x9777c4;
@@ -506,6 +508,33 @@ pub unsafe extern "C" fn on_viewport_apply(vp: usize, w: usize, fb: usize) -> u3
         viewport::apply(p, vp, w, fb);
         Ok(1)
     })
+}
+
+static TARGETS: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+fn targets_compared(expected: &[String], got: &[String]) {
+    let k = (expected == got) as usize;
+    if TARGETS[k].fetch_add(1, Ordering::Relaxed) < 4 && k == 0 {
+        println!("[model-draw] render targets differ: port {expected:?} game {got:?}");
+    }
+}
+
+/// agl::RenderBuffer::bind: --verify-render-lists compares the port with the game's commands; apply mode draws it.
+#[no_mangle]
+pub unsafe extern "C" fn on_render_buffer_bind(rb: usize, w: usize) -> u32 {
+    if crate::settings::get().totk.diagnostics.verify_render_lists {
+        if crate::nvn::api::capturing() {
+            return 0;
+        }
+        let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+        let mut r = Ok(());
+        let expected = crate::nvn::api::capture_dry(|| r = targets::bind(&mut port, rb, w));
+        if r.is_ok() {
+            crate::nvn::api::capture_watch(expected, targets_compared);
+        }
+        return 0;
+    }
+    primitive(|p| targets::bind(p, rb, w).map(|_| 1))
 }
 
 #[no_mangle]
@@ -980,6 +1009,10 @@ fn report() {
             vfx::report()
         );
     }
+    let (ts, td) = (TARGETS[1].load(Ordering::Relaxed), TARGETS[0].load(Ordering::Relaxed));
+    if ts + td != 0 {
+        println!("[model-draw] render buffer binds: {ts} identical, {td} different");
+    }
     let (vs, vd) = (VIEWPORTS[1].load(Ordering::Relaxed), VIEWPORTS[0].load(Ordering::Relaxed));
     if vs + vd != 0 {
         println!("[model-draw] viewports: {vs} identical, {vd} different");
@@ -1070,6 +1103,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let post = mem_space.make_hle_trampoline(crate::hle!(on_primitive_end())) as usize;
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_viewport_apply(_, _, _))) as usize;
         hook(base, mem_space, VIEWPORT_APPLY.0, VIEWPORT_APPLY.1, pre, post, "sead::Viewport::apply");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_buffer_bind(_, _))) as usize;
+        hook(base, mem_space, RENDER_BUFFER_BIND.0, RENDER_BUFFER_BIND.1, pre, post, "agl::RenderBuffer::bind");
     }
     if d.verify_render_lists || d.native_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_lights(_, _, _, _))) as usize;
