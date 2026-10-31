@@ -2722,8 +2722,13 @@ unsafe fn record_generic(
     if capture(|| {
         // Registers past a call's arguments hold whatever the caller left there.
         let n = match name {
-            "nvnCommandBufferSetTiledCacheAction" => 1,
+            "nvnCommandBufferSetTiledCacheAction"
+            | "nvnCommandBufferSetRasterizerDiscard"
+            | "nvnCommandBufferSetSampleMask"
+            | "nvnCommandBufferSetConservativeRasterEnable" => 1,
             "nvnCommandBufferSetTiledCacheTileSize" => 2,
+            // Float arguments travel in s registers.
+            "nvnCommandBufferSetDepthBounds" => 1,
             _ => 5,
         };
         let a = [a1, a2, a3, a4, a5];

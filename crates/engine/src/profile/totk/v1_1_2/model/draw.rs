@@ -325,7 +325,7 @@ impl Port {
     }
 
     /// nn::gfx::CommandBuffer::SetShader (main+0x74b81c) through the wrapper `w8` (= the context's wrapper + 8).
-    unsafe fn set_shader(&mut self, w8: usize, shader: usize, stages: u32) {
+    pub(super) unsafe fn set_shader(&mut self, w8: usize, shader: usize, stages: u32) {
         let cmd = self.m.r64(w8 + 0xb0);
         let (program, bits) = if shader == 0 {
             (0, Self::nvn_stage_bits(stages))
@@ -423,13 +423,13 @@ impl Port {
     }
 
     /// sub_68b1d8: the GPU address of an nn::gfx buffer (its NVNbuffer at +8).
-    unsafe fn gfx_buffer_address(&self, gfx_buffer: usize) -> u64 {
+    pub(super) unsafe fn gfx_buffer_address(&self, gfx_buffer: usize) -> u64 {
         self.buffer_address(self.m.r64(gfx_buffer + 8))
     }
 
     /// sub_68b364: an indexed draw through the command buffer wrapper `w` (NVNcommandBuffer* at +0xb0).
     #[allow(clippy::too_many_arguments)]
-    unsafe fn draw_indexed(&mut self, w: usize, prim: u32, itype: u32, addr: u64, count: i32, base_vertex: i32, instances: i32, base_instance: i32) {
+    pub(super) unsafe fn draw_indexed(&mut self, w: usize, prim: u32, itype: u32, addr: u64, count: i32, base_vertex: i32, instances: i32, base_instance: i32) {
         let cmd = self.m.r64(w + 0xb0);
         let mode = self.m.r32(self.base + PRIMITIVE_TABLE + prim as usize * 4);
         let ty = self.m.r32(self.base + INDEX_TYPE_TABLE + itype as usize * 4);
@@ -454,7 +454,7 @@ impl Port {
     }
 
     /// The index count of sub-mesh range [first, last] of shape record `sh` and its index buffer address.
-    unsafe fn range(&self, sh: usize, first: usize, last: usize) -> (u64, i32) {
+    pub(super) unsafe fn range(&self, sh: usize, first: usize, last: usize) -> (u64, i32) {
         let ranges = self.m.r64(sh);
         let end = ranges + last * 8;
         let start = self.m.r32(ranges + first * 8) as u64;
