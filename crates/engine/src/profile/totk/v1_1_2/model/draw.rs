@@ -24,6 +24,7 @@ const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
 const PFN_BIND_TEXTURE: usize = 0x466e008;
 const PFN_BIND_TEXTURES_DEFERRED: usize = 0x466e018;
 const PFN_DRAW_ELEMENTS: usize = 0x466e088;
+const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_BLEND_STATE_SET_DEFAULTS: usize = 0x466dc58;
@@ -216,6 +217,44 @@ impl Port {
     pub(super) unsafe fn bind_uniform(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
         if !self.join(cmd, stage, slot, crate::nvn::cmd::ModelBindKind::Uniform { addr, size: size as usize }) {
             self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
+        }
+    }
+
+    /// nvnCommandBufferDrawElementsBaseVertex (natively a native draw).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn draw_elements_base_vertex(&mut self, cmd: usize, mode: i32, index_type: i32, count: i32, addr: u64, base_vertex: i32) {
+        if self.native {
+            let r = crate::nvn::cmd::ModelRange { mode, index_type, count, index_addr: addr, base_vertex, base_instance: 0, instances: 1 };
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Draw(r));
+        }
+        self.call(self.pfn(PFN_DRAW_ELEMENTS_BASE_VERTEX), &[cmd as u64, mode as u64, index_type as u64, count as u64, addr, base_vertex as u32 as u64]);
+    }
+
+    /// nvnCommandBufferDrawElementsInstanced (natively a native draw).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn draw_elements_instanced(&mut self, cmd: usize, mode: i32, index_type: i32, count: i32, addr: u64, base_vertex: i32, base_instance: i32, instances: i32) {
+        if self.native {
+            let r = crate::nvn::cmd::ModelRange { mode, index_type, count, index_addr: addr, base_vertex, base_instance, instances };
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Draw(r));
+        }
+        self.call(
+            self.pfn(PFN_DRAW_ELEMENTS_INSTANCED),
+            &[cmd as u64, mode as u64, index_type as u64, count as u64, addr, base_vertex as u32 as u64, base_instance as u32 as u64, instances as u64],
+        );
+    }
+
+    /// A draw of `count` vertices from `first` (natively a native draw; else through `f`, the game's
+    /// nvnCommandBufferDrawArrays (instances 0) or DrawArraysInstanced pointer).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn draw_arrays(&mut self, f: usize, cmd: usize, mode: i32, first: i32, count: i32, base_instance: i32, instances: i32) {
+        if self.native {
+            let (base_instance, instances) = if instances == 0 { (0, 1) } else { (base_instance, instances) };
+            return self.push(cmd, crate::nvn::cmd::ModelItem::DrawArrays { mode, first, count, base_instance, instances });
+        }
+        if instances == 0 {
+            self.call(f, &[cmd as u64, mode as u64, first as u64, count as u64]);
+        } else {
+            self.call(f, &[cmd as u64, mode as u64, first as u64, count as u64, base_instance as u64, instances as u64]);
         }
     }
 

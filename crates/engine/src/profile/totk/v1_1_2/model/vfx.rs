@@ -162,7 +162,7 @@ unsafe fn strip_draw(p: &mut Port, i: &Info) -> R<()> {
             }
             let cmd = p.m.r64(i.g + 0xb0) as u64;
             let mode = p.m.r32(p.base + TOPOLOGY_TABLE + 4 * 4) as u64;
-            p.call(got(p, GOT_DRAW_ARRAYS), &[cmd, mode, 0, p.m.r32(strip + 0x20) as u64]);
+            p.draw_arrays(got(p, GOT_DRAW_ARRAYS), cmd as usize, mode as i32, 0, p.m.r32(strip + 0x20) as i32, 0, 0);
         }
     }
     Ok(())
@@ -335,7 +335,7 @@ unsafe fn bind_vertex_buffer(p: &mut Port, g: usize, index: i32, addr: u64, size
 unsafe fn draw_arrays(p: &mut Port, g: usize, topology: u32, count: u32, first: u32, instances: u32, base: u32) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     let mode = p.m.r32(p.base + TOPOLOGY_TABLE + topology as usize * 4) as u64;
-    p.call(got(p, GOT_DRAW_ARRAYS_INSTANCED), &[cmd, mode, first as u64, count as u64, base as u64, instances as u64]);
+    p.draw_arrays(got(p, GOT_DRAW_ARRAYS_INSTANCED), cmd as usize, mode as i32, first as i32, count as i32, base as i32, instances as i32);
 }
 
 /// main+0x7650f4: vertex attribute and stream states.
@@ -1778,7 +1778,6 @@ unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32,
 
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
-const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_VERTEX_BUFFER_: usize = 0x466dfb8;
 const PROGRAM_BLOCK: usize = 0x4632818;
 const DECAL_SYSTEM: usize = 0x462ade0;
@@ -1851,7 +1850,7 @@ unsafe fn shape_draw(p: &mut Port, shape: usize, mesh: usize, w: usize, instance
     if instances < 2 {
         p.draw_elements(cmd as usize, prim as i32, ty as i32, count as i32, addr as u64);
     } else {
-        p.call(p.pfn(PFN_DRAW_ELEMENTS_INSTANCED), &[cmd, prim, ty, count as u32 as u64, addr, 0, 0, instances as u64]);
+        p.draw_elements_instanced(cmd as usize, prim as i32, ty as i32, count as i32, addr, 0, 0, instances as i32);
     }
 }
 

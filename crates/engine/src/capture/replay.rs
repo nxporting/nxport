@@ -126,6 +126,7 @@ fn flatten(
                                 Cmd::BindUniformBuffer { .. } => "nvnCommandBufferBindUniformBuffer",
                                 Cmd::BindStorageBuffer { .. } => "nvnCommandBufferBindStorageBuffer",
                                 Cmd::BindTexture { .. } => "nvnCommandBufferBindTexture",
+                                Cmd::DrawArraysInstanced { .. } => "nvnCommandBufferDrawArraysInstanced",
                                 _ => "nvnCommandBufferDrawElementsInstanced",
                             };
                             out.push(Op { name: name.into(), typed: Some(t), args: None });

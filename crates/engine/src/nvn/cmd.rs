@@ -329,6 +329,7 @@ pub enum ModelItem {
     Draw(ModelRange),
     RenderState(Box<RenderState>),
     Program { program: usize, stages: i32 },
+    DrawArrays { mode: i32, first: i32, count: i32, base_instance: i32, instances: i32 },
     /// Texture handles read from guest memory when the commands run (the game fills the table later).
     TexturesDeferred { stage: i32, first: i32, count: i32, handles: u64 },
 }
@@ -352,6 +353,9 @@ impl ModelItem {
                 instances: r.instances,
                 caller: 0,
             },
+            ModelItem::DrawArrays { mode, first, count, base_instance, instances } => {
+                Cmd::DrawArraysInstanced { mode, first, count, base_instance, instances, caller: 0 }
+            }
             _ => return None,
         })
     }
