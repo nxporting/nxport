@@ -278,8 +278,8 @@ pub enum Cmd {
     },
     /// `color` holds the raw 32-bit words of the float / int / uint clear value.
     ClearTexture(Box<ClearTextureParams>),
-    /// A render unit of TotK's model renderer (the port, --native-model-draws): its list called, then its index ranges
-    /// drawn, as CallCommands([unit]) followed by DrawElementsInstanced per range.
+    /// What TotK's renderer port (--native-model-draws) records on a command buffer between the game's own commands:
+    /// render units, bindings, draws and render states, in order, built from the game's objects.
     ModelDraw(Box<ModelDraw>),
     /// A whole render state from TotK's graphics context in one command (the port, --native-model-draws), in place of
     /// the state object binds sead::GraphicsContext::apply records.
@@ -311,24 +311,47 @@ pub struct RenderState {
     pub depth_clamp: bool,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ModelDraw {
-    pub unit: u64,
-    pub ranges: smallvec::SmallVec<[ModelRange; 2]>,
-    /// The unit's material, from the game's objects (in place of running `unit`): the model's vertex input and the
-    /// material's bindings. Captures keep only `unit`.
-    #[serde(skip)]
-    pub material: Option<std::sync::Arc<Vec<Cmd>>>,
-    /// Bindings made between the ranges (each before range `at`; `at` = ranges.len(): after the last).
-    pub binds: smallvec::SmallVec<[ModelBind; 2]>,
+    pub items: smallvec::SmallVec<[ModelItem; 4]>,
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ModelBind {
-    pub at: u32,
-    pub stage: i32,
-    pub index: i32,
-    pub kind: ModelBindKind,
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ModelItem {
+    /// A render unit's material list. `material`: its description from the game's objects, in place of running the
+    /// list (the model's vertex input and the material's bindings). Captures keep only the list.
+    Unit {
+        list: u64,
+        #[serde(skip)]
+        material: Option<std::sync::Arc<Vec<Cmd>>>,
+    },
+    Bind { stage: i32, index: i32, kind: ModelBindKind },
+    Draw(ModelRange),
+    RenderState(Box<RenderState>),
+}
+
+impl ModelItem {
+    /// A binding or draw as the command it stands for (None for units and render states).
+    pub fn cmd(&self) -> Option<Cmd> {
+        Some(match *self {
+            ModelItem::Bind { stage, index, kind } => match kind {
+                ModelBindKind::Uniform { addr, size } => Cmd::BindUniformBuffer { stage, index, addr, size },
+                ModelBindKind::Storage { addr, size } => Cmd::BindStorageBuffer { stage, index, addr, size },
+                ModelBindKind::Texture(handle) => Cmd::BindTexture { stage, index, handle },
+            },
+            ModelItem::Draw(r) => Cmd::DrawElementsInstanced {
+                mode: r.mode,
+                index_type: r.index_type,
+                count: r.count,
+                index_addr: r.index_addr,
+                base_vertex: r.base_vertex,
+                base_instance: r.base_instance,
+                instances: r.instances,
+                caller: 0,
+            },
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -336,18 +359,6 @@ pub enum ModelBindKind {
     Uniform { addr: u64, size: usize },
     Storage { addr: u64, size: usize },
     Texture(u64),
-}
-
-impl ModelBind {
-    /// The same binding as a command.
-    pub fn cmd(&self) -> Cmd {
-        let (stage, index) = (self.stage, self.index);
-        match self.kind {
-            ModelBindKind::Uniform { addr, size } => Cmd::BindUniformBuffer { stage, index, addr, size },
-            ModelBindKind::Storage { addr, size } => Cmd::BindStorageBuffer { stage, index, addr, size },
-            ModelBindKind::Texture(handle) => Cmd::BindTexture { stage, index, handle },
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]

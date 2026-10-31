@@ -69,16 +69,16 @@ const INDEX_TYPE_TABLE: usize = 0x37ffa0c; // nn::gfx index format -> NVN index 
 /// Virtual functions the port met but does not implement: (vtable slot, main+ offset).
 pub(super) static UNKNOWN_VFNS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
 
-/// A unit call waiting for its draws: (NVNcommandBuffer, the draw).
+/// The native commands not recorded yet: (NVNcommandBuffer, the commands).
 type Pending = (usize, crate::nvn::cmd::ModelDraw);
 
 pub(super) struct Port {
     pub(super) m: Mem,
     pub(super) base: usize,
-    /// --native-model-draws on Metal: a render unit's list call and the index ranges drawn after it are recorded as
-    /// one Cmd::ModelDraw.
+    /// --native-model-draws on Metal: render units, bindings, draws and render states the port makes are recorded as
+    /// native commands (Cmd::ModelDraw, one per run between the game's own commands).
     pub(super) native: bool,
-    /// The unit call waiting for its draws: (NVNcommandBuffer, list handle, ranges). Recorded before anything else is.
+    /// The native commands not recorded yet; recorded before anything else is.
     pending: std::cell::RefCell<Option<Pending>>,
     /// Predicting: NVNbuffer objects re-initialized so far, with the address they got.
     buffers: Vec<(usize, u64)>,
@@ -95,7 +95,7 @@ impl Port {
         Port { m, base, native, pending: Default::default(), buffers: Vec::new(), trial: false }
     }
 
-    /// Records the pending unit draw (anything recorded after it must come after it in the stream).
+    /// Records the pending native commands (anything recorded after them must come after them in the stream).
     pub(super) unsafe fn flush(&self) {
         if let Some((cmd, draw)) = self.pending.borrow_mut().take() {
             crate::nvn::api::record_typed("nvnCommandBufferModelDraw", cmd, crate::nvn::cmd::Cmd::ModelDraw(Box::new(draw)));
@@ -166,16 +166,20 @@ impl Port {
         self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[nvn_buffer as u64])
     }
 
-    /// Adds `bind` to the pending unit draw when it is on `cmd` (bindings between a unit's draws are part of it).
-    fn join(&self, cmd: usize, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) -> bool {
-        match self.pending.borrow_mut().as_mut() {
-            Some((pcmd, d)) if *pcmd == cmd => {
-                let at = d.ranges.len() as u32;
-                d.binds.push(crate::nvn::cmd::ModelBind { at, stage, index, kind });
-                true
-            }
-            _ => false,
+    /// Appends a native command for `cmd` (recording the pending ones first when they are for another command buffer).
+    unsafe fn push(&self, cmd: usize, item: crate::nvn::cmd::ModelItem) {
+        if self.pending.borrow().as_ref().is_some_and(|(c, _)| *c != cmd) {
+            self.flush();
         }
+        self.pending.borrow_mut().get_or_insert_with(|| (cmd, Default::default())).1.items.push(item);
+    }
+
+    /// Natively, a binding as a native command.
+    unsafe fn join(&self, cmd: usize, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) -> bool {
+        if self.native {
+            self.push(cmd, crate::nvn::cmd::ModelItem::Bind { stage, index, kind });
+        }
+        self.native
     }
 
     pub(super) unsafe fn bind_uniform_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
@@ -197,14 +201,11 @@ impl Port {
         }
     }
 
-    /// nvnCommandBufferDrawElements: one of the pending unit's draws when it is on `cmd`.
+    /// nvnCommandBufferDrawElements (natively a native draw).
     pub(super) unsafe fn draw_elements(&mut self, cmd: usize, mode: i32, index_type: i32, count: i32, addr: u64) {
-        if let Some((pcmd, d)) = self.pending.borrow_mut().as_mut() {
-            if *pcmd == cmd {
-                let r = crate::nvn::cmd::ModelRange { mode, index_type, count, index_addr: addr, base_vertex: 0, base_instance: 0, instances: 1 };
-                d.ranges.push(r);
-                return;
-            }
+        if self.native {
+            let r = crate::nvn::cmd::ModelRange { mode, index_type, count, index_addr: addr, base_vertex: 0, base_instance: 0, instances: 1 };
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Draw(r));
         }
         self.call(self.pfn(PFN_DRAW_ELEMENTS), &[cmd as u64, mode as u64, index_type as u64, count as u64, addr]);
     }
@@ -220,25 +221,19 @@ impl Port {
             return self.call_commands(cmd, handles);
         }
         self.m.w::<u8>(cmd + 0x10, 1);
-        self.flush();
-        let unit = self.m.r64(handles) as u64;
-        let draw = crate::nvn::cmd::ModelDraw { unit, ranges: Default::default(), material: None, binds: Default::default() };
-        *self.pending.borrow_mut() = Some((cmd, draw));
+        self.push(cmd, crate::nvn::cmd::ModelItem::Unit { list: self.m.r64(handles) as u64, material: None });
     }
 
     /// A unit's material list (at `handles`, recorded by main+0x7b3c80 for `pass`, slot `b`): natively, the material's
-    /// description from the game's objects in its place (built once per recorded list: the game records a new list,
-    /// with a new handle, when the material changes); else the list call.
+    /// description from the game's objects in its place (built once per recorded list); else the list call.
     pub(super) unsafe fn call_material(&mut self, cmd: usize, handles: usize, d: usize, w: usize, pass: usize, b: i32) {
         if !self.native {
             return self.call_unit(cmd, handles);
         }
-        let handle = self.m.r64(handles) as u64;
-        let material = super::material::described(self, handle, d, w, pass, b);
-        self.call_unit(cmd, handles);
-        if let Some((_, d)) = self.pending.borrow_mut().as_mut() {
-            d.material = material;
-        }
+        let list = self.m.r64(handles) as u64;
+        let material = super::material::described(self, list, d, w, pass, b);
+        self.m.w::<u8>(cmd + 0x10, 1);
+        self.push(cmd, crate::nvn::cmd::ModelItem::Unit { list, material });
     }
 
     /// nvnBufferGetAddress of `buf`, as re-initialized by the prediction so far.
@@ -435,9 +430,7 @@ impl Port {
         let cmd = self.m.r64(w + 0xb8) as u64;
         if self.native {
             let r = self.render_state(g);
-            self.flush();
-            crate::nvn::api::record_typed("nvnCommandBufferRenderState", cmd as usize, crate::nvn::cmd::Cmd::RenderState(Box::new(r)));
-            return;
+            return self.push(cmd as usize, crate::nvn::cmd::ModelItem::RenderState(Box::new(r)));
         }
         let mut blend = [0u64; 8];
         let mut color = [0u64; 8];
@@ -638,19 +631,9 @@ impl Port {
         let cmd = self.m.r64(w + 0xb0);
         let mode = self.m.r32(self.base + PRIMITIVE_TABLE + prim as usize * 4);
         let ty = self.m.r32(self.base + INDEX_TYPE_TABLE + itype as usize * 4);
-        if let Some((pcmd, d)) = self.pending.borrow_mut().as_mut() {
-            if *pcmd == cmd {
-                d.ranges.push(crate::nvn::cmd::ModelRange {
-                    mode: mode as i32,
-                    index_type: ty as i32,
-                    count,
-                    index_addr: addr,
-                    base_vertex,
-                    base_instance,
-                    instances,
-                });
-                return;
-            }
+        if self.native {
+            let r = crate::nvn::cmd::ModelRange { mode: mode as i32, index_type: ty as i32, count, index_addr: addr, base_vertex, base_instance, instances };
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Draw(r));
         }
         self.call(
             self.pfn(PFN_DRAW_ELEMENTS_INSTANCED),

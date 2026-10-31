@@ -2126,7 +2126,10 @@ impl RecordedCommandList {
                     Some(crate::nvn::cmd::Cmd::CallCommands(h)) => {
                         calls.extend_from_slice(h.as_slice())
                     }
-                    Some(crate::nvn::cmd::Cmd::ModelDraw(m)) => calls.push(m.unit),
+                    Some(crate::nvn::cmd::Cmd::ModelDraw(m)) => calls.extend(m.items.iter().filter_map(|i| match i {
+                        crate::nvn::cmd::ModelItem::Unit { list, .. } => Some(*list),
+                        _ => None,
+                    })),
                     _ => {}
                 }
             }
@@ -2163,8 +2166,16 @@ impl RecordedCommandList {
                         | Cmd::DrawElementsInstanced { .. },
                     ) => PassEvent::Draw,
                     Some(Cmd::ModelDraw(m)) => {
-                        ev.push(PassEvent::Call(m.unit));
-                        PassEvent::Draw
+                        for item in &m.items {
+                            match item {
+                                crate::nvn::cmd::ModelItem::Unit { list, .. } => ev.push(PassEvent::Call(*list)),
+                                crate::nvn::cmd::ModelItem::Draw(_) if !matches!(ev.last(), Some(PassEvent::Draw)) => {
+                                    ev.push(PassEvent::Draw)
+                                }
+                                _ => {}
+                            }
+                        }
+                        continue;
                     }
                     Some(Cmd::ClearColor { .. } | Cmd::ClearDepthStencil { .. }) => PassEvent::Clear,
                     Some(Cmd::DispatchCompute { .. }) => PassEvent::Break("compute"),

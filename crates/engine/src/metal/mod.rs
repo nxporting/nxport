@@ -3353,78 +3353,65 @@ impl Gfx {
                 Cmd::SetBlendColor(c) => {
                     st.blend_color = *c;
                 }
-                Cmd::RenderState(r) => {
-                    for &b in &r.blend {
-                        st.blend_states[(b & 7) as usize] = b;
-                    }
-                    st.color_state = r.color;
-                    st.channel_mask = r.channel_mask;
-                    st.blend_color = r.blend_color;
-                    st.depth_stencil = r.depth_stencil;
-                    if let Some((mask, reference)) = r.stencil {
-                        st.stencil = [[reference; 2], [mask; 2], [0xff; 2]];
-                    }
-                    st.polygon = r.polygon;
-                    st.polygon_offset = r.polygon_offset;
-                    st.depth_clamp = r.depth_clamp;
-                }
+                Cmd::RenderState(r) => apply_render_state(st, r),
                 Cmd::VertexInput(v) => apply_vertex_input(st, v),
                 Cmd::ModelDraw(m) => {
-                    match &m.material {
-                        // The material from the game's objects: the model's vertex input, then the material's
-                        // bindings (replay side B runs the recorded list instead).
-                        Some(mat) if !replay_b() => {
-                            for c in mat.iter() {
-                                match c {
-                                    Cmd::VertexInput(v) => apply_vertex_input(st, v),
-                                    Cmd::BindTexture { stage, index, handle } => {
-                                        st.textures_bound.insert((*stage, *index), *handle);
-                                    }
-                                    Cmd::BindUniformBuffer { stage, index, addr, size } => {
-                                        st.uniform_buffers.insert((*stage, *index), (*addr, *size));
-                                    }
-                                    Cmd::BindStorageBuffer { stage, index, addr, size } => {
-                                        if (0..6).contains(stage) && (0..16).contains(index) {
-                                            st.storage_buffers[*stage as usize][*index as usize] = (*addr, *size);
+                    use crate::nvn::cmd::ModelItem;
+                    for item in &m.items {
+                        match item {
+                            // The material from the game's objects: the model's vertex input, then the material's
+                            // bindings (replay side B runs the recorded list instead).
+                            ModelItem::Unit { material: Some(mat), .. } if !replay_b() => {
+                                for c in mat.iter() {
+                                    match c {
+                                        Cmd::VertexInput(v) => apply_vertex_input(st, v),
+                                        Cmd::BindTexture { stage, index, handle } => {
+                                            st.textures_bound.insert((*stage, *index), *handle);
                                         }
+                                        Cmd::BindUniformBuffer { stage, index, addr, size } => {
+                                            st.uniform_buffers.insert((*stage, *index), (*addr, *size));
+                                        }
+                                        Cmd::BindStorageBuffer { stage, index, addr, size } => {
+                                            if (0..6).contains(stage) && (0..16).contains(index) {
+                                                st.storage_buffers[*stage as usize][*index as usize] = (*addr, *size);
+                                            }
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
+                                }
+                            }
+                            ModelItem::Unit { list, .. } => {
+                                let c = cur.clone();
+                                self.run_list(st, &c, *list, depth + 1);
+                                if let Some(new_cb) = &st.cur_cb {
+                                    if Retained::as_ptr(&cur) != Retained::as_ptr(new_cb) {
+                                        cur = new_cb.clone();
+                                    }
+                                }
+                            }
+                            ModelItem::Bind { stage, index, kind } => apply_model_bind(st, *stage, *index, *kind),
+                            ModelItem::RenderState(r) => apply_render_state(st, r),
+                            ModelItem::Draw(r) => {
+                                st.cur_caller = 0;
+                                st.stats.draws += 1;
+                                if st.occl.counting {
+                                    st.occl.draws_seen += 1;
+                                }
+                                if gfx_mode() >= GfxMode::Draws || gfx_mode() == GfxMode::Dry {
+                                    self.draw_elements(
+                                        st,
+                                        &cur,
+                                        r.mode,
+                                        r.index_type,
+                                        r.count,
+                                        r.index_addr,
+                                        r.base_vertex,
+                                        r.base_instance,
+                                        r.instances,
+                                    );
                                 }
                             }
                         }
-                        _ => self.run_list(st, cb, m.unit, depth + 1),
-                    }
-                    if let Some(new_cb) = &st.cur_cb {
-                        if Retained::as_ptr(&cur) != Retained::as_ptr(new_cb) {
-                            cur = new_cb.clone();
-                        }
-                    }
-                    let mut binds = m.binds.iter().peekable();
-                    for (i, r) in m.ranges.iter().enumerate() {
-                        while let Some(b) = binds.next_if(|b| b.at as usize <= i) {
-                            apply_model_bind(st, b);
-                        }
-                        st.cur_caller = 0;
-                        st.stats.draws += 1;
-                        if st.occl.counting {
-                            st.occl.draws_seen += 1;
-                        }
-                        if gfx_mode() >= GfxMode::Draws || gfx_mode() == GfxMode::Dry {
-                            self.draw_elements(
-                                st,
-                                &cur,
-                                r.mode,
-                                r.index_type,
-                                r.count,
-                                r.index_addr,
-                                r.base_vertex,
-                                r.base_instance,
-                                r.instances,
-                            );
-                        }
-                    }
-                    for b in binds {
-                        apply_model_bind(st, b);
                     }
                 }
                 Cmd::CallCommands(handles) => {
@@ -8323,19 +8310,35 @@ fn apply_vertex_input(st: &mut State, v: &crate::nvn::cmd::VertexInput) {
     }
 }
 
-fn apply_model_bind(st: &mut State, b: &crate::nvn::cmd::ModelBind) {
+fn apply_render_state(st: &mut State, r: &crate::nvn::cmd::RenderState) {
+    for &b in &r.blend {
+        st.blend_states[(b & 7) as usize] = b;
+    }
+    st.color_state = r.color;
+    st.channel_mask = r.channel_mask;
+    st.blend_color = r.blend_color;
+    st.depth_stencil = r.depth_stencil;
+    if let Some((mask, reference)) = r.stencil {
+        st.stencil = [[reference; 2], [mask; 2], [0xff; 2]];
+    }
+    st.polygon = r.polygon;
+    st.polygon_offset = r.polygon_offset;
+    st.depth_clamp = r.depth_clamp;
+}
+
+fn apply_model_bind(st: &mut State, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) {
     use crate::nvn::cmd::ModelBindKind;
-    match b.kind {
+    match kind {
         ModelBindKind::Uniform { addr, size } => {
-            st.uniform_buffers.insert((b.stage, b.index), (addr, size));
+            st.uniform_buffers.insert((stage, index), (addr, size));
         }
         ModelBindKind::Storage { addr, size } => {
-            if (0..6).contains(&b.stage) && (0..16).contains(&b.index) {
-                st.storage_buffers[b.stage as usize][b.index as usize] = (addr, size);
+            if (0..6).contains(&stage) && (0..16).contains(&index) {
+                st.storage_buffers[stage as usize][index as usize] = (addr, size);
             }
         }
         ModelBindKind::Texture(handle) => {
-            st.textures_bound.insert((b.stage, b.index), handle);
+            st.textures_bound.insert((stage, index), handle);
         }
     }
 }
