@@ -55,6 +55,7 @@ struct Info {
     em: usize,
     a3: usize,
     dp: usize,
+    cache: usize,
     path: u8,
 }
 
@@ -66,6 +67,7 @@ unsafe fn run_callback(p: &mut Port, f: usize, i: &Info) -> R<bool> {
         0x7c4bf0 => Ok(custom_block(p, i)),
         0x7c4440 => render_state_basic2(p, i, false),
         0xd61360 => render_state_basic2(p, i, true),
+        0x2e24c => repeated_draw(p, i).map(|_| true),
         0x780f80 => {
             render_state_blend(p, i);
             Ok(true)
@@ -207,7 +209,7 @@ pub(super) unsafe fn draw_emitter(p: &mut Port, sys: usize, g: usize, em: usize,
     }
     // main+0x1854: the emitter's four callback sets (+0x370..), their +0x28 draw callback.
     let path = p.m.r8(dp + 0x2c) as usize;
-    let info = Info { g, em, a3, dp, path: path as u8 };
+    let info = Info { g, em, a3, dp, cache, path: path as u8 };
     for k in 0..4 {
         let set = p.m.r64(em + 0x370 + k * 8);
         if set != 0 && p.m.r64(set + 0x28) != 0 && run_callback(p, p.m.r64(set + 0x28), &info)? {
@@ -436,7 +438,7 @@ unsafe fn callbacks(p: &mut Port, em: usize, _g: usize, path: u8, _a3: usize, dp
         p.m.w::<u64>(e + 0x800, v as u64);
         p.m.w::<u8>(e + 0x820, 10);
     }
-    let info = Info { g: _g, em, a3: _a3, dp, path };
+    let info = Info { g: _g, em, a3: _a3, dp, cache: 0, path };
     for o in [0x370usize, 0x380] {
         let set = p.m.r64(em + o);
         if set != 0 && p.m.r64(set + 0x50) != 0 && !run_callback(p, p.m.r64(set + 0x50), &info)? {
@@ -513,7 +515,11 @@ unsafe fn ring_alloc(p: &mut Port, a: usize, core: i32, size: usize) -> Option<(
     if core >= p.m.i32(a + 0x2f38) {
         return None;
     }
-    let r = p.m.r64(a + 0x98) + core as i64 as usize * 0x828;
+    bump(p, p.m.r64(a + 0x98) + core as i64 as usize * 0x828, size)
+}
+
+/// main+0x2ebb8: `size` bytes from bump allocator `r` (into the overlay): (CPU address, GPU address).
+unsafe fn bump(p: &mut Port, r: usize, size: usize) -> Option<(usize, u64)> {
     if p.m.r8(r + 0x52d) == 0 || size == 0 {
         return None;
     }
@@ -826,6 +832,38 @@ unsafe fn sorted(p: &mut Port, g: usize, em: usize, prim: usize, dp: usize, lod:
         } else {
             draw_arrays(p, g, 4, 4, 0, 1, idx as u32);
         }
+    }
+    Ok(())
+}
+
+/// main+0x2e24c -> main+0x2e27c: the emitter drawn (main+0x8544) (int)([res+0x128]+0xc + 1) times, each with its own
+/// 0xc0-byte uniform block from the params' bump allocator (+0x18) bound at the shader's vertex / fragment slots
+/// +0x3d / +0x7f. The block's contents (per-repeat transforms) are the game's: the prediction checks the commands,
+/// not the data.
+unsafe fn repeated_draw(p: &mut Port, i: &Info) -> R<()> {
+    if i.path == 3 {
+        return Ok(());
+    }
+    let em = i.em;
+    let res = p.m.r64(em + 0x40);
+    let sh = p.m.r64(res + i.path as usize * 8 + 0x10);
+    if sh == 0 || p.m.i32(i.dp + 0x24) != -1 {
+        return Ok(());
+    }
+    let t = p.m.r64(res + 0x128);
+    p.set_shader(i.g, p.m.r64(sh), 0x3f);
+    let n = (p.m.f32(t + 0xc) + 1.0) as i32;
+    let sys = p.m.r64(em + 0x50);
+    for _ in 0..n.max(0) {
+        let Some((_, gpu)) = bump(p, p.m.r64(i.dp + 0x18), 0xc0) else { return Ok(()) };
+        let (v, f) = (p.m.i8(sh + 0x3d), p.m.i8(sh + 0x7f));
+        if v != -1 {
+            bind_uniform(p, i.g, v as i32, 0, gpu, 0xc0);
+        }
+        if f != -1 {
+            bind_uniform(p, i.g, f as i32, 4, gpu, 0xc0);
+        }
+        draw_shaded(p, sys, i.g, em, sh, i.a3, i.dp, i.cache)?;
     }
     Ok(())
 }
