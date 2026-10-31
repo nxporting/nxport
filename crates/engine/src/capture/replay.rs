@@ -102,37 +102,26 @@ fn flatten(
                 }
             }
             Some(Cmd::ModelDraw(m)) if depth < 16 => {
-                flatten(lists, m.unit, depth + 1, out, missing);
-                let mut binds = m.binds.iter().peekable();
-                let bind = |b: &crate::nvn::cmd::ModelBind| {
-                    let t = b.cmd();
-                    let name = match t {
-                        Cmd::BindUniformBuffer { .. } => "nvnCommandBufferBindUniformBuffer",
-                        Cmd::BindStorageBuffer { .. } => "nvnCommandBufferBindStorageBuffer",
-                        _ => "nvnCommandBufferBindTexture",
-                    };
-                    Op { name: name.into(), typed: Some(t), args: None }
-                };
-                for (i, r) in m.ranges.iter().enumerate() {
-                    while let Some(b) = binds.next_if(|b| b.at as usize <= i) {
-                        out.push(bind(b));
-                    }
-                    out.push(Op {
-                        name: "nvnCommandBufferDrawElementsInstanced".into(),
-                        typed: Some(Cmd::DrawElementsInstanced {
-                            mode: r.mode,
-                            index_type: r.index_type,
-                            count: r.count,
-                            index_addr: r.index_addr,
-                            base_vertex: r.base_vertex,
-                            base_instance: r.base_instance,
-                            instances: r.instances,
-                            caller: 0,
+                for item in &m.items {
+                    match item {
+                        crate::nvn::cmd::ModelItem::Unit { list, .. } => flatten(lists, *list, depth + 1, out, missing),
+                        crate::nvn::cmd::ModelItem::RenderState(r) => out.push(Op {
+                            name: "nvnCommandBufferRenderState".into(),
+                            typed: Some(Cmd::RenderState(r.clone())),
+                            args: None,
                         }),
-                        args: None,
-                    });
+                        item => {
+                            let t = item.cmd().unwrap();
+                            let name = match t {
+                                Cmd::BindUniformBuffer { .. } => "nvnCommandBufferBindUniformBuffer",
+                                Cmd::BindStorageBuffer { .. } => "nvnCommandBufferBindStorageBuffer",
+                                Cmd::BindTexture { .. } => "nvnCommandBufferBindTexture",
+                                _ => "nvnCommandBufferDrawElementsInstanced",
+                            };
+                            out.push(Op { name: name.into(), typed: Some(t), args: None });
+                        }
+                    }
                 }
-                out.extend(binds.map(bind));
             }
             _ => out.push(op.clone()),
         }
