@@ -328,6 +328,9 @@ pub enum ModelItem {
     Bind { stage: i32, index: i32, kind: ModelBindKind },
     Draw(ModelRange),
     RenderState(Box<RenderState>),
+    Program { program: usize, stages: i32 },
+    /// Texture handles read from guest memory when the commands run (the game fills the table later).
+    TexturesDeferred { stage: i32, first: i32, count: i32, handles: u64 },
 }
 
 impl ModelItem {
