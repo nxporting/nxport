@@ -260,14 +260,10 @@ pub struct Ctx {
     chunk_start: std::time::Instant,
     /// Index of the command being executed in this submit (in the order they run).
     op_index: u64,
-    /// Guest memory this submit's commands write while it is recorded (inline uniform updates, reports): uniform
-    /// buffers there are copied when bound (draws before the write must not see it), others are read in place.
-    pub(super) cmd_writes: Ranges,
-    /// The submit's command lists by handle (fetched once by the pre-scan).
+    /// The submit's command lists by handle (nvn::api::walk_command_lists).
     lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
-    /// The lists in the order the pre-scan visited them (null: not found), which vk-decode walks them in, and that
-    /// thread (decode.rs).
-    list_order: Vec<*const crate::nvn::api::RecordedCommandList>,
+    /// Walks them, publishing their commands in the order they run and where the occlusion counters are reset and
+    /// reported (decode.rs).
     decoder: decode::Decoder,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
@@ -464,9 +460,6 @@ pub(super) struct Occlusion {
     events: Vec<super::inflight::Occl>,
     reports: Vec<u64>,
     precise: bool,
-    /// The submit's counter resets (false) and reports (true) by command index (Ctx::op_index), and the next one.
-    upcoming: Vec<(u64, bool)>,
-    cursor: usize,
 }
 
 impl Occlusion {
@@ -481,8 +474,6 @@ impl Occlusion {
             events: Vec::new(),
             reports: Vec::new(),
             precise: dev.precise_occlusion,
-            upcoming: Vec::new(),
-            cursor: 0,
         }
     }
 
@@ -670,9 +661,7 @@ impl Ctx {
             chunks: Vec::new(),
             chunk_start: std::time::Instant::now(),
             op_index: 0,
-            cmd_writes: Ranges::default(),
             lists: Default::default(),
-            list_order: Vec::new(),
             decoder: decode::Decoder::new()?,
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
@@ -765,22 +754,9 @@ impl Ctx {
         self.record_rt_reads();
         let t0 = std::time::Instant::now();
         self.chunk_start = t0;
-        let mut upcoming = std::mem::take(&mut self.occl.upcoming);
-        upcoming.clear();
-        let mut n = 0;
-        let mut writes = std::mem::take(&mut self.cmd_writes);
-        writes.clear();
-        let mut order = std::mem::take(&mut self.list_order);
-        order.clear();
-        for &h in lists {
-            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.lists, &mut order);
-        }
-        self.cmd_writes = writes;
-        self.occl.upcoming = upcoming;
-        self.occl.cursor = 0;
         self.op_index = 0;
-        // The lists are walked on vk-decode (decode.rs), in the pre-scan's order, while their commands run here.
-        self.decoder.start(lists, &mut order);
+        // The lists are walked on vk-decode (decode.rs) while their commands run here.
+        self.decoder.start(lists, &self.lists);
         while let Some(e) = self.decoder.next() {
             let op = &*e.op;
             match &op.typed {
@@ -797,8 +773,7 @@ impl Ctx {
             }
             self.op_index += 1;
         }
-        self.decoder.finish(&mut order);
-        self.list_order = order;
+        self.decoder.finish();
         self.end_pass();
         if let Some(q) = self.occl.active.take() {
             let pool = self.occl.pool;
@@ -1103,59 +1078,6 @@ impl Ctx {
         if let Some(w) = self.window.as_mut() {
             w.present(&self.dev, image, level, layer, size, crop);
         }
-    }
-
-    /// The occlusion counter resets and reports of the lists, by command index (as they run, decode.rs), and the guest
-    /// memory their commands write (inline uniform updates, reports): from each list's events, made when it was recorded
-    /// (nvn::api::ListEvents), so a submit's pre-scan does not walk its commands.
-    unsafe fn scan_counters(
-        handle: u64,
-        depth: u32,
-        index: &mut u64,
-        out: &mut Vec<(u64, bool)>,
-        writes: &mut Ranges,
-        lists: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
-        order: &mut Vec<*const crate::nvn::api::RecordedCommandList>,
-    ) {
-        use crate::nvn::api::ListEvent;
-        // Held in `lists` until the submit ended.
-        let list: &crate::nvn::api::RecordedCommandList = match lists.get(&handle) {
-            Some(l) => &*std::sync::Arc::as_ptr(l),
-            None => {
-                let Some(l) = crate::nvn::api::command_list(handle, depth > 0) else {
-                    order.push(std::ptr::null());
-                    return;
-                };
-                let p = std::sync::Arc::as_ptr(&l);
-                lists.insert(handle, l);
-                &*p
-            }
-        };
-        order.push(list);
-        let ev = list.events();
-        let start = *index;
-        // Commands of the lists it calls, before the current event.
-        let mut called = 0;
-        for (at, e) in &ev.items {
-            let pos = start + at + called;
-            match e {
-                ListEvent::Counter(report) => out.push((pos, *report)),
-                ListEvent::Write(addr, len) => {
-                    let a = crate::nvn::api::translate_virtual(*addr as usize);
-                    writes.add(a, a + len);
-                }
-                // Beyond 16 levels a call counts as one command and does not follow it.
-                ListEvent::Call(_) if depth >= 16 => called += 1,
-                ListEvent::Call(hs) => {
-                    *index = pos;
-                    for &h in hs.iter() {
-                        Self::scan_counters(h, depth + 1, index, out, writes, lists, order);
-                    }
-                    called = *index - start - at;
-                }
-            }
-        }
-        *index = start + ev.ops + called;
     }
 
     unsafe fn exec(&mut self, c: &Cmd) {
@@ -1483,12 +1405,10 @@ impl Ctx {
             return;
         }
         // Samples count only toward a report: none are needed when the counter is reset before the next report.
-        while o.cursor < o.upcoming.len() && o.upcoming[o.cursor].0 <= self.op_index {
-            o.cursor += 1;
-        }
-        if o.upcoming.get(o.cursor).is_some_and(|&(_, report)| !report) {
+        if self.decoder.next_counter(self.op_index) == Some(false) {
             return;
         }
+        let o = &mut self.occl;
         if o.next >= Occlusion::QUERIES {
             if self.warned.insert("occlusion queries".into()) {
                 println!("[vulkan] more than {} render passes in one submit: later ones are not counted", Occlusion::QUERIES);
