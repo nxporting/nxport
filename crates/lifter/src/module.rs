@@ -353,6 +353,193 @@ fn fname(a: u64) -> String {
 
 const TAIL_DISPATCH: &str = "__attribute__((musttail)) return rt_dispatch(c);";
 
+/// One instruction's C. `next`: execution can go on at the next line.
+struct Line {
+    label: Option<u64>,
+    code: String,
+    next: bool,
+}
+
+/// The flag-setting helpers (runtime/cpu.h) and their variants that leave NZCV alone.
+const FLAG_HELPERS: [(&str, &str); 6] = [
+    ("subs32(c, ", "sub32_nf("),
+    ("subs64(c, ", "sub64_nf("),
+    ("adds32(c, ", "add32_nf("),
+    ("adds64(c, ", "add64_nf("),
+    ("logic32(c, ", "logic32_nf("),
+    ("logic64(c, ", "logic64_nf("),
+];
+
+/// Whether a line's C reads NZCV: a condition, a carry-in (adc, sbc), or the register itself (mrs). Leaving the function
+/// through a tail jump or the dispatcher counts as a read: the lifter splits functions at call targets, and code can
+/// branch into the next one with flags set.
+fn reads_flags(code: &str) -> bool {
+    code.contains("COND_")
+        || code.contains("FLAG_")
+        || code.contains("adc")
+        || code.contains("sbc")
+        || code.contains("musttail")
+        || code.match_indices("c->nzcv").any(|(i, _)| !code[i + 7..].starts_with(" ="))
+}
+
+/// Whether a line sets NZCV on every path: a flag-setting helper or an assignment, and calls (AAPCS64: the callee
+/// leaves the flags undefined, and no caller reads them after a call).
+fn writes_flags(code: &str) -> bool {
+    FLAG_HELPERS.iter().any(|(h, _)| code.contains(h)) || code.contains("c->nzcv =") || code.contains("RT_RETURNED")
+}
+
+/// The arguments of the call whose argument list starts `s` ("(a, b)..." -> ["a", "b"]), split at top-level commas,
+/// and the text after its closing parenthesis.
+fn call_args(s: &str) -> Option<(Vec<&str>, &str)> {
+    let rest = s.strip_prefix('(')?;
+    let (mut depth, mut start, mut args) = (0, 0, Vec::new());
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => {
+                args.push(rest[start..i].trim());
+                return Some((args, &rest[i + 1..]));
+            }
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(rest[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The C condition `cond` (an A64 condition name) reads from the flags of `cmp a, b` (`sub`) or `tst r` (logic) of
+/// `bits` width, computed from the operands; None for the overflow conditions of a compare, left to the flags.
+fn fused_cond(cond: &str, sub: bool, bits: u32, args: &[&str]) -> Option<String> {
+    let (u, s) = (format!("uint{bits}_t"), format!("int{bits}_t"));
+    if sub {
+        let (a, b) = (format!("(({u})({}))", args[0]), format!("(({u})({}))", args[1]));
+        let (sa, sb) = (format!("(({s}){a})"), format!("(({s}){b})"));
+        Some(match cond {
+            "EQ" => format!("{a} == {b}"),
+            "NE" => format!("{a} != {b}"),
+            "CS" => format!("{a} >= {b}"),
+            "CC" => format!("{a} < {b}"),
+            "MI" => format!("({s})({u})({a} - {b}) < 0"),
+            "PL" => format!("({s})({u})({a} - {b}) >= 0"),
+            "HI" => format!("{a} > {b}"),
+            "LS" => format!("{a} <= {b}"),
+            "GE" => format!("{sa} >= {sb}"),
+            "LT" => format!("{sa} < {sb}"),
+            "GT" => format!("{sa} > {sb}"),
+            "LE" => format!("{sa} <= {sb}"),
+            _ => return None,
+        })
+    } else {
+        // N and Z from the result, C and V clear.
+        let r = format!("(({s})({u})({}))", args[0]);
+        Some(match cond {
+            "EQ" => format!("{r} == 0"),
+            "NE" => format!("{r} != 0"),
+            "MI" | "LT" => format!("{r} < 0"),
+            "PL" | "GE" => format!("{r} >= 0"),
+            "GT" => format!("{r} > 0"),
+            "LE" => format!("{r} <= 0"),
+            "CS" | "VS" | "HI" => "0".into(),
+            "CC" | "VC" | "LS" => "1".into(),
+            _ => return None,
+        })
+    }
+}
+
+/// The next line's code with its one flag condition replaced by the condition over the operands of the compare or test
+/// in `code`, when that is all that reads the flags `code` sets.
+fn fuse(code: &str, next: &str) -> Option<String> {
+    let code = code.trim();
+    let forms = [(true, 32, "(void)(subs32(c, "), (true, 64, "(void)(subs64(c, "), (false, 32, "(void)(logic32(c, "), (false, 64, "(void)(logic64(c, ")];
+    let (sub, bits, f) = forms.into_iter().find(|(_, _, f)| code.starts_with(f))?;
+    // "(void)(subs32(c, A, B));": the arguments after `c`.
+    let (args, tail) = call_args(&format!("({}", &code[f.len()..]))
+        .map(|(a, t)| (a.into_iter().map(str::to_string).collect::<Vec<_>>(), t.to_string()))?;
+    if tail != ");" || args.len() != if sub { 2 } else { 1 } {
+        return None;
+    }
+    let uses: Vec<_> = next.match_indices("COND_").collect();
+    if uses.len() != 1 || next.contains("FLAG_") || next.contains("adc") || next.contains("sbc") || next.contains("c->nzcv") {
+        return None;
+    }
+    let j = uses[0].0;
+    let name = next.get(j + 5..j + 7)?;
+    if !next[j + 7..].starts_with("(c)") {
+        return None;
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let cond = fused_cond(name, sub, bits, &args)?;
+    Some(format!("{}({cond}){}", &next[..j], &next[j + 10..]))
+}
+
+/// NZCV is computed only where something reads it: flag-setting instructions whose flags are never read compute just
+/// their result, and a compare or test whose flags only the next instruction's condition reads becomes that condition
+/// over its operands (cmp + b.lt: one x86 compare and branch). Flags are dead across calls and returns (AAPCS64).
+fn optimize_flags(lines: &mut [Line]) {
+    let n = lines.len();
+    let at: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for (i, l) in lines.iter().enumerate() {
+        let mut s = Vec::new();
+        let mut rest = l.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            let hex: String = rest[j + 7..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Some(&t) = u64::from_str_radix(&hex, 16).ok().and_then(|a| at.get(&a)) {
+                s.push(t);
+            }
+            rest = &rest[j + 7..];
+        }
+        if l.next && i + 1 < n {
+            s.push(i + 1);
+        }
+        succ.push(s);
+    }
+    let reads: Vec<bool> = lines.iter().map(|l| reads_flags(&l.code)).collect();
+    let writes: Vec<bool> = lines.iter().map(|l| writes_flags(&l.code)).collect();
+    // Flags live after each line (backward, any path).
+    let mut live_out = vec![false; n];
+    let mut live_in = vec![false; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in (0..n).rev() {
+            let out = succ[i].iter().any(|&t| live_in[t]);
+            let inn = reads[i] || (out && !writes[i]);
+            if out != live_out[i] || inn != live_in[i] {
+                live_out[i] = out;
+                live_in[i] = inn;
+                changed = true;
+            }
+        }
+    }
+    for i in 0..n {
+        if !writes[i] {
+            continue;
+        }
+        // Read by the next line alone, and dead after it.
+        let next_ok = i + 1 < n && lines[i].next && lines[i + 1].label.is_none() && !live_out[i + 1] && !writes[i + 1];
+        if next_ok {
+            if let Some(next) = fuse(&lines[i].code, &lines[i + 1].code) {
+                lines[i].code = String::new();
+                lines[i + 1].code = next;
+                continue;
+            }
+        }
+        // Flags never read: the result alone.
+        if !live_out[i] && !reads[i] {
+            for (h, nf) in FLAG_HELPERS {
+                if lines[i].code.contains(h) {
+                    lines[i].code = lines[i].code.replace(h, nf);
+                }
+            }
+        }
+    }
+}
+
 fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut BTreeSet<u64>) {
     let s = scan(l, entry, end);
     let jump = |t: u64, refs: &mut BTreeSet<u64>| -> String {
@@ -365,15 +552,12 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
             format!("c->pc = {}; {TAIL_DISPATCH}", hx(t))
         }
     };
-    let _ = writeln!(out, "RT_FN void {}(Cpu *c) {{", fname(entry));
+    let mut lines = Vec::new();
     let mut a = entry;
     let mut last_ends = false;
     while a < end {
-        if s.labels.contains(&a) {
-            let _ = writeln!(out, "L_{a:x}:;");
-        }
         let ra = hx(a + 4);
-        let line = match l.at(a) {
+        let code = match l.at(a) {
             Insn::Op(code) | Insn::Trap(code) => code.clone(),
             Insn::B(t) => jump(*t, refs),
             Insn::BCond(cond, t) => format!("if ({cond}) {{ {} }}", jump(*t, refs)),
@@ -395,14 +579,24 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
             },
             Insn::Ret(target) => format!("c->pc = {target}; return;"),
         };
-        let _ = writeln!(out, "    {line}");
         last_ends = l.at(a).ends_block();
+        lines.push(Line { label: s.labels.contains(&a).then_some(a), code, next: !last_ends });
         a += 4;
     }
     if !last_ends {
         // falls through into the next function
-        let line = if end < l.m.text.end { jump(end, refs) } else { format!("rt_udf(c, {});", hx(end)) };
-        let _ = writeln!(out, "    {line}");
+        let code = if end < l.m.text.end { jump(end, refs) } else { format!("rt_udf(c, {});", hx(end)) };
+        lines.push(Line { label: None, code, next: false });
+    }
+    optimize_flags(&mut lines);
+    let _ = writeln!(out, "RT_FN void {}(Cpu *c) {{", fname(entry));
+    for l in &lines {
+        if let Some(a) = l.label {
+            let _ = writeln!(out, "L_{a:x}:;");
+        }
+        if !l.code.is_empty() {
+            let _ = writeln!(out, "    {}", l.code);
+        }
     }
     out.push_str("}\n\n");
 }
@@ -515,6 +709,20 @@ mod tests {
         assert!(body.contains("c->x[30] = 0x100010ull; f_100100(c); RT_RETURNED(c, 0x100010ull)"));
         assert!(body.contains("case 0x100238ull: goto L_100238;"));
         assert!(body.contains("goto L_100104;")); // the loop's back edge
+    }
+
+    #[test]
+    fn flags_fused_and_dead() {
+        // 0x1000: cmp w0, #1; b.lt 0x1010; adds x1, x1, #1 (flags never read); ret; 0x1010: ret
+        let mut img = Vec::new();
+        for w in [0x7100041fu32, 0x5400006b, 0xb1000421, 0xd65f03c0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert!(body.contains("if ((((int32_t)((uint32_t)((uint32_t)c->x[0]))) < ((int32_t)((uint32_t)(0x1ull))))) { goto L_1010; }"), "{body}");
+        assert!(!body.contains("subs32(c,") && !body.contains("COND_"));
+        assert!(body.contains("add64_nf("));
     }
 
     #[test]
