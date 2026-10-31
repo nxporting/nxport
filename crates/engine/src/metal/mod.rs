@@ -2662,7 +2662,7 @@ impl Gfx {
                     Some(Cmd::SetRenderTargets { colors, depth }) => println!(
                         "[cmdtrace] SetRenderTargets {:x?} depth={:x?}",
                         colors.iter().map(|c| c.texture).collect::<Vec<_>>(),
-                        depth.map(|d| d.texture)
+                        depth.as_ref().map(|d| d.texture)
                     ),
                     Some(_) => println!("[cmdtrace] {}", op.name),
                     None => println!(
@@ -2872,7 +2872,7 @@ impl Gfx {
                         ..*r
                     };
                     let colors: Vec<crate::nvn::cmd::RtRef> = colors.iter().map(resolve).collect();
-                    let depth = depth.as_ref().map(resolve);
+                    let depth = depth.as_deref().map(resolve);
                     if let Some(w) = watch_storage() {
                         for (i, c) in colors.iter().enumerate() {
                             if tex_info(c.texture).is_some_and(|(_, t)| t.storage == w) {
@@ -3201,7 +3201,7 @@ impl Gfx {
                     }
                 }
                 Cmd::BindVertexAttribState(attribs) => {
-                    st.vertex_attribs = *attribs;
+                    st.vertex_attribs = **attribs;
                 }
                 Cmd::BindVertexStreamState(streams) => {
                     st.vertex_streams.clone_from(streams);

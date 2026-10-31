@@ -478,7 +478,7 @@ pub fn run(dir: &Path, opts: &Options) -> Result<Report, String> {
                             }
                         }
                         if let Cmd::SetRenderTargets { colors, depth } = c {
-                            for r in colors.iter().chain(depth.iter()).filter(|r| r.texture != 0) {
+                            for r in colors.iter().chain(depth.as_deref()).filter(|r| r.texture != 0) {
                                 let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
                                 if let Some((_, t)) = crate::nvn::api::texture_snapshot(addr) {
                                     println!(
