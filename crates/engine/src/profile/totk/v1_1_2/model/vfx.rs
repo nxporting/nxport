@@ -1448,8 +1448,11 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
             if k >= 3 || p.m.r8(l6 + 0xce1) & 1 != 0 {
                 return Ok(());
             }
-            if p.m.r64(obj + 0x1b8) != 0 {
-                return callback(p.m.r64(obj + 0x1b8), p.base);
+            let cb = p.m.r64(obj + 0x1b8);
+            if cb == p.base + CASCADE_DECALS {
+                cascade_decals(p, w, p.m.r8(c + 0x30) as u32, k)?;
+            } else if cb != 0 {
+                return callback(cb, p.base);
             }
             let bv = p.m.r8(c + 0x30) as u32;
             let vi = if p.m.r32(l6 + 0xd20) > bv { bv } else { 0 } as usize;
@@ -1565,4 +1568,152 @@ unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32,
     put(&mut a3, 0xd0, &u64::MAX.to_le_bytes());
     put(&mut a3, 0xd8, &(l as u64).to_le_bytes());
     draw_view(p, gr, w, l + 0x78, n as u32, bit, a3.as_ptr() as usize, (fl >> 2) & 1)
+}
+
+const PFN_BIND_PROGRAM: usize = 0x466dfb0;
+const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
+const PFN_DRAW_ELEMENTS: usize = 0x466e088;
+const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
+const PFN_BIND_VERTEX_BUFFER_: usize = 0x466dfb8;
+const PROGRAM_BLOCK: usize = 0x4632818;
+const DECAL_SYSTEM: usize = 0x462ade0;
+const CASCADE_DECALS: usize = 0xa56740;
+const DECAL_KINDS_GUARD: usize = 0x462c1a0;
+const DECAL_KINDS: usize = 0x462c1a8;
+
+/// main+0x7ef4b8: a shader program applied: when enabled (+0x20 bit 0) its program (+200, all stages) and, with
+/// +0x18 set, the shared block (global +0x78, size +0x38) at the slots +0x1c..+0x1f of stages 0, 1, 2 and 5. A program
+/// still being set up (+0x10) is not predicted.
+unsafe fn program_apply(p: &mut Port, prog: usize, w: usize) -> R<()> {
+    if p.m.r32(prog + 0x10) != 0 {
+        return Err("agl program setup pending");
+    }
+    if p.m.r8(prog + 0x20) & 1 == 0 {
+        return Ok(());
+    }
+    let cmd = p.m.r64(w + 0xb8) as u64;
+    p.call(p.pfn(PFN_BIND_PROGRAM), &[cmd, (prog + 200) as u64, 0x3f]);
+    if p.m.r32(prog + 0x18) == 0 {
+        return Ok(());
+    }
+    let g = p.m.r64(p.m.r64(p.base + PROGRAM_BLOCK));
+    for (k, st) in [(0usize, 0u64), (1, 1), (2, 2), (3, 5)] {
+        let slot = p.m.i8(prog + 0x1c + k);
+        if slot != -1 {
+            p.m.w::<u8>(cmd as usize + 0x10, 1);
+            p.call(p.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd, st, slot as i64 as u64, p.m.r64(g + 0x78) as u64, p.m.r64(g + 0x38) as u64]);
+        }
+    }
+    Ok(())
+}
+
+/// main+0x96306c(prog, w, index, block, element): the uniform block's element at the program's slots for `index`
+/// (+0x50 table, 16-byte entries, count +0x48); whether the program has them. A program still being set up (+0x14) is
+/// not predicted.
+unsafe fn program_block(p: &mut Port, prog: usize, w: usize, index: u32, block: usize, element: i32) -> R<bool> {
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let i = if p.m.r32(prog + 0x48) > index { index } else { 0 } as usize;
+    let slots = p.m.r32(p.m.r64(prog + 0x50) + i * 16);
+    p.bind_uniform_block(block, w, slots, element)
+}
+
+/// main+0x978ba4 / main+0xf216b4 / main+0x966e70: a shape's vertex states (+0x11c / +0x160), its vertex buffers (+0x108
+/// count, +0x110 buffers: address, size +0x118) and its indexed draw (+0x180 relative: prim +0xc, type +8, count
+/// +0x28, index buffer +0x30), `instances` times.
+unsafe fn shape_draw(p: &mut Port, shape: usize, mesh: usize, w: usize, instances: u32) {
+    let cmd = p.m.r64(w + 0xb8) as u64;
+    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd, 0x10, (shape + 0x11c) as u64]);
+    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd, 0x10, (shape + 0x160) as u64]);
+    let bufs = p.m.r64(shape + 0x110);
+    for i in 0..p.m.r32(shape + 0x108) as usize {
+        let b = p.m.r64(bufs + i * 8);
+        if b == 0 {
+            continue;
+        }
+        let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(b + 8) as u64]);
+        p.m.w::<u8>(cmd as usize + 0x10, 1);
+        p.call(p.pfn(PFN_BIND_VERTEX_BUFFER_), &[cmd, i as u64, addr, p.m.r32(b + 0x118) as u64]);
+    }
+    let count = p.m.i32(mesh + 0x28);
+    if count == 0 {
+        return;
+    }
+    let (prim, ty) = (p.m.r32(mesh + 0xc) as u64, p.m.r32(mesh + 8) as u64);
+    let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(mesh + 0x30) as u64]);
+    p.m.w::<u8>(cmd as usize + 0x10, 1);
+    if instances < 2 {
+        p.call(p.pfn(PFN_DRAW_ELEMENTS), &[cmd, prim, ty, count as u32 as u64, addr]);
+    } else {
+        p.call(p.pfn(PFN_DRAW_ELEMENTS_INSTANCED), &[cmd, prim, ty, count as u32 as u64, addr, 0, 0, instances as u64]);
+    }
+}
+
+/// main+0x8c8370: a double-buffered uniform block's current buffer (+0x42 high nibble) and CPU pointer (+0x18).
+unsafe fn block_select(p: &mut Port, b: usize, sel: u32) {
+    p.m.w::<u8>(b + 0x42, p.m.r8(b + 0x42) & 0xf | (sel << 4) as u8);
+    let count = p.m.r16(b + 0x40) as u32;
+    let size = p.m.r64(b + 0x38);
+    let a1 = p.query(p.base + p.vfn(b, 0x20), &[b as u64]) as i32;
+    let a2 = p.query(p.base + p.vfn(b, 0x20), &[b as u64]) as i32;
+    let mut ptr = 0usize;
+    let o = p.m.r64(b + 0x30);
+    if o != 0 {
+        let q = p.m.r64(o + 0x10);
+        if q != 0 {
+            let base = p.m.r64(q + 0x100);
+            if base != 0 {
+                let stride = ((size as i32).wrapping_add(a1).wrapping_sub(1) as u32) & (a2.wrapping_neg() as u32);
+                ptr = base.wrapping_add((p.m.r32(b + 0x20)).wrapping_add((sel & 0xf).wrapping_mul(count).wrapping_mul(stride)) as usize);
+            }
+        }
+    }
+    p.m.w::<u64>(b + 0x18, ptr as u64);
+}
+
+/// main+0xa56740(w, views, obj, view, ctx, cascade, _): the cascade pass callback (decals projected per cascade): the
+/// default graphics context, then for each decal of kind 4 enabled for the view, its block for the cascade selected
+/// (its contents, the cascade's transforms, are the game's: not predicted), the decal program applied with the block,
+/// its shape drawn.
+#[allow(clippy::too_many_arguments)]
+unsafe fn cascade_decals(p: &mut Port, w: usize, view: u32, cascade: u32) -> R<()> {
+    let sys = p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.base + DECAL_SYSTEM)) + 0x128) + 0xb08);
+    if sys == 0 || p.m.r32(sys + 8) & 0x101 != 1 {
+        return Ok(());
+    }
+    let mut gc = vec![0u8; 0x100];
+    p.query(p.base + GRAPHICS_CONTEXT_INIT, &[gc.as_mut_ptr() as u64]);
+    gc[0..2].copy_from_slice(&0x101u16.to_le_bytes());
+    gc[2] = 1;
+    gc[4..8].copy_from_slice(&0u32.to_le_bytes());
+    gc[0x1c..0x20].copy_from_slice(&0u32.to_le_bytes());
+    p.apply_graphics_context(gc.as_ptr() as usize, w);
+    let n = p.m.r32(sys + 0x2b0) as usize;
+    let arr = p.m.r64(sys + 0x2b8);
+    if n != 0 && p.m.r8(p.m.r64(p.base + DECAL_KINDS_GUARD)) & 1 == 0 {
+        return Err("decal kinds (static init)");
+    }
+    let kinds = p.m.r64(p.base + DECAL_KINDS);
+    for i in 0..n {
+        let e = arr + i * 0x628;
+        let k = p.m.r32(e + 8);
+        let k = if p.m.r32(kinds) > k { k } else { 0 } as usize;
+        if p.m.i32(p.m.r64(kinds + 8) + k * 4) != 4 || p.m.r8(e + 0xc) != 0 {
+            continue;
+        }
+        let vi = if p.m.r32(e + 0x498) > view { view } else { 0 } as usize;
+        if p.m.r8(p.m.r64(e + 0x4a0) + vi * 0x88 + 0x81) == 0 {
+            continue;
+        }
+        let ci = if cascade < 3 { cascade as usize } else { 0 };
+        let blk = if cascade < 3 { e + cascade as usize * 0x80 + 0x4a8 } else { e + 0x4a8 };
+        let sel = 1u32.wrapping_sub((p.m.r8(e + ci * 0x80 + 0x4ea) >> 4) as u32);
+        block_select(p, blk, sel);
+        let prog = p.m.r64(p.m.r64(p.m.r64(sys + 0x2d0) + 8) + 0x10);
+        program_apply(p, prog, w)?;
+        program_block(p, prog, w, 0, blk, 0)?;
+        shape_draw(p, e + 0x88, e + 0x268, w, 1);
+    }
+    Ok(())
 }
