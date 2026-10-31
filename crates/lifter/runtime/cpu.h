@@ -180,6 +180,14 @@ static inline uint32_t subs32(Cpu *c, uint32_t a, uint32_t b) {
 static inline uint64_t logic64(Cpu *c, uint64_t r) { c->nzcv = MKFLAGS(r >> 63, r == 0, 0, 0); return r; }
 static inline uint32_t logic32(Cpu *c, uint32_t r) { c->nzcv = MKFLAGS(r >> 31, r == 0, 0, 0); return r; }
 
+// The helpers above where no instruction reads the flags they would set (the lifter's flag liveness).
+static inline uint64_t add64_nf(uint64_t a, uint64_t b) { return a + b; }
+static inline uint64_t sub64_nf(uint64_t a, uint64_t b) { return a - b; }
+static inline uint32_t add32_nf(uint32_t a, uint32_t b) { return a + b; }
+static inline uint32_t sub32_nf(uint32_t a, uint32_t b) { return a - b; }
+static inline uint64_t logic64_nf(uint64_t r) { return r; }
+static inline uint32_t logic32_nf(uint32_t r) { return r; }
+
 #define ADC_IMPL(N)                                                                        \
     static inline uint##N##_t adc##N(Cpu *c, uint##N##_t a, uint##N##_t b) {               \
         return a + b + (uint##N##_t)FLAG_C(c);                                             \
