@@ -115,17 +115,18 @@ impl Backend for Vulkan {
 
     fn submit(&self, lists: &[u64]) {
         let guard_on = crate::gpu::report_guard::mode() != crate::settings::ReportGuard::Off;
-        if guard_on {
-            let mut stack = Vec::new();
-            let mut submit_lists = rustc_hash::FxHashMap::default();
-            let mut samples: Vec<usize> = Vec::new();
-            crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
+        // Every list the submit reaches, fetched under one lock (a submit reaches ~3,000; one lock each was ~5% of
+        // recording) for the executor too.
+        let mut stack = Vec::new();
+        let mut submit_lists = rustc_hash::FxHashMap::default();
+        let mut samples: Vec<usize> = Vec::new();
+        crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
+            if guard_on {
                 let s = l.summary();
-                samples.extend(
-                    s.2.iter()
-                        .map(|&a| crate::nvn::api::translate_virtual(a as usize)),
-                );
-            });
+                samples.extend(s.2.iter().map(|&a| crate::nvn::api::translate_virtual(a as usize)));
+            }
+        });
+        if guard_on {
             crate::gpu::report_guard::begin_submit(&samples);
         }
         let mut g = self.ctx.lock().unwrap();
@@ -133,7 +134,7 @@ impl Backend for Vulkan {
         match g.as_mut() {
             Some(c) => unsafe {
                 guard::hold_hot();
-                c.submit(lists, serial);
+                c.submit(lists, serial, &mut submit_lists);
                 guard::release_hot();
             },
             None => inflight::watch(inflight::Done {
