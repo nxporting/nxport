@@ -85,7 +85,8 @@ unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) ->
                 p.call(p.pfn(PFN_BARRIER), &[p.m.r64(p.m.r64(c + 0x20) + 0xb8) as u64, flags]);
             }
         }
-        // A list drawn only in pass 0 with scene flags 1, 2 and 6 set.
+        // In pass 0 with scene flags 1, 2 and 6 set: per item of its list the scene's +0x8f8 hook main+0x12291e4 (an
+        // empty function) and a reset of the core's scene block; no commands (the game's own call does the resets).
         0x1229090 => {
             let g = p.m.r64(p.m.r64(p.base + SCENE_HOLDER));
             let f948 = p.m.r32(g + 0x948);
@@ -95,8 +96,7 @@ unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) ->
                 && p.m.r8(c + 0x31) == 0
                 && (f948 >> 6) & 1 != 0
             {
-                note_drawable(f | 1 << 40);
-                p.helper("forwarded draw", f, &[obj as u64, index as u64, c as u64])?;
+                p.cpu_helper(f, &[obj as u64, index as u64, c as u64]);
             }
         }
         _ => {

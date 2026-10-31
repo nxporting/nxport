@@ -1336,14 +1336,21 @@ pub(super) unsafe fn draw_pass(p: &mut Port, obj: usize, w: usize, views: usize,
         2 => 1,
         _ => 0,
     };
-    if over != 0 && (p.m.r8(over + 0x41) >> 1) & 1 != 0 {
-        return Err("vfx pass override target");
-    }
     let idx = p.m.r8(obj + 8) as u32;
     let vi = if p.m.r32(views + 8) > idx { idx } else { 0 } as usize;
     let vb = p.m.r64(views + 0x10) + vi * 0x21b0;
     let alt = p.m.r32(gr + 0x378) & 1 != 0;
-    let target = if alt { vb + v * 0x740 + 0x700 } else { vb + 0x610 };
+    // The render context's own targets (+0x41 bit 1): its target table (+0x10, entry t at +0x20 + t*8; t from the
+    // variant table main+0x386e1e8, else 0x13) and deferred texture indices.
+    let own = over != 0 && (p.m.r8(over + 0x41) >> 1) & 1 != 0;
+    let t = if alt { p.m.r64(p.base + VARIANT_TARGETS + v * 8) } else { 0x13 };
+    let target = if own {
+        p.m.r64(p.m.r64(over + 0x10) + t * 8 + 0x20)
+    } else if alt {
+        vb + v * 0x740 + 0x700
+    } else {
+        vb + 0x610
+    };
     let c = core(p);
     let ci = c as i64 as usize;
     if c < p.m.i32(s + 0x2f38) {
@@ -1384,6 +1391,12 @@ pub(super) unsafe fn draw_pass(p: &mut Port, obj: usize, w: usize, views: usize,
     put(&mut a3, 0xbc, &pass.to_le_bytes());
     put(&mut a3, 0xc0, &path.to_le_bytes());
     put(&mut a3, 0xd0, &u64::MAX.to_le_bytes());
+    if own {
+        let tt = p.m.r64(over + 0x10);
+        put(&mut a3, 0xc8, &p.m.r64(over + 0xe0).to_le_bytes());
+        put(&mut a3, 0xd0, &(p.m.i8(tt + 0x2a9) as i32).to_le_bytes());
+        put(&mut a3, 0xd4, &(p.m.i8(tt + t * 0x10 + 0x189) as i32).to_le_bytes());
+    }
     put(&mut a3, 0xd8, &(l as u64).to_le_bytes());
     put(&mut a3, 0xe0, &(over as u64).to_le_bytes());
     let groups = l + 0x78;
@@ -1469,6 +1482,7 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
 }
 
 const CASCADE_TARGETS: usize = 0x4631740;
+const VARIANT_TARGETS: usize = 0x386e1e8;
 const GRAPHICS_CONTEXT_INIT: usize = 0x688a38;
 
 /// main+0x9c9144(obj, w, pass, mode, view, proj, info, index): an effect pass for a shadow / cascade view: the same
