@@ -1418,7 +1418,16 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
         5 => {
             let b0 = p.m.i32(c + 0xb0);
             if (b0.wrapping_sub(2) as u32) < 2 {
-                return Err("vfx shadow cascade passes");
+                let bv = p.m.r8(c + 0x30) as u32;
+                let vi = if p.m.r32(views + 8) > bv { bv } else { 0 } as usize;
+                let l12 = p.m.r64(p.m.r64(views + 0x10) + vi * 0x21b0 + 0x2118);
+                if p.m.r8(l12 + 0x4e8) & 0x1f == 0 && p.m.r8(l12 + 0xa60) & 0x1f == 0 {
+                    return Err("vfx shadow systems");
+                }
+                let v = p.m.r64(o + 0x18);
+                draw_cascade(p, o, w, 0xc, 3, v, v + 0x160, v + 0x60, u32::MAX)?;
+                let v2 = p.m.r64(o + 0x18);
+                return draw_cascade(p, o, w, 0xd, 3, v2, v2 + 0x160, v + 0x60, u32::MAX);
             }
             if b0 != 1 {
                 return Ok(());
@@ -1434,11 +1443,126 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
         }
         _ => {
             let b0 = p.m.i32(c + 0xb0);
-            if (b0.wrapping_sub(9) as u32) < 3 && p.m.r8(p.m.r64(obj + 0x198) + 0xce1) & 1 == 0 {
-                return Err("vfx cascade passes");
+            let k = b0.wrapping_sub(9) as u32;
+            let l6 = p.m.r64(obj + 0x198);
+            if k >= 3 || p.m.r8(l6 + 0xce1) & 1 != 0 {
+                return Ok(());
+            }
+            if p.m.r64(obj + 0x1b8) != 0 {
+                return callback(p.m.r64(obj + 0x1b8), p.base);
+            }
+            let bv = p.m.r8(c + 0x30) as u32;
+            let vi = if p.m.r32(l6 + 0xd20) > bv { bv } else { 0 } as usize;
+            let l12 = p.m.r64(l6 + 0xd28) + vi * 0xb48;
+            for pass in [0xc, 0x14, 0x11] {
+                let ki = if p.m.r32(l12 + 0x360) > k { k } else { 0 } as usize;
+                let e = p.m.r64(l12 + 0x368) + ki * 0x590;
+                draw_cascade(p, o, w, pass, 4, e + 0x230, e + 0x260, 0, k)?;
             }
             return Ok(());
         }
     };
     draw_pass(p, o, w, views, id, 0, c, 0)
+}
+
+const CASCADE_TARGETS: usize = 0x4631740;
+const GRAPHICS_CONTEXT_INIT: usize = 0x688a38;
+
+/// main+0x9c9144(obj, w, pass, mode, view, proj, info, index): an effect pass for a shadow / cascade view: the same
+/// group test as main+0xa414ac, the cascade target ids, a default sead::GraphicsContext (+0 0x101, +2 1) applied, then
+/// main+0xa41a38 with the context built from the given view (3x4 rows), projection, the target's size and the
+/// cascade's near / far values (info+0x180..).
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32, view: usize, proj: usize, info: usize, index: u32) -> R<()> {
+    let fl = p.m.r8(obj + 0x64a) as u32;
+    if !fl & 3 != 0 {
+        return Ok(());
+    }
+    let gr = p.m.r64(p.m.r64(p.base + RENDER_GLOBALS));
+    if gr == 0 {
+        return Ok(());
+    }
+    let s = p.m.r64(gr + 0x18);
+    let l = p.m.r64(obj + 0x5f8);
+    let bit = 1u32.wrapping_shl(pass & 31);
+    let n = p.m.i32(l + 0xf8);
+    let cnt = p.m.i32(s + 0x2f34);
+    let tbl = p.m.r64(s + 0x90);
+    let has = |p: &Port, o: usize| (0..cnt.max(0) as usize).any(|j| p.m.r32(tbl + o + j * 0x300) & bit != 0);
+    let mut found = false;
+    if n > 0 {
+        if cnt < 1 {
+            return Ok(());
+        }
+        found = (0..n as usize).any(|k| has(p, p.m.i32(l + k * 4 + 0x78) as i64 as usize * 4));
+    }
+    if !found && (cnt < 1 || !has(p, 0xfc)) {
+        return Ok(());
+    }
+    let ct = p.m.r64(p.m.r64(p.base + CASCADE_TARGETS));
+    let c = core(p);
+    if c < p.m.i32(s + 0x2f38) {
+        let r = p.m.r64(s + 0x98) + c as i64 as usize * 0x828;
+        p.m.w::<i64>(r + 0x7f0, p.m.i32(p.m.r64(ct + 0x40) + 0x58) as i64);
+        p.m.w::<i64>(r + 0x7f8, p.m.i32(p.m.r64(ct + 0xd0) + 0x58) as i64);
+    }
+    let mut gc = vec![0u8; 0x100];
+    p.query(p.base + GRAPHICS_CONTEXT_INIT, &[gc.as_mut_ptr() as u64]);
+    gc[0..2].copy_from_slice(&0x101u16.to_le_bytes());
+    gc[2] = 1;
+    gc[4..8].copy_from_slice(&0u32.to_le_bytes());
+    gc[0x1c..0x20].copy_from_slice(&0u32.to_le_bytes());
+    p.apply_graphics_context(gc.as_ptr() as usize, w);
+    let mut a3 = vec![0u8; 0x100];
+    let put = |a3: &mut Vec<u8>, o: usize, b: &[u8]| a3[o..o + b.len()].copy_from_slice(b);
+    for k in 0..0x30usize {
+        a3[k] = p.m.r8(view + k);
+    }
+    for k in 0..0x40usize {
+        a3[0x30 + k] = p.m.r8(proj + k);
+    }
+    let f = |o: usize| p.m.f32(view + o);
+    let cx = ((-f(0)) * f(0xc) - f(0x1c) * f(0x10)) - f(0x2c) * f(0x20);
+    let cy = ((-f(4)) * f(0xc) - f(0x1c) * f(0x14)) - f(0x2c) * f(0x24);
+    let cz = ((-f(8)) * f(0xc) - f(0x1c) * f(0x18)) - f(0x2c) * f(0x28);
+    put(&mut a3, 0x70, &cx.to_le_bytes());
+    put(&mut a3, 0x74, &cy.to_le_bytes());
+    put(&mut a3, 0x78, &cz.to_le_bytes());
+    let t = p.m.r64(ct + 0xd0);
+    let wd = p.m.r16(t + 0x30) as u32;
+    let wd = if wd > 1 { wd } else { 1 };
+    let (d3, ht) = (p.m.r16(t + 0x3a) as u32, p.m.r16(t + 0x32) as u32);
+    let k = if d3 == 3 { ht } else { 1 };
+    let ht = if k > ht { k } else { ht };
+    put(&mut a3, 0x7c, &(wd as f32).to_le_bytes());
+    put(&mut a3, 0x80, &(ht as f32).to_le_bytes());
+    if info != 0 {
+        put(&mut a3, 0x84, &p.m.r64(info + 0x180).to_le_bytes());
+        put(&mut a3, 0x8c, &p.m.r32(info + 0x18c).to_le_bytes());
+        put(&mut a3, 0x90, &p.m.r32(info + 0x188).to_le_bytes());
+        put(&mut a3, 0x94, &p.m.r32(info + 0x194).to_le_bytes());
+        put(&mut a3, 0x98, &p.m.r32(info + 0x19c).to_le_bytes());
+        put(&mut a3, 0x9c, &p.m.r32(info + 0x1a0).to_le_bytes());
+    } else {
+        put(&mut a3, 0x84, &0.1f32.to_le_bytes());
+        put(&mut a3, 0x88, &1.0f32.to_le_bytes());
+        put(&mut a3, 0x8c, &1.0f32.to_le_bytes());
+        put(&mut a3, 0x90, &1.0f32.to_le_bytes());
+        put(&mut a3, 0x94, &1.0f32.to_le_bytes());
+    }
+    put(&mut a3, 0xa0, &(info as u64).to_le_bytes());
+    put(&mut a3, 0xa8, &index.to_le_bytes());
+    put(&mut a3, 0xb0, &(w as u64).to_le_bytes());
+    put(&mut a3, 0xb8, &(p.m.r8(obj + 8) as u32).to_le_bytes());
+    if mode == 4 || mode.wrapping_sub(1) <= 2 {
+        let path = p.m.r32(gr + if mode == 4 { 0x3b4 } else { 0x3b0 });
+        put(&mut a3, 0xbc, &pass.to_le_bytes());
+        put(&mut a3, 0xc0, &path.to_le_bytes());
+        put(&mut a3, 0xc4, &mode.to_le_bytes());
+    } else {
+        put(&mut a3, 0xbc, &0x20u32.to_le_bytes());
+    }
+    put(&mut a3, 0xd0, &u64::MAX.to_le_bytes());
+    put(&mut a3, 0xd8, &(l as u64).to_le_bytes());
+    draw_view(p, gr, w, l + 0x78, n as u32, bit, a3.as_ptr() as usize, (fl >> 2) & 1)
 }
