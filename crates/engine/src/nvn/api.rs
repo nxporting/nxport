@@ -2196,13 +2196,14 @@ pub(crate) fn walk_command_lists(
         if e.2 == LIST_NEW {
             e.2 = LIST_CALLED;
         }
-        let l = e.0.clone();
-        cache.insert(h, l.clone());
+        // Lists called again (a mesh's list, once per pass drawing it) are in `cache` already.
+        let l = &e.0;
         if l.visit.swap(stamp, std::sync::atomic::Ordering::Relaxed) == stamp {
             continue;
         }
+        cache.insert(h, l.clone());
         n += 1;
-        f(&l);
+        f(l);
         stack.extend_from_slice(&l.summary().1);
     }
     n
