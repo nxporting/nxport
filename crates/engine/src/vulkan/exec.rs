@@ -224,8 +224,6 @@ pub struct Ctx {
     pub(super) cmd_writes: Ranges,
     /// The submit's command lists by handle (fetched once by the pre-scan).
     lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
-    /// Pre-scans of lists without calls, by list.
-    scan_cache: rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan, u64)>,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -623,7 +621,6 @@ impl Ctx {
             chunk_start: std::time::Instant::now(),
             op_index: 0,
             cmd_writes: Ranges::default(),
-            scan_cache: Default::default(),
             lists: Default::default(),
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
@@ -650,9 +647,12 @@ impl Ctx {
         }
     }
 
-    /// Records and queues a submit with `serial` (inflight.rs completes it).
-    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64) {
+    /// Records and queues a submit with `serial` (inflight.rs completes it). `fetched`: the lists it reaches, by handle
+    /// (nvn::api::walk_command_lists), taken.
+    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64, fetched: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>) {
         crate::gpu::history::journal(|| format!("submit {} lists serial {serial}", lists.len()));
+        // Emptied when the previous submit ended.
+        std::mem::swap(&mut self.lists, fetched);
         let empty = |serial| super::inflight::Done {
             serial,
             fence: vk::Fence::null(),
@@ -719,29 +719,9 @@ impl Ctx {
         let mut writes = std::mem::take(&mut self.cmd_writes);
         writes.clear();
         for &h in lists {
-            Self::scan_counters(h, serial, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache, &mut self.lists);
+            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.lists);
         }
         self.cmd_writes = writes;
-        // Lists not reached lately may be gone: forget those now and then (not all of them: scanning a whole frame's lists
-        // again took ~80 ms, a hitch every few seconds on TotK's title).
-        if self.scan_cache.len() > 1 << 15 {
-            // Freed on another thread: they hold the last references to tens of thousands of recorded lists, whose
-            // freeing took ~80 ms here.
-            let (keep, old): (rustc_hash::FxHashMap<_, _>, Vec<_>) = {
-                let mut keep = rustc_hash::FxHashMap::default();
-                let mut old = Vec::new();
-                for (k, e) in std::mem::take(&mut self.scan_cache) {
-                    if e.2 + 8 >= serial {
-                        keep.insert(k, e);
-                    } else {
-                        old.push(e);
-                    }
-                }
-                (keep, old)
-            };
-            self.scan_cache = keep;
-            let _ = std::thread::Builder::new().name("vk-list-free".into()).spawn(move || drop(old));
-        }
         self.occl.upcoming = upcoming;
         self.occl.cursor = 0;
         self.op_index = 0;
@@ -1053,17 +1033,17 @@ impl Ctx {
     }
 
     /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them), and the guest
-    /// memory their commands write (inline uniform updates, reports).
+    /// memory their commands write (inline uniform updates, reports): from each list's events, made when it was recorded
+    /// (nvn::api::ListEvents), so a submit's pre-scan does not walk its commands.
     unsafe fn scan_counters(
         handle: u64,
-        serial: u64,
         depth: u32,
         index: &mut u64,
         out: &mut Vec<(u64, bool)>,
         writes: &mut Ranges,
-        cache: &mut rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan, u64)>,
         lists: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
     ) {
+        use crate::nvn::api::ListEvent;
         let list = match lists.get(&handle) {
             Some(l) => l.clone(),
             None => {
@@ -1072,51 +1052,43 @@ impl Ctx {
                 l
             }
         };
-        // Lists without calls (most: TotK records each mesh's list once) are scanned once.
-        if list.summary().1.is_empty() {
-            let key = std::sync::Arc::as_ptr(&list) as usize;
-            let e = cache.entry(key).or_insert_with(|| (list.clone(), ListScan::of(&list), serial));
-            e.2 = serial;
-            let scan = &e.1;
-            out.extend(scan.events.iter().map(|&(i, report)| (*index + i, report)));
-            for &(addr, len) in &scan.writes {
-                let a = crate::nvn::api::translate_virtual(addr as usize);
-                writes.add(a, a + len);
-            }
-            *index += scan.ops;
-            return;
-        }
-        for op in &list.ops {
-            match &op.typed {
-                Some(Cmd::CallCommands(hs)) if depth < 16 => {
+        let ev = list.events();
+        let start = *index;
+        // Commands of the lists it calls, before the current event.
+        let mut called = 0;
+        for (at, e) in &ev.items {
+            let pos = start + at + called;
+            match e {
+                ListEvent::Counter(report) => out.push((pos, *report)),
+                ListEvent::Write(addr, len) => {
+                    let a = crate::nvn::api::translate_virtual(*addr as usize);
+                    writes.add(a, a + len);
+                }
+                // Beyond 16 levels run_list counts a call as one command and does not follow it.
+                ListEvent::Call(_) if depth >= 16 => called += 1,
+                ListEvent::Call(hs) => {
+                    *index = pos;
                     for &h in hs.iter() {
-                        Self::scan_counters(h, serial, depth + 1, index, out, writes, cache, lists);
+                        Self::scan_counters(h, depth + 1, index, out, writes, lists);
                     }
-                    continue;
+                    called = *index - start - at;
                 }
-                Some(c) => {
-                    if let Some((report, write)) = ListScan::classify(c) {
-                        if let Some(r) = report {
-                            out.push((*index, r));
-                        }
-                        if let Some((addr, len)) = write {
-                            let a = crate::nvn::api::translate_virtual(addr as usize);
-                            writes.add(a, a + len);
-                        }
-                    }
-                }
-                None => {}
             }
-            *index += 1;
         }
+        *index = start + ev.ops + called;
     }
 
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
-        // Fetched by the pre-scan.
-        let list = match self.lists.get(&handle) {
-            Some(l) => l.clone(),
+        // Fetched before the pre-scan: self.lists holds it until the submit ended (nothing removes lists before), so it
+        // is borrowed rather than counted again for each of a submit's ~3,000 lists.
+        let held;
+        let list: &crate::nvn::api::RecordedCommandList = match self.lists.get(&handle) {
+            Some(l) => &*std::sync::Arc::as_ptr(l),
             None => match crate::nvn::api::command_list(handle, depth > 0) {
-                Some(l) => l,
+                Some(l) => {
+                    held = l;
+                    &held
+                }
                 None => return,
             },
         };
@@ -1928,38 +1900,3 @@ unsafe fn new_timestamp_pool(dev: &Dev, supported: bool) -> vk::QueryPool {
         .unwrap_or(vk::QueryPool::null())
 }
 
-/// What a list without calls contributes to a submit's pre-scan (Ctx::scan_counters): its command count, its counter
-/// resets (false) and reports (true) by command index in the list, and the guest memory its commands write.
-pub(super) struct ListScan {
-    ops: u64,
-    events: Vec<(u64, bool)>,
-    writes: Vec<(u64, usize)>,
-}
-
-impl ListScan {
-    fn of(list: &crate::nvn::api::RecordedCommandList) -> ListScan {
-        let mut s = ListScan { ops: list.ops.len() as u64, events: Vec::new(), writes: Vec::new() };
-        for (i, op) in list.ops.iter().enumerate() {
-            if let Some((report, write)) = op.typed.as_ref().and_then(Self::classify) {
-                if let Some(r) = report {
-                    s.events.push((i as u64, r));
-                }
-                if let Some(w) = write {
-                    s.writes.push(w);
-                }
-            }
-        }
-        s
-    }
-
-    /// A command's occlusion counter event and the guest memory it writes (untranslated address, length).
-    fn classify(c: &Cmd) -> Option<(Option<bool>, Option<(u64, usize)>)> {
-        match c {
-            Cmd::ResetCounter { counter: 1 } => Some((Some(false), None)),
-            Cmd::ReportCounter { counter, addr } => Some(((*counter == 1).then_some(true), Some((*addr, 16)))),
-            Cmd::ReportValue { addr, .. } => Some((None, Some((*addr, 16)))),
-            Cmd::UpdateUniformBuffer { addr, offset, data } => Some((None, Some(((*addr as i64 + *offset as i64) as u64, data.len())))),
-            _ => None,
-        }
-    }
-}

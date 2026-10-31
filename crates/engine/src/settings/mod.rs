@@ -428,6 +428,8 @@ group! {
         log_shader_draws: Vec<String> = Vec::new(),
         log_alias: bool = false,
         log_alias_new: bool = false,
+        /// Recorded NVN commands by name, every 600 frames
+        log_cmd_histogram: bool = false,
         log_batchable: bool = false,
         log_bind_miss: bool = false,
         log_dirty_track: bool = false,
