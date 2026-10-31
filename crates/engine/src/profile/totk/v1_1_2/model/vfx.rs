@@ -1389,3 +1389,56 @@ pub(super) unsafe fn draw_pass(p: &mut Port, obj: usize, w: usize, views: usize,
     let groups = l + 0x78;
     draw_view(p, gr, w, groups, n as u32, bit, a3.as_ptr() as usize, (fl >> 2) & 1)
 }
+
+/// main+0x9c8d00(obj, pass, ctx): the gsys view pass's effect drawable: per render pass the scene view's effect
+/// passes (main+0xa414ac with the render context as its override object). Not ported: the pass-3 callbacks
+/// (obj+0x1a8 / +0x1b0), pass 5's shadow cascades (ctx+0xb0 2 / 3) and pass 6's cascade passes.
+pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R<()> {
+    if p.m.r8(obj + 0x1a4) & 1 == 0 || pass > 7 {
+        return Ok(());
+    }
+    let views = p.m.r64(p.m.r64(obj + 0x198) + 0x1ec0);
+    let (w, o) = (p.m.r64(c + 0x20), p.m.r64(c + 0x10));
+    let id = match pass {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        4 => 0x17,
+        7 => 0x13,
+        3 => {
+            if p.m.r64(obj + 0x1a8) != 0 {
+                return callback(p.m.r64(obj + 0x1a8), p.base);
+            }
+            draw_pass(p, o, w, views, 8, 0, c, 0)?;
+            if p.m.r64(obj + 0x1b0) != 0 {
+                return callback(p.m.r64(obj + 0x1b0), p.base);
+            }
+            return Ok(());
+        }
+        5 => {
+            let b0 = p.m.i32(c + 0xb0);
+            if (b0.wrapping_sub(2) as u32) < 2 {
+                return Err("vfx shadow cascade passes");
+            }
+            if b0 != 1 {
+                return Ok(());
+            }
+            draw_pass(p, o, w, views, 0xc, 0, c, 0)?;
+            draw_pass(p, o, w, views, 0xd, 0, c, 0)?;
+            let gr = p.m.r64(p.m.r64(p.base + RENDER_GLOBALS));
+            if (p.m.r32(gr + 0x378) >> 3) & 1 == 0 {
+                return Ok(());
+            }
+            draw_pass(p, o, w, views, 0x14, 0, c, 0)?;
+            0x15
+        }
+        _ => {
+            let b0 = p.m.i32(c + 0xb0);
+            if (b0.wrapping_sub(9) as u32) < 3 && p.m.r8(p.m.r64(obj + 0x198) + 0xce1) & 1 == 0 {
+                return Err("vfx cascade passes");
+            }
+            return Ok(());
+        }
+    };
+    draw_pass(p, o, w, views, id, 0, c, 0)
+}

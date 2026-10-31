@@ -76,6 +76,7 @@ pub(super) unsafe fn draw_list(p: &mut Port, list: usize, count: u32, c: usize, 
 unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) -> R<()> {
     match f {
         0x27e04b8 | 0x26ae888 => {}
+        0x9c8d00 => super::vfx::forward(p, obj, index, c)?,
         // A barrier before the first four views (ORDER_FRAGMENTS | INVALIDATE_TEXTURE, + INVALIDATE_SHADER with a
         // graphics flag).
         0x27d0104 => {
