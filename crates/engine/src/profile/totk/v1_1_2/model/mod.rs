@@ -8,6 +8,7 @@ mod dispatch;
 mod draw;
 mod grid;
 mod gridtile;
+mod material;
 mod mem;
 mod perview;
 mod render_list;
@@ -25,6 +26,8 @@ const LIST_SITE: usize = 0x12de2a0;
 const LIST_SITE_INSTRUCTION: u32 = 0xd10183ff; // sub sp, sp, #0x60
 /// The dispatch drawable's draw (dispatch.rs), checked by itself when no enclosing render list is.
 const DISPATCH_SITE: usize = 0x763718;
+const MATERIAL_SITE: usize = 0x7b42f0;
+const MATERIAL_SITE_INSTRUCTION: u32 = 0xd10243ff; // sub sp, sp, #0x90
 const VFX_PASS_SITE: usize = 0xa414ac;
 const VFX_PASS_SITE_INSTRUCTION: u32 = 0xd10603ff; // sub sp, sp, #0x180
 const VFX_VIEW_SITE: usize = 0xa41a38;
@@ -341,6 +344,65 @@ thread_local! {
 }
 
 /// --verify-render-lists: an effect pass of a scene view (main+0xa414ac) predicted by itself.
+static MAT_CALLS: AtomicU64 = AtomicU64::new(0);
+static MAT_SAME: AtomicU64 = AtomicU64::new(0);
+static MAT_DIFFERENT: AtomicU64 = AtomicU64::new(0);
+static MAT_STOPS: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static MAT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// --verify-render-lists: a material bind (main+0x7b42f0, run while the game records a material's list) predicted
+/// and compared with what the game records.
+#[no_mangle]
+pub unsafe extern "C" fn on_material(d: usize, w: usize, entry: usize, set: usize, a: u32, b: u32) -> u32 {
+    if crate::nvn::api::capturing() {
+        return 0;
+    }
+    MAT_CALLS.fetch_add(1, Ordering::Relaxed);
+    let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+    let mut result = Ok(());
+    let expected =
+        crate::nvn::api::capture_dry(|| result = material::bind(&mut port, d, w, entry, set, a as i32, b as i32));
+    match result {
+        Ok(()) => {
+            MAT_EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
+            crate::nvn::api::capture_collect();
+        }
+        Err(what) => {
+            let mut s = MAT_STOPS.lock().unwrap();
+            match s.iter_mut().find(|x| x.0 == what) {
+                Some(x) => x.1 += 1,
+                None => s.push((what, 1)),
+            }
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_material_end() -> u32 {
+    let Some(expected) = MAT_EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
+    let got = crate::nvn::api::capture_collected();
+    if expected == got {
+        MAT_SAME.fetch_add(1, Ordering::Relaxed);
+        return 0;
+    }
+    let k = MAT_DIFFERENT.fetch_add(1, Ordering::Relaxed);
+    if k < 4 {
+        println!("[model-draw] material mismatch #{k}:");
+        for i in 0..expected.len().max(got.len()) {
+            let (e, g) = (expected.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
+            println!("[model-draw]   {} port: {e}", if e == g { " " } else { "!" });
+            if e != g {
+                println!("[model-draw]     game: {g}");
+            }
+        }
+    }
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn on_vfx_pass(obj: usize, w: usize, views: usize, pass: u32, path: u32, _x5: usize, over: usize, mode: u32) -> u32 {
     if crate::nvn::api::capturing() {
@@ -511,6 +573,18 @@ fn report() {
     if !dp.is_empty() {
         println!("[model-draw] dispatch targets reached: {dp}");
     }
+    let mn = MAT_CALLS.load(Ordering::Relaxed);
+    if mn > 0 {
+        let mut s = MAT_STOPS.lock().unwrap().clone();
+        s.sort_by(|a, b| b.1.cmp(&a.1));
+        let stops: Vec<String> = s.iter().map(|(w, k)| format!("{w} {k}")).collect();
+        println!(
+            "[model-draw] material binds checked: {mn}, {} identical, {} different; unported: {}",
+            MAT_SAME.load(Ordering::Relaxed),
+            MAT_DIFFERENT.load(Ordering::Relaxed),
+            stops.join(", ")
+        );
+    }
     let bv: Vec<String> = BY_VIEW
         .lock()
         .unwrap()
@@ -632,6 +706,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx_pass(_, _, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_pass_end())) as usize;
         hook(base, mem_space, VFX_PASS_SITE, VFX_PASS_SITE_INSTRUCTION, pre, post, "Vfx pass draw");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_material(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_material_end())) as usize;
+        hook(base, mem_space, MATERIAL_SITE, MATERIAL_SITE_INSTRUCTION, pre, post, "Material bind");
     }
     if d.verify_render_lists || d.verify_model_draws {
         let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc(_))) as usize;

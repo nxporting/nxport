@@ -166,7 +166,7 @@ impl Port {
         self.query(self.pfn(PFN_BUFFER_GET_ADDRESS), &[nvn_buffer as u64])
     }
 
-    unsafe fn bind_uniform_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
+    pub(super) unsafe fn bind_uniform_buffer(&mut self, cmd: usize, stage: i32, slot: i32, addr: u64, size: u64) {
         self.m.w::<u8>(cmd + 0x10, 1);
         self.call(self.pfn(PFN_BIND_UNIFORM_BUFFER), &[cmd as u64, stage as u64, slot as u64, addr, size]);
     }
@@ -278,7 +278,7 @@ impl Port {
     }
 
     /// Uniform block object, virtual +0x20: the block alignment.
-    unsafe fn block_alignment(&mut self, obj: usize) -> R<i32> {
+    pub(super) unsafe fn block_alignment(&mut self, obj: usize) -> R<i32> {
         match self.vfn(obj, 0x20) {
             0x2a30390 => Ok(0x100),
             // Storage blocks: their own alignment.
