@@ -1946,12 +1946,6 @@ unsafe fn view_callback(p: &mut Port, cb: usize, w: usize, views: usize, o: usiz
     if p.m.r32(cb) == RET {
         return Ok(());
     }
-    // Applying leaves the callbacks to the game: the effect pass they draw into the render context's own targets
-    // differs from the game in its uniform data (the effect pass data check).
-    if !p.m.predict() {
-        p.call(cb, &[w as u64, views as u64, o as u64, p.m.r8(c + 0x30) as u64, c as u64]);
-        return Ok(());
-    }
     match cb.wrapping_sub(p.base) {
         0x122f360 => screen_effects(p, w, views, o, c),
         _ => callback(cb, p.base),
