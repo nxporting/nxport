@@ -78,6 +78,8 @@ pub(super) struct Port {
     pending: std::cell::RefCell<Option<(usize, u64, smallvec::SmallVec<[crate::nvn::cmd::ModelRange; 2]>)>>,
     /// Predicting: NVNbuffer objects re-initialized so far, with the address they got.
     buffers: Vec<(usize, u64)>,
+    /// The dry run before applying: state the applying run sets up first (pending textures) does not stop it.
+    pub(super) trial: bool,
 }
 
 impl Port {
@@ -86,7 +88,7 @@ impl Port {
     }
 
     pub(super) fn new(m: Mem, base: usize, native: bool) -> Self {
-        Port { m, base, native, pending: Default::default(), buffers: Vec::new() }
+        Port { m, base, native, pending: Default::default(), buffers: Vec::new(), trial: false }
     }
 
     /// Records the pending unit draw (anything recorded after it must come after it in the stream).
@@ -439,6 +441,31 @@ impl Port {
         clamp(cmd, self.m.f32(g + 0x58), self.m.f32(g + 0x5c), self.m.f32(g + 0x60));
         self.call(f(self, PFN_SET_DEPTH_CLAMP), &[cmd, b(0x6e)]);
         let _ = (&mut blend, &mut color, &mut mask, &mut ds, &mut poly);
+    }
+
+    /// A texture whose setup is pending (+0xe4: flags, bit 31 a lock) before it is bound: Err when predicting; the dry
+    /// run goes on (applying finishes it first); applying finishes it as the game's binders do: the lock taken, the
+    /// game's finisher main+0x7ff1fc(texture, flags) called, the word cleared (a lock held by another thread is waited
+    /// out).
+    pub(super) unsafe fn texture_ready(&mut self, tex: usize, what: &'static str) -> R<()> {
+        if self.m.r32(tex + 0xe4) == 0 || self.trial {
+            return Ok(());
+        }
+        if self.m.predict() {
+            return Err(what);
+        }
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let word = &*((tex + 0xe4) as *const AtomicU32);
+        let old = word.fetch_or(0x8000_0000, Ordering::AcqRel);
+        if old & 0x8000_0000 != 0 {
+            while word.load(Ordering::Acquire) & 0x8000_0000 != 0 {
+                std::thread::yield_now();
+            }
+        } else if old & 0x7fff_ffff != 0 {
+            self.call(self.base + 0x7ff1fc, &[tex as u64, old as u64]);
+        }
+        word.store(0, Ordering::Release);
+        Ok(())
     }
 
     /// A polygon state built from defaults-free setters (cull face, front face, polygon mode, offset enables), bound,

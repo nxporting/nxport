@@ -177,6 +177,7 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
         // A dry prediction first: a list the port would stop in is left whole to the game (applying cannot stop
         // halfway, and the game's own call does the lazy setup the port leaves to it).
         let mut trial = draw::Port::new(mem::Mem::predicting(), base, false);
+        trial.trial = true;
         let mut tried = Ok(());
         crate::nvn::api::capture_dry(|| tried = render_list::draw_list(&mut trial, list, count, c, mask, flags));
         ring::discard();
