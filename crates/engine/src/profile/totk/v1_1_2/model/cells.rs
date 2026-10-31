@@ -85,6 +85,8 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize) -> R<()> {
         0x13efdcc => setup(p, this, arg, Some((0x462ce50, 0x462ce58)))?,
         0x13ef70c => setup(p, this, arg, Some((0x462ce18, 0x462ce20)))?,
         0x13ef9a8 => setup(p, this, arg, Some((0x462ce38, 0x462ce40)))?,
+        0x13f0480 => setup(p, this, arg, Some((0x462ce70, 0x462ce78)))?,
+        0x13f0170 => setup(p, this, arg, Some((0x462ce60, 0x462ce68)))?,
         _ => {
             note(f68, 0x68);
             p.helper("cell setup", f68, &[this as u64, arg as u64, slot as u32 as u64])?;
@@ -123,10 +125,9 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize) -> R<()> {
                 let a388 = p.m.r64(this + 0x388);
                 let k = if p.m.r32(a388 + 0x1e0) > slot as u32 { slot as u32 } else { 0 } as i32 as i64;
                 let e = (p.m.r64(a388 + 0x1e8) as i64 + k * 0x58) as usize;
-                let above = match f30 {
-                    0x26abb50 | 0x26abe78 => false,
-                    0x26ac39c | 0x26ac00c => true,
-                    _ => {
+                let above = match p.constant_result(f30) {
+                    Some(v) => v != 0,
+                    None => {
                         note(f30, 0x30);
                         p.helper("cell test", f30, &[this as u64])? & 1 != 0
                     }
@@ -155,8 +156,8 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize) -> R<()> {
                     match f {
                         // The cell's index range in the drawer's tables (+0x4d0 first, +0x9d0 count; 4 x 8 x 10),
                         // in units of 6 or 9 indices, drawn from its mesh at +0x428.
-                        0x13f247c | 0x26add8c | 0x26ad688 | 0x26ad0b0 => {
-                            let unit = if f == 0x13f247c || f == 0x26add8c { 6 } else { 9 };
+                        0x13f247c | 0x26add8c | 0x13f2e48 | 0x26ad688 | 0x26ad0b0 | 0x13f2bc4 => {
+                            let unit = if matches!(f, 0x13f247c | 0x26add8c | 0x13f2e48) { 6 } else { 9 };
                             let c = drawer + layer * 0x140 + row * 0x28 + col * 4;
                             let (first, count) = (p.m.r32(c + 0x4d0).wrapping_mul(unit), p.m.r32(c + 0x9d0).wrapping_mul(unit));
                             super::cave::mesh_elements(p, drawer + 0x428, w, first, count, 1, 0, 0);
@@ -168,8 +169,9 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize) -> R<()> {
                     }
                 } else {
                     let f = p.vfn(drawer, 0x28);
-                    if matches!(f, 0x879d20 | 0x13f263c | 0x26ad1cc | 0x26ad7a4) {
-                        runs(p, drawer, w, col, layer, row, id as u32, if f == 0x879d20 || f == 0x13f263c { 6 } else { 9 });
+                    if matches!(f, 0x879d20 | 0x13f263c | 0x13f2e9c | 0x26ad1cc | 0x26ad7a4 | 0x13f2c10) {
+                        let unit = if matches!(f, 0x879d20 | 0x13f263c | 0x13f2e9c) { 6 } else { 9 };
+                        runs(p, drawer, w, col, layer, row, id as u32, unit);
                         continue;
                     }
                     note(f, 0x28);
@@ -181,7 +183,8 @@ pub(super) unsafe fn draw(p: &mut Port, this: usize, arg: usize) -> R<()> {
     Ok(())
 }
 
-/// The cell setups (main+0x13ef344, and main+0x13efdcc / 0x13ef70c / 0x13ef9a8 through a cast of the drawer with
+/// The cell setups (main+0x13ef344, and main+0x13efdcc / 0x13ef70c / 0x13ef9a8 / 0x13f0480 / 0x13f0170 (the last two
+/// fill the table through main+0x13f0294 and bind through main+0x777138) through a cast of the drawer with
 /// the static guard and type token `cast`): the drawer's three textures (+0x90 indices into its list, +0x80 table
 /// slots) bound with every other entry of the drawable's pass program (main+0x777170).
 unsafe fn setup(p: &mut Port, this: usize, arg: usize, cast: Option<(usize, usize)>) -> R<()> {

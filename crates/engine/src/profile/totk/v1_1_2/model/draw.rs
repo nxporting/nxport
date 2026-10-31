@@ -252,6 +252,16 @@ impl Port {
         Some(Some(if adj & 1 != 0 { self.m.r64(self.m.r64(this) + f) } else { f }.wrapping_sub(self.base)))
     }
 
+    /// The value a game function at main+`f` returns when its whole body is `mov w0, wzr` or `mov w0, #1`, then `ret`.
+    pub(super) unsafe fn constant_result(&self, f: usize) -> Option<u32> {
+        let (a, b) = (self.m.r32(self.base + f), self.m.r32(self.base + f + 4));
+        match (a, b) {
+            (0x2a1f_03e0, 0xd65f_03c0) => Some(0),
+            (0x5280_0020, 0xd65f_03c0) => Some(1),
+            _ => None,
+        }
+    }
+
     /// The main+ offset of `obj`'s virtual function at vtable slot `slot`.
     pub(super) unsafe fn vfn(&self, obj: usize, slot: usize) -> usize {
         self.m.r64(self.m.r64(obj) + slot).wrapping_sub(self.base)
