@@ -2113,6 +2113,55 @@ pub(crate) struct RecordedCommandList {
 }
 
 impl RecordedCommandList {
+    /// Makes the summary and the events in one pass over the commands (EndRecording, on the game's recording thread).
+    fn index(&self) {
+        use crate::nvn::cmd::Cmd;
+        if self.summary.get().is_some() || self.events.get().is_some() {
+            self.summary();
+            self.events();
+            return;
+        }
+        let (mut ranges, mut calls, mut samples) = (Vec::new(), Vec::new(), Vec::new());
+        let mut e = ListEvents { ops: 0, items: Vec::new() };
+        for op in &self.ops {
+            match &op.typed {
+                Some(Cmd::CallCommands(h)) => {
+                    calls.extend_from_slice(h.as_slice());
+                    e.items.push((e.ops, ListEvent::Call(h.as_slice().into())));
+                    continue;
+                }
+                Some(Cmd::ResetCounter { counter: 1 }) => e.items.push((e.ops, ListEvent::Counter(false))),
+                Some(Cmd::ReportCounter { counter, addr }) => {
+                    if *addr > 0x10000 {
+                        ranges.push((*addr, *addr + 16));
+                        if *counter == 1 {
+                            samples.push(*addr);
+                        }
+                    }
+                    if *counter == 1 {
+                        e.items.push((e.ops, ListEvent::Counter(true)));
+                    }
+                    e.items.push((e.ops, ListEvent::Write(*addr, 16)));
+                }
+                Some(Cmd::ReportValue { addr, .. }) => {
+                    if *addr > 0x10000 {
+                        ranges.push((*addr, *addr + 16));
+                    }
+                    e.items.push((e.ops, ListEvent::Write(*addr, 16)));
+                }
+                Some(Cmd::UpdateUniformBuffer { addr, offset, data }) => {
+                    let a = (*addr as i64 + *offset as i64) as u64;
+                    ranges.push((a, a + data.len() as u64));
+                    e.items.push((e.ops, ListEvent::Write(a, data.len())));
+                }
+                _ => {}
+            }
+            e.ops += 1;
+        }
+        let _ = self.summary.set((ranges, calls, samples));
+        let _ = self.events.set(e);
+    }
+
     pub(crate) fn summary(&self) -> &(Vec<(u64, u64)>, Vec<u64>, Vec<u64>) {
         self.summary.get_or_init(|| {
             let (mut ranges, mut calls, mut samples) = (Vec::new(), Vec::new(), Vec::new());
@@ -2171,6 +2220,19 @@ impl RecordedCommandList {
             }
             e
         })
+    }
+}
+
+/// Drops `l` on a thread of its own (nvn-free): the last reference to a replaced list frees all its commands.
+fn free_later(l: std::sync::Arc<RecordedCommandList>) {
+    static TX: std::sync::OnceLock<Option<StdMutex<std::sync::mpsc::Sender<std::sync::Arc<RecordedCommandList>>>>> = std::sync::OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<std::sync::Arc<RecordedCommandList>>();
+        std::thread::Builder::new().name("nvn-free".into()).spawn(move || while rx.recv().is_ok() {}).ok().map(|_| StdMutex::new(tx))
+    });
+    if let Some(tx) = tx {
+        // Sent back (and dropped here) only if the thread is gone.
+        let _ = tx.lock().unwrap().send(l);
     }
 }
 
@@ -2514,8 +2576,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         visit: std::sync::atomic::AtomicU64::new(0),
     });
     // Here on the recording thread rather than on the Presentation Thread at submit (they scan every op).
-    snapshot.summary();
-    snapshot.events();
+    snapshot.index();
     // An NVN command handle is the GPU address of the command set: recording again at the same place in command memory
     // yields the same handle, and the game may keep calling the one it stored first. Same location, same handle here.
     let handle = match command_list_location(cmd as usize) {
@@ -2539,7 +2600,9 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         drop(g);
         if let Some(old) = old {
             COMMAND_LIST_BYTES.fetch_sub(old.3, std::sync::atomic::Ordering::Relaxed);
-            drop(old); // the replaced list is freed outside the lock
+            // The replaced list is freed outside the lock, and off the game's thread (its commands' memory, freed one
+            // allocation at a time, was ~2% of guest-main).
+            free_later(old.0);
         }
         command_list_recorded(cmd as usize, handle, (*cmd).command_used);
         let mut g = COMMAND_LISTS.lock().unwrap();
