@@ -31,6 +31,8 @@ struct RtHost {
     svc: unsafe extern "C" fn(*mut Cpu, u32, u64),
     trap: unsafe extern "C" fn(*mut Cpu, u32, u32, u64),
     ticks: unsafe extern "C" fn() -> u64,
+    resolve_hle: unsafe extern "C" fn(u64) -> *const crate::hle_abi::Hle,
+    call_hle: unsafe extern "C" fn(*const crate::hle_abi::Hle, *mut Cpu),
 }
 
 fn handlers() -> &'static Handlers {
@@ -54,6 +56,17 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
         Some(h) => h.call(c),
         None => (handlers().unknown)(c),
     }
+    CURRENT.with(|cur| cur.set(prev));
+}
+
+/// The dispatcher's cache of HLE targets (runtime/rt.c): what `host_call` would find for `pc`.
+unsafe extern "C" fn host_resolve_hle(pc: u64) -> *const crate::hle_abi::Hle {
+    crate::hle_abi::entry_ref(pc).map_or(std::ptr::null(), |h| h as *const _)
+}
+
+unsafe extern "C" fn host_call_hle(h: *const crate::hle_abi::Hle, c: *mut Cpu) {
+    let prev = CURRENT.with(|cur| cur.replace(c));
+    (*h).call(&mut *c);
     CURRENT.with(|cur| cur.set(prev));
 }
 
@@ -96,7 +109,14 @@ impl GuestLibrary {
             let init: unsafe extern "C" fn(*const RtHost) = std::mem::transmute(sym("nx_rt_init")?);
             let add: unsafe extern "C" fn(*const u64, *const c_void, u64) -> i32 =
                 std::mem::transmute(sym("nx_rt_add_module")?);
-            let host = RtHost { call: host_call, svc: host_svc, trap: host_trap, ticks: host_ticks };
+            let host = RtHost {
+                call: host_call,
+                svc: host_svc,
+                trap: host_trap,
+                ticks: host_ticks,
+                resolve_hle: host_resolve_hle,
+                call_hle: host_call_hle,
+            };
             init(&host);
             for m in modules {
                 let count = *(sym(&format!("{m}_fn_count"))? as *const u64);
