@@ -139,8 +139,24 @@ pub fn sleep_ns(ns: u64) {
             }
             unsafe { WaitForSingleObject(timer, INFINITE) };
         }
-        while ticks() < deadline {
-            std::thread::yield_now();
+        // The wait is mostly pause instructions, which leave the core to the thread on its other hardware thread (the
+        // game's chain threads; TotK sleeps 20 us thousands of times a second), with a yield now and then for threads
+        // waiting for a core. Back-to-back yields (a system call each, ~100 ns) took both.
+        let yield_every = ns_to_ticks(100_000);
+        let mut next_yield = 0;
+        loop {
+            let t = ticks();
+            if t >= deadline {
+                break;
+            }
+            if t >= next_yield {
+                std::thread::yield_now();
+                next_yield = t + yield_every;
+            } else {
+                for _ in 0..16 {
+                    std::hint::spin_loop();
+                }
+            }
         }
     }
 }
