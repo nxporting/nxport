@@ -160,11 +160,87 @@ struct Draw {
     meshes: usize,
 }
 
+/// The instance's record, created by main+0xd7e090 on its first draw (into the overlay; the game's own call creates
+/// it the same way): the next of the model's records (counter +0x110, array +0xf8, count +0xf0), filled by
+/// main+0xd7e8c4 with the instance's +0x20..0x30 and per texture set slot (+0x40c slots, LOD bit bytes at +0x410)
+/// the first set in the instance's chain (+0x38, next +0x18) that has the slot's LOD with a usable texture. Only what
+/// the draw reads is written (not the slots' texture coordinates, nor the instance's uniform data).
+unsafe fn create_record(p: &mut Port, comp: usize, inst: usize) -> usize {
+    let n = p.m.r32(comp + 0x110);
+    p.m.w::<u32>(comp + 0x110, n.wrapping_add(1));
+    if p.m.r32(comp + 0xf0) <= n {
+        return 0;
+    }
+    let rec = (p.m.r64(comp + 0xf8) as i64 + n as i32 as i64 * 0x50) as usize;
+    p.m.w::<u64>(rec, p.m.r64(inst + 0x20) as u64);
+    p.m.w::<u64>(rec + 8, p.m.r64(inst + 0x28) as u64);
+    for k in 0..p.m.i32(comp + 0x40c).max(0) as usize {
+        let set = choose_set(p, comp, inst, k);
+        p.m.w::<u64>(rec + 0x18 + k * 0x10, set as u64);
+    }
+    p.m.w::<u64>(inst + 0x78, rec as u64);
+    rec
+}
+
+/// main+0xd7e8c4's set for slot k: the first set in the instance's chain with the slot's LOD and a usable texture.
+unsafe fn choose_set(p: &Port, comp: usize, inst: usize, k: usize) -> usize {
+    let bit = p.m.r8(p.m.r64(p.m.r64(comp + 0x410) + k * 8) + 1);
+    let mut set = 0usize;
+    if bit != 0xff {
+        let mut s = p.m.r64(inst + 0x38);
+        let b = bit as u32 & 31;
+        while s != 0 {
+            let bits = p.m.r32(s + 0xc);
+            if (bits >> b) & 1 != 0 {
+                let m = bits & !(u32::MAX << b);
+                let i = if m >= 2 { m.count_ones() } else { m };
+                let tex = p.m.r64(p.m.r64(s + 0x10) + i as usize * 8);
+                let usable = tex != 0
+                    && (p.m.r8(tex + 0x12) & 4 != 0
+                        || (p.m.r64(tex + 8) != 0 && p.m.r32(tex + 0x18) != 0 && p.m.r32(tex + 0x18) >> 30 == 0));
+                if usable {
+                    set = s;
+                    break;
+                }
+            }
+            s = p.m.r64(s + 0x18);
+        }
+    }
+    set
+}
+
+/// The pair's record, created on its first draw (main+0xd7c1d8 / main+0x24b2a04, into the overlay): the next of the
+/// model's pair records (counter +0x114, array +0x108, 16-byte entries, count +0x100) holding the records of its two
+/// instances (created first where missing, main+0x24b8774), in the order the pair's +0 kind (2 or 3: A first) gives.
+/// The pair's uniform data (main+0x24b8980) is not written.
+unsafe fn create_pair(p: &mut Port, comp: usize, e: usize) -> usize {
+    let n = p.m.r32(comp + 0x114);
+    p.m.w::<u32>(comp + 0x114, n.wrapping_add(1));
+    let rec = if p.m.r32(comp + 0x100) > n { (p.m.r64(comp + 0x108) as i64 + n as i32 as i64 * 16) as usize } else { 0 };
+    let (a, b) = (p.m.r64(e + 8), p.m.r64(e + 0x10));
+    let (x, y) = if p.m.r32(e) & !1 == 2 { (a, b) } else { (b, a) };
+    for i in [x, y] {
+        if p.m.r64(i + 0x78) == 0 && create_record(p, comp, i) == 0 {
+            return 0;
+        }
+    }
+    if rec == 0 {
+        return 0;
+    }
+    p.m.w::<u64>(rec, p.m.r64(x + 0x78) as u64);
+    p.m.w::<u64>(rec + 8, p.m.r64(y + 0x78) as u64);
+    p.m.w::<u64>(e + 0x18, rec as u64);
+    rec
+}
+
 /// main+0xd7e090: one instance: its block element, its two texture sets' textures for the LOD, its mesh's draw.
 unsafe fn draw_instance(p: &mut Port, d: &mut Draw, inst: usize) -> R<u32> {
-    let rec = p.m.r64(inst + 0x78);
+    let mut rec = p.m.r64(inst + 0x78);
     if rec == 0 {
-        return Err("per-view instance record");
+        rec = create_record(p, d.block - 0x118, inst);
+        if rec == 0 {
+            return Err("per-view instance record");
+        }
     }
     p.bind_uniform_block(d.block, d.w, d.slots, p.m.r16(inst) as i32)?;
     for k in 0..2 {
@@ -400,9 +476,12 @@ unsafe fn locked(
             if !vis(p, a) || !vis(p, b) {
                 continue;
             }
-            let prec = p.m.r64(e + 0x18);
+            let mut prec = p.m.r64(e + 0x18);
             if prec == 0 {
-                return Err("per-view pair record");
+                prec = create_pair(p, comp, e);
+                if prec == 0 {
+                    return Err("per-view pair record");
+                }
             }
             p.bind_uniform_block(comp + 0x198, w, slots_a, p.m.r16(e + 4) as i32)?;
             let (ra, rb) = (p.m.r64(prec), p.m.r64(prec + 8));
@@ -755,9 +834,12 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
             if !vis(p, a) || !vis(p, b) {
                 continue;
             }
-            let prec = p.m.r64(e + 0x18);
+            let mut prec = p.m.r64(e + 0x18);
             if prec == 0 {
-                return Err("per-view pair record");
+                prec = create_pair(p, comp, e);
+                if prec == 0 {
+                    return Err("per-view pair record");
+                }
             }
             p.bind_uniform_block(comp + 0x198, w, slots_a, p.m.r16(e + 4) as i32)?;
             let ra = p.m.r64(prec);
@@ -801,9 +883,12 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
         if (word >> sh) & 1 == 0 || (word >> (sh | 1)) & 1 != 0 {
             continue;
         }
-        let rec = p.m.r64(inst + 0x78);
+        let mut rec = p.m.r64(inst + 0x78);
         if rec == 0 {
-            return Err("per-view instance record");
+            rec = create_record(p, comp, inst);
+            if rec == 0 {
+                return Err("per-view instance record");
+            }
         }
         p.bind_uniform_block(comp + 0x118, w, slots_a, iid as i32)?;
         // The first slot's set is the instance's own (+0x28); the others are the record's.
