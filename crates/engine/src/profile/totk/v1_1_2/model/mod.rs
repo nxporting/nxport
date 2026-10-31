@@ -177,28 +177,27 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
     let base = crate::guest::loader::main_base();
     let d = &crate::settings::get().totk.diagnostics;
     if d.native_render_lists {
-        // A dry prediction first: a list the port would stop in is left whole to the game (applying cannot stop
-        // halfway, and the game's own call does the lazy setup the port leaves to it).
+        // Applied undoably, its commands kept: a list the port stops in is undone and left whole to the game (the
+        // game's own call also does the lazy setup the port leaves to it).
         static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
-        let native = metal && d.native_model_draws;
-        let mut trial = draw::Port::new(mem::Mem::predicting(), base, native);
-        trial.trial = true;
-        let mut tried = Ok(());
-        crate::nvn::api::capture_discard(|| tried = render_list::draw_list(&mut trial, list, count, c, mask, flags));
-        trial.discard();
+        let mut port = draw::Port::new(mem::Mem::applying_undoably(), base, metal && d.native_model_draws);
+        let (r, commands) = crate::nvn::api::capture_buffered(|| {
+            let r = render_list::draw_list(&mut port, list, count, c, mask, flags);
+            if r.is_ok() {
+                port.flush();
+            }
+            r
+        });
         ring::discard();
         vfx::discard_blocks();
-        if let Err(what) = tried {
+        if let Err(what) = r {
+            port.discard();
+            port.m.rollback();
             note_stop(what);
             return 0;
         }
-        let mut port = draw::Port::new(mem::Mem::applying(), base, native);
-        let r = render_list::draw_list(&mut port, list, count, c, mask, flags);
-        port.flush();
-        if let Err(what) = r {
-            note_stop(what);
-        }
+        crate::nvn::api::commit_buffered(commands);
         return 1;
     }
     let mut port = draw::Port::new(mem::Mem::predicting(), base, false);

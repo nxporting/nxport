@@ -82,8 +82,6 @@ pub(super) struct Port {
     pending: std::cell::RefCell<Option<Pending>>,
     /// Predicting: NVNbuffer objects re-initialized so far, with the address they got.
     buffers: Vec<(usize, u64)>,
-    /// The dry run before applying: state the applying run sets up first (pending textures) does not stop it.
-    pub(super) trial: bool,
 }
 
 impl Port {
@@ -92,7 +90,7 @@ impl Port {
     }
 
     pub(super) fn new(m: Mem, base: usize, native: bool) -> Self {
-        Port { m, base, native, pending: Default::default(), buffers: Vec::new(), trial: false }
+        Port { m, base, native, pending: Default::default(), buffers: Vec::new() }
     }
 
     /// Records the pending native commands (anything recorded after them must come after them in the stream).
@@ -102,7 +100,7 @@ impl Port {
         }
     }
 
-    /// Drops the pending native commands (a dry run's).
+    /// Drops the pending native commands (a run that is undone).
     pub(super) fn discard(&self) {
         self.pending.borrow_mut().take();
     }
@@ -151,7 +149,7 @@ impl Port {
 
     /// A game helper the port does not implement: predicting stops there; applying calls the game's function.
     pub(super) unsafe fn helper(&self, name: &'static str, addr: usize, args: &[u64]) -> R<u64> {
-        if self.m.predict() {
+        if self.m.stops() {
             return Err(name);
         }
         Ok(self.call(self.base + addr, args))
@@ -353,7 +351,7 @@ impl Port {
             0x2a30390 => Ok(0x100),
             // Storage blocks: their own alignment.
             0x2a2c054 => Ok(self.m.i32(obj + 0x80)),
-            f if self.m.predict() => Err(self.unknown_vfn(0x20, f)),
+            f if self.m.stops() => Err(self.unknown_vfn(0x20, f)),
             f => Ok(self.call(self.base + f, &[obj as u64]) as i32),
         }
     }
@@ -371,7 +369,7 @@ impl Port {
                 self.bind_storage_buffer(cmd as usize, stage as i32, slot as i32, addr as u64, size as usize);
                 Ok(())
             }
-            f if self.m.predict() => Err(self.unknown_vfn(0x48, f)),
+            f if self.m.stops() => Err(self.unknown_vfn(0x48, f)),
             f => {
                 self.call(self.base + f, &[obj as u64, cmd as u64, stage as u64, slot as u64, addr, size as u64]);
                 Ok(())
@@ -602,12 +600,11 @@ impl Port {
         }
     }
 
-    /// A texture whose setup is pending (+0xe4: flags, bit 31 a lock) before it is bound: Err when predicting; the dry
-    /// run goes on (applying finishes it first); applying finishes it as the game's binders do: the lock taken, the
-    /// game's finisher main+0x7ff1fc(texture, flags) called, the word cleared (a lock held by another thread is waited
-    /// out).
+    /// A texture whose setup is pending (+0xe4: flags, bit 31 a lock) before it is bound: Err when predicting;
+    /// applying finishes it as the game's binders do: the lock taken, the game's finisher main+0x7ff1fc(texture, flags)
+    /// called, the word cleared (a lock held by another thread is waited out).
     pub(super) unsafe fn texture_ready(&mut self, tex: usize, what: &'static str) -> R<()> {
-        if self.m.r32(tex + 0xe4) == 0 || self.trial {
+        if self.m.r32(tex + 0xe4) == 0 {
             return Ok(());
         }
         if self.m.predict() {
