@@ -73,6 +73,12 @@ pub(super) unsafe fn shape_state(p: &mut Port, shape: usize, w: usize) {
     let cmd = p.m.r64(w + 0xb8);
     p.bind_vertex_attribs(cmd, 0x10, shape + 0x11c);
     p.bind_vertex_streams(cmd, 0x10, shape + 0x160);
+    shape_buffers(p, shape, w);
+}
+
+/// main+0xf216b4(shape, w): the shape's vertex buffers (+0x108 count, +0x110 buffers: address, size +0x118).
+pub(super) unsafe fn shape_buffers(p: &mut Port, shape: usize, w: usize) {
+    let cmd = p.m.r64(w + 0xb8);
     let bufs = p.m.r64(shape + 0x110);
     for i in 0..p.m.r32(shape + 0x108) as usize {
         let b = p.m.r64(bufs + i * 8);
@@ -87,12 +93,22 @@ pub(super) unsafe fn shape_state(p: &mut Port, shape: usize, w: usize) {
 
 /// main+0x966e70(stream, w, 1): the index stream's draw (prim +0xc, type +8, count +0x28, buffer +0x30).
 pub(super) unsafe fn stream_draw(p: &mut Port, stream: usize, w: usize) {
+    stream_draw_n(p, stream, w, 1);
+}
+
+/// main+0x966e70(stream, w, instances): instanced from two instances on (without the command buffer's +0x10 flag).
+pub(super) unsafe fn stream_draw_n(p: &mut Port, stream: usize, w: usize, instances: u32) {
     let count = p.m.i32(stream + 0x28);
     if count == 0 {
         return;
     }
     let cmd = p.m.r64(w + 0xb8);
     let addr = p.buffer_address_of(stream + 0x30);
-    p.m.w::<u8>(cmd + 0x10, 1);
-    p.draw_elements(cmd, p.m.r32(stream + 0xc) as i32, p.m.r32(stream + 8) as i32, count, addr);
+    let (mode, ty) = (p.m.r32(stream + 0xc) as i32, p.m.r32(stream + 8) as i32);
+    if instances < 2 {
+        p.m.w::<u8>(cmd + 0x10, 1);
+        p.draw_elements(cmd, mode, ty, count, addr);
+    } else {
+        p.draw_elements_instanced(cmd, mode, ty, count, addr, 0, 0, instances as i32);
+    }
 }

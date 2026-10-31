@@ -27,6 +27,13 @@ const SITE_INSTRUCTION: u32 = 0xd10383ff; // sub sp, sp, #0xe0
 const LIST_SITE: usize = 0x12de2a0;
 const LIST_SITE_INSTRUCTION: u32 = 0xd10183ff; // sub sp, sp, #0x60
 /// The dispatch drawable's draw (dispatch.rs), checked by itself when no enclosing render list is.
+/// agl / sead primitives the pass functions are built from, drawn natively in apply mode: (site, entry instruction).
+const GRAPHICS_CONTEXT_APPLY: (usize, u32) = (0x74d980, 0xd10243ff); // sead::GraphicsContext::apply
+const PROGRAM_APPLY: (usize, u32) = (0x7ef4b8, 0xa9bd7bfd);
+const PROGRAM_BLOCK: (usize, u32) = (0x96306c, 0xa9ba7bfd);
+const PROGRAM_BLOCK_AT: (usize, u32) = (0x9771a8, 0xa9ba7bfd);
+const STREAM_DRAW: (usize, u32) = (0x966e70, 0xa9bc7bfd);
+const SHAPE_BUFFERS: (usize, u32) = (0xf216b4, 0xa9ba7bfd);
 const OCCLUSION_SITE: usize = 0xa6c3a4;
 const OCCLUSION_SITE_INSTRUCTION: u32 = 0xd10203ff; // sub sp, sp, #0x80
 const LIGHTS_SITE: usize = 0x9777c4;
@@ -385,6 +392,83 @@ pub unsafe extern "C" fn on_lights_end() -> u32 {
             }
         }
     }
+    0
+}
+
+/// Primitive calls drawn natively and left to the game.
+static PRIMITIVES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// A primitive of the game drawn natively (apply mode): undoably, its commands kept; nonzero from `f` = handled (the
+/// game's function is skipped and returns it), else undone and left to the game.
+unsafe fn primitive(f: impl FnOnce(&mut draw::Port) -> draw::R<u32>) -> u32 {
+    if crate::nvn::api::capturing() {
+        return 0;
+    }
+    let mut port = draw::Port::new(mem::Mem::applying_undoably(), crate::guest::loader::main_base(), true);
+    let (r, commands) = crate::nvn::api::capture_buffered(|| {
+        let r = f(&mut port);
+        if matches!(r, Ok(v) if v != 0) {
+            port.flush();
+        }
+        r
+    });
+    match r {
+        Ok(v) if v != 0 => {
+            crate::nvn::api::commit_buffered(commands);
+            PRIMITIVES[0].fetch_add(1, Ordering::Relaxed);
+            v
+        }
+        _ => {
+            port.discard();
+            port.m.rollback();
+            PRIMITIVES[1].fetch_add(1, Ordering::Relaxed);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_graphics_context_apply(g: usize, w: usize) -> u32 {
+    primitive(|p| {
+        p.apply_graphics_context(g, w);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_program_apply(prog: usize, w: usize) -> u32 {
+    primitive(|p| vfx::program_apply(p, prog, w).map(|_| 1))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_program_block(prog: usize, w: usize, index: u32, block: usize, element: i32) -> u32 {
+    primitive(|p| vfx::program_block(p, prog, w, index, block, element).map(|b| b as u32))
+}
+
+/// main+0x9771a8: main+0x96306c with the block through a pointer.
+#[no_mangle]
+pub unsafe extern "C" fn on_program_block_at(prog: usize, w: usize, index: u32, block: usize, element: i32) -> u32 {
+    primitive(|p| vfx::program_block(p, prog, w, index, p.m.r64(block), element).map(|b| b as u32))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_stream_draw(stream: usize, w: usize, instances: u32) -> u32 {
+    primitive(|p| {
+        lights::stream_draw_n(p, stream, w, instances);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_shape_buffers(shape: usize, w: usize) -> u32 {
+    primitive(|p| {
+        lights::shape_buffers(p, shape, w);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_primitive_end() -> u32 {
     0
 }
 
@@ -855,6 +939,10 @@ fn report() {
             vfx::report()
         );
     }
+    let (pd, pl) = (PRIMITIVES[0].load(Ordering::Relaxed), PRIMITIVES[1].load(Ordering::Relaxed));
+    if pd + pl != 0 {
+        println!("[model-draw] agl / sead primitives drawn natively: {pd}, left to the game: {pl}");
+    }
     let on = OCCL_CALLS.load(Ordering::Relaxed);
     if on != 0 {
         let s = OCCL_STOPS.lock().unwrap().clone();
@@ -914,6 +1002,22 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_list(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_model_draw_end())) as usize;
         hook(base, mem_space, LIST_SITE, LIST_SITE_INSTRUCTION, pre, post, "Render list");
+    }
+    let metal = crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal;
+    if d.native_render_lists && d.native_model_draws && metal {
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_primitive_end())) as usize;
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_graphics_context_apply(_, _))) as usize;
+        hook(base, mem_space, GRAPHICS_CONTEXT_APPLY.0, GRAPHICS_CONTEXT_APPLY.1, pre, post, "sead::GraphicsContext::apply");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_apply(_, _))) as usize;
+        hook(base, mem_space, PROGRAM_APPLY.0, PROGRAM_APPLY.1, pre, post, "Program apply");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block(_, _, _, _, _))) as usize;
+        hook(base, mem_space, PROGRAM_BLOCK.0, PROGRAM_BLOCK.1, pre, post, "Program block");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block_at(_, _, _, _, _))) as usize;
+        hook(base, mem_space, PROGRAM_BLOCK_AT.0, PROGRAM_BLOCK_AT.1, pre, post, "Program block (pointer)");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_stream_draw(_, _, _))) as usize;
+        hook(base, mem_space, STREAM_DRAW.0, STREAM_DRAW.1, pre, post, "Index stream draw");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_shape_buffers(_, _))) as usize;
+        hook(base, mem_space, SHAPE_BUFFERS.0, SHAPE_BUFFERS.1, pre, post, "Shape vertex buffers");
     }
     if d.verify_render_lists || d.native_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_lights(_, _, _, _))) as usize;
