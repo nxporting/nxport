@@ -331,10 +331,10 @@ impl Backend for Vulkan {
 /// fps (Ryzen 7 3700X); on the second, 62.8-64.9 (the first L3 is taken, whatever the thread ran on before).
 static REC_AFFINITY: AtomicU64 = AtomicU64::new(0);
 
-/// The processors sharing the first L3 cache (the one of the lowest-numbered processor; 0: one L3 for all of them, or
+/// The processors of each L3 cache of processor group 0, the first L3's (the lowest-numbered processor's) first (none:
 /// unknown).
 #[cfg(windows)]
-unsafe fn recording_affinity() -> u64 {
+unsafe fn l3_masks() -> Vec<u64> {
     extern "system" {
         fn GetLogicalProcessorInformationEx(relation: u32, buf: *mut u8, len: *mut u32) -> i32;
     }
@@ -343,35 +343,49 @@ unsafe fn recording_affinity() -> u64 {
     let mut buf = vec![0u8; len as usize];
     // RelationCache: SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX records with a CACHE_RELATIONSHIP each.
     if len == 0 || GetLogicalProcessorInformationEx(2, buf.as_mut_ptr(), &mut len) == 0 {
-        return 0;
+        return Vec::new();
     }
-    let (mut at, mut l3s, mut mine) = (0usize, 0, 0u64);
+    let (mut at, mut masks) = (0usize, Vec::new());
     while at + 56 <= len as usize {
         let r = &buf[at..];
         let size = u32::from_le_bytes(r[4..8].try_into().unwrap()) as usize;
         // Level, then the first GROUP_AFFINITY (mask, group) at 40.
         let (level, mask, group) = (r[8], u64::from_le_bytes(r[40..48].try_into().unwrap()), u16::from_le_bytes(r[48..50].try_into().unwrap()));
-        if level == 3 && group == 0 {
-            l3s += 1;
-            if mine == 0 || (mask != 0 && mask.trailing_zeros() < mine.trailing_zeros()) {
-                mine = mask;
-            }
+        if level == 3 && group == 0 && mask != 0 {
+            masks.push(mask);
         }
         if size == 0 {
             break;
         }
         at += size;
     }
-    if l3s > 1 {
-        mine
-    } else {
-        0
-    }
+    masks.sort_by_key(|m| m.trailing_zeros());
+    masks
 }
 
 #[cfg(not(windows))]
+unsafe fn l3_masks() -> Vec<u64> {
+    Vec::new()
+}
+
+/// The processors sharing the first L3 cache (0: one L3 for all of them, or unknown).
 unsafe fn recording_affinity() -> u64 {
-    0
+    match l3_masks()[..] {
+        [first, _, ..] => first,
+        _ => 0,
+    }
+}
+
+/// The processors of the other L3 caches, where the game's threads run when Vulkan records on the first (0: anywhere).
+/// They no longer take the recording threads' cores and cache, and the game's job threads (which hand work to each other
+/// tens of thousands of times a second) share one: TotK on Great Sky Island 69.5-70.1 -> 72.0-73.3 fps, recording
+/// 12.6-13.0 -> 12.0-12.3 ms a frame (Ryzen 7 3700X).
+pub(crate) fn guest_affinity() -> u64 {
+    static MASK: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MASK.get_or_init(|| match unsafe { l3_masks() }[..] {
+        [_, ref rest @ ..] if !rest.is_empty() => rest.iter().fold(0, |a, m| a | m),
+        _ => 0,
+    })
 }
 
 /// Keeps the calling thread on processors `mask` (0: leaves it as it is).

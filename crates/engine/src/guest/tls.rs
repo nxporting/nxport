@@ -69,6 +69,9 @@ pub fn thread_block() -> usize {
 /// Called first on every thread that runs guest code (guest-main and the threads the guest creates).
 pub fn mark_guest_thread() {
     GUEST_THREAD.with(|g| g.set(true));
+    if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
+        unsafe { crate::vulkan::pin_current_thread(crate::vulkan::guest_affinity()) };
+    }
 }
 
 /// Whether this thread runs guest code. Signal-safe.
