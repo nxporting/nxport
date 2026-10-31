@@ -1293,3 +1293,99 @@ unsafe fn scene_texture(p: &mut Port, w: usize, slot: i32, tex: usize) -> R<()> 
     }
     Ok(())
 }
+
+/// main+0xa414ac(obj, w, views, pass, path, _, over, mode): the effect pass of a scene view: when the pass's bit is in
+/// the view's groups (or group 0x3f) of the system's tables, the draw context for the view built from the scene's
+/// view (+0x18, 0x430 bytes: view rows, projection, camera, extents) and its target block, then main+0xa41a38.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn draw_pass(p: &mut Port, obj: usize, w: usize, views: usize, pass: u32, path: u32, over: usize, mode: u32) -> R<()> {
+    let fl = p.m.r8(obj + 0x64a) as u32;
+    if !fl & 3 != 0 {
+        return Ok(());
+    }
+    let gr = p.m.r64(p.m.r64(p.base + RENDER_GLOBALS));
+    if gr == 0 {
+        return Ok(());
+    }
+    let l = p.m.r64(obj + 0x5f8);
+    let s = p.m.r64(gr + 0x18);
+    let bit = 1u32.wrapping_shl(pass & 31);
+    let n = p.m.i32(l + 0xf8);
+    let cnt = p.m.i32(s + 0x2f34);
+    let tbl = p.m.r64(s + 0x90);
+    let has = |p: &Port, o: usize| (0..cnt.max(0) as usize).any(|j| p.m.r32(tbl + o + j * 0x300) & bit != 0);
+    let mut found = false;
+    if n > 0 {
+        if cnt < 1 {
+            return Ok(());
+        }
+        found = (0..n as usize).any(|k| has(p, p.m.i32(l + k * 4 + 0x78) as i64 as usize * 4));
+    }
+    if !found && (cnt < 1 || !has(p, 0xfc)) {
+        return Ok(());
+    }
+    let v = match mode {
+        0 => {
+            let mut v = if (fl >> 3) & 1 != 0 || pass == 8 { 1 } else { 0 };
+            if pass == 0x17 {
+                v = 2;
+            }
+            v
+        }
+        3 => 2,
+        2 => 1,
+        _ => 0,
+    };
+    if over != 0 && (p.m.r8(over + 0x41) >> 1) & 1 != 0 {
+        return Err("vfx pass override target");
+    }
+    let idx = p.m.r8(obj + 8) as u32;
+    let vi = if p.m.r32(views + 8) > idx { idx } else { 0 } as usize;
+    let vb = p.m.r64(views + 0x10) + vi * 0x21b0;
+    let alt = p.m.r32(gr + 0x378) & 1 != 0;
+    let target = if alt { vb + v * 0x740 + 0x700 } else { vb + 0x610 };
+    let c = core(p);
+    let ci = c as i64 as usize;
+    if c < p.m.i32(s + 0x2f38) {
+        let r = p.m.r64(s + 0x98) + ci * 0x828;
+        p.m.w::<i64>(r + 0x7f0, p.m.i32(vb + 0xcb8) as i64);
+        p.m.w::<i64>(r + 0x7f8, p.m.i32(target + 0x58) as i64);
+    }
+    // The context (a3).
+    let mut a3 = vec![0u8; 0x100];
+    let put = |a3: &mut Vec<u8>, o: usize, b: &[u8]| a3[o..o + b.len()].copy_from_slice(b);
+    let vw = p.m.r64(obj + 0x18) + if over != 0 { p.m.r8(over + 0x46) as usize } else { 0 } * 0x430;
+    for k in 0..0x30usize {
+        a3[k] = p.m.r8(vw + k);
+    }
+    for k in 0..0x40usize {
+        a3[0x30 + k] = p.m.r8(vw + 0x160 + k);
+    }
+    let f = |o: usize| p.m.f32(vw + o);
+    let (v0, v1, v2, v3) = (f(0), f(4), f(8), f(0xc));
+    let (v4, v5, v6, v7) = (f(0x10), f(0x14), f(0x18), f(0x1c));
+    let (v8, v9, v10, v11) = (f(0x20), f(0x24), f(0x28), f(0x2c));
+    let cx = ((v3 * -v0) - v4 * v7) - v8 * v11;
+    let cy = ((v3 * -v1) - v7 * v5) - v11 * v9;
+    let cz = ((v3 * -v2) - v7 * v6) - v11 * v10;
+    put(&mut a3, 0x70, &cx.to_le_bytes());
+    put(&mut a3, 0x74, &cy.to_le_bytes());
+    put(&mut a3, 0x78, &cz.to_le_bytes());
+    let e = vb + if alt { v } else { 0 } * 0x740;
+    put(&mut a3, 0x7c, &(p.m.f32(e + 0x1e0) - p.m.f32(e + 0x1d8)).to_le_bytes());
+    put(&mut a3, 0x80, &(p.m.f32(e + 0x1e4) - p.m.f32(e + 0x1dc)).to_le_bytes());
+    for (dst, src) in [(0x84, 0x1e0), (0x88, 0x1e4), (0x8c, 0x1ec), (0x90, 0x1e8), (0x94, 0x1f4), (0x98, 0x1fc), (0x9c, 0x200)] {
+        put(&mut a3, dst, &p.m.r32(vw + src).to_le_bytes());
+    }
+    put(&mut a3, 0xa0, &((vw + 0x60) as u64).to_le_bytes());
+    put(&mut a3, 0xa8, &u32::MAX.to_le_bytes());
+    put(&mut a3, 0xb0, &(w as u64).to_le_bytes());
+    put(&mut a3, 0xb8, &idx.to_le_bytes());
+    put(&mut a3, 0xbc, &pass.to_le_bytes());
+    put(&mut a3, 0xc0, &path.to_le_bytes());
+    put(&mut a3, 0xd0, &u64::MAX.to_le_bytes());
+    put(&mut a3, 0xd8, &(l as u64).to_le_bytes());
+    put(&mut a3, 0xe0, &(over as u64).to_le_bytes());
+    let groups = l + 0x78;
+    draw_view(p, gr, w, groups, n as u32, bit, a3.as_ptr() as usize, (fl >> 2) & 1)
+}
