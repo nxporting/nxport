@@ -352,7 +352,9 @@ fn fname(a: u64) -> String {
 }
 
 /// Leaves the function: the registers it keeps in locals go to the Cpu first (a `SPILL` marker: keep_registers).
-const TAIL_DISPATCH: &str = "SPILL __attribute__((musttail)) return rt_dispatch(c);";
+/// Each dispatch probes the dispatcher's cache first (cpu.h, rt_hit), so the branch to a cached function is at this site.
+const TAIL_DISPATCH: &str =
+    "SPILL { GuestFn rt_f = rt_hit(c->pc); if (rt_f) { __attribute__((musttail)) return rt_f(c); } } __attribute__((musttail)) return rt_dispatch(c);";
 
 /// One instruction's C. `next`: execution can go on at the next line.
 struct Line {
@@ -629,6 +631,261 @@ fn uses(code: &str) -> (Regs, Regs) {
     (reads, writes)
 }
 
+/// The vector-register macros of runtime/simd.h, as the preprocessor would expand them with literal register numbers
+/// ($1.. for the arguments): spelled out, their registers appear as c->v[N] and can be kept in locals (keep_vregs).
+const VMACROS: [(&str, &str); 14] = [
+    ("VREG", "(*($1 *)&c->v[$2])"),
+    ("VQ", "(($1)(($2) ? c->v[$3] : (u128)(uint64_t)c->v[$3]))"),
+    ("VW", "do { $1 _w = ($4); c->v[$3] = ($2) ? (u128)_w : (u128)(uint64_t)(u128)_w; } while (0)"),
+    ("VS8", "(*(uint8_t *)&c->v[$1])"),
+    ("VS16", "(*(sa16 *)&c->v[$1])"),
+    ("VS32", "(*(sa32 *)&c->v[$1])"),
+    ("VS64", "(*(sa64 *)&c->v[$1])"),
+    ("VSF32", "(*(saf32 *)&c->v[$1])"),
+    ("VSF64", "(*(saf64 *)&c->v[$1])"),
+    ("VHI64", "(((sa64 *)&c->v[$1])[1])"),
+    ("FP_SETS", "(c->v[$1] = fb_s($2))"),
+    ("FP_SETD", "(c->v[$1] = fb_d($2))"),
+    ("SV_FOP_S", "VW(vf32, $2, $3, vop_s(c, $1, $4, $5, $6))"),
+    ("SV_FOP_D", "VW(vf64, $2, $3, vop_d(c, $1, $4, $5, $6))"),
+];
+
+/// Helpers of runtime/simd.h that take vector registers by number and read or write c->v themselves: the registers a
+/// function keeps in locals go to the Cpu before a call to one and are loaded again after it.
+const V_HELPERS: [&str; 19] = [
+    "fp_fma_d", "fp_fma_s", "sl_across", "sl_addlp", "sl_gen", "sl_ldm", "sl_ldr", "sl_lds", "sl_pmull64", "sl_stm",
+    "sl_sts", "sv_aes", "sv_fcvtl", "sv_fcvtn", "sv_fred_s", "sv_sha1hash", "sv_sha256hash", "sv_sha_misc", "sv_tbl",
+];
+
+/// `code` with VMACROS uses expanded (arguments first).
+fn expand_vmacros(code: &str) -> String {
+    let b = code.as_bytes();
+    let mut out = String::with_capacity(code.len() + code.len() / 2);
+    let mut i = 0;
+    'scan: while i < b.len() {
+        let boundary = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+        if boundary && b[i].is_ascii_uppercase() {
+            for (name, body) in VMACROS {
+                if code[i..].starts_with(name) && code[i + name.len()..].starts_with('(') {
+                    if let Some((args, rest)) = call_args(&code[i + name.len()..]) {
+                        let mut e = body.to_string();
+                        for (k, a) in args.iter().enumerate().rev() {
+                            e = e.replace(&format!("${}", k + 1), &expand_vmacros(a));
+                        }
+                        out.push_str(&expand_vmacros(&e));
+                        i = code.len() - rest.len();
+                        continue 'scan;
+                    }
+                }
+            }
+        }
+        let ch = code[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// The vector register a "c->v[N]" at the start of `s` names, and its length.
+fn vreg_at(s: &str) -> Option<(u32, usize)> {
+    let num = s.strip_prefix("c->v[")?;
+    let digits = num.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || num.as_bytes().get(digits) != Some(&b']') {
+        return None;
+    }
+    Some((num[..digits].parse().ok()?, 5 + digits + 1))
+}
+
+/// The vector registers `code` names as c->v[N].
+fn vregs_named(code: &str) -> Regs {
+    let mut set = 0;
+    let mut rest = code;
+    while let Some(i) = rest.find("c->v[") {
+        if let Some((r, _)) = vreg_at(&rest[i..]) {
+            set |= 1 << r;
+        }
+        rest = &rest[i + 5..];
+    }
+    set
+}
+
+/// The vector-register locals C code reads and writes: `gvN = ...` writes, a pointer to one (a lane or view of it)
+/// reads and writes, any other use reads.
+fn vuses(code: &str) -> (Regs, Regs) {
+    let (mut reads, mut writes) = (0, 0);
+    let b = code.as_bytes();
+    let mut i = 0;
+    while let Some(j) = code[i..].find("gv").map(|j| i + j) {
+        let ident = |k: usize| k < b.len() && (b[k].is_ascii_alphanumeric() || b[k] == b'_');
+        let d = b[j + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if (j > 0 && ident(j - 1)) || d == 0 || ident(j + 2 + d) {
+            i = j + 2;
+            continue;
+        }
+        let r: u32 = code[j + 2..j + 2 + d].parse().unwrap();
+        let rest = code[j + 2 + d..].trim_start();
+        if j > 0 && b[j - 1] == b'&' {
+            // A view of it (a lane, a narrower type): written when assigned to, keeping its other bytes.
+            reads |= 1 << r;
+            let mut view = rest.trim_start_matches(')').trim_start();
+            // A lane: "[N]".
+            if let Some(lane) = view.strip_prefix('[') {
+                view = lane.split_once(']').map_or("", |(_, v)| v).trim_start_matches(')').trim_start();
+            }
+            let compound = ["+=", "-=", "|=", "&=", "^=", "<<=", ">>=", "*="].iter().any(|op| view.starts_with(op));
+            if compound || (view.starts_with('=') && !view.starts_with("==")) {
+                writes |= 1 << r;
+            }
+        } else if rest.starts_with('=') && !rest.starts_with("==") {
+            writes |= 1 << r;
+        } else {
+            reads |= 1 << r;
+        }
+        i = j + 2 + d;
+    }
+    (reads, writes)
+}
+
+/// Vector registers a function keeps in locals: its most referenced ones (x86 has 16 vector registers).
+const KEPT_V: usize = 8;
+
+/// keep_registers for the vector registers (u128 locals gv0..gv31), run first: it stores and loads around the SPILL and
+/// RELOAD markers (leaving them to keep_registers) and around each line calling a V_HELPERS helper, and never keeps a
+/// register such a line names itself. Returns the registers kept and those to load at entry.
+fn keep_vregs(lines: &mut [Line]) -> (Regs, Regs) {
+    for l in lines.iter_mut() {
+        if l.code.contains('V') || l.code.contains("FP_SET") {
+            l.code = expand_vmacros(&l.code);
+        }
+    }
+    let sync: Vec<bool> = lines
+        .iter()
+        .map(|l| V_HELPERS.iter().any(|h| l.code.match_indices(h).any(|(i, _)| l.code[i + h.len()..].starts_with("(c")))
+            || VMACROS.iter().any(|(m, _)| l.code.contains(&format!("{m}("))))
+        .collect();
+    let mut count = [0usize; 32];
+    let mut banned: Regs = 0;
+    for (l, &s) in lines.iter().zip(&sync) {
+        let mut rest = l.code.as_str();
+        while let Some(i) = rest.find("c->v[") {
+            if let Some((r, _)) = vreg_at(&rest[i..]) {
+                count[r as usize] += 1;
+            }
+            rest = &rest[i + 5..];
+        }
+        if s {
+            banned |= vregs_named(&l.code);
+        }
+    }
+    let mut order: Vec<u32> = (0..32).filter(|&r| count[r as usize] > 0 && banned & (1 << r) == 0).collect();
+    order.sort_by_key(|&r| (std::cmp::Reverse(count[r as usize]), r));
+    let kept: Regs = order.iter().take(KEPT_V).fold(0, |acc, &r| acc | 1 << r);
+    if kept == 0 {
+        return (0, 0);
+    }
+    for l in lines.iter_mut() {
+        let mut out = String::with_capacity(l.code.len());
+        let mut rest = l.code.as_str();
+        while let Some(i) = rest.find("c->v[") {
+            out.push_str(&rest[..i]);
+            match vreg_at(&rest[i..]) {
+                Some((r, len)) if kept & (1 << r) != 0 => {
+                    let _ = write!(out, "gv{r}");
+                    rest = &rest[i + len..];
+                }
+                _ => {
+                    out.push_str("c->v[");
+                    rest = &rest[i + 5..];
+                }
+            }
+        }
+        out.push_str(rest);
+        l.code = out;
+    }
+    let n = lines.len();
+    let at: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut pre: Vec<(Regs, Regs)> = Vec::with_capacity(n);
+    for (i, l) in lines.iter().enumerate() {
+        let mut s = Vec::new();
+        let mut rest = l.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            let hex: String = rest[j + 7..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Some(&t) = u64::from_str_radix(&hex, 16).ok().and_then(|a| at.get(&a)) {
+                s.push(t);
+            }
+            rest = &rest[j + 7..];
+        }
+        if l.next && i + 1 < n {
+            s.push(i + 1);
+        }
+        succ.push(s);
+        // A helper line names no kept register: its stores come before it.
+        let head = if sync[i] { "" } else { l.code.find("SPILL").map_or(l.code.as_str(), |j| &l.code[..j]) };
+        pre.push(vuses(head));
+    }
+    let spills: Vec<bool> = lines.iter().zip(&sync).map(|(l, &s)| s || l.code.contains("SPILL")).collect();
+    let reloads: Vec<bool> = lines.iter().zip(&sync).map(|(l, &s)| s || l.code.contains("RELOAD")).collect();
+    let mut dirty_in = vec![0 as Regs; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            let out = if reloads[i] { 0 } else { dirty_in[i] | pre[i].1 };
+            for &t in &succ[i] {
+                if dirty_in[t] | out != dirty_in[t] {
+                    dirty_in[t] |= out;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut live_in = vec![0 as Regs; n];
+    let mut live_out = vec![0 as Regs; n];
+    changed = true;
+    while changed {
+        changed = false;
+        for i in (0..n).rev() {
+            let out = succ[i].iter().fold(0, |acc, &t| acc | live_in[t]);
+            let (r, w) = pre[i];
+            let spilled = if spills[i] { dirty_in[i] & !w } else { 0 };
+            let after = if reloads[i] { 0 } else { out & !w };
+            let inn = r | spilled | after;
+            if inn != live_in[i] || out != live_out[i] {
+                live_in[i] = inn;
+                live_out[i] = out;
+                changed = true;
+            }
+        }
+    }
+    let regs = |set: Regs| (0..32).filter(move |r| set & (1 << r) != 0);
+    for (i, l) in lines.iter_mut().enumerate() {
+        let mut st = String::new();
+        if spills[i] {
+            for r in regs(dirty_in[i] | pre[i].1) {
+                let _ = write!(st, "c->v[{r}] = gv{r}; ");
+            }
+        }
+        let mut ld = String::new();
+        if reloads[i] {
+            for r in regs(live_out[i]) {
+                let _ = write!(ld, "gv{r} = c->v[{r}]; ");
+            }
+        }
+        if sync[i] {
+            l.code = format!("{st}{} {ld}", l.code);
+        } else {
+            if !st.is_empty() {
+                l.code = l.code.replace("SPILL ", &format!("{st}SPILL "));
+            }
+            if !ld.is_empty() {
+                l.code = l.code.replace("RELOAD ", &format!("RELOAD {ld}"));
+            }
+        }
+    }
+    (kept, live_in.first().copied().unwrap_or(0))
+}
+
 /// Keeps the function's most referenced registers in locals, and returns them and those to load at entry. Guest memory
 /// is accessed through may_alias pointers, so clang must assume every guest store may change a register in the Cpu and
 /// load it again before its next use; locals stay in host registers. The Cpu holds them where code outside the function
@@ -769,7 +1026,9 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
                 format!("c->x[30] = {ra}; SPILL {}(c); RELOAD RT_RETURNED(c, {ra})", fname(*t))
             }
             Insn::Bl(t) => format!("c->x[30] = {ra}; c->pc = {}; SPILL rt_dispatch(c); RELOAD RT_RETURNED(c, {ra})", hx(*t)),
-            Insn::Blr(target) => format!("c->pc = {target}; c->x[30] = {ra}; SPILL rt_dispatch(c); RELOAD RT_RETURNED(c, {ra})"),
+            Insn::Blr(target) => format!(
+                "c->pc = {target}; c->x[30] = {ra}; SPILL {{ GuestFn rt_f = rt_hit(c->pc); if (rt_f) rt_f(c); else rt_dispatch(c); }} RELOAD RT_RETURNED(c, {ra})"
+            ),
             Insn::Br(target) => match s.tables.get(&a) {
                 Some(Table::Cases(targets)) => {
                     let mut cases = String::new();
@@ -792,8 +1051,16 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
         lines.push(Line { label: None, code, next: false });
     }
     optimize_flags(&mut lines);
+    let (vkept, ventry_live) = keep_vregs(&mut lines);
     let (kept, entry_live) = keep_registers(&mut lines);
     let _ = write!(out, "RT_FN void {}(Cpu *c) {{\n   ", fname(entry));
+    for r in (0..32).filter(|r| vkept & (1 << r) != 0) {
+        if ventry_live & (1 << r) != 0 {
+            let _ = write!(out, " u128 gv{r} = c->v[{r}];");
+        } else {
+            let _ = write!(out, " u128 gv{r};");
+        }
+    }
     for r in (0..32).filter(|r| kept & (1 << r) != 0) {
         let (name, field) = if r == 31 { ("gsp".to_string(), "c->sp".to_string()) } else { (format!("gx{r}"), format!("c->x[{r}]")) };
         if entry_live & (1 << r) != 0 {
@@ -925,6 +1192,104 @@ mod tests {
         assert!(body.contains("uint64_t gx0; uint64_t gx19; uint64_t gx29 = c->x[29];"));
         assert!(body.contains("case 0x100238ull: goto L_100238;"));
         assert!(body.contains("goto L_100104;")); // the loop's back edge
+    }
+
+    /// `body` with each identifier in `params` replaced by $1..
+    fn subst_params(body: &str, params: &[&str]) -> String {
+        let mut out = String::new();
+        let mut word = String::new();
+        for ch in body.chars().chain(std::iter::once(' ')) {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                word.push(ch);
+                continue;
+            }
+            match params.iter().position(|p| *p == word) {
+                Some(k) => out.push_str(&format!("${}", k + 1)),
+                None => out.push_str(&word),
+            }
+            word.clear();
+            out.push(ch);
+        }
+        out.pop();
+        out
+    }
+
+    #[test]
+    fn vector_macros_and_helpers_match_simd_h() {
+        let h = include_str!("../runtime/simd.h");
+        // Every macro of the runtime naming a vector register (itself or through another) is in VMACROS.
+        let mut names: BTreeSet<&str> = BTreeSet::new();
+        let defs: Vec<&str> = [h, include_str!("../runtime/simd_fp.h"), include_str!("../runtime/cpu.h")]
+            .iter()
+            .flat_map(|f| f.lines())
+            .filter(|l| l.starts_with("#define "))
+            .collect();
+        loop {
+            let before = names.len();
+            for d in &defs {
+                let name = d[8..].split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap();
+                if d.contains("c->v[") || names.iter().any(|n| d[8 + name.len()..].contains(&format!("{n}("))) {
+                    names.insert(name);
+                }
+            }
+            if names.len() == before {
+                break;
+            }
+        }
+        assert_eq!(names, VMACROS.iter().map(|(n, _)| *n).collect::<BTreeSet<_>>());
+        // VMACROS: each as simd.h defines it, its parameters as $1..
+        for (name, body) in VMACROS {
+            let def = h.lines().find(|l| l.starts_with(&format!("#define {name}("))).unwrap_or_else(|| panic!("{name}"));
+            let (params, rest) = def[8 + name.len() + 1..].split_once(')').unwrap();
+            let mut want = rest.trim().to_string();
+            want = subst_params(&want, &params.split(',').map(str::trim).collect::<Vec<_>>());
+            assert_eq!(want, body, "{name}");
+        }
+        // V_HELPERS: the functions taking the Cpu that read or write c->v (fp_op_s / fp_op_d are not emitted).
+        let mut touch = BTreeSet::new();
+        let mut cur: Option<(String, bool)> = None;
+        for l in h.lines() {
+            if (l.starts_with("SI ") || l.starts_with("SN ")) && l.contains("(Cpu *c") {
+                let name = l[..l.find('(').unwrap()].rsplit(' ').next().unwrap().trim_start_matches('*').to_string();
+                cur = Some((name, false));
+            }
+            if let Some((_, uses)) = cur.as_mut() {
+                *uses |= ["c->v[", "VSF", "VS8(", "VS16(", "VS32(", "VS64(", "VREG(", "VQ(", "VW(", "FP_SET", "VHI64("].iter().any(|m| l.contains(m));
+            }
+            if l == "}" || (l.ends_with('}') && cur.is_some() && !l.starts_with(' ')) {
+                if let Some((name, true)) = cur.take() {
+                    touch.insert(name);
+                }
+                cur = None;
+            }
+        }
+        touch.remove("fp_op_s");
+        touch.remove("fp_op_d");
+        assert_eq!(touch, V_HELPERS.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
+    }
+
+    #[test]
+    fn vector_lane_writes() {
+        assert_eq!(vuses("((sa32 *)&gv7)[2] = x;"), (1 << 7, 1 << 7));
+        assert_eq!(vuses("((sa32 *)&gv7)[0] |= x;"), (1 << 7, 1 << 7));
+        assert_eq!(vuses("(*(saf32 *)&gv7) = x;"), (1 << 7, 1 << 7));
+        assert_eq!(vuses("y = ((sa32 *)&gv7)[3] == x;"), (1 << 7, 0));
+        assert_eq!(vuses("y = (*(saf32 *)&gv7);"), (1 << 7, 0));
+        assert_eq!(vuses("gv7 = gv8;"), (1 << 8, 1 << 7));
+    }
+
+    #[test]
+    fn vector_registers_in_locals() {
+        // 0x1000: fmul s0, s1, s2; fadd s0, s0, s3; ret
+        let mut img = Vec::new();
+        for w in [0x1e220820u32, 0x1e232800, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x100c, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert!(body.contains("u128 gv0; u128 gv1 = c->v[1]; u128 gv2 = c->v[2]; u128 gv3 = c->v[3];"), "{body}");
+        assert!(body.contains("(gv0 = fb_s(op_s(c, FOP_ADD, (*(saf32 *)&gv0), (*(saf32 *)&gv3), 0)))"), "{body}");
+        assert!(body.contains("c->v[0] = gv0; return;"), "{body}");
     }
 
     #[test]

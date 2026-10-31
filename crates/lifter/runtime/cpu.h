@@ -62,6 +62,17 @@ typedef void (RT_CC *GuestFn)(Cpu *);
 
 // ---- provided by the runtime
 RT_CC void rt_dispatch(Cpu *c);  // continue at c->pc
+
+// The dispatcher's per-thread cache of lifted functions by address (rt.c), probed at each indirect call and jump: the
+// host branch to the function is then at that site, which the CPU predicts per site (all of them through rt_dispatch's
+// one branch mispredicted constantly). An entry of an HLE target is kept as pc | 1 and so never hits here.
+#define RT_CACHE_SIZE 4096
+typedef struct { uint64_t pc; GuestFn fn; } RtCacheEntry;
+extern __thread RtCacheEntry rt_cache[RT_CACHE_SIZE];
+static inline GuestFn rt_hit(uint64_t pc) {
+    const RtCacheEntry *e = &rt_cache[(pc >> 2) & (RT_CACHE_SIZE - 1)];
+    return e->pc == pc ? e->fn : 0; // fn is null in an unused entry (pc 0)
+}
 void rt_svc(Cpu *c, uint32_t imm, uint64_t pc);
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) __attribute__((noreturn));
 void rt_udf(Cpu *c, uint64_t pc) __attribute__((noreturn));

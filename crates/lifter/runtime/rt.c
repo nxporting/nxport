@@ -55,8 +55,8 @@ static GuestFn lookup(uint64_t pc) {
 
 // A direct-mapped cache in front of the lookup, per thread (the tables do not change once guest code runs). HLE
 // targets are kept too (a binding never changes once guest code can reach it), as pc | 1 with the host's handle.
-#define CACHE_SIZE 4096
-static __thread struct { uint64_t pc; GuestFn fn; } cache[CACHE_SIZE];
+
+__thread RtCacheEntry rt_cache[RT_CACHE_SIZE];
 
 #ifndef RT_CC
 #define RT_CC
@@ -68,13 +68,13 @@ static RT_CC __attribute__((noinline)) void dispatch_miss(Cpu *c);
 void rt_dispatch(Cpu *c) {
     uint64_t pc = c->pc;
     if (pc == RT_RETURN_TO_HOST) return;
-    unsigned h = (unsigned)(pc >> 2) & (CACHE_SIZE - 1);
+    unsigned h = (unsigned)(pc >> 2) & (RT_CACHE_SIZE - 1);
     // A kept pc always has its function (pc 0 is never looked up).
-    if (__builtin_expect(cache[h].pc == pc, 1)) {
-        __attribute__((musttail)) return cache[h].fn(c);
+    if (__builtin_expect(rt_cache[h].pc == pc, 1)) {
+        __attribute__((musttail)) return rt_cache[h].fn(c);
     }
-    if (cache[h].pc == (pc | 1)) {
-        host.call_hle((void *)cache[h].fn, c);
+    if (rt_cache[h].pc == (pc | 1)) {
+        host.call_hle((void *)rt_cache[h].fn, c);
         return;
     }
     __attribute__((musttail)) return dispatch_miss(c);
@@ -82,17 +82,17 @@ void rt_dispatch(Cpu *c) {
 
 static RT_CC void dispatch_miss(Cpu *c) {
     uint64_t pc = c->pc;
-    unsigned h = (unsigned)(pc >> 2) & (CACHE_SIZE - 1);
+    unsigned h = (unsigned)(pc >> 2) & (RT_CACHE_SIZE - 1);
     GuestFn f = lookup(pc);
     if (f) {
-        cache[h].pc = pc;
-        cache[h].fn = f;
+        rt_cache[h].pc = pc;
+        rt_cache[h].fn = f;
         __attribute__((musttail)) return f(c);
     }
     void *hle = host.resolve_hle(pc);
     if (hle) {
-        cache[h].pc = pc | 1;
-        cache[h].fn = (GuestFn)hle;
+        rt_cache[h].pc = pc | 1;
+        rt_cache[h].fn = (GuestFn)hle;
         host.call_hle(hle, c);
         return;
     }
