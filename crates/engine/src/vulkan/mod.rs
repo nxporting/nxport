@@ -117,8 +117,14 @@ impl Backend for Vulkan {
         let guard_on = crate::gpu::report_guard::mode() != crate::settings::ReportGuard::Off;
         // Every list the submit reaches, fetched under one lock (a submit reaches ~3,000; one lock each was ~5% of
         // recording) for the executor too.
-        let mut stack = Vec::new();
-        let mut submit_lists = rustc_hash::FxHashMap::default();
+        // The map and stack of the submit before, kept (growing a fresh map to ~3,000 entries for every submit was ~1% of
+        // recording).
+        thread_local! {
+            static SCRATCH: std::cell::RefCell<(Vec<u64>, rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>)> =
+                std::cell::RefCell::new(Default::default());
+        }
+        let (mut stack, mut submit_lists) = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        submit_lists.clear();
         let mut samples: Vec<usize> = Vec::new();
         crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
             if guard_on {
@@ -149,6 +155,9 @@ impl Backend for Vulkan {
                 rt_writebacks: Vec::new(),
             }),
         }
+        // Ctx::submit handed back the map it emptied.
+        submit_lists.clear();
+        SCRATCH.with(|s| *s.borrow_mut() = (stack, submit_lists));
         self.serial.store(serial, Ordering::Release);
     }
 

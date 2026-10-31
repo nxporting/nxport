@@ -111,6 +111,24 @@ pub(super) struct DrawMemo {
     push: bool,
 }
 
+/// Uniform buffer slots per stage with a memo of their last binding (Ctx::ubo_slot_memo).
+pub(super) const UBO_MEMO: usize = 16;
+
+/// Bound texture slots per stage with a memo of their last resolution (Ctx::tex_memo).
+pub(super) const TEX_MEMO: usize = 48;
+
+/// What the handle bound at a texture slot resolved to (texture_binding), while Ctx::bindings holds it (`gen`:
+/// Ctx::bindings_gen then).
+#[derive(Clone, Copy, Default)]
+pub(super) struct TexMemo {
+    pub(super) gen: u64,
+    pub(super) handle: u64,
+    pub(super) declared: vk::ImageViewType,
+    pub(super) image: vk::Image,
+    pub(super) view: vk::ImageView,
+    pub(super) sampler: vk::Sampler,
+}
+
 /// Draw states kept (Ctx::draw_memos) before they are dropped and worked out again.
 const DRAW_MEMOS: usize = 8192;
 
@@ -634,16 +652,16 @@ impl Ctx {
         };
         // Compute stages also find their uniform buffers' descriptors here.
         if stage == 5 {
-            for (&(s, i), &(addr, size)) in &self.st.uniforms {
-                if s == 5 && (0..14).contains(&i) {
+            for i in 0..14 {
+                if let Some((addr, size)) = self.st.uniforms.get(5, i) {
                     let o = 0x210 + 0x10 * i as usize;
                     c[o..o + 8].copy_from_slice(&addr.to_le_bytes());
                     c[o + 8..o + 12].copy_from_slice(&(size as u32).to_le_bytes());
                 }
             }
         }
-        for (&(s, i), &(addr, size)) in &self.st.storage {
-            if s == stage && (0..16).contains(&i) {
+        for i in 0..16 {
+            if let Some((addr, size)) = self.st.storage.get(stage, i) {
                 let o = base + 0x10 * i as usize;
                 c[o..o + 8].copy_from_slice(&addr.to_le_bytes());
                 c[o + 8..o + 12].copy_from_slice(&(size as u32).to_le_bytes());
@@ -667,7 +685,7 @@ impl Ctx {
                 (size > 0).then(|| ((data + off) as *const u8, size))
             }
             n if n >= 3 => {
-                let &(addr, size) = self.st.uniforms.get(&(stage, n - 3))?;
+                let (addr, size) = self.st.uniforms.get(stage, n - 3)?;
                 let a = crate::nvn::api::translate_virtual(addr as usize);
                 (a > 0x10000 && size > 0).then(|| (a as *const u8, size.min(0x10000)))
             }
@@ -758,9 +776,22 @@ impl Ctx {
                     // GPU reads it after those writes, in queue order; a copy now could catch them half done).
                     let mut memo_key = None;
                     if *slot >= 3 {
-                        if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
+                        if let Some((addr, size)) = self.st.uniforms.get(stage, slot - 3) {
                             let k = (addr, size, b.extent, self.ubo_epoch);
+                            // The slot's last binding first (most draws read a buffer an earlier draw bound there).
+                            let at = usize::try_from(stage).ok().filter(|&s| s < 6).zip(usize::try_from(slot - 3).ok().filter(|&i| i < UBO_MEMO));
+                            let memo = at.map(|(s, i)| self.ubo_slot_memo[s][i]).filter(|m| m.0 == self.ubo_memo_gen && m.1 == k);
+                            if let Some(m) = memo {
+                                if let Some((buf, off, len, bound)) = m.2 {
+                                    limits.push((b.binding - base, bound));
+                                    buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
+                                }
+                                continue;
+                            }
                             if let Some(x) = self.ubo_memo.get(&k) {
+                                if let Some((s, i)) = at {
+                                    self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, *x);
+                                }
                                 if let Some((buf, off, len, bound)) = *x {
                                     limits.push((b.binding - base, bound));
                                     buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
@@ -837,6 +868,11 @@ impl Ctx {
                     };
                     if let Some(k) = memo_key {
                         self.ubo_memo.insert(k, x);
+                        if let (Ok(s), Ok(i)) = (usize::try_from(stage), usize::try_from(slot - 3)) {
+                            if s < 6 && i < UBO_MEMO {
+                                self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, x);
+                            }
+                        }
                     }
                     if let Some((buf, off, len, bound)) = x {
                         limits.push((b.binding - base, bound));
@@ -875,9 +911,11 @@ impl Ctx {
                 Feed::Texture { cbuf_slot, handle_index, view, count, buffer, slot } => {
                     let mut infos: smallvec::SmallVec<[vk::DescriptorImageInfo; 1]> = Default::default();
                     for j in 0..*count {
+                        let mut at = None;
                         let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                             let k = (handle_index - 8) / 2 + j as i32;
-                            self.st.textures.get(&(stage, k)).copied()
+                            at = Some((stage, k));
+                            self.st.textures.get(stage, k)
                         } else {
                             cbuf(self, *cbuf_slot).and_then(|c| {
                                 let o = (*handle_index as usize + j as usize) * 4;
@@ -888,7 +926,7 @@ impl Ctx {
                             self.warn("buffer textures are not implemented");
                             (vk::ImageView::null(), self.default_sampler)
                         } else {
-                            self.texture_binding(handle, *view)
+                            self.texture_binding(handle, *view, at)
                         };
                         let s = match slot {
                             Some(first) => {
@@ -925,7 +963,7 @@ impl Ctx {
                 Feed::Image { cbuf_slot, handle_index, view, buffer } => {
                     let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                         let k = (handle_index - 8) / 2;
-                        self.st.images.get(&(stage, k)).copied()
+                        self.st.images.get(stage, k)
                     } else {
                         None
                     };
@@ -982,13 +1020,25 @@ impl Ctx {
         Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 })
     }
 
-    unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (vk::ImageView, vk::Sampler) {
+    /// `at`: the bound texture slot (stage, index) it was read from, whose last resolution (Ctx::tex_memo) is tried first.
+    unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
+        let in_pass = |me: &Self, img: vk::Image| me.pass.as_ref().is_some_and(|p| p.images.contains(&img));
+        let memo = at.and_then(|(s, k)| Some((usize::try_from(s).ok().filter(|&s| s < 6)?, usize::try_from(k).ok().filter(|&k| k < TEX_MEMO)?)));
+        if let Some((s, k)) = memo {
+            let m = self.tex_memo[s][k];
+            if m.gen == self.bindings_gen && m.handle == h && m.declared == declared && !in_pass(self, m.image) {
+                return (m.view, m.sampler);
+            }
+        }
         // Pools change between submits only (registration is CPU work): a handle resolves the same way within one,
         // except where its image is an attachment of the current pass (render-target feedback).
         let key = (h, declared);
         if let Some(&(img, v, s)) = self.bindings.get(&key) {
-            if !self.pass.as_ref().is_some_and(|p| p.images.contains(&img)) {
+            if !in_pass(self, img) {
+                if let Some((ms, mk)) = memo {
+                    self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: h, declared, image: img, view: v, sampler: s };
+                }
                 return (v, s);
             }
         }
@@ -1011,6 +1061,9 @@ impl Ctx {
         let r = (view.unwrap_or(vk::ImageView::null()), sampler.unwrap_or(self.default_sampler));
         if !feedback {
             self.bindings.insert(key, (image, r.0, r.1));
+            if let Some((ms, mk)) = memo {
+                self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: h, declared, image, view: r.0, sampler: r.1 };
+            }
         }
         r
     }

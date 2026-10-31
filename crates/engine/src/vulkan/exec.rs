@@ -23,6 +23,37 @@ mod draw;
 mod record;
 pub(super) use draw::{desc_streams, fragment_graphics_state, vertex_graphics_state, vertex_streams};
 
+/// Bindings by (NVN stage, index): the six stages' first N indices in place (the commands set and the draws read them
+/// several times per draw), others in a map.
+struct Slots<T: Copy, const N: usize> {
+    fixed: [[Option<T>; N]; 6],
+    rest: HashMap<(i32, i32), T>,
+}
+
+impl<T: Copy, const N: usize> Default for Slots<T, N> {
+    fn default() -> Self {
+        Slots { fixed: [[None; N]; 6], rest: HashMap::default() }
+    }
+}
+
+impl<T: Copy, const N: usize> Slots<T, N> {
+    fn get(&self, stage: i32, index: i32) -> Option<T> {
+        match self.fixed.get(stage as usize).and_then(|s| s.get(index as usize)) {
+            Some(v) => *v,
+            None => self.rest.get(&(stage, index)).copied(),
+        }
+    }
+
+    fn set(&mut self, stage: i32, index: i32, v: T) {
+        match self.fixed.get_mut(stage as usize).and_then(|s| s.get_mut(index as usize)) {
+            Some(x) => *x = Some(v),
+            None => {
+                self.rest.insert((stage, index), v);
+            }
+        }
+    }
+}
+
 /// NVN state the commands set (it persists across submits, as the queue's does).
 #[derive(Default)]
 struct Nvn {
@@ -45,10 +76,10 @@ struct Nvn {
     vertex_buffers: [(u64, usize); 16],
     attribs: AttribState,
     streams: Vec<u64>,
-    uniforms: HashMap<(i32, i32), (u64, usize)>,
-    storage: HashMap<(i32, i32), (u64, usize)>,
-    textures: HashMap<(i32, i32), u64>,
-    images: HashMap<(i32, i32), u64>,
+    uniforms: Slots<(u64, usize), 16>,
+    storage: Slots<(u64, usize), 16>,
+    textures: Slots<u64, 48>,
+    images: Slots<u64, 16>,
     render_disabled: bool,
     prim_restart: Option<u32>,
     depth_clamp: bool,
@@ -155,6 +186,10 @@ pub struct Ctx {
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
+    /// Advanced when `bindings` is emptied; the bound texture slots' last resolutions (draw.rs texture_binding) are valid
+    /// at the generation they were made in.
+    bindings_gen: u64,
+    tex_memo: Box<[[draw::TexMemo; draw::TEX_MEMO]; 6]>,
     /// Repacked vertex streams kept across submits (draw.rs cached_repack), by (memory, layout).
     pub(super) repack_cache: rustc_hash::FxHashMap<u64, draw::RepackedStream>,
     repack_swept: u64,
@@ -200,6 +235,10 @@ pub struct Ctx {
     /// Uniform buffer bindings this submit copied, by (guest address, bound size, extent read, epoch): (buffer, offset,
     /// range, bound size). Cleared when the submit's commands add a range they write (it may then be bound in place).
     pub(super) ubo_memo: rustc_hash::FxHashMap<(u64, usize, i32, u64), Option<(vk::Buffer, u64, u64, usize)>>,
+    /// Advanced when `ubo_memo` is emptied; per uniform buffer slot, its last entry (generation, key, value).
+    ubo_memo_gen: u64,
+    #[allow(clippy::type_complexity)]
+    ubo_slot_memo: Box<[[(u64, (u64, usize, i32, u64), Option<(vk::Buffer, u64, u64, usize)>); draw::UBO_MEMO]; 6]>,
     /// Vertex and index data found in the device copies (vcache.rs) in this epoch is used again unchecked; a new one
     /// begins with each submit and when the submit's commands add a range they write.
     pub(super) cached_epoch: u64,
@@ -224,6 +263,9 @@ pub struct Ctx {
     pub(super) cmd_writes: Ranges,
     /// The submit's command lists by handle (fetched once by the pre-scan).
     lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
+    /// The lists in the order the pre-scan visited them, which run_list follows (null: not found), and the next one.
+    list_order: Vec<*const crate::nvn::api::RecordedCommandList>,
+    list_at: usize,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -376,6 +418,7 @@ impl Ctx {
         if !self.gpu_dirty.covers(a, b) {
             self.gpu_dirty.add(a, b);
             self.ubo_memo.clear();
+            self.ubo_memo_gen += 1;
             self.cached_epoch += 1;
         }
     }
@@ -586,6 +629,10 @@ impl Ctx {
             zeros,
             repacked: Default::default(),
             bindings: Default::default(),
+            bindings_gen: 1,
+            ubo_memo_gen: 1,
+            ubo_slot_memo: Box::new([[(0, (0, 0, 0, 0), None); draw::UBO_MEMO]; 6]),
+            tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
             max_indices: Default::default(),
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
@@ -622,6 +669,8 @@ impl Ctx {
             op_index: 0,
             cmd_writes: Ranges::default(),
             lists: Default::default(),
+            list_order: Vec::new(),
+            list_at: 0,
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
             pool_tx,
@@ -718,11 +767,15 @@ impl Ctx {
         let mut n = 0;
         let mut writes = std::mem::take(&mut self.cmd_writes);
         writes.clear();
+        let mut order = std::mem::take(&mut self.list_order);
+        order.clear();
         for &h in lists {
-            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.lists);
+            Self::scan_counters(h, 0, &mut n, &mut upcoming, &mut writes, &mut self.lists, &mut order);
         }
         self.cmd_writes = writes;
         self.occl.upcoming = upcoming;
+        self.list_order = order;
+        self.list_at = 0;
         self.occl.cursor = 0;
         self.op_index = 0;
         for &h in lists {
@@ -830,6 +883,7 @@ impl Ctx {
         self.tex.settle();
         self.repacked.clear();
         self.bindings.clear();
+        self.bindings_gen += 1;
         self.max_indices.clear();
         self.lists.clear();
         self.vb_memo.clear();
@@ -837,6 +891,7 @@ impl Ctx {
         self.restart_memo.clear();
         self.ubo_copies.clear();
         self.ubo_memo.clear();
+        self.ubo_memo_gen += 1;
         self.driver_copies.clear();
         self.cached_epoch += 1;
     }
@@ -1042,16 +1097,23 @@ impl Ctx {
         out: &mut Vec<(u64, bool)>,
         writes: &mut Ranges,
         lists: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
+        order: &mut Vec<*const crate::nvn::api::RecordedCommandList>,
     ) {
         use crate::nvn::api::ListEvent;
-        let list = match lists.get(&handle) {
-            Some(l) => l.clone(),
+        // Held in `lists` until the submit ended.
+        let list: &crate::nvn::api::RecordedCommandList = match lists.get(&handle) {
+            Some(l) => &*std::sync::Arc::as_ptr(l),
             None => {
-                let Some(l) = crate::nvn::api::command_list(handle, depth > 0) else { return };
-                lists.insert(handle, l.clone());
-                l
+                let Some(l) = crate::nvn::api::command_list(handle, depth > 0) else {
+                    order.push(std::ptr::null());
+                    return;
+                };
+                let p = std::sync::Arc::as_ptr(&l);
+                lists.insert(handle, l);
+                &*p
             }
         };
+        order.push(list);
         let ev = list.events();
         let start = *index;
         // Commands of the lists it calls, before the current event.
@@ -1069,7 +1131,7 @@ impl Ctx {
                 ListEvent::Call(hs) => {
                     *index = pos;
                     for &h in hs.iter() {
-                        Self::scan_counters(h, depth + 1, index, out, writes, lists);
+                        Self::scan_counters(h, depth + 1, index, out, writes, lists, order);
                     }
                     called = *index - start - at;
                 }
@@ -1079,11 +1141,13 @@ impl Ctx {
     }
 
     unsafe fn run_list(&mut self, handle: u64, depth: u32) {
-        // Fetched before the pre-scan: self.lists holds it until the submit ended (nothing removes lists before), so it
-        // is borrowed rather than counted again for each of a submit's ~3,000 lists.
+        // The pre-scan visited the lists in this order: the next one is this one (held in self.lists until the submit
+        // ended, so it is borrowed rather than counted again for each of a submit's ~7,500 runs, nor looked up again).
+        let next = self.list_order.get(self.list_at).copied().unwrap_or(std::ptr::null());
+        self.list_at += 1;
         let held;
-        let list: &crate::nvn::api::RecordedCommandList = match self.lists.get(&handle) {
-            Some(l) => &*std::sync::Arc::as_ptr(l),
+        let list: &crate::nvn::api::RecordedCommandList = match next.as_ref() {
+            Some(l) => l,
             None => match crate::nvn::api::command_list(handle, depth > 0) {
                 Some(l) => {
                     held = l;
@@ -1223,16 +1287,16 @@ impl Ctx {
                 }
             }
             Cmd::BindTexture { stage, index, handle } => {
-                self.st.textures.insert((*stage, *index), *handle);
+                self.st.textures.set(*stage, *index, *handle);
             }
             Cmd::BindImage { stage, index, handle } => {
-                self.st.images.insert((*stage, *index), *handle);
+                self.st.images.set(*stage, *index, *handle);
             }
             Cmd::BindTexturesDeferred { stage, first, count, handles } => {
                 let a = crate::nvn::api::translate_virtual(*handles as usize);
                 for i in 0..(*count).clamp(0, 32) {
                     let h = if a > 0x10000 { std::ptr::read_unaligned((a as *const u64).add(i as usize)) } else { 0 };
-                    self.st.textures.insert((*stage, *first + i), h);
+                    self.st.textures.set(*stage, *first + i, h);
                 }
             }
             Cmd::SetRenderEnable(e) => self.st.render_disabled = !*e,
@@ -1253,11 +1317,11 @@ impl Ctx {
                 });
             }
             Cmd::BindUniformBuffer { stage, index, addr, size } => {
-                self.st.uniforms.insert((*stage, *index), (*addr, *size));
+                self.st.uniforms.set(*stage, *index, (*addr, *size));
                 self.uniform_gen += 1;
             }
             Cmd::BindStorageBuffer { stage, index, addr, size } => {
-                self.st.storage.insert((*stage, *index), (*addr, *size));
+                self.st.storage.set(*stage, *index, (*addr, *size));
                 self.storage_gen += 1;
             }
             Cmd::UpdateUniformBuffer { addr, offset, data } => {

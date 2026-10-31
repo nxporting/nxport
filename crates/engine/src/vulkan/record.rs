@@ -120,7 +120,7 @@ impl Recorder {
 
     /// An empty BindJob to fill (one vk-record handed back, else a new one).
     pub(super) fn job(&mut self) -> Box<BindJob> {
-        self.jobs.try_recv().unwrap_or_else(|_| {
+        let j = self.jobs.try_recv().unwrap_or_else(|_| {
             Box::new(BindJob {
                 w: DescWrites::default(),
                 point: vk::PipelineBindPoint::GRAPHICS,
@@ -128,7 +128,16 @@ impl Recorder {
                 set_layout: vk::DescriptorSetLayout::null(),
                 push: false,
             })
-        })
+        });
+        // Its memory was last in vk-record's cache: fetched for writing now, while the draw's descriptors are worked out.
+        #[cfg(target_arch = "x86_64")]
+        {
+            let p = &*j as *const BindJob as *const i8;
+            for o in (0..std::mem::size_of::<BindJob>()).step_by(64) {
+                unsafe { std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_ET0 }>(p.add(o)) };
+            }
+        }
+        j
     }
 
     /// The pools the submit allocated sets from (once vk-record ended its last command buffer).
