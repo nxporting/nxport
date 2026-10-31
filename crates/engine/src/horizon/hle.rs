@@ -3279,6 +3279,25 @@ fn light_event_new(initially_signaled: bool, clear_mode: i32) -> Arc<LightEventS
     })
 }
 
+/// Spins up to LIGHT_EVENT_SPIN for a signal before a wait blocks: TotK's job threads wait tens of thousands of times a
+/// second, mostly for tens of microseconds, about what a sleep and a wake-up cost on Windows.
+fn light_event_spin(state: &LightEventState) {
+    const LIGHT_EVENT_SPIN: std::time::Duration = std::time::Duration::from_micros(30);
+    let s0 = state.signals.load(std::sync::atomic::Ordering::Relaxed);
+    if state.signaled.try_lock().map_or(true, |g| *g) {
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    while state.signals.load(std::sync::atomic::Ordering::Relaxed) == s0 {
+        for _ in 0..32 {
+            std::hint::spin_loop();
+        }
+        if t0.elapsed() >= LIGHT_EVENT_SPIN {
+            return;
+        }
+    }
+}
+
 unsafe fn light_event_get(ev: *mut ()) -> Arc<LightEventState> {
     let key = ev as usize;
     let mut table = light_event_table().lock().unwrap();
@@ -3404,6 +3423,7 @@ pub fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Du
 pub unsafe extern "C" fn hle_nn_os_WaitLightEvent(ev: *mut ()) {
     let fp = crate::guest_reg!(x29);
     let state = light_event_get(ev);
+    light_event_spin(&state);
     let mut guard = state.signaled.lock().unwrap();
     let _blocked = if *guard {
         None
