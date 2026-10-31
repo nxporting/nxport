@@ -132,3 +132,34 @@ unsafe fn bind_texture_slots(p: &mut Port, w: usize, slots: u32, id: usize, samp
         }
     }
 }
+
+/// Material lists the draw path calls whose commands match a bind from the game's objects now: (same, different).
+pub(super) static LISTS: [std::sync::atomic::AtomicU64; 2] = [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+/// Verify: the material list at `handles` (recorded by main+0x7b3c80 for pass `pass`, slot `b`: the pass's program
+/// list called, then the bind) against the same from the game's objects now.
+pub(super) unsafe fn check_list(p: &Port, d: usize, w: usize, pass: usize, b: i32, handles: usize) {
+    use std::sync::atomic::Ordering;
+    let Some(recorded) = crate::nvn::api::list_texts(p.m.r64(handles) as u64) else { return };
+    let e = p.m.r64(d + 0x68) + pass * 0x60;
+    let mut q = Port::new(super::mem::Mem::predicting(), p.base, false);
+    let mut r = Ok(());
+    let mut now = crate::nvn::api::capture_dry_nested(|| r = bind(&mut q, d, w, e + 0x18, p.m.r64(e + 0x40), 0, b));
+    if r.is_err() {
+        return;
+    }
+    // main+0x7b3c80 calls the pass's program list ([e+0x28]+0x48 when its +0x50 bit 0) first.
+    let prog = p.m.r64(e + 0x28);
+    if prog != 0 && p.m.r8(prog + 0x50) & 1 != 0 {
+        now.insert(0, format!("nvnCommandBufferCallCommands CallCommands([{}])", p.m.r64(prog + 0x48)));
+    }
+    let k = if now == recorded { 0 } else { 1 };
+    if LISTS[k].fetch_add(1, Ordering::Relaxed) < 3 && k == 1 {
+        let i = (0..now.len().max(recorded.len())).find(|&i| now.get(i) != recorded.get(i)).unwrap_or(0);
+        println!(
+            "[model-draw] material list differs from its material at {i}: now {:?}, recorded {:?}",
+            now.get(i),
+            recorded.get(i)
+        );
+    }
+}

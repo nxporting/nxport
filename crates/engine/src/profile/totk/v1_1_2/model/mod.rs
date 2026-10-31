@@ -573,6 +573,10 @@ fn report() {
     if !dp.is_empty() {
         println!("[model-draw] dispatch targets reached: {dp}");
     }
+    let (ls, ld) = (material::LISTS[0].load(Ordering::Relaxed), material::LISTS[1].load(Ordering::Relaxed));
+    if ls + ld > 0 {
+        println!("[model-draw] material lists called: {} as their material binds now, {ld} differ", ls);
+    }
     let mn = MAT_CALLS.load(Ordering::Relaxed);
     if mn > 0 {
         let mut s = MAT_STOPS.lock().unwrap().clone();
