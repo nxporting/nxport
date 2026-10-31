@@ -1,8 +1,8 @@
 // The per-view instance renderer main+0xd7c1d8(this, slot, arg), reached through the per-view dispatch target
 // (main+0x2ad00a0 -> virtual +0x30). Instances of the drawable's component are culled once per frame, view and pass
 // into a per-worker bitset (a visible bit and a drawn bit per instance), then the visible ones of the model's LOD
-// kind draw (main+0xd7e090). Predicting only: applying lets the game draw until every path is ported (the
-// Degeneracy / Deformable paths, region lists, lazily created instance records are not).
+// kind draw (main+0xd7e090). Paths not ported (Degeneracy / Deformable, region lists) stop; so do an instance's first
+// draw, which creates its record and uniform data, and a texture still to be loaded: the game's own call does those.
 
 use super::draw::{Port, R};
 
@@ -163,8 +163,12 @@ struct Draw {
 /// it the same way): the next of the model's records (counter +0x110, array +0xf8, count +0xf0), filled by
 /// main+0xd7e8c4 with the instance's +0x20..0x30 and per texture set slot (+0x40c slots, LOD bit bytes at +0x410)
 /// the first set in the instance's chain (+0x38, next +0x18) that has the slot's LOD with a usable texture. Only what
-/// the draw reads is written (not the slots' texture coordinates, nor the instance's uniform data).
+/// the draw reads is written (not the slots' texture coordinates, nor the instance's uniform data). Applying: 0, the
+/// game's own call creates it.
 unsafe fn create_record(p: &mut Port, comp: usize, inst: usize) -> usize {
+    if !p.m.predict() {
+        return 0;
+    }
     let n = p.m.r32(comp + 0x110);
     p.m.w::<u32>(comp + 0x110, n.wrapping_add(1));
     if p.m.r32(comp + 0xf0) <= n {
@@ -179,6 +183,15 @@ unsafe fn create_record(p: &mut Port, comp: usize, inst: usize) -> usize {
     }
     p.m.w::<u64>(inst + 0x78, rec as u64);
     rec
+}
+
+/// The texture's descriptor (+8, then +8) once loaded (flags +0x13 bit 5 and +8 set); the game loads it first
+/// (main+0x242fe2c), which the port leaves to it.
+unsafe fn loaded(p: &Port, tex: usize) -> R<u64> {
+    if (p.m.r8(tex + 0x13) >> 5) & 1 == 0 || p.m.r64(tex + 8) == 0 {
+        return Err("per-view texture load");
+    }
+    Ok((p.m.r64(tex + 8) + 8) as u64)
 }
 
 /// main+0xd7e8c4's set for slot k: the first set in the instance's chain with the slot's LOD and a usable texture.
@@ -213,6 +226,9 @@ unsafe fn choose_set(p: &Port, comp: usize, inst: usize, k: usize) -> usize {
 /// instances (created first where missing, main+0x24b8774), in the order the pair's +0 kind (2 or 3: A first) gives.
 /// The pair's uniform data (main+0x24b8980) is not written.
 unsafe fn create_pair(p: &mut Port, comp: usize, e: usize) -> usize {
+    if !p.m.predict() {
+        return 0;
+    }
     let n = p.m.r32(comp + 0x114);
     p.m.w::<u32>(comp + 0x114, n.wrapping_add(1));
     let rec = if p.m.r32(comp + 0x100) > n { (p.m.r64(comp + 0x108) as i64 + n as i32 as i64 * 16) as usize } else { 0 };
@@ -262,7 +278,7 @@ unsafe fn draw_instance(p: &mut Port, d: &mut Draw, inst: usize) -> R<u32> {
         let m = bits & !(u32::MAX << b);
         let n = if m >= 2 { m.count_ones() } else { m };
         let tex = p.m.r64(p.m.r64(s + 0x10) + n as usize * 8);
-        d.table[i] = (p.m.r64(tex + 8) + 8) as u64;
+        d.table[i] = loaded(p, tex)?;
         let e = d.entries[i];
         let pb = d.pb;
         bind_entry(p, pb, d.w, d.defaults, &d.table, e);
@@ -299,10 +315,6 @@ unsafe fn mesh_draw(p: &mut Port, mesh: usize, w: usize) -> R<u32> {
 
 /// main+0xd7c1d8(this, slot, arg).
 pub(super) unsafe fn draw(p: &mut Port, this: usize, slot: u32, arg: usize) -> R<()> {
-    if !p.m.predict() {
-        p.call(p.base + 0xd7c1d8, &[this as u64, slot as u64, arg as u64]);
-        return Ok(());
-    }
     let t = p.m.r64(this + 0x18);
     let scene = p.m.r64(p.m.r64(t + 0x70) + 8);
     let vi = if p.m.r32(t + 0xea0) > slot { slot } else { 0 } as i32 as i64;
@@ -641,7 +653,7 @@ unsafe fn set_slot(p: &mut Port, idx: i32, set: u64, lod: usize, sets: &mut [u64
     let m = bits & !(u32::MAX << b);
     let n = if m >= 2 { m.count_ones() } else { m };
     let tex = p.m.r64(p.m.r64(s + 0x10) + n as usize * 8);
-    table[i] = (p.m.r64(tex + 8) + 8) as u64;
+    table[i] = loaded(p, tex)?;
     bind_entry(p, pb, w, defaults, table, entries[i]);
     Ok(true)
 }
@@ -672,10 +684,6 @@ unsafe fn chain(p: &Port, mut c: usize, lod: usize) -> usize {
 /// main+0x24b2a04(this, slot, arg): as main+0xd7c1d8 with the scene's 8 tiers (+0x1244), exact LOD names
 /// (..NormalNear / NormalMiddle / NormalFar) and an inlined instance draw over seven texture set slots.
 pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) -> R<()> {
-    if !p.m.predict() {
-        p.call(p.base + 0x24b2a04, &[this as u64, slot as u64, arg as u64]);
-        return Ok(());
-    }
     let t = p.m.r64(this + 0x18);
     let first = p.m.r64(p.m.r64(t + 0x70));
     if p.m.r8(p.base + SCENE_CAST_GUARD) & 1 == 0 {
