@@ -404,6 +404,15 @@ pub(super) unsafe fn gate(p: &mut Port, this: usize, arg: usize) -> R<()> {
     if target == 0x12e3774 {
         return super::gridtile::draw(p, &super::gridtile::TILES_12E3774, this, arg, index as u32);
     }
+    if target == 0x18ca004 {
+        return super::gridtile::draw_records(p, &super::gridtile::RECORDS_18CA004, this, arg, index as u32);
+    }
+    if target == 0xcf48b0 {
+        return super::gridtile::draw_records(p, &super::gridtile::RECORDS_CF48B0, this, arg, index as u32);
+    }
+    if target == 0x18c8560 {
+        return super::gridtile::draw_records(p, &super::gridtile::RECORDS_18C8560, this, arg, index as u32);
+    }
     if target == 0x744c7c {
         return super::gridtile::draw(p, &super::gridtile::TILES_744C7C, this, arg, index as u32);
     }
