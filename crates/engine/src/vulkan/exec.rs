@@ -21,6 +21,8 @@ mod copy;
 mod draw;
 #[path = "record.rs"]
 mod record;
+#[path = "decode.rs"]
+mod decode;
 pub(super) use draw::{desc_streams, fragment_graphics_state, vertex_graphics_state, vertex_streams};
 
 /// Bindings by (NVN stage, index): the six stages' first N indices in place (the commands set and the draws read them
@@ -256,16 +258,17 @@ pub struct Ctx {
     /// idle GPU runs at a fraction of its speed), and when the current one began.
     chunks: Vec<vk::CommandBuffer>,
     chunk_start: std::time::Instant,
-    /// Index of the command being executed in this submit (in run_list order).
+    /// Index of the command being executed in this submit (in the order they run).
     op_index: u64,
     /// Guest memory this submit's commands write while it is recorded (inline uniform updates, reports): uniform
     /// buffers there are copied when bound (draws before the write must not see it), others are read in place.
     pub(super) cmd_writes: Ranges,
     /// The submit's command lists by handle (fetched once by the pre-scan).
     lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
-    /// The lists in the order the pre-scan visited them, which run_list follows (null: not found), and the next one.
+    /// The lists in the order the pre-scan visited them (null: not found), which vk-decode walks them in, and that
+    /// thread (decode.rs).
     list_order: Vec<*const crate::nvn::api::RecordedCommandList>,
-    list_at: usize,
+    decoder: decode::Decoder,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -670,7 +673,7 @@ impl Ctx {
             cmd_writes: Ranges::default(),
             lists: Default::default(),
             list_order: Vec::new(),
-            list_at: 0,
+            decoder: decode::Decoder::new()?,
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
             pool_tx,
@@ -774,13 +777,28 @@ impl Ctx {
         }
         self.cmd_writes = writes;
         self.occl.upcoming = upcoming;
-        self.list_order = order;
-        self.list_at = 0;
         self.occl.cursor = 0;
         self.op_index = 0;
-        for &h in lists {
-            self.run_list(h, 0);
+        // The lists are walked on vk-decode (decode.rs), in the pre-scan's order, while their commands run here.
+        self.decoder.start(lists, &mut order);
+        while let Some(e) = self.decoder.next() {
+            let op = &*e.op;
+            match &op.typed {
+                Some(c) => {
+                    self.checkpoint_each(op.name, [self.op_index, e.list, 0, 0]);
+                    self.exec(c)
+                }
+                None => {
+                    let name = op.name;
+                    if self.unimplemented.insert(name) {
+                        self.warn(format!("{name} is not implemented"));
+                    }
+                }
+            }
+            self.op_index += 1;
         }
+        self.decoder.finish(&mut order);
+        self.list_order = order;
         self.end_pass();
         if let Some(q) = self.occl.active.take() {
             let pool = self.occl.pool;
@@ -1087,7 +1105,7 @@ impl Ctx {
         }
     }
 
-    /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them), and the guest
+    /// The occlusion counter resets and reports of the lists, by command index (as they run, decode.rs), and the guest
     /// memory their commands write (inline uniform updates, reports): from each list's events, made when it was recorded
     /// (nvn::api::ListEvents), so a submit's pre-scan does not walk its commands.
     unsafe fn scan_counters(
@@ -1126,7 +1144,7 @@ impl Ctx {
                     let a = crate::nvn::api::translate_virtual(*addr as usize);
                     writes.add(a, a + len);
                 }
-                // Beyond 16 levels run_list counts a call as one command and does not follow it.
+                // Beyond 16 levels a call counts as one command and does not follow it.
                 ListEvent::Call(_) if depth >= 16 => called += 1,
                 ListEvent::Call(hs) => {
                     *index = pos;
@@ -1138,47 +1156,6 @@ impl Ctx {
             }
         }
         *index = start + ev.ops + called;
-    }
-
-    unsafe fn run_list(&mut self, handle: u64, depth: u32) {
-        // The pre-scan visited the lists in this order: the next one is this one (held in self.lists until the submit
-        // ended, so it is borrowed rather than counted again for each of a submit's ~7,500 runs, nor looked up again).
-        let next = self.list_order.get(self.list_at).copied();
-        self.list_at += 1;
-        let held;
-        let list: &crate::nvn::api::RecordedCommandList = match next.map(|p| p.as_ref()) {
-            Some(Some(l)) => l,
-            // Missing at the pre-scan: left out here too (the lists after it are still the ones it visited next).
-            Some(None) => return,
-            None => match crate::nvn::api::command_list(handle, depth > 0) {
-                Some(l) => {
-                    held = l;
-                    &held
-                }
-                None => return,
-            },
-        };
-        for op in &list.ops {
-            match &op.typed {
-                Some(Cmd::CallCommands(hs)) if depth < 16 => {
-                    for &h in hs.iter() {
-                        self.run_list(h, depth + 1);
-                    }
-                    continue;
-                }
-                Some(c) => {
-                    self.checkpoint_each(op.name, [self.op_index, handle, 0, 0]);
-                    self.exec(c)
-                }
-                None => {
-                    let name = op.name;
-                    if self.unimplemented.insert(name) {
-                        self.warn(format!("{name} is not implemented"));
-                    }
-                }
-            }
-            self.op_index += 1;
-        }
     }
 
     unsafe fn exec(&mut self, c: &Cmd) {
