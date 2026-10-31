@@ -3354,7 +3354,34 @@ impl Gfx {
                     st.blend_color = *c;
                 }
                 Cmd::ModelDraw(m) => {
-                    self.run_list(st, cb, m.unit, depth + 1);
+                    match &m.material {
+                        // The material from the game's objects: its program list, then its bindings (replay side B
+                        // runs the recorded list instead).
+                        Some(mat) if !replay_b() => {
+                            for c in mat.iter() {
+                                match c {
+                                    Cmd::CallCommands(hs) => {
+                                        for h in hs {
+                                            self.run_list(st, cb, *h, depth + 1);
+                                        }
+                                    }
+                                    Cmd::BindTexture { stage, index, handle } => {
+                                        st.textures_bound.insert((*stage, *index), *handle);
+                                    }
+                                    Cmd::BindUniformBuffer { stage, index, addr, size } => {
+                                        st.uniform_buffers.insert((*stage, *index), (*addr, *size));
+                                    }
+                                    Cmd::BindStorageBuffer { stage, index, addr, size } => {
+                                        if (0..6).contains(stage) && (0..16).contains(index) {
+                                            st.storage_buffers[*stage as usize][*index as usize] = (*addr, *size);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => self.run_list(st, cb, m.unit, depth + 1),
+                    }
                     if let Some(new_cb) = &st.cur_cb {
                         if Retained::as_ptr(&cur) != Retained::as_ptr(new_cb) {
                             cur = new_cb.clone();

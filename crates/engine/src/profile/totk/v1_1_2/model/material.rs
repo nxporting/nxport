@@ -163,3 +163,47 @@ pub(super) unsafe fn check_list(p: &Port, d: usize, w: usize, pass: usize, b: i3
         );
     }
 }
+
+type Description = std::sync::Arc<Vec<crate::nvn::cmd::Cmd>>;
+type Recording = std::sync::Weak<crate::nvn::api::RecordedCommandList>;
+
+/// Native material descriptions by list handle, with the recording they describe (the game records a changed
+/// material again at the same command memory, which keeps the handle).
+static DESCRIBED: std::sync::Mutex<Option<std::collections::HashMap<u64, (Recording, Description)>>> =
+    std::sync::Mutex::new(None);
+
+/// The material list `handle` (pass `pass`, slot `b` of unit `d`) described from the game's objects: the pass's
+/// program list call, then the bind's typed commands. Rebuilt when the game records the list again. None when a
+/// command is not of the kinds the executor applies (the list is run instead).
+pub(super) unsafe fn described(p: &Port, handle: u64, d: usize, w: usize, pass: usize, b: i32) -> Option<Description> {
+    let recording = crate::nvn::api::command_list_peek(handle)?;
+    if let Some((rec, m)) = DESCRIBED.lock().unwrap().get_or_insert_with(Default::default).get(&handle) {
+        if rec.upgrade().is_some_and(|r| std::sync::Arc::ptr_eq(&r, &recording)) {
+            return Some(m.clone());
+        }
+    }
+    let e = p.m.r64(d + 0x68) + pass * 0x60;
+    let mut q = Port::new(super::mem::Mem::applying(), p.base, false);
+    let mut r = Ok(());
+    let cmds = crate::nvn::api::capture_typed_dry(|| r = bind(&mut q, d, w, e + 0x18, p.m.r64(e + 0x40), 0, b))?;
+    r.ok()?;
+    use crate::nvn::cmd::Cmd;
+    // The executor applies these kinds only.
+    if !cmds.iter().all(|c| matches!(c, Cmd::BindTexture { .. } | Cmd::BindUniformBuffer { .. } | Cmd::BindStorageBuffer { .. })) {
+        return None;
+    }
+    let mut all = Vec::with_capacity(cmds.len() + 1);
+    let prog = p.m.r64(e + 0x28);
+    if prog != 0 && p.m.r8(prog + 0x50) & 1 != 0 {
+        all.push(Cmd::CallCommands(smallvec::smallvec![p.m.r64(prog + 0x48) as u64]));
+    }
+    all.extend(cmds);
+    let m = std::sync::Arc::new(all);
+    let mut g = DESCRIBED.lock().unwrap();
+    let map = g.get_or_insert_with(Default::default);
+    if map.len() > 1 << 17 {
+        map.retain(|_, (rec, _)| rec.strong_count() > 0);
+    }
+    map.insert(handle, (std::sync::Arc::downgrade(&recording), m.clone()));
+    Some(m)
+}

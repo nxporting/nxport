@@ -2763,6 +2763,8 @@ enum Capture {
     Watch { expected: Vec<String>, got: Vec<String>, report: fn(&[String], &[String]) },
     /// Commands are recorded and collected until capture_collected.
     Collect(Vec<String>),
+    /// Typed commands are collected and not recorded (`ok` false once an untyped command came).
+    Typed { cmds: Vec<crate::nvn::cmd::Cmd>, ok: bool },
 }
 
 thread_local! {
@@ -2785,6 +2787,25 @@ pub fn capture_dry_nested(f: impl FnOnce()) -> Vec<String> {
     let v = capture_dry(f);
     CAPTURE.with(|c| *c.borrow_mut() = outer);
     v
+}
+
+/// The typed commands `f` would record on this thread, not recorded; None when any of them is not a typed command.
+pub fn capture_typed_dry(f: impl FnOnce()) -> Option<Vec<crate::nvn::cmd::Cmd>> {
+    let outer = CAPTURE.with(|c| c.borrow_mut().take());
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Typed { cmds: Vec::new(), ok: true }));
+    f();
+    let got = CAPTURE.with(|c| c.borrow_mut().take());
+    CAPTURE.with(|c| *c.borrow_mut() = outer);
+    match got {
+        Some(Capture::Typed { cmds, ok: true }) => Some(cmds),
+        _ => None,
+    }
+}
+
+/// The recording `handle` refers to now (a recording at the same command memory keeps its handle), without
+/// touching its eviction state.
+pub(crate) fn command_list_peek(handle: u64) -> Option<std::sync::Arc<RecordedCommandList>> {
+    COMMAND_LISTS.lock().unwrap().get(&handle).map(|e| e.0.clone())
 }
 
 /// A recorded list's commands as captures show them (None for an unknown handle).
@@ -2849,6 +2870,10 @@ fn capture(text: impl FnOnce() -> String) -> bool {
                 v.push(text());
                 false
             }
+            Some(Capture::Typed { ok, .. }) => {
+                *ok = false;
+                true
+            }
             Some(Capture::Watch { expected, got, .. }) => {
                 got.push(text());
                 if got.len() == expected.len() {
@@ -2877,6 +2902,16 @@ pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::
     record_hle_call(name);
     super::frame_map::note(name, cmd);
     drawable_cmd_probe(name);
+    let typed_capture = CAPTURE.with(|c| match c.borrow_mut().as_mut() {
+        Some(Capture::Typed { cmds, .. }) => {
+            cmds.push(typed.clone());
+            true
+        }
+        _ => false,
+    });
+    if typed_capture {
+        return;
+    }
     if capture(|| {
         let mut t = typed.clone();
         if let crate::nvn::cmd::Cmd::DrawElementsInstanced { caller, .. } = &mut t {
