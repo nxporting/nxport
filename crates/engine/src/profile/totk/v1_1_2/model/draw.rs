@@ -174,7 +174,7 @@ impl Port {
     }
 
     /// Appends a native command for `cmd` (recording the pending ones first when they are for another command buffer).
-    unsafe fn push(&self, cmd: usize, item: crate::nvn::cmd::ModelItem) {
+    pub(super) unsafe fn push(&self, cmd: usize, item: crate::nvn::cmd::ModelItem) {
         if self.pending.borrow().as_ref().is_some_and(|(c, _)| *c != cmd) {
             self.flush();
         }

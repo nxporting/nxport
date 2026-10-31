@@ -17,6 +17,7 @@ mod render_list;
 mod ring;
 mod terrain;
 mod vfx;
+mod viewport;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -34,6 +35,8 @@ const PROGRAM_BLOCK: (usize, u32) = (0x96306c, 0xa9ba7bfd);
 const PROGRAM_BLOCK_AT: (usize, u32) = (0x9771a8, 0xa9ba7bfd);
 const STREAM_DRAW: (usize, u32) = (0x966e70, 0xa9bc7bfd);
 const SHAPE_BUFFERS: (usize, u32) = (0xf216b4, 0xa9ba7bfd);
+const SHAPE_STATES: (usize, u32) = (0x978ba4, 0xa9be7bfd);
+const VIEWPORT_APPLY: (usize, u32) = (0x74474c, 0xa9bc7bfd); // sead::Viewport::apply
 const OCCLUSION_SITE: usize = 0xa6c3a4;
 const OCCLUSION_SITE_INSTRUCTION: u32 = 0xd10203ff; // sub sp, sp, #0x80
 const LIGHTS_SITE: usize = 0x9777c4;
@@ -463,6 +466,44 @@ pub unsafe extern "C" fn on_stream_draw(stream: usize, w: usize, instances: u32)
 pub unsafe extern "C" fn on_shape_buffers(shape: usize, w: usize) -> u32 {
     primitive(|p| {
         lights::shape_buffers(p, shape, w);
+        Ok(1)
+    })
+}
+
+/// main+0x978ba4(shape, w): the shape's vertex attribute and stream states.
+#[no_mangle]
+pub unsafe extern "C" fn on_shape_states(shape: usize, w: usize) -> u32 {
+    primitive(|p| {
+        let cmd = p.m.r64(w + 0xb8);
+        p.bind_vertex_attribs(cmd, 0x10, shape + 0x11c);
+        p.bind_vertex_streams(cmd, 0x10, shape + 0x160);
+        Ok(1)
+    })
+}
+
+static VIEWPORTS: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+fn viewport_compared(expected: &[String], got: &[String]) {
+    let k = (expected == got) as usize;
+    if VIEWPORTS[k].fetch_add(1, Ordering::Relaxed) < 4 && k == 0 {
+        println!("[model-draw] viewport differs: port {expected:?} game {got:?}");
+    }
+}
+
+/// sead::Viewport::apply: --verify-render-lists compares the port with the game's commands; apply mode draws it.
+#[no_mangle]
+pub unsafe extern "C" fn on_viewport_apply(vp: usize, w: usize, fb: usize) -> u32 {
+    if crate::settings::get().totk.diagnostics.verify_render_lists {
+        if crate::nvn::api::capturing() {
+            return 0;
+        }
+        let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+        let expected = crate::nvn::api::capture_dry(|| viewport::apply(&mut port, vp, w, fb));
+        crate::nvn::api::capture_watch(expected, viewport_compared);
+        return 0;
+    }
+    primitive(|p| {
+        viewport::apply(p, vp, w, fb);
         Ok(1)
     })
 }
@@ -939,6 +980,10 @@ fn report() {
             vfx::report()
         );
     }
+    let (vs, vd) = (VIEWPORTS[1].load(Ordering::Relaxed), VIEWPORTS[0].load(Ordering::Relaxed));
+    if vs + vd != 0 {
+        println!("[model-draw] viewports: {vs} identical, {vd} different");
+    }
     let (pd, pl) = (PRIMITIVES[0].load(Ordering::Relaxed), PRIMITIVES[1].load(Ordering::Relaxed));
     if pd + pl != 0 {
         println!("[model-draw] agl / sead primitives drawn natively: {pd}, left to the game: {pl}");
@@ -1018,6 +1063,13 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, STREAM_DRAW.0, STREAM_DRAW.1, pre, post, "Index stream draw");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_shape_buffers(_, _))) as usize;
         hook(base, mem_space, SHAPE_BUFFERS.0, SHAPE_BUFFERS.1, pre, post, "Shape vertex buffers");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_shape_states(_, _))) as usize;
+        hook(base, mem_space, SHAPE_STATES.0, SHAPE_STATES.1, pre, post, "Shape vertex states");
+    }
+    if (d.native_render_lists && d.native_model_draws && metal) || d.verify_render_lists {
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_primitive_end())) as usize;
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_viewport_apply(_, _, _))) as usize;
+        hook(base, mem_space, VIEWPORT_APPLY.0, VIEWPORT_APPLY.1, pre, post, "sead::Viewport::apply");
     }
     if d.verify_render_lists || d.native_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_lights(_, _, _, _))) as usize;

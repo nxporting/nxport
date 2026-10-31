@@ -3146,16 +3146,7 @@ impl Gfx {
                 Cmd::BindChannelMaskState(s) => {
                     st.channel_mask = *s;
                 }
-                Cmd::SetViewport { x, y, w, h } => {
-                    st.viewport = Some((*x, *y, *w, *h));
-                    // The main 3D passes (3+ colour targets: the G-buffer) show the game's render resolution (its
-                    // dynamic resolution scales the viewport): reported with the fps line.
-                    if st.colors.len() >= 3 && *w > 0 && *h > 0 {
-                        // Largest since the last report (area in the high bits).
-                        let (w, h) = ((*w as u64).min(0xFFFFF), (*h as u64).min(0xFFFFF));
-                        SCENE_VIEWPORT.fetch_max((w * h) << 40 | w << 20 | h, Ordering::Relaxed);
-                    }
-                }
+                Cmd::SetViewport { x, y, w, h } => set_viewport(st, *x, *y, *w, *h),
                 Cmd::SetScissor { x, y, w, h } => {
                     st.scissor = Some((*x, *y, *w, *h));
                 }
@@ -3375,6 +3366,11 @@ impl Gfx {
                             ModelItem::Bind { stage, index, kind } => apply_model_bind(st, *stage, *index, *kind),
                             ModelItem::RenderState(r) => apply_render_state(st, r),
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
+                            ModelItem::Viewport { x, y, w, h, near, far } => {
+                                st.scissor = Some((*x, *y, *w, *h));
+                                set_viewport(st, *x, *y, *w, *h);
+                                st.depth_range = (*near, *far);
+                            }
                             ModelItem::VertexAttribs(a) => st.vertex_attribs = *a,
                             ModelItem::VertexStreams(v) => st.vertex_streams.clone_from(v),
                             ModelItem::TexturesDeferred { stage, first, count, handles } => {
@@ -8363,5 +8359,16 @@ unsafe fn apply_textures_deferred(st: &mut State, stage: i32, first: i32, count:
     for i in 0..count.clamp(0, 32) {
         let h = if handles > 0x10000 { std::ptr::read_unaligned((handles as *const u64).add(i as usize)) } else { 0 };
         st.textures_bound.insert((stage, first + i), h);
+    }
+}
+
+fn set_viewport(st: &mut State, x: i32, y: i32, w: i32, h: i32) {
+    st.viewport = Some((x, y, w, h));
+    // The main 3D passes (3+ colour targets: the G-buffer) show the game's render resolution (its dynamic resolution
+    // scales the viewport): reported with the fps line.
+    if st.colors.len() >= 3 && w > 0 && h > 0 {
+        // Largest since the last report (area in the high bits).
+        let (w, h) = ((w as u64).min(0xFFFFF), (h as u64).min(0xFFFFF));
+        SCENE_VIEWPORT.fetch_max((w * h) << 40 | w << 20 | h, Ordering::Relaxed);
     }
 }

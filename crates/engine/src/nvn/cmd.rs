@@ -329,6 +329,8 @@ pub enum ModelItem {
     Draw(ModelRange),
     RenderState(Box<RenderState>),
     Program { program: usize, stages: i32 },
+    /// sead::Viewport::apply: the same rectangle as scissor and viewport, then the depth range.
+    Viewport { x: i32, y: i32, w: i32, h: i32, near: f32, far: f32 },
     VertexAttribs(AttribState),
     VertexStreams(Vec<u64>),
     DrawArrays { mode: i32, first: i32, count: i32, base_instance: i32, instances: i32 },
