@@ -319,6 +319,17 @@ pub struct ModelDraw {
     /// material's bindings. Captures keep only `unit`.
     #[serde(skip)]
     pub material: Option<std::sync::Arc<Vec<Cmd>>>,
+    /// Uniform buffers bound between the ranges (each before range `at`; `at` = ranges.len(): after the last).
+    pub uniforms: smallvec::SmallVec<[ModelUniform; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ModelUniform {
+    pub at: u32,
+    pub stage: i32,
+    pub index: i32,
+    pub addr: u64,
+    pub size: usize,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]

@@ -103,7 +103,16 @@ fn flatten(
             }
             Some(Cmd::ModelDraw(m)) if depth < 16 => {
                 flatten(lists, m.unit, depth + 1, out, missing);
-                for r in &m.ranges {
+                let mut uniforms = m.uniforms.iter().peekable();
+                let uniform = |u: &crate::nvn::cmd::ModelUniform| Op {
+                    name: "nvnCommandBufferBindUniformBuffer".into(),
+                    typed: Some(Cmd::BindUniformBuffer { stage: u.stage, index: u.index, addr: u.addr, size: u.size }),
+                    args: None,
+                };
+                for (i, r) in m.ranges.iter().enumerate() {
+                    while let Some(u) = uniforms.next_if(|u| u.at as usize <= i) {
+                        out.push(uniform(u));
+                    }
                     out.push(Op {
                         name: "nvnCommandBufferDrawElementsInstanced".into(),
                         typed: Some(Cmd::DrawElementsInstanced {
@@ -119,6 +128,7 @@ fn flatten(
                         args: None,
                     });
                 }
+                out.extend(uniforms.map(uniform));
             }
             _ => out.push(op.clone()),
         }

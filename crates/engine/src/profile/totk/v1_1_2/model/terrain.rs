@@ -165,8 +165,13 @@ unsafe fn lod_list(p: &mut Port, d: usize, w: usize, c: usize, lod: usize) {
     let model = p.m.r64(d + 0x68);
     if (lod as i32) < p.m.r8(p.m.r64(model + 8) + 0x5b) as i32 {
         let lists = p.m.r64(model + 0x8c8);
-        let cmd = p.m.r64(w + 0xb8);
-        p.call_commands(cmd, lists + lod * 0x268 + 0x48);
+        if p.native {
+            // The list is sub_758644's draw of the LOD's sub-meshes, recorded at load.
+            let sh = p.m.r64(p.m.r64(model + 8) + 0x18) + lod * 0x38;
+            p.draw_shape(sh, w + 8, 0, p.m.r16(sh + 0x34) as u32, 1, 0);
+        } else {
+            p.call_commands(p.m.r64(w + 0xb8), lists + lod * 0x268 + 0x48);
+        }
         let tris = p.m.r32(lists + lod * 0x268 + 0x260);
         p.m.w::<u32>(c + 0x34, p.m.r32(c + 0x34).wrapping_add(tris));
     }
