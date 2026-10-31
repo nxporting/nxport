@@ -37,22 +37,31 @@ _Static_assert(offsetof(Cpu, excl_val_hi) == 336, "excl_val_hi");
 _Static_assert(offsetof(Cpu, v) == 512, "v");
 _Static_assert(sizeof(Cpu) == 1024, "size");
 
-typedef void (*GuestFn)(Cpu *);
+// Lifted functions and the dispatcher are called only by each other (the host enters through nx_rt_enter): on x86-64
+// they use the System V convention, whose callee saves six integer registers and no vector registers (Windows x64: eight
+// and xmm6-xmm15, saved and restored by every lifted function that touched them, and 32 bytes of stack per call).
+#if defined(__x86_64__)
+#define RT_CC __attribute__((sysv_abi))
+#else
+#define RT_CC
+#endif
+
+typedef void (RT_CC *GuestFn)(Cpu *);
 
 // The guest library exports only its function tables: a game has more functions than a PE export table holds (64K),
 // and an explicit export turns off the MinGW linker's export-everything default.
 #ifdef _WIN32
 #define RT_EXPORT __declspec(dllexport)
-#define RT_FN
+#define RT_FN RT_CC
 #else
 #define RT_EXPORT __attribute__((visibility("default")))
-#define RT_FN __attribute__((visibility("hidden")))
+#define RT_FN __attribute__((visibility("hidden"))) RT_CC
 #endif
 
 #define RT_RETURN_TO_HOST 0ull
 
 // ---- provided by the runtime
-void rt_dispatch(Cpu *c);  // continue at c->pc
+RT_CC void rt_dispatch(Cpu *c);  // continue at c->pc
 void rt_svc(Cpu *c, uint32_t imm, uint64_t pc);
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) __attribute__((noreturn));
 void rt_udf(Cpu *c, uint64_t pc) __attribute__((noreturn));

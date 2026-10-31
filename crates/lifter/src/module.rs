@@ -351,7 +351,8 @@ fn fname(a: u64) -> String {
     format!("f_{a:x}")
 }
 
-const TAIL_DISPATCH: &str = "__attribute__((musttail)) return rt_dispatch(c);";
+/// Leaves the function: the registers it keeps in locals go to the Cpu first (a `SPILL` marker: keep_registers).
+const TAIL_DISPATCH: &str = "SPILL __attribute__((musttail)) return rt_dispatch(c);";
 
 /// One instruction's C. `next`: execution can go on at the next line.
 struct Line {
@@ -540,6 +541,205 @@ fn optimize_flags(lines: &mut [Line]) {
     }
 }
 
+/// Guest integer registers x0..x30 (bits 0..30) and sp (bit 31).
+type Regs = u32;
+
+/// Registers a function keeps in locals: its most referenced ones. More cost more than they save (clang spills them
+/// to the stack, and every call stores and loads them); valentderah's TotK recompilation measured the fewest
+/// instructions and memory operands at 4 to 6.
+const KEPT: usize = 6;
+
+/// x19..x29 and sp: a callee preserves them (AAPCS64), so they are not loaded again after a call.
+const CALLEE_SAVED: Regs = (0x7ff << 19) | (1 << 31);
+
+/// The guest register a "c->x[N]" or "c->sp" at the start of `s` names, and its length.
+fn reg_at(s: &str) -> Option<(u32, usize)> {
+    let after = s.strip_prefix("c->")?;
+    if let Some(num) = after.strip_prefix("x[") {
+        let digits = num.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && num.as_bytes().get(digits) == Some(&b']') {
+            return Some((num[..digits].parse().ok()?, 3 + 2 + digits + 1));
+        }
+    } else if let Some(tail) = after.strip_prefix("sp") {
+        if !tail.starts_with(|ch: char| ch.is_ascii_alphanumeric() || ch == '_') {
+            return Some((31, 5));
+        }
+    }
+    None
+}
+
+/// `code` with the registers in `kept` renamed to their locals (gx0..gx30, gsp).
+fn localize(code: &str, kept: Regs) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(i) = rest.find("c->") {
+        out.push_str(&rest[..i]);
+        match reg_at(&rest[i..]) {
+            Some((r, len)) if kept & (1 << r) != 0 => {
+                if r == 31 {
+                    out.push_str("gsp");
+                } else {
+                    let _ = write!(out, "gx{r}");
+                }
+                rest = &rest[i + len..];
+            }
+            _ => {
+                out.push_str("c->");
+                rest = &rest[i + 3..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The locals C code reads and writes (any use counts as a read; `r = ...` and `r op= ...` as writes).
+fn uses(code: &str) -> (Regs, Regs) {
+    let (mut reads, mut writes) = (0, 0);
+    let b = code.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let ident = |j: usize| j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_');
+        if b[i] == b'g' && (i == 0 || !ident(i - 1)) {
+            let (r, len) = if code[i..].starts_with("gsp") {
+                (Some(31), 3)
+            } else if code[i..].starts_with("gx") {
+                let d = b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
+                (if d > 0 { code[i + 2..i + 2 + d].parse::<u32>().ok() } else { None }, 2 + d)
+            } else {
+                (None, 1)
+            };
+            if let Some(r) = r.filter(|_| !ident(i + len)) {
+                let rest = code[i + len..].trim_start();
+                let compound = ["+=", "-=", "|=", "&=", "^=", "<<=", ">>=", "*="].iter().any(|op| rest.starts_with(op));
+                if compound {
+                    reads |= 1 << r;
+                    writes |= 1 << r;
+                } else if rest.starts_with('=') && !rest.starts_with("==") {
+                    writes |= 1 << r;
+                } else {
+                    reads |= 1 << r;
+                }
+            }
+            i += len;
+            continue;
+        }
+        i += 1;
+    }
+    (reads, writes)
+}
+
+/// Keeps the function's most referenced registers in locals, and returns them and those to load at entry. Guest memory
+/// is accessed through may_alias pointers, so clang must assume every guest store may change a register in the Cpu and
+/// load it again before its next use; locals stay in host registers. The Cpu holds them where code outside the function
+/// sees them: `SPILL` (before calls, tail calls, dispatches, returns and runtime entries) stores those written since the
+/// Cpu last held them on some path to it (dirty), `RELOAD` (after calls and svc) loads those read again before being
+/// written (live), except callee-saved ones after a call. Elsewhere the Cpu holds a register's value and its local is not
+/// read again. No runtime helper reads integer registers or sp from the Cpu (vector registers stay there).
+fn keep_registers(lines: &mut [Line]) -> (Regs, Regs) {
+    let mut count = [0usize; 32];
+    for l in lines.iter() {
+        let mut rest = l.code.as_str();
+        while let Some(i) = rest.find("c->") {
+            if let Some((r, _)) = reg_at(&rest[i..]) {
+                count[r as usize] += 1;
+            }
+            rest = &rest[i + 3..];
+        }
+    }
+    let mut order: Vec<u32> = (0..32).filter(|&r| count[r as usize] > 0).collect();
+    order.sort_by_key(|&r| (std::cmp::Reverse(count[r as usize]), r));
+    let kept = order.iter().take(KEPT).fold(0, |acc, &r| acc | 1 << r);
+    for l in lines.iter_mut() {
+        l.code = localize(&l.code, kept);
+    }
+    let n = lines.len();
+    let at: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    // Per line: successors, and the reads and writes before its first marker (what follows a SPILL leaves or calls).
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut pre: Vec<(Regs, Regs)> = Vec::with_capacity(n);
+    for (i, l) in lines.iter().enumerate() {
+        let mut s = Vec::new();
+        let mut rest = l.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            let hex: String = rest[j + 7..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Some(&t) = u64::from_str_radix(&hex, 16).ok().and_then(|a| at.get(&a)) {
+                s.push(t);
+            }
+            rest = &rest[j + 7..];
+        }
+        if l.next && i + 1 < n {
+            s.push(i + 1);
+        }
+        succ.push(s);
+        let head = l.code.find("SPILL").map_or(l.code.as_str(), |j| &l.code[..j]);
+        pre.push(uses(head));
+    }
+    let spills: Vec<bool> = lines.iter().map(|l| l.code.contains("SPILL")).collect();
+    // Registers a RELOAD leaves to the locals: callee-saved ones after a call, none after svc.
+    let trusted: Vec<Option<Regs>> = lines
+        .iter()
+        .map(|l| l.code.contains("RELOAD").then(|| if l.code.contains("RT_RETURNED") { CALLEE_SAVED } else { 0 }))
+        .collect();
+    // Dirty registers on entry to each line (forward, any path).
+    let mut dirty_in = vec![0 as Regs; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            let out = if trusted[i].is_some() { 0 } else { dirty_in[i] | pre[i].1 };
+            for &t in &succ[i] {
+                if dirty_in[t] | out != dirty_in[t] {
+                    dirty_in[t] |= out;
+                    changed = true;
+                }
+            }
+        }
+    }
+    // Live registers on entry to each line (backward): a SPILL reads what it stores, a RELOAD writes what it loads.
+    let mut live_in = vec![0 as Regs; n];
+    let mut live_out = vec![0 as Regs; n];
+    changed = true;
+    while changed {
+        changed = false;
+        for i in (0..n).rev() {
+            let out = succ[i].iter().fold(0, |acc, &t| acc | live_in[t]);
+            let (r, w) = pre[i];
+            let spilled = if spills[i] { dirty_in[i] & !w } else { 0 };
+            let after = match trusted[i] {
+                Some(keep) => out & keep & !w,
+                None => out & !w,
+            };
+            let inn = r | spilled | after;
+            if inn != live_in[i] || out != live_out[i] {
+                live_in[i] = inn;
+                live_out[i] = out;
+                changed = true;
+            }
+        }
+    }
+    let field = |r: u32| if r == 31 { "c->sp".to_string() } else { format!("c->x[{r}]") };
+    let local = |r: u32| if r == 31 { "gsp".to_string() } else { format!("gx{r}") };
+    let regs = |set: Regs| (0..32).filter(move |r| set & (1 << r) != 0);
+    for (i, l) in lines.iter_mut().enumerate() {
+        if spills[i] {
+            let mut st = String::new();
+            for r in regs(dirty_in[i] | pre[i].1) {
+                let _ = write!(st, "{} = {}; ", field(r), local(r));
+            }
+            l.code = l.code.replace("SPILL ", &st);
+        }
+        if let Some(keep) = trusted[i] {
+            let mut ld = String::new();
+            for r in regs(live_out[i] & !keep) {
+                let _ = write!(ld, "{} = {}; ", local(r), field(r));
+            }
+            l.code = l.code.replace("RELOAD ", &ld);
+        }
+    }
+    (kept, live_in.first().copied().unwrap_or(0))
+}
+
 fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut BTreeSet<u64>) {
     let s = scan(l, entry, end);
     let jump = |t: u64, refs: &mut BTreeSet<u64>| -> String {
@@ -547,7 +747,7 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
             format!("goto L_{t:x};")
         } else if l.in_text(t) {
             refs.insert(t);
-            format!("__attribute__((musttail)) return {}(c);", fname(t))
+            format!("SPILL __attribute__((musttail)) return {}(c);", fname(t))
         } else {
             format!("c->pc = {}; {TAIL_DISPATCH}", hx(t))
         }
@@ -558,15 +758,18 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
     while a < end {
         let ra = hx(a + 4);
         let code = match l.at(a) {
-            Insn::Op(code) | Insn::Trap(code) => code.clone(),
+            // Runtime entries see the registers: svc returns, brk and udf do not.
+            Insn::Op(code) if code.contains("rt_svc(c") => format!("SPILL {code} RELOAD "),
+            Insn::Trap(code) => format!("SPILL {code}"),
+            Insn::Op(code) => code.clone(),
             Insn::B(t) => jump(*t, refs),
             Insn::BCond(cond, t) => format!("if ({cond}) {{ {} }}", jump(*t, refs)),
             Insn::Bl(t) if l.in_text(*t) => {
                 refs.insert(*t);
-                format!("c->x[30] = {ra}; {}(c); RT_RETURNED(c, {ra})", fname(*t))
+                format!("c->x[30] = {ra}; SPILL {}(c); RELOAD RT_RETURNED(c, {ra})", fname(*t))
             }
-            Insn::Bl(t) => format!("c->x[30] = {ra}; c->pc = {}; rt_dispatch(c); RT_RETURNED(c, {ra})", hx(*t)),
-            Insn::Blr(target) => format!("c->pc = {target}; c->x[30] = {ra}; rt_dispatch(c); RT_RETURNED(c, {ra})"),
+            Insn::Bl(t) => format!("c->x[30] = {ra}; c->pc = {}; SPILL rt_dispatch(c); RELOAD RT_RETURNED(c, {ra})", hx(*t)),
+            Insn::Blr(target) => format!("c->pc = {target}; c->x[30] = {ra}; SPILL rt_dispatch(c); RELOAD RT_RETURNED(c, {ra})"),
             Insn::Br(target) => match s.tables.get(&a) {
                 Some(Table::Cases(targets)) => {
                     let mut cases = String::new();
@@ -577,7 +780,7 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
                 }
                 Some(Table::All { .. }) | None => format!("c->pc = {target}; {TAIL_DISPATCH}"),
             },
-            Insn::Ret(target) => format!("c->pc = {target}; return;"),
+            Insn::Ret(target) => format!("c->pc = {target}; SPILL return;"),
         };
         last_ends = l.at(a).ends_block();
         lines.push(Line { label: s.labels.contains(&a).then_some(a), code, next: !last_ends });
@@ -585,11 +788,21 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
     }
     if !last_ends {
         // falls through into the next function
-        let code = if end < l.m.text.end { jump(end, refs) } else { format!("rt_udf(c, {});", hx(end)) };
+        let code = if end < l.m.text.end { jump(end, refs) } else { format!("SPILL rt_udf(c, {});", hx(end)) };
         lines.push(Line { label: None, code, next: false });
     }
     optimize_flags(&mut lines);
-    let _ = writeln!(out, "RT_FN void {}(Cpu *c) {{", fname(entry));
+    let (kept, entry_live) = keep_registers(&mut lines);
+    let _ = write!(out, "RT_FN void {}(Cpu *c) {{\n   ", fname(entry));
+    for r in (0..32).filter(|r| kept & (1 << r) != 0) {
+        let (name, field) = if r == 31 { ("gsp".to_string(), "c->sp".to_string()) } else { (format!("gx{r}"), format!("c->x[{r}]")) };
+        if entry_live & (1 << r) != 0 {
+            let _ = write!(out, " uint64_t {name} = {field};");
+        } else {
+            let _ = write!(out, " uint64_t {name};");
+        }
+    }
+    out.push('\n');
     for l in &lines {
         if let Some(a) = l.label {
             let _ = writeln!(out, "L_{a:x}:;");
@@ -706,7 +919,10 @@ mod tests {
         assert_eq!(out.jump_tables, 1);
         assert_eq!(out.unresolved_computed, 0);
         let body = &out.files[0].1;
-        assert!(body.contains("c->x[30] = 0x100010ull; f_100100(c); RT_RETURNED(c, 0x100010ull)"));
+        // Six registers in locals: a call stores those written since the Cpu last held them and loads those read again
+        // after it, but not callee-saved ones (x19, sp).
+        assert!(body.contains("gx30 = 0x10001cull; c->x[0] = gx0; c->x[19] = gx19; c->x[30] = gx30; f_100200(c); gx0 = c->x[0]; RT_RETURNED(c, 0x10001cull)"));
+        assert!(body.contains("uint64_t gx0; uint64_t gx19; uint64_t gx29 = c->x[29];"));
         assert!(body.contains("case 0x100238ull: goto L_100238;"));
         assert!(body.contains("goto L_100104;")); // the loop's back edge
     }
@@ -720,7 +936,7 @@ mod tests {
         }
         let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
         let body = &lift_module(&m, &Options::default()).files[0].1;
-        assert!(body.contains("if ((((int32_t)((uint32_t)((uint32_t)c->x[0]))) < ((int32_t)((uint32_t)(0x1ull))))) { goto L_1010; }"), "{body}");
+        assert!(body.contains("if ((((int32_t)((uint32_t)((uint32_t)gx0))) < ((int32_t)((uint32_t)(0x1ull))))) { goto L_1010; }"), "{body}");
         assert!(!body.contains("subs32(c,") && !body.contains("COND_"));
         assert!(body.contains("add64_nf("));
     }
