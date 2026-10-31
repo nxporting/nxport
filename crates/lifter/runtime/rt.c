@@ -11,6 +11,10 @@ typedef struct RtHost {
     // brk (kind 0) / undefined instruction (kind 1); does not return.
     void (*trap)(Cpu *c, uint32_t kind, uint32_t imm, uint64_t pc);
     uint64_t (*ticks)(void);
+    // The HLE function guest code reaches by branching to pc, as a handle for call_hle; null if none.
+    void *(*resolve_hle)(uint64_t pc);
+    // Runs HLE function `h` (from resolve_hle) as call would.
+    void (*call_hle)(void *h, Cpu *c);
 } RtHost;
 
 static RtHost host;
@@ -49,22 +53,48 @@ static GuestFn lookup(uint64_t pc) {
     return 0;
 }
 
-// A direct-mapped cache in front of the lookup, per thread (the tables do not change once guest code runs).
+// A direct-mapped cache in front of the lookup, per thread (the tables do not change once guest code runs). HLE
+// targets are kept too (a binding never changes once guest code can reach it), as pc | 1 with the host's handle.
 #define CACHE_SIZE 4096
 static __thread struct { uint64_t pc; GuestFn fn; } cache[CACHE_SIZE];
+
+#ifndef RT_CC
+#define RT_CC
+#endif
+
+// Out of line, so that a hit saves no registers.
+static RT_CC __attribute__((noinline)) void dispatch_miss(Cpu *c);
 
 void rt_dispatch(Cpu *c) {
     uint64_t pc = c->pc;
     if (pc == RT_RETURN_TO_HOST) return;
     unsigned h = (unsigned)(pc >> 2) & (CACHE_SIZE - 1);
-    if (cache[h].pc == pc && cache[h].fn) {
+    // A kept pc always has its function (pc 0 is never looked up).
+    if (__builtin_expect(cache[h].pc == pc, 1)) {
         __attribute__((musttail)) return cache[h].fn(c);
     }
+    if (cache[h].pc == (pc | 1)) {
+        host.call_hle((void *)cache[h].fn, c);
+        return;
+    }
+    __attribute__((musttail)) return dispatch_miss(c);
+}
+
+static RT_CC void dispatch_miss(Cpu *c) {
+    uint64_t pc = c->pc;
+    unsigned h = (unsigned)(pc >> 2) & (CACHE_SIZE - 1);
     GuestFn f = lookup(pc);
     if (f) {
         cache[h].pc = pc;
         cache[h].fn = f;
         __attribute__((musttail)) return f(c);
+    }
+    void *hle = host.resolve_hle(pc);
+    if (hle) {
+        cache[h].pc = pc | 1;
+        cache[h].fn = (GuestFn)hle;
+        host.call_hle(hle, c);
+        return;
     }
     // Not lifted code: the host runs it (an HLE call returns to x30, which the caller's RT_RETURNED check expects).
     host.call(c);

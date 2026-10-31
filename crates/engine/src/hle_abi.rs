@@ -309,17 +309,26 @@ pub fn bind_entry(entry: u64, f: *const ()) {
 /// The HLE function guest code reaches by branching to `addr`: through a trampoline (`bind_entry`), or the function's
 /// own address.
 pub fn entry(addr: u64) -> Option<Hle> {
-    // Lifted code asks on every HLE call, from every guest thread at once: each thread keeps what it found, so the
-    // shared tables (two locks) are consulted once per thread and address. A binding never changes once guest code
-    // can reach it; an address without one stops the run (lifted::Handlers::unknown), so misses are not kept.
+    entry_ref(addr).copied()
+}
+
+/// `entry`, as a reference that stays valid (lifted code's dispatcher keeps it).
+pub fn entry_ref(addr: u64) -> Option<&'static Hle> {
+    // Each thread keeps what it found, so the shared tables (three locks) are consulted once per thread and address.
+    // A binding never changes once guest code can reach it; an address without one stops the run
+    // (lifted::Handlers::unknown), so misses are not kept.
     thread_local! {
-        static FOUND: std::cell::RefCell<rustc_hash::FxHashMap<u64, Hle>> = Default::default();
+        static FOUND: std::cell::RefCell<rustc_hash::FxHashMap<u64, &'static Hle>> = Default::default();
     }
+    static KEPT: OnceLock<Mutex<HashMap<u64, &'static Hle>>> = OnceLock::new();
     if let Some(h) = FOUND.with(|f| f.borrow().get(&addr).copied()) {
         return Some(h);
     }
     let f = entries().lock().unwrap().get(&addr).copied().unwrap_or(addr as usize);
     let h = adapter(f as *const ())?;
+    let mut kept = KEPT.get_or_init(Default::default).lock().unwrap();
+    let h: &'static Hle = *kept.entry(addr).or_insert_with(|| Box::leak(Box::new(h)));
+    drop(kept);
     FOUND.with(|found| found.borrow_mut().insert(addr, h));
     Some(h)
 }
