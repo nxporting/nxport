@@ -103,15 +103,19 @@ fn flatten(
             }
             Some(Cmd::ModelDraw(m)) if depth < 16 => {
                 flatten(lists, m.unit, depth + 1, out, missing);
-                let mut uniforms = m.uniforms.iter().peekable();
-                let uniform = |u: &crate::nvn::cmd::ModelUniform| Op {
-                    name: "nvnCommandBufferBindUniformBuffer".into(),
-                    typed: Some(Cmd::BindUniformBuffer { stage: u.stage, index: u.index, addr: u.addr, size: u.size }),
-                    args: None,
+                let mut binds = m.binds.iter().peekable();
+                let bind = |b: &crate::nvn::cmd::ModelBind| {
+                    let t = b.cmd();
+                    let name = match t {
+                        Cmd::BindUniformBuffer { .. } => "nvnCommandBufferBindUniformBuffer",
+                        Cmd::BindStorageBuffer { .. } => "nvnCommandBufferBindStorageBuffer",
+                        _ => "nvnCommandBufferBindTexture",
+                    };
+                    Op { name: name.into(), typed: Some(t), args: None }
                 };
                 for (i, r) in m.ranges.iter().enumerate() {
-                    while let Some(u) = uniforms.next_if(|u| u.at as usize <= i) {
-                        out.push(uniform(u));
+                    while let Some(b) = binds.next_if(|b| b.at as usize <= i) {
+                        out.push(bind(b));
                     }
                     out.push(Op {
                         name: "nvnCommandBufferDrawElementsInstanced".into(),
@@ -128,7 +132,7 @@ fn flatten(
                         args: None,
                     });
                 }
-                out.extend(uniforms.map(uniform));
+                out.extend(binds.map(bind));
             }
             _ => out.push(op.clone()),
         }
