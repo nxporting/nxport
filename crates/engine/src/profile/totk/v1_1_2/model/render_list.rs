@@ -306,13 +306,18 @@ const PASS_GLOBALS_HOLDER: usize = 0x4631f68;
 const WORKER_RINGS_HOLDER: usize = 0x4639fb8;
 const CONTEXT_VTABLE: usize = 0x462cdf0;
 
-/// The pass listener at `v`+0x570 (virtual +0x10: enabled); enabled listeners are not ported.
-unsafe fn listener_quiet(p: &Port, v: usize) -> R<()> {
+/// The pass listener at `v`+0x570 (the render context's state hook, a sead::Delegate1; virtual +0x10: bound) for an
+/// event of `kind` other than 2: the hooks seen here act only on kind 2 (main+0x27d0468) or never (main+0x27d0464).
+pub(super) unsafe fn pass_event(p: &Port, v: usize) -> R<()> {
     let l = v + 0x570;
-    if p.query(p.base + p.vfn(l, 0x10), &[l as u64]) & 1 != 0 {
-        return Err("model pass listener");
+    if p.query(p.base + p.vfn(l, 0x10), &[l as u64]) & 1 == 0 {
+        return Ok(());
     }
-    Ok(())
+    match p.delegate_target(l) {
+        Some(None) | Some(Some(STATE_HOOK)) | Some(Some(0x27d0464)) => Ok(()),
+        Some(Some(f)) => super::vfx::callback(p.base + f, p.base),
+        None => super::vfx::callback(p.base + p.vfn(l, 0), p.base),
+    }
 }
 
 /// main+0x931960(renderer, w, args, view, range, flag, out, user): one model pass. Builds the draw context (0x1c0
@@ -476,7 +481,7 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
     if fl & 0x800_0000 != 0 {
         p.m.w::<u32>(c + 0x50, p.m.r32(a + 0x48));
     }
-    listener_quiet(p, v)?;
+    pass_event(p, v)?;
     let base_flags: u32 = if fl & 0x200_0000 == 0 { 0xc1 } else { 0x80 };
     let mut lf = if p.m.r8(c + 0x46) as i32 == p.m.r8(v + 0xc) as i8 as i32 { base_flags | 2 } else { base_flags };
     let cmd = p.m.r64(w + 0xb8) as u64;
@@ -510,7 +515,7 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
     p.m.forget(c, 0x1c0);
     drop(buf);
     drawn?;
-    listener_quiet(p, v)?;
+    pass_event(p, v)?;
     if out != 0 {
         p.m.w::<u32>(out, count_out);
     }

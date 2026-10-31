@@ -86,6 +86,27 @@ pub unsafe extern "C" fn on_model_draw(d: usize, c: usize, shape: u32, flags: u3
     0
 }
 
+thread_local! {
+    /// The view (+0x30) and pass kind (+0xb0) of the render list being checked.
+    static LIST_KEY: std::cell::Cell<Option<(u8, u32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Render-list checks by (view, pass kind): (same, different).
+static BY_VIEW: Mutex<Vec<((u8, u32), (u64, u64))>> = Mutex::new(Vec::new());
+
+fn tally_view(same: bool) {
+    let Some(key) = LIST_KEY.with(|k| k.take()) else { return };
+    let mut v = BY_VIEW.lock().unwrap();
+    let e = match v.iter_mut().find(|e| e.0 == key) {
+        Some(e) => e,
+        None => {
+            v.push((key, (0, 0)));
+            v.last_mut().unwrap()
+        }
+    };
+    if same { e.1 .0 += 1 } else { e.1 .1 += 1 }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn on_model_draw_end() -> u32 {
     let Some(expected) = EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
@@ -100,6 +121,7 @@ pub unsafe extern "C" fn on_model_draw_end() -> u32 {
             return 0;
         }
     };
+    tally_view(expected == got);
     if expected == got {
         SAME.fetch_add(1, Ordering::Relaxed);
         return 0;
@@ -146,6 +168,7 @@ pub unsafe extern "C" fn on_render_list(list: usize, count: u32, c: usize, mask:
         crate::nvn::api::capture_dry(|| result = render_list::draw_list(&mut port, list, count, c, mask, flags));
     match result {
         Ok(()) => {
+            LIST_KEY.with(|k| k.set(Some((*((c + 0x30) as *const u8), *((c + 0xb0) as *const u32)))));
             EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
             ring::watch();
             crate::nvn::api::capture_collect();
@@ -452,6 +475,16 @@ fn report() {
     let dp = dispatch::ported_report();
     if !dp.is_empty() {
         println!("[model-draw] dispatch targets reached: {dp}");
+    }
+    let bv: Vec<String> = BY_VIEW
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e.1 .1 != 0)
+        .map(|((v, k), (s, d))| format!("view {v} kind {k:#x}: {d} of {}", s + d))
+        .collect();
+    if !bv.is_empty() {
+        println!("[model-draw] different by view: {}", bv.join(", "));
     }
     let pv = perview::report();
     if !pv.is_empty() {
