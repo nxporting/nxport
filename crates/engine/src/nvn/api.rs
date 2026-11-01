@@ -5006,10 +5006,18 @@ pub unsafe extern "C" fn hle_nvnDeviceSetDepthMode(_device: usize, mode: i32) {
     );
     DEPTH_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
 }
-/// Vblanks each presented frame stays on screen (nvnWindowSetPresentInterval; 1 = 60 Hz, 2 = 30 Hz, 0 = no wait).
+/// Vblanks each presented frame stays on screen as the game asked (nvnWindowSetPresentInterval; 1 = 60 Hz, 2 = 30 Hz,
+/// 0 = no wait).
 static PRESENT_INTERVAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
+/// The interval presents follow: the game's, at least 2 at the 30 fps setting. Read each frame, so changing the setting
+/// while the game runs takes effect at once (the games' frame-rate hooks unlock their pacer whatever the setting).
 pub fn present_interval() -> i32 {
-    PRESENT_INTERVAL.load(std::sync::atomic::Ordering::Relaxed)
+    let asked = PRESENT_INTERVAL.load(std::sync::atomic::Ordering::Relaxed);
+    if crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30 {
+        asked.max(2)
+    } else {
+        asked
+    }
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interval: i32) {
@@ -5074,11 +5082,6 @@ pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interva
                 n, interval, ticks, freq, ticks as f64 / freq as f64 * 60.0, bias, mx, mn, cur, *((st + 0x18) as *const i32), *((st + 0x20) as *const i32), cbs);
         }
     }
-    let interval = if crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30 {
-        interval.max(2)
-    } else {
-        interval
-    };
     if PRESENT_INTERVAL.swap(interval, std::sync::atomic::Ordering::Relaxed) != interval {
         let fp = crate::guest_reg!(x29);
         println!(
