@@ -1,11 +1,18 @@
 // agl::RenderBuffer::bind, main+0x7ab9a4(buffer, w): the buffer's colour targets (+0x20, 8) and depth target (+0x60)
 // bound as render targets (texture ids at +0x60 into the device's texture table, views at +0xb8), with the context's
-// current buffer and name updated. The previous buffer's unbind, targets another thread is setting up and the
-// first-use clears (with bit 6 of the graphics holder's +0x780) stop: left to the game.
+// current buffer and name updated, then the first-use clears. The previous buffer's unbind and targets another thread
+// is setting up stop: left to the game.
 
 use super::draw::{Port, R};
 
 const PFN_SET_RENDER_TARGETS: usize = 0x466e258;
+const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
+const PFN_SET_RENDER_ENABLE_CONDITIONAL: usize = 0x466e250;
+const PFN_CLEAR_COLOR: usize = 0x466e0c8;
+const PFN_CLEAR_DEPTH_STENCIL: usize = 0x466e0e0;
+const PFN_REPORT_COUNTER: usize = 0x466e230;
+/// The first-use clear colour (four floats).
+const CLEAR_COLOR: usize = 0x3840174;
 const HOLDER: usize = 0x462bbf0;
 const EMPTY_NAME: usize = 0x374f715;
 const VIEW_SETUP: usize = 0x2a2f550;
@@ -24,24 +31,6 @@ pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
     let holder = p.m.r64(p.m.r64(p.base + HOLDER));
     let targets: [usize; 9] = std::array::from_fn(|k| p.m.r64(rb + 0x20 + k * 8));
     let target = |k: usize| targets[k];
-    // With bit 6 of +0x780, a target's first use (its texture table entry's +4 bit 0 set, bit 1 not yet) is cleared
-    // after the bind: left to the game.
-    if (p.m.r32(holder + 0x780) >> 6) & 1 != 0 {
-        for k in 0..9 {
-            let t = target(k);
-            if t == 0 {
-                continue;
-            }
-            let mut i = (p.m.i32(t + 0x60) as u32).wrapping_sub(p.m.r16(holder + 0x5a2) as u32);
-            if p.m.r32(holder + 0x530) <= i {
-                i = 0;
-            }
-            let flags = p.m.r32((p.m.r64(holder + 0x538) as i64 + i as i32 as i64 * 0x20) as usize + 4);
-            if flags & 1 != 0 && flags & 2 == 0 {
-                return Err("render target first use");
-            }
-        }
-    }
     // The name: the last colour target's, the depth target's only without colour targets, else "Empty".
     let mut name = p.base + EMPTY_NAME;
     for k in 0..7 {
@@ -103,14 +92,81 @@ pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
             textures[8] as usize,
             views[8] as *const u8,
         );
-        return {
-            p.push(cmd, crate::nvn::cmd::ModelItem::Targets { colors, depth });
-            Ok(())
-        };
+        p.push(cmd, crate::nvn::cmd::ModelItem::Targets { colors, depth });
+        return first_use(p, holder, &targets, cmd);
     }
     p.call(
         p.pfn(PFN_SET_RENDER_TARGETS),
         &[cmd as u64, count as u64, textures.as_ptr() as u64, views.as_ptr() as u64, textures[8], views[8]],
     );
+    first_use(p, holder, &targets, cmd)
+}
+
+/// With bit 6 of the holder's +0x780, a target's first use (its texture table entry's +4 bit 0 set, bit 1 not yet)
+/// is cleared when its report (the holder's +0x798 buffer at the entry's [[+0x10]] +0x84 * 0x20) is set, else only
+/// marked used (bit 1). A clear runs under conditional rendering on the holder's +0x7f8 report and is reported
+/// (counter 0x10); after any clear, rendering is enabled again. Only the mode with bit 20 set (bit 23 clear, +0x784
+/// = 4, +0x782 bits 5 and 7 clear) is ported, from the disassembly; others stop.
+unsafe fn first_use(p: &mut Port, holder: usize, targets: &[usize; 9], cmd: usize) -> R<()> {
+    let mode = p.m.r32(holder + 0x780);
+    if (mode >> 6) & 1 == 0 {
+        return Ok(());
+    }
+    let mut cleared = false;
+    for (k, &t) in targets.iter().enumerate() {
+        if t == 0 {
+            continue;
+        }
+        let mut i = (p.m.i32(t + 0x60) as u32).wrapping_sub(p.m.r16(holder + 0x5a2) as u32);
+        if p.m.r32(holder + 0x530) <= i {
+            i = 0;
+        }
+        let e = (p.m.r64(holder + 0x538) as i64 + i as i32 as i64 * 0x20) as usize;
+        let flags = p.m.r32(e + 4);
+        if flags & 1 == 0 || flags & 2 != 0 {
+            continue;
+        }
+        if (mode >> 20) & 1 == 0 {
+            return Err("render target first use (mode)");
+        }
+        let rb = p.m.r64(holder + 0x798);
+        if rb == 0 {
+            return Err("render target first use (no reports)");
+        }
+        let off = (p.m.r16(p.m.r64(p.m.r64(e + 0x10)) + 0x84) as u32) << 5;
+        let pool = p.m.r64(rb + 0x110);
+        let base = if pool != 0 { p.m.r64(holder + 0x790).wrapping_sub(p.m.r64(pool + 0x18)) } else { 0 };
+        if p.m.r64(p.m.r64(rb + 0x100) + (base as u32).wrapping_add(off) as usize) == 0 {
+            p.m.fetch_or32(e + 4, 2);
+            continue;
+        }
+        let report = (p.m.r64(holder + 0x7f8) + off as usize) as u64;
+        p.call(p.pfn(PFN_SET_RENDER_ENABLE_CONDITIONAL), &[cmd as u64, 1, report]);
+        let flags2 = p.m.r8(holder + 0x782);
+        if flags2 >> 7 != 0 {
+            return Err("render target first use (mode)");
+        }
+        if k < 8 {
+            p.call(p.pfn(PFN_CLEAR_COLOR), &[cmd as u64, k as u64, (p.base + CLEAR_COLOR) as u64, 0xf]);
+        } else {
+            let mask = if p.m.r8(t + 0xa8).wrapping_sub(0x5b) <= 1 { 0xff } else { 0 };
+            let clear: unsafe extern "C" fn(u64, f32, u32, u32, u32) = std::mem::transmute(p.pfn(PFN_CLEAR_DEPTH_STENCIL));
+            p.flush();
+            clear(cmd as u64, 1.0, 1, 0, mask);
+        }
+        if (mode >> 23) & 1 == 0 {
+            if p.m.r8(holder + 0x784) != 4 {
+                return Err("render target first use (mode)");
+            }
+            p.call(p.pfn(PFN_REPORT_COUNTER), &[cmd as u64, 0x10, report]);
+        }
+        if (flags2 >> 5) & 1 != 0 {
+            return Err("render target first use (mode)");
+        }
+        cleared = true;
+    }
+    if cleared && mode & 0x30_0000 == 0x10_0000 {
+        p.call(p.pfn(PFN_SET_RENDER_ENABLE), &[cmd as u64, 1]);
+    }
     Ok(())
 }
