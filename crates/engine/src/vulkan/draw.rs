@@ -133,6 +133,18 @@ pub(super) struct BlEntry {
     fb: (u64, u32),
 }
 
+/// Bindless textures: a push constant word's last resolution (Ctx::bl_memo), good within the submit (`serial`) while
+/// the image is not rendered to (`fb` 0) or, while it is, for the feedback copy of barrier epoch `fb`.
+#[derive(Clone, Copy, Default)]
+pub(super) struct BlMemo {
+    pub(super) handle: u64,
+    pub(super) declared: vk::ImageViewType,
+    pub(super) serial: u64,
+    pub(super) fb: u64,
+    pub(super) image: vk::Image,
+    pub(super) word: u32,
+}
+
 /// What the handle bound at a texture slot resolved to (texture_binding), while Ctx::bindings holds it (`gen`:
 /// Ctx::bindings_gen then).
 #[derive(Clone, Copy, Default)]
@@ -1000,10 +1012,23 @@ impl Ctx {
                             (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
                         })
                     };
-                    let w = self.bindless_word(handle, *view);
-                    if let Some(x) = self.bl_words.get_mut(*word as usize) {
-                        *x = w;
-                    }
+                    let i = (*word as usize).min(self.bl_memo.len() - 1);
+                    // The word's last resolution in this submit first (most draws bind what the draw before bound).
+                    let m = self.bl_memo[i];
+                    let hit = handle.is_some_and(|h| {
+                        m.handle == h && m.declared == *view && m.serial == self.tex.serial && {
+                            let in_pass = self.pass.as_ref().is_some_and(|p| p.images.contains(&m.image));
+                            if in_pass { m.fb == self.fb_epoch } else { m.fb == 0 }
+                        }
+                    });
+                    self.bl_words[i] = if hit {
+                        m.word
+                    } else {
+                        let (w, image, fb) = self.bindless_word(handle, *view);
+                        let (handle, serial) = (handle.unwrap_or(u64::MAX), self.tex.serial);
+                        self.bl_memo[i] = BlMemo { handle, declared: *view, serial, fb, image, word: w };
+                        w
+                    };
                 }
                 Feed::SamplerTable => {
                     let infos = (0..b.count)
@@ -1051,12 +1076,8 @@ impl Ctx {
             self.bound.global = true;
         }
         if self.bound.words != Some(self.bl_words) {
-            let w = self.bl_words;
-            self.rec.cmd(move |d, cb| {
-                let bytes = std::slice::from_raw_parts(w.as_ptr() as *const u8, std::mem::size_of_val(&w));
-                d.device.cmd_push_constants(cb, layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, bytes)
-            });
-            self.bound.words = Some(w);
+            self.rec.words(layout, &self.bl_words);
+            self.bound.words = Some(self.bl_words);
         }
     }
 
@@ -1168,15 +1189,16 @@ impl Ctx {
     /// per submit the texture's place (alias roots change as textures come and go) is checked and its image against guest
     /// memory. A texture the current pass renders to is sampled through its feedback copy (feedback_view), whose word is
     /// kept while the copy is that barrier epoch's (the depth buffer many passes read while testing against it).
-    unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> u32 {
-        let Some(h) = handle else { return 0 };
+    /// Returns the word, the image and the barrier epoch of the feedback copy the word names (0: none).
+    unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (u32, vk::Image, u64) {
+        let Some(h) = handle else { return (0, vk::Image::null(), 0) };
         let in_pass = |me: &Self, img: vk::Image| me.pass.as_ref().is_some_and(|p| p.images.contains(&img));
         let key = (h, declared);
         let serial = self.tex.serial;
         if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.resolved || e.serial == serial) {
             if in_pass(self, e.image) {
                 if e.fb.0 == self.fb_epoch && e.serial == serial {
-                    return e.fb.1;
+                    return (e.fb.1, e.image, e.fb.0);
                 }
             } else {
                 let mut ok = true;
@@ -1192,7 +1214,7 @@ impl Ctx {
                     }
                 }
                 if ok {
-                    return e.word;
+                    return (e.word, e.image, 0);
                 }
             }
         }
@@ -1224,7 +1246,7 @@ impl Ctx {
         self.bl = Some(slots);
         let resolved = view.is_some();
         self.bl_cache.insert(key, BlEntry { word, image, place, serial, resolved, fb: fb.unwrap_or((0, 0)) });
-        fb.map_or(word, |f| f.1)
+        fb.map_or((word, image, 0), |f| (f.1, image, f.0))
     }
 
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
