@@ -5,7 +5,6 @@
 
 use super::draw::{self, Port, R};
 
-const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
 const MODEL_DRAW: usize = 0x688c68;
 const TERRAIN_DRAW: usize = 0x2a47078;
 const DISPATCH_DRAW: usize = 0x763718;
@@ -91,7 +90,7 @@ unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) ->
         0x27d0104 => {
             if index < 4 {
                 let flags = if p.m.r8(p.m.r64(p.m.r64(p.base + GRAPHICS_FLAGS_HOLDER)) + 0x50c) & 2 != 0 { 0x112 } else { 0x12 };
-                p.call(p.pfn(PFN_BARRIER), &[p.m.r64(p.m.r64(c + 0x20) + 0xb8) as u64, flags]);
+                p.barrier(p.m.r64(p.m.r64(c + 0x20) + 0xb8), flags);
             }
         }
         // In pass 0 with scene flags 1, 2 and 6 set: per item of its list the scene's +0x8f8 hook main+0x12291e4 (an
@@ -128,7 +127,7 @@ unsafe fn entry_state(p: &mut Port, c: usize, e: usize) -> R<()> {
         p.m.w::<u8>(c + 0x3f, bit as u8);
         if p.m.r64(c + 0x100) != 0 {
             let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8) as u64;
-            p.call(p.pfn(PFN_SET_RENDER_ENABLE), &[cmd, 1]);
+            p.render_enable(cmd as usize, true);
             p.m.w::<u32>(c + 0x100, 0);
             p.m.w::<u32>(c + 0x104, 0);
         }
@@ -300,8 +299,6 @@ unsafe fn state_hook(p: &mut Port, mode: u32, g: usize) {
     p.m.w::<u8>(g + 0x64, 5);
 }
 
-const PFN_SET_LINE_WIDTH: usize = 0x466e1a0;
-const PFN_SET_POINT_SIZE: usize = 0x466e198;
 const PASS_GLOBALS_HOLDER: usize = 0x4631f68;
 const WORKER_RINGS_HOLDER: usize = 0x4639fb8;
 const CONTEXT_VTABLE: usize = 0x462cdf0;
@@ -485,9 +482,8 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
     let base_flags: u32 = if fl & 0x200_0000 == 0 { 0xc1 } else { 0x80 };
     let mut lf = if p.m.r8(c + 0x46) as i32 == p.m.r8(v + 0xc) as i8 as i32 { base_flags | 2 } else { base_flags };
     let cmd = p.m.r64(w + 0xb8) as u64;
-    p.flush();
-    p.query_f(p.pfn(PFN_SET_LINE_WIDTH), &[cmd], &[p.m.f32(v + 0x568)]);
-    p.query_f(p.pfn(PFN_SET_POINT_SIZE), &[cmd], &[p.m.f32(v + 0x56c)]);
+    p.line_width(cmd as usize, p.m.f32(v + 0x568));
+    p.point_size(cmd as usize, p.m.f32(v + 0x56c));
     if fl & 0x400_0000 != 0 {
         lf |= 8;
         if p.m.r8(v + 0xd) == 0xff {
@@ -520,7 +516,7 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
         p.m.w::<u32>(out, count_out);
     }
     if enable != 0 {
-        p.call(p.pfn(PFN_SET_RENDER_ENABLE), &[p.m.r64(w + 0xb8) as u64, 1]);
+        p.render_enable(p.m.r64(w + 0xb8), true);
     }
     Ok(())
 }

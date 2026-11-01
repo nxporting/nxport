@@ -28,6 +28,9 @@ const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_CLEAR_COLOR: usize = 0x466e0c8;
+const PFN_SET_POINT_SIZE: usize = 0x466e198;
+const PFN_SET_LINE_WIDTH: usize = 0x466e1a0;
+const PFN_SET_PRIMITIVE_RESTART: usize = 0x466e050;
 const PFN_CLEAR_DEPTH_STENCIL: usize = 0x466e0e0;
 const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
 const PFN_SET_RENDER_ENABLE_CONDITIONAL: usize = 0x466e250;
@@ -231,6 +234,39 @@ impl Port {
         let f: unsafe extern "C" fn(u64, f32, u32, u32, u32) = std::mem::transmute(self.pfn(PFN_CLEAR_DEPTH_STENCIL));
         self.flush();
         f(cmd as u64, depth, depth_mask as u32, stencil as u32, stencil_mask as u32);
+    }
+
+    /// nvnCommandBufferSetPointSize.
+    pub(super) unsafe fn point_size(&mut self, cmd: usize, size: f32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::PointSize(size));
+        }
+        self.flush();
+        self.query_f(self.pfn(PFN_SET_POINT_SIZE), &[cmd as u64], &[size]);
+    }
+
+    /// nvnCommandBufferSetLineWidth: natively nothing (the executor has no line width; Metal draws one-pixel lines).
+    pub(super) unsafe fn line_width(&mut self, cmd: usize, width: f32) {
+        if !self.native {
+            self.flush();
+            self.query_f(self.pfn(PFN_SET_LINE_WIDTH), &[cmd as u64], &[width]);
+        }
+    }
+
+    /// nvnCommandBufferSetPrimitiveRestart.
+    pub(super) unsafe fn primitive_restart(&mut self, cmd: usize, enable: bool, index: u32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::PrimitiveRestart { enable, index });
+        }
+        self.call(self.pfn(PFN_SET_PRIMITIVE_RESTART), &[cmd as u64, enable as u64, index as u64]);
+    }
+
+    /// nvnCommandBufferBarrier.
+    pub(super) unsafe fn barrier(&mut self, cmd: usize, bits: u32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Barrier(bits));
+        }
+        self.call(self.pfn(super::render_list::PFN_BARRIER), &[cmd as u64, bits as u64]);
     }
 
     /// nvnCommandBufferSetRenderEnable.

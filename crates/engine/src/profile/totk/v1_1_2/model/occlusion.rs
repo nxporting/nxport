@@ -7,7 +7,6 @@ use super::draw::{Port, R};
 use super::lights::{shape_state, stream_draw, SHAPES, STREAMS};
 use super::vfx::{program_apply, program_block};
 
-const PFN_SET_POINT_SIZE: usize = 0x466e198;
 /// The item class drawn here: its program getter (virtual +0x30), setup (+0x38, agl::VertexAttribute::activate in the
 /// symbol match) and draw (+0x40).
 const ITEM_PROGRAM: usize = 0x2a3819c;
@@ -36,8 +35,7 @@ pub(super) unsafe fn draw(p: &mut Port, q: usize, w: usize, view: u32, flags: u6
     let v = if p.m.r32(q + 0x98) <= view { 0 } else { view } as usize;
     let data = p.m.r64(q + 0xa0) + v * 0x98;
     let cmd = p.m.r64(w + 0xb8);
-    p.flush();
-    p.query_f(p.pfn(PFN_SET_POINT_SIZE), &[cmd as u64], &[p.m.f32(q + 0xa8)]);
+    p.point_size(cmd, p.m.f32(q + 0xa8));
     let items = p.m.r64(q + 0x10);
     let mut last = 0usize;
     for k in 0..p.m.r32(q + 8) as usize {
@@ -85,6 +83,6 @@ pub(super) unsafe fn draw(p: &mut Port, q: usize, w: usize, view: u32, flags: u6
             p.report_counter(cmd, 1, at);
         }
     }
-    p.call(p.pfn(super::render_list::PFN_BARRIER), &[cmd as u64, 1]);
+    p.barrier(cmd, 1);
     Ok(())
 }

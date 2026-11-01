@@ -6,7 +6,6 @@
 
 use super::draw::{load_resource, Port, R};
 
-const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
 const VARIANTS: usize = 0x45c2800;
 
 /// Calls of the variants the port does not draw, by index.
@@ -27,7 +26,7 @@ pub(super) unsafe fn draw(p: &mut Port, d: usize, c: usize, sub: u32, flags: u32
     let idx = b4 | ((f >> 2) & 2 | (f >> 4) & 1) | ((s40 >> 8) & 4) | b3;
     if p.m.r64(c + 0x100) != 0 {
         let cmd = p.m.r64(p.m.r64(c + 0x20) + 0xb8) as u64;
-        p.call(p.pfn(PFN_SET_RENDER_ENABLE), &[cmd, 1]);
+        p.render_enable(cmd as usize, true);
         p.m.w::<u64>(c + 0x100, 0);
     }
     let n = match p.m.r32(c + 8) {
