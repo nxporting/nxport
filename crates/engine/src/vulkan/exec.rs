@@ -756,6 +756,9 @@ impl Ctx {
         crate::gpu::history::journal(|| format!("submit {} lists serial {serial}", lists.len()));
         // Emptied when the previous submit ended.
         std::mem::swap(&mut self.lists, fetched);
+        // vk-decode walks the lists while the submit is set up here: fetching what the roots call (~3,000 lists in TotK,
+        // under the list lock) took it ~1 ms before it published the first command, and this thread waited all of it.
+        self.decoder.start(lists, &self.lists, resolve);
         let empty = |serial| super::inflight::Done {
             serial,
             fence: vk::Fence::null(),
@@ -770,6 +773,7 @@ impl Ctx {
         self.retire();
         if self.lost || super::inflight::LOST.load(std::sync::atomic::Ordering::Acquire) {
             self.lost = true;
+            self.decoder.finish();
             super::inflight::watch(empty(serial));
             return;
         }
@@ -780,6 +784,7 @@ impl Ctx {
             self.retire();
         }
         let (Some(pool), Some(rec_pool)) = (self.command_pool(), self.command_pool()) else {
+            self.decoder.finish();
             super::inflight::watch(empty(serial));
             return;
         };
@@ -787,6 +792,7 @@ impl Ctx {
         self.spare_cbs.clear();
         self.alloc_cbs();
         let Some(cb) = self.next_cb() else {
+            self.decoder.finish();
             super::inflight::watch(empty(serial));
             return;
         };
@@ -819,7 +825,6 @@ impl Ctx {
         self.chunk_start = t0;
         self.op_index = 0;
         // The lists are walked on vk-decode (decode.rs) while their commands run here.
-        self.decoder.start(lists, &self.lists, resolve);
         while let Some(e) = self.decoder.next() {
             let op = &*e.op;
             match &op.typed {

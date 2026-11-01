@@ -53,15 +53,14 @@ impl<T: Copy> Chunks<T> {
 /// One submit's walk: what to walk (the lists by handle, the submit's map: Ctx::lists, unchanged until the walk ended)
 /// and the lists looked up again because the map lacked them (kept until the submit ended).
 /// With `resolve`, the map holds the roots only (nvn::api::pin_command_lists) and the walk fetches the lists they call
-/// itself, under one lock per root (nvn::api::walk_command_lists_at, into `own`): the Presentation Thread no longer
-/// walks them before recording (~0.6 ms a frame in TotK).
+/// itself, under one lock per CallCommands it reaches first (nvn::api::fetch_command_lists_at, into `own`): the
+/// Presentation Thread no longer walks them before recording (~0.6 ms a frame in TotK).
 struct Walk {
     roots: Vec<u64>,
     lists: *const Lists,
     held: Vec<Arc<RecordedCommandList>>,
     resolve: bool,
     own: Lists,
-    stack: Vec<u64>,
     now: u64,
     len: usize,
     events: usize,
@@ -104,7 +103,6 @@ impl Decoder {
                 held: Vec::new(),
                 resolve: false,
                 own: Lists::default(),
-                stack: Vec::new(),
                 now: 0,
                 len: 0,
                 events: 0,
@@ -221,11 +219,6 @@ unsafe fn decode(s: &Shared) {
     w.own.clear();
     let roots = std::mem::take(&mut w.roots);
     for &h in &roots {
-        if w.resolve {
-            let mut stack = std::mem::take(&mut w.stack);
-            crate::nvn::api::walk_command_lists_at(w.now, &[h], &mut stack, &mut w.own, |_| {});
-            w.stack = stack;
-        }
         if !walk_list(s, w, h, 0) {
             break;
         }
@@ -263,6 +256,12 @@ unsafe fn walk_list(s: &Shared, w: &mut Walk, handle: u64, depth: u32) -> bool {
         use crate::nvn::cmd::Cmd;
         match &op.typed {
             Some(Cmd::CallCommands(hs)) if depth < 16 => {
+                // The lists it calls, fetched under one lock when the walk first reaches them: fetching all the lists
+                // a root reaches before its first command (~3,000 in TotK) kept the Presentation Thread waiting ~1 ms
+                // for that command.
+                if w.resolve && !hs.iter().all(|h| w.own.contains_key(h)) {
+                    crate::nvn::api::fetch_command_lists_at(w.now, hs, &mut w.own);
+                }
                 for &h in hs.iter() {
                     if !walk_list(s, w, h, depth + 1) {
                         return false;
