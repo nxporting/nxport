@@ -1517,7 +1517,14 @@ pub unsafe extern "C" fn hle_nn_os_SleepThread(nano: i64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_YieldThread() {
-    std::thread::yield_now();
+    // A few pauses, not SwitchToThread. The console yields to the game's own ready threads on that core, and TotK's job
+    // threads poll with yields hundreds of thousands of times a second. Windows yields to whatever is ready on the
+    // processor: with all of them busy that is another process, for its whole quantum (~10 ms a yield, ~1 fps). The
+    // game's threads that are ready get a processor from the scheduler anyway; an idle machine's SwitchToThread
+    // returned at once (0.1-0.2 us), about what these pauses take.
+    for _ in 0..8 {
+        std::hint::spin_loop();
+    }
 }
 
 #[no_mangle]
