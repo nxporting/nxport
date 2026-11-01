@@ -408,7 +408,14 @@ impl Builder {
         self.mods = mem.mods.or_else(|| (!self.dump.is_empty() && own.is_dir()).then(|| own.display().to_string())).unwrap_or_default();
         self.bundle_id = mem.bundle_id.unwrap_or_default();
         self.ios_gpu = mem.gpu.unwrap_or_default();
-        let edits = mem.settings.unwrap_or_default();
+        let mut edits = mem.settings.unwrap_or_default();
+        // A Windows app's settings are set in the app (its menus and settings window), not here: only the system data
+        // folder, which the builder asks for, carries over.
+        if self.target == Target::WindowsApp {
+            let sys = edits.files.system_data_dir.take();
+            edits = SettingsPatch::default();
+            edits.files.system_data_dir = sys;
+        }
         if let Some(sys) = edits.files.system_data_dir.as_ref() {
             self.system_data = sys.display().to_string();
         } else if self.system_data.is_empty() {
@@ -488,6 +495,10 @@ impl Builder {
 
     fn contents(&mut self, ui: &imgui::Ui) {
         let running = self.job.as_ref().is_some_and(|j| j.lock().unwrap().result.is_none());
+        #[cfg(windows)]
+        if self.target == Target::WindowsApp {
+            return self.contents_windows(ui, running);
+        }
         let _width = ui.push_item_width(-260.0);
         let _disabled = ui.begin_disabled_with_cond(running);
 
@@ -641,6 +652,101 @@ impl Builder {
         drop(_disabled);
 
         ui.separator();
+        self.build_bar(ui, running);
+    }
+
+    /// The Windows target: what must be decided when the app is built. A Windows app runs the game's code lifted to C and
+    /// compiled in, so the code it runs (the game's, and mods' ExeFS patches and plugins) is fixed here; everything else
+    /// is set in the app while it runs (its menu bar and nxport > Settings…).
+    #[cfg(windows)]
+    fn contents_windows(&mut self, ui: &imgui::Ui, running: bool) {
+        use nxport::ui_sdl::{heading, ERROR, MUTED, OK, WARN};
+        const LABEL: f32 = 110.0;
+        let tip = |ui: &imgui::Ui, text: &str| {
+            if ui.is_item_hovered() {
+                ui.tooltip(|| {
+                    let _w = ui.push_text_wrap_pos(420.0);
+                    ui.text(text);
+                });
+            }
+        };
+        // A row: label, path field, Browse.
+        let row = |ui: &imgui::Ui, id: &str, label: &str, text: &mut String, hint: &str, help: &str| -> bool {
+            ui.align_text_to_frame_padding();
+            ui.text(label);
+            tip(ui, help);
+            ui.same_line_with_pos(LABEL);
+            ui.set_next_item_width((ui.content_region_avail()[0] - 90.0).max(120.0));
+            let changed = ui.input_text(format!("##{id}"), text).hint(hint).build();
+            ui.same_line();
+            if ui.button(format!("Browse##{id}")) {
+                window::request_path(id, PathKind::Directory);
+            }
+            changed
+        };
+        // A muted line under a row, lined up with its field.
+        let detail = |ui: &imgui::Ui, color: [f32; 4], text: &str| {
+            ui.set_cursor_pos_x(LABEL + ui.clone_style().window_padding()[0]);
+            ui.text_colored(color, text);
+        };
+
+        heading(ui, "nxport");
+        ui.same_line();
+        ui.text_colored(MUTED, "Windows app builder");
+        ui.separator();
+        let _disabled = ui.begin_disabled_with_cond(running);
+
+        let mut dump = self.dump.clone();
+        if row(ui, "dump", "Game", &mut dump, "dump folder (ExeFS, RomFS)", "A dump folder with ExeFS/ and RomFS/.") {
+            self.set_dump(dump);
+        }
+        match &self.game {
+            Some(g) => {
+                let version = g.version.as_ref().map_or_else(String::new, |v| format!(" {v}"));
+                let profile = if g.profile.is_some() { "" } else { "  (no nxport profile)" };
+                detail(ui, if g.profile.is_some() { OK } else { WARN }, &format!("{}{version}  {:016X}{profile}", g.name, g.title_id));
+                if g.is_32bit {
+                    detail(ui, ERROR, "32-bit games are not supported");
+                }
+            }
+            None if !self.dump.trim().is_empty() => detail(ui, ERROR, "Not a game dump (needs ExeFS/main.npdm and RomFS/)"),
+            None => {}
+        }
+
+        row(ui, "mods", "Mods", &mut self.mods, "none", "A folder of mods in Atmosphère layout (one folder per mod), or one mod's folder. RomFS mods are data, loaded while the game runs. ExeFS patches and plugins change the game's code: they are compiled into the app, so changing them needs a new build.");
+        if !self.mods.trim().is_empty() {
+            let dir = PathBuf::from(self.mods.trim());
+            let list = if dir.is_dir() { mods_in(&dir) } else { Vec::new() };
+            if list.is_empty() {
+                detail(ui, WARN, "No mods there");
+            }
+            for (name, k) in list {
+                let kind = match (k.patches || k.plugin, k.romfs) {
+                    (true, true) => "code + data",
+                    (true, false) => "code",
+                    (false, true) => "data",
+                    (false, false) => "empty",
+                };
+                detail(ui, MUTED, &format!("{name}  ·  {kind}"));
+            }
+        }
+
+        row(ui, "out", "Output", &mut self.out_dir, "folder", "Where the app folder goes. Start nxport.exe in it to play; saves and settings stay in your nxport data.");
+        ui.set_cursor_pos_x(LABEL + ui.clone_style().window_padding()[0]);
+        ui.checkbox("Precompile shaders", &mut self.prebuild_shaders);
+        tip(ui, "Translates the game's shaders into the app now (a few minutes), so the game does not stutter the first time it draws something. Off, the app translates them as it meets them, and keeps them.");
+        ui.same_line();
+        ui.checkbox("Include game files", &mut self.bundle_game);
+        let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
+        tip(ui, &format!("Copies the game files into the app ({size}), so it does not need the dump folder."));
+        if let Some(_t) = ui.tree_node("More") {
+            row(ui, "system_data", "System data", &mut self.system_data, "none", "Firmware archives (one folder per archive, named by its id), for games that mount them.");
+        }
+        drop(_disabled);
+        ui.separator();
+        if let Some(m) = &self.message {
+            ui.text_colored(ERROR, m);
+        }
         self.build_bar(ui, running);
     }
 
@@ -854,7 +960,23 @@ impl Builder {
         };
         match &j.result {
             None => ui.text(&overlay),
-            Some(Ok(app)) => ui.text_colored([0.5, 0.9, 0.5, 1.0], format!("Built {}", app.display())),
+            Some(Ok(app)) => {
+                ui.text_colored([0.5, 0.9, 0.5, 1.0], format!("Built {}", app.display()));
+                // Windows: the app is a folder with nxport.exe; start it, or show it.
+                #[cfg(windows)]
+                {
+                    if ui.button("Play") {
+                        let exe = app.join("nxport.exe");
+                        if let Err(e) = std::process::Command::new(&exe).current_dir(app).spawn() {
+                            println!("[!] {}: {e}", exe.display());
+                        }
+                    }
+                    ui.same_line();
+                    if ui.button("Open Folder") {
+                        let _ = std::process::Command::new("explorer.exe").arg(app).spawn();
+                    }
+                }
+            }
             Some(Err(e)) => ui.text_colored([1.0, 0.45, 0.4, 1.0], e),
         };
         drop(j);
@@ -1016,6 +1138,50 @@ fn run_steps(job: &Arc<Mutex<Job>>, steps: Vec<Step>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What a mod (Atmosphère layout) holds: RomFS data the app reads while it runs, and code that is compiled into the app
+/// (ExeFS patches: IPS / pchtxt; plugins: exefs/subsdkN modules).
+#[derive(Default)]
+struct ModKinds {
+    romfs: bool,
+    patches: bool,
+    plugin: bool,
+}
+
+fn mod_kinds(dir: &Path) -> ModKinds {
+    let sub = |names: &[&str]| names.iter().map(|n| dir.join(n)).find(|d| d.is_dir());
+    let exefs = sub(&["exefs", "ExeFS"]);
+    let files: Vec<String> = exefs
+        .as_ref()
+        .and_then(|e| std::fs::read_dir(e).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_lowercase())
+        .collect();
+    ModKinds {
+        romfs: sub(&["romfs", "RomFS"]).is_some(),
+        patches: files.iter().any(|f| f.ends_with(".ips") || f.ends_with(".pchtxt")),
+        plugin: files.iter().any(|f| f.starts_with("subsdk")),
+    }
+}
+
+/// The mods in `dir`: one folder each, or a single mod's romfs / exefs at the top.
+fn mods_in(dir: &Path) -> Vec<(String, ModKinds)> {
+    if ["romfs", "RomFS", "exefs", "ExeFS"].iter().any(|n| dir.join(n).is_dir()) {
+        let name = dir.file_name().map_or_else(|| "Mod".into(), |n| n.to_string_lossy().into_owned());
+        return vec![(name, mod_kinds(dir))];
+    }
+    let mut list: Vec<(String, ModKinds)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), mod_kinds(&e.path())))
+        .collect();
+    list.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    list
 }
 
 fn dir_size(dir: &Path) -> u64 {

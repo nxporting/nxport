@@ -138,7 +138,7 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [no_vsync, frame_limit, launch_aspect, stretch] {
+    Window "Display" [no_vsync, frame_limit, fps_in_title, launch_aspect, stretch] {
         /// No window (frame dumps still work)
         headless: bool = false,
         /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
@@ -146,6 +146,8 @@ group! {
         /// Frame-rate limit (fps) where the title may run faster than 30: 60, 90, 120 or 144. With vsync, the display's
         /// refresh rate also limits it
         frame_limit: u32 = 60,
+        /// The window's title shows the frame rate
+        fps_in_title: bool = true,
         /// Launch aspect ratio (W:H): initial window aspect ratio when the application launches
         #[arg(alias = "aspect")]
         launch_aspect: Option<Aspect> = None,

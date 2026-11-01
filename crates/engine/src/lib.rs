@@ -48,6 +48,9 @@ mod nvn;
 pub mod vulkan;
 pub mod profile;
 pub mod settings;
+/// Dear ImGui windows over SDL3 on Windows: the builder's and the game's settings window.
+#[cfg(windows)]
+pub mod ui_sdl;
 
 #[cfg(nx_native)]
 use std::thread;

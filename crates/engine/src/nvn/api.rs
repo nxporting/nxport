@@ -6330,7 +6330,15 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             } else if !crate::profile::real_time() && interval > 0 {
                 fps = fps.min(60 / interval as u32);
             }
-            std::time::Duration::from_nanos(1_000_000_000 / fps.max(1) as u64)
+            // With vsync at or above the display's refresh, the swapchain's wait for the vblank paces: a limiter above it
+            // let frames out faster than the display takes them, and the swapchain then held the game back unevenly
+            // (microstutter: game time follows those uneven frames); at it, two clocks of the same rate drift apart.
+            let refresh = crate::host::live::refresh_rate();
+            if vsync && refresh != 0 && fps + 1 >= refresh {
+                std::time::Duration::ZERO
+            } else {
+                std::time::Duration::from_nanos(1_000_000_000 / fps.max(1) as u64)
+            }
         });
         #[cfg(nx_native)]
         let limited: Option<std::time::Duration> = None;

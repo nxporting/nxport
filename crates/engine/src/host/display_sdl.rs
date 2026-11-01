@@ -51,6 +51,8 @@ struct Host {
     pads: Vec<(Gamepad, Rumbler)>,
     /// The size to go back to from full screen.
     windowed_size: (u32, u32),
+    video: sdl3::VideoSubsystem,
+    settings: Option<crate::host::settings_win::SettingsWindow>,
 }
 
 /// Create the window and run SDL's event loop. Must be called on the process main thread.
@@ -94,7 +96,7 @@ pub fn run_main_thread() -> ! {
     let mut window = window;
     let _ = window.set_size(w as u32, h as u32);
     let mut pump = sdl.event_pump().unwrap_or_else(|e| fail("SDL events", &e));
-    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32) };
+    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32), video: video.clone(), settings: None };
 
     WINDOW_UP.store(true, Ordering::Release);
     println!("[+] Display: window up ({w}x{h}); presenting guest frames");
@@ -109,8 +111,12 @@ pub fn run_main_thread() -> ! {
             host.event(e);
         }
         host.poll_controllers();
+        if let Some(w) = host.settings.as_mut() {
+            w.frame();
+        }
         match menu::take_request() {
             Some(menu::Request::FullScreen) => host.toggle_fullscreen(),
+            Some(menu::Request::Settings) => host.open_settings(),
             Some(menu::Request::Size(h)) => host.set_window_height(h),
             None => {}
         }
@@ -119,7 +125,7 @@ pub fn run_main_thread() -> ! {
             host.update_title(&base_title);
             // The display's refresh rate, for the frame-rate limits vsync makes unreachable (the window may have moved).
             if let Ok(mode) = host.window.get_display().and_then(|d| d.get_mode()) {
-                menu::set_refresh_rate(mode.refresh_rate.round() as u32);
+                crate::host::live::set_refresh_rate(mode.refresh_rate.round() as u32);
             }
         }
         // Debug: --debug-close-after=N closes the window after N seconds, as its close button does.
@@ -129,6 +135,19 @@ pub fn run_main_thread() -> ! {
     }
 }
 
+/// Starts this program again with the same arguments, then leaves (the guest has no clean shutdown).
+pub fn restart() -> ! {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
+                println!("[!] Restart: {e}");
+            }
+        }
+        Err(e) => println!("[!] Restart: {e}"),
+    }
+    std::process::exit(0)
+}
+
 /// Closing the window quits: the guest has no clean shutdown path, so leave immediately.
 fn quit() -> ! {
     println!("[+] Display: quit requested; exiting");
@@ -136,7 +155,26 @@ fn quit() -> ! {
 }
 
 impl Host {
+    /// Opens the settings window, or raises it.
+    fn open_settings(&mut self) {
+        match &mut self.settings {
+            Some(w) => w.raise(),
+            None => match crate::host::settings_win::SettingsWindow::open(&self.video) {
+                Ok(w) => self.settings = Some(w),
+                Err(e) => println!("[!] Settings window: {e}"),
+            },
+        }
+    }
+
     fn event(&mut self, e: Event) {
+        // The settings window's events are its own; closing it leaves the game running.
+        if let Some(w) = self.settings.as_mut().filter(|w| e.get_window_id() == Some(w.id())) {
+            match e {
+                Event::Window { win_event: WindowEvent::CloseRequested, .. } => self.settings = None,
+                e => w.event(&e),
+            }
+            return;
+        }
         match e {
             Event::Quit { .. } => quit(),
             Event::Window { win_event, .. } => match win_event {
