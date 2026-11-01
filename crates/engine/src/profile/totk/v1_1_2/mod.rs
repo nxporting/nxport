@@ -5,20 +5,20 @@
 #[cfg(nx_native)]
 pub mod aspect;
 #[cfg(nx_native)]
-pub mod dynamic_fps;
-#[cfg(nx_native)]
 pub mod hud;
 #[cfg(nx_native)]
 pub mod font_draw;
 
 use crate::profile::VersionProfile;
 
+use super::frame_time::{self, Sites};
+
 pub static PROFILE: VersionProfile = VersionProfile {
     version_string: "1.1.2",
     build_id_prefix: "9a10ed9435c06733da597d8094d9000a",
-    #[cfg(nx_native)]
+    #[cfg(nx_runtime)]
     install_hooks: Some(install_v1_1_2_hooks),
-    #[cfg(not(nx_native))]
+    #[cfg(not(nx_runtime))]
     install_hooks: None,
     heap_instance_offset: Some(0x047137d0),
     allocator_pool_offset: Some(0x0466e500),
@@ -26,6 +26,16 @@ pub static PROFILE: VersionProfile = VersionProfile {
     draw_item: Some(draw_item),
     #[cfg(not(nx_native))]
     draw_item: None,
+};
+
+/// Frame pacing and game time (frame_time.rs): the pacer at main+0x8f6670, the time manager's update at main+0x7f7a28.
+pub static SITES: Sites = Sites {
+    lowest: 0xea87e0,
+    veto: 0x8f67f8,
+    step: 0x7f7a38,
+    step_code: frame_time::step_code(0xd001_f1c8),           // adrp x8, main+0x4631000
+    input: 0x8f633c,
+    input_code: frame_time::input_code(0xf001_ea08, 0xf945_cd08), // adrp x8, main+0x4639000; ldr x8, [x8, #0xb98]
 };
 
 /// --log-draw-items: main+0x763718 takes (renderer, item, ...), keeps the item at [x29 - 0x20] and calls the renderer's
@@ -58,34 +68,20 @@ extern "C" {
     fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
 }
 
-#[cfg(nx_native)]
-pub unsafe fn install_v1_1_2_hooks(
-    base: usize,
-    mem_space: &mut crate::guest::loader::GuestMemorySpace,
-) {
-    // 1. Frame rate unlock: patch min vblanks from 2 to 1 (Stock30 keeps 30 fps).
-    {
-        let fps_unlocked = crate::settings::get().system.fps != crate::settings::FpsMode::Stock30;
-        let p = (base + 0xea87e0) as *mut u32;
-        const MOV_X8_2: u32 = 0xd280_0048; // movz x8, #2
-        const MOV_X8_1: u32 = 0xd280_0028; // movz x8, #1
-        if fps_unlocked {
-            if std::ptr::read(p) == MOV_X8_2 {
-                std::ptr::write(p, MOV_X8_1);
-                sys_icache_invalidate(p as *mut libc::c_void, 4);
-                println!("[+] Frame pacer: minimum present interval 1 (up to 60+ fps; --fps=stock for the 30 fps cap)");
-            } else if std::ptr::read(p) == MOV_X8_1 {
-                println!("[+] Frame pacer: minimum present interval already 1 (patched by a mod)");
-            } else {
-                println!("[!] Frame pacer: unexpected instruction {:#010x} at guest+0xea87e0; fps unlock not applied", std::ptr::read(p));
-            }
-        } else {
-            println!("[+] Frame pacer: stock 30 fps cap active (minimum present interval 2)");
-        }
-        if fps_unlocked && crate::settings::get().totk.v1_1_2.dynamic_fps {
-            dynamic_fps::install(base, mem_space);
-        }
+/// The hooks every runtime takes (they rewrite instructions and call HLE trampolines, so a lifted game has them too),
+/// then natively the ones that write code of their own into trampolines.
+#[cfg(nx_runtime)]
+pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    // 1. Game time from real time, and the pacer unlocked; the frame-rate setting caps it while the game runs.
+    if crate::settings::get().totk.v1_1_2.dynamic_fps {
+        frame_time::install(base, mem_space, &SITES);
     }
+    #[cfg(nx_native)]
+    install_native_hooks(base, mem_space);
+}
+
+#[cfg(nx_native)]
+unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
 
     // 2. Dynamic aspect ratio (unless --dynamic-aspect-ratio=false): the game renders at the screen's shape (aspect.rs,
     //    hud.rs; narrower than 16:9 it sees more vertically) and follows it when it changes (a resized window); otherwise

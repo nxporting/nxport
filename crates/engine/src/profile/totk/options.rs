@@ -12,7 +12,8 @@ crate::settings::group! {
         /// Workaround: hide HUD capture panes that sample the wrong screen region at shapes other than 16:9 (a ghost
         /// copy of the load screen's heading); their effect is lost there
         hide_hud_captures: bool = true,
-        /// Dynamic delta-time and frame-pacing hooks for variable and unlocked 60+ FPS
+        /// Game time from real time and the frame pacer unlocked (frame_time.rs): the game runs at real speed at any frame
+        /// rate; the frame-rate setting caps it
         dynamic_fps: bool = true,
     }
 }
