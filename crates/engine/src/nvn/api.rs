@@ -2156,9 +2156,40 @@ pub(crate) fn walk_command_lists(
     handles: &[u64],
     stack: &mut Vec<u64>,
     cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>,
+    f: impl FnMut(&RecordedCommandList),
+) -> usize {
+    walk_command_lists_at(list_walk_clock(), handles, stack, cache, f)
+}
+
+/// The submitted lists `handles` into `cache`, marked as walk_command_lists marks them, without following their calls
+/// (Vulkan's vk-decode fetches those, walk_command_lists_at): held from the submit on.
+pub(crate) fn pin_command_lists(handles: &[u64], cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>) {
+    let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut map = COMMAND_LISTS.lock().unwrap();
+    for h in handles {
+        let Some(e) = map.get_mut(h) else { continue };
+        e.1 = now;
+        if e.2 == LIST_NEW {
+            e.2 = LIST_CALLED;
+        }
+        cache.insert(*h, e.0.clone());
+    }
+}
+
+/// A tick for walk_command_lists_at: walks with the same one visit each list once between them.
+pub(crate) fn list_walk_clock() -> u64 {
+    COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// walk_command_lists with the visit tick `now` (list_walk_clock): a submit's roots walked one at a time (one lock
+/// each, Vulkan's vk-decode) visit each list once.
+pub(crate) fn walk_command_lists_at(
+    now: u64,
+    handles: &[u64],
+    stack: &mut Vec<u64>,
+    cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>,
     mut f: impl FnMut(&RecordedCommandList),
 ) -> usize {
-    let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut map = COMMAND_LISTS.lock().unwrap();
     stack.clear();
     stack.extend_from_slice(handles);

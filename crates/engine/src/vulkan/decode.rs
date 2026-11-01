@@ -52,10 +52,17 @@ impl<T: Copy> Chunks<T> {
 
 /// One submit's walk: what to walk (the lists by handle, the submit's map: Ctx::lists, unchanged until the walk ended)
 /// and the lists looked up again because the map lacked them (kept until the submit ended).
+/// With `resolve`, the map holds the roots only (nvn::api::pin_command_lists) and the walk fetches the lists they call
+/// itself, under one lock per root (nvn::api::walk_command_lists_at, into `own`): the Presentation Thread no longer
+/// walks them before recording (~0.6 ms a frame in TotK).
 struct Walk {
     roots: Vec<u64>,
     lists: *const Lists,
     held: Vec<Arc<RecordedCommandList>>,
+    resolve: bool,
+    own: Lists,
+    stack: Vec<u64>,
+    now: u64,
     len: usize,
     events: usize,
 }
@@ -91,7 +98,17 @@ const PUBLISH: usize = 32;
 impl Decoder {
     pub(super) fn new() -> Result<Decoder, String> {
         let shared = Arc::new(Shared {
-            walk: std::cell::UnsafeCell::new(Walk { roots: Vec::new(), lists: std::ptr::null(), held: Vec::new(), len: 0, events: 0 }),
+            walk: std::cell::UnsafeCell::new(Walk {
+                roots: Vec::new(),
+                lists: std::ptr::null(),
+                held: Vec::new(),
+                resolve: false,
+                own: Lists::default(),
+                stack: Vec::new(),
+                now: 0,
+                len: 0,
+                events: 0,
+            }),
             entries: Chunks::new(Entry { op: std::ptr::null(), list: 0 }),
             events: Chunks::new((0, false)),
             avail: AtomicUsize::new(0),
@@ -120,14 +137,17 @@ impl Decoder {
         Ok(Decoder { shared, tx, next: 0, event: 0 })
     }
 
-    /// Starts walking `roots`, finding lists in `lists` (which must not change until finish).
-    pub(super) fn start(&mut self, roots: &[u64], lists: &Lists) {
+    /// Starts walking `roots`, finding lists in `lists` (which must not change until finish); with `resolve`, fetching
+    /// them itself.
+    pub(super) fn start(&mut self, roots: &[u64], lists: &Lists, resolve: bool) {
         let w = unsafe { &mut *self.shared.walk.get() };
         w.roots.clear();
         w.roots.extend_from_slice(roots);
         w.lists = lists;
         w.held.clear();
         w.len = 0;
+        w.resolve = resolve;
+        w.now = if resolve { crate::nvn::api::list_walk_clock() } else { 0 };
         w.events = 0;
         (self.next, self.event) = (0, 0);
         self.shared.avail.store(0, Ordering::Relaxed);
@@ -195,8 +215,15 @@ impl Decoder {
 
 unsafe fn decode(s: &Shared) {
     let w = &mut *s.walk.get();
+    // The last submit's lists (its commands all ran), let go here rather than on the Presentation Thread.
+    w.own.clear();
     let roots = std::mem::take(&mut w.roots);
     for &h in &roots {
+        if w.resolve {
+            let mut stack = std::mem::take(&mut w.stack);
+            crate::nvn::api::walk_command_lists_at(w.now, &[h], &mut stack, &mut w.own, |_| {});
+            w.stack = stack;
+        }
         if !walk_list(s, w, h, 0) {
             break;
         }
@@ -218,7 +245,8 @@ unsafe fn counter_event(s: &Shared, w: &mut Walk, report: bool) {
 /// Walks list `handle`: calls are followed to 16 levels, deeper ones are commands of their own. False when the entries
 /// are full (the commands after are left out, with a warning).
 unsafe fn walk_list(s: &Shared, w: &mut Walk, handle: u64, depth: u32) -> bool {
-    let list: *const RecordedCommandList = match (*w.lists).get(&handle) {
+    let found = if w.resolve { w.own.get(&handle).or_else(|| (*w.lists).get(&handle)) } else { (*w.lists).get(&handle) };
+    let list: *const RecordedCommandList = match found {
         Some(l) => Arc::as_ptr(l),
         None => match crate::nvn::api::command_list(handle, depth > 0) {
             Some(l) => {

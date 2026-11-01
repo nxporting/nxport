@@ -136,21 +136,23 @@ impl Backend for Vulkan {
         let (mut stack, mut submit_lists) = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
         submit_lists.clear();
         let mut samples: Vec<usize> = Vec::new();
-        crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
-            if guard_on {
+        // The report guard needs every list's report addresses before the submit; otherwise vk-decode fetches the lists the
+        // roots call while their commands run (decode.rs), and only the roots are taken here.
+        if guard_on {
+            crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
                 let s = l.summary();
                 samples.extend(s.2.iter().map(|&a| crate::nvn::api::translate_virtual(a as usize)));
-            }
-        });
-        if guard_on {
+            });
             crate::gpu::report_guard::begin_submit(&samples);
+        } else {
+            crate::nvn::api::pin_command_lists(lists, &mut submit_lists);
         }
         let mut g = self.ctx.lock().unwrap();
         let serial = self.serial.load(Ordering::Acquire) + 1;
         match g.as_mut() {
             Some(c) => unsafe {
                 guard::hold_hot();
-                c.submit(lists, serial, &mut submit_lists);
+                c.submit(lists, serial, &mut submit_lists, !guard_on);
                 guard::release_hot();
             },
             None => inflight::watch(inflight::Done {
