@@ -3710,13 +3710,11 @@ impl Gfx {
         if !tiny_enabled() {
             return None;
         }
-        // Kernels that sample through the descriptor heaps gave varying results from one run of the same frame to
-        // the next (TotK's atmosphere LUT kernel s_ec8a96bdd2f04e50: whole-frame tint flashes) while their render
-        // versions are stable; a kernel with the same texture from the heap and a fixed sampler was stable too.
-        // Cause not found: these draws render.
-        if (vs.texture_heap && !vs.textures.is_empty())
-            || fs.is_some_and(|f| f.texture_heap && !f.textures.is_empty())
-        {
+        // Kernels reading their samplers from the sampler heap gave varying results from one run of the same frame to
+        // the next (TotK's atmosphere LUT kernel s_ec8a96bdd2f04e50: whole-frame tint flashes; the render versions are
+        // stable, cause not found): only kernels that take their samplers as parameters run (index line `tks`).
+        let heap_samplers = |c: &CachedStage| c.texture_heap && !c.textures.is_empty() && !c.tiny_samplers;
+        if heap_samplers(vs) || fs.is_some_and(heap_samplers) {
             return None;
         }
         let r = self.tiny_plan_inner(st, vs, fs, call, mode, color_texs, depth_tex, resolved);
@@ -6310,6 +6308,15 @@ impl Gfx {
                         .3
                         .and_then(|id| self.sampler_state(&mut *env.sh, id))
                         .or_else(|| self.default_sampler(&mut *env.sh));
+                    // Tiny kernels take the sampler as a parameter at the texture's binding (index line `tks`).
+                    if let (Some(r), Some(s)) = (env.cx.ec.rec.as_mut(), sampler.as_ref()) {
+                        let smp = (Some(s.clone()), tb.binding as usize);
+                        if is_vs {
+                            r.vsamp.push(smp);
+                        } else {
+                            r.fsamp.push(smp);
+                        }
+                    }
                     let Some(ss) =
                         sampler.and_then(|s| env.cx.heaps.sampler(&self.device, &s, frame))
                     else {

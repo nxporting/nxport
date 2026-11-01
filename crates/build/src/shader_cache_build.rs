@@ -570,6 +570,7 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
         sbro: readonly_sbuffers(&text),
         cl: uses_cbuf_limits(&text),
         th: text.contains("nx_heaps["),
+        tks: tiny.as_deref().is_some_and(crate::tiny_kernels::kernels_bind_samplers),
         tk: tiny.is_some(),
         tkl: tiny.as_deref().and_then(crate::tiny_kernels::implicit_tag),
         tkc: tiny.as_deref().is_some_and(crate::tiny_kernels::applies_clears),
@@ -606,6 +607,9 @@ pub struct StageRecord {
     /// Reads textures from the descriptor heaps (--texture-heap).
     #[serde(default)]
     pub th: bool,
+    /// Its tiny kernels take their samplers as parameters (tiny_kernels::kernels_bind_samplers).
+    #[serde(default)]
+    pub tks: bool,
     #[serde(default)]
     pub tk: bool,
     #[serde(default)]
@@ -770,6 +774,9 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
         }
         if r.th {
             f.push_str("th\n");
+            if r.tks {
+                f.push_str("tks\n");
+            }
         }
         // The stage has a compute version (tkv_<entry> / tkf_<entry>).
         // Fragment kernels also list the texture bindings they sample with implicit LOD (exact only for one level).
@@ -852,19 +859,25 @@ pub fn build(o: &Options) -> Result<(), String> {
         // Text-derived metadata is recomputed from the MSL the build kept (work/<stem>.metal), so a fix to its analysis
         // reaches an existing cache without retranslating: the constant-buffer extents (`cx`), descriptor heap reads
         // (`th`).
-        let mut ext_by_entry: HashMap<String, (BTreeMap<u32, usize>, bool)> = HashMap::new();
+        let mut ext_by_entry: HashMap<String, (BTreeMap<u32, usize>, bool, bool)> = HashMap::new();
         for m in collect_metal_files(&work) {
             let Ok(text) = std::fs::read_to_string(&m) else { continue };
             let Some(m) = entry_line_re().find(&text) else { continue };
             let Some(name) = m.as_str().split_whitespace().nth(2).map(|n| n.split('(').next().unwrap_or(n).to_string()) else { continue };
-            ext_by_entry.insert(name, (cbuf_extents(&text), text.contains("nx_heaps[")));
+            let tks = text.find(crate::tiny_kernels::MARKER).is_some_and(|i| {
+                let k = &text[i..];
+                let end = [crate::batch_kernels::MARKER, crate::arg_kernels::MARKER].iter().filter_map(|m| k.find(m)).min().unwrap_or(k.len());
+                crate::tiny_kernels::kernels_bind_samplers(&k[..end])
+            });
+            ext_by_entry.insert(name, (cbuf_extents(&text), text.contains("nx_heaps["), tks));
         }
         let mut changed = 0;
         for r in &mut st.records {
-            if let Some((ext, th)) = ext_by_entry.get(&r.entry) {
-                if &r.cbext != ext || r.th != *th {
+            if let Some((ext, th, tks)) = ext_by_entry.get(&r.entry) {
+                if &r.cbext != ext || r.th != *th || r.tks != (*tks && r.tk) {
                     r.cbext = ext.clone();
                     r.th = *th;
+                    r.tks = *tks && r.tk;
                     changed += 1;
                 }
             }
