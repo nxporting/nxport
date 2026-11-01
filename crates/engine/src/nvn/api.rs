@@ -2212,6 +2212,23 @@ pub(crate) fn walk_command_lists_at(
     n
 }
 
+/// The lists `handles` into `cache`, marked as walk_command_lists_at marks them with the tick `now`, without following
+/// their calls: vk-decode fetches each CallCommands' lists as its walk reaches it (decode.rs).
+pub(crate) fn fetch_command_lists_at(now: u64, handles: &[u64], cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>) {
+    let mut map = COMMAND_LISTS.lock().unwrap();
+    for h in handles {
+        let Some(e) = map.get_mut(h) else { continue };
+        if e.1 == now {
+            continue;
+        }
+        e.1 = now;
+        if e.2 == LIST_NEW {
+            e.2 = LIST_CALLED;
+        }
+        cache.insert(*h, e.0.clone());
+    }
+}
+
 // EndRecording handles -> finalized recorded-command snapshots. A command
 // buffer gets reused across frames (BeginRecording clears it), so a snapshot
 // has to be taken at EndRecording time rather than handing back a pointer
