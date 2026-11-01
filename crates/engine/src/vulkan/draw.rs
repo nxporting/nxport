@@ -818,6 +818,26 @@ impl Ctx {
                                 }
                                 self.warn("a uniform buffer the GPU writes in the same submit could not be bound in place");
                             }
+                            // A binding not seen before in this submit (most misses: TotK's per-object constants, ~5,500
+                            // a frame): copied straight from the address found here, without the content memo (it
+                            // missed for these too, and its lookups and inserts were most of the cost).
+                            if a > 0x10000 && len > 0 {
+                                let n = if b.extent >= 0 { (b.extent as usize).max(16).min(len) } else { len };
+                                let x = self.arena.reserve(&self.dev, n).map(|(buf, off, p)| {
+                                    self.rec.fill(a, p, n, self.ubo_epoch);
+                                    (buf, off, n as u64, len)
+                                });
+                                let m = (self.ubo_epoch, a, len, x);
+                                self.ubo_memo.insert(k, m);
+                                if let Some((s, i)) = at {
+                                    self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, m);
+                                }
+                                if let Some((buf, off, len, bound)) = x {
+                                    limits.push((b.binding - base, bound));
+                                    buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
+                                }
+                                continue;
+                            }
                         }
                     }
                     // Others are copied (only the extent the stage reads), as on Metal: in place, the game's writes to their

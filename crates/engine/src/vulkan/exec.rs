@@ -369,6 +369,9 @@ impl Ranges {
     }
 
     pub(super) fn overlaps(&self, a: usize, b: usize) -> bool {
+        if self.0.is_empty() {
+            return false;
+        }
         self.0.range(..b).next_back().is_some_and(|(_, &e)| e > a)
     }
 
@@ -459,6 +462,9 @@ impl Ctx {
 fn gpu_writes(dirty: &Ranges, inflight: &[(u64, Ranges)], a: usize, b: usize) -> bool {
     if dirty.overlaps(a, b) {
         return true;
+    }
+    if inflight.iter().all(|(_, r)| r.0.is_empty()) {
+        return false;
     }
     let done = super::inflight::completed();
     inflight.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
