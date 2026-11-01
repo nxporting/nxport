@@ -208,16 +208,16 @@ pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
                 return None;
             }
             let st = cur & STATE_MASK;
-            if st == PG_PROT {
-                break;
-            }
             if st == PG_BUSY {
                 if !busy_wait(&f[p]) {
                     return None;
                 }
                 continue;
             }
-            // PG_NONE -> PG_BUSY
+            // PG_NONE (or PG_PROT) -> PG_BUSY. Protected pages are claimed too: the mprotect below covers them, and a
+            // fault that opened one between a look at it and the mprotect (PG_NONE) was left read-only as PG_NONE, which
+            // the fault handler takes for already opened: every later write to the page faulted forever (the Vulkan
+            // watcher's write-back copy spun, 2026-10-31).
             let next = (cur & !STATE_MASK) | PG_BUSY | EVER;
             if f[p].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                 if cur & EVER == 0 {
