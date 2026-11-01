@@ -570,6 +570,16 @@ pub unsafe extern "C" fn on_cached_model_pass(r: usize, w: usize, a: usize, v: u
     primitive(|p| render_list::cached_model_pass(p, r, w, a, v, out, user).map(|_| 1))
 }
 
+/// main+0xc56c70(shader, w, mode): with mode bit 0 the shader's program (+8) applied (main+0x7ef4b8's body); returns
+/// that bit (0: left to the game, which does nothing either).
+#[no_mangle]
+pub unsafe extern "C" fn on_shader_apply(shader: usize, w: usize, mode: u32) -> u32 {
+    if mode & 1 == 0 {
+        return 0;
+    }
+    primitive(|p| vfx::program_apply(p, p.m.r64(shader + 8), w).map(|_| 1))
+}
+
 /// main+0x9c7e04 / main+0x9c7c80: the frame's default texture and uniform bindings (binds.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_default_textures(settings: usize, w: usize) -> u32 {
@@ -1524,6 +1534,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook_float(base, mem_space, 0x98a150, 0xfc190fe8, pre, post, "Target clear");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_target_barriers(_, _))) as usize;
         hook(base, mem_space, 0xc26458, 0xa9be7bfd, pre, post, "Target barriers");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_shader_apply(_, _, _))) as usize;
+        hook(base, mem_space, 0xc56c70, 0xa9bc7bfd, pre, post, "Shader apply");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_textures(_, _))) as usize;
         hook(base, mem_space, 0x9c7e04, 0xa9ba7bfd, pre, post, "Default textures");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_uniforms(_, _))) as usize;
