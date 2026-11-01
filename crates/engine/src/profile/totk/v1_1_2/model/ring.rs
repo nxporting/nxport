@@ -41,6 +41,18 @@ pub(super) unsafe fn predict_inline(base: usize, data: usize, size: usize) -> us
     predict_as(base, data, size, true)
 }
 
+/// predict_inline where only the first `known` bytes of the data are the game's (it copies uninitialised bytes after
+/// them): only those are compared.
+pub(super) unsafe fn predict_inline_known(base: usize, data: usize, known: usize, size: usize) -> usize {
+    let a = predict_as(base, data, size, true);
+    PREDICTED.with(|p| {
+        if let Some(last) = p.borrow_mut().last_mut() {
+            last.data.truncate(known);
+        }
+    });
+    a
+}
+
 unsafe fn predict_as(base: usize, data: usize, size: usize, inline: bool) -> usize {
     let ring = *(((*((base + RING_HOLDER) as *const usize)) as *const usize));
     let template = *((ring + 0x50) as *const usize);
