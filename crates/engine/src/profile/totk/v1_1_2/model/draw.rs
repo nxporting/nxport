@@ -434,7 +434,7 @@ impl Port {
     }
 
     /// Calls a render unit's material list (its draws follow).
-    unsafe fn call_unit(&mut self, cmd: usize, handles: usize) {
+    pub(super) unsafe fn call_unit(&mut self, cmd: usize, handles: usize) {
         if !self.native {
             return self.call_commands(cmd, handles);
         }
