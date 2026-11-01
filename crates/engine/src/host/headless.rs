@@ -18,6 +18,9 @@ pub mod rumble;
 #[path = "live.rs"]
 pub mod live;
 
+#[path = "settings_win.rs"]
+pub mod settings_win;
+
 pub mod overlay {
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
     use std::sync::LazyLock;
@@ -50,12 +53,20 @@ pub mod overlay {
         VSYNC.load(Relaxed)
     }
 
+    pub fn set_vsync(on: bool) {
+        VSYNC.store(on, Relaxed);
+    }
+
     pub fn toggle_vsync() -> bool {
         !VSYNC.fetch_not(Relaxed)
     }
 
     pub fn is_async_shaders() -> bool {
         ASYNC_SHADERS.load(Relaxed)
+    }
+
+    pub fn set_async_shaders(on: bool) {
+        ASYNC_SHADERS.store(on, Relaxed);
     }
 
     pub fn toggle_async_shaders() -> bool {

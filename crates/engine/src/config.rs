@@ -43,6 +43,39 @@ pub fn remember(change: impl FnOnce(&mut crate::settings::SettingsPatch)) {
     }
 }
 
+/// Keeps the fields `change` sets in the game's settings file, over what it held (the settings window's edits).
+#[cfg(nx_runtime)]
+pub fn remember_patch(change: &crate::settings::SettingsPatch) {
+    fn merge(into: &mut toml::Value, from: toml::Value) {
+        match (into, from) {
+            (toml::Value::Table(a), toml::Value::Table(b)) => {
+                for (k, v) in b {
+                    match a.get_mut(&k) {
+                        Some(old) if old.is_table() && v.is_table() => merge(old, v),
+                        _ => {
+                            a.insert(k, v);
+                        }
+                    }
+                }
+            }
+            (into, from) => *into = from,
+        }
+    }
+    let Some(tid) = crate::game::title_id() else { return };
+    let Some(file) = game_settings_file(tid) else { return };
+    let mut v = toml::Value::try_from(game_settings(tid).unwrap_or_default()).unwrap_or(toml::Value::Table(Default::default()));
+    if let Ok(c) = toml::Value::try_from(change) {
+        merge(&mut v, c);
+    }
+    let saved = v.try_into::<crate::settings::SettingsPatch>().map_err(|e| e.to_string()).and_then(|p| {
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+        crate::settings::save_preset(&file, &p)
+    });
+    if let Err(e) = saved {
+        eprintln!("[!] settings: {e}");
+    }
+}
+
 /// The settings file an app carries (the builder writes it): in a Windows app folder, beside the program.
 #[cfg(windows)]
 const APP_SETTINGS: &str = "settings.toml";

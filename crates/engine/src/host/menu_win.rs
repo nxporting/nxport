@@ -48,6 +48,7 @@ const MFT_RADIOCHECK: u32 = 0x200;
 /// Menu command ids. Choices of one value are a base plus the value (frame-rate limit + fps, volume + percent, ...).
 mod id {
     pub const DATA_FOLDER: u16 = 1;
+    pub const SETTINGS: u16 = 4;
     pub const RESTART: u16 = 2;
     pub const QUIT: u16 = 3;
     pub const DOCKED: u16 = 10;
@@ -83,15 +84,13 @@ const STRENGTHS: [u32; 3] = [50, 100, 150];
 
 static PREVIOUS: AtomicIsize = AtomicIsize::new(0);
 static BAR: AtomicUsize = AtomicUsize::new(0);
-/// The display's refresh rate (Hz; 0 unknown), for the limits vsync makes unreachable (the main loop keeps it current).
-static REFRESH: AtomicU32 = AtomicU32::new(0);
 /// What the main loop is asked to do with the SDL window (Request as u32).
 static REQUEST: AtomicU32 = AtomicU32::new(0);
-static TITLE_FPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
 /// What only the main loop can do: it owns the SDL window.
 pub enum Request {
     FullScreen,
+    /// Open (or raise) the settings window.
+    Settings,
     /// A window of this height (16:9, unless the game renders at the window's shape).
     Size(u32),
 }
@@ -153,6 +152,8 @@ pub fn attach(hwnd: usize) {
     unsafe {
         let bar = CreateMenu();
         sub(bar, "nxport", |m| {
+            item(m, id::SETTINGS, "Settings…");
+            separator(m);
             item(m, id::DATA_FOLDER, "Open Game Data Folder");
             separator(m);
             item(m, id::RESTART, "Restart");
@@ -242,13 +243,9 @@ pub fn show(hwnd: usize, on: bool) {
     }
 }
 
-pub fn set_refresh_rate(hz: u32) {
-    REFRESH.store(hz, Ordering::Relaxed);
-}
-
 /// Whether the title bar shows the frame rate.
 pub fn fps_in_title() -> bool {
-    TITLE_FPS.load(Ordering::Relaxed)
+    live::fps_in_title()
 }
 
 /// What the menu asked the main loop to do since the last call.
@@ -256,6 +253,7 @@ pub fn take_request() -> Option<Request> {
     match REQUEST.swap(0, Ordering::Relaxed) {
         0 => None,
         1 => Some(Request::FullScreen),
+        2 => Some(Request::Settings),
         h => Some(Request::Size(h)),
     }
 }
@@ -263,7 +261,7 @@ pub fn take_request() -> Option<Request> {
 /// Why the limit `fps` cannot be reached, if it cannot: above the title's own rate only where its game time follows real
 /// time (otherwise it would run fast), and with vsync not above the display's refresh.
 fn unreachable(fps: u32) -> Option<&'static str> {
-    let refresh = REFRESH.load(Ordering::Relaxed);
+    let refresh = live::refresh_rate();
     if fps > 60 && !crate::profile::real_time() {
         Some("needs Variable Frame Rate")
     } else if overlay::is_vsync() && refresh != 0 && fps > refresh + 1 {
@@ -281,12 +279,16 @@ fn limit_label(fps: u32) -> String {
     }
 }
 
-/// The limit the menu shows: 30 at the stock setting, else the live limit.
+/// The limit the menu shows: the one in effect (30 at the stock setting; with vsync, no more than the display's refresh).
 fn limit() -> u32 {
     if overlay::fps_mode() == FpsMode::Stock30 {
-        30
+        return 30;
+    }
+    let (fps, refresh) = (live::frame_limit(), live::refresh_rate());
+    if overlay::is_vsync() && refresh != 0 && fps > refresh + 1 {
+        LIMITS.iter().copied().filter(|&l| l <= refresh + 1).max().unwrap_or(30)
     } else {
-        live::frame_limit()
+        fps
     }
 }
 
@@ -344,24 +346,12 @@ fn open(dir: Option<std::path::PathBuf>) {
     }
 }
 
-/// Starts this program again with the same arguments, then leaves (the guest has no clean shutdown).
-fn restart() -> ! {
-    match std::env::current_exe() {
-        Ok(exe) => {
-            if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
-                println!("[!] Restart: {e}");
-            }
-        }
-        Err(e) => println!("[!] Restart: {e}"),
-    }
-    std::process::exit(0)
-}
-
 fn command(cmd: u16) -> bool {
     let data = || crate::profile::data_dir().map(|d| d.to_path_buf());
     match cmd {
         id::DATA_FOLDER => open(data()),
-        id::RESTART => restart(),
+        id::RESTART => super::restart(),
+        id::SETTINGS => REQUEST.store(2, Ordering::Relaxed),
         id::QUIT => std::process::exit(0),
         id::DOCKED | id::HANDHELD => {
             let handheld = cmd == id::HANDHELD;
@@ -374,7 +364,7 @@ fn command(cmd: u16) -> bool {
         }
         id::FULL_SCREEN => REQUEST.store(1, Ordering::Relaxed),
         id::FPS_TITLE => {
-            TITLE_FPS.fetch_xor(true, Ordering::Relaxed);
+            live::set_fps_in_title(!live::fps_in_title());
         }
         c if (id::LIMIT..id::LIMIT + 200).contains(&c) => {
             let fps = (c - id::LIMIT) as u32;

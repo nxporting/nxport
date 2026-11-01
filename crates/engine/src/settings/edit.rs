@@ -99,8 +99,29 @@ impl<G: EditGroup> Section for G {
     }
     fn edit(&mut self, ui: &Ui, audience: Audience) -> bool {
         let _id = ui.push_id(G::HEADING);
+        HEADING.with(|h| h.set(G::HEADING));
         self.edit_fields(ui, audience)
     }
+}
+
+thread_local! {
+    /// The heading of the group being edited (for `live`).
+    static HEADING: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
+    /// Where settings change while the game runs (its settings window): whether (group heading, field) does; the others
+    /// are marked as taking effect after a restart. None (the builder): no marks.
+    static LIVE: std::cell::Cell<Option<fn(&str, &str) -> bool>> = const { std::cell::Cell::new(None) };
+    /// A field that takes effect after a restart was changed.
+    static RESTART: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the fields `live` says do not change while the game runs (the game's settings window).
+pub fn set_live(live: fn(&str, &str) -> bool) {
+    LIVE.with(|l| l.set(Some(live)));
+}
+
+/// Whether a field that takes effect after a restart was changed since the last call.
+pub fn take_restart_needed() -> bool {
+    RESTART.with(|r| r.replace(false))
 }
 
 /// A printf format for a number field (constant and valid; Dear ImGui checks it against the value type).
@@ -709,6 +730,18 @@ pub fn field<T: Edit>(ui: &Ui, value: &mut T, name: &str, docs: &[&str]) -> bool
     let changed = value.edit(ui, name, &label);
     if !docs.is_empty() && ui.is_item_hovered() {
         ui.tooltip_text(docs.iter().map(|d| d.trim()).collect::<Vec<_>>().join("\n"));
+    }
+    if let Some(live) = LIVE.with(|l| l.get()) {
+        if !live(HEADING.with(|h| h.get()), name) {
+            if changed {
+                RESTART.with(|r| r.set(true));
+            }
+            ui.same_line();
+            ui.text_disabled("(restart)");
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Takes effect the next time the game starts");
+            }
+        }
     }
     changed
 }

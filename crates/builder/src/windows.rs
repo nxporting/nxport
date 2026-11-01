@@ -185,13 +185,14 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, app: &Path, job: &Arc<Mutex<Jo
 
 /// The mods in `mods` (one folder each) with modules of their own (exefs/subsdkN): plugin mods.
 fn plugin_mods(mods: Option<&Path>) -> Vec<String> {
-    let Some(rd) = mods.and_then(|m| std::fs::read_dir(m).ok()) else { return Vec::new() };
-    rd.flatten()
-        .filter(|e| {
-            ["exefs", "ExeFS"].iter().any(|d| (0..10).any(|i| e.path().join(d).join(format!("subsdk{i}")).is_file()))
-        })
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect()
+    let Some(mods) = mods else { return Vec::new() };
+    let plugin = |m: &Path| ["exefs", "ExeFS"].iter().any(|d| (0..10).any(|i| m.join(d).join(format!("subsdk{i}")).is_file()));
+    // One mod chosen itself (its exefs at the top) as well as a folder of mods: one was missed, its patches never made.
+    if plugin(mods) {
+        return vec![mods.file_name().map_or_else(|| "mod".into(), |n| n.to_string_lossy().into_owned())];
+    }
+    let Ok(rd) = std::fs::read_dir(mods) else { return Vec::new() };
+    rd.flatten().filter(|e| plugin(&e.path())).map(|e| e.file_name().to_string_lossy().into_owned()).collect()
 }
 
 /// Runs the app (its first guest.dll, which holds the plugin mods' modules) headless until its mods patched the game's
