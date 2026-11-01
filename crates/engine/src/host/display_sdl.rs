@@ -6,7 +6,8 @@
 // virtual key codes (the bindings in controls.cfg are those codes on every host), the left mouse button is the touch
 // screen, game controllers are read every 4 ms and given the game's rumble (host/rumble_sdl.rs), and the title shows
 // the presented frame rate. F11 or Alt+Enter toggles full screen (borderless, at the desktop's resolution), F9 asks for a
-// frame capture. Guest threads never call SDL.
+// frame capture. Guest threads never call SDL. The window's menu bar holds the switches of the macOS app menu that apply
+// here (the menu module below).
 //
 // Set --headless to skip the window entirely.
 
@@ -48,6 +49,8 @@ struct Host {
     window: sdl3::video::Window,
     gamepads: sdl3::GamepadSubsystem,
     pads: Vec<(Gamepad, Rumbler)>,
+    /// The size to go back to from full screen.
+    windowed_size: (u32, u32),
 }
 
 /// Create the window and run SDL's event loop. Must be called on the process main thread.
@@ -85,8 +88,12 @@ pub fn run_main_thread() -> ! {
         fail("window", &"no HWND");
     }
     HWND.store(hwnd, Ordering::Release);
+    menu::attach(hwnd);
+    // The menu bar came out of the client area: back to the size asked for.
+    let mut window = window;
+    let _ = window.set_size(w as u32, h as u32);
     let mut pump = sdl.event_pump().unwrap_or_else(|e| fail("SDL events", &e));
-    let mut host = Host { window, gamepads, pads: Vec::new() };
+    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32) };
 
     WINDOW_UP.store(true, Ordering::Release);
     println!("[+] Display: window up ({w}x{h}); presenting guest frames");
@@ -101,6 +108,9 @@ pub fn run_main_thread() -> ! {
             host.event(e);
         }
         host.poll_controllers();
+        if menu::take_fullscreen_request() {
+            host.toggle_fullscreen();
+        }
         if title_at.elapsed() >= Duration::from_millis(500) {
             title_at = Instant::now();
             host.update_title(&base_title);
@@ -179,8 +189,18 @@ impl Host {
 
     fn toggle_fullscreen(&mut self) {
         let full = self.window.fullscreen_state() != FullscreenType::Off;
+        if !full {
+            self.windowed_size = self.window.size();
+        }
+        // No menu bar in full screen.
+        menu::show(full);
         if let Err(e) = self.window.set_fullscreen(!full) {
             println!("[!] Display: full screen: {e}");
+        }
+        // SDL's restored size does not allow for the menu bar coming back.
+        if full {
+            let (w, h) = self.windowed_size;
+            let _ = self.window.set_size(w, h);
         }
     }
 
@@ -258,6 +278,132 @@ impl Host {
         if fps > 0.0 && !LOGGED.swap(true, Ordering::Relaxed) {
             println!("[+] Display: window title now \"{}\"", title);
         }
+    }
+}
+
+/// The menu bar: Win32's, because SDL has none. Its commands reach the window procedure while SDL pumps messages, on the
+/// main thread, so the procedure is wrapped to see them. SDL swallows the Alt and F10 menu activation, so game keys never
+/// open it. Like the macOS app menu's, the switches last until the app closes.
+mod menu {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+
+    use crate::host::overlay;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn CreateMenu() -> *mut c_void;
+        fn CreatePopupMenu() -> *mut c_void;
+        fn AppendMenuW(menu: *mut c_void, flags: u32, id: usize, text: *const u16) -> i32;
+        fn CheckMenuItem(menu: *mut c_void, id: u32, flags: u32) -> u32;
+        fn SetMenu(hwnd: usize, menu: *mut c_void) -> i32;
+        fn DrawMenuBar(hwnd: usize) -> i32;
+        fn SetWindowLongPtrW(hwnd: usize, index: i32, value: isize) -> isize;
+        fn CallWindowProcW(prev: isize, hwnd: usize, msg: u32, wparam: usize, lparam: isize) -> isize;
+    }
+
+    const WM_COMMAND: u32 = 0x0111;
+    const WM_INITMENUPOPUP: u32 = 0x0117;
+    const WM_ENTERMENULOOP: u32 = 0x0211;
+    const GWLP_WNDPROC: i32 = -4;
+    const MF_POPUP: u32 = 0x10;
+    const MF_SEPARATOR: u32 = 0x800;
+    const MF_CHECKED: u32 = 8;
+
+    const UNLOCKED: u16 = 1;
+    const VSYNC: u16 = 2;
+    const HANDHELD: u16 = 3;
+    const ASYNC_SHADERS: u16 = 4;
+    const FULLSCREEN: u16 = 5;
+
+    static PREVIOUS: AtomicIsize = AtomicIsize::new(0);
+    static BAR: AtomicUsize = AtomicUsize::new(0);
+    static POPUP: AtomicUsize = AtomicUsize::new(0);
+    static FULLSCREEN_ASKED: AtomicBool = AtomicBool::new(false);
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain([0]).collect()
+    }
+
+    pub fn attach(hwnd: usize) {
+        unsafe {
+            let (bar, popup) = (CreateMenu(), CreatePopupMenu());
+            for (id, text) in [
+                (UNLOCKED, "Unlocked Framerate"),
+                (VSYNC, "VSync"),
+                (HANDHELD, "Handheld Mode (720p)"),
+                (ASYNC_SHADERS, "Asynchronous Shaders"),
+            ] {
+                AppendMenuW(popup, 0, id as usize, wide(text).as_ptr());
+            }
+            AppendMenuW(popup, MF_SEPARATOR, 0, std::ptr::null());
+            AppendMenuW(popup, 0, FULLSCREEN as usize, wide("Full Screen\tF11").as_ptr());
+            AppendMenuW(bar, MF_POPUP, popup as usize, wide("Options").as_ptr());
+            BAR.store(bar as usize, Ordering::Relaxed);
+            POPUP.store(popup as usize, Ordering::Relaxed);
+            let wrapped: unsafe extern "system" fn(usize, u32, usize, isize) -> isize = window_proc;
+            PREVIOUS.store(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wrapped as usize as isize), Ordering::Release);
+            SetMenu(hwnd, bar);
+            DrawMenuBar(hwnd);
+        }
+    }
+
+    /// Shows or hides the menu bar.
+    pub fn show(on: bool) {
+        let hwnd = super::hwnd();
+        unsafe {
+            SetMenu(hwnd, if on { BAR.load(Ordering::Relaxed) as *mut c_void } else { std::ptr::null_mut() });
+            DrawMenuBar(hwnd);
+        }
+    }
+
+    /// Whether the menu asked for full screen to change since the last call (the main loop owns the window object).
+    pub fn take_fullscreen_request() -> bool {
+        FULLSCREEN_ASKED.swap(false, Ordering::Relaxed)
+    }
+
+    /// The check marks, from the switches' current values (as the macOS menu validates its items when it opens).
+    unsafe fn refresh() {
+        let popup = POPUP.load(Ordering::Relaxed) as *mut c_void;
+        for (id, on) in [
+            (UNLOCKED, overlay::fps_mode() == crate::settings::FpsMode::Unlocked),
+            (VSYNC, overlay::is_vsync()),
+            (HANDHELD, crate::horizon::hle::is_handheld()),
+            (ASYNC_SHADERS, overlay::is_async_shaders()),
+        ] {
+            CheckMenuItem(popup, id as u32, if on { MF_CHECKED } else { 0 });
+        }
+    }
+
+    fn command(id: u16) -> bool {
+        match id {
+            UNLOCKED => println!("[+] Display: framerate {:?}", overlay::toggle_fps_mode()),
+            VSYNC => println!("[+] Display: VSync {}", overlay::toggle_vsync()),
+            HANDHELD => {
+                let next = !crate::horizon::hle::is_handheld();
+                crate::horizon::hle::set_handheld(next);
+                println!("[+] Display: handheld mode {next}");
+            }
+            ASYNC_SHADERS => println!("[+] Display: asynchronous shaders {}", overlay::toggle_async_shaders()),
+            FULLSCREEN => FULLSCREEN_ASKED.store(true, Ordering::Relaxed),
+            _ => return false,
+        }
+        true
+    }
+
+    unsafe extern "system" fn window_proc(hwnd: usize, msg: u32, wparam: usize, lparam: isize) -> isize {
+        match msg {
+            // A menu's command has 0 in the high word.
+            WM_COMMAND if wparam >> 16 == 0 && command(wparam as u16) => return 0,
+            WM_INITMENUPOPUP => refresh(),
+            // The open menu takes the key and button releases: drop what is held, as when focus is lost.
+            WM_ENTERMENULOOP => {
+                crate::host::input::clear_keys();
+                crate::host::input::touch_ended(0);
+            }
+            _ => {}
+        }
+        CallWindowProcW(PREVIOUS.load(Ordering::Acquire), hwnd, msg, wparam, lparam)
     }
 }
 

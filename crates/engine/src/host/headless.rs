@@ -16,18 +16,42 @@ pub mod input;
 pub mod rumble;
 
 pub mod overlay {
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    use std::sync::LazyLock;
+
     use crate::settings::FpsMode;
 
-    /// The settings' values: there is no overlay to change them.
+    // The settings' values until the window's menu changes them (host/display_sdl.rs).
+    static UNLOCKED: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(crate::settings::get().system.fps == FpsMode::Unlocked));
+    static VSYNC: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(!crate::settings::get().display.no_vsync));
+    static ASYNC_SHADERS: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(crate::settings::get().graphics.async_pipelines));
+
     pub fn fps_mode() -> FpsMode {
-        crate::settings::get().system.fps
+        if UNLOCKED.load(Relaxed) {
+            FpsMode::Unlocked
+        } else {
+            FpsMode::Stock30
+        }
+    }
+
+    pub fn toggle_fps_mode() -> FpsMode {
+        UNLOCKED.fetch_not(Relaxed);
+        fps_mode()
     }
 
     pub fn is_vsync() -> bool {
-        !crate::settings::get().display.no_vsync
+        VSYNC.load(Relaxed)
+    }
+
+    pub fn toggle_vsync() -> bool {
+        !VSYNC.fetch_not(Relaxed)
     }
 
     pub fn is_async_shaders() -> bool {
-        crate::settings::get().graphics.async_pipelines
+        ASYNC_SHADERS.load(Relaxed)
+    }
+
+    pub fn toggle_async_shaders() -> bool {
+        !ASYNC_SHADERS.fetch_not(Relaxed)
     }
 }
