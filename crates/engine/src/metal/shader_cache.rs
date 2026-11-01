@@ -70,6 +70,8 @@ pub struct CachedStage {
     /// Sampled textures of the bound texture table come from the descriptor heaps (index line `th`): the engine
     /// writes heap addresses and handles into the driver cbuf (binding 17) instead of binding textures.
     pub texture_heap: bool,
+    /// A heap stage whose tiny kernels take their samplers as parameters (index line `tks`).
+    pub tiny_samplers: bool,
     /// The stage has a compute version for the tiny-pass path (index line `tk`): tkv_<entry> for a
     /// vertex stage, tkf_<entry> for a fragment stage.
     pub tiny_kernel: bool,
@@ -183,6 +185,7 @@ fn parse_index(text: &str) -> Index {
                         sb_readonly: Vec::new(),
                         cbuf_limits: false,
                         texture_heap: false,
+                        tiny_samplers: false,
                         tiny_kernel: false,
                         tiny_implicit: None,
                         tiny_clears: false,
@@ -223,6 +226,11 @@ fn parse_index(text: &str) -> Index {
             ["th"] => {
                 if let Some((.., st)) = cur.as_mut() {
                     st.texture_heap = true;
+                }
+            }
+            ["tks"] => {
+                if let Some((.., st)) = cur.as_mut() {
+                    st.tiny_samplers = true;
                 }
             }
             ["tk"] => {
@@ -471,6 +479,9 @@ fn save_runtime_stage(weak: u64, full: u64, st: &CachedStage, msl: &str) {
     }
     if st.texture_heap {
         r.push_str("th\n");
+    }
+    if st.tiny_samplers {
+        r.push_str("tks\n");
     }
     for b in &st.sb_readonly {
         let _ = writeln!(r, "sr {b}");
@@ -751,6 +762,7 @@ pub unsafe fn lookup_or_translate_dynamic(
         sb_readonly,
         cbuf_limits,
         texture_heap: specialized.contains("nx_heaps["),
+        tiny_samplers: false,
         tiny_kernel: false,
         tiny_implicit: None,
         tiny_clears: false,

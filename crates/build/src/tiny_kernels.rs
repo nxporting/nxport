@@ -324,6 +324,30 @@ fn heap_textures(body: &str) -> Vec<(String, String, u32)> {
         .collect()
 }
 
+/// Kernels take the samplers a stage reads from the descriptor heap as parameters bound at their texture's binding: a
+/// sampler read from the sampler heap in a compute kernel gave varying results between runs of the same frame (TotK's
+/// atmosphere LUT kernel). Returns the body without those locals, and the parameters (None: a binding Metal cannot bind).
+fn heap_samplers_as_params(body: &str) -> Option<(String, Vec<Param>)> {
+    let heap = heap_textures(body);
+    let re = regex::Regex::new(r"(?m)^\s*sampler (\w+) = reinterpret_cast<const device NxSamplerHeap\*>[^\n]*\n").unwrap();
+    let mut params = Vec::new();
+    for c in re.captures_iter(body) {
+        let name = c[1].to_string();
+        let (.., b) = heap.iter().find(|(t, ..)| format!("{t}Smplr") == name)?;
+        if *b >= 16 {
+            return None;
+        }
+        params.push(Param { decl: format!("sampler {name}"), attr: format!("[[sampler({b})]]"), name });
+    }
+    Some((re.replace_all(body, "").into_owned(), params))
+}
+
+/// The tiny kernels appended to a stage (from MARKER, before any other variants) read no sampler from the sampler heap:
+/// what the index line `tks` tells the engine. Kernels generated before heap_samplers_as_params did.
+pub fn kernels_bind_samplers(kernels: &str) -> bool {
+    !kernels.contains("NxSamplerHeap")
+}
+
 /// Comment line in a fragment kernel listing the Metal texture bindings it samples with implicit LOD (comma list, maybe
 /// empty); the cache builder copies it into the index (`tk <list>`).
 pub const IMPLICIT_TAG: &str = "// tk-implicit-lod: ";
@@ -357,6 +381,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
     let (ret, name, params, b0, b1) = entry(msl, "fragment")?;
     // Kernels have no helper threads.
     let body_owned = msl[b0..b1].replace("simd_is_helper_thread()", "false");
+    let (body_owned, heap_samplers) = tk_try!(heap_samplers_as_params(&body_owned));
     let body = body_owned.as_str();
     let sig_and_body = format!("{}{}", &msl[msl.find("\nfragment ")?..b0], body);
     if INELIGIBLE.iter().any(|w| sig_and_body.contains(w)) {
@@ -414,6 +439,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
     if pass.iter().any(|p| p.attr.contains("buffer(27)") || p.attr.contains("buffer(28)") || (24..40).any(|i| p.attr.contains(&format!("texture({})", i)))) {
         return tk_none(line!());
     }
+    pass.extend(heap_samplers.iter());
     let heap = heap_textures(body);
     let textures: Vec<(String, String)> = pass.iter().filter(|p| p.decl.starts_with("texture") || p.decl.starts_with("depth"))
         .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string()))
@@ -593,7 +619,8 @@ TK_CLEAR_UNCOVERED        }
 /// Appends `tkv_<entry>` to a translated vertex stage (see module docs). None: no kernel.
 pub fn vertex_kernel(msl: &str) -> Option<String> {
     let (ret, name, params, b0, b1) = entry(msl, "vertex")?;
-    let body = &msl[b0..b1];
+    let (body_owned, heap_samplers) = heap_samplers_as_params(&msl[b0..b1])?;
+    let body = body_owned.as_str();
     let sig_and_body = &msl[msl.find("\nvertex ")?..b1];
     if ["atomic", "simd_", "threadgroup", "access::write", "access::read_write"].iter().any(|w| sig_and_body.contains(w)) {
         return None;
@@ -628,6 +655,7 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
     if pass.iter().any(|p| (25..=28).any(|i| p.attr.contains(&format!("buffer({})", i)))) {
         return None;
     }
+    pass.extend(heap_samplers.iter());
     let textures: Vec<(String, String)> = pass.iter().filter(|p| p.decl.starts_with("texture") || p.decl.starts_with("depth"))
         .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string()))
         .chain(heap_textures(body).into_iter().map(|(n, t, _)| (n, t)))
