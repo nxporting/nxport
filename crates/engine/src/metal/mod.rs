@@ -2797,69 +2797,7 @@ impl Gfx {
                     }
                     st.point_size = *sz;
                 }
-                Cmd::SetRenderEnableConditional { mode, counters } => {
-                    // Counter reports earlier in the stream were written when they executed, so this sees them in order,
-                    // except SAMPLES_PASSED reports: those are written when their command buffer completes, so a
-                    // condition on one from this submit or an uncompleted one is not known yet while encoding. The GPU
-                    // would evaluate it after the report; Metal has no predication, so such draws render (Ryujinx's
-                    // fallback when a counter is not available). Skipping them instead culled TotK's Hyrule Field grass
-                    // patches (both reports still read 0).
-                    // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them
-                    // (they used to be missed here: conditions on them read stale memory and skipped the draw, e.g. a
-                    // signpost's new LOD for one frame, 2026-10-14).
-                    let unresolved = |a: u64| {
-                        st.occl.pending.iter().any(|(_, r)| *r == a)
-                            || st.inflight.iter().any(|f| {
-                                f.occl.iter().any(|(_, r)| *r == a)
-                                    || f.occl_watched.as_ref().is_some_and(|w| {
-                                        w.lock()
-                                            .unwrap()
-                                            .as_ref()
-                                            .is_some_and(|v| v.iter().any(|(_, r)| *r == a))
-                                    })
-                            })
-                    };
-                    let pending = *counters > 0x10000
-                        && (unresolved(*counters) || unresolved(*counters + 16));
-                    st.render_enabled = if pending {
-                        true
-                    } else if *counters > 0x10000 {
-                        // Report pages held by --report-guard are read through their aliases (the engine never waits).
-                        let p = report_guard::engine_ptr(*counters as usize) as *const u64;
-                        let equal = p.read_unaligned()
-                            == (report_guard::engine_ptr(*counters as usize + 16) as *const u64)
-                                .read_unaligned();
-                        equal == (*mode == 0)
-                    } else {
-                        true
-                    };
-                    let read2 = |c: u64| unsafe {
-                        (
-                            (report_guard::engine_ptr(c as usize) as *const u64).read_unaligned(),
-                            (report_guard::engine_ptr(c as usize + 16) as *const u64)
-                                .read_unaligned(),
-                        )
-                    };
-                    if journal_on() && *counters > 0x10000 {
-                        let (a, b) = read2(*counters);
-                        let en = st.render_enabled;
-                        journal(|| {
-                            format!(
-                                "  cond mode {} @{:#x} [{:#x}, {:#x}]{} -> {}",
-                                mode,
-                                counters,
-                                a,
-                                b,
-                                if pending { " pending" } else { "" },
-                                en
-                            )
-                        });
-                    }
-                    if tracing_frame() && *counters > 0x10000 {
-                        let (a, b) = read2(*counters);
-                        println!("[cmdtrace]   conditional mode={} @{:#x} [{:#x}, {:#x}]{} -> render_enabled={}", mode, counters, a, b, if pending { " (report pending)" } else { "" }, st.render_enabled);
-                    }
-                }
+                Cmd::SetRenderEnableConditional { mode, counters } => self.render_enable_conditional(st, *mode, *counters),
                 Cmd::BindTexturesDeferred {
                     stage,
                     first,
@@ -3000,27 +2938,7 @@ impl Gfx {
                         self.occl_reset(st);
                     }
                 }
-                Cmd::ReportCounter { counter, addr } => {
-                    // Reports are written into guest memory by the engine: older render-target holds there end.
-                    rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
-                    if *counter == 1 && self.real_samples() {
-                        self.occl_report(st, *addr);
-                    } else {
-                        write_counter(*counter, *addr, None);
-                        if *counter == 0 && gpu_timestamps() && *addr >= 0x10000 {
-                            // Rewritten with the GPU's time once the command buffer completes (the CPU time stays as a
-                            // provisional value).
-                            st.ts_pending.push((*addr, st.lb.enc_labels.is_empty()));
-                        }
-                        if *counter == 1 {
-                            report_guard::close(crate::nvn::api::translate_virtual(*addr as usize));
-                        }
-                    }
-                    st.plan_ubo.invalidate(*addr, *addr + 16);
-                    st.cx.ubo_copies.invalidate(*addr, *addr + 16);
-                    st.ubo_plan_epoch += 1;
-                    GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
-                }
+                Cmd::ReportCounter { counter, addr } => self.report_counter(st, *counter, *addr),
                 Cmd::ReportValue { value, addr } => {
                     rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     write_counter(0, *addr, Some(*value as u64));
@@ -3259,6 +3177,38 @@ impl Gfx {
                             ModelItem::RenderState(r) => apply_render_state(st, r),
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
                             ModelItem::Targets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
+                            ModelItem::RenderEnable(e) => {
+                                if journal_on() && st.render_enabled != *e {
+                                    journal(|| format!("  render-enable {}", e));
+                                }
+                                st.render_enabled = *e;
+                            }
+                            ModelItem::RenderEnableConditional { mode, counters } => {
+                                self.render_enable_conditional(st, *mode, *counters)
+                            }
+                            ModelItem::ResetCounter(counter) => {
+                                if *counter == 1 && self.real_samples() {
+                                    self.occl_reset(st);
+                                }
+                            }
+                            ModelItem::ReportCounter { counter, addr } => self.report_counter(st, *counter, *addr),
+                            ModelItem::Clear { .. } | ModelItem::ClearDepth { .. } if !st.render_enabled => {
+                                journal(|| format!("  cond-skip program {:#x}", st.program.unwrap_or(0)));
+                            }
+                            ModelItem::Clear { index, rgba, mask } => {
+                                st.stats.clears += 1;
+                                let index = match st.color_dups.get(*index as usize) {
+                                    Some(Some(i)) => *i as i32,
+                                    _ => *index,
+                                };
+                                let c = cur.clone();
+                                self.clear(st, &c, index, *rgba, *mask);
+                            }
+                            ModelItem::ClearDepth { depth, depth_mask, stencil, stencil_mask } => {
+                                st.stats.clears += 1;
+                                let c = cur.clone();
+                                self.clear_depth(st, &c, *depth, *depth_mask, *stencil, *stencil_mask);
+                            }
                             ModelItem::Viewport { x, y, w, h, near, far } => {
                                 st.scissor = Some((*x, *y, *w, *h));
                                 set_viewport(st, *x, *y, *w, *h);
@@ -3331,6 +3281,96 @@ impl Gfx {
         if let Some((n, t)) = cmd_t {
             note_cmd_time(n, t.elapsed().as_nanos() as u64);
         }
+    }
+
+    /// nvnCommandBufferSetRenderEnableConditional (and the native item).
+    unsafe fn render_enable_conditional(&self, st: &mut State, mode: i32, counters: u64) {
+        let (mode, counters) = (&mode, &counters);
+        // Counter reports earlier in the stream were written when they executed, so this sees them in order,
+        // except SAMPLES_PASSED reports: those are written when their command buffer completes, so a
+        // condition on one from this submit or an uncompleted one is not known yet while encoding. The GPU
+        // would evaluate it after the report; Metal has no predication, so such draws render (Ryujinx's
+        // fallback when a counter is not available). Skipping them instead culled TotK's Hyrule Field grass
+        // patches (both reports still read 0).
+        // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them
+        // (they used to be missed here: conditions on them read stale memory and skipped the draw, e.g. a
+        // signpost's new LOD for one frame, 2026-10-14).
+        let unresolved = |a: u64| {
+            st.occl.pending.iter().any(|(_, r)| *r == a)
+                || st.inflight.iter().any(|f| {
+                    f.occl.iter().any(|(_, r)| *r == a)
+                        || f.occl_watched.as_ref().is_some_and(|w| {
+                            w.lock()
+                                .unwrap()
+                                .as_ref()
+                                .is_some_and(|v| v.iter().any(|(_, r)| *r == a))
+                        })
+                })
+        };
+        let pending = *counters > 0x10000
+            && (unresolved(*counters) || unresolved(*counters + 16));
+        st.render_enabled = if pending {
+            true
+        } else if *counters > 0x10000 {
+            // Report pages held by --report-guard are read through their aliases (the engine never waits).
+            let p = report_guard::engine_ptr(*counters as usize) as *const u64;
+            let equal = p.read_unaligned()
+                == (report_guard::engine_ptr(*counters as usize + 16) as *const u64)
+                    .read_unaligned();
+            equal == (*mode == 0)
+        } else {
+            true
+        };
+        let read2 = |c: u64| unsafe {
+            (
+                (report_guard::engine_ptr(c as usize) as *const u64).read_unaligned(),
+                (report_guard::engine_ptr(c as usize + 16) as *const u64)
+                    .read_unaligned(),
+            )
+        };
+        if journal_on() && *counters > 0x10000 {
+            let (a, b) = read2(*counters);
+            let en = st.render_enabled;
+            journal(|| {
+                format!(
+                    "  cond mode {} @{:#x} [{:#x}, {:#x}]{} -> {}",
+                    mode,
+                    counters,
+                    a,
+                    b,
+                    if pending { " pending" } else { "" },
+                    en
+                )
+            });
+        }
+        if tracing_frame() && *counters > 0x10000 {
+            let (a, b) = read2(*counters);
+            println!("[cmdtrace]   conditional mode={} @{:#x} [{:#x}, {:#x}]{} -> render_enabled={}", mode, counters, a, b, if pending { " (report pending)" } else { "" }, st.render_enabled);
+        }
+    }
+
+    /// nvnCommandBufferReportCounter (and the native item).
+    unsafe fn report_counter(&self, st: &mut State, counter: i32, addr: u64) {
+        let (counter, addr) = (&counter, &addr);
+        // Reports are written into guest memory by the engine: older render-target holds there end.
+        rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
+        if *counter == 1 && self.real_samples() {
+            self.occl_report(st, *addr);
+        } else {
+            write_counter(*counter, *addr, None);
+            if *counter == 0 && gpu_timestamps() && *addr >= 0x10000 {
+                // Rewritten with the GPU's time once the command buffer completes (the CPU time stays as a
+                // provisional value).
+                st.ts_pending.push((*addr, st.lb.enc_labels.is_empty()));
+            }
+            if *counter == 1 {
+                report_guard::close(crate::nvn::api::translate_virtual(*addr as usize));
+            }
+        }
+        st.plan_ubo.invalidate(*addr, *addr + 16);
+        st.cx.ubo_copies.invalidate(*addr, *addr + 16);
+        st.ubo_plan_epoch += 1;
+        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
     }
 
     /// nvnCommandBufferSetRenderTargets (and the native targets item): the pass's render targets.

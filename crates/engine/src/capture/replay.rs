@@ -141,6 +141,12 @@ fn flatten(
                                 Cmd::BindVertexAttribState(_) => "nvnCommandBufferBindVertexAttribState",
                                 Cmd::BindVertexStreamState(_) => "nvnCommandBufferBindVertexStreamState",
                                 Cmd::BindProgram { .. } => "nvnCommandBufferBindProgram",
+                                Cmd::SetRenderEnable(_) => "nvnCommandBufferSetRenderEnable",
+                                Cmd::SetRenderEnableConditional { .. } => "nvnCommandBufferSetRenderEnableConditional",
+                                Cmd::ResetCounter { .. } => "nvnCommandBufferResetCounter",
+                                Cmd::ReportCounter { .. } => "nvnCommandBufferReportCounter",
+                                Cmd::ClearColor { .. } => "nvnCommandBufferClearColor",
+                                Cmd::ClearDepthStencil { .. } => "nvnCommandBufferClearDepthStencil",
                                 _ => "nvnCommandBufferDrawElementsInstanced",
                             };
                             out.push(Op { name: name.into(), typed: Some(t), args: None });

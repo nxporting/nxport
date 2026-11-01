@@ -6,11 +6,6 @@
 use super::draw::{Port, R};
 
 const PFN_SET_RENDER_TARGETS: usize = 0x466e258;
-const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
-const PFN_SET_RENDER_ENABLE_CONDITIONAL: usize = 0x466e250;
-const PFN_CLEAR_COLOR: usize = 0x466e0c8;
-const PFN_CLEAR_DEPTH_STENCIL: usize = 0x466e0e0;
-const PFN_REPORT_COUNTER: usize = 0x466e230;
 /// The first-use clear colour (four floats).
 const CLEAR_COLOR: usize = 0x3840174;
 const HOLDER: usize = 0x462bbf0;
@@ -141,24 +136,22 @@ unsafe fn first_use(p: &mut Port, holder: usize, targets: &[usize; 9], cmd: usiz
             continue;
         }
         let report = (p.m.r64(holder + 0x7f8) + off as usize) as u64;
-        p.call(p.pfn(PFN_SET_RENDER_ENABLE_CONDITIONAL), &[cmd as u64, 1, report]);
+        p.render_enable_conditional(cmd, 1, report);
         let flags2 = p.m.r8(holder + 0x782);
         if flags2 >> 7 != 0 {
             return Err("render target first use (mode)");
         }
         if k < 8 {
-            p.call(p.pfn(PFN_CLEAR_COLOR), &[cmd as u64, k as u64, (p.base + CLEAR_COLOR) as u64, 0xf]);
+            p.clear_color(cmd, k as i32, p.base + CLEAR_COLOR, 0xf);
         } else {
             let mask = if p.m.r8(t + 0xa8).wrapping_sub(0x5b) <= 1 { 0xff } else { 0 };
-            let clear: unsafe extern "C" fn(u64, f32, u32, u32, u32) = std::mem::transmute(p.pfn(PFN_CLEAR_DEPTH_STENCIL));
-            p.flush();
-            clear(cmd as u64, 1.0, 1, 0, mask);
+            p.clear_depth(cmd, 1.0, true, 0, mask);
         }
         if (mode >> 23) & 1 == 0 {
             if p.m.r8(holder + 0x784) != 4 {
                 return Err("render target first use (mode)");
             }
-            p.call(p.pfn(PFN_REPORT_COUNTER), &[cmd as u64, 0x10, report]);
+            p.report_counter(cmd, 0x10, report);
         }
         if (flags2 >> 5) & 1 != 0 {
             return Err("render target first use (mode)");
@@ -166,7 +159,7 @@ unsafe fn first_use(p: &mut Port, holder: usize, targets: &[usize; 9], cmd: usiz
         cleared = true;
     }
     if cleared && mode & 0x30_0000 == 0x10_0000 {
-        p.call(p.pfn(PFN_SET_RENDER_ENABLE), &[cmd as u64, 1]);
+        p.render_enable(cmd, true);
     }
     Ok(())
 }

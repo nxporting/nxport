@@ -2126,10 +2126,20 @@ impl RecordedCommandList {
                     Some(crate::nvn::cmd::Cmd::CallCommands(h)) => {
                         calls.extend_from_slice(h.as_slice())
                     }
-                    Some(crate::nvn::cmd::Cmd::ModelDraw(m)) => calls.extend(m.items.iter().filter_map(|i| match i {
-                        crate::nvn::cmd::ModelItem::Unit { list, .. } => Some(*list),
-                        _ => None,
-                    })),
+                    Some(crate::nvn::cmd::Cmd::ModelDraw(m)) => {
+                        for i in &m.items {
+                            match i {
+                                crate::nvn::cmd::ModelItem::Unit { list, .. } => calls.push(*list),
+                                crate::nvn::cmd::ModelItem::ReportCounter { counter, addr } if *addr > 0x10000 => {
+                                    ranges.push((*addr, *addr + 16));
+                                    if *counter == 1 {
+                                        samples.push(*addr);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

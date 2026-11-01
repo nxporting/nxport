@@ -329,6 +329,12 @@ pub enum ModelItem {
     Draw(ModelRange),
     RenderState(Box<RenderState>),
     Program { program: usize, stages: i32 },
+    RenderEnable(bool),
+    RenderEnableConditional { mode: i32, counters: u64 },
+    ResetCounter(i32),
+    ReportCounter { counter: i32, addr: u64 },
+    Clear { index: i32, rgba: [f32; 4], mask: i32 },
+    ClearDepth { depth: f32, depth_mask: bool, stencil: i32, stencil_mask: i32 },
     /// Render targets (agl::RenderBuffer::bind).
     Targets { colors: Vec<RtRef>, depth: Option<RtRef> },
     /// sead::Viewport::apply: the same rectangle as scissor and viewport, then the depth range.
@@ -353,6 +359,14 @@ impl ModelItem {
             ModelItem::VertexAttribs(a) => Cmd::BindVertexAttribState(a),
             ModelItem::VertexStreams(ref v) => Cmd::BindVertexStreamState(v.clone()),
             ModelItem::Program { program, stages } => Cmd::BindProgram { program, stages },
+            ModelItem::RenderEnable(e) => Cmd::SetRenderEnable(e),
+            ModelItem::RenderEnableConditional { mode, counters } => Cmd::SetRenderEnableConditional { mode, counters },
+            ModelItem::ResetCounter(counter) => Cmd::ResetCounter { counter },
+            ModelItem::ReportCounter { counter, addr } => Cmd::ReportCounter { counter, addr },
+            ModelItem::Clear { index, rgba, mask } => Cmd::ClearColor { index, rgba, mask },
+            ModelItem::ClearDepth { depth, depth_mask, stencil, stencil_mask } => {
+                Cmd::ClearDepthStencil { depth, depth_mask, stencil, stencil_mask }
+            }
             ModelItem::Draw(r) => Cmd::DrawElementsInstanced {
                 mode: r.mode,
                 index_type: r.index_type,
