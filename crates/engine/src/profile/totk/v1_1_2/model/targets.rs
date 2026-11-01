@@ -163,3 +163,19 @@ unsafe fn first_use(p: &mut Port, holder: usize, targets: &[usize; 9], cmd: usiz
     }
     Ok(())
 }
+
+/// main+0xc26458(rb, w): a barrier for each of the render buffer's targets (+0x20..+0x60) that has storage (+0x60 not
+/// -1): ORDER_FRAGMENTS, or ORDER_PRIMITIVES with graphics settings +0x780 bit 5, plus INVALIDATE_TEXTURE and, with
+/// +0x50c bit 1, INVALIDATE_SHADER.
+pub(super) unsafe fn barrier_targets(p: &mut Port, rb: usize, w: usize) {
+    let s = p.m.r64(p.m.r64(p.base + HOLDER));
+    let order = if p.m.r8(s + 0x780) & 0x20 == 0 { 2 } else { 1 };
+    let invalidate = if (p.m.r8(s + 0x50c) >> 1) & 1 == 0 { 0x10 } else { 0x110 };
+    let cmd = p.m.r64(w + 0xb8);
+    for o in (0x20..=0x60).step_by(8) {
+        let t = p.m.r64(rb + o);
+        if t != 0 && p.m.i32(t + 0x60) != -1 {
+            p.barrier(cmd, invalidate | order);
+        }
+    }
+}
