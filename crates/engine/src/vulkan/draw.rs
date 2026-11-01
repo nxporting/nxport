@@ -777,30 +777,33 @@ impl Ctx {
                     let mut memo_key = None;
                     if *slot >= 3 {
                         if let Some((addr, size)) = self.st.uniforms.get(stage, slot - 3) {
-                            let k = (addr, size, b.extent, self.ubo_epoch);
+                            // Good until this submit's commands write its range (Ctx::ubo_unchanged).
+                            let k = (addr, size, b.extent);
                             // The slot's last binding first (most draws read a buffer an earlier draw bound there).
                             let at = usize::try_from(stage).ok().filter(|&s| s < 6).zip(usize::try_from(slot - 3).ok().filter(|&i| i < UBO_MEMO));
-                            let memo = at.map(|(s, i)| self.ubo_slot_memo[s][i]).filter(|m| m.0 == self.ubo_memo_gen && m.1 == k);
+                            let memo = at
+                                .map(|(s, i)| self.ubo_slot_memo[s][i])
+                                .filter(|m| m.0 == self.ubo_memo_gen && m.1 == k && self.ubo_unchanged(m.2 .1, m.2 .2, m.2 .0));
                             if let Some(m) = memo {
-                                if let Some((buf, off, len, bound)) = m.2 {
+                                if let Some((buf, off, len, bound)) = m.2 .3 {
                                     limits.push((b.binding - base, bound));
                                     buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
                                 }
                                 continue;
                             }
-                            if let Some(x) = self.ubo_memo.get(&k) {
+                            if let Some(x) = self.ubo_memo.get(&k).copied().filter(|x| self.ubo_unchanged(x.1, x.2, x.0)) {
                                 if let Some((s, i)) = at {
-                                    self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, *x);
+                                    self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, x);
                                 }
-                                if let Some((buf, off, len, bound)) = *x {
+                                if let Some((buf, off, len, bound)) = x.3 {
                                     limits.push((b.binding - base, bound));
                                     buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
                                 }
                                 continue;
                             }
-                            memo_key = Some(k);
                             let a = crate::nvn::api::translate_virtual(addr as usize);
                             let len = size.min(0x10000);
+                            memo_key = Some((k, a, len));
                             if a > 0x10000 && self.gpu_writes(a, a + len) {
                                 let x = match self.shadow(a, len, false) {
                                     Some(x) => Some(x),
@@ -827,17 +830,17 @@ impl Ctx {
                         // size still goes to the shader's check.
                         Some(v) if *slot != 0 => {
                             let n = if b.extent >= 0 { (b.extent as usize).max(16).min(v.len()) } else { v.len() };
-                            let key = (v.as_ptr() as usize, n, self.ubo_epoch);
-                            match self.ubo_copies.get(&key) {
-                                Some(&(b, o)) => Some((b, o, n as u64, v.len())),
+                            let key = (v.as_ptr() as usize, n);
+                            match self.ubo_copies.get(&key).copied().filter(|c| self.ubo_unchanged(key.0, n, c.0)) {
+                                Some((_, b, o)) => Some((b, o, n as u64, v.len())),
                                 // Copied on vk-record, before the commands after this one.
                                 None => {
                                     let c = self.arena.reserve(&self.dev, n).map(|(b, o, p)| {
                                         self.rec.fill(v.as_ptr() as usize, p, n, self.ubo_epoch);
                                         (b, o)
                                     });
-                                    if let Some(c) = c {
-                                        self.ubo_copies.insert(key, c);
+                                    if let Some((b, o)) = c {
+                                        self.ubo_copies.insert(key, (self.ubo_epoch, b, o));
                                     }
                                     c.map(|(b, o)| (b, o, n as u64, v.len()))
                                 }
@@ -866,11 +869,12 @@ impl Ctx {
                         }
                         None => zero.map(|(b, o)| (b, o, 256, 256)),
                     };
-                    if let Some(k) = memo_key {
-                        self.ubo_memo.insert(k, x);
+                    if let Some((k, a, len)) = memo_key {
+                        let m = (self.ubo_epoch, a, len, x);
+                        self.ubo_memo.insert(k, m);
                         if let (Ok(s), Ok(i)) = (usize::try_from(stage), usize::try_from(slot - 3)) {
                             if s < 6 && i < UBO_MEMO {
-                                self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, x);
+                                self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, m);
                             }
                         }
                     }
