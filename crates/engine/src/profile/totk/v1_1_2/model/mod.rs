@@ -529,6 +529,24 @@ pub unsafe extern "C" fn on_transformed_quad_end() -> u32 {
     TRANSFORMED_QUADS.end("transformed quads", &TRANSFORMED_QUAD_EXPECTED)
 }
 
+static COPY_QUADS: Checked = Checked::new();
+
+thread_local! {
+    static COPY_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x876e28(w, tex, m, rows, a, b, value in s0): a full-screen copy (cubemap.rs; hook_float).
+#[no_mangle]
+pub unsafe extern "C" fn on_copy_quad(w: usize, tex: usize, m: usize, rows: usize, a: i32, b: u32, _x6: u64, floats: usize) -> u32 {
+    let value = (floats as *const f32).read();
+    COPY_QUADS.run(&COPY_QUAD_EXPECTED, |p| cubemap::copy_quad(p, w, tex, m, rows, a, b, value))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_copy_quad_end() -> u32 {
+    COPY_QUADS.end("copy quads", &COPY_QUAD_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1412,6 +1430,9 @@ fn report() {
     if pd + pl != 0 {
         println!("[model-draw] agl / sead primitives drawn natively: {pd}, left to the game: {pl}");
     }
+    if let Some(l) = COPY_QUADS.summary("copy quads") {
+        println!("{l}");
+    }
     if let Some(l) = TRANSFORMED_QUADS.summary("transformed quads") {
         println!("{l}");
     }
@@ -1566,6 +1587,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_transformed_quad(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_transformed_quad_end())) as usize;
         hook(base, mem_space, 0x877418, 0xd10303ff, pre, post, "Transformed quads");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_copy_quad(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_copy_quad_end())) as usize;
+        hook_float(base, mem_space, 0x876e28, 0xd10203ff, pre, post, "Copy quads");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
