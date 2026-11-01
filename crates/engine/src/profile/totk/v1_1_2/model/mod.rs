@@ -45,6 +45,9 @@ const OCCLUSION_SITE_INSTRUCTION: u32 = 0xd10203ff; // sub sp, sp, #0x80
 /// An item's occlusion query (items.rs).
 const QUERY_ITEM_SITE: usize = 0x895ce8;
 const QUERY_ITEM_SITE_INSTRUCTION: u32 = 0xa9bb7bfd; // stp x29, x30, [sp, #-0x50]!
+/// An item drawn under its query (items.rs).
+const OBJECT_ITEM_SITE: usize = 0x7fddf0;
+const OBJECT_ITEM_SITE_INSTRUCTION: u32 = 0xd10143ff; // sub sp, sp, #0x50
 const LIGHTS_SITE: usize = 0x9777c4;
 const LIGHTS_SITE_INSTRUCTION: u32 = 0xd10743ff; // sub sp, sp, #0x1d0
 const DISPATCH_SITE: usize = 0x763718;
@@ -768,6 +771,23 @@ pub unsafe extern "C" fn on_query_item_end() -> u32 {
     QUERY_ITEMS.end("item queries", &QUERY_ITEM_EXPECTED)
 }
 
+static OBJECT_ITEMS: Checked = Checked::new();
+
+thread_local! {
+    static OBJECT_ITEM_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// An item drawn under its occlusion query, main+0x7fddf0 (items.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_object_item(item: usize, ctx: usize) -> u32 {
+    OBJECT_ITEMS.run(&OBJECT_ITEM_EXPECTED, |p| items::object_item(p, item, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_object_item_end() -> u32 {
+    OBJECT_ITEMS.end("item objects", &OBJECT_ITEM_EXPECTED)
+}
+
 static VFX_CALLS: AtomicU64 = AtomicU64::new(0);
 static VFX_SAME: AtomicU64 = AtomicU64::new(0);
 static VFX_DIFFERENT: AtomicU64 = AtomicU64::new(0);
@@ -1156,6 +1176,9 @@ fn report() {
     if let Some(l) = QUERY_ITEMS.summary("item queries") {
         println!("{l}");
     }
+    if let Some(l) = OBJECT_ITEMS.summary("item objects") {
+        println!("{l}");
+    }
     let on = OCCL_CALLS.load(Ordering::Relaxed);
     if on != 0 {
         let s = OCCL_STOPS.lock().unwrap().clone();
@@ -1251,6 +1274,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_query_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_query_item_end())) as usize;
         hook(base, mem_space, QUERY_ITEM_SITE, QUERY_ITEM_SITE_INSTRUCTION, pre, post, "Item queries");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
+        hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
     }
     if d.verify_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_dispatch(_, _, _, _))) as usize;

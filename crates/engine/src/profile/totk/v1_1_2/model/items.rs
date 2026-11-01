@@ -5,7 +5,7 @@
 
 use super::draw::{Port, R};
 use super::lights::{shape_buffers, SHAPES, STREAMS};
-use super::vfx::{program_apply, program_block};
+use super::vfx::{program_apply, program_block, program_texture};
 
 /// The query pool (lock-free ring: capacity +0x30, elements +0x38, head +0x48, tails +0x40 / +0x44 by +0x80, empty flag
 /// +0x4c, taken count +0x50).
@@ -130,5 +130,99 @@ unsafe fn query_box(p: &mut Port, q: usize, w: usize, data: usize) -> R<()> {
         _ => 0,
     };
     super::lights::stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + kind * 0x120 + 0x15e8, w);
+    Ok(())
+}
+
+/// main+0x7fddf0(item, ctx): the item drawn (main+0x7fdeb0), under conditional rendering on the query of its record for
+/// the view when it has one.
+pub(super) unsafe fn object_item(p: &mut Port, item: usize, ctx: usize) -> R<()> {
+    let view = p.m.r32(p.m.r64(ctx + 0x10) + 0x20);
+    let i = if p.m.r32(item + 0x48) > view { view as usize } else { 0 };
+    let q = p.m.r64(p.m.r64(item + 0x50) + i * 16);
+    let w = p.m.r64(ctx);
+    let cmd = p.m.r64(w + 0xb8);
+    if q == 0 {
+        return object_draw(p, item, ctx);
+    }
+    let addr = p.buffer_address_of(q + 0x10);
+    p.render_enable_conditional(cmd, 1, addr + p.m.r8(q + 8) as u64 * 0x20);
+    object_draw(p, item, ctx)?;
+    p.render_enable(cmd, true);
+    Ok(())
+}
+
+/// main+0x7fdeb0: the item's program variation by its flags ([item+0x30]+0x40), the view state's graphics context when
+/// its two cached choices change, the program with the view's two textures (+0x28 / +0x30, slots 1 / 0), the context's
+/// texture (ctx+0x20, slot 5), the context's block (ctx+0x18, index 2), the item's block (+0x60, index 3), the item's
+/// texture (+0x128, slot 6) when lit, then the box shape and its index stream (kind 2 for records flagged 0xc).
+unsafe fn object_draw(p: &mut Port, item: usize, ctx: usize) -> R<()> {
+    let v = p.m.r64(ctx + 0x10);
+    let w = p.m.r64(ctx);
+    let view = p.m.r32(v + 0x20);
+    let lit = p.m.f32(item + 0x130) > 0.0;
+    let flags = p.m.r32(p.m.r64(item + 0x30) + 0x40);
+    let vs = p.m.r64(v);
+    let near = p.m.r64(p.m.r64(v + 8) + 0x60) != 0;
+    let unflagged = flags & 0x1000 == 0;
+    let alt = (p.m.r8(vs + 9) >> 1) & 1 != 0;
+    let choice = alt && unflagged;
+    let cached = p.m.r64(vs + 0x20) + if p.m.r32(vs + 0x18) > view { view as usize } else { 0 } * 0x9e0;
+    if (p.m.r8(cached + 0x94c) != 0) != near || (p.m.r8(cached + 0x94d) != 0) != choice {
+        p.m.w::<u8>(cached + 0x94c, near as u8);
+        p.m.w::<u8>(cached + 0x94d, choice as u8);
+        let g = if p.m.r8(vs + 9) & 1 == 0 || !choice {
+            if near { 0xcc } else { 0x58 }
+        } else if near {
+            0x1b4
+        } else {
+            0x140
+        };
+        p.apply_graphics_context(vs + g, w);
+    }
+    // The variation: one count per option the flags leave on (+0x30 option table, 0x28-byte entries, +0x20 count).
+    let set = p.m.r64(p.m.r64(p.m.r64(p.m.r64(item + 0x30) + 0x30)) + 8);
+    let (options, n) = (p.m.r64(set + 0x30), p.m.r32(set + 0x28));
+    let option = |p: &Port, k: u32| p.m.r16(options + if n > k { k as usize * 0x28 } else { 0 } + 0x20) as u32;
+    let shadowed = lit && flags & 0x8000 == 0;
+    let mut variation = 0;
+    if unflagged {
+        variation += option(p, 0);
+    }
+    if shadowed {
+        variation += option(p, 1);
+    }
+    if p.m.f32(item + 0x104) == 0.0 || flags & 0x2000 != 0 {
+        variation += option(p, 3);
+    }
+    if lit && flags & 0x10000 == 0 {
+        variation += option(p, 4);
+    }
+    let prog = if variation == 0 {
+        p.m.r64(set + 0x10)
+    } else {
+        let k = variation - 1;
+        p.m.r64(set + 0x20) + if p.m.r32(set + 0x18) > k { k as usize } else { 0 } * 0x158
+    };
+    program_apply(p, prog, w)?;
+    program_texture(p, prog, w, 1, p.m.r64(v + 0x28))?;
+    program_texture(p, prog, w, 0, p.m.r64(v + 0x30))?;
+    program_texture(p, prog, w, 5, p.m.r64(ctx + 0x20))?;
+    program_block(p, prog, w, 2, p.m.r64(ctx + 0x18), 0)?;
+    program_block(p, prog, w, 3, item + 0x60, 0)?;
+    if shadowed {
+        let t = p.m.r64(item + 0x128);
+        if t == 0 {
+            return Err("item without its texture");
+        }
+        program_texture(p, prog, w, 6, t + 0x70)?;
+    }
+    let cmd = p.m.r64(w + 0xb8);
+    let shapes = p.m.r64(p.m.r64(p.base + SHAPES));
+    p.bind_vertex_attribs(cmd, 0x10, shapes + 0xa84);
+    p.bind_vertex_streams(cmd, 0x10, shapes + 0xac8);
+    shape_buffers(p, shapes + 0x968, w);
+    let i = if p.m.r32(item + 0x48) > view { view as usize } else { 0 };
+    let kind = if p.m.r8(p.m.r64(item + 0x50) + i * 16 + 8) & 0xc != 0 { 2 } else { 1 };
+    super::lights::stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + kind * 0x120 + 0x1528, w);
     Ok(())
 }
