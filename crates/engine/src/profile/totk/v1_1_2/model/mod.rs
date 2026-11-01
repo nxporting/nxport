@@ -4,6 +4,7 @@
 
 mod binds;
 mod cave;
+mod cubemap;
 mod cells;
 mod dispatch;
 mod draw;
@@ -490,6 +491,25 @@ pub unsafe extern "C" fn on_block_bind(block: usize, w: usize, slots: usize, ele
         let s = p.m.r32(slots);
         p.bind_uniform_block(block, w, s, element).map(|b| b as u32)
     })
+}
+
+static CUBEMAP_FACES: Checked = Checked::new();
+
+thread_local! {
+    static CUBEMAP_FACE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x7ee7a8(w, tex, level, face, kind, value in s0): one face of a cube map mip filter pass (cubemap.rs; hooked with
+/// hook_float: `floats` points at the saved d0..d7).
+#[no_mangle]
+pub unsafe extern "C" fn on_cubemap_face(w: usize, tex: usize, level: u32, face: u32, kind: u32, _x5: u64, _x6: u64, floats: usize) -> u32 {
+    let value = (floats as *const u32).read();
+    CUBEMAP_FACES.run(&CUBEMAP_FACE_EXPECTED, |p| cubemap::face(p, w, tex, level, face, kind, value))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_cubemap_face_end() -> u32 {
+    CUBEMAP_FACES.end("cube map faces", &CUBEMAP_FACE_EXPECTED)
 }
 
 /// main+0x9c7e04 / main+0x9c7c80: the frame's default texture and uniform bindings (binds.rs).
@@ -1352,6 +1372,9 @@ fn report() {
     if pd + pl != 0 {
         println!("[model-draw] agl / sead primitives drawn natively: {pd}, left to the game: {pl}");
     }
+    if let Some(l) = CUBEMAP_FACES.summary("cube map faces") {
+        println!("{l}");
+    }
     if let Some(l) = QUERY_ITEMS.summary("item queries") {
         println!("{l}");
     }
@@ -1488,6 +1511,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_query_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_query_item_end())) as usize;
         hook(base, mem_space, QUERY_ITEM_SITE, QUERY_ITEM_SITE_INSTRUCTION, pre, post, "Item queries");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_cubemap_face(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_cubemap_face_end())) as usize;
+        hook_float(base, mem_space, 0x7ee7a8, 0xd10203ff, pre, post, "Cube map faces");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
@@ -1519,6 +1545,99 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
 
 /// The entry of the function at main+`site` branches to a wrapper: pre(args); unless it returned nonzero, the function
 /// itself (the displaced instruction, then the rest of it) as a call; then post().
+/// The first instruction of a hooked function as it runs from `to`: an adrp is re-encoded for the page it named.
+fn relocate(instruction: u32, from: usize, to: usize) -> Option<u32> {
+    if instruction & 0x9f00_0000 != 0x9000_0000 {
+        return Some(instruction);
+    }
+    let imm = (((instruction >> 5) & 0x7ffff) << 2 | (instruction >> 29) & 3) as i64;
+    let imm = (imm << 43) >> 43;
+    let page = ((from & !0xfff) as i64).wrapping_add(imm << 12);
+    let delta = (page - (to & !0xfff) as i64) >> 12;
+    if delta.abs() >= 1 << 20 {
+        return None;
+    }
+    let d = delta as u32;
+    Some((instruction & 0x9f00_001f) | (d & 3) << 29 | ((d >> 2) & 0x7ffff) << 5)
+}
+
+/// hook() for functions with floating-point arguments: d0..d7 are kept for the function and `pre` gets a pointer to
+/// them in place of x7 (its own x7 argument).
+unsafe fn hook_float(
+    base: usize,
+    mem_space: &mut crate::guest::loader::GuestMemorySpace,
+    site_off: usize,
+    instruction: u32,
+    pre: usize,
+    post: usize,
+    what: &str,
+) {
+    let site = (base + site_off) as *mut u32;
+    let actual = std::ptr::read(site);
+    if actual != instruction {
+        println!("[!] {what} hook not installed: main+{site_off:#x} = {actual:#010x}");
+        return;
+    }
+    let wrap = mem_space.make_code_block(31) as usize;
+    let b = |from: usize, to: usize, link: bool| -> Option<u32> {
+        let d = to as i64 - from as i64;
+        (d.abs() < 1 << 27).then(|| (if link { 0x9400_0000 } else { 0x1400_0000 }) | ((d >> 2) as u32 & 0x03ff_ffff))
+    };
+    let at = |k: usize| wrap + k * 4;
+    let (Some(to_wrap), Some(call_pre), Some(call_body), Some(call_post), Some(back), Some(displaced)) = (
+        b(site as usize, wrap, false),
+        b(at(11), pre, true),
+        b(at(21), at(29), true),
+        b(at(23), post, true),
+        b(at(30), site as usize + 4, false),
+        relocate(instruction, site as usize, at(29)),
+    ) else {
+        println!("[!] {what} hook not installed: wrapper out of range");
+        return;
+    };
+    let code: [u32; 31] = [
+        0xa9b67bfd,  // 0: stp x29, x30, [sp, #-0xa0]!
+        0x910003fd,  // 1: mov x29, sp
+        0xa90107e0,  // 2: stp x0, x1, [sp, #0x10]
+        0xa9020fe2,  // 3: stp x2, x3, [sp, #0x20]
+        0xa90317e4,  // 4: stp x4, x5, [sp, #0x30]
+        0xa9041fe6,  // 5: stp x6, x7, [sp, #0x40]
+        0x6d0507e0,  // 6: stp d0, d1, [sp, #0x50]
+        0x6d060fe2,  // 7: stp d2, d3, [sp, #0x60]
+        0x6d0717e4,  // 8: stp d4, d5, [sp, #0x70]
+        0x6d081fe6,  // 9: stp d6, d7, [sp, #0x80]
+        0x910143e7,  // 10: add x7, sp, #0x50
+        call_pre,    // 11: bl pre
+        0x350001e0,  // 12: cbnz w0, 27 (handled)
+        0x6d481fe6,  // 13: ldp d6, d7, [sp, #0x80]
+        0x6d4717e4,  // 14: ldp d4, d5, [sp, #0x70]
+        0x6d460fe2,  // 15: ldp d2, d3, [sp, #0x60]
+        0x6d4507e0,  // 16: ldp d0, d1, [sp, #0x50]
+        0xa9441fe6,  // 17: ldp x6, x7, [sp, #0x40]
+        0xa94317e4,  // 18: ldp x4, x5, [sp, #0x30]
+        0xa9420fe2,  // 19: ldp x2, x3, [sp, #0x20]
+        0xa94107e0,  // 20: ldp x0, x1, [sp, #0x10]
+        call_body,   // 21: bl 29 (the function)
+        0xf9000be0,  // 22: str x0, [sp, #0x10]
+        call_post,   // 23: bl post
+        0xf9400be0,  // 24: ldr x0, [sp, #0x10]
+        0xa8ca7bfd,  // 25: ldp x29, x30, [sp], #0xa0
+        0xd65f03c0,  // 26: ret
+        0xa8ca7bfd,  // 27: ldp x29, x30, [sp], #0xa0
+        0xd65f03c0,  // 28: ret
+        displaced,   // 29: the displaced instruction
+        back,        // 30: b site+4
+    ];
+    let w = wrap as *mut u32;
+    for (k, c) in code.iter().enumerate() {
+        std::ptr::write(w.add(k), *c);
+    }
+    sys_icache_invalidate(w as *mut libc::c_void, code.len() * 4);
+    std::ptr::write(site, to_wrap);
+    sys_icache_invalidate(site as *mut libc::c_void, 4);
+    println!("[+] {what} hook installed at main+{site_off:#x}");
+}
+
 unsafe fn hook(
     base: usize,
     mem_space: &mut crate::guest::loader::GuestMemorySpace,
@@ -1550,20 +1669,10 @@ unsafe fn hook(
         println!("[!] {what} hook not installed: wrapper out of branch range");
         return;
     };
-    // The displaced instruction runs at at(20): an adrp is re-encoded for the page it named.
-    let displaced = if instruction & 0x9f00_0000 == 0x9000_0000 {
-        let imm = (((instruction >> 5) & 0x7ffff) << 2 | (instruction >> 29) & 3) as i64;
-        let imm = (imm << 43) >> 43;
-        let page = ((site as usize & !0xfff) as i64).wrapping_add(imm << 12);
-        let delta = (page - (at(20) & !0xfff) as i64) >> 12;
-        if delta.abs() >= 1 << 20 {
-            println!("[!] {what} hook not installed: adrp out of range");
-            return;
-        }
-        let d = delta as u32;
-        (instruction & 0x9f00_001f) | (d & 3) << 29 | ((d >> 2) & 0x7ffff) << 5
-    } else {
-        instruction
+    // The displaced instruction runs at at(20).
+    let Some(displaced) = relocate(instruction, site as usize, at(20)) else {
+        println!("[!] {what} hook not installed: adrp out of range");
+        return;
     };
     let code: [u32; 22] = [
         0xa9ba7bfd,  // 0: stp x29, x30, [sp, #-0x60]!
