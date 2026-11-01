@@ -512,6 +512,14 @@ pub unsafe extern "C" fn on_cubemap_face_end() -> u32 {
     CUBEMAP_FACES.end("cube map faces", &CUBEMAP_FACE_EXPECTED)
 }
 
+/// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
+/// with hook_float: `floats` points at the saved d0..d7).
+#[no_mangle]
+pub unsafe extern "C" fn on_target_clear(rb: usize, w: usize, index: i32, mask: u32, color: usize, stencil: i32, vp: usize, floats: usize) -> u32 {
+    let depth = (floats as *const f32).read();
+    primitive(|p| targets::clear(p, rb, w, index, mask, color, stencil, vp, depth).map(|_| 1))
+}
+
 /// main+0xc26458(rb, w): barriers for a render buffer's targets (targets.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_target_barriers(rb: usize, w: usize) -> u32 {
@@ -1463,6 +1471,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, 0x931960, 0xa9ba7bfd, pre, post, "Model pass");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_block_bind(_, _, _, _))) as usize;
         hook(base, mem_space, 0x74efd4, 0xa9ba7bfd, pre, post, "Block bind");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_target_clear(_, _, _, _, _, _, _, _))) as usize;
+        hook_float(base, mem_space, 0x98a150, 0xfc190fe8, pre, post, "Target clear");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_target_barriers(_, _))) as usize;
         hook(base, mem_space, 0xc26458, 0xa9be7bfd, pre, post, "Target barriers");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_textures(_, _))) as usize;
