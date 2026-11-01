@@ -20,7 +20,6 @@ const OCCLUSION: usize = 0xd7ddf4;
 const DEFAULT_LOD: usize = 0x4632760;
 const DEVICE_HOLDER: usize = 0x462bbe8;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
-const PFN_SET_PRIMITIVE_RESTART: usize = 0x466e050;
 const COMPONENT_TYPE: u32 = 0xd21b65b6;
 /// main+0xd7e8c4(component, record, instance): a new record's contents; main+0x85d284(data + 0x50, instance, record,
 /// component + 0x218): its uniform data's texture coordinates.
@@ -565,7 +564,7 @@ unsafe fn locked(
     let begin = p.vfn(obj, 0x38);
     if begin == 0x2ad0f4c {
         // Primitive restart on, index 0xffff.
-        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 1, 0xffff]);
+        p.primitive_restart(p.m.r64(w + 0xb8), true, 0xffff);
     } else {
         note(begin, 0x38);
         p.helper("per-view begin", begin, &[obj as u64, w as u64])?;
@@ -648,7 +647,7 @@ unsafe fn locked(
     }
     let end = p.vfn(obj, 0x40);
     if end == 0x2ad0f68 {
-        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 0, 0]);
+        p.primitive_restart(p.m.r64(w + 0xb8), false, 0);
     } else {
         note(end, 0x40);
         p.helper("per-view end", end, &[obj as u64, w as u64])?;
@@ -939,7 +938,7 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
     let obj = p.m.r64(meshes);
     let begin = p.vfn(obj, 0x38);
     if begin == 0x2ad0f4c {
-        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 1, 0xffff]);
+        p.primitive_restart(p.m.r64(w + 0xb8), true, 0xffff);
     } else {
         note(begin, 0x38);
         p.helper("per-view begin", begin, &[obj as u64, w as u64])?;
@@ -1054,7 +1053,7 @@ pub(super) unsafe fn draw_b(p: &mut Port, this: usize, slot: u32, arg: usize) ->
     }
     let end = p.vfn(obj, 0x40);
     if end == 0x2ad0f68 {
-        p.call(p.pfn(PFN_SET_PRIMITIVE_RESTART), &[p.m.r64(w + 0xb8) as u64, 0, 0]);
+        p.primitive_restart(p.m.r64(w + 0xb8), false, 0);
     } else {
         note(end, 0x40);
         p.helper("per-view end", end, &[obj as u64, w as u64])?;

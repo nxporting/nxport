@@ -3177,6 +3177,13 @@ impl Gfx {
                             ModelItem::RenderState(r) => apply_render_state(st, r),
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
                             ModelItem::Targets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
+                            ModelItem::PointSize(sz) => st.point_size = *sz,
+                            ModelItem::PrimitiveRestart { enable, index } => st.prim_restart = enable.then_some(*index),
+                            ModelItem::Barrier(bits) => {
+                                if bits & 0x10 != 0 {
+                                    st.fb_epoch += 1;
+                                }
+                            }
                             ModelItem::RenderEnable(e) => {
                                 if journal_on() && st.render_enabled != *e {
                                     journal(|| format!("  render-enable {}", e));
