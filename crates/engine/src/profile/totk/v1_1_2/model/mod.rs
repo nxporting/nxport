@@ -482,6 +482,16 @@ pub unsafe extern "C" fn on_model_pass(r: usize, w: usize, a: usize, v: usize, r
     })
 }
 
+/// main+0x74efd4(block, w, *slots, element): a uniform or storage block's element at the slots (bound: handled; no
+/// slots: left to the game, which binds nothing either).
+#[no_mangle]
+pub unsafe extern "C" fn on_block_bind(block: usize, w: usize, slots: usize, element: i32) -> u32 {
+    primitive(|p| {
+        let s = p.m.r32(slots);
+        p.bind_uniform_block(block, w, s, element).map(|b| b as u32)
+    })
+}
+
 /// main+0x9c7e04 / main+0x9c7c80: the frame's default texture and uniform bindings (binds.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_default_textures(settings: usize, w: usize) -> u32 {
@@ -1411,6 +1421,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, PROGRAM_BLOCK.0, PROGRAM_BLOCK.1, pre, post, "Program block");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_model_pass(_, _, _, _, _, _, _, _))) as usize;
         hook(base, mem_space, 0x931960, 0xa9ba7bfd, pre, post, "Model pass");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_block_bind(_, _, _, _))) as usize;
+        hook(base, mem_space, 0x74efd4, 0xa9ba7bfd, pre, post, "Block bind");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_textures(_, _))) as usize;
         hook(base, mem_space, 0x9c7e04, 0xa9ba7bfd, pre, post, "Default textures");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_uniforms(_, _))) as usize;
