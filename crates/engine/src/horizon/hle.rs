@@ -432,7 +432,46 @@ unsafe fn mutex_lock_word<'a>(mutex: *mut NnMutex) -> &'a std::sync::atomic::Ato
     &*(&raw mut (*mutex).lock as *const std::sync::atomic::AtomicU32)
 }
 fn mutex_token(cur: *mut NnThreadType) -> u32 {
-    (cur as usize as u32) | 1
+    (cur as usize as u32 & !MUTEX_WAITERS) | 1
+}
+/// Set in a held lock word while a thread is (or may be) parked on it: the unlock then wakes one.
+const MUTEX_WAITERS: u32 = 2;
+
+/// Blocks while `word` still holds `held` (or returns early: callers re-check). Windows parks the thread on the
+/// address; elsewhere a short sleep stands in for it.
+fn mutex_park(word: &std::sync::atomic::AtomicU32, held: u32) {
+    #[cfg(windows)]
+    {
+        #[link(name = "synchronization")]
+        extern "system" {
+            fn WaitOnAddress(addr: *const std::ffi::c_void, cmp: *const std::ffi::c_void, size: usize, ms: u32) -> i32;
+        }
+        unsafe {
+            WaitOnAddress(
+                word as *const _ as *const std::ffi::c_void,
+                &held as *const u32 as *const std::ffi::c_void,
+                4,
+                u32::MAX,
+            )
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (word, held);
+        hle_sleep_ns(5_000);
+    }
+}
+fn mutex_unpark(word: &std::sync::atomic::AtomicU32) {
+    #[cfg(windows)]
+    {
+        #[link(name = "synchronization")]
+        extern "system" {
+            fn WakeByAddressSingle(addr: *const std::ffi::c_void);
+        }
+        unsafe { WakeByAddressSingle(word as *const _ as *const std::ffi::c_void) };
+    }
+    #[cfg(not(windows))]
+    let _ = word;
 }
 
 #[no_mangle]
@@ -457,19 +496,8 @@ pub unsafe extern "C" fn hle_nn_os_LockMutex(mutex: *mut NnMutex) {
     }
     let word = mutex_lock_word(mutex);
     let tok = mutex_token(cur);
-    let mut spins = 0u32;
-    while word
-        .compare_exchange(0, tok, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        spins += 1;
-        if spins < 1000 {
-            std::hint::spin_loop();
-        } else if spins < 1050 {
-            std::thread::yield_now();
-        } else {
-            hle_sleep_ns(5_000);
-        }
+    if word.compare_exchange(0, tok, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        mutex_lock_contended(word, tok);
     }
     (*mutex).owner_thread = cur;
     (*mutex).nest_count = 1;
@@ -487,7 +515,48 @@ pub unsafe extern "C" fn hle_nn_os_UnlockMutex(mutex: *mut NnMutex) {
     (*mutex).nest_count -= 1;
     if (*mutex).nest_count == 0 {
         (*mutex).owner_thread = std::ptr::null_mut();
-        mutex_lock_word(mutex).store(0, std::sync::atomic::Ordering::Release);
+        let word = mutex_lock_word(mutex);
+        if word.swap(0, std::sync::atomic::Ordering::Release) & MUTEX_WAITERS != 0 {
+            mutex_unpark(word);
+        }
+    }
+}
+
+/// LockMutex once the first compare-and-swap failed. TotK's waits for a held mutex are a couple of microseconds, so a
+/// short spin takes most; then the thread parks on the lock word. It used to spin, yield and sleep-spin instead, which
+/// with every processor busy kept a core while the owner sat preempted in the ready queue behind it.
+#[cold]
+fn mutex_lock_contended(word: &std::sync::atomic::AtomicU32, tok: u32) {
+    use std::sync::atomic::Ordering;
+    for _ in 0..1000 {
+        std::hint::spin_loop();
+        if word.load(Ordering::Relaxed) == 0
+            && word.compare_exchange(0, tok, Ordering::Acquire, Ordering::Relaxed).is_ok()
+        {
+            return;
+        }
+    }
+    // A thread that parked once takes the lock with MUTEX_WAITERS set: others may still be parked behind it.
+    let mut w = word.load(Ordering::Relaxed);
+    loop {
+        if w == 0 {
+            match word.compare_exchange(0, tok | MUTEX_WAITERS, Ordering::Acquire, Ordering::Relaxed) {
+                Ok(_) => return,
+                Err(x) => {
+                    w = x;
+                    continue;
+                }
+            }
+        }
+        if w & MUTEX_WAITERS == 0 {
+            if let Err(x) = word.compare_exchange(w, w | MUTEX_WAITERS, Ordering::Relaxed, Ordering::Relaxed) {
+                w = x;
+                continue;
+            }
+            w |= MUTEX_WAITERS;
+        }
+        mutex_park(word, w);
+        w = word.load(Ordering::Relaxed);
     }
 }
 
