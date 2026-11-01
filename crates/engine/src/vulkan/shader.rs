@@ -22,6 +22,9 @@ pub enum Feed {
     Texture { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, count: u32, buffer: bool, slot: Option<u32> },
     /// The sampler table (sass2spv properties::sampler_table_plan): the textures' samplers, deduplicated.
     SamplerTable,
+    /// A texture sampled through the global arrays (vulkan/bindless.rs): no descriptor of its own; its handle (read as
+    /// for Texture) resolves to the packed word the draw pushes at push constant word `word`.
+    Bindless { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, word: u32 },
     Image { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, buffer: bool },
 }
 
@@ -201,6 +204,8 @@ pub fn translation_key(
     fragment_inputs: Option<u32>,
     discard_writes_depth: bool,
 ) -> u64 {
+    // Bindless textures: graphics stages' own resources in set 1, the global arrays in set 0.
+    let set = if dev.bindless.is_some() && !prep.compute { 1 } else { set };
     let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
     key_for(&host, prep, full, state)
 }
@@ -222,6 +227,8 @@ pub unsafe fn get(
     discard_writes_depth: bool,
 ) -> Result<Stage, String> {
     use super::stage_cache as sc;
+    // Bindless textures: graphics stages' own resources in set 1, the global arrays in set 0.
+    let set = if dev.bindless.is_some() && !prep.compute { 1 } else { set };
     let host = sass2spv::accessor::Host { stage_set: Some(set as i32), binding_base: binding_base as i32, fragment_inputs, discard_writes_depth, ..dev.shader_host.clone() };
     let translate = |state: Option<sass2spv::accessor::GraphicsState>| -> Result<sass2spv::ShaderProgram, String> {
         let p = sass2spv::translate_stage_for(code, prep.hint, prep.cb1, prep.compute_fields, &sass2spv::Target::Spirv, state, host.clone())?;
@@ -280,6 +287,9 @@ unsafe fn build_stage(
     let words: Vec<u32> = spirv.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     // The bindings the module declares (OpDecorate 71, Binding 33), each fed as the manifest says.
     let mut declared = Vec::new();
+    // Variables in the global set (bindless.rs; DescriptorSet 34) are not the stage's own bindings.
+    let mut global_vars = std::collections::HashSet::new();
+    let bindless = dev.bindless.is_some() && !compute;
     // Inputs: OpVariable (59) of storage class Input (1) with a Location decoration (30).
     let mut locations: HashMap<u32, u32> = HashMap::new();
     let mut input_vars = Vec::new();
@@ -291,7 +301,10 @@ unsafe fn build_stage(
             break;
         }
         if op == 71 && n >= 4 && words[i + 2] == 33 {
-            declared.push(words[i + 3]);
+            declared.push((words[i + 1], words[i + 3]));
+        }
+        if bindless && op == 71 && n >= 4 && words[i + 2] == 34 && words[i + 3] == sass2spv::accessor::BINDLESS_SET as u32 {
+            global_vars.insert(words[i + 1]);
         }
         if op == 71 && n >= 4 && words[i + 2] == 30 {
             locations.insert(words[i + 1], words[i + 3]);
@@ -308,7 +321,10 @@ unsafe fn build_stage(
     inputs.sort();
     let outputs = output_vars.iter().filter_map(|v| locations.get(v)).filter(|&&l| l < 32).fold(0u32, |m, &l| m | 1 << l);
     let mut out = Vec::new();
-    for b in declared {
+    for (var, b) in declared {
+        if global_vars.contains(&var) {
+            continue;
+        }
         let mb = b.wrapping_sub(binding_base);
         // Uniform buffers are dynamic: the offset is given when the set is bound, so draws whose copies differ only in
         // where they sit share a set.
@@ -347,11 +363,19 @@ unsafe fn build_stage(
             None => return Err(format!("binding {b} is not in the manifest")),
         }
     }
+    // Textures sampled through the global arrays: fed like Texture, with no descriptor.
+    for t in m.textures.iter().filter(|t| bindless && t.push_word >= 0) {
+        let (view, _) = view_type(&t.texture_type);
+        let feed = Feed::Bindless { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, word: t.push_word as u32 };
+        out.push(Binding { binding: binding_base + t.binding, ty: vk::DescriptorType::SAMPLED_IMAGE, count: 1, feed, extent: -1 });
+    }
     // In the order draws fill them (draw.rs stage_writes): the sampler table after the textures naming its samplers, the
     // support buffer last (it holds the bound sizes and the textures' table indices).
     out.sort_by_key(|b| (matches!(b.feed, Feed::SamplerTable) as u8 + 2 * matches!(b.feed, Feed::Support) as u8, b.binding));
     let reads_driver = out.iter().any(|b| {
-        matches!(b.feed, Feed::Cbuf(0) | Feed::Sbuf { cb_slot: 0, .. } | Feed::Texture { cbuf_slot: 0, .. } | Feed::Image { cbuf_slot: 0, .. })
+        matches!(b.feed, Feed::Cbuf(0) | Feed::Sbuf { cb_slot: 0, .. } | Feed::Texture { cbuf_slot: 0, .. }
+                | Feed::Bindless { cbuf_slot: 0, .. }
+                | Feed::Image { cbuf_slot: 0, .. })
     });
     let module = dev
         .device
@@ -368,6 +392,7 @@ unsafe fn build_stage(
     };
     let lb: Vec<vk::DescriptorSetLayoutBinding> = out
         .iter()
+        .filter(|b| !matches!(b.feed, Feed::Bindless { .. }))
         .map(|b| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(b.binding)

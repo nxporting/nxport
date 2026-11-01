@@ -56,6 +56,9 @@ pub struct Dev {
     /// A discrete GPU (its own memory): device-local memory the CPU maps is the BAR window over PCIe, slow to read.
     /// False for unified memory (Apple GPUs through MoltenVK, integrated GPUs).
     pub discrete: bool,
+    /// graphics.vk_bindless_textures where the device has descriptor indexing (not portability implementations: macOS
+    /// draws through Metal): the global texture set (vulkan/bindless.rs).
+    pub bindless: Option<super::bindless::Global>,
 }
 
 /// The most recent checkpoints (Dev::checkpoint): marker, what follows it and its numbers.
@@ -382,6 +385,7 @@ impl Dev {
                 tessellation_shader: supported.tessellation_shader,
                 sample_rate_shading: supported.sample_rate_shading,
                 shader_image_gather_extended: supported.shader_image_gather_extended,
+                shader_sampled_image_array_dynamic_indexing: supported.shader_sampled_image_array_dynamic_indexing,
                 ..Default::default()
             };
             let mut f11 = vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(q11.shader_draw_parameters != 0);
@@ -401,12 +405,29 @@ impl Dev {
                 binding_base: 0,
                 fragment_inputs: None,
                 sampler_slots: 0,
+                bindless_textures: false,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
                 .synchronization2(q13.synchronization2 != 0)
                 .shader_demote_to_helper_invocation(q13.shader_demote_to_helper_invocation != 0);
+            // Bindless textures (vulkan/bindless.rs): runtime arrays of sampled images and samplers, partially bound and
+            // written after binding, indexed by push constants (dynamically uniform), null descriptors for unresolved ones.
+            let bindless = crate::settings::get().graphics.vk_bindless_textures
+                && !has(&dev_exts, portability)
+                && qr2.null_descriptor != 0
+                && supported.shader_sampled_image_array_dynamic_indexing != 0
+                && q12.descriptor_indexing != 0
+                && q12.runtime_descriptor_array != 0
+                && q12.descriptor_binding_partially_bound != 0
+                && q12.descriptor_binding_sampled_image_update_after_bind != 0
+                && q12.descriptor_binding_update_unused_while_pending != 0;
             let mut f12 = vk::PhysicalDeviceVulkan12Features::default()
+                .descriptor_indexing(bindless)
+                .runtime_descriptor_array(bindless)
+                .descriptor_binding_partially_bound(bindless)
+                .descriptor_binding_sampled_image_update_after_bind(bindless)
+                .descriptor_binding_update_unused_while_pending(bindless)
                 .timeline_semaphore(q12.timeline_semaphore != 0)
                 .sampler_mirror_clamp_to_edge(q12.sampler_mirror_clamp_to_edge != 0)
                 .scalar_block_layout(q12.scalar_block_layout != 0)
@@ -463,6 +484,18 @@ impl Dev {
                 info = info.push_next(&mut port);
             }
             let device = instance.create_device(pdev, &info, None).map_err(|e| format!("vkCreateDevice: {e}"))?;
+            let bindless = if bindless {
+                let mut ip = vk::PhysicalDeviceDescriptorIndexingProperties::default();
+                let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut ip);
+                instance.get_physical_device_properties2(pdev, &mut p2);
+                super::bindless::create(&device, &ip)
+            } else {
+                None
+            };
+            if crate::settings::get().graphics.vk_bindless_textures {
+                let what = bindless.as_ref().map_or("unsupported".to_string(), |g| format!("on ({} views per type, {} samplers)", g.images, g.samplers));
+                println!("[vulkan] bindless textures {what}");
+            }
             let queue = device.get_device_queue(family, 0);
             let mem = instance.get_physical_device_memory_properties(pdev);
             let host_memory = host_memory.then(|| {
@@ -530,6 +563,7 @@ impl Dev {
                     cbuf_limits: has_portability,
                     reduced_precision: has_portability,
                     sampler_slots: if has_portability { 16 } else { 0 },
+                    bindless_textures: bindless.is_some(),
                     ..shader_host
                 },
                 vertex_align,
@@ -546,6 +580,7 @@ impl Dev {
                 checkpoints,
                 checkpoints_each: crate::settings::get().debug.gpu_checkpoints_each,
                 discrete: props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU,
+                bindless,
             })
         }
     }

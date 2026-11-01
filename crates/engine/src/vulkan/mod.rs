@@ -8,6 +8,7 @@
 // with frame captures (crate::capture).
 
 mod astc;
+mod bindless;
 mod async_pipe;
 pub mod device;
 mod exec;

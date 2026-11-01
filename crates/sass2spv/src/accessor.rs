@@ -52,6 +52,11 @@ pub struct Host {
     /// Samplers a stage may bind (0: no limit). A stage needing more samples its textures through a sampler table
     /// (properties::sampler_table_plan): Metal without argument buffers (MoltenVK) has 16 per stage.
     pub sampler_slots: u32,
+    /// Graphics stages sample their textures through the host's global arrays (BINDLESS_SET) instead of a binding
+    /// each: the push constants hold one word per texture (properties::bindless_plan), an index into the array of its
+    /// view type (low 20 bits) and one into the sampler array (high 12 bits), as NVN packs a handle. Not with
+    /// sampler_slots.
+    pub bindless_textures: bool,
 }
 
 impl Default for Host {
@@ -70,7 +75,27 @@ impl Default for Host {
             binding_base: 0,
             fragment_inputs: None,
             sampler_slots: 0,
+            bindless_textures: false,
         }
+    }
+}
+
+/// Host::bindless_textures: the set of the global arrays (the stage's own resources move to set 1). Image arrays are at
+/// the binding of their VkImageViewType's value (1D 0, 2D 1, 3D 2, cube 3, 1D array 4, 2D array 5, cube array 6),
+/// the samplers at BINDLESS_SAMPLERS.
+pub const BINDLESS_SET: i32 = 0;
+pub const BINDLESS_SAMPLERS: i32 = 7;
+/// The push constant words of all stages (128 bytes, the least Vulkan guarantees).
+pub const BINDLESS_PUSH_WORDS: u32 = 32;
+
+/// Host::bindless_textures: the push constant words of a stage (first, count); graphics stages only.
+pub fn bindless_words(stage: crate::types::ShaderStage) -> Option<(u32, u32)> {
+    use crate::types::ShaderStage as S;
+    match stage {
+        S::Vertex => Some((0, 8)),
+        S::Geometry => Some((8, 4)),
+        S::Fragment => Some((12, 20)),
+        _ => None,
     }
 }
 

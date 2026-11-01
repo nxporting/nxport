@@ -279,6 +279,8 @@ group! {
         view_cache_cap: usize = 4096,
         /// Bind uniform buffers zero-copy where no update of the submit writes them
         ubo_zero_copy: bool = false,
+        /// Vulkan: graphics stages sample textures through global descriptor arrays indexed by push constants
+        vk_bindless_textures: bool = false,
         /// Which work the GPU executor does
         gfx_mode: GfxMode = GfxMode::All,
         /// The GPU backend

@@ -241,6 +241,12 @@ impl Textures {
         self.root_changes = changes;
     }
 
+    /// The texture index change sequence the alias roots are valid at: where textures live (`locate`) stays the same
+    /// while it does.
+    pub fn roots_seq(&self) -> u64 {
+        self.roots_seq
+    }
+
     /// Where texture `t` lives: the description of the image holding it and the level / layer it starts at there.
     /// Several texture objects over the same memory (a mip level or layer of a larger texture, a render target over a
     /// mip chain, another format of the same texels) share the image of the largest live texture containing them, so
