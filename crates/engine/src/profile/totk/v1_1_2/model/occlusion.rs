@@ -8,8 +8,6 @@ use super::lights::{shape_state, stream_draw, SHAPES, STREAMS};
 use super::vfx::{program_apply, program_block};
 
 const PFN_SET_POINT_SIZE: usize = 0x466e198;
-const PFN_RESET_COUNTER: usize = 0x466e238;
-const PFN_REPORT_COUNTER: usize = 0x466e230;
 /// The item class drawn here: its program getter (virtual +0x30), setup (+0x38, agl::VertexAttribute::activate in the
 /// symbol match) and draw (+0x40).
 const ITEM_PROGRAM: usize = 0x2a3819c;
@@ -48,7 +46,7 @@ pub(super) unsafe fn draw(p: &mut Port, q: usize, w: usize, view: u32, flags: u6
             continue;
         }
         if flags & 1 != 0 {
-            p.call(p.pfn(PFN_RESET_COUNTER), &[cmd as u64, 1]);
+            p.reset_counter(cmd, 1);
         }
         let f = p.vfn(it, 0x28);
         if p.constant_result(f) != Some(0) {
@@ -84,7 +82,7 @@ pub(super) unsafe fn draw(p: &mut Port, q: usize, w: usize, view: u32, flags: u6
         stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + kind * 0x60 + 0x2268, w);
         if flags & 1 != 0 {
             let at = p.buffer_address_of(it + 0x10) + p.m.r8(it + 8) as u64 * 0x20;
-            p.call(p.pfn(PFN_REPORT_COUNTER), &[cmd as u64, 1, at]);
+            p.report_counter(cmd, 1, at);
         }
     }
     p.call(p.pfn(super::render_list::PFN_BARRIER), &[cmd as u64, 1]);

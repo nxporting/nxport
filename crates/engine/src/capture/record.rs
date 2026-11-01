@@ -87,6 +87,15 @@ pub(crate) fn on_present(texture: usize, crop: [i32; 4]) {
 
 /// Guest memory a command reads or writes, beyond what textures and pools cover: (address, length).
 fn cmd_ranges(c: &Cmd, out: &mut Vec<(u64, u64)>) {
+    // Native commands: what their NVN equivalents name (units' lists are captured with the lists).
+    if let Cmd::ModelDraw(m) = c {
+        for item in &m.items {
+            if let Some(c) = item.cmd() {
+                cmd_ranges(&c, out);
+            }
+        }
+        return;
+    }
     let mut add = |a: u64, len: u64| {
         if a > 0x10000 && len > 0 {
             let a = crate::nvn::api::translate_virtual(a as usize) as u64;

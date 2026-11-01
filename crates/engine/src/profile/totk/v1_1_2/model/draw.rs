@@ -27,6 +27,12 @@ const PFN_DRAW_ELEMENTS: usize = 0x466e088;
 const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
+const PFN_CLEAR_COLOR: usize = 0x466e0c8;
+const PFN_CLEAR_DEPTH_STENCIL: usize = 0x466e0e0;
+const PFN_SET_RENDER_ENABLE: usize = 0x466e248;
+const PFN_SET_RENDER_ENABLE_CONDITIONAL: usize = 0x466e250;
+const PFN_RESET_COUNTER: usize = 0x466e238;
+const PFN_REPORT_COUNTER: usize = 0x466e230;
 const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
 const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
 const PFN_BIND_VERTEX_BUFFER: usize = 0x466dfb8;
@@ -206,6 +212,57 @@ impl Port {
         if !self.join(cmd, stage, slot, crate::nvn::cmd::ModelBindKind::Texture(handle)) {
             self.call(self.pfn(PFN_BIND_TEXTURE), &[cmd as u64, stage as u64, slot as u64, handle]);
         }
+    }
+
+    /// nvnCommandBufferClearColor (`color`: four floats).
+    pub(super) unsafe fn clear_color(&mut self, cmd: usize, index: i32, color: usize, mask: i32) {
+        if self.native {
+            let rgba = [self.m.f32(color), self.m.f32(color + 4), self.m.f32(color + 8), self.m.f32(color + 12)];
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Clear { index, rgba, mask });
+        }
+        self.call(self.pfn(PFN_CLEAR_COLOR), &[cmd as u64, index as u64, color as u64, mask as u64]);
+    }
+
+    /// nvnCommandBufferClearDepthStencil.
+    pub(super) unsafe fn clear_depth(&mut self, cmd: usize, depth: f32, depth_mask: bool, stencil: i32, stencil_mask: i32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::ClearDepth { depth, depth_mask, stencil, stencil_mask });
+        }
+        let f: unsafe extern "C" fn(u64, f32, u32, u32, u32) = std::mem::transmute(self.pfn(PFN_CLEAR_DEPTH_STENCIL));
+        self.flush();
+        f(cmd as u64, depth, depth_mask as u32, stencil as u32, stencil_mask as u32);
+    }
+
+    /// nvnCommandBufferSetRenderEnable.
+    pub(super) unsafe fn render_enable(&mut self, cmd: usize, enable: bool) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::RenderEnable(enable));
+        }
+        self.call(self.pfn(PFN_SET_RENDER_ENABLE), &[cmd as u64, enable as u64]);
+    }
+
+    /// nvnCommandBufferSetRenderEnableConditional.
+    pub(super) unsafe fn render_enable_conditional(&mut self, cmd: usize, mode: i32, counters: u64) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::RenderEnableConditional { mode, counters });
+        }
+        self.call(self.pfn(PFN_SET_RENDER_ENABLE_CONDITIONAL), &[cmd as u64, mode as u64, counters]);
+    }
+
+    /// nvnCommandBufferResetCounter.
+    pub(super) unsafe fn reset_counter(&mut self, cmd: usize, counter: i32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::ResetCounter(counter));
+        }
+        self.call(self.pfn(PFN_RESET_COUNTER), &[cmd as u64, counter as u64]);
+    }
+
+    /// nvnCommandBufferReportCounter.
+    pub(super) unsafe fn report_counter(&mut self, cmd: usize, counter: i32, addr: u64) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::ReportCounter { counter, addr });
+        }
+        self.call(self.pfn(PFN_REPORT_COUNTER), &[cmd as u64, counter as u64, addr]);
     }
 
     /// nvnCommandBufferBindProgram.
