@@ -35,6 +35,7 @@ const GRAPHICS_CONTEXT_APPLY: (usize, u32) = (0x74d980, 0xd10243ff); // sead::Gr
 const PROGRAM_APPLY: (usize, u32) = (0x7ef4b8, 0xa9bd7bfd);
 const PROGRAM_BLOCK: (usize, u32) = (0x96306c, 0xa9ba7bfd);
 const PROGRAM_BLOCK_AT: (usize, u32) = (0x9771a8, 0xa9ba7bfd);
+const PROGRAM_TEXTURE: (usize, u32) = (0x96ac04, 0xd10143ff);
 const STREAM_DRAW: (usize, u32) = (0x966e70, 0xa9bc7bfd);
 const SHAPE_BUFFERS: (usize, u32) = (0xf216b4, 0xa9ba7bfd);
 const SHAPE_STATES: (usize, u32) = (0x978ba4, 0xa9be7bfd);
@@ -461,6 +462,13 @@ pub unsafe extern "C" fn on_program_block(prog: usize, w: usize, index: u32, blo
 #[no_mangle]
 pub unsafe extern "C" fn on_program_block_at(prog: usize, w: usize, index: u32, block: usize, element: i32) -> u32 {
     primitive(|p| vfx::program_block(p, prog, w, index, p.m.r64(block), element).map(|b| b as u32))
+}
+
+/// main+0x96ac04(prog, w, slot, texture): returns whether the texture was bound (0: left to the game, which binds
+/// nothing either).
+#[no_mangle]
+pub unsafe extern "C" fn on_program_texture(prog: usize, w: usize, slot: u32, tex: usize) -> u32 {
+    primitive(|p| vfx::program_texture(p, prog, w, slot, tex).map(|b| b as u32))
 }
 
 #[no_mangle]
@@ -1379,6 +1387,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, PROGRAM_APPLY.0, PROGRAM_APPLY.1, pre, post, "Program apply");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block(_, _, _, _, _))) as usize;
         hook(base, mem_space, PROGRAM_BLOCK.0, PROGRAM_BLOCK.1, pre, post, "Program block");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_texture(_, _, _, _))) as usize;
+        hook(base, mem_space, PROGRAM_TEXTURE.0, PROGRAM_TEXTURE.1, pre, post, "Program texture");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block_at(_, _, _, _, _))) as usize;
         hook(base, mem_space, PROGRAM_BLOCK_AT.0, PROGRAM_BLOCK_AT.1, pre, post, "Program block (pointer)");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_stream_draw(_, _, _))) as usize;
