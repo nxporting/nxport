@@ -87,7 +87,7 @@ unsafe impl Send for Shared {}
 pub(super) struct Decoder {
     shared: Arc<Shared>,
     tx: std::sync::mpsc::Sender<()>,
-    /// Entries read so far, and the first counter event not yet passed (next_counter).
+    /// Entries read so far, and the first counter event not yet passed (peek_counter).
     next: usize,
     event: usize,
 }
@@ -188,17 +188,19 @@ impl Decoder {
         Some(unsafe { self.shared.entries.get(i) })
     }
 
-    /// Whether the next occlusion counter event after command `index` resets the counter (Some(false)) or reports it
-    /// (Some(true)); None: none follows. Waits for the walk to find it.
-    pub(super) fn next_counter(&mut self, index: u64) -> Option<bool> {
+    /// Whether the next occlusion counter event after command `index` resets the counter (Some(Some(false))) or reports it
+    /// (Some(Some(true))); Some(None): none follows. None while the walk has neither found it nor ended (no waiting).
+    pub(super) fn peek_counter(&mut self, index: u64) -> Option<Option<bool>> {
         loop {
             let e = self.event;
-            if !self.wait(|| e < self.shared.events_avail.load(Ordering::Acquire)) {
-                return None;
+            // The done flag is published after the last events: read first, an event seen after it is not missed.
+            let done = self.shared.done.load(Ordering::Acquire);
+            if e >= self.shared.events_avail.load(Ordering::Acquire) {
+                return done.then_some(None);
             }
             let (at, report) = unsafe { self.shared.events.get(e) };
             if at > index {
-                return Some(report);
+                return Some(Some(report));
             }
             self.event += 1;
         }

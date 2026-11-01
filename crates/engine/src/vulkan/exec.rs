@@ -1468,7 +1468,10 @@ impl Ctx {
             return;
         }
         // Samples count only toward a report: none are needed when the counter is reset before the next report.
-        if self.decoder.next_counter(self.op_index) == Some(false) {
+        // Without waiting for vk-decode's walk to find out: a pass begun before the walk reaches the next counter event
+        // counts its samples anyway (waiting held the Presentation Thread at pass starts until the walk got there: about 5%
+        // of its time once bindless textures made binding cheaper).
+        if self.decoder.peek_counter(self.op_index) == Some(Some(false)) {
             return;
         }
         let o = &mut self.occl;
