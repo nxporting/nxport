@@ -1176,10 +1176,16 @@ impl Ctx {
         let samplers = crate::nvn::api::samplers_gen();
         if !complete || samplers != self.bl_epoch || changed.contains(&-1) {
             self.bl_cache.clear();
+            self.bl_by_slot.clear();
             self.bl_epoch = samplers;
-        } else if !changed.is_empty() {
-            changed.sort_unstable();
-            self.bl_cache.retain(|k, _| changed.binary_search(&((k.0 & 0xFFFFF) as i32)).is_err());
+        } else {
+            // By the slots' own resolutions (bl_by_slot): a pass over the whole cache, every submit, was ~1 ms a frame
+            // of the Presentation Thread on Great Sky Island.
+            for id in changed {
+                for k in self.bl_by_slot.remove(&id).unwrap_or_default() {
+                    self.bl_cache.remove(&k);
+                }
+            }
         }
     }
 
@@ -1245,7 +1251,9 @@ impl Ctx {
         }
         self.bl = Some(slots);
         let resolved = view.is_some();
-        self.bl_cache.insert(key, BlEntry { word, image, place, serial, resolved, fb: fb.unwrap_or((0, 0)) });
+        if self.bl_cache.insert(key, BlEntry { word, image, place, serial, resolved, fb: fb.unwrap_or((0, 0)) }).is_none() {
+            self.bl_by_slot.entry(tex_id).or_default().push(key);
+        }
         fb.map_or((word, image, 0), |f| (f.1, image, f.0))
     }
 
