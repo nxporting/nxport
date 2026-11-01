@@ -43,6 +43,10 @@ pub mod report_guard {
         false
     }
     pub(crate) fn frame_end(_frame: u64) {}
+    /// Lifted code calls its HLE functions directly: there is no trampoline pool to return into.
+    pub(crate) fn in_hle_stubs(_addr: usize) -> bool {
+        false
+    }
 }
 
 use std::sync::OnceLock;
