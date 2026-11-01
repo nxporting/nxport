@@ -15,6 +15,9 @@ pub mod input;
 #[path = "rumble_sdl.rs"]
 pub mod rumble;
 
+#[path = "live.rs"]
+pub mod live;
+
 pub mod overlay {
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
     use std::sync::LazyLock;
@@ -32,6 +35,10 @@ pub mod overlay {
         } else {
             FpsMode::Stock30
         }
+    }
+
+    pub fn set_fps_mode(mode: FpsMode) {
+        UNLOCKED.store(mode == FpsMode::Unlocked, Relaxed);
     }
 
     pub fn toggle_fps_mode() -> FpsMode {

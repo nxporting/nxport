@@ -138,11 +138,14 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [launch_aspect, stretch] {
+    Window "Display" [no_vsync, frame_limit, launch_aspect, stretch] {
         /// No window (frame dumps still work)
         headless: bool = false,
-        /// Never wait for vsync (benchmark: the game runs faster than real time)
+        /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
         no_vsync: bool = false,
+        /// Frame-rate limit (fps) where the title may run faster than 30: 60, 90, 120 or 144. With vsync, the display's
+        /// refresh rate also limits it
+        frame_limit: u32 = 60,
         /// Launch aspect ratio (W:H): initial window aspect ratio when the application launches
         #[arg(alias = "aspect")]
         launch_aspect: Option<Aspect> = None,
@@ -173,9 +176,11 @@ group! {
 
 group! {
     /// Audio output and its diagnostics.
-    Audio "Audio" [audio] {
+    Audio "Audio" [audio, volume] {
         /// Audio output
         audio: bool = true,
+        /// Output volume, percent
+        volume: u32 = 100,
         /// Write the output as a stereo WAV file
         audio_wav: Option<PathBuf> = None,
     }

@@ -512,8 +512,7 @@ static TOUCHES: std::sync::Mutex<Vec<Touch>> = std::sync::Mutex::new(Vec::new())
 /// Begins or moves contact `key` (any id the platform gives a finger) at normalized position (0..1, 0..1, origin top
 /// left). --no-touch ignores all touch input.
 pub fn touch_moved(key: usize, nx: f64, ny: f64) {
-    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *OFF.get_or_init(|| crate::settings::get().input.no_touch) {
+    if !crate::host::live::touch() {
         return;
     }
     let (x, y) = (

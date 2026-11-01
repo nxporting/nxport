@@ -268,6 +268,15 @@ pub fn app_title() -> &'static str {
     "Nintendo Switch"
 }
 
+/// Whether the running game's time follows real time (a profile patch), so it may run at any frame rate.
+#[cfg(nx_runtime)]
+pub fn real_time() -> bool {
+    match active().kind {
+        GameKind::TotK => totk::frame_time::real_time(),
+        _ => false,
+    }
+}
+
 /// The aspect the game renders at when a profile patch changed it from the game's own (the screen shape asked for).
 #[cfg(nx_native)]
 pub fn rendered_aspect() -> Option<f64> {
