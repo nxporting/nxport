@@ -509,9 +509,57 @@ unsafe fn rt_list(tex: *const usize, views: *const usize, n: usize) -> Vec<RtRef
 }
 
 macro_rules! rec {
-    ($name:literal, $cmd:expr, $val:expr) => {
+    ($name:literal, $cmd:expr, $val:expr) => {{
+        note_cmd_caller($name);
         record_typed($name, $cmd as usize, $val)
+    }};
+}
+
+/// --log-draw-callers=N also counts every command the game records through the NVN entry points by its first two guest
+/// return addresses, frames N..N+60 (the game code still recording through NVN, per call site).
+unsafe fn note_cmd_caller(name: &'static str) {
+    static FROM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let Some(from) = *FROM.get_or_init(|| crate::settings::get().log.log_draw_callers) else {
+        return;
     };
+    static MAP: std::sync::Mutex<Option<std::collections::HashMap<(&'static str, usize, usize), u64>>> = std::sync::Mutex::new(None);
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let frame = crate::gpu::backend().presented_frames();
+    if frame < from {
+        return;
+    }
+    if frame >= from + 60 {
+        if !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let g = MAP.lock().unwrap();
+            let mut rows: Vec<_> = g.as_ref().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect()).unwrap_or_default();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            for ((n, a, b), c) in rows.iter().take(100) {
+                println!("[cmd-callers] {:7.1} per frame  main+ {:#x} <- {:#x}  {}", *c as f64 / 60.0, a, b, n);
+            }
+        }
+        return;
+    }
+    let base = crate::guest::loader::main_base();
+    let mut fp = crate::guest_reg!(x29);
+    let mut key = [0usize; 2];
+    let mut n = 0;
+    for _ in 0..32 {
+        if fp < 0x1000 || fp & 7 != 0 || n == 2 {
+            break;
+        }
+        let next = *(fp as *const usize);
+        let ret = *((fp + 8) as *const usize);
+        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
+        if !stub && ret >= base && ret < base + (256 << 20) {
+            key[n] = ret - base;
+            n += 1;
+        }
+        if next <= fp && !stub {
+            break;
+        }
+        fp = next;
+    }
+    *MAP.lock().unwrap().get_or_insert_with(Default::default).entry((name, key[0], key[1])).or_default() += 1;
 }
 
 #[no_mangle]
