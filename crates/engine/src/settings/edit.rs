@@ -21,30 +21,31 @@ pub enum PathKind {
     Either,
 }
 
-thread_local! {
-    /// A file panel requested during a frame (key, what it chooses), and the paths chosen by key. The window running
-    /// the interface (host::ui::window on macOS, the builder's own on Windows) opens the panel between frames.
-    static PICK: RefCell<(Option<(String, PathKind)>, HashMap<String, PathBuf>)> = RefCell::new((None, HashMap::new()));
-}
+/// A file panel requested during a frame (key, what it chooses), and the paths chosen by key. The window running the
+/// interface (host::ui::window on macOS, the builder's own on Windows) opens the panel between frames. Shared between
+/// threads: on Windows SDL answers from the file dialog's own thread.
+#[allow(clippy::type_complexity)]
+static PICK: std::sync::LazyLock<std::sync::Mutex<(Option<(String, PathKind)>, HashMap<String, PathBuf>)>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new((None, HashMap::new())));
 
 /// Opens a file panel after this frame; its choice is collected with `take_path(key)`.
 pub fn request_path(key: &str, kind: PathKind) {
-    PICK.with(|p| p.borrow_mut().0 = Some((key.to_string(), kind)));
+    PICK.lock().unwrap().0 = Some((key.to_string(), kind));
 }
 
 /// The path chosen for `key` since the last call, if any.
 pub fn take_path(key: &str) -> Option<PathBuf> {
-    PICK.with(|p| p.borrow_mut().1.remove(key))
+    PICK.lock().unwrap().1.remove(key)
 }
 
 /// For the window: the file panel asked for since the last call, if any.
 pub fn take_request() -> Option<(String, PathKind)> {
-    PICK.with(|p| p.borrow_mut().0.take())
+    PICK.lock().unwrap().0.take()
 }
 
 /// For the window: what the user chose in the panel asked for under `key`.
 pub fn put_path(key: String, path: PathBuf) {
-    PICK.with(|p| p.borrow_mut().1.insert(key, path));
+    PICK.lock().unwrap().1.insert(key, path);
 }
 
 /// A value that can be edited in place; true when it changed.
@@ -710,4 +711,17 @@ pub fn field<T: Edit>(ui: &Ui, value: &mut T, name: &str, docs: &[&str]) -> bool
         ui.tooltip_text(docs.iter().map(|d| d.trim()).collect::<Vec<_>>().join("\n"));
     }
     changed
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    /// On Windows SDL answers from the file dialog's own thread.
+    #[test]
+    fn a_path_chosen_on_another_thread_reaches_the_interface() {
+        std::thread::spawn(|| put_path("pick_test".into(), PathBuf::from("C:/game"))).join().unwrap();
+        assert_eq!(take_path("pick_test"), Some(PathBuf::from("C:/game")));
+        assert_eq!(take_path("pick_test"), None);
+    }
 }
