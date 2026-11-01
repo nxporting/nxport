@@ -7,6 +7,7 @@ mod cells;
 mod dispatch;
 mod draw;
 mod grid;
+mod items;
 mod lights;
 mod gridtile;
 mod material;
@@ -41,6 +42,9 @@ const VIEWPORT_APPLY: (usize, u32) = (0x74474c, 0xa9bc7bfd); // sead::Viewport::
 const RENDER_BUFFER_BIND: (usize, u32) = (0x7ab9a4, 0xd103c3ff); // agl::RenderBuffer::bind
 const OCCLUSION_SITE: usize = 0xa6c3a4;
 const OCCLUSION_SITE_INSTRUCTION: u32 = 0xd10203ff; // sub sp, sp, #0x80
+/// An item's occlusion query (items.rs).
+const QUERY_ITEM_SITE: usize = 0x895ce8;
+const QUERY_ITEM_SITE_INSTRUCTION: u32 = 0xa9bb7bfd; // stp x29, x30, [sp, #-0x50]!
 const LIGHTS_SITE: usize = 0x9777c4;
 const LIGHTS_SITE_INSTRUCTION: u32 = 0xd10743ff; // sub sp, sp, #0x1d0
 const DISPATCH_SITE: usize = 0x763718;
@@ -636,6 +640,134 @@ pub unsafe extern "C" fn on_occlusion_end() -> u32 {
     0
 }
 
+/// Calls, identical, different, stops of a port checked at its own entry hook (items).
+struct Checked {
+    calls: AtomicU64,
+    same: AtomicU64,
+    different: AtomicU64,
+    stops: Mutex<Vec<(&'static str, u64)>>,
+}
+
+impl Checked {
+    const fn new() -> Self {
+        Checked { calls: AtomicU64::new(0), same: AtomicU64::new(0), different: AtomicU64::new(0), stops: Mutex::new(Vec::new()) }
+    }
+
+    fn stop(&self, what: &'static str) {
+        let mut s = self.stops.lock().unwrap();
+        match s.iter_mut().find(|x| x.0 == what) {
+            Some(x) => x.1 += 1,
+            None => s.push((what, 1)),
+        }
+    }
+
+    fn summary(&self, name: &str) -> Option<String> {
+        let n = self.calls.load(Ordering::Relaxed);
+        if n == 0 {
+            return None;
+        }
+        let stops: Vec<String> = self.stops.lock().unwrap().iter().map(|(w, k)| format!("{w} {k}")).collect();
+        Some(format!(
+            "[model-draw] {name}: {n} calls, {} identical, {} different; stops: {}",
+            self.same.load(Ordering::Relaxed),
+            self.different.load(Ordering::Relaxed),
+            stops.join(", ")
+        ))
+    }
+
+    /// Apply mode: drawn undoably (1: the game's function is skipped); verify mode: predicted, compared at `end`.
+    unsafe fn run(&'static self, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>, f: impl Fn(&mut draw::Port) -> draw::R<()>) -> u32 {
+        if crate::nvn::api::capturing() {
+            return 0;
+        }
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let base = crate::guest::loader::main_base();
+        let d = &crate::settings::get().totk.diagnostics;
+        if d.native_render_lists {
+            static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
+            let mut port = draw::Port::new(mem::Mem::applying_undoably(), base, metal && d.native_model_draws);
+            let (r, commands) = crate::nvn::api::capture_buffered(|| {
+                let r = f(&mut port);
+                if r.is_ok() {
+                    port.flush();
+                }
+                r
+            });
+            ring::discard();
+            if let Err(what) = r {
+                port.discard();
+                port.m.rollback();
+                self.stop(what);
+                return 0;
+            }
+            crate::nvn::api::commit_buffered(commands);
+            return 1;
+        }
+        let mut port = draw::Port::new(mem::Mem::predicting(), base, false);
+        let mut result = Ok(());
+        let e = crate::nvn::api::capture_dry(|| result = f(&mut port));
+        match result {
+            Ok(()) => {
+                expected.with(|x| *x.borrow_mut() = Some(e));
+                ring::watch();
+                crate::nvn::api::capture_collect();
+            }
+            Err(what) => {
+                ring::discard();
+                self.stop(what);
+            }
+        }
+        0
+    }
+
+    unsafe fn end(&self, name: &str, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>) -> u32 {
+        let Some(e) = expected.with(|x| x.borrow_mut().take()) else { return 0 };
+        let got = crate::nvn::api::capture_collected();
+        let e = match ring::resolve_with(e, &got) {
+            Ok(e) => e,
+            Err(why) => {
+                self.different.fetch_add(1, Ordering::Relaxed);
+                println!("[model-draw] {name} mismatch: {why}");
+                return 0;
+            }
+        };
+        if e == got {
+            self.same.fetch_add(1, Ordering::Relaxed);
+            return 0;
+        }
+        let k = self.different.fetch_add(1, Ordering::Relaxed);
+        if k < 4 {
+            println!("[model-draw] {name} mismatch #{k}:");
+            for i in 0..e.len().max(got.len()) {
+                let (a, b) = (e.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
+                println!("[model-draw]   {} port: {a}", if a == b { " " } else { "!" });
+                if a != b {
+                    println!("[model-draw]     game: {b}");
+                }
+            }
+        }
+        0
+    }
+}
+
+static QUERY_ITEMS: Checked = Checked::new();
+
+thread_local! {
+    static QUERY_ITEM_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// An item's occlusion query, main+0x895ce8 (items.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_query_item(item: usize, ctx: usize) -> u32 {
+    QUERY_ITEMS.run(&QUERY_ITEM_EXPECTED, |p| items::query_item(p, item, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_query_item_end() -> u32 {
+    QUERY_ITEMS.end("item queries", &QUERY_ITEM_EXPECTED)
+}
+
 static VFX_CALLS: AtomicU64 = AtomicU64::new(0);
 static VFX_SAME: AtomicU64 = AtomicU64::new(0);
 static VFX_DIFFERENT: AtomicU64 = AtomicU64::new(0);
@@ -1021,6 +1153,9 @@ fn report() {
     if pd + pl != 0 {
         println!("[model-draw] agl / sead primitives drawn natively: {pd}, left to the game: {pl}");
     }
+    if let Some(l) = QUERY_ITEMS.summary("item queries") {
+        println!("{l}");
+    }
     let on = OCCL_CALLS.load(Ordering::Relaxed);
     if on != 0 {
         let s = OCCL_STOPS.lock().unwrap().clone();
@@ -1113,6 +1248,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_occlusion(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_occlusion_end())) as usize;
         hook(base, mem_space, OCCLUSION_SITE, OCCLUSION_SITE_INSTRUCTION, pre, post, "Occlusion items");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_query_item(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_query_item_end())) as usize;
+        hook(base, mem_space, QUERY_ITEM_SITE, QUERY_ITEM_SITE_INSTRUCTION, pre, post, "Item queries");
     }
     if d.verify_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_dispatch(_, _, _, _))) as usize;

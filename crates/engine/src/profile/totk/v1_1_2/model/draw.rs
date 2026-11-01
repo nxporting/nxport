@@ -494,6 +494,14 @@ impl Port {
         self.ring_block(data, size)
     }
 
+    /// ring_block_inline with `size` bytes of which the game writes only the first `known` (verify compares those).
+    pub(super) unsafe fn ring_block_inline_known(&mut self, data: usize, known: usize, size: usize) -> usize {
+        if self.m.predict() {
+            return super::ring::predict_inline_known(self.base, data, known, size);
+        }
+        self.ring_block(data, size)
+    }
+
     pub(super) unsafe fn ring_block_direct(&mut self, data: usize, size: usize) -> usize {
         if self.m.predict() {
             return super::ring::predict(self.base, data, size);

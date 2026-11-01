@@ -3273,7 +3273,7 @@ impl Gfx {
                 for t in [&tex, &root] {
                     st.issuer.push(super::issuer::Op::CUse(
                         ProtocolObject::<dyn objc2_metal::MTLResource>::from_retained(t.clone()),
-                        objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample,
+                        objc2_metal::MTLResourceUsage::Read,
                     ));
                 }
             }
@@ -4389,7 +4389,7 @@ impl Gfx {
             enc.push(Op::CBuf(b.clone(), *off, 26));
         }
         for x in &rec.uses {
-            enc.push(Op::CUse(x.clone(), objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample));
+            enc.push(Op::CUse(x.clone(), objc2_metal::MTLResourceUsage::Read));
         }
         for (t, i) in rec.vtex {
             enc.push(Op::CTex(t, i));
@@ -6979,7 +6979,7 @@ impl Gfx {
             let mut res = Vec::new();
             let v = compose_args(vs, &rec.vbufs, &rec.vtex, &rec.vsamp, zero.as_deref(), &mut res);
             let f = fs.map_or_else(Vec::new, |f| compose_args(f, &rec.fbufs, &rec.ftex, &rec.fsamp, zero.as_deref(), &mut res));
-            res.extend(rec.uses.into_iter().map(|x| (x, objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample)));
+            res.extend(rec.uses.into_iter().map(|x| (x, objc2_metal::MTLResourceUsage::Read)));
             enc.push(Op::ArgStructs { v: v.into(), f: f.into(), res });
         }
         if details {
@@ -7843,7 +7843,7 @@ impl EncCache {
             return;
         }
         if self.heap_used.insert(ptr_of(Some(r))) {
-            enc.push(Op::Use(r.retain(), objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample));
+            enc.push(Op::Use(r.retain(), objc2_metal::MTLResourceUsage::Read));
         }
     }
     pub(super) unsafe fn pipeline(
