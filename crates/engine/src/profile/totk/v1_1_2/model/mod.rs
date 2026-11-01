@@ -903,6 +903,38 @@ pub unsafe extern "C" fn on_vfx(sys: usize, g: usize, em: usize, a3: usize, dp: 
         return 0;
     }
     VFX_CALLS.fetch_add(1, Ordering::Relaxed);
+    if !crate::settings::get().totk.diagnostics.verify_render_lists {
+        // Apply mode: an emitter the port draws returns true (main+0x843c's result); one it does not draw, or stops
+        // at, is left to the game.
+        let mut port = draw::Port::new(mem::Mem::applying_undoably(), crate::guest::loader::main_base(), true);
+        let (r, commands) = crate::nvn::api::capture_buffered(|| {
+            let r = vfx::draw_emitter(&mut port, sys, g, em, a3, dp, cache);
+            if matches!(r, Ok(true)) {
+                port.flush();
+            }
+            r
+        });
+        ring::discard();
+        match r {
+            Ok(true) => {
+                crate::nvn::api::commit_buffered(commands);
+                return 1;
+            }
+            r => {
+                port.discard();
+                port.m.rollback();
+                vfx::discard_blocks();
+                if let Err(what) = r {
+                    let mut s = VFX_STOPS.lock().unwrap();
+                    match s.iter_mut().find(|x| x.0 == what) {
+                        Some(x) => x.1 += 1,
+                        None => s.push((what, 1)),
+                    }
+                }
+                return 0;
+            }
+        }
+    }
     let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
     let mut result = Ok(());
     let expected = crate::nvn::api::capture_dry(|| result = vfx::draw_emitter(&mut port, sys, g, em, a3, dp, cache).map(|_| ()));
@@ -1382,6 +1414,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_render_buffer_bind(_, _))) as usize;
         hook(base, mem_space, RENDER_BUFFER_BIND.0, RENDER_BUFFER_BIND.1, pre, post, "agl::RenderBuffer::bind");
     }
+    if d.verify_render_lists || (d.native_render_lists && d.native_model_draws && metal) {
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_end())) as usize;
+        hook(base, mem_space, VFX_SITE, VFX_SITE_INSTRUCTION, pre, post, "Vfx emitter draw");
+    }
     if d.verify_render_lists || d.native_render_lists {
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_lights(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_lights_end())) as usize;
@@ -1400,9 +1437,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_dispatch(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_dispatch_end())) as usize;
         hook(base, mem_space, DISPATCH_SITE, DISPATCH_SITE_INSTRUCTION, pre, post, "Dispatch draw");
-        let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx(_, _, _, _, _, _))) as usize;
-        let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_end())) as usize;
-        hook(base, mem_space, VFX_SITE, VFX_SITE_INSTRUCTION, pre, post, "Vfx emitter draw");
+
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx_view(_, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_view_end())) as usize;
         hook(base, mem_space, VFX_VIEW_SITE, VFX_VIEW_SITE_INSTRUCTION, pre, post, "Vfx view draw");
