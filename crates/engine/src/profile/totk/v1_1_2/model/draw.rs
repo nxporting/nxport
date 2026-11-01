@@ -236,6 +236,11 @@ impl Port {
         f(cmd as u64, depth, depth_mask as u32, stencil as u32, stencil_mask as u32);
     }
 
+    /// A fixed-function state as a native item (callers record the NVN commands when not native).
+    pub(super) unsafe fn fixed(&mut self, cmd: usize, f: crate::nvn::cmd::FixedState) {
+        self.push(cmd, crate::nvn::cmd::ModelItem::Fixed(f));
+    }
+
     /// nvnCommandBufferSetPointSize.
     pub(super) unsafe fn point_size(&mut self, cmd: usize, size: f32) {
         if self.native {

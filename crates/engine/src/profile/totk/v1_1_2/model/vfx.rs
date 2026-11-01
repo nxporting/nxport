@@ -26,7 +26,6 @@ const GOT_SET_SAMPLE_MASK: usize = 0x4613c08;
 const GOT_SET_DEPTH_CLAMP: usize = 0x4613c10;
 const GOT_SET_RASTERIZER_DISCARD: usize = 0x4613c18;
 const GOT_SET_CONSERVATIVE_RASTER: usize = 0x4613c20;
-const GOT_BIND_VERTEX_BUFFER: usize = 0x4613c30;
 /// nn::gfx shader stage -> NVN stage, primitive topology -> NVN draw mode (u32 tables).
 const STAGE_TABLE: usize = 0x37ff9f4;
 const TOPOLOGY_TABLE: usize = 0x37ff9b8;
@@ -260,6 +259,18 @@ unsafe fn stage(p: &Port, s: u32) -> u64 {
 unsafe fn set_blend_state(p: &mut Port, g: usize, bs: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     let arr = p.m.r64(bs);
+    if p.native {
+        use crate::nvn::cmd::FixedState;
+        let c = cmd as usize;
+        for i in 0..p.m.r8(bs + 0x25) as usize {
+            p.fixed(c, FixedState::Blend(p.m.r64(arr + i * 8) as u64));
+        }
+        p.fixed(c, FixedState::ChannelMask(p.m.r32(bs + 0xc)));
+        p.fixed(c, FixedState::Color(p.m.r32(bs + 8) & 0x1FFFF));
+        let color = [p.m.f32(bs + 0x10), p.m.f32(bs + 0x14), p.m.f32(bs + 0x18), p.m.f32(bs + 0x1c)];
+        p.fixed(c, FixedState::BlendColor(color));
+        return;
+    }
     for i in 0..p.m.r8(bs + 0x25) as usize {
         p.call(p.pfn(PFN_BIND_BLEND_STATE), &[cmd, (arr + i * 8) as u64]);
     }
@@ -271,6 +282,19 @@ unsafe fn set_blend_state(p: &mut Port, g: usize, bs: usize) {
 /// main+0x78112c: nn::gfx SetDepthStencilState.
 unsafe fn set_depth_stencil_state(p: &mut Port, g: usize, ds: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
+    if p.native {
+        use crate::nvn::cmd::FixedState;
+        let c = cmd as usize;
+        p.fixed(c, FixedState::DepthStencil(p.m.r64(ds) as u64 & crate::nvn::state::DS_DEFINED));
+        p.fixed(c, FixedState::Stencil { kind: 1, faces: 3, value: p.m.i32(ds + 8) });
+        p.fixed(c, FixedState::Stencil { kind: 2, faces: 3, value: p.m.i32(ds + 0xc) });
+        p.fixed(c, FixedState::Stencil { kind: 0, faces: 2, value: p.m.i32(ds + 0x10) });
+        p.fixed(c, FixedState::Stencil { kind: 0, faces: 1, value: p.m.i32(ds + 0x14) });
+        if (p.m.r8(ds + 0x1a) >> 3) & 1 == 0 {
+            p.fixed(c, FixedState::DepthBounds { enable: false, min: 0.0, max: 1.0 });
+        }
+        return;
+    }
     p.call(got(p, GOT_BIND_DEPTH_STENCIL_STATE), &[cmd, ds as u64]);
     p.call(got(p, GOT_SET_STENCIL_VALUE_MASK), &[cmd, 3, p.m.r32(ds + 8) as u64]);
     p.call(got(p, GOT_SET_STENCIL_MASK), &[cmd, 3, p.m.r32(ds + 0xc) as u64]);
@@ -286,6 +310,17 @@ unsafe fn set_depth_stencil_state(p: &mut Port, g: usize, ds: usize) {
 /// main+0x2f8ec: nn::gfx SetRasterizerState.
 unsafe fn set_rasterizer_state(p: &mut Port, g: usize, rs: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
+    if p.native {
+        // Sample mask, rasterizer discard and conservative raster: the executor has none of them.
+        use crate::nvn::cmd::FixedState;
+        let c = cmd as usize;
+        p.fixed(c, FixedState::Polygon(p.m.r32(rs) & 0xFF));
+        let (factor, units, clamp) = (p.m.f32(rs + 0x28), p.m.f32(rs + 0x20), p.m.f32(rs + 0x24));
+        p.fixed(c, FixedState::PolygonOffset { factor, units, clamp });
+        p.fixed(c, FixedState::Multisample(p.m.r64(rs + 4) as u64));
+        p.fixed(c, FixedState::DepthClamp((!(p.m.r8(rs + 0x2d) >> 1)) & 1 != 0));
+        return;
+    }
     p.call(got(p, GOT_BIND_POLYGON_STATE), &[cmd, rs as u64]);
     let f: unsafe extern "C" fn(u64, f32, f32, f32) = std::mem::transmute(got(p, GOT_SET_POLYGON_OFFSET_CLAMP));
     p.flush();
@@ -326,8 +361,8 @@ unsafe fn bind_storage(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, si
 
 /// main+0x7650a4: vertex buffer `index` at `addr`, `size` bytes.
 unsafe fn bind_vertex_buffer(p: &mut Port, g: usize, index: i32, addr: u64, size: u64) {
-    let cmd = p.m.r64(g + 0xb0) as u64;
-    p.call(got(p, GOT_BIND_VERTEX_BUFFER), &[cmd, index as u32 as u64, addr, size]);
+    let cmd = p.m.r64(g + 0xb0);
+    p.bind_vertex_buffer(cmd, index, addr, size as usize);
 }
 
 /// main+0x2f804(g, topology, count, first, instances, base instance).

@@ -3177,6 +3177,7 @@ impl Gfx {
                             ModelItem::RenderState(r) => apply_render_state(st, r),
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
                             ModelItem::Targets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
+                            ModelItem::Fixed(f) => apply_fixed(st, *f),
                             ModelItem::PointSize(sz) => st.point_size = *sz,
                             ModelItem::PrimitiveRestart { enable, index } => st.prim_restart = enable.then_some(*index),
                             ModelItem::Barrier(bits) => {
@@ -8421,5 +8422,31 @@ fn set_viewport(st: &mut State, x: i32, y: i32, w: i32, h: i32) {
         // Largest since the last report (area in the high bits).
         let (w, h) = ((w as u64).min(0xFFFFF), (h as u64).min(0xFFFFF));
         SCENE_VIEWPORT.fetch_max((w * h) << 40 | w << 20 | h, Ordering::Relaxed);
+    }
+}
+
+fn apply_fixed(st: &mut State, f: crate::nvn::cmd::FixedState) {
+    use crate::nvn::cmd::FixedState;
+    match f {
+        FixedState::Blend(v) => st.blend_states[(v & 7) as usize] = v,
+        FixedState::Color(v) => st.color_state = v,
+        FixedState::ChannelMask(v) => st.channel_mask = v,
+        FixedState::BlendColor(c) => st.blend_color = c,
+        FixedState::DepthStencil(v) => st.depth_stencil = v,
+        FixedState::Stencil { kind, faces, value } => {
+            // NVNface: FRONT 1, BACK 2, FRONT_AND_BACK 3.
+            let k = (kind as usize).min(2);
+            if faces & 1 != 0 {
+                st.stencil[k][0] = value as u8;
+            }
+            if faces & 2 != 0 {
+                st.stencil[k][1] = value as u8;
+            }
+        }
+        FixedState::DepthBounds { enable, min, max } => st.depth_bounds = enable.then_some((min, max)),
+        FixedState::Polygon(v) => st.polygon = v,
+        FixedState::PolygonOffset { factor, units, clamp } => st.polygon_offset = (factor, units, clamp),
+        FixedState::Multisample(v) => st.multisample = v,
+        FixedState::DepthClamp(v) => st.depth_clamp = v,
     }
 }

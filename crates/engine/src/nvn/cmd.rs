@@ -329,6 +329,8 @@ pub enum ModelItem {
     Draw(ModelRange),
     RenderState(Box<RenderState>),
     Program { program: usize, stages: i32 },
+    /// Fixed-function state words as nn::gfx's state objects bind them.
+    Fixed(FixedState),
     RenderEnable(bool),
     PointSize(f32),
     PrimitiveRestart { enable: bool, index: u32 },
@@ -362,6 +364,7 @@ impl ModelItem {
             ModelItem::VertexAttribs(a) => Cmd::BindVertexAttribState(a),
             ModelItem::VertexStreams(ref v) => Cmd::BindVertexStreamState(v.clone()),
             ModelItem::Program { program, stages } => Cmd::BindProgram { program, stages },
+            ModelItem::Fixed(f) => f.cmd(),
             ModelItem::RenderEnable(e) => Cmd::SetRenderEnable(e),
             ModelItem::PointSize(s) => Cmd::SetPointSize(s),
             ModelItem::PrimitiveRestart { enable, index } => Cmd::SetPrimitiveRestart { enable, index },
@@ -388,6 +391,40 @@ impl ModelItem {
             }
             _ => return None,
         })
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum FixedState {
+    Blend(u64),
+    Color(u32),
+    ChannelMask(u32),
+    BlendColor([f32; 4]),
+    DepthStencil(u64),
+    /// kind 0 reference, 1 value mask, 2 write mask
+    Stencil { kind: u8, faces: i32, value: i32 },
+    DepthBounds { enable: bool, min: f32, max: f32 },
+    Polygon(u32),
+    PolygonOffset { factor: f32, units: f32, clamp: f32 },
+    Multisample(u64),
+    DepthClamp(bool),
+}
+
+impl FixedState {
+    pub fn cmd(self) -> Cmd {
+        match self {
+            FixedState::Blend(v) => Cmd::BindBlendState(v),
+            FixedState::Color(v) => Cmd::BindColorState(v),
+            FixedState::ChannelMask(v) => Cmd::BindChannelMaskState(v),
+            FixedState::BlendColor(c) => Cmd::SetBlendColor(c),
+            FixedState::DepthStencil(v) => Cmd::BindDepthStencilState(v),
+            FixedState::Stencil { kind, faces, value } => Cmd::SetStencilValue { kind, faces, value },
+            FixedState::DepthBounds { enable, min, max } => Cmd::SetDepthBounds { enable, min, max },
+            FixedState::Polygon(v) => Cmd::BindPolygonState(v),
+            FixedState::PolygonOffset { factor, units, clamp } => Cmd::SetPolygonOffset { factor, units, clamp },
+            FixedState::Multisample(v) => Cmd::BindMultisampleState(v),
+            FixedState::DepthClamp(v) => Cmd::SetDepthClamp(v),
+        }
     }
 }
 
