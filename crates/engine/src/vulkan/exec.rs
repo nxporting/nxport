@@ -689,8 +689,8 @@ impl Ctx {
     }
 
     /// Records and queues a submit with `serial` (inflight.rs completes it). `fetched`: the lists it reaches, by handle
-    /// (nvn::api::walk_command_lists), taken.
-    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64, fetched: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>) {
+    /// (nvn::api::walk_command_lists), taken; with `resolve`, the roots only (vk-decode fetches the rest).
+    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64, fetched: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>, resolve: bool) {
         crate::gpu::history::journal(|| format!("submit {} lists serial {serial}", lists.len()));
         // Emptied when the previous submit ended.
         std::mem::swap(&mut self.lists, fetched);
@@ -756,7 +756,7 @@ impl Ctx {
         self.chunk_start = t0;
         self.op_index = 0;
         // The lists are walked on vk-decode (decode.rs) while their commands run here.
-        self.decoder.start(lists, &self.lists);
+        self.decoder.start(lists, &self.lists, resolve);
         while let Some(e) = self.decoder.next() {
             let op = &*e.op;
             match &op.typed {
