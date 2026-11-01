@@ -198,6 +198,8 @@ pub struct Ctx {
     /// words of the draw being worked out.
     pub(super) bl: Option<super::bindless::Slots>,
     pub(super) bl_cache: rustc_hash::FxHashMap<(u64, vk::ImageViewType), draw::BlEntry>,
+    /// The bl_cache keys of each texture pool slot (bindless_submit drops a re-registered slot's).
+    pub(super) bl_by_slot: rustc_hash::FxHashMap<i32, smallvec::SmallVec<[(u64, vk::ImageViewType); 2]>>,
     pub(super) bl_pool_seq: u64,
     pub(super) bl_epoch: u64,
     pub(super) bl_words: [u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
@@ -680,6 +682,7 @@ impl Ctx {
             tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
             bl: None,
             bl_cache: Default::default(),
+            bl_by_slot: Default::default(),
             bl_pool_seq: 0,
             bl_epoch: 0,
             bl_words: [0; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
