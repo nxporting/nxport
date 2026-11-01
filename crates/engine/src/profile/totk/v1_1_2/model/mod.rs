@@ -18,6 +18,7 @@ mod mem;
 mod perview;
 mod render_list;
 mod ring;
+mod snapshot;
 mod targets;
 mod terrain;
 mod vfx;
@@ -545,6 +546,23 @@ pub unsafe extern "C" fn on_copy_quad(w: usize, tex: usize, m: usize, rows: usiz
 #[no_mangle]
 pub unsafe extern "C" fn on_copy_quad_end() -> u32 {
     COPY_QUADS.end("copy quads", &COPY_QUAD_EXPECTED)
+}
+
+static SNAPSHOTS: Checked = Checked::new();
+
+thread_local! {
+    static SNAPSHOT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xcc75ec(snap, w, index, ctx): a snapshot's mip levels (snapshot.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_snapshot(snap: usize, w: usize, index: u32, ctx: usize) -> u32 {
+    SNAPSHOTS.run(&SNAPSHOT_EXPECTED, |p| snapshot::draw(p, snap, w, index, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_snapshot_end() -> u32 {
+    SNAPSHOTS.end("snapshots", &SNAPSHOT_EXPECTED)
 }
 
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
@@ -1443,6 +1461,9 @@ fn report() {
     if let Some(l) = COPY_QUADS.summary("copy quads") {
         println!("{l}");
     }
+    if let Some(l) = SNAPSHOTS.summary("snapshots") {
+        println!("{l}");
+    }
     if let Some(l) = TRANSFORMED_QUADS.summary("transformed quads") {
         println!("{l}");
     }
@@ -1602,6 +1623,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_copy_quad(_, _, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_copy_quad_end())) as usize;
         hook_float(base, mem_space, 0x876e28, 0xd10203ff, pre, post, "Copy quads");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_snapshot(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_snapshot_end())) as usize;
+        hook(base, mem_space, 0xcc75ec, 0xd10403ff, pre, post, "Snapshots");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
