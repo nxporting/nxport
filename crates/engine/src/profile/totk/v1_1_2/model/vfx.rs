@@ -371,6 +371,12 @@ pub(super) unsafe fn draw_arrays(p: &mut Port, g: usize, topology: u32, count: u
     p.draw_arrays(got(p, GOT_DRAW_ARRAYS_INSTANCED), cmd as usize, mode as i32, first as i32, count as i32, base as i32, instances as i32);
 }
 
+/// main+0x2f7a0(g, x, y, z): a compute dispatch.
+pub(super) unsafe fn dispatch(p: &mut Port, g: usize, x: i32, y: i32, z: i32) {
+    let cmd = p.m.r64(g + 0xb0);
+    p.dispatch(cmd, x, y, z);
+}
+
 /// main+0x2f7b4(g, topology, count, first): a draw of `count` vertices from `first`.
 pub(super) unsafe fn draw_plain(p: &mut Port, g: usize, topology: u32, count: u32, first: u32) {
     let cmd = p.m.r64(g + 0xb0);

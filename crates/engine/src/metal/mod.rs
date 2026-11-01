@@ -3198,6 +3198,13 @@ impl Gfx {
                                 }
                             }
                             ModelItem::ReportCounter { counter, addr } => self.report_counter(st, *counter, *addr),
+                            ModelItem::Dispatch { x, y, z } => {
+                                if translated::enabled() {
+                                    self.end_encoder(st);
+                                    let c = cur.clone();
+                                    self.dispatch_compute(st, &c, *x, *y, *z);
+                                }
+                            }
                             ModelItem::Clear { .. } | ModelItem::ClearDepth { .. } if !st.render_enabled => {
                                 journal(|| format!("  cond-skip program {:#x}", st.program.unwrap_or(0)));
                             }
