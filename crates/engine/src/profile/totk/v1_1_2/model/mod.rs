@@ -544,6 +544,105 @@ pub unsafe extern "C" fn on_render_buffer_bind(rb: usize, w: usize) -> u32 {
     primitive(|p| targets::bind(p, rb, w).map(|_| 1))
 }
 
+// The nn::gfx command buffer (NVNcommandBuffer at +0xb0) the UI layouts, fonts and effects draw through: each method
+// drawn natively in apply mode (vfx.rs has the ports).
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_constant_buffer(g: usize, slot: i32, stage: u32, addr: usize, size: u64) -> u32 {
+    primitive(|p| {
+        vfx::bind_uniform(p, g, slot, stage, p.m.r64(addr) as u64, size);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_storage_buffer(g: usize, slot: i32, stage: u32, addr: usize, size: u64) -> u32 {
+    primitive(|p| {
+        vfx::bind_storage(p, g, slot, stage, p.m.r64(addr) as u64, size);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_vertex_buffer(g: usize, index: i32, addr: usize, _stride: u64, size: u64) -> u32 {
+    primitive(|p| {
+        vfx::bind_vertex_buffer(p, g, index, p.m.r64(addr) as u64, size);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_draw_indexed(g: usize, topology: u32, format: u32, addr: usize, count: i32, base_vertex: i32) -> u32 {
+    primitive(|p| {
+        vfx::draw_indexed_base(p, g, topology, format, p.m.r64(addr) as u64, count, base_vertex);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_draw(g: usize, topology: u32, count: u32, first: u32) -> u32 {
+    primitive(|p| {
+        vfx::draw_plain(p, g, topology, count, first);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_draw_instanced(g: usize, topology: u32, count: u32, first: u32, instances: u32, base: u32) -> u32 {
+    primitive(|p| {
+        vfx::draw_arrays(p, g, topology, count, first, instances, base);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_texture(g: usize, slot: i32, stage: u32, tex: usize, smp: usize) -> u32 {
+    primitive(|p| {
+        vfx::bind_texture(p, g, slot, stage, tex, smp);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_shader(g: usize, shader: usize, stages: u32) -> u32 {
+    primitive(|p| {
+        p.set_shader(g, shader, stages);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_vertex_state(g: usize, s: usize) -> u32 {
+    primitive(|p| {
+        vfx::bind_vertex_state(p, g, s);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_blend_state(g: usize, s: usize) -> u32 {
+    primitive(|p| {
+        vfx::set_blend_state(p, g, s);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_depth_stencil_state(g: usize, s: usize) -> u32 {
+    primitive(|p| {
+        vfx::set_depth_stencil_state(p, g, s);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_rasterizer_state(g: usize, s: usize) -> u32 {
+    primitive(|p| {
+        vfx::set_rasterizer_state(p, g, s);
+        Ok(1)
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn on_primitive_end() -> u32 {
     0
@@ -1256,6 +1355,25 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, SHAPE_BUFFERS.0, SHAPE_BUFFERS.1, pre, post, "Shape vertex buffers");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_shape_states(_, _))) as usize;
         hook(base, mem_space, SHAPE_STATES.0, SHAPE_STATES.1, pre, post, "Shape vertex states");
+        macro_rules! gfx {
+            ($site:expr, $f:expr, $what:expr) => {{
+                let pre = mem_space.make_hle_trampoline($f) as usize;
+                let first = std::ptr::read((base + $site) as *const u32);
+                hook(base, mem_space, $site, first, pre, post, $what);
+            }};
+        }
+        gfx!(0x30274, crate::hle!(on_gfx_constant_buffer(_, _, _, _, _)), "nn::gfx SetConstantBuffer");
+        gfx!(0x302e0, crate::hle!(on_gfx_storage_buffer(_, _, _, _, _)), "nn::gfx SetUnorderedAccessBuffer");
+        gfx!(0x7650a4, crate::hle!(on_gfx_vertex_buffer(_, _, _, _, _)), "nn::gfx SetVertexBuffer");
+        gfx!(0x2f86c, crate::hle!(on_gfx_draw_indexed(_, _, _, _, _, _)), "nn::gfx DrawIndexed");
+        gfx!(0x2f7b4, crate::hle!(on_gfx_draw(_, _, _, _)), "nn::gfx Draw");
+        gfx!(0x2f804, crate::hle!(on_gfx_draw_instanced(_, _, _, _, _, _)), "nn::gfx Draw instanced");
+        gfx!(0x74ee70, crate::hle!(on_gfx_texture(_, _, _, _, _)), "nn::gfx SetTextureAndSampler");
+        gfx!(0x74b81c, crate::hle!(on_gfx_shader(_, _, _)), "nn::gfx SetShader");
+        gfx!(0x7650f4, crate::hle!(on_gfx_vertex_state(_, _)), "nn::gfx SetVertexState");
+        gfx!(0x781064, crate::hle!(on_gfx_blend_state(_, _)), "nn::gfx SetBlendState");
+        gfx!(0x78112c, crate::hle!(on_gfx_depth_stencil_state(_, _)), "nn::gfx SetDepthStencilState");
+        gfx!(0x2f8ec, crate::hle!(on_gfx_rasterizer_state(_, _)), "nn::gfx SetRasterizerState");
     }
     if (d.native_render_lists && d.native_model_draws && metal) || d.verify_render_lists {
         let post = mem_space.make_hle_trampoline(crate::hle!(on_primitive_end())) as usize;

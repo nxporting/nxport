@@ -26,6 +26,7 @@ const GOT_SET_RASTERIZER_DISCARD: usize = 0x4613c18;
 const GOT_SET_CONSERVATIVE_RASTER: usize = 0x4613c20;
 /// nn::gfx shader stage -> NVN stage, primitive topology -> NVN draw mode (u32 tables).
 const STAGE_TABLE: usize = 0x37ff9f4;
+const INDEX_FORMAT_TABLE: usize = 0x37ffa0c;
 const TOPOLOGY_TABLE: usize = 0x37ff9b8;
 const GLOBAL_TEXTURES: usize = 0x4613830;
 
@@ -254,7 +255,7 @@ unsafe fn stage(p: &Port, s: u32) -> u64 {
 
 /// main+0x781064: nn::gfx SetBlendState (`bs`: per-target blend states at [bs] (+0x25 of them), color +8, channel
 /// mask +0xc, blend color +0x10).
-unsafe fn set_blend_state(p: &mut Port, g: usize, bs: usize) {
+pub(super) unsafe fn set_blend_state(p: &mut Port, g: usize, bs: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     let arr = p.m.r64(bs);
     if p.native {
@@ -278,7 +279,7 @@ unsafe fn set_blend_state(p: &mut Port, g: usize, bs: usize) {
 }
 
 /// main+0x78112c: nn::gfx SetDepthStencilState.
-unsafe fn set_depth_stencil_state(p: &mut Port, g: usize, ds: usize) {
+pub(super) unsafe fn set_depth_stencil_state(p: &mut Port, g: usize, ds: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     if p.native {
         use crate::nvn::cmd::FixedState;
@@ -306,7 +307,7 @@ unsafe fn set_depth_stencil_state(p: &mut Port, g: usize, ds: usize) {
 }
 
 /// main+0x2f8ec: nn::gfx SetRasterizerState.
-unsafe fn set_rasterizer_state(p: &mut Port, g: usize, rs: usize) {
+pub(super) unsafe fn set_rasterizer_state(p: &mut Port, g: usize, rs: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     if p.native {
         // Sample mask, rasterizer discard and conservative raster: the executor has none of them.
@@ -337,7 +338,7 @@ unsafe fn set_rasterizer_state(p: &mut Port, g: usize, rs: usize) {
 }
 
 /// main+0x74ee70: the texture (descriptor slot *tex) with the sampler (slot *smp) bound to `slot` of `st`.
-unsafe fn bind_texture(p: &mut Port, g: usize, slot: i32, st: u32, tex: usize, smp: usize) {
+pub(super) unsafe fn bind_texture(p: &mut Port, g: usize, slot: i32, st: u32, tex: usize, smp: usize) {
     let dev = p.m.r64(p.m.r64(g + 8)) as u64;
     let pfn = p.pfn(PFN_DEVICE_GET_TEXTURE_HANDLE);
     let handle = p.query(pfn, &[dev, p.m.r32(tex) as u64, p.m.r32(smp) as u64]);
@@ -346,32 +347,47 @@ unsafe fn bind_texture(p: &mut Port, g: usize, slot: i32, st: u32, tex: usize, s
 }
 
 /// main+0x30274: a uniform block (GPU address *addr) of `size` bytes bound to `slot` of `st`.
-unsafe fn bind_uniform(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, size: u64) {
+pub(super) unsafe fn bind_uniform(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, size: u64) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     p.bind_uniform(cmd as usize, stage(p, st) as i32, slot, addr, size);
 }
 
 /// main+0x302e0: a storage buffer bound to `slot` of `st`.
-unsafe fn bind_storage(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, size: u64) {
+pub(super) unsafe fn bind_storage(p: &mut Port, g: usize, slot: i32, st: u32, addr: u64, size: u64) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     p.bind_storage_buffer(cmd as usize, stage(p, st) as i32, slot, addr as u64, size as usize);
 }
 
 /// main+0x7650a4: vertex buffer `index` at `addr`, `size` bytes.
-unsafe fn bind_vertex_buffer(p: &mut Port, g: usize, index: i32, addr: u64, size: u64) {
+pub(super) unsafe fn bind_vertex_buffer(p: &mut Port, g: usize, index: i32, addr: u64, size: u64) {
     let cmd = p.m.r64(g + 0xb0);
     p.bind_vertex_buffer(cmd, index, addr, size as usize);
 }
 
 /// main+0x2f804(g, topology, count, first, instances, base instance).
-unsafe fn draw_arrays(p: &mut Port, g: usize, topology: u32, count: u32, first: u32, instances: u32, base: u32) {
+pub(super) unsafe fn draw_arrays(p: &mut Port, g: usize, topology: u32, count: u32, first: u32, instances: u32, base: u32) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     let mode = p.m.r32(p.base + TOPOLOGY_TABLE + topology as usize * 4) as u64;
     p.draw_arrays(got(p, GOT_DRAW_ARRAYS_INSTANCED), cmd as usize, mode as i32, first as i32, count as i32, base as i32, instances as i32);
 }
 
+/// main+0x2f7b4(g, topology, count, first): a draw of `count` vertices from `first`.
+pub(super) unsafe fn draw_plain(p: &mut Port, g: usize, topology: u32, count: u32, first: u32) {
+    let cmd = p.m.r64(g + 0xb0);
+    let mode = p.m.r32(p.base + TOPOLOGY_TABLE + topology as usize * 4) as i32;
+    p.draw_arrays(got(p, GOT_DRAW_ARRAYS), cmd, mode, first as i32, count as i32, 0, 0);
+}
+
+/// main+0x2f86c(g, topology, index format, addr, count, base vertex): an indexed draw.
+pub(super) unsafe fn draw_indexed_base(p: &mut Port, g: usize, topology: u32, format: u32, addr: u64, count: i32, base_vertex: i32) {
+    let cmd = p.m.r64(g + 0xb0);
+    let mode = p.m.r32(p.base + TOPOLOGY_TABLE + topology as usize * 4) as i32;
+    let ty = p.m.r32(p.base + INDEX_FORMAT_TABLE + format as usize * 4) as i32;
+    p.draw_elements_base_vertex(cmd, mode, ty, count, addr, base_vertex);
+}
+
 /// main+0x7650f4: vertex attribute and stream states.
-unsafe fn bind_vertex_state(p: &mut Port, g: usize, s: usize) {
+pub(super) unsafe fn bind_vertex_state(p: &mut Port, g: usize, s: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
     p.bind_vertex_attribs(cmd as usize, p.m.r32(s + 8) as i32, p.m.r64(s + 0x18));
     p.bind_vertex_streams(cmd as usize, p.m.r32(s + 4) as i32, p.m.r64(s + 0x10));
