@@ -193,11 +193,13 @@ pub struct Ctx {
     bindings_gen: u64,
     tex_memo: Box<[[draw::TexMemo; draw::TEX_MEMO]; 6]>,
     /// Bindless textures (vulkan/bindless.rs): the indices given out (made with the first draw), what handles resolved
-    /// to across submits (draw.rs bindless_word) and the pool, sampler and alias state they are valid at (read when a
-    /// submit begins: pools change between submits only), and the push constant words of the draw being worked out.
+    /// to across submits (draw.rs bindless_word; slots registered again are dropped when a submit begins: pools change
+    /// between submits only), the pool change sequence and samplers generation they are valid at, and the push constant
+    /// words of the draw being worked out.
     pub(super) bl: Option<super::bindless::Slots>,
-    bl_cache: rustc_hash::FxHashMap<(u64, vk::ImageViewType), draw::BlEntry>,
-    pub(super) bl_epoch: (u64, u64, u64),
+    pub(super) bl_cache: rustc_hash::FxHashMap<(u64, vk::ImageViewType), draw::BlEntry>,
+    pub(super) bl_pool_seq: u64,
+    pub(super) bl_epoch: u64,
     pub(super) bl_words: [u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
     /// Repacked vertex streams kept across submits (draw.rs cached_repack), by (memory, layout).
     pub(super) repack_cache: rustc_hash::FxHashMap<u64, draw::RepackedStream>,
@@ -677,7 +679,8 @@ impl Ctx {
             tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
             bl: None,
             bl_cache: Default::default(),
-            bl_epoch: (0, 0, 0),
+            bl_pool_seq: 0,
+            bl_epoch: 0,
             bl_words: [0; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
             max_indices: Default::default(),
             vb_memo: Default::default(),
@@ -788,7 +791,7 @@ impl Ctx {
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
         record::clear_overwritten();
         self.tex.begin_submit();
-        self.bl_epoch = (crate::nvn::api::tex_table_epoch(), crate::nvn::api::samplers_gen(), self.tex.roots_seq());
+        self.bindless_submit();
         self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
         if self.timestamps_supported {
             self.timestamps = self.free_timestamps.pop().unwrap_or_else(|| new_timestamp_pool(&self.dev, true));

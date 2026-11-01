@@ -117,19 +117,20 @@ pub(super) const UBO_MEMO: usize = 16;
 /// Bound texture slots per stage with a memo of their last resolution (Ctx::tex_memo).
 pub(super) const TEX_MEMO: usize = 48;
 
-/// Bindless textures: what a (handle, view type) resolved to (bindless_word), at Ctx::bl_epoch `epoch`: the packed
-/// word, the image (render-target feedback is checked against the pass) and its description, checked against guest
-/// memory once per submit (`serial`: Textures::serial then).
+/// Bindless textures: what a (handle, view type) resolved to (bindless_word): the packed word, the image (render-target
+/// feedback is checked against the pass), the texture's description and where it lives (Textures::locate), checked once
+/// per submit (`serial`: Textures::serial then).
 #[derive(Clone, Copy)]
 pub(super) struct BlEntry {
-    epoch: (u64, u64, u64),
     word: u32,
     image: vk::Image,
-    desc: Option<super::texture::Desc>,
+    place: Option<(super::texture::Desc, (super::texture::Desc, u32, u32))>,
     serial: u64,
     /// Resolved to a view: unresolved ones are tried again in the next submit (as texture_binding does), a texture whose
     /// memory or image is not there yet not kept as nothing until the pools change.
     resolved: bool,
+    /// Sampled while the current pass renders to it: (barrier epoch, the word of its feedback copy then).
+    fb: (u64, u32),
 }
 
 /// What the handle bound at a texture slot resolved to (texture_binding), while Ctx::bindings holds it (`gen`:
@@ -1142,41 +1143,70 @@ impl Ctx {
         r
     }
 
+    /// Bindless textures, when a submit begins: drops the resolutions of pool slots registered again since the last
+    /// (all of them when the samplers changed or the change log lost some).
+    pub(super) fn bindless_submit(&mut self) {
+        if self.dev.bindless.is_none() {
+            return;
+        }
+        let mut changed = Vec::new();
+        let (seq, complete) = crate::nvn::api::pool_changes_since(self.bl_pool_seq, &mut changed);
+        self.bl_pool_seq = seq;
+        let samplers = crate::nvn::api::samplers_gen();
+        if !complete || samplers != self.bl_epoch || changed.contains(&-1) {
+            self.bl_cache.clear();
+            self.bl_epoch = samplers;
+        } else if !changed.is_empty() {
+            changed.sort_unstable();
+            self.bl_cache.retain(|k, _| changed.binary_search(&((k.0 & 0xFFFFF) as i32)).is_err());
+        }
+    }
+
     /// Bindless textures: the packed word (bindless::Slots::word) for sampling handle `handle` as `declared`. Resolved
-    /// once while the pools, samplers and alias roots stay as they are (across submits, where texture_binding resolves
-    /// again in each), the image checked against guest memory once per submit; a texture the current pass renders to
-    /// takes texture_binding's way (its feedback copy) and is not kept.
+    /// once and kept across submits (texture_binding resolves every handle again in each) until the game registers the
+    /// pool slot again (bindless_submit): a slot resolves to the state it was registered with (nvn::api::PoolSlot). Once
+    /// per submit the texture's place (alias roots change as textures come and go) is checked and its image against guest
+    /// memory. A texture the current pass renders to is sampled through its feedback copy (feedback_view), whose word is
+    /// kept while the copy is that barrier epoch's (the depth buffer many passes read while testing against it).
     unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> u32 {
         let Some(h) = handle else { return 0 };
         let in_pass = |me: &Self, img: vk::Image| me.pass.as_ref().is_some_and(|p| p.images.contains(&img));
         let key = (h, declared);
         let serial = self.tex.serial;
-        if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.epoch == self.bl_epoch && (e.resolved || e.serial == serial)) {
-            if !in_pass(self, e.image) {
-                if e.serial != self.tex.serial {
-                    if let Some(d) = e.desc {
-                        self.tex.get_desc(&self.dev, &d);
+        if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.resolved || e.serial == serial) {
+            if in_pass(self, e.image) {
+                if e.fb.0 == self.fb_epoch && e.serial == serial {
+                    return e.fb.1;
+                }
+            } else {
+                let mut ok = true;
+                if e.serial != serial {
+                    if let Some((own, root)) = e.place {
+                        ok = self.tex.locate_desc(&own) == root;
+                        if ok {
+                            self.tex.get_desc(&self.dev, &root.0);
+                        }
                     }
-                    if let Some(e) = self.bl_cache.get_mut(&key) {
-                        e.serial = self.tex.serial;
+                    if let Some(e) = self.bl_cache.get_mut(&key).filter(|_| ok) {
+                        e.serial = serial;
                     }
                 }
-                return e.word;
+                if ok {
+                    return e.word;
+                }
             }
         }
         let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
         let mut image = vk::Image::null();
-        let mut desc = None;
-        let mut feedback = false;
+        let mut place = None;
+        let mut fb_view = None;
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
-            desc = Some(self.tex.locate(&t).0);
+            let own = super::texture::Desc::of(&t);
+            place = Some((own, self.tex.locate_desc(&own)));
             image = self.tex.get(&self.dev, &t)?.0.image;
-            if in_pass(self, image) {
-                feedback = true;
-                if !self.dev.feedback_in_place {
-                    return self.feedback_view(&t, view.as_ref(), declared);
-                }
+            if in_pass(self, image) && !self.dev.feedback_in_place {
+                fb_view = Some(self.feedback_view(&t, view.as_ref(), declared));
             }
             self.tex.sampled_view(&self.dev, &t, view.as_ref(), declared)
         });
@@ -1186,15 +1216,15 @@ impl Ctx {
             None => crate::vulkan::bindless::Slots::new(&self.dev, self.default_sampler),
         };
         let word = slots.word(&self.dev, view.unwrap_or(vk::ImageView::null()), declared, sampler);
+        // The feedback copy is current for this barrier epoch (feedback_view took it if it was not).
+        let fb = fb_view.map(|v| (self.fb_epoch, slots.word(&self.dev, v.unwrap_or(vk::ImageView::null()), declared, sampler)));
         if std::mem::take(&mut slots.warned) {
             self.warn("bindless textures: more views or samplers than the global arrays hold");
         }
         self.bl = Some(slots);
-        if !feedback {
-            let resolved = view.is_some();
-            self.bl_cache.insert(key, BlEntry { epoch: self.bl_epoch, word, image, desc, serial: self.tex.serial, resolved });
-        }
-        word
+        let resolved = view.is_some();
+        self.bl_cache.insert(key, BlEntry { word, image, place, serial, resolved, fb: fb.unwrap_or((0, 0)) });
+        fb.map_or(word, |f| f.1)
     }
 
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch

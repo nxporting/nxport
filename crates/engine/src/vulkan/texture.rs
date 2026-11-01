@@ -241,18 +241,17 @@ impl Textures {
         self.root_changes = changes;
     }
 
-    /// The texture index change sequence the alias roots are valid at: where textures live (`locate`) stays the same
-    /// while it does.
-    pub fn roots_seq(&self) -> u64 {
-        self.roots_seq
-    }
-
     /// Where texture `t` lives: the description of the image holding it and the level / layer it starts at there.
     /// Several texture objects over the same memory (a mip level or layer of a larger texture, a render target over a
     /// mip chain, another format of the same texels) share the image of the largest live texture containing them, so
     /// rendering through one is visible through the others, as on the GPU (the Metal backend's alias views).
     pub unsafe fn locate(&mut self, t: &NvnTexture) -> (Desc, u32, u32) {
-        let d = Desc::of(t);
+        self.locate_desc(&Desc::of(t))
+    }
+
+    /// `locate` by the texture's description.
+    pub unsafe fn locate_desc(&mut self, d: &Desc) -> (Desc, u32, u32) {
+        let d = *d;
         if let Some(&r) = self.roots.get(&d) {
             return r;
         }

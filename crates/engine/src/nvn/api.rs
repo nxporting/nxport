@@ -5818,7 +5818,34 @@ unsafe fn register_pool_slot(id: i32, texture: *const NvnTexture, view: Option<N
             copy: None,
         },
     );
+    log_pool_change(id);
     bump_tex_table_epoch();
+}
+
+/// Recent texture pool registrations that changed a slot: (sequence, id; -1: every slot). A slot resolves to the state
+/// it was registered with until then (PoolSlot), so backends keeping resolutions across submits drop only the ones these
+/// name (pool_changes_since), where tex_table_epoch changes with every texture initialized anywhere (most frames).
+static POOL_CHANGES: std::sync::Mutex<(u64, std::collections::VecDeque<(u64, i32)>)> =
+    std::sync::Mutex::new((0, std::collections::VecDeque::new()));
+const POOL_CHANGES_KEPT: usize = 1 << 14;
+
+fn log_pool_change(id: i32) {
+    let mut g = POOL_CHANGES.lock().unwrap();
+    g.0 += 1;
+    let seq = g.0;
+    if g.1.len() == POOL_CHANGES_KEPT {
+        g.1.pop_front();
+    }
+    g.1.push_back((seq, id));
+}
+
+/// The texture pool slots registered again after sequence `since` (-1: all of them), and the current sequence; false
+/// when some changes are no longer kept (every slot must be considered changed).
+pub fn pool_changes_since(since: u64, out: &mut Vec<i32>) -> (u64, bool) {
+    let g = POOL_CHANGES.lock().unwrap();
+    let complete = g.1.front().is_none_or(|f| f.0 <= since + 1) || g.0 == since;
+    out.extend(g.1.iter().filter(|c| c.0 > since).map(|c| c.1));
+    (g.0, complete)
 }
 
 fn view_bytes(v: NvnTextureView) -> [u8; std::mem::size_of::<NvnTextureView>()] {
@@ -6928,6 +6955,7 @@ pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
             })
             .collect(),
     );
+    log_pool_change(-1);
     bump_tex_table_epoch();
     for &(id, d) in &f.pool_samplers {
         register_pool_sampler(id, d);
