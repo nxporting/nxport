@@ -47,6 +47,8 @@ pub(super) enum Op {
         f: Box<[u64]>,
         res: Vec<(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage)>,
     },
+    /// A resource draws reach only through descriptor heaps (metal/tex_heap.rs): made resident once per encoder.
+    Use(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage),
     Pipeline(Retained<ProtocolObject<dyn MTLRenderPipelineState>>),
     Viewport(MTLViewport),
     Scissor(MTLScissorRect),
@@ -96,10 +98,14 @@ pub(super) enum Op {
     CBuf(Buf, usize, usize),
     CTex(Tex, usize),
     CSamp(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize),
+    /// Op::Use for the compute encoder.
+    CUse(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage),
     CDispatch(MTLSize, MTLSize),
     /// Tiny compute draws: continue the compute encoder a previous tiny draw left open on the same
     /// command buffer (its dispatches run in order: serial dispatch), else begin one.
-    CJoin(Retained<ProtocolObject<dyn MTLCommandBuffer>>, String),
+    /// With `fresh`, always a new encoder: what the next dispatches read only through descriptor heaps is ordered after
+    /// earlier dispatches' writes only across encoders (no hazard tracking between dispatches of one encoder for it).
+    CJoin(Retained<ProtocolObject<dyn MTLCommandBuffer>>, String, bool),
     /// Leave the compute encoder open for the next CJoin; any other op (or the issuer going idle) ends it first.
     CLinger,
     /// A blit pass (buffer / texture copies, fills): `f` encodes the commands. Queued in order so the encoding thread does
@@ -145,6 +151,7 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
             | Op::CBuf(..)
             | Op::CTex(..)
             | Op::CSamp(..)
+            | Op::CUse(..)
             | Op::CDispatch(..)
             | Op::CJoin(..)
             | Op::CLinger
@@ -155,9 +162,10 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
     if !render && super::batch::pending() {
         super::batch::flush(enc, &mut |o, e| exec_render(o, e));
     }
-    if let Op::CJoin(cb, label) = op {
+    if let Op::CJoin(cb, label, fresh) = op {
         JOINED.with(|j| *j.borrow_mut() = Some(cb.clone()));
-        let same = LINGER
+        let same = !fresh
+            && LINGER
             .with(|l| l.borrow_mut().take())
             .is_some_and(|c| std::ptr::eq(&*c, &*cb))
             && cenc.is_some();
@@ -220,6 +228,12 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
         Op::CSamp(s, i) => {
             if let Some(e) = cenc.as_ref() {
                 e.setSamplerState_atIndex(s.as_deref(), i)
+            }
+            return;
+        }
+        Op::CUse(x, usage) => {
+            if let Some(e) = cenc.as_ref() {
+                e.useResource_usage(&x, usage)
             }
             return;
         }
@@ -311,6 +325,12 @@ unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
         Op::DepthStencil(d) => e.setDepthStencilState(Some(&d)),
         Op::StencilRef(f, b) => e.setStencilFrontReferenceValue_backReferenceValue(f, b),
         Op::Blend(c) => e.setBlendColorRed_green_blue_alpha(c[0], c[1], c[2], c[3]),
+        Op::Use(x, usage) => {
+            let k = (&*x as *const ProtocolObject<dyn MTLResource> as *const u8 as usize, usage.0);
+            if RESIDENT.with(|r| r.borrow_mut().insert(k)) {
+                e.useResource_usage_stages(&x, usage, MTLRenderStages::Vertex | MTLRenderStages::Fragment);
+            }
+        }
         Op::ArgStructs { v, f, res } => {
             RESIDENT.with(|r| {
                 let mut r = r.borrow_mut();
@@ -366,7 +386,7 @@ unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
         Op::PushGroup(s) => e.pushDebugGroup(&NSString::from_str(&s)),
         Op::PopGroup => e.popDebugGroup(),
         Op::Begin { .. } | Op::End | Op::Commit(..) => {}
-        Op::CBegin(..) | Op::CPipeline(_) | Op::CBuf(..) | Op::CTex(..) | Op::CSamp(..) | Op::CDispatch(..) | Op::CJoin(..) | Op::CLinger | Op::Blit { .. } => {}
+        Op::CBegin(..) | Op::CPipeline(_) | Op::CBuf(..) | Op::CTex(..) | Op::CSamp(..) | Op::CUse(..) | Op::CDispatch(..) | Op::CJoin(..) | Op::CLinger | Op::Blit { .. } => {}
         Op::DrawJob(_) | Op::SubmitStart => {} // handled by the issuer thread's loop (never queued in inline mode)
     }
 }

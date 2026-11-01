@@ -314,6 +314,16 @@ fn explicit_lod(body: &str, textures: &[(String, String)], implicit: &mut Vec<St
     Some(out)
 }
 
+/// Textures the stage reads from the descriptor heaps (sass2spv Host::texture_heap): locals at the top of the body,
+/// tagged with their binding. (name, type without template arguments, binding)
+fn heap_textures(body: &str) -> Vec<(String, String, u32)> {
+    regex::Regex::new(r"(?m)^\s*(\w+)<[^>]*> (\w+) = reinterpret_cast<const device NxHeap<.*// heap texture\((\d+)\)")
+        .unwrap()
+        .captures_iter(body)
+        .filter_map(|c| Some((c[2].to_string(), c[1].to_string(), c[3].parse().ok()?)))
+        .collect()
+}
+
 /// Comment line in a fragment kernel listing the Metal texture bindings it samples with implicit LOD (comma list, maybe
 /// empty); the cache builder copies it into the index (`tk <list>`).
 pub const IMPLICIT_TAG: &str = "// tk-implicit-lod: ";
@@ -404,14 +414,18 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
     if pass.iter().any(|p| p.attr.contains("buffer(27)") || p.attr.contains("buffer(28)") || (24..40).any(|i| p.attr.contains(&format!("texture({})", i)))) {
         return tk_none(line!());
     }
+    let heap = heap_textures(body);
     let textures: Vec<(String, String)> = pass.iter().filter(|p| p.decl.starts_with("texture") || p.decl.starts_with("depth"))
-        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string())).collect();
+        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string()))
+        .chain(heap.iter().map(|(n, t, _)| (n.clone(), t.clone())))
+        .collect();
     let mut implicit = Vec::new();
     let body = tk_try!(explicit_lod(body, &textures, &mut implicit));
     // Metal texture bindings sampled with implicit LOD (see explicit_lod).
     let mut implicit_bindings: Vec<u32> = pass.iter()
         .filter(|p| implicit.contains(&p.name))
         .filter_map(|p| regex::Regex::new(r"texture\((\d+)\)").unwrap().captures(&p.attr).and_then(|c| c[1].parse().ok()))
+        .chain(heap.iter().filter(|(n, ..)| implicit.contains(n)).map(|(.., b)| *b))
         .collect();
     implicit_bindings.sort_unstable();
     implicit_bindings.dedup();
@@ -622,7 +636,9 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
         return None;
     }
     let textures: Vec<(String, String)> = pass.iter().filter(|p| p.decl.starts_with("texture") || p.decl.starts_with("depth"))
-        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string())).collect();
+        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string()))
+        .chain(heap_textures(body).into_iter().map(|(n, t, _)| (n, t)))
+        .collect();
     let body = explicit_lod(body, &textures, &mut Vec::new())?; // vertex samples are explicit already; same rewrite for safety
     // Attributes: (type, member, location, function constant).
     let mut attrs = Vec::new();

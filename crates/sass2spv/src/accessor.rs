@@ -57,11 +57,12 @@ pub struct Host {
     pub texture_heap: bool,
 }
 
-/// Driver constant buffer bytes used with Host::texture_heap: the texture heap's and the sampler heap's GPU addresses
-/// (u64 each), then the stage's bound texture handles as the texture constant buffer has them (one u32 per handle
-/// index).
+/// Driver constant buffer bytes used with Host::texture_heap: GPU addresses (u64) of one texture heap per
+/// MTLTextureType value (0..8) and of the sampler heap (TEXTURE_HEAP_SAMPLERS), then the stage's bound texture handles
+/// by handle index (one u32 each: texture heap index in the low 20 bits, sampler heap index above).
 pub const TEXTURE_HEAP_ADDRESSES: i32 = 0xd00;
-pub const TEXTURE_HEAP_HANDLES: i32 = 0xd10;
+pub const TEXTURE_HEAP_SAMPLERS: u32 = 9;
+pub const TEXTURE_HEAP_HANDLES: i32 = 0xd60;
 
 impl Default for Host {
     fn default() -> Self {
