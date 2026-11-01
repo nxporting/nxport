@@ -2278,7 +2278,7 @@ const DEVICE_HOLDER: usize = 0x462bbe8;
 /// main+0x96ac04(prog, w, slot, texture): the texture (+0x58 id, +0xea sampler) at the program's slots for `slot`
 /// (+0x70 table, 16-byte entries, count +0x68; bytes for stages 0, 1, 2 and 5); whether the program has them. A
 /// texture the game is still finishing (+0xe4) is not predicted.
-unsafe fn program_texture(p: &mut Port, prog: usize, w: usize, slot: u32, tex: usize) -> R<bool> {
+pub(super) unsafe fn program_texture(p: &mut Port, prog: usize, w: usize, slot: u32, tex: usize) -> R<bool> {
     if p.m.r32(prog + 0x14) != 0 {
         return Err("agl program setup pending");
     }
