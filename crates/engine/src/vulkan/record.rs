@@ -30,6 +30,8 @@ pub(super) enum Op {
     /// Copies guest memory (src, into dst, len bytes) as it was at uniform epoch `epoch` (Ctx::ubo_epoch), for the draws
     /// recorded after it: copy_guest.
     Fill(usize, usize, u32, u64),
+    /// Bindless textures: pushes the batch's words at this index with this layout (Recorder::words).
+    Words(vk::PipelineLayout, u32),
     /// Anything else (owning what it records).
     Cmd(Box<dyn FnOnce(&Dev, vk::CommandBuffer)>),
 }
@@ -50,7 +52,12 @@ pub(super) struct BindJob {
 #[derive(Default)]
 struct Batch {
     ops: Vec<Op>,
+    /// Bindless textures: the push constant words Op::Words name (kept here, not boxed per draw).
+    words: Vec<Words>,
 }
+
+/// A draw's bindless texture words (sass2spv::accessor::BINDLESS_PUSH_WORDS).
+pub(super) type Words = [u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize];
 unsafe impl Send for Batch {}
 unsafe impl Send for BindJob {}
 
@@ -96,6 +103,11 @@ impl Recorder {
                     }
                     for op in b.ops.drain(..) {
                         match op {
+                            Op::Words(layout, i) => unsafe {
+                                let w = &b.words[i as usize];
+                                let bytes = std::slice::from_raw_parts(w.as_ptr() as *const u8, std::mem::size_of_val(w));
+                                dev.device.cmd_push_constants(cb, layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, bytes);
+                            },
                             Op::Bind(mut j) => unsafe {
                                 bind(&dev, cb, &mut sets, &shared, &j);
                                 j.w.buffers.clear();
@@ -105,11 +117,12 @@ impl Recorder {
                             op => unsafe { run(&dev, &mut cb, &mut sets, op, &ended_tx) },
                         }
                     }
+                    b.words.clear();
                     let _ = spare_tx.send(b);
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Recorder { batch: Batch { ops: Vec::with_capacity(BATCH) }, tx, spare, ended, jobs, pools })
+        Ok(Recorder { batch: Batch { ops: Vec::with_capacity(BATCH), words: Vec::new() }, tx, spare, ended, jobs, pools })
     }
 
     pub(super) fn op(&mut self, op: Op) {
@@ -127,6 +140,13 @@ impl Recorder {
     /// Copies guest memory [src, src + len) into `dst` as it is at uniform epoch `epoch`, before the commands after it.
     pub(super) fn fill(&mut self, src: usize, dst: *mut u8, len: usize, epoch: u64) {
         self.op(Op::Fill(src, dst as usize, len as u32, epoch));
+    }
+
+    /// Pushes the bindless texture words `w` for the draws after it (Op::Words).
+    pub(super) fn words(&mut self, layout: vk::PipelineLayout, w: &Words) {
+        self.batch.words.push(*w);
+        let i = self.batch.words.len() as u32 - 1;
+        self.op(Op::Words(layout, i));
     }
 
     /// An empty BindJob to fill (one vk-record handed back, else a new one).
@@ -166,7 +186,7 @@ impl Recorder {
         if self.batch.ops.is_empty() {
             return;
         }
-        let next = self.spare.try_recv().unwrap_or_else(|_| Batch { ops: Vec::with_capacity(BATCH) });
+        let next = self.spare.try_recv().unwrap_or_else(|_| Batch { ops: Vec::with_capacity(BATCH), words: Vec::new() });
         let b = std::mem::replace(&mut self.batch, next);
         let _ = self.tx.send(b);
     }
@@ -311,6 +331,7 @@ unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, sets: &mut Sets, op: Op, en
         Op::Pipeline(point, p) => d.cmd_bind_pipeline(c, point, p),
         // Bound by the vk-record loop, which hands the job back.
         Op::Bind(_) => unreachable!(),
+        Op::Words(..) => unreachable!(),
         Op::VertexBuffer(binding, b, o) => d.cmd_bind_vertex_buffers(c, binding, &[b], &[o]),
         Op::IndexBuffer(b, o, ty) => d.cmd_bind_index_buffer(c, b, o, ty),
         Op::Draw(n, i, first, base) => d.cmd_draw(c, n, i, first, base),

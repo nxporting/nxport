@@ -87,11 +87,15 @@ pub struct Slots {
     samplers: rustc_hash::FxHashMap<vk::Sampler, u32>,
     next_sampler: u32,
     pub warned: bool,
+    /// Entries given out and not yet written: (binding, index, view, sampler), written together before the next queue
+    /// submission (flush; update-after-bind lets recorded commands name them first). One write per new view at a scene
+    /// change was a hitch of its own.
+    pending: Vec<(u32, u32, vk::ImageView, vk::Sampler)>,
 }
 
 impl Slots {
     pub unsafe fn new(dev: &Dev, default_sampler: vk::Sampler) -> Slots {
-        let mut s = Slots { views: Default::default(), next: [1; VIEW_TYPES as usize], samplers: Default::default(), next_sampler: 0, warned: false };
+        let mut s = Slots { views: Default::default(), next: [1; VIEW_TYPES as usize], samplers: Default::default(), next_sampler: 0, warned: false, pending: Vec::new() };
         if let Some(g) = &dev.bindless {
             for t in 0..VIEW_TYPES {
                 write(dev, g, t, 0, vk::ImageView::null(), vk::Sampler::null());
@@ -99,6 +103,30 @@ impl Slots {
         }
         s.sampler(dev, default_sampler);
         s
+    }
+
+    /// Writes the entries given out since the last flush (before work recorded with them is submitted).
+    pub unsafe fn flush(&mut self, dev: &Dev) {
+        let Some(g) = &dev.bindless else { return };
+        if self.pending.is_empty() {
+            return;
+        }
+        let infos: Vec<[vk::DescriptorImageInfo; 1]> = self
+            .pending
+            .iter()
+            .map(|&(_, _, view, sampler)| [vk::DescriptorImageInfo { sampler, image_view: view, image_layout: vk::ImageLayout::GENERAL }])
+            .collect();
+        let writes: Vec<vk::WriteDescriptorSet> = self
+            .pending
+            .iter()
+            .zip(&infos)
+            .map(|(&(b, i, _, _), info)| {
+                let ty = if b < VIEW_TYPES { vk::DescriptorType::SAMPLED_IMAGE } else { vk::DescriptorType::SAMPLER };
+                vk::WriteDescriptorSet::default().dst_set(g.set).dst_binding(b).dst_array_element(i).descriptor_type(ty).image_info(info)
+            })
+            .collect();
+        dev.device.update_descriptor_sets(&writes, &[]);
+        self.pending.clear();
     }
 
     /// The packed word for sampling `view` (of type `ty`) with `sampler`: the view's index (low 20 bits), the sampler's
@@ -122,7 +150,7 @@ impl Slots {
             return 0;
         }
         self.next[t as usize] += 1;
-        write(dev, g, t, i, view, vk::Sampler::null());
+        self.pending.push((t, i, view, vk::Sampler::null()));
         self.views.insert(view, i);
         i
     }
@@ -138,7 +166,7 @@ impl Slots {
             return 0;
         }
         self.next_sampler += 1;
-        write(dev, g, sass2spv::accessor::BINDLESS_SAMPLERS as u32, i, vk::ImageView::null(), sampler);
+        self.pending.push((sass2spv::accessor::BINDLESS_SAMPLERS as u32, i, vk::ImageView::null(), sampler));
         self.samplers.insert(sampler, i);
         i
     }

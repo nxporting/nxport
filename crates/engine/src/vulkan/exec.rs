@@ -201,6 +201,7 @@ pub struct Ctx {
     pub(super) bl_pool_seq: u64,
     pub(super) bl_epoch: u64,
     pub(super) bl_words: [u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
+    pub(super) bl_memo: Box<[draw::BlMemo; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize]>,
     /// Repacked vertex streams kept across submits (draw.rs cached_repack), by (memory, layout).
     pub(super) repack_cache: rustc_hash::FxHashMap<u64, draw::RepackedStream>,
     repack_swept: u64,
@@ -682,6 +683,7 @@ impl Ctx {
             bl_pool_seq: 0,
             bl_epoch: 0,
             bl_words: [0; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
+            bl_memo: Box::new([Default::default(); sass2spv::accessor::BINDLESS_PUSH_WORDS as usize]),
             max_indices: Default::default(),
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
@@ -871,6 +873,9 @@ impl Ctx {
         let fence = d.create_fence(&vk::FenceCreateInfo::default(), None).unwrap_or(vk::Fence::null());
         let cbs = self.with_uploads(self.cb);
         self.tex.end_batch();
+        if let Some(s) = self.bl.as_mut() {
+            s.flush(&self.dev);
+        }
         let d = &self.dev.device;
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
@@ -1663,6 +1668,10 @@ impl Ctx {
                 break;
             }
             let cbs = self.unqueued.pop_front().unwrap();
+            // Bindless texture entries its commands name are written first.
+            if let Some(s) = self.bl.as_mut() {
+                s.flush(&self.dev);
+            }
             let d = &self.dev.device;
             if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()) {
                 println!("[vulkan] vkQueueSubmit: {e}");
