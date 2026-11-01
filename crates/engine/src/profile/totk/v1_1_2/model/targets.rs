@@ -179,3 +179,36 @@ pub(super) unsafe fn barrier_targets(p: &mut Port, rb: usize, w: usize) {
         }
     }
 }
+
+/// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): clears the render buffer's color target
+/// `index` (mask bit 0, all channels) and its depth / stencil (bits 1 / 2) within the viewport, where the buffer has
+/// those targets. A target still being set up (+0xc8) is left to the game.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn clear(p: &mut Port, rb: usize, w: usize, index: i32, mask: u32, color: usize, stencil: i32, vp: usize, depth: f32) -> R<()> {
+    let target = rb + 0x20 + index as isize as usize * 8;
+    let mut m = mask;
+    if p.m.r64(target) == 0 {
+        m &= !1;
+    }
+    if p.m.r64(rb + 0x60) == 0 {
+        m &= !6;
+    }
+    if m == 0 {
+        return Ok(());
+    }
+    for o in (0x20..=0x60).step_by(8) {
+        let t = p.m.r64(rb + o);
+        if t != 0 && p.m.r32(t + 0xc8) != 0 {
+            return Err("render target still being set up");
+        }
+    }
+    super::viewport::apply(p, vp, w, rb);
+    let cmd = p.m.r64(w + 0xb8);
+    if m & 1 != 0 {
+        p.clear_color(cmd, index, color, 0xf);
+    }
+    if m & 6 != 0 {
+        p.clear_depth(cmd, depth, (m >> 1) & 1 != 0, stencil, if (m >> 2) & 1 != 0 { 0xff } else { 0 });
+    }
+    Ok(())
+}
