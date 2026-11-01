@@ -33,6 +33,7 @@ pub struct HostCapabilities {
     pub binding_base: i32,
     pub fragment_inputs: Option<u32>,
     pub sampler_slots: u32,
+    pub texture_heap: bool,
 }
 
 #[derive(Clone)]

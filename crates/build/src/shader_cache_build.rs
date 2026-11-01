@@ -351,7 +351,10 @@ fn translate_batch(paths: &[PathBuf], spv_dir: &Path, o: &Options) -> HashMap<St
         let fields: Vec<i32> = ctrl_fields(p, o.ctrl_dir.as_deref()).split('\t').map(|f| f.parse().unwrap_or(-1)).collect();
         let compute = (fields.len() > 1).then(|| [fields[1], fields[2], fields[3], fields[4]]);
         let res = std::fs::read(p).map_err(|e| e.to_string()).and_then(|code| {
-            std::panic::catch_unwind(|| sass2spv::translate_stage_to(&code, if compute.is_some() { 3 } else { 0 }, fields[0], compute, &target))
+            let host = sass2spv::accessor::Host { texture_heap: crate::translation::get().texture_heap, ..Default::default() };
+            std::panic::catch_unwind(|| {
+                sass2spv::translate_stage_for(&code, if compute.is_some() { 3 } else { 0 }, fields[0], compute, &target, None, host.clone())
+            })
                 .unwrap_or_else(|_| Err("translator panicked".into()))
         });
         let res = match res {

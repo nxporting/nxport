@@ -627,6 +627,9 @@ pub struct IoDecls {
     pub params: Vec<(Global, String, String)>,
     /// Statements at the top of the entry point (output struct, local and shared memory).
     pub prologue: Vec<String>,
+    /// Textures and samplers read from the descriptor heaps (Host::texture_heap): locals of the entry point, passed to
+    /// helpers as parameters: (global, declaration as a helper parameter).
+    pub heap: Vec<(Global, String)>,
     pub ret: String,
 }
 
@@ -883,11 +886,33 @@ fn io_declarations(c: &mut Ctx) -> R<IoDecls> {
     // Textures, images, then samplers (texture and sampler indices = bindings).
     let mut textures: Vec<(i32, Global, String, String)> = Vec::new();
     let mut samplers: Vec<(i32, Global, String, String)> = Vec::new();
+    let mut heap: Vec<(Global, String)> = Vec::new();
+    let mut heap_decls: Vec<String> = Vec::new();
     for t in c.props.textures.values() {
         let key = SetBindingPair::new(t.set, t.binding);
         if t.array_length != 1 {
             if main_uses.contains(&Global::Texture(key)) || main_uses.contains(&Global::Sampler(key)) {
                 unsupported!("texture arrays");
+            }
+            continue;
+        }
+        // From the descriptor heaps: a combined handle in the bound texture table (low 20 bits the texture, the rest
+        // the sampler).
+        if c.host.texture_heap && t.cbuf_slot < 0 && !t.separate && t.ty != SamplerType::NONE && t.ty.base() != SamplerType::TEXTURE_BUFFER {
+            let tt = texture_type(t.ty, "float", None)?;
+            if main_uses.contains(&Global::Texture(key)) {
+                heap_decls.push(format!(
+                    "{tt} {} = reinterpret_cast<const device NxHeap<{tt}>*>(nx_heaps[0])[nx_handles[{}] & 0xfffff].t;",
+                    t.name, t.handle
+                ));
+                heap.push((Global::Texture(key), format!("{tt} {}", t.name)));
+            }
+            if main_uses.contains(&Global::Sampler(key)) {
+                heap_decls.push(format!(
+                    "sampler {}Smplr = reinterpret_cast<const device NxSamplerHeap*>(nx_heaps[1])[nx_handles[{}] >> 20].s;",
+                    t.name, t.handle
+                ));
+                heap.push((Global::Sampler(key), format!("sampler {}Smplr", t.name)));
             }
             continue;
         }
@@ -928,6 +953,24 @@ fn io_declarations(c: &mut Ctx) -> R<IoDecls> {
         let tt = texture_type(t.ty, &ct, (access != "read").then_some(access))?;
         textures.push((t.binding, Global::Image(key), format!("{tt} {} [[texture({})]]", t.name, t.binding), format!("{tt} {}", t.name)));
     }
+    if !heap_decls.is_empty() {
+        // The driver constant buffer as words: its parameter when the stage reads it, else one of its own.
+        let drv = crate::accessor::DRIVER_CBUF_BINDING;
+        let declared = params.iter().any(|p| p.0 == Global::ConstantBuffer(drv));
+        if declared {
+            let name = c.buffer(StorageKind::ConstantBuffer, drv)?.name.clone();
+            prologue.push(format!("constant uint* nx_drv = reinterpret_cast<constant uint*>(&{name});"));
+        } else {
+            params.push((Global::ConstantBuffer(drv), format!("constant uint* nx_drv [[buffer({drv})]]"), "constant uint* nx_drv".into()));
+        }
+        prologue.push(format!(
+            "constant ulong* nx_heaps = reinterpret_cast<constant ulong*>(nx_drv + {});",
+            crate::accessor::TEXTURE_HEAP_ADDRESSES / 4
+        ));
+        prologue.push(format!("constant uint* nx_handles = nx_drv + {};", crate::accessor::TEXTURE_HEAP_HANDLES / 4));
+        prologue.extend(heap_decls);
+        structs.push_str("template<typename T> struct NxHeap { T t; };\nstruct NxSamplerHeap { sampler s; };\n\n");
+    }
     textures.sort_by_key(|t| t.0);
     samplers.sort_by_key(|t| t.0);
     for (_, g, a, h) in textures.into_iter().chain(samplers) {
@@ -966,11 +1009,14 @@ fn io_declarations(c: &mut Ctx) -> R<IoDecls> {
         _ if c.has_stage_out => format!("{e}_out"),
         _ => "void".to_string(),
     };
-    Ok(IoDecls { structs, params, prologue, ret })
+    Ok(IoDecls { structs, params, prologue, heap, ret })
 }
 
 /// The helper-function parameter for a global that has no entry parameter (stage in/out, memories, computed builtins).
 fn helper_param(c: &Ctx, g: Global, io: &IoDecls) -> R<String> {
+    if let Some((_, h)) = io.heap.iter().find(|p| p.0 == g) {
+        return Ok(h.clone());
+    }
     if let Some((_, _, h)) = io.params.iter().find(|p| p.0 == g) {
         return Ok(h.clone());
     }

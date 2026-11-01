@@ -51,6 +51,9 @@ pub struct Translation {
     /// SPIR-V through spirv-cross (on the PATH) instead of the translator's own MSL backend
     #[arg(long)]
     pub spirv_cross: bool,
+    /// Sampled textures of the bound texture table read from the engine's descriptor heaps (MSL backend)
+    #[arg(long)]
+    pub texture_heap: bool,
 }
 
 impl Default for Translation {
@@ -68,6 +71,7 @@ impl Default for Translation {
             no_arg_kernels: false,
             debug_kernels: false,
             spirv_cross: false,
+            texture_heap: false,
         }
     }
 }
@@ -103,5 +107,5 @@ pub fn fingerprint() -> String {
         "contract={:?} optnone={} guards={} invariant={} cbuf_limits={} discard_depth={} early_tests={} tiny={} batch={} ab={}{}",
         t.contract_fast, t.keep_optnone, t.fuse_guards, !t.no_invariant, !t.no_cbuf_limits, !t.no_discard_depth,
         t.early_tests, !t.no_tiny_kernels, !t.no_batch_kernels, !t.no_arg_kernels, if t.spirv_cross { "" } else { " backend=msl" }
-    )
+    ) + if t.texture_heap { " texture_heap" } else { "" }
 }

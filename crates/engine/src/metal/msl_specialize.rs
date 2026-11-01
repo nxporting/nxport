@@ -503,6 +503,9 @@ pub fn bound_cbuf_reads(msl: &str) -> String {
         }
         if let Some((n, _)) = slots.iter().find(|(_, b)| *b == 17) {
             c17 = format!("{n}._m0");
+        } else if params.contains("nx_drv [[buffer(17)]]") {
+            // Texture heap stages declare the driver cbuf as words.
+            c17 = "reinterpret_cast<constant float4*>(nx_drv)".into();
         }
     }
     let read = re!(r"\b(\w+_c\d+)\._m0\[");

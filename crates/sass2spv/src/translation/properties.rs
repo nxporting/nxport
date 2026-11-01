@@ -61,6 +61,9 @@ impl std::ops::BitOrAssign for TextureUsageFlags {
 
 #[derive(Clone, Debug)]
 pub struct TextureDefinition {
+    /// Where its handle is: constant buffer slot (negative: the bound texture table) and word index.
+    pub cbuf_slot: i32,
+    pub handle: i32,
     pub set: i32,
     pub binding: i32,
     pub array_length: i32,
