@@ -117,6 +117,21 @@ pub(super) const UBO_MEMO: usize = 16;
 /// Bound texture slots per stage with a memo of their last resolution (Ctx::tex_memo).
 pub(super) const TEX_MEMO: usize = 48;
 
+/// Bindless textures: what a (handle, view type) resolved to (bindless_word), at Ctx::bl_epoch `epoch`: the packed
+/// word, the image (render-target feedback is checked against the pass) and its description, checked against guest
+/// memory once per submit (`serial`: Textures::serial then).
+#[derive(Clone, Copy)]
+pub(super) struct BlEntry {
+    epoch: (u64, u64, u64),
+    word: u32,
+    image: vk::Image,
+    desc: Option<super::texture::Desc>,
+    serial: u64,
+    /// Resolved to a view: unresolved ones are tried again in the next submit (as texture_binding does), a texture whose
+    /// memory or image is not there yet not kept as nothing until the pools change.
+    resolved: bool,
+}
+
 /// What the handle bound at a texture slot resolved to (texture_binding), while Ctx::bindings holds it (`gen`:
 /// Ctx::bindings_gen then).
 #[derive(Clone, Copy, Default)]
@@ -382,6 +397,7 @@ impl Ctx {
             self.bound.pipeline = pipe;
         }
         self.bind_writes(j, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
+        self.bind_bindless(layout);
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
         if let Some(p) = self.pass.as_mut() {
@@ -974,6 +990,20 @@ impl Ctx {
                     }
                     images.push((b.binding, b.ty, infos));
                 }
+                Feed::Bindless { cbuf_slot, handle_index, view, word } => {
+                    let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
+                        self.st.textures.get(stage, (handle_index - 8) / 2)
+                    } else {
+                        cbuf(self, *cbuf_slot).and_then(|c| {
+                            let o = *handle_index as usize * 4;
+                            (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
+                        })
+                    };
+                    let w = self.bindless_word(handle, *view);
+                    if let Some(x) = self.bl_words.get_mut(*word as usize) {
+                        *x = w;
+                    }
+                }
                 Feed::SamplerTable => {
                     let infos = (0..b.count)
                         .map(|i| vk::DescriptorImageInfo {
@@ -1006,7 +1036,27 @@ impl Ctx {
             return;
         }
         (j.point, j.layout, j.set_layout, j.push) = (point, layout, set_layout, push);
+        j.first_set = (point == vk::PipelineBindPoint::GRAPHICS && self.dev.bindless.is_some()) as u32;
         self.rec.op(record::Op::Bind(j));
+    }
+
+    /// Bindless textures: the global set (once per command buffer: every graphics layout has it first, with the same
+    /// push constant range, so it stays bound) and the draw's words where they differ from the last pushed.
+    unsafe fn bind_bindless(&mut self, layout: vk::PipelineLayout) {
+        let Some(g) = &self.dev.bindless else { return };
+        if !self.bound.global {
+            let set = g.set;
+            self.rec.cmd(move |d, cb| d.device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::GRAPHICS, layout, 0, &[set], &[]));
+            self.bound.global = true;
+        }
+        if self.bound.words != Some(self.bl_words) {
+            let w = self.bl_words;
+            self.rec.cmd(move |d, cb| {
+                let bytes = std::slice::from_raw_parts(w.as_ptr() as *const u8, std::mem::size_of_val(&w));
+                d.device.cmd_push_constants(cb, layout, vk::ShaderStageFlags::ALL_GRAPHICS, 0, bytes)
+            });
+            self.bound.words = Some(w);
+        }
     }
 
     /// A storage buffer over guest memory: in place when its pool is imported and the offset aligned, else a copy that is
@@ -1090,6 +1140,61 @@ impl Ctx {
             }
         }
         r
+    }
+
+    /// Bindless textures: the packed word (bindless::Slots::word) for sampling handle `handle` as `declared`. Resolved
+    /// once while the pools, samplers and alias roots stay as they are (across submits, where texture_binding resolves
+    /// again in each), the image checked against guest memory once per submit; a texture the current pass renders to
+    /// takes texture_binding's way (its feedback copy) and is not kept.
+    unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> u32 {
+        let Some(h) = handle else { return 0 };
+        let in_pass = |me: &Self, img: vk::Image| me.pass.as_ref().is_some_and(|p| p.images.contains(&img));
+        let key = (h, declared);
+        let serial = self.tex.serial;
+        if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.epoch == self.bl_epoch && (e.resolved || e.serial == serial)) {
+            if !in_pass(self, e.image) {
+                if e.serial != self.tex.serial {
+                    if let Some(d) = e.desc {
+                        self.tex.get_desc(&self.dev, &d);
+                    }
+                    if let Some(e) = self.bl_cache.get_mut(&key) {
+                        e.serial = self.tex.serial;
+                    }
+                }
+                return e.word;
+            }
+        }
+        let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
+        let mut image = vk::Image::null();
+        let mut desc = None;
+        let mut feedback = false;
+        let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
+            let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
+            desc = Some(self.tex.locate(&t).0);
+            image = self.tex.get(&self.dev, &t)?.0.image;
+            if in_pass(self, image) {
+                feedback = true;
+                if !self.dev.feedback_in_place {
+                    return self.feedback_view(&t, view.as_ref(), declared);
+                }
+            }
+            self.tex.sampled_view(&self.dev, &t, view.as_ref(), declared)
+        });
+        let sampler = crate::nvn::api::lookup_pool_sampler(sampler_id).and_then(|d| self.tex.sampler(&self.dev, &d)).unwrap_or(self.default_sampler);
+        let mut slots = match self.bl.take() {
+            Some(s) => s,
+            None => crate::vulkan::bindless::Slots::new(&self.dev, self.default_sampler),
+        };
+        let word = slots.word(&self.dev, view.unwrap_or(vk::ImageView::null()), declared, sampler);
+        if std::mem::take(&mut slots.warned) {
+            self.warn("bindless textures: more views or samplers than the global arrays hold");
+        }
+        self.bl = Some(slots);
+        if !feedback {
+            let resolved = view.is_some();
+            self.bl_cache.insert(key, BlEntry { epoch: self.bl_epoch, word, image, desc, serial: self.tex.serial, resolved });
+        }
+        word
     }
 
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch

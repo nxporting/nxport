@@ -192,6 +192,13 @@ pub struct Ctx {
     /// at the generation they were made in.
     bindings_gen: u64,
     tex_memo: Box<[[draw::TexMemo; draw::TEX_MEMO]; 6]>,
+    /// Bindless textures (vulkan/bindless.rs): the indices given out (made with the first draw), what handles resolved
+    /// to across submits (draw.rs bindless_word) and the pool, sampler and alias state they are valid at (read when a
+    /// submit begins: pools change between submits only), and the push constant words of the draw being worked out.
+    pub(super) bl: Option<super::bindless::Slots>,
+    bl_cache: rustc_hash::FxHashMap<(u64, vk::ImageViewType), draw::BlEntry>,
+    pub(super) bl_epoch: (u64, u64, u64),
+    pub(super) bl_words: [u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
     /// Repacked vertex streams kept across submits (draw.rs cached_repack), by (memory, layout).
     pub(super) repack_cache: rustc_hash::FxHashMap<u64, draw::RepackedStream>,
     repack_swept: u64,
@@ -337,6 +344,9 @@ pub(super) struct Bound {
     pub(super) pipeline: vk::Pipeline,
     pub(super) vertex: [(vk::Buffer, u64); pipelines::ZERO_STREAM as usize + 1],
     pub(super) index: Option<(vk::Buffer, u64, vk::IndexType)>,
+    /// Bindless textures: the global set, and the push constant words.
+    pub(super) global: bool,
+    pub(super) words: Option<[u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize]>,
 }
 
 /// Disjoint address ranges [start, end), merged as they are added.
@@ -665,6 +675,10 @@ impl Ctx {
             ubo_memo_gen: 1,
             ubo_slot_memo: Box::new([[(0, (0, 0, 0), (0, 0, 0, None)); draw::UBO_MEMO]; 6]),
             tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
+            bl: None,
+            bl_cache: Default::default(),
+            bl_epoch: (0, 0, 0),
+            bl_words: [0; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
             max_indices: Default::default(),
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
@@ -774,6 +788,7 @@ impl Ctx {
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
         record::clear_overwritten();
         self.tex.begin_submit();
+        self.bl_epoch = (crate::nvn::api::tex_table_epoch(), crate::nvn::api::samplers_gen(), self.tex.roots_seq());
         self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
         if self.timestamps_supported {
             self.timestamps = self.free_timestamps.pop().unwrap_or_else(|| new_timestamp_pool(&self.dev, true));

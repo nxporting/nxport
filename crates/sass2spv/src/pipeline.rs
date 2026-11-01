@@ -24,6 +24,9 @@ pub struct ShaderProgramInfo {
     /// The sampler table (Host::sampler_slots; properties::sampler_table_plan): its size and the first texture slot of
     /// each texture binding sampled through it.
     pub sampler_table: Option<(u32, Vec<(i32, i32)>)>,
+    /// Host::bindless_textures: the textures sampled through the global arrays and their push constant words
+    /// (properties::bindless_plan).
+    pub bindless: Vec<(i32, i32)>,
     /// SPIR-V: bytes of each constant buffer binding the stage reads at literal offsets, -1 when it indexes it at run
     /// time (bindings it never reads are absent).
     pub cbuf_extents: Vec<(i32, i32)>,
@@ -105,6 +108,7 @@ pub fn translate_functions(
         uses_instance_id: used_features.has(FeatureFlags::INSTANCE_ID),
         uses_draw_parameters: used_features.has(FeatureFlags::DRAW_PARAMETERS),
         sampler_table: None,
+        bindless: Vec::new(),
         cbuf_extents: Vec::new(),
     };
     let kinds: Vec<(i32, i32, crate::translation::properties::TextureKind)> = info
@@ -113,6 +117,10 @@ pub fn translate_functions(
         .map(|t| (t.binding, t.array_length, crate::translation::properties::TextureKind::of(t.ty, t.separate)))
         .collect();
     let mut info = ShaderProgramInfo { sampler_table: crate::translation::properties::sampler_table_plan(&kinds, d.tc.gpu.host.sampler_slots), ..info };
+    if d.tc.gpu.host.bindless_textures && matches!(target, Target::Spirv) {
+        let t: Vec<_> = info.textures.iter().map(|t| (t.binding, t.array_length, t.ty, t.separate)).collect();
+        info.bindless = crate::translation::properties::bindless_plan(&t, crate::accessor::bindless_words(info.stage));
+    }
     let gpu = &d.tc.gpu;
     let host = HostCapabilities {
         reduced_precision: gpu.host_reduced_precision(),
@@ -127,6 +135,7 @@ pub fn translate_functions(
         binding_base: gpu.host.binding_base,
         fragment_inputs: gpu.host.fragment_inputs,
         sampler_slots: gpu.host.sampler_slots,
+        bindless: info.bindless.clone(),
     };
     let (binary_code, msl) = match target {
         Target::Spirv => {

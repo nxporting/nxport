@@ -333,6 +333,10 @@ impl Module {
     }
 
     pub fn add_extension(&mut self, e: &str) {
+        // Once (descriptor indexing is declared by bindless textures and by non-uniform indexing).
+        if self.extensions.iter().any(|x| x == e) {
+            return;
+        }
         self.extensions.push(e.to_string());
     }
 

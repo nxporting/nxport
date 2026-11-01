@@ -42,6 +42,8 @@ pub(super) struct BindJob {
     pub(super) layout: vk::PipelineLayout,
     pub(super) set_layout: vk::DescriptorSetLayout,
     pub(super) push: bool,
+    /// The set it binds (1 for graphics with bindless textures: the global set is 0).
+    pub(super) first_set: u32,
 }
 
 /// Ops own what they record (handles, plain values); the Presentation thread no longer touches them once handed over.
@@ -136,6 +138,7 @@ impl Recorder {
                 layout: vk::PipelineLayout::null(),
                 set_layout: vk::DescriptorSetLayout::null(),
                 push: false,
+                first_set: 0,
             })
         });
         // Its memory was last in vk-record's cache: fetched for writing now, while the draw's descriptors are worked out.
@@ -251,7 +254,7 @@ unsafe fn bind(dev: &Dev, cb: vk::CommandBuffer, s: &mut Sets, pools: &Pools, j:
             set
         }
     };
-    dev.device.cmd_bind_descriptor_sets(cb, j.point, j.layout, 0, &[set], &offsets);
+    dev.device.cmd_bind_descriptor_sets(cb, j.point, j.layout, j.first_set, &[set], &offsets);
     s.bound[point] = Some((j.layout, set, offsets));
 }
 
