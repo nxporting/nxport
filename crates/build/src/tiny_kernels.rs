@@ -453,12 +453,6 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
             members.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, interp, fc));
         }
     }
-    // A tiny pass draw is at most 2 triangles (3-6 vertices) for fullscreen quads/blurs/downsamples.
-    // Fragment shaders taking more than 4 varyings are complex 3D surface shaders (tangents, normals, shadow coords, etc.)
-    // that never qualify for tiny passes.
-    if members.len() > 4 {
-        return tk_none(line!());
-    }
     // Color outputs: (type, member, color index, function constant).
     let mut outs = Vec::new();
     for line in struct_body(msl, &ret)?.lines() {
@@ -469,8 +463,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
         let caps = tk_try!(regex::Regex::new(r"^(\w+) (\w+) \[\[color\((\d+)\)(?:, function_constant\((\w+)\))?\]\]$").unwrap().captures(line));
         outs.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, caps.get(4).map(|m| m.as_str().to_string())));
     }
-    // Tiny passes have at most 6 targets (cubemap MRTs) or 1-2 targets (blurs/downsamples).
-    if outs.is_empty() || outs.len() > 6 || outs.iter().any(|o| o.2 > 7) {
+    if outs.is_empty() || outs.iter().any(|o| o.2 > 7) {
         return tk_none(line!());
     }
     let decls: Vec<String> = pass.iter().map(|p| p.decl.clone()).collect();
@@ -652,8 +645,7 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
             attrs.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, caps.get(4).map(|m| m.as_str().to_string())));
         }
     }
-    // Fullscreen quads/blurs only have at most 4 attributes (position, uv, color) from streams 0/1.
-    if attrs.len() > 4 || attrs.iter().any(|a| a.2 > 15) {
+    if attrs.iter().any(|a| a.2 > 15) {
         return None;
     }
     // Outputs: gl_Position and user locations.
@@ -675,8 +667,7 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
         }
     }
     let pos = pos?;
-    // Fullscreen quads/blurs pass at most 4 varyings (uv, color).
-    if outs.len() > 4 || outs.iter().any(|o| o.2 > 31) {
+    if outs.iter().any(|o| o.2 > 31) {
         return None;
     }
     let mut decls: Vec<String> = pass.iter().map(|p| p.decl.clone()).collect();
