@@ -472,6 +472,16 @@ pub unsafe extern "C" fn on_program_texture(prog: usize, w: usize, slot: u32, te
     primitive(|p| vfx::program_texture(p, prog, w, slot, tex).map(|b| b as u32))
 }
 
+/// main+0x931960(renderer, w, args, view, range (start, count), flag, out, user): one model pass, as the frame's
+/// command-recording workers (main+0x90ddb0) call it.
+#[no_mangle]
+pub unsafe extern "C" fn on_model_pass(r: usize, w: usize, a: usize, v: usize, range: usize, flag: u32, out: usize, user: u64) -> u32 {
+    primitive(|p| {
+        let (start, count) = (p.m.r32(range), p.m.i32(range + 4));
+        render_list::model_pass(p, r, w, a, v, start, count, flag, out, user).map(|_| 1)
+    })
+}
+
 /// main+0x9c7e04 / main+0x9c7c80: the frame's default texture and uniform bindings (binds.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_default_textures(settings: usize, w: usize) -> u32 {
@@ -1399,6 +1409,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, PROGRAM_APPLY.0, PROGRAM_APPLY.1, pre, post, "Program apply");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block(_, _, _, _, _))) as usize;
         hook(base, mem_space, PROGRAM_BLOCK.0, PROGRAM_BLOCK.1, pre, post, "Program block");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_model_pass(_, _, _, _, _, _, _, _))) as usize;
+        hook(base, mem_space, 0x931960, 0xa9ba7bfd, pre, post, "Model pass");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_textures(_, _))) as usize;
         hook(base, mem_space, 0x9c7e04, 0xa9ba7bfd, pre, post, "Default textures");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_uniforms(_, _))) as usize;
