@@ -533,7 +533,7 @@ unsafe fn note_cmd_caller(name: &'static str) {
             let g = MAP.lock().unwrap();
             let mut rows: Vec<_> = g.as_ref().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect()).unwrap_or_default();
             rows.sort_by(|a, b| b.1.cmp(&a.1));
-            for ((n, a, b), c) in rows.iter().take(100) {
+            for ((n, a, b), c) in rows.iter().take(300) {
                 println!("[cmd-callers] {:7.1} per frame  main+ {:#x} <- {:#x}  {}", *c as f64 / 60.0, a, b, n);
             }
         }

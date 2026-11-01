@@ -512,6 +512,23 @@ pub unsafe extern "C" fn on_cubemap_face_end() -> u32 {
     CUBEMAP_FACES.end("cube map faces", &CUBEMAP_FACE_EXPECTED)
 }
 
+static TRANSFORMED_QUADS: Checked = Checked::new();
+
+thread_local! {
+    static TRANSFORMED_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x877418(w, prog, tex, m, rows, v): a full-screen copy with a transform (cubemap.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_transformed_quad(w: usize, prog: usize, tex: usize, m: usize, rows: usize, v: usize) -> u32 {
+    TRANSFORMED_QUADS.run(&TRANSFORMED_QUAD_EXPECTED, |p| cubemap::transformed_quad(p, w, prog, tex, m, rows, v))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_transformed_quad_end() -> u32 {
+    TRANSFORMED_QUADS.end("transformed quads", &TRANSFORMED_QUAD_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1395,6 +1412,9 @@ fn report() {
     if pd + pl != 0 {
         println!("[model-draw] agl / sead primitives drawn natively: {pd}, left to the game: {pl}");
     }
+    if let Some(l) = TRANSFORMED_QUADS.summary("transformed quads") {
+        println!("{l}");
+    }
     if let Some(l) = CUBEMAP_FACES.summary("cube map faces") {
         println!("{l}");
     }
@@ -1543,6 +1563,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_cubemap_face(_, _, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_cubemap_face_end())) as usize;
         hook_float(base, mem_space, 0x7ee7a8, 0xd10203ff, pre, post, "Cube map faces");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_transformed_quad(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_transformed_quad_end())) as usize;
+        hook(base, mem_space, 0x877418, 0xd10303ff, pre, post, "Transformed quads");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

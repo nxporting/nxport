@@ -48,3 +48,38 @@ pub(super) unsafe fn face(p: &mut Port, w: usize, tex: usize, level: u32, face: 
     stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1e8, w);
     Ok(())
 }
+
+/// main+0x877418(w, prog, tex, m, rows, v): the full-screen shape with `prog`'s texture slot 0 set to `tex` and its
+/// uniforms 0 (the four `rows` transformed by the 3x4 matrix `m`: each row's xyz through the matrix columns, its w added
+/// to the last lane), 8 (16 bytes at `v`) and 10 (the texture's +0xe8 bit 0). Used by the frame's full-screen copies.
+pub(super) unsafe fn transformed_quad(p: &mut Port, w: usize, prog: usize, tex: usize, m: usize, rows: usize, v: usize) -> R<()> {
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    program_texture(p, prog, w, 0, tex)?;
+    let f = |p: &Port, a: usize| p.m.f32(a);
+    let mut out = [0u8; 64];
+    for i in 0..4 {
+        let b = rows + i * 16;
+        let (b0, b1, b2, b3) = (f(p, b), f(p, b + 4), f(p, b + 8), f(p, b + 12));
+        for l in 0..4 {
+            // fmul, fmla, fmla, then fadd with (0, 0, 0, w): as the game's vector code.
+            let x = f(p, m + l * 4) * b0;
+            let x = f(p, m + 16 + l * 4).mul_add(b1, x);
+            let x = f(p, m + 32 + l * 4).mul_add(b2, x);
+            let x = if l == 3 { b3 + x } else { 0.0 + x };
+            out[i * 16 + l * 4..i * 16 + l * 4 + 4].copy_from_slice(&x.to_le_bytes());
+        }
+    }
+    set_uniform(p, prog, w, 0, &out);
+    let mut v16 = [0u8; 16];
+    for (k, x) in v16.iter_mut().enumerate() {
+        *x = p.m.r8(v + k);
+    }
+    set_uniform(p, prog, w, 8, &v16);
+    set_uniform(p, prog, w, 10, &((p.m.r8(tex + 0xe8) & 1) as u32).to_le_bytes());
+    let shapes = p.m.r64(p.m.r64(p.base + SHAPES));
+    shape_state(p, shapes + 0xd28, w);
+    stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1e8, w);
+    Ok(())
+}
