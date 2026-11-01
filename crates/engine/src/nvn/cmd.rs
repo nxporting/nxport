@@ -351,6 +351,8 @@ pub enum ModelItem {
     DrawArrays { mode: i32, first: i32, count: i32, base_instance: i32, instances: i32 },
     /// Texture handles read from guest memory when the commands run (the game fills the table later).
     TexturesDeferred { stage: i32, first: i32, count: i32, handles: u64 },
+    /// A compute dispatch with the bound compute program.
+    Dispatch { x: i32, y: i32, z: i32 },
 }
 
 impl ModelItem {
@@ -392,6 +394,7 @@ impl ModelItem {
             ModelItem::DrawArrays { mode, first, count, base_instance, instances } => {
                 Cmd::DrawArraysInstanced { mode, first, count, base_instance, instances, caller: 0 }
             }
+            ModelItem::Dispatch { x, y, z } => Cmd::DispatchCompute { x, y, z },
             _ => return None,
         })
     }

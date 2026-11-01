@@ -24,6 +24,7 @@ const PFN_BIND_UNIFORM_BUFFER: usize = 0x466dfc8;
 const PFN_BIND_TEXTURE: usize = 0x466e008;
 const PFN_BIND_TEXTURES_DEFERRED: usize = 0x466e018;
 const PFN_DRAW_ELEMENTS: usize = 0x466e088;
+const PFN_DISPATCH_COMPUTE: usize = 0x466e0e8;
 const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
@@ -305,6 +306,14 @@ impl Port {
     }
 
     /// nvnCommandBufferResetCounter.
+    /// nvnCommandBufferDispatchCompute (natively a native dispatch).
+    pub(super) unsafe fn dispatch(&mut self, cmd: usize, x: i32, y: i32, z: i32) {
+        if self.native {
+            return self.push(cmd, crate::nvn::cmd::ModelItem::Dispatch { x, y, z });
+        }
+        self.call(self.pfn(PFN_DISPATCH_COMPUTE), &[cmd as u64, x as u64, y as u64, z as u64]);
+    }
+
     pub(super) unsafe fn reset_counter(&mut self, cmd: usize, counter: i32) {
         if self.native {
             return self.push(cmd, crate::nvn::cmd::ModelItem::ResetCounter(counter));

@@ -620,6 +620,14 @@ pub unsafe extern "C" fn on_gfx_draw_indexed(g: usize, topology: u32, format: u3
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn on_gfx_dispatch(g: usize, x: i32, y: i32, z: i32) -> u32 {
+    primitive(|p| {
+        vfx::dispatch(p, g, x, y, z);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn on_gfx_draw(g: usize, topology: u32, count: u32, first: u32) -> u32 {
     primitive(|p| {
         vfx::draw_plain(p, g, topology, count, first);
@@ -1448,6 +1456,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         gfx!(0x302e0, crate::hle!(on_gfx_storage_buffer(_, _, _, _, _)), "nn::gfx SetUnorderedAccessBuffer");
         gfx!(0x7650a4, crate::hle!(on_gfx_vertex_buffer(_, _, _, _, _)), "nn::gfx SetVertexBuffer");
         gfx!(0x2f86c, crate::hle!(on_gfx_draw_indexed(_, _, _, _, _, _)), "nn::gfx DrawIndexed");
+        gfx!(0x2f7a0, crate::hle!(on_gfx_dispatch(_, _, _, _)), "nn::gfx Dispatch");
         gfx!(0x2f7b4, crate::hle!(on_gfx_draw(_, _, _, _)), "nn::gfx Draw");
         gfx!(0x2f804, crate::hle!(on_gfx_draw_instanced(_, _, _, _, _, _)), "nn::gfx Draw instanced");
         gfx!(0x74ee70, crate::hle!(on_gfx_texture(_, _, _, _, _)), "nn::gfx SetTextureAndSampler");
@@ -1525,7 +1534,7 @@ unsafe fn hook(
         println!("[!] {what} hook not installed: main+{site_off:#x} = {actual:#010x}");
         return;
     }
-    let wrap = mem_space.make_code_block(20) as usize;
+    let wrap = mem_space.make_code_block(22) as usize;
     let b = |from: usize, to: usize, link: bool| -> Option<u32> {
         let d = to as i64 - from as i64;
         (d.abs() < 1 << 27).then(|| (if link { 0x9400_0000 } else { 0x1400_0000 }) | ((d >> 2) as u32 & 0x03ff_ffff))
@@ -1534,14 +1543,29 @@ unsafe fn hook(
     let (Some(to_wrap), Some(call_pre), Some(call_body), Some(call_post), Some(back)) = (
         b(site as usize, wrap, false),
         b(at(6), pre, true),
-        b(at(12), at(18), true),
-        b(at(13), post, true),
-        b(at(19), site as usize + 4, false),
+        b(at(12), at(20), true),
+        b(at(14), post, true),
+        b(at(21), site as usize + 4, false),
     ) else {
         println!("[!] {what} hook not installed: wrapper out of branch range");
         return;
     };
-    let code: [u32; 20] = [
+    // The displaced instruction runs at at(20): an adrp is re-encoded for the page it named.
+    let displaced = if instruction & 0x9f00_0000 == 0x9000_0000 {
+        let imm = (((instruction >> 5) & 0x7ffff) << 2 | (instruction >> 29) & 3) as i64;
+        let imm = (imm << 43) >> 43;
+        let page = ((site as usize & !0xfff) as i64).wrapping_add(imm << 12);
+        let delta = (page - (at(20) & !0xfff) as i64) >> 12;
+        if delta.abs() >= 1 << 20 {
+            println!("[!] {what} hook not installed: adrp out of range");
+            return;
+        }
+        let d = delta as u32;
+        (instruction & 0x9f00_001f) | (d & 3) << 29 | ((d >> 2) & 0x7ffff) << 5
+    } else {
+        instruction
+    };
+    let code: [u32; 22] = [
         0xa9ba7bfd,  // 0: stp x29, x30, [sp, #-0x60]!
         0x910003fd,  // 1: mov x29, sp
         0xa90107e0,  // 2: stp x0, x1, [sp, #0x10]
@@ -1549,19 +1573,21 @@ unsafe fn hook(
         0xa90317e4,  // 4: stp x4, x5, [sp, #0x30]
         0xa9041fe6,  // 5: stp x6, x7, [sp, #0x40]
         call_pre,    // 6: bl pre
-        0x35000120,  // 7: cbnz w0, 16 (handled)
+        0x35000160,  // 7: cbnz w0, 18 (handled)
         0xa9441fe6,  // 8: ldp x6, x7, [sp, #0x40]
         0xa94317e4,  // 9: ldp x4, x5, [sp, #0x30]
         0xa9420fe2,  // 10: ldp x2, x3, [sp, #0x20]
         0xa94107e0,  // 11: ldp x0, x1, [sp, #0x10]
-        call_body,   // 12: bl 18 (the function)
-        call_post,   // 13: bl post
-        0xa8c67bfd,  // 14: ldp x29, x30, [sp], #0x60
-        0xd65f03c0,  // 15: ret
+        call_body,   // 12: bl 20 (the function)
+        0xf9000be0,  // 13: str x0, [sp, #0x10] (its result, kept across post)
+        call_post,   // 14: bl post
+        0xf9400be0,  // 15: ldr x0, [sp, #0x10]
         0xa8c67bfd,  // 16: ldp x29, x30, [sp], #0x60
         0xd65f03c0,  // 17: ret
-        instruction, // 18: the displaced instruction
-        back,        // 19: b site+4
+        0xa8c67bfd,  // 18: ldp x29, x30, [sp], #0x60
+        0xd65f03c0,  // 19: ret
+        displaced,   // 20: the displaced instruction
+        back,        // 21: b site+4
     ];
     let w = wrap as *mut u32;
     for (k, c) in code.iter().enumerate() {
