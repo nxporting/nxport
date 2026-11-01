@@ -83,7 +83,10 @@ static SAVE_LOCK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 thread_local! {
     static RECORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WATCHER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The watcher's last faulting page and how many times in a row (fault).
+    static REPEATS: std::cell::Cell<(usize, u32)> = const { std::cell::Cell::new((0, 0)) };
 }
+static STUCK_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Marks this thread as the one that completes submits (inflight.rs): it never waits for a submit to complete.
 pub(super) fn watcher_thread() {
@@ -375,6 +378,31 @@ pub(super) unsafe fn fault(addr: usize) -> bool {
         set_prot(addr & !(PAGE - 1), PAGE, true);
         crate::guest::dirty_track::handle_fault(addr);
     }
+    // Backstop: the watcher faulting on one page over and over (a page left read-only that nothing here holds, which the
+    // write tracking takes for one already opened) opens it, once reported.
+    if !handled && enabled() && WATCHER.with(|w| w.get()) {
+        let page = addr & !(PAGE - 1);
+        let n = REPEATS.with(|r| {
+            let (p, n) = r.get();
+            let n = if p == page { n + 1 } else { 1 };
+            r.set((page, n));
+            n
+        });
+        if n >= 64 {
+            if !STUCK_REPORTED.swap(true, Ordering::Relaxed) {
+                let gen = ACTIVE.load(Ordering::Acquire);
+                eprintln!(
+                    "[vk-guard] the watcher's write to {addr:#x} faulted {n} times on a page nothing holds (old table {}, hot {}, hot held {}): opened",
+                    find(&TABLES[(gen + 1) & 1], addr).is_some(),
+                    hot(addr, 1),
+                    HOT_HELD.load(Ordering::Acquire)
+                );
+            }
+            REPEATS.with(|r| r.set((0, 0)));
+            set_prot(page, PAGE, true);
+            return true;
+        }
+    }
     handled
 }
 
@@ -407,7 +435,11 @@ unsafe fn fault_held(addr: usize) -> bool {
         // Possibly a hot page held while a submit is recorded too: opened for the backend's threads as below. Left
         // read-only, the watcher's write-back faulted until the recording ended, and the recording was waiting for the
         // watcher (three submits in flight): the game hung.
-        hot_fault(addr);
+        // The previous generation's ranges were all released at the rebuild: a page of one still read-only (a reprotect
+        // that raced a release) is opened, else every write to it faulted forever.
+        if !hot_fault(addr) {
+            set_prot(addr & !(PAGE - 1), PAGE, true);
+        }
         crate::guest::dirty_track::handle_fault(addr);
         return true;
     }
@@ -477,9 +509,15 @@ pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
             let _ = crate::os::protect(page, PAGE, crate::os::Prot::ReadWrite);
         }
         std::ptr::copy_nonoverlapping(src.add(at - addr), at as *mut u8, n);
-        // Unless a fault released it meanwhile (it stays open then, as release_slot left it).
+        // Unless a fault released it meanwhile (it stays open then, as release_slot left it). A release between the
+        // check and the mprotect (release_slot marks the slot, then opens the page) is seen after it: the page is opened
+        // again. Left read-only with the slot released, no rebuild opened it, and once no table held it every write to
+        // it faulted forever (the watcher's next write-back copy spun, the game stopped).
         if held && holds(at) {
             let _ = crate::os::protect(page, PAGE, crate::os::Prot::Read);
+            if !holds(at) {
+                set_prot(page, PAGE, true);
+            }
         }
         at += n;
     }
@@ -564,6 +602,10 @@ pub(super) fn protect(fence: u64) {
     for (i, &(a, b, _)) in ranges.iter().enumerate() {
         if !unsafe { set_prot(a, b - a, false) } {
             t.released[i].store(1, Ordering::Release);
+        } else if t.released[i].load(Ordering::Acquire) != 0 {
+            // A fault released it before this mprotect (a page already read-only for the write tracking or a hot
+            // hold faults as soon as the table is published): open again, as release_slot left it.
+            unsafe { set_prot(a, b - a, true) };
         }
         pages += (b - a) / PAGE;
     }
