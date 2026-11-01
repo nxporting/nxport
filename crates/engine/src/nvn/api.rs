@@ -2130,6 +2130,10 @@ impl RecordedCommandList {
                         for i in &m.items {
                             match i {
                                 crate::nvn::cmd::ModelItem::Unit { list, .. } => calls.push(*list),
+                                crate::nvn::cmd::ModelItem::UpdateUniform { addr, offset, data } => {
+                                    let a = (*addr as i64 + *offset as i64) as u64;
+                                    ranges.push((a, a + data.len() as u64));
+                                }
                                 crate::nvn::cmd::ModelItem::ReportCounter { counter, addr } if *addr > 0x10000 => {
                                     ranges.push((*addr, *addr + 16));
                                     if *counter == 1 {

@@ -331,6 +331,8 @@ pub enum ModelItem {
     Program { program: usize, stages: i32 },
     /// Fixed-function state words as nn::gfx's state objects bind them.
     Fixed(FixedState),
+    /// Bytes written into a uniform buffer in stream order.
+    UpdateUniform { addr: u64, offset: isize, data: Vec<u8> },
     RenderEnable(bool),
     PointSize(f32),
     PrimitiveRestart { enable: bool, index: u32 },
@@ -365,6 +367,7 @@ impl ModelItem {
             ModelItem::VertexStreams(ref v) => Cmd::BindVertexStreamState(v.clone()),
             ModelItem::Program { program, stages } => Cmd::BindProgram { program, stages },
             ModelItem::Fixed(f) => f.cmd(),
+            ModelItem::UpdateUniform { addr, offset, ref data } => Cmd::UpdateUniformBuffer { addr, offset, data: data.clone() },
             ModelItem::RenderEnable(e) => Cmd::SetRenderEnable(e),
             ModelItem::PointSize(s) => Cmd::SetPointSize(s),
             ModelItem::PrimitiveRestart { enable, index } => Cmd::SetPrimitiveRestart { enable, index },

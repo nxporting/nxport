@@ -2981,18 +2981,7 @@ impl Gfx {
                         st.storage_buffers[*stage as usize][*index as usize] = (*addr, *size);
                     }
                 }
-                Cmd::UpdateUniformBuffer { addr, offset, data } => {
-                    if *addr > 0x10000 && !data.is_empty() {
-                        let dest = (*addr as isize + *offset) as *mut u8;
-                        std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
-                        // Plan-side copies and encode-side copies overlapping the written range are stale now.
-                        let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
-                        st.plan_ubo.invalidate(lo, hi);
-                        st.cx.ubo_copies.invalidate(lo, hi);
-                        st.ubo_plan_epoch += 1;
-                        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                Cmd::UpdateUniformBuffer { addr, offset, data } => update_uniform(st, *addr, *offset, data),
                 Cmd::BindVertexAttribState(attribs) => {
                     st.vertex_attribs = *attribs;
                 }
@@ -3178,6 +3167,7 @@ impl Gfx {
                             ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
                             ModelItem::Targets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
                             ModelItem::Fixed(f) => apply_fixed(st, *f),
+                            ModelItem::UpdateUniform { addr, offset, data } => update_uniform(st, *addr, *offset, data),
                             ModelItem::PointSize(sz) => st.point_size = *sz,
                             ModelItem::PrimitiveRestart { enable, index } => st.prim_restart = enable.then_some(*index),
                             ModelItem::Barrier(bits) => {
@@ -8448,5 +8438,18 @@ fn apply_fixed(st: &mut State, f: crate::nvn::cmd::FixedState) {
         FixedState::PolygonOffset { factor, units, clamp } => st.polygon_offset = (factor, units, clamp),
         FixedState::Multisample(v) => st.multisample = v,
         FixedState::DepthClamp(v) => st.depth_clamp = v,
+    }
+}
+
+unsafe fn update_uniform(st: &mut State, addr: u64, offset: isize, data: &[u8]) {
+    if addr > 0x10000 && !data.is_empty() {
+        let dest = (addr as isize + offset) as *mut u8;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
+        // Plan-side copies and encode-side copies overlapping the written range are stale now.
+        let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
+        st.plan_ubo.invalidate(lo, hi);
+        st.cx.ubo_copies.invalidate(lo, hi);
+        st.ubo_plan_epoch += 1;
+        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
     }
 }

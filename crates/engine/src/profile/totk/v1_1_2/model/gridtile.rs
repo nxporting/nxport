@@ -29,6 +29,10 @@ unsafe fn tiled_caching(p: &mut Port, w: usize, on: bool) {
         return;
     }
     let cmd = p.m.r64(w + 0xb8) as u64;
+    // Natively nothing: the executor has no tiled caching (Metal's tile memory is not configured by the game).
+    if p.native {
+        return;
+    }
     if !on {
         p.call(p.pfn(PFN_SET_TILED_CACHE_ACTION), &[cmd, 2]);
         return;

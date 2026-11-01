@@ -28,6 +28,7 @@ const PFN_DRAW_ELEMENTS_BASE_VERTEX: usize = 0x466e090;
 const PFN_DRAW_ELEMENTS_INSTANCED: usize = 0x466e0a0;
 const PFN_BIND_PROGRAM: usize = 0x466dfb0;
 const PFN_CLEAR_COLOR: usize = 0x466e0c8;
+const PFN_UPDATE_UNIFORM_BUFFER: usize = 0x466e228;
 const PFN_SET_POINT_SIZE: usize = 0x466e198;
 const PFN_SET_LINE_WIDTH: usize = 0x466e1a0;
 const PFN_SET_PRIMITIVE_RESTART: usize = 0x466e050;
@@ -239,6 +240,19 @@ impl Port {
     /// A fixed-function state as a native item (callers record the NVN commands when not native).
     pub(super) unsafe fn fixed(&mut self, cmd: usize, f: crate::nvn::cmd::FixedState) {
         self.push(cmd, crate::nvn::cmd::ModelItem::Fixed(f));
+    }
+
+    /// nvnCommandBufferUpdateUniformBuffer(buffer `addr`, `offset`, `size` bytes from `data`).
+    pub(super) unsafe fn update_uniform(&mut self, cmd: usize, addr: u64, buffer_size: u64, offset: i64, size: usize, data: usize) {
+        if self.native {
+            let data = if data == 0 || size == 0 || size > 0x10000 {
+                Vec::new()
+            } else {
+                (0..size).map(|i| self.m.r8(data + i)).collect()
+            };
+            return self.push(cmd, crate::nvn::cmd::ModelItem::UpdateUniform { addr, offset: offset as isize, data });
+        }
+        self.call(self.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, addr, buffer_size, offset as u64, size as u64, data as u64]);
     }
 
     /// nvnCommandBufferSetPointSize.
@@ -810,6 +824,19 @@ impl Port {
     /// then the polygon offset (factor, units, clamp).
     #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn polygon_state(&mut self, cmd: u64, cull: u64, front: u64, mode: u64, enables: u64, offset: [f32; 3]) {
+        if self.native {
+            use crate::nvn::state::*;
+            let mut poly = 0u32;
+            let pp = &mut poly as *mut u32 as *mut PolygonState;
+            hle_nvnPolygonStateSetCullFace(pp, cull as i32);
+            hle_nvnPolygonStateSetFrontFace(pp, front as i32);
+            hle_nvnPolygonStateSetPolygonMode(pp, mode as i32);
+            hle_nvnPolygonStateSetPolygonOffsetEnables(pp, enables as i32);
+            use crate::nvn::cmd::FixedState;
+            self.fixed(cmd as usize, FixedState::Polygon(poly & 0xFF));
+            let [factor, units, clamp] = offset;
+            return self.fixed(cmd as usize, FixedState::PolygonOffset { factor, units, clamp });
+        }
         let mut poly = [0u64; 1];
         let pp = poly.as_mut_ptr() as u64;
         self.query(self.pfn(PFN_POLYGON_STATE_SET_CULL_FACE), &[pp, cull]);
