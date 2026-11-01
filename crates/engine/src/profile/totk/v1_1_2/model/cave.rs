@@ -5,7 +5,6 @@
 
 use super::draw::{load_resource, Port, R};
 
-const PFN_UPDATE_UNIFORM_BUFFER: usize = 0x466e228;
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
 const DEVICE_HOLDER: usize = 0x462bbe8;
@@ -231,13 +230,13 @@ unsafe fn instances(
             let mat = p.m.i32(rec);
             if last_mat != mat {
                 let src = (p.m.r64(this + 0x18) as i64 + mat as i64 * 0x100) as u64;
-                p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x390) as u64, p.m.r64(this + 0x308) as u64, 0, 0x100, src]);
+                p.update_uniform(cmd as usize, p.m.r64(this + 0x390) as u64, p.m.r64(this + 0x308) as u64, 0, 0x100, src as usize);
                 last_mat = mat;
             }
             let xf = p.m.i32(rec + 4);
             if last_xf != xf {
                 let src = (p.m.r64(this + 0x38) as i64 + xf as i64 * 0x30) as u64;
-                p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x450) as u64, p.m.r64(this + 0x3c8) as u64, 0, 0x30, src]);
+                p.update_uniform(cmd as usize, p.m.r64(this + 0x450) as u64, p.m.r64(this + 0x3c8) as u64, 0, 0x30, src as usize);
                 last_xf = xf;
             }
             let (first, last) = (p.m.i32(rec + 0x14), p.m.i32(rec + 0x18));
@@ -246,7 +245,7 @@ unsafe fn instances(
             }
             for m in first..last {
                 let src = (p.m.r64(this + 0x518) as i64 + m as i64 * 0x30) as u64;
-                p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x510) as u64, p.m.r64(this + 0x488) as u64, 0, 0x30, src]);
+                p.update_uniform(cmd as usize, p.m.r64(this + 0x510) as u64, p.m.r64(this + 0x488) as u64, 0, 0x30, src as usize);
                 let mesh = p.m.r64(this + 0xac8) + m as usize * 0x18;
                 let k = p.m.i32(mesh + 0xc) as i64 + mode as i64 * 5 + (cascade != 0) as i64 * 0x1e;
                 if p.m.r8((p.base as i64 + MESH_DRAWS as i64 + k) as usize) == 0 {
@@ -667,21 +666,18 @@ unsafe fn chunks(p: &mut Port, this: usize, arg: usize, mode: u32, info: usize) 
                     u = 0;
                 }
                 let src = (p.m.r64(this + 0x110) as i64 + u as i32 as i64 * 0x30) as u64;
-                p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x350) as u64, p.m.r64(this + 0x2c8) as u64, 0, 0x30, src]);
+                p.update_uniform(cmd as usize, p.m.r64(this + 0x350) as u64, p.m.r64(this + 0x2c8) as u64, 0, 0x30, src as usize);
                 last1 = p.m.i32(ent + 8);
             }
             if last2 != last1 {
                 let block = p.m.r64(p.m.r64(p.m.r64(ent)) + 8);
                 let x = p.m.r64(block + 0xa0) as u64;
                 let size = ((x as i64) >> 27) as u64 & !0x1f;
-                p.call(
-                    p.pfn(PFN_UPDATE_UNIFORM_BUFFER),
-                    &[cmd as u64, p.m.r64(this + 0x410) as u64, p.m.r64(this + 0x388) as u64, 0, size, block as u64 + (x & 0xffff_ffff)],
-                );
+                p.update_uniform(cmd as usize, p.m.r64(this + 0x410) as u64, p.m.r64(this + 0x388) as u64, 0, size as usize, (block as u64 + (x & 0xffff_ffff)) as usize);
                 last2 = p.m.i32(ent + 8);
             }
             let src = (p.m.r64(this + 0x78) as i64 + idx * 0x60) as u64;
-            p.call(p.pfn(PFN_UPDATE_UNIFORM_BUFFER), &[cmd as u64, p.m.r64(this + 0x4d0) as u64, p.m.r64(this + 0x448) as u64, 0, 0x60, src]);
+            p.update_uniform(cmd as usize, p.m.r64(this + 0x4d0) as u64, p.m.r64(this + 0x448) as u64, 0, 0x60, src as usize);
             // The worker's vertex buffer over the record's storage.
             let k3 = if p.m.r32(this + 0x598) > core3 { core3 } else { 0 };
             let vb = (p.m.r64(this + 0x5a0) as i64 + k3 as i32 as i64 * 0x340) as usize;

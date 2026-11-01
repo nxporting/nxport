@@ -143,6 +143,7 @@ fn flatten(
                                 Cmd::BindProgram { .. } => "nvnCommandBufferBindProgram",
                                 Cmd::SetRenderEnable(_) => "nvnCommandBufferSetRenderEnable",
                                 Cmd::SetPointSize(_) => "nvnCommandBufferSetPointSize",
+                                Cmd::UpdateUniformBuffer { .. } => "nvnCommandBufferUpdateUniformBuffer",
                                 Cmd::BindBlendState(_) => "nvnCommandBufferBindBlendState",
                                 Cmd::BindColorState(_) => "nvnCommandBufferBindColorState",
                                 Cmd::BindChannelMaskState(_) => "nvnCommandBufferBindChannelMaskState",

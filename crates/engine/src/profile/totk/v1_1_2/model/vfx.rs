@@ -11,8 +11,6 @@ const PFN_BIND_CHANNEL_MASK_STATE: usize = 0x466df78;
 const PFN_BIND_COLOR_STATE: usize = 0x466df80;
 const PFN_SET_BLEND_COLOR: usize = 0x466e190;
 const PFN_DEVICE_GET_TEXTURE_HANDLE: usize = 0x466d428;
-const PFN_BIND_VERTEX_ATTRIB_STATE: usize = 0x466dfa0;
-const PFN_BIND_VERTEX_STREAM_STATE: usize = 0x466dfa8;
 const GOT_DRAW_ARRAYS_INSTANCED: usize = 0x4613b88;
 const GOT_BIND_DEPTH_STENCIL_STATE: usize = 0x4613bb8;
 const GOT_SET_STENCIL_VALUE_MASK: usize = 0x4613bc0;
@@ -974,6 +972,10 @@ unsafe fn channel_mask(p: &mut Port, g: usize, mask: u32) {
         p.query(p.pfn(PFN_SET_CHANNEL_MASK), &[sp, t, (m & 1) as u64, ((m >> 1) & 1) as u64, ((m >> 2) & 1) as u64, ((m >> 3) & 1) as u64]);
     }
     let cmd = p.m.r64(g + 0xb0) as u64;
+    if p.native {
+        p.fixed(cmd as usize, crate::nvn::cmd::FixedState::ChannelMask(st[0] as u32));
+        return;
+    }
     p.call(p.pfn(PFN_BIND_CHANNEL_MASK_STATE_), &[cmd, sp]);
     let _ = &mut st;
 }
@@ -1083,7 +1085,6 @@ const TICK: usize = 0x2b15810;
 const EXTRA_BLOCK_SLOTS: usize = 0x37ff704;
 const DRAW_HOOK: usize = 0x74b610;
 const VIEW_SCALE: usize = 0x463a288;
-const PFN_BIND_TEXTURES_DEFERRED: usize = 0x466e018;
 
 /// Copies `n` bytes into the overlay (and keeps them for the data check when `check`).
 unsafe fn copy_into(p: &mut Port, dst: usize, src: &[u8], check: bool) {
@@ -1432,7 +1433,7 @@ unsafe fn bind_deferred(p: &mut Port, w: usize, table: usize, index: i32, mask: 
         let b = (mask >> (k * 8)) & 0xff;
         if b != 0xff {
             p.m.w::<u8>(cmd + 0x10, 1);
-            p.call(p.pfn(PFN_BIND_TEXTURES_DEFERRED), &[cmd as u64, st, b as u8 as i8 as i64 as u64, 1, e]);
+            p.bind_textures_deferred(cmd, st as i32, b as u8 as i8 as i32, 1, e);
         }
     }
     true
@@ -1811,7 +1812,6 @@ unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32,
 }
 
 const PFN_BUFFER_GET_ADDRESS: usize = 0x466d818;
-const PFN_BIND_VERTEX_BUFFER_: usize = 0x466dfb8;
 const PROGRAM_BLOCK: usize = 0x4632818;
 const DECAL_SYSTEM: usize = 0x462ade0;
 const CASCADE_DECALS: usize = 0xa56740;
@@ -2259,8 +2259,8 @@ unsafe fn screen_pass(p: &mut Port, r: usize, w: usize, view: u32, pass: usize, 
 /// Vertex attribute / stream states (16 each) and the vertex buffers of a list (count at `list`, buffers at +8:
 /// address of buffer +8, size +0x118).
 unsafe fn vertex_buffers(p: &mut Port, cmd: usize, attribs: usize, streams: usize, list: usize) {
-    p.call(p.pfn(PFN_BIND_VERTEX_ATTRIB_STATE), &[cmd as u64, 0x10, attribs as u64]);
-    p.call(p.pfn(PFN_BIND_VERTEX_STREAM_STATE), &[cmd as u64, 0x10, streams as u64]);
+    p.bind_vertex_attribs(cmd, 0x10, attribs);
+    p.bind_vertex_streams(cmd, 0x10, streams);
     let bufs = p.m.r64(list + 8);
     for i in 0..p.m.r32(list) as usize {
         let b = p.m.r64(bufs + i * 8);
@@ -2269,7 +2269,7 @@ unsafe fn vertex_buffers(p: &mut Port, cmd: usize, attribs: usize, streams: usiz
         }
         let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[(b + 8) as u64]);
         p.m.w::<u8>(cmd + 0x10, 1);
-        p.call(p.pfn(PFN_BIND_VERTEX_BUFFER_), &[cmd as u64, i as u64, addr, p.m.r32(b + 0x118) as u64]);
+        p.bind_vertex_buffer(cmd, i as i32, addr, p.m.r32(b + 0x118) as usize);
     }
 }
 
