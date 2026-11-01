@@ -468,6 +468,14 @@ pub(crate) struct DriverCbKey {
     base_instance: i32,
     sb_descs: Vec<(usize, u64, u64)>,
     limits: [u32; 18],
+    heap: Option<HeapCb>,
+}
+
+/// A heap stage's driver cbuf part (metal/tex_heap.rs): heap addresses, (handle index, handle) per sampled texture.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct HeapCb {
+    addresses: [u64; super::tex_heap::HEAPS],
+    handles: smallvec::SmallVec<[(u16, u32); 8]>,
 }
 
 /// Registers a new pipeline with the batcher (metal/batch.rs) when its draws can be batched: both stages have batched
@@ -2659,6 +2667,11 @@ impl Gfx {
                 return Some(s.clone());
             }
         }
+        if let Some((_, s)) = sh.sampler_states.iter().find(|(d, _)| *d == desc) {
+            let s = s.clone();
+            sh.samplers.insert(id, (desc, s.clone()));
+            return Some(s);
+        }
         let sd = MTLSamplerDescriptor::new();
         let (min_linear, mip) = match desc.min_filter {
             0 => (false, MTLSamplerMipFilter::NotMipmapped),
@@ -2703,6 +2716,7 @@ impl Gfx {
         sd.setSupportArgumentBuffers(true); // samplers 16+ are passed by handle (see bind_extra_samplers)
         let s = self.device.newSamplerStateWithDescriptor(&sd)?;
         sh.samplers.insert(id, (desc, s.clone()));
+        sh.sampler_states.push((desc, s.clone()));
         Some(s)
     }
 
@@ -3211,7 +3225,7 @@ impl Gfx {
         };
         // Consecutive dispatches (and tiny compute draws) share one compute encoder: serial dispatch keeps their order
         // and makes each see the previous one's writes; any other op ends it (issuer CJoin / CLinger).
-        st.issuer.push(super::issuer::Op::CJoin(cur_cb, cached.entry.clone()));
+        st.issuer.push(super::issuer::Op::CJoin(cur_cb, cached.entry.clone(), cached.texture_heap));
         self.note_encoder(
             st,
             format!(
@@ -3228,6 +3242,54 @@ impl Gfx {
         }
         if let Some((buf, off)) = st.cx.arena.alloc(&self.device, &sup) {
             st.issuer.push(super::issuer::Op::CBuf(buf, off, 0));
+        }
+        // Descriptor heaps (metal/tex_heap.rs): slots, handles and heap addresses in the driver cbuf, residency.
+        if cached.texture_heap {
+            let frame = super::presented_frames();
+            st.cx.heaps.sweep(frame);
+            let mut used = 1u32 << super::tex_heap::SAMPLERS;
+            for tb in &cached.textures {
+                let (tex, sampler_id) = self.bound_texture(st, STAGE_COMPUTE, tb);
+                let Some(tex) = tex.or_else(|| self.dummy_texture(&mut st.tc, &tb.ty)) else {
+                    continue;
+                };
+                let sampler = {
+                    let mut g = shm.lock().unwrap();
+                    sampler_id
+                        .and_then(|id| self.sampler_state(&mut g, id))
+                        .or_else(|| self.default_sampler(&mut g))
+                };
+                let Some(ss) = sampler.and_then(|s| st.cx.heaps.sampler(&self.device, &s, frame))
+                else {
+                    continue;
+                };
+                let Some((ts, root)) = st.cx.heaps.texture(&self.device, tb.declared, &tex, frame)
+                else {
+                    continue;
+                };
+                let o = super::tex_heap::HANDLES + tb.handle_index as usize * 4;
+                c0[o..o + 4].copy_from_slice(&(ts | ss << 20).to_le_bytes());
+                used |= 1 << tb.declared.min(super::tex_heap::SAMPLERS - 1);
+                for t in [&tex, &root] {
+                    st.issuer.push(super::issuer::Op::CUse(
+                        ProtocolObject::<dyn objc2_metal::MTLResource>::from_retained(t.clone()),
+                        objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample,
+                    ));
+                }
+            }
+            for h in 0..super::tex_heap::HEAPS {
+                if used >> h & 1 == 0 {
+                    continue;
+                }
+                let o = super::tex_heap::ADDRESSES + h * 8;
+                c0[o..o + 8].copy_from_slice(&st.cx.heaps.address(h).to_le_bytes());
+                if let Some(b) = st.cx.heaps.buffer(h).cloned() {
+                    st.issuer.push(super::issuer::Op::CUse(
+                        ProtocolObject::<dyn objc2_metal::MTLResource>::from_retained(b),
+                        objc2_metal::MTLResourceUsage::Read,
+                    ));
+                }
+            }
         }
         // Bound size of each constant buffer the kernel reads, in the driver cbuf (see CBUF_LIMITS_OFFSET).
         if c0.len() >= CBUF_LIMITS_OFFSET + 18 * 4 {
@@ -3249,7 +3311,10 @@ impl Gfx {
                     .copy_from_slice(&l.to_le_bytes());
             }
         }
-        if cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0) {
+        // Heap stages read the driver cbuf at binding 17 (sass2spv: a parameter of its own when the stage binds it elsewhere).
+        if (cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0))
+            || (cached.texture_heap && !cached.cbuffers.iter().any(|&(b, _)| b == 17))
+        {
             if let Some((buf, off)) = st.cx.arena.alloc(&self.device, &c0) {
                 st.issuer.push(super::issuer::Op::CBuf(buf, off, 17));
             }
@@ -3362,6 +3427,9 @@ impl Gfx {
         let mut extra_samplers: Vec<(usize, Retained<ProtocolObject<dyn MTLSamplerState>>)> =
             Vec::new();
         for tb in &cached.textures {
+            if cached.texture_heap {
+                break;
+            }
             let (tex, sampler_id) = self.bound_texture(st, STAGE_COMPUTE, tb);
             let Some(tex) = tex.or_else(|| self.dummy_texture(&mut st.tc, &tb.ty)) else {
                 continue;
@@ -3640,6 +3708,15 @@ impl Gfx {
         resolved: &ResolvedTex,
     ) -> Option<TinyPlan> {
         if !tiny_enabled() {
+            return None;
+        }
+        // Kernels that sample through the descriptor heaps gave varying results from one run of the same frame to
+        // the next (TotK's atmosphere LUT kernel s_ec8a96bdd2f04e50: whole-frame tint flashes) while their render
+        // versions are stable; a kernel with the same texture from the heap and a fixed sampler was stable too.
+        // Cause not found: these draws render.
+        if (vs.texture_heap && !vs.textures.is_empty())
+            || fs.is_some_and(|f| f.texture_heap && !f.textures.is_empty())
+        {
             return None;
         }
         let r = self.tiny_plan_inner(st, vs, fs, call, mode, color_texs, depth_tex, resolved);
@@ -4289,6 +4366,7 @@ impl Gfx {
         enc.push(Op::CJoin(
             tp.cb.clone(),
             format!("tiny {} / {}", vs.entry, fs.entry),
+            !rec.uses.is_empty(),
         ));
         enc.push(Op::CPipeline(kv));
         if crate::settings::get().log.log_tiny_bufs {
@@ -4311,6 +4389,9 @@ impl Gfx {
         }
         if let Some((b, off)) = &ib {
             enc.push(Op::CBuf(b.clone(), *off, 26));
+        }
+        for x in &rec.uses {
+            enc.push(Op::CUse(x.clone(), objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample));
         }
         for (t, i) in rec.vtex {
             enc.push(Op::CTex(t, i));
@@ -6210,6 +6291,60 @@ impl Gfx {
                     }
                 }
             }
+            // Descriptor heaps (metal/tex_heap.rs): each sampled texture's and sampler's slot, the handles and heap
+            // addresses for the driver cbuf, residency once per encoder.
+            let heap_cb = if cached.texture_heap {
+                let frame = super::presented_frames();
+                env.cx.heaps.sweep(frame);
+                let mut hc = HeapCb::default();
+                let mut used = 1u32 << super::tex_heap::SAMPLERS;
+                for tb in &cached.textures {
+                    let Some(r) = resolved_tex
+                        .iter()
+                        .find(|r| r.0 == nvn_stage && r.1 == tb.binding)
+                    else {
+                        continue;
+                    };
+                    let Some(tex) = r.2.clone() else { continue };
+                    let sampler = r
+                        .3
+                        .and_then(|id| self.sampler_state(&mut *env.sh, id))
+                        .or_else(|| self.default_sampler(&mut *env.sh));
+                    let Some(ss) =
+                        sampler.and_then(|s| env.cx.heaps.sampler(&self.device, &s, frame))
+                    else {
+                        continue;
+                    };
+                    let Some((ts, root)) =
+                        env.cx.heaps.texture(&self.device, tb.declared, &tex, frame)
+                    else {
+                        continue;
+                    };
+                    hc.handles.push((tb.handle_index as u16, ts | ss << 20));
+                    used |= 1 << tb.declared.min(super::tex_heap::SAMPLERS - 1);
+                    for t in [&tex, &root] {
+                        env.cx.ec.heap_use(
+                            &enc,
+                            ProtocolObject::<dyn objc2_metal::MTLResource>::from_ref(&**t),
+                        );
+                    }
+                }
+                for h in 0..super::tex_heap::HEAPS {
+                    if used >> h & 1 == 0 {
+                        continue;
+                    }
+                    hc.addresses[h] = env.cx.heaps.address(h);
+                    if let Some(b) = env.cx.heaps.buffer(h).cloned() {
+                        env.cx.ec.heap_use(
+                            &enc,
+                            ProtocolObject::<dyn objc2_metal::MTLResource>::from_ref(&*b),
+                        );
+                    }
+                }
+                Some(hc)
+            } else {
+                None
+            };
             // Bound size of each constant buffer the stage reads (see CBUF_LIMITS_OFFSET).
             let mut limits = [4096u32; 18];
             for &(binding, slot) in &cached.cbuffers {
@@ -6241,6 +6376,16 @@ impl Gfx {
                     c0[CBUF_LIMITS_OFFSET + b * 4..CBUF_LIMITS_OFFSET + b * 4 + 4]
                         .copy_from_slice(&l.to_le_bytes());
                 }
+                if let Some(hc) = &heap_cb {
+                    for (h, a) in hc.addresses.iter().enumerate() {
+                        let o = super::tex_heap::ADDRESSES + h * 8;
+                        c0[o..o + 8].copy_from_slice(&a.to_le_bytes());
+                    }
+                    for &(i, v) in &hc.handles {
+                        let o = super::tex_heap::HANDLES + i as usize * 4;
+                        c0[o..o + 4].copy_from_slice(&v.to_le_bytes());
+                    }
+                }
             };
             // One copy per distinct content: consecutive draws mostly share it (--no-driver-cb-memo: a copy per draw).
             let dkey = DriverCbKey {
@@ -6248,6 +6393,7 @@ impl Gfx {
                 base_instance: base_instance_value,
                 sb_descs: sb_descs.clone(),
                 limits,
+                heap: heap_cb.clone(),
             };
             let driver_cb =
                 |env: &mut EncodeEnv| -> Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)> {
@@ -6261,7 +6407,9 @@ impl Gfx {
                     env.cx.driver_cb_memo[si] = Some((dkey.clone(), x.clone()));
                     Some(x)
                 };
-            if cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0) {
+            if (cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0))
+                || (cached.texture_heap && !cached.cbuffers.iter().any(|&(b, _)| b == 17))
+            {
                 if let Some((buf, off)) = driver_cb(env) {
                     if is_vs {
                         env.cx.ec.vbuf(&enc, &buf, off, 17);
@@ -6551,6 +6699,9 @@ impl Gfx {
                     p.handle(nvn_stage, k as i32), sampler_id, src, nvn.unwrap_or_default()
                 ));
                 }
+                if cached.texture_heap {
+                    continue;
+                }
                 let sampler = sampler_id
                     .and_then(|id| self.sampler_state(&mut *env.sh, id))
                     .or_else(|| self.default_sampler(&mut *env.sh));
@@ -6821,6 +6972,7 @@ impl Gfx {
             let mut res = Vec::new();
             let v = compose_args(vs, &rec.vbufs, &rec.vtex, &rec.vsamp, zero.as_deref(), &mut res);
             let f = fs.map_or_else(Vec::new, |f| compose_args(f, &rec.fbufs, &rec.ftex, &rec.fsamp, zero.as_deref(), &mut res));
+            res.extend(rec.uses.into_iter().map(|x| (x, objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample)));
             enc.push(Op::ArgStructs { v: v.into(), f: f.into(), res });
         }
         if details {
@@ -7621,6 +7773,8 @@ pub(crate) struct EncCache {
     /// Argument-buffer draws (--arg-buffers): resource bindings are recorded for the draw's structs; fixed-function
     /// state is set as usual.
     pub(super) bind_rec: Option<TinyRec>,
+    /// Resources made resident for heap reads in this encoder (Op::Use), by pointer.
+    heap_used: rustc_hash::FxHashSet<usize>,
 }
 
 /// Bindings encode_draw made for a draw that runs as compute: (object, offset / none, index) per stage.
@@ -7632,6 +7786,8 @@ pub(super) struct TinyRec {
     pub(super) ftex: Vec<(Tex, usize)>,
     pub(super) vsamp: Vec<(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize)>,
     pub(super) fsamp: Vec<(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize)>,
+    /// Resources the stages read through descriptor heaps (made resident, not bound).
+    pub(super) uses: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLResource>>>,
 }
 
 impl Default for EncCache {
@@ -7656,6 +7812,7 @@ impl Default for EncCache {
             fsamp: [usize::MAX; 32],
             rec: None,
             bind_rec: None,
+            heap_used: Default::default(),
         }
     }
 }
@@ -7668,6 +7825,20 @@ fn ptr_of<T: ?Sized>(o: Option<&T>) -> usize {
 }
 
 impl EncCache {
+    /// Makes a resource read through the descriptor heaps resident (once per encoder; recorded for kernels).
+    pub(super) unsafe fn heap_use(
+        &mut self,
+        enc: &Enc,
+        r: &ProtocolObject<dyn objc2_metal::MTLResource>,
+    ) {
+        if let Some(rec) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
+            rec.uses.push(r.retain());
+            return;
+        }
+        if self.heap_used.insert(ptr_of(Some(r))) {
+            enc.push(Op::Use(r.retain(), objc2_metal::MTLResourceUsage::Read | objc2_metal::MTLResourceUsage::Sample));
+        }
+    }
     pub(super) unsafe fn pipeline(
         &mut self,
         enc: &Enc,

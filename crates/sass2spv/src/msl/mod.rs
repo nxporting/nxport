@@ -696,6 +696,23 @@ pub fn scalar_array_in_vec4(b: &BufferDefinition, field: usize) -> bool {
     b.layout == BufferLayout::Std140 && f.ty.has(A::ARRAY) && (f.ty & !A::ARRAY).count() == A::SCALAR
 }
 
+/// The descriptor heap a texture of this type is read from: its MTLTextureType value.
+fn heap_type_index(ty: SamplerType) -> R<u32> {
+    let (array, ms) = (ty.has(SamplerType::ARRAY), ty.has(SamplerType::MULTISAMPLE));
+    Ok(match ty.base() {
+        SamplerType::TEXTURE_1D => array as u32,
+        SamplerType::TEXTURE_2D => match (array, ms) {
+            (false, false) => 2,
+            (true, false) => 3,
+            (false, true) => 4,
+            (true, true) => 8,
+        },
+        SamplerType::TEXTURE_CUBE => 5 + array as u32,
+        SamplerType::TEXTURE_3D => 7,
+        t => unsupported!("texture type {}", t.0),
+    })
+}
+
 pub fn texture_type(ty: SamplerType, component: &str, access: Option<&str>) -> R<String> {
     let base = match ty.base() {
         SamplerType::TEXTURE_1D => {
@@ -902,15 +919,20 @@ fn io_declarations(c: &mut Ctx) -> R<IoDecls> {
             let tt = texture_type(t.ty, "float", None)?;
             if main_uses.contains(&Global::Texture(key)) {
                 heap_decls.push(format!(
-                    "{tt} {} = reinterpret_cast<const device NxHeap<{tt}>*>(nx_heaps[0])[nx_handles[{}] & 0xfffff].t;",
-                    t.name, t.handle
+                    "{tt} {} = reinterpret_cast<const device NxHeap<{tt}>*>(nx_heaps[{}])[nx_handles[{}] & 0xfffff].t; // heap texture({})",
+                    t.name,
+                    heap_type_index(t.ty)?,
+                    t.handle,
+                    t.binding
                 ));
                 heap.push((Global::Texture(key), format!("{tt} {}", t.name)));
             }
             if main_uses.contains(&Global::Sampler(key)) {
                 heap_decls.push(format!(
-                    "sampler {}Smplr = reinterpret_cast<const device NxSamplerHeap*>(nx_heaps[1])[nx_handles[{}] >> 20].s;",
-                    t.name, t.handle
+                    "sampler {}Smplr = reinterpret_cast<const device NxSamplerHeap*>(nx_heaps[{}])[nx_handles[{}] >> 20].s;",
+                    t.name,
+                    crate::accessor::TEXTURE_HEAP_SAMPLERS,
+                    t.handle
                 ));
                 heap.push((Global::Sampler(key), format!("sampler {}Smplr", t.name)));
             }

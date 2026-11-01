@@ -45,6 +45,7 @@ pub(crate) use crate::gpu::report_guard;
 pub(crate) mod rt_guard;
 pub mod shader_cache;
 mod tex_backing;
+mod tex_heap;
 mod translated;
 
 use crate::nvn::api::NvnTexture;
@@ -364,6 +365,8 @@ pub(super) struct EncodeCtx {
         usize,
         usize,
     )>,
+    /// Texture and sampler descriptor heaps of this encoding thread (stages built with --texture-heap).
+    pub(super) heaps: tex_heap::TexHeaps,
 }
 
 impl Default for EncodeCtx {
@@ -383,6 +386,7 @@ impl Default for EncodeCtx {
             translated_hist: HashMap::default(),
             driver_cb_memo: [None, None],
             index_memo: None,
+            heaps: Default::default(),
         }
     }
 }
@@ -400,6 +404,9 @@ pub(super) struct SharedCaches {
     pub(super) repack_bytes: usize,
     /// (stage data, cache entry: CachedStage pointer, 'static) -> the stage's cbuf 1.
     pub(super) const_banks: HashMap<(u64, usize), Retained<ProtocolObject<dyn MTLBuffer>>>,
+    /// Every sampler state made, by descriptor: one Metal object per distinct sampler (samplers that can be used
+    /// through argument buffers are a limited device resource, and pool slots repeat descriptors).
+    pub(super) sampler_states: Vec<(crate::nvn::api::SamplerDesc, Retained<ProtocolObject<dyn MTLSamplerState>>)>,
     pub(super) samplers: HashMap<
         i32,
         (
@@ -428,6 +435,7 @@ impl Default for SharedCaches {
             repack_bytes: 0,
             const_banks: HashMap::default(),
             samplers: HashMap::default(),
+            sampler_states: Vec::new(),
             default_sampler: None,
             ds_states: HashMap::default(),
             translated_pipelines: HashMap::default(),

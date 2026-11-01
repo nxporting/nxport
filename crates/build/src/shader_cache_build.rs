@@ -569,6 +569,7 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
         cbext,
         sbro: readonly_sbuffers(&text),
         cl: uses_cbuf_limits(&text),
+        th: text.contains("nx_heaps["),
         tk: tiny.is_some(),
         tkl: tiny.as_deref().and_then(crate::tiny_kernels::implicit_tag),
         tkc: tiny.as_deref().is_some_and(crate::tiny_kernels::applies_clears),
@@ -602,6 +603,9 @@ pub struct StageRecord {
     pub sbro: Vec<u32>,
     #[serde(default)]
     pub cl: bool,
+    /// Reads textures from the descriptor heaps (--texture-heap).
+    #[serde(default)]
+    pub th: bool,
     #[serde(default)]
     pub tk: bool,
     #[serde(default)]
@@ -764,6 +768,9 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
         if r.cl {
             f.push_str("cl\n");
         }
+        if r.th {
+            f.push_str("th\n");
+        }
         // The stage has a compute version (tkv_<entry> / tkf_<entry>).
         // Fragment kernels also list the texture bindings they sample with implicit LOD (exact only for one level).
         if r.tk {
@@ -843,19 +850,21 @@ pub fn build(o: &Options) -> Result<(), String> {
     if o.index_only {
         let mut st: StateFile = serde_json::from_str(&std::fs::read_to_string(&state_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         // Text-derived metadata is recomputed from the MSL the build kept (work/<stem>.metal), so a fix to its analysis
-        // reaches an existing cache without retranslating: the constant-buffer extents (`cx`).
-        let mut ext_by_entry: HashMap<String, BTreeMap<u32, usize>> = HashMap::new();
+        // reaches an existing cache without retranslating: the constant-buffer extents (`cx`), descriptor heap reads
+        // (`th`).
+        let mut ext_by_entry: HashMap<String, (BTreeMap<u32, usize>, bool)> = HashMap::new();
         for m in collect_metal_files(&work) {
             let Ok(text) = std::fs::read_to_string(&m) else { continue };
             let Some(m) = entry_line_re().find(&text) else { continue };
             let Some(name) = m.as_str().split_whitespace().nth(2).map(|n| n.split('(').next().unwrap_or(n).to_string()) else { continue };
-            ext_by_entry.insert(name, cbuf_extents(&text));
+            ext_by_entry.insert(name, (cbuf_extents(&text), text.contains("nx_heaps[")));
         }
         let mut changed = 0;
         for r in &mut st.records {
-            if let Some(ext) = ext_by_entry.get(&r.entry) {
-                if &r.cbext != ext {
+            if let Some((ext, th)) = ext_by_entry.get(&r.entry) {
+                if &r.cbext != ext || r.th != *th {
                     r.cbext = ext.clone();
+                    r.th = *th;
                     changed += 1;
                 }
             }
@@ -863,7 +872,7 @@ pub fn build(o: &Options) -> Result<(), String> {
         if changed > 0 {
             std::fs::write(&state_path, serde_json::to_string(&st).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         }
-        println!("[+] constant-buffer extents recomputed from {} kept MSL files: {} stages changed", ext_by_entry.len(), changed);
+        println!("[+] constant-buffer extents and heap reads recomputed from {} kept MSL files: {} stages changed", ext_by_entry.len(), changed);
         let records: Vec<&StageRecord> = st.records.iter().collect();
         write_index(&out_dir.join("index.txt"), &records).map_err(|e| e.to_string())?;
         println!("[+] wrote {} ({} stages)", out_dir.join("index.txt").display(), records.len());

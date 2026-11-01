@@ -67,6 +67,9 @@ pub struct CachedStage {
     /// The stage clamps computed constant buffer reads to the bound sizes the engine writes into the driver cbuf (index
     /// line `cl`; msl_specialize.bound_cbuf_reads): it needs binding 17 even when it reads nothing else there.
     pub cbuf_limits: bool,
+    /// Sampled textures of the bound texture table come from the descriptor heaps (index line `th`): the engine
+    /// writes heap addresses and handles into the driver cbuf (binding 17) instead of binding textures.
+    pub texture_heap: bool,
     /// The stage has a compute version for the tiny-pass path (index line `tk`): tkv_<entry> for a
     /// vertex stage, tkf_<entry> for a fragment stage.
     pub tiny_kernel: bool,
@@ -179,6 +182,7 @@ fn parse_index(text: &str) -> Index {
                         sbuffers: Vec::new(),
                         sb_readonly: Vec::new(),
                         cbuf_limits: false,
+                        texture_heap: false,
                         tiny_kernel: false,
                         tiny_implicit: None,
                         tiny_clears: false,
@@ -214,6 +218,11 @@ fn parse_index(text: &str) -> Index {
             ["cl"] => {
                 if let Some((.., st)) = cur.as_mut() {
                     st.cbuf_limits = true;
+                }
+            }
+            ["th"] => {
+                if let Some((.., st)) = cur.as_mut() {
+                    st.texture_heap = true;
                 }
             }
             ["tk"] => {
@@ -459,6 +468,9 @@ fn save_runtime_stage(weak: u64, full: u64, st: &CachedStage, msl: &str) {
     }
     if st.cbuf_limits {
         r.push_str("cl\n");
+    }
+    if st.texture_heap {
+        r.push_str("th\n");
     }
     for b in &st.sb_readonly {
         let _ = writeln!(r, "sr {b}");
@@ -738,6 +750,7 @@ pub unsafe fn lookup_or_translate_dynamic(
         sbuffers,
         sb_readonly,
         cbuf_limits,
+        texture_heap: specialized.contains("nx_heaps["),
         tiny_kernel: false,
         tiny_implicit: None,
         tiny_clears: false,
