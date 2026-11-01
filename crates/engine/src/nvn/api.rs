@@ -6320,7 +6320,23 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         let interval = present_interval();
         let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
         let vsync = crate::host::overlay::is_vsync();
-        let frame = if is_stock30 {
+        // Windows: the frame-rate limit paces (vsync only chooses how the swapchain presents). A title whose game time
+        // does not follow real time is also held to its interval: running faster would run it fast.
+        #[cfg(not(nx_native))]
+        let limited = Some({
+            let mut fps = crate::host::live::frame_limit().clamp(30, UNPACED_MAX_FPS as u32);
+            if is_stock30 {
+                fps = 30;
+            } else if !crate::profile::real_time() && interval > 0 {
+                fps = fps.min(60 / interval as u32);
+            }
+            std::time::Duration::from_nanos(1_000_000_000 / fps.max(1) as u64)
+        });
+        #[cfg(nx_native)]
+        let limited: Option<std::time::Duration> = None;
+        let frame = if let Some(f) = limited {
+            f
+        } else if is_stock30 {
             std::time::Duration::from_nanos(1_000_000_000 / 30)
         } else if !vsync {
             // VSync off still stops at UNPACED_MAX_FPS: above the audio renderer's 200 frames a second TotK starts no sounds at

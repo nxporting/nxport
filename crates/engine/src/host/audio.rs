@@ -145,6 +145,11 @@ fn fill(out: &mut [f32]) {
             *o = (*o + s).clamp(-1.0, 1.0);
         }
     }
+    // The volume and mute the window's menu sets (host/live.rs), applied to everything the device plays.
+    let gain = crate::host::live::gain();
+    if gain != 1.0 {
+        out.iter_mut().for_each(|o| *o *= gain);
+    }
 }
 
 fn open_wav() -> Option<Mutex<Wav>> {

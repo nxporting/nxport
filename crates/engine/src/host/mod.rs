@@ -16,3 +16,4 @@ pub mod thread_stats;
 #[cfg(target_os = "macos")]
 pub mod ui;
 pub mod overlay;
+pub mod live;

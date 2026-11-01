@@ -73,9 +73,9 @@ extern "C" {
 #[cfg(nx_runtime)]
 pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     // 1. Game time from real time, and the pacer unlocked; the frame-rate setting caps it while the game runs.
-    if crate::settings::get().totk.v1_1_2.dynamic_fps {
-        frame_time::install(base, mem_space, &SITES);
-    }
+    // Installed whatever the setting: it is switched while the game runs (host/live.rs), and a lifted game keeps the
+    // hooks it was lifted with.
+    frame_time::install(base, mem_space, &SITES);
     #[cfg(nx_native)]
     install_native_hooks(base, mem_space);
 }

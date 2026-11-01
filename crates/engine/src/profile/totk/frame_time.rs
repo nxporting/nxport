@@ -74,6 +74,16 @@ const SAME_FRAME_NS: u64 = 1_000_000;
 
 static LAST_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_STEP: AtomicU32 = AtomicU32::new(0);
+/// Whether the running title has the hooks (installed when it was loaded; a lifted game also had them when lifted).
+static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the game steps by real time now: then it may run at any frame rate without running fast or slow.
+pub fn real_time() -> bool {
+    INSTALLED.load(Ordering::Relaxed) && crate::host::live::real_time_speed()
+}
+
+/// The interval the game picked last (the stock step, with real-time game speed off).
+static LAST_INTERVAL: AtomicU32 = AtomicU32::new(2);
 
 /// Replaces the step the time manager computes from the interval: the real time since the previous frame, clamped.
 pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
@@ -96,6 +106,9 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
         LAST_STEP.store(dt.to_bits(), Ordering::Relaxed);
         dt
     };
+    LAST_INTERVAL.store(interval.max(1) as u32, Ordering::Relaxed);
+    // Real-time game speed off (the menu): the stock step, from the interval the game picked.
+    let dt = if crate::host::live::real_time_speed() { dt } else { interval.max(1) as f32 / 60.0 };
     *((timer + 8) as *mut f32) = dt * 30.0;
     *((timer + 0xc) as *mut f32) = dt;
     // Installing the hook says it is in the code; this says the game calls it (a lifted game calls what it was lifted with).
@@ -108,6 +121,10 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
 /// Replaces the controllers' hold-timer step (frames at 30 fps): the last step time_step took.
 pub unsafe extern "C" fn input_step(dest: usize) {
     if dest == 0 {
+        return;
+    }
+    if !crate::host::live::real_time_speed() {
+        *(dest as *mut f32) = LAST_INTERVAL.load(Ordering::Relaxed) as f32 * 0.5;
         return;
     }
     let dt = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
@@ -194,7 +211,10 @@ unsafe fn install_time_step(base: usize, mem_space: &mut crate::guest::loader::G
 #[cfg(nx_runtime)]
 pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) {
     match install_time_step(base, mem_space, s) {
-        Ok(()) => println!("[+] Game time: each frame steps by the real time since the last one (1/240 to 1/15 s)"),
+        Ok(()) => {
+            INSTALLED.store(true, Ordering::Relaxed);
+            println!("[+] Game time: each frame steps by the real time since the last one (1/240 to 1/15 s)")
+        }
         Err(e) => println!("[!] Game time: {e}; the step stays tied to the present interval"),
     }
     // Both or neither: the lowest interval alone stays vetoed.

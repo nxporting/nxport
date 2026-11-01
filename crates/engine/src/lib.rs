@@ -620,18 +620,18 @@ fn resolve_settings(layers: Vec<settings::SettingsPatch>) -> settings::Settings 
             .chain(user.iter().cloned())
             .chain(layers.iter().cloned()),
     );
-    let game_layers = provisional
-        .files
-        .game_dir
-        .as_deref()
-        .and_then(game::title_id_of)
+    let title_id = provisional.files.game_dir.as_deref().and_then(game::title_id_of);
+    let game_layers = title_id
         .and_then(profile::for_title)
         .map(|p| profile::layers(p, PLATFORM))
         .unwrap_or_default();
+    // What was changed while the game last ran (host/live.rs), above the app's settings.
+    let changed = title_id.and_then(config::game_settings);
     settings::resolve(
         base.into_iter()
             .chain(game_layers)
             .chain(user)
+            .chain(changed)
             .chain(layers),
     )
 }

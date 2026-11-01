@@ -12,8 +12,8 @@ crate::settings::group! {
         /// Workaround: hide HUD capture panes that sample the wrong screen region at shapes other than 16:9 (a ghost
         /// copy of the load screen's heading); their effect is lost there
         hide_hud_captures: bool = true,
-        /// Game time from real time and the frame pacer unlocked (frame_time.rs): the game runs at real speed at any frame
-        /// rate; the frame-rate setting caps it
+        /// Variable frame rate: game time follows the real time each frame took, so the game plays at the right speed at
+        /// any frame rate (off: the console's fixed timing, held to 30 or 60 fps)
         dynamic_fps: bool = true,
     }
 }

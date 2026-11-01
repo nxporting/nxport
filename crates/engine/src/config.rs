@@ -11,6 +11,38 @@ pub fn support_dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/nxport"))
 }
 
+/// The game's own settings: what was changed while it ran (host/live.rs), in its data directory. A layer above the app's
+/// settings (the builder's) and below the command line.
+pub fn game_settings_file(title_id: u64) -> Option<PathBuf> {
+    Some(support_dir()?.join("games").join(format!("{title_id:016x}")).join("settings.toml"))
+}
+
+pub fn game_settings(title_id: u64) -> Option<crate::settings::SettingsPatch> {
+    let file = game_settings_file(title_id)?;
+    if !file.is_file() {
+        return None;
+    }
+    match crate::settings::load_preset(&file) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!("[!] {}: {e}", file.display());
+            None
+        }
+    }
+}
+
+/// Keeps a change made while the game runs in the game's settings file (the running game's; nothing without one).
+#[cfg(nx_runtime)]
+pub fn remember(change: impl FnOnce(&mut crate::settings::SettingsPatch)) {
+    let Some(tid) = crate::game::title_id() else { return };
+    let Some(file) = game_settings_file(tid) else { return };
+    let mut p = game_settings(tid).unwrap_or_default();
+    change(&mut p);
+    if let Err(e) = std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string()).and_then(|_| crate::settings::save_preset(&file, &p)) {
+        eprintln!("[!] settings: {e}");
+    }
+}
+
 /// The settings file an app carries (the builder writes it): in a Windows app folder, beside the program.
 #[cfg(windows)]
 const APP_SETTINGS: &str = "settings.toml";
