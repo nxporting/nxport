@@ -52,7 +52,16 @@ pub struct Host {
     /// Samplers a stage may bind (0: no limit). A stage needing more samples its textures through a sampler table
     /// (properties::sampler_table_plan): Metal without argument buffers (MoltenVK) has 16 per stage.
     pub sampler_slots: u32,
+    /// MSL: sampled textures whose handles are in the bound texture table read their texture and sampler from the
+    /// host's descriptor heaps (TEXTURE_HEAP_* in the driver constant buffer) instead of bound slots.
+    pub texture_heap: bool,
 }
+
+/// Driver constant buffer bytes used with Host::texture_heap: the texture heap's and the sampler heap's GPU addresses
+/// (u64 each), then the stage's bound texture handles as the texture constant buffer has them (one u32 per handle
+/// index).
+pub const TEXTURE_HEAP_ADDRESSES: i32 = 0xd00;
+pub const TEXTURE_HEAP_HANDLES: i32 = 0xd10;
 
 impl Default for Host {
     fn default() -> Self {
@@ -70,6 +79,7 @@ impl Default for Host {
             binding_base: 0,
             fragment_inputs: None,
             sampler_slots: 0,
+            texture_heap: false,
         }
     }
 }

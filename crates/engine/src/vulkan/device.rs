@@ -401,6 +401,7 @@ impl Dev {
                 binding_base: 0,
                 fragment_inputs: None,
                 sampler_slots: 0,
+                texture_heap: false,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
