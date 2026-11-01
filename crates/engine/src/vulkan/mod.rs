@@ -36,6 +36,8 @@ use crate::gpu::{Backend, GpuOnlyTexture, ShaderStage, Texels};
 
 pub struct Vulkan {
     ctx: Mutex<Option<exec::Ctx>>,
+    /// Programs set (set_program) and not yet taken into the context: (program, stages as Ctx::set_program takes them).
+    programs: Mutex<Vec<(usize, Vec<(u64, u64, u64)>)>>,
     serial: AtomicU64,
     frames: AtomicU64,
     /// Start of the current 50-frame interval of the fps line.
@@ -94,6 +96,7 @@ pub fn timing() -> (f64, f64, f64, u64) {
 
 pub static VULKAN: Vulkan = Vulkan {
     ctx: Mutex::new(None),
+    programs: Mutex::new(Vec::new()),
     serial: AtomicU64::new(0),
     frames: AtomicU64::new(0),
     interval: Mutex::new(None),
@@ -107,10 +110,27 @@ pub fn init(validation: bool) -> Result<(), String> {
     Ok(())
 }
 
+impl Vulkan {
+    /// The programs set since the context last took them, in the order they were set (under the context's lock).
+    fn take_programs(&self, c: &mut exec::Ctx) {
+        let set = std::mem::take(&mut *self.programs.lock().unwrap());
+        for (program, stages) in set {
+            c.set_program(program, stages);
+        }
+    }
+}
+
 impl Backend for Vulkan {
     fn set_program(&self, program: usize, stages: &[ShaderStage]) {
-        if let Some(c) = self.ctx.lock().unwrap().as_mut() {
-            c.set_program(program, stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect());
+        // Queued, and taken in by the next submit, which is when it took effect anyway: the game's threads set programs
+        // in gameplay too (TotK on Great Sky Island, now and then on a ModuleSystemWorker), and waiting for the context
+        // waited out the whole recording of a submit (~5 ms).
+        let stages = stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect();
+        self.programs.lock().unwrap().push((program, stages));
+        if let Ok(mut g) = self.ctx.try_lock() {
+            if let Some(c) = g.as_mut() {
+                self.take_programs(c);
+            }
         }
     }
 
@@ -152,6 +172,7 @@ impl Backend for Vulkan {
         let serial = self.serial.load(Ordering::Acquire) + 1;
         match g.as_mut() {
             Some(c) => unsafe {
+                self.take_programs(c);
                 guard::hold_hot();
                 c.submit(lists, serial, &mut submit_lists, !guard_on);
                 guard::release_hot();
