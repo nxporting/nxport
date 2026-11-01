@@ -317,6 +317,63 @@ pub(super) unsafe fn pass_event(p: &Port, v: usize) -> R<()> {
     }
 }
 
+/// main+0x9314b4(renderer, w, args, view, out, user): a model pass through the renderer's cache of recorded passes
+/// (+0x38 entries of 0xa8 bytes, +0x40 used, +0x30 capacity): an entry whose 0x70 argument bytes match (CRC-32 at
+/// +0x88, inverted) calls its recorded lists (+0x98, +0x90 of them, put in order of their +0x60 first, in place) and
+/// gives its +0xa0 in `out`; else the pass is drawn between the view's listener events.
+pub(super) unsafe fn cached_model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: usize, out: usize, user: u64) -> R<()> {
+    if p.m.i32(r + 0x2c) < 1 || p.m.r32(r + 0x14) & p.m.r32(a) == 0 {
+        return Ok(());
+    }
+    if p.m.r8(v + 0xb) & 1 != 0 {
+        return Ok(());
+    }
+    let n = p.m.i32(r + 0x40);
+    if n > 0 {
+        let mut crc = 0xffff_ffffu32;
+        for k in 0..14 {
+            crc = core::arch::aarch64::__crc32d(crc, p.m.r64(a + k * 8) as u64);
+        }
+        let cap = p.m.r32(r + 0x30);
+        let entries = p.m.r64(r + 0x38);
+        for k in 0..n as u32 {
+            let e = entries + if cap <= k { 0 } else { k } as usize * 0xa8;
+            if p.m.r32(e + 0x88) != !crc || !(0..14).all(|j| p.m.r64(e + j * 8) == p.m.r64(a + j * 8)) {
+                continue;
+            }
+            let count = p.m.i32(e + 0x90);
+            if count < 1 {
+                return Ok(());
+            }
+            let lists = p.m.r64(e + 0x98);
+            if count >= 2 {
+                let mut l: Vec<(i32, usize)> = (0..count as usize)
+                    .map(|j| {
+                        let x = p.m.r64(lists + j * 8);
+                        (p.m.i32(x + 0x60), x)
+                    })
+                    .collect();
+                l.sort_by_key(|x| x.0);
+                for (j, x) in l.iter().enumerate() {
+                    p.m.w::<u64>(lists + j * 8, x.1 as u64);
+                }
+            }
+            let cmd = p.m.r64(w + 0xb8);
+            for j in 0..count as usize {
+                let x = p.m.r64(lists + j * 8);
+                p.call_unit(cmd, x + 0x48);
+            }
+            if out != 0 {
+                p.m.w::<u32>(out, p.m.r32(e + 0xa0));
+            }
+            return Ok(());
+        }
+    }
+    pass_event(p, v)?;
+    model_pass(p, r, w, a, v, 0, -1, 0, out, user)?;
+    pass_event(p, v)
+}
+
 /// main+0x931960(renderer, w, args, view, range, flag, out, user): one model pass. Builds the draw context (0x1c0
 /// bytes) the render list reads from the pass arguments and the view (+0x558 color, +0x5d0 mask, per-view entries at
 /// +0x18), the line width and point size, then draws the renderer's list range. Only the plain list variant

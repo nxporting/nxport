@@ -529,6 +529,12 @@ pub unsafe extern "C" fn on_target_barriers(rb: usize, w: usize) -> u32 {
     })
 }
 
+/// main+0x9314b4(renderer, w, args, view, out, user): a model pass through the renderer's recorded-pass cache.
+#[no_mangle]
+pub unsafe extern "C" fn on_cached_model_pass(r: usize, w: usize, a: usize, v: usize, out: usize, user: u64) -> u32 {
+    primitive(|p| render_list::cached_model_pass(p, r, w, a, v, out, user).map(|_| 1))
+}
+
 /// main+0x9c7e04 / main+0x9c7c80: the frame's default texture and uniform bindings (binds.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_default_textures(settings: usize, w: usize) -> u32 {
@@ -1467,6 +1473,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, PROGRAM_APPLY.0, PROGRAM_APPLY.1, pre, post, "Program apply");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block(_, _, _, _, _))) as usize;
         hook(base, mem_space, PROGRAM_BLOCK.0, PROGRAM_BLOCK.1, pre, post, "Program block");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_cached_model_pass(_, _, _, _, _, _))) as usize;
+        hook(base, mem_space, 0x9314b4, 0xd102c3ff, pre, post, "Cached model pass");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_model_pass(_, _, _, _, _, _, _, _))) as usize;
         hook(base, mem_space, 0x931960, 0xa9ba7bfd, pre, post, "Model pass");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_block_bind(_, _, _, _))) as usize;
