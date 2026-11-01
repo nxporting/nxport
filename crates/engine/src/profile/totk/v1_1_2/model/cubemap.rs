@@ -83,3 +83,23 @@ pub(super) unsafe fn transformed_quad(p: &mut Port, w: usize, prog: usize, tex: 
     stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1e8, w);
     Ok(())
 }
+
+/// main+0x876e28(w, tex, m, rows, a, b, value in s0): a transformed full-screen copy of `tex` with the copy program for
+/// the texture's kind (+0x3a 9: array) and for `value` -1 or not: uniforms 3 (`a` as float), 17 (`b`) and 2 (`value`),
+/// then main+0x877418 with v = (1, 1, 1, 1).
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn copy_quad(p: &mut Port, w: usize, tex: usize, m: usize, rows: usize, a: i32, b: u32, value: f32) -> R<()> {
+    let off = if p.m.r16(tex + 0x3a) != 9 { 0x148 } else { 0x150 };
+    let slot = if value == -1.0 { 0x10 } else { 0x20 };
+    let h = p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.base + PROGRAM_HOLDER)) + 0x10) + off);
+    let prog = p.m.r64(p.m.r64(h + 8) + slot);
+    program_apply(p, prog, w)?;
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    set_uniform(p, prog, w, 3, &(a as f32).to_le_bytes());
+    set_uniform(p, prog, w, 17, &b.to_le_bytes());
+    set_uniform(p, prog, w, 2, &value.to_le_bytes());
+    let ones = [1.0f32; 4];
+    transformed_quad(p, w, prog, tex, m, rows, ones.as_ptr() as usize)
+}
