@@ -231,16 +231,22 @@ pub struct Ctx {
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
     pub(super) restart_memo: rustc_hash::FxHashMap<(i32, i32, usize, i32, u32, i32), Option<(vk::Buffer, u64, u32)>>,
-    /// Uniform buffer copies of this submit by (host address, length, epoch); the epoch advances at every write of guest
-    /// memory by this submit's commands (inline uniform updates, reports).
-    pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize, u64), (vk::Buffer, u64)>,
-    /// Uniform buffer bindings this submit copied, by (guest address, bound size, extent read, epoch): (buffer, offset,
-    /// range, bound size). Cleared when the submit's commands add a range they write (it may then be bound in place).
-    pub(super) ubo_memo: rustc_hash::FxHashMap<(u64, usize, i32, u64), Option<(vk::Buffer, u64, u64, usize)>>,
+    /// Uniform buffer copies of this submit by (host address, length): (epoch made, buffer, offset). Good while no write
+    /// of this submit's commands since overlapped them (ubo_unchanged).
+    pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize), (u64, vk::Buffer, u64)>,
+    /// Uniform buffer bindings this submit copied, by (guest address, bound size, extent read): (epoch made, host
+    /// address, length, (buffer, offset, range, bound size)), good as ubo_copies. Cleared when the submit's commands add
+    /// a range they write (it may then be bound in place).
+    pub(super) ubo_memo: rustc_hash::FxHashMap<(u64, usize, i32), UboMemo>,
     /// Advanced when `ubo_memo` is emptied; per uniform buffer slot, its last entry (generation, key, value).
     ubo_memo_gen: u64,
     #[allow(clippy::type_complexity)]
-    ubo_slot_memo: Box<[[(u64, (u64, usize, i32, u64), Option<(vk::Buffer, u64, u64, usize)>); draw::UBO_MEMO]; 6]>,
+    ubo_slot_memo: Box<[[(u64, (u64, usize, i32), UboMemo); draw::UBO_MEMO]; 6]>,
+    /// The epoch of the last write by this submit's commands to each 4 KiB block of guest memory (inline uniform
+    /// updates, reports), and of the last write at all. The epoch used to key the copies: every inline update (TotK
+    /// interleaves them with its draws) made every draw copy its uniform buffers again, ~2.4 ms a frame.
+    ubo_writes: rustc_hash::FxHashMap<usize, u64>,
+    ubo_last_write: u64,
     /// Vertex and index data found in the device copies (vcache.rs) in this epoch is used again unchecked; a new one
     /// begins with each submit and when the submit's commands add a range they write.
     pub(super) cached_epoch: u64,
@@ -309,12 +315,18 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
 }
 
 /// A report at guest `addr` is about to be written, beginning uniform epoch `epoch` (record::overwriting).
-unsafe fn report_overwriting(epoch: u64, addr: u64) {
+/// The host address a report at `addr` writes (16 bytes; 0 if none).
+unsafe fn report_overwriting(epoch: u64, addr: u64) -> usize {
     let a = crate::nvn::api::translate_virtual(addr as usize);
     if a >= 0x10000 {
         record::overwriting(epoch, a, crate::gpu::report_guard::engine_ptr(a) as *const u8, 16);
+        return a;
     }
+    0
 }
+
+/// A uniform buffer memo entry (Ctx::ubo_memo): epoch made, host address, length, binding.
+pub(super) type UboMemo = (u64, usize, usize, Option<(vk::Buffer, u64, u64, usize)>);
 
 /// What a command buffer has bound: the graphics pipeline, the vertex buffers (NVN's 16 streams and
 /// pipelines::ZERO_STREAM) and the index buffer (descriptor sets: vk-record, record::Sets). The driver charges as much
@@ -409,6 +421,26 @@ impl Ctx {
             tex.record_copy(dev, b, o, dst, dst_off, n as u64);
             true
         })
+    }
+
+    /// This submit's commands wrote host memory [a, a+len) at the current uniform epoch.
+    pub(super) fn ubo_wrote(&mut self, a: usize, len: usize) {
+        if a == 0 || len == 0 {
+            return;
+        }
+        for block in a >> 12..=(a + len - 1) >> 12 {
+            self.ubo_writes.insert(block, self.ubo_epoch);
+        }
+        self.ubo_last_write = self.ubo_epoch;
+    }
+
+    /// Whether no write of this submit's commands touched host memory [a, a+len) since uniform epoch `made` (a copy made
+    /// then holds what a copy now would).
+    pub(super) fn ubo_unchanged(&self, a: usize, len: usize, made: u64) -> bool {
+        if made >= self.ubo_last_write || len == 0 {
+            return true;
+        }
+        (a >> 12..=(a + len - 1) >> 12).all(|block| self.ubo_writes.get(&block).is_none_or(|&e| e <= made))
     }
 
     /// Guest memory [a, b) is written by this submit's commands: what was checked against it is checked again.
@@ -625,7 +657,7 @@ impl Ctx {
             bindings: Default::default(),
             bindings_gen: 1,
             ubo_memo_gen: 1,
-            ubo_slot_memo: Box::new([[(0, (0, 0, 0, 0), None); draw::UBO_MEMO]; 6]),
+            ubo_slot_memo: Box::new([[(0, (0, 0, 0), (0, 0, 0, None)); draw::UBO_MEMO]; 6]),
             tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
             max_indices: Default::default(),
             vb_memo: Default::default(),
@@ -650,6 +682,8 @@ impl Ctx {
             restart_memo: Default::default(),
             ubo_copies: Default::default(),
             ubo_memo: Default::default(),
+            ubo_writes: Default::default(),
+            ubo_last_write: 0,
             driver_copies: Default::default(),
             cached_epoch: 1,
             ubo_epoch: 0,
@@ -883,6 +917,8 @@ impl Ctx {
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
+        self.ubo_writes.clear();
+        self.ubo_last_write = 0;
         self.ubo_memo.clear();
         self.ubo_memo_gen += 1;
         self.driver_copies.clear();
@@ -1231,6 +1267,7 @@ impl Ctx {
                 self.ubo_epoch += 1;
                 if a > 0x10000 {
                     record::overwriting(self.ubo_epoch, a, a as *const u8, data.len());
+                    self.ubo_wrote(a, data.len());
                     std::ptr::copy_nonoverlapping(data.as_ptr(), a as *mut u8, data.len());
                 }
             }
@@ -1254,7 +1291,8 @@ impl Ctx {
             }
             Cmd::ReportValue { value, addr } => {
                 self.ubo_epoch += 1;
-                report_overwriting(self.ubo_epoch, *addr);
+                let a = report_overwriting(self.ubo_epoch, *addr);
+                self.ubo_wrote(a, 16);
                 write_report(*addr, *value as u64, true)
             }
             Cmd::ReportCounter { counter, addr } => {
@@ -1265,7 +1303,8 @@ impl Ctx {
                 } else {
                     let v = if *counter == 0 { crate::clock::now_ns() } else { 0 };
                     self.ubo_epoch += 1;
-                    report_overwriting(self.ubo_epoch, *addr);
+                    let a = report_overwriting(self.ubo_epoch, *addr);
+                    self.ubo_wrote(a, 16);
                     write_report(*addr, v, *counter != 0xF);
                 }
             }
