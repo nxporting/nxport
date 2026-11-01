@@ -2,6 +2,7 @@
 // each call of the game's function and compares the NVN commands the game then records with the prediction; calls
 // that reach a helper the port does not implement yet are counted by that helper.
 
+mod binds;
 mod cave;
 mod cells;
 mod dispatch;
@@ -469,6 +470,17 @@ pub unsafe extern "C" fn on_program_block_at(prog: usize, w: usize, index: u32, 
 #[no_mangle]
 pub unsafe extern "C" fn on_program_texture(prog: usize, w: usize, slot: u32, tex: usize) -> u32 {
     primitive(|p| vfx::program_texture(p, prog, w, slot, tex).map(|b| b as u32))
+}
+
+/// main+0x9c7e04 / main+0x9c7c80: the frame's default texture and uniform bindings (binds.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_default_textures(settings: usize, w: usize) -> u32 {
+    primitive(|p| binds::default_textures(p, settings, w).map(|_| 1))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_default_uniforms(settings: usize, w: usize) -> u32 {
+    primitive(|p| binds::default_uniforms(p, settings, w).map(|_| 1))
 }
 
 #[no_mangle]
@@ -1387,6 +1399,10 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         hook(base, mem_space, PROGRAM_APPLY.0, PROGRAM_APPLY.1, pre, post, "Program apply");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block(_, _, _, _, _))) as usize;
         hook(base, mem_space, PROGRAM_BLOCK.0, PROGRAM_BLOCK.1, pre, post, "Program block");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_textures(_, _))) as usize;
+        hook(base, mem_space, 0x9c7e04, 0xa9ba7bfd, pre, post, "Default textures");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_default_uniforms(_, _))) as usize;
+        hook(base, mem_space, 0x9c7c80, 0xa9ba7bfd, pre, post, "Default uniforms");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_texture(_, _, _, _))) as usize;
         hook(base, mem_space, PROGRAM_TEXTURE.0, PROGRAM_TEXTURE.1, pre, post, "Program texture");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_program_block_at(_, _, _, _, _))) as usize;
