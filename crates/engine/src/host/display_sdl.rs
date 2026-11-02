@@ -51,8 +51,6 @@ struct Host {
     pads: Vec<(Gamepad, Rumbler)>,
     /// The size to go back to from full screen.
     windowed_size: (u32, u32),
-    video: sdl3::VideoSubsystem,
-    settings: Option<crate::host::settings_win::SettingsWindow>,
 }
 
 /// Create the window and run SDL's event loop. Must be called on the process main thread.
@@ -96,7 +94,7 @@ pub fn run_main_thread() -> ! {
     let mut window = window;
     let _ = window.set_size(w as u32, h as u32);
     let mut pump = sdl.event_pump().unwrap_or_else(|e| fail("SDL events", &e));
-    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32), video: video.clone(), settings: None };
+    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32) };
 
     WINDOW_UP.store(true, Ordering::Release);
     println!("[+] Display: window up ({w}x{h}); presenting guest frames");
@@ -111,12 +109,8 @@ pub fn run_main_thread() -> ! {
             host.event(e);
         }
         host.poll_controllers();
-        if let Some(w) = host.settings.as_mut() {
-            w.frame();
-        }
         match menu::take_request() {
             Some(menu::Request::FullScreen) => host.toggle_fullscreen(),
-            Some(menu::Request::Settings) => host.open_settings(),
             Some(menu::Request::Size(h)) => host.set_window_height(h),
             None => {}
         }
@@ -155,26 +149,7 @@ fn quit() -> ! {
 }
 
 impl Host {
-    /// Opens the settings window, or raises it.
-    fn open_settings(&mut self) {
-        match &mut self.settings {
-            Some(w) => w.raise(),
-            None => match crate::host::settings_win::SettingsWindow::open(&self.video) {
-                Ok(w) => self.settings = Some(w),
-                Err(e) => println!("[!] Settings window: {e}"),
-            },
-        }
-    }
-
     fn event(&mut self, e: Event) {
-        // The settings window's events are its own; closing it leaves the game running.
-        if let Some(w) = self.settings.as_mut().filter(|w| e.get_window_id() == Some(w.id())) {
-            match e {
-                Event::Window { win_event: WindowEvent::CloseRequested, .. } => self.settings = None,
-                e => w.event(&e),
-            }
-            return;
-        }
         match e {
             Event::Quit { .. } => quit(),
             Event::Window { win_event, .. } => match win_event {

@@ -1,4 +1,4 @@
-// Dear ImGui windows on Windows (the builder's, the game's settings window): SDL3 (the SDL3.dll the engine links against, vendor/SDL3) with Dear ImGui drawn
+// Dear ImGui windows on Windows (the builder's): SDL3 (the SDL3.dll the engine links against, vendor/SDL3) with Dear ImGui drawn
 // through SDL_Renderer. The renderer and the input translation are here rather than in a backend crate: those build
 // SDL from source with CMake, which a Windows machine building nxport need not have. Textures (the font atlas pages)
 // are created and updated as Dear ImGui requests them, as the Metal renderer on macOS does (host/ui/renderer.rs).
@@ -16,7 +16,7 @@ use sdl3::sys::pixels::{SDL_FColor, SDL_PIXELFORMAT_RGBA32};
 use sdl3::sys::render::{self as sr, SDL_Renderer, SDL_Texture, SDL_TEXTUREACCESS_STATIC};
 use sdl3::sys::rect::SDL_Rect;
 
-pub use crate::settings::edit::{put_path, request_path, take_path, take_request, PathKind};
+pub use crate::settings::edit::{heading, note, put_path, request_path, take_path, take_request, PathKind, ACCENT, ERROR, MUTED, OK, WARN};
 
 pub type Frame = Box<dyn FnMut(&imgui::Ui) -> bool>;
 
@@ -38,77 +38,10 @@ pub fn new_context() -> imgui::Context {
     let mut ctx = imgui::Context::create();
     let _ = ctx.set_ini_filename(None::<String>);
     load_font(&mut ctx, 15.0);
-    theme(ctx.style_mut());
+    crate::settings::edit::theme(ctx.style_mut());
     ctx
 }
 
-/// The accent colour (buttons, checks, progress): nxport's blue.
-pub const ACCENT: [f32; 4] = [0.31, 0.56, 0.98, 1.0];
-/// Secondary text: hints and explanations under a heading or a field.
-pub const MUTED: [f32; 4] = [0.62, 0.64, 0.70, 1.0];
-pub const WARN: [f32; 4] = [1.0, 0.72, 0.30, 1.0];
-pub const ERROR: [f32; 4] = [1.0, 0.45, 0.40, 1.0];
-pub const OK: [f32; 4] = [0.45, 0.85, 0.55, 1.0];
-
-/// One look for the builder and the game's settings window: dark neutral panels, rounded frames, the accent colour on
-/// what can be acted on.
-fn theme(s: &mut imgui::Style) {
-    use imgui::StyleColor as C;
-    s.set_window_padding([18.0, 16.0]);
-    s.set_frame_padding([10.0, 6.0]);
-    s.set_item_spacing([10.0, 9.0]);
-    s.set_window_rounding(0.0);
-    s.set_child_rounding(8.0);
-    s.set_frame_rounding(6.0);
-    s.set_popup_rounding(6.0);
-    s.set_grab_rounding(6.0);
-    s.set_scrollbar_rounding(6.0);
-    s.set_tab_rounding(6.0);
-    s.set_child_border_size(1.0);
-    s.set_frame_border_size(0.0);
-    let [r, g, b, _] = ACCENT;
-    let a = |alpha: f32| [r, g, b, alpha];
-    let grey = |v: f32| [v, v, v * 1.08, 1.0];
-    for (c, v) in [
-        (C::Text, [0.92, 0.93, 0.95, 1.0]),
-        (C::TextDisabled, MUTED),
-        (C::WindowBg, grey(0.090)),
-        (C::ChildBg, grey(0.120)),
-        (C::PopupBg, grey(0.130)),
-        (C::Border, grey(0.20)),
-        (C::FrameBg, grey(0.170)),
-        (C::FrameBgHovered, grey(0.215)),
-        (C::FrameBgActive, grey(0.245)),
-        (C::Button, a(0.80)),
-        (C::ButtonHovered, a(0.95)),
-        (C::ButtonActive, a(1.0)),
-        (C::Header, grey(0.170)),
-        (C::HeaderHovered, grey(0.215)),
-        (C::HeaderActive, grey(0.245)),
-        (C::CheckMark, ACCENT),
-        (C::SliderGrab, a(0.85)),
-        (C::SliderGrabActive, ACCENT),
-        (C::Separator, grey(0.20)),
-        (C::PlotHistogram, ACCENT),
-        (C::TextSelectedBg, a(0.35)),
-        (C::ScrollbarBg, grey(0.090)),
-        (C::ScrollbarGrab, grey(0.22)),
-    ] {
-        s.set_color(c, v);
-    }
-}
-
-/// A section title: larger than the text under it.
-pub fn heading(ui: &imgui::Ui, text: &str) {
-    let _f = ui.push_font_with_size(None, 20.0);
-    ui.text(text);
-}
-
-/// An explanation under a heading or a field, wrapped to the window.
-pub fn note(ui: &imgui::Ui, text: &str) {
-    let _c = ui.push_style_color(imgui::StyleColor::Text, MUTED);
-    ui.text_wrapped(text);
-}
 
 /// Dear ImGui draw data on an SDL_Renderer.
 pub struct Renderer {

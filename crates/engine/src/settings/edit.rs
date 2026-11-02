@@ -99,29 +99,8 @@ impl<G: EditGroup> Section for G {
     }
     fn edit(&mut self, ui: &Ui, audience: Audience) -> bool {
         let _id = ui.push_id(G::HEADING);
-        HEADING.with(|h| h.set(G::HEADING));
         self.edit_fields(ui, audience)
     }
-}
-
-thread_local! {
-    /// The heading of the group being edited (for `live`).
-    static HEADING: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
-    /// Where settings change while the game runs (its settings window): whether (group heading, field) does; the others
-    /// are marked as taking effect after a restart. None (the builder): no marks.
-    static LIVE: std::cell::Cell<Option<fn(&str, &str) -> bool>> = const { std::cell::Cell::new(None) };
-    /// A field that takes effect after a restart was changed.
-    static RESTART: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Marks the fields `live` says do not change while the game runs (the game's settings window).
-pub fn set_live(live: fn(&str, &str) -> bool) {
-    LIVE.with(|l| l.set(Some(live)));
-}
-
-/// Whether a field that takes effect after a restart was changed since the last call.
-pub fn take_restart_needed() -> bool {
-    RESTART.with(|r| r.replace(false))
 }
 
 /// A printf format for a number field (constant and valid; Dear ImGui checks it against the value type).
@@ -731,18 +710,6 @@ pub fn field<T: Edit>(ui: &Ui, value: &mut T, name: &str, docs: &[&str]) -> bool
     if !docs.is_empty() && ui.is_item_hovered() {
         ui.tooltip_text(docs.iter().map(|d| d.trim()).collect::<Vec<_>>().join("\n"));
     }
-    if let Some(live) = LIVE.with(|l| l.get()) {
-        if !live(HEADING.with(|h| h.get()), name) {
-            if changed {
-                RESTART.with(|r| r.set(true));
-            }
-            ui.same_line();
-            ui.text_disabled("(restart)");
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Takes effect the next time the game starts");
-            }
-        }
-    }
     changed
 }
 
@@ -757,4 +724,71 @@ mod pick_tests {
         assert_eq!(take_path("pick_test"), Some(PathBuf::from("C:/game")));
         assert_eq!(take_path("pick_test"), None);
     }
+}
+
+/// The accent colour (buttons, checks, progress): nxport's blue.
+pub const ACCENT: [f32; 4] = [0.31, 0.56, 0.98, 1.0];
+/// Secondary text: hints and explanations under a heading or a field.
+pub const MUTED: [f32; 4] = [0.62, 0.64, 0.70, 1.0];
+pub const WARN: [f32; 4] = [1.0, 0.72, 0.30, 1.0];
+pub const ERROR: [f32; 4] = [1.0, 0.45, 0.40, 1.0];
+pub const OK: [f32; 4] = [0.45, 0.85, 0.55, 1.0];
+
+/// The builder's look: dark neutral panels, square edges, the accent colour on what can be acted on.
+pub fn theme(s: &mut imgui::Style) {
+    use imgui::StyleColor as C;
+    s.set_window_padding([18.0, 16.0]);
+    s.set_frame_padding([10.0, 6.0]);
+    s.set_item_spacing([10.0, 9.0]);
+    s.set_window_rounding(0.0);
+    s.set_child_rounding(0.0);
+    s.set_frame_rounding(0.0);
+    s.set_popup_rounding(0.0);
+    s.set_grab_rounding(0.0);
+    s.set_scrollbar_rounding(0.0);
+    s.set_tab_rounding(0.0);
+    s.set_child_border_size(1.0);
+    s.set_frame_border_size(0.0);
+    let [r, g, b, _] = ACCENT;
+    let a = |alpha: f32| [r, g, b, alpha];
+    let grey = |v: f32| [v, v, v * 1.08, 1.0];
+    for (c, v) in [
+        (C::Text, [0.92, 0.93, 0.95, 1.0]),
+        (C::TextDisabled, MUTED),
+        (C::WindowBg, grey(0.090)),
+        (C::ChildBg, grey(0.120)),
+        (C::PopupBg, grey(0.130)),
+        (C::Border, grey(0.20)),
+        (C::FrameBg, grey(0.170)),
+        (C::FrameBgHovered, grey(0.215)),
+        (C::FrameBgActive, grey(0.245)),
+        (C::Button, a(0.80)),
+        (C::ButtonHovered, a(0.95)),
+        (C::ButtonActive, a(1.0)),
+        (C::Header, grey(0.170)),
+        (C::HeaderHovered, grey(0.215)),
+        (C::HeaderActive, grey(0.245)),
+        (C::CheckMark, ACCENT),
+        (C::SliderGrab, a(0.85)),
+        (C::SliderGrabActive, ACCENT),
+        (C::Separator, grey(0.20)),
+        (C::PlotHistogram, ACCENT),
+        (C::TextSelectedBg, a(0.35)),
+        (C::ScrollbarBg, grey(0.090)),
+        (C::ScrollbarGrab, grey(0.22)),
+    ] {
+        s.set_color(c, v);
+    }
+}
+
+/// A section title: larger than the text under it.
+pub fn heading(ui: &imgui::Ui, text: &str) {
+    let _f = ui.push_font_with_size(None, 20.0);
+    ui.text(text);
+}
+
+/// An explanation under a heading or a field, wrapped to the window.
+pub fn note(ui: &imgui::Ui, text: &str) {
+    let _c = ui.push_style_color(imgui::StyleColor::Text, MUTED);
+    ui.text_wrapped(text);
 }

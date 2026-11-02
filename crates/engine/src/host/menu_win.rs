@@ -48,7 +48,6 @@ const MFT_RADIOCHECK: u32 = 0x200;
 /// Menu command ids. Choices of one value are a base plus the value (frame-rate limit + fps, volume + percent, ...).
 mod id {
     pub const DATA_FOLDER: u16 = 1;
-    pub const SETTINGS: u16 = 4;
     pub const RESTART: u16 = 2;
     pub const QUIT: u16 = 3;
     pub const DOCKED: u16 = 10;
@@ -89,8 +88,6 @@ static REQUEST: AtomicU32 = AtomicU32::new(0);
 /// What only the main loop can do: it owns the SDL window.
 pub enum Request {
     FullScreen,
-    /// Open (or raise) the settings window.
-    Settings,
     /// A window of this height (16:9, unless the game renders at the window's shape).
     Size(u32),
 }
@@ -152,8 +149,6 @@ pub fn attach(hwnd: usize) {
     unsafe {
         let bar = CreateMenu();
         sub(bar, "nxport", |m| {
-            item(m, id::SETTINGS, "Settings…");
-            separator(m);
             item(m, id::DATA_FOLDER, "Open Game Data Folder");
             separator(m);
             item(m, id::RESTART, "Restart");
@@ -253,7 +248,6 @@ pub fn take_request() -> Option<Request> {
     match REQUEST.swap(0, Ordering::Relaxed) {
         0 => None,
         1 => Some(Request::FullScreen),
-        2 => Some(Request::Settings),
         h => Some(Request::Size(h)),
     }
 }
@@ -351,7 +345,6 @@ fn command(cmd: u16) -> bool {
     match cmd {
         id::DATA_FOLDER => open(data()),
         id::RESTART => super::restart(),
-        id::SETTINGS => REQUEST.store(2, Ordering::Relaxed),
         id::QUIT => std::process::exit(0),
         id::DOCKED | id::HANDHELD => {
             let handheld = cmd == id::HANDHELD;
