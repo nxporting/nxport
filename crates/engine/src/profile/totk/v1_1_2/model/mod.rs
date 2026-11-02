@@ -796,6 +796,32 @@ pub unsafe extern "C" fn on_gfx_draw_indexed(g: usize, topology: u32, format: u3
 }
 
 #[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_gfx_draw_indexed_instanced(g: usize, topology: u32, format: u32, addr: usize, count: i32, base_vertex: i32, instances: i32, base_instance: i32) -> u32 {
+    primitive(|p| {
+        vfx::draw_indexed_instanced(p, g, topology, format, p.m.r64(addr) as u64, count, base_vertex, instances, base_instance);
+        Ok(1)
+    })
+}
+
+/// nn::gfx's memory flush / invalidation barriers (main+0x300d8 / main+0x30100); they return nothing.
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_flush_memory(g: usize, flags: u32) -> u32 {
+    primitive(|p| {
+        vfx::flush_memory(p, g, flags);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gfx_invalidate_memory(g: usize, flags: u32) -> u32 {
+    primitive(|p| {
+        vfx::invalidate_memory(p, g, flags);
+        Ok(1)
+    })
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn on_gfx_dispatch(g: usize, x: i32, y: i32, z: i32) -> u32 {
     primitive(|p| {
         vfx::dispatch(p, g, x, y, z);
@@ -1665,6 +1691,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         gfx!(0x7650a4, crate::hle!(on_gfx_vertex_buffer(_, _, _, _, _)), "nn::gfx SetVertexBuffer");
         gfx!(0x2f86c, crate::hle!(on_gfx_draw_indexed(_, _, _, _, _, _)), "nn::gfx DrawIndexed");
         gfx!(0x2f7a0, crate::hle!(on_gfx_dispatch(_, _, _, _)), "nn::gfx Dispatch");
+        gfx!(0x68b364, crate::hle!(on_gfx_draw_indexed_instanced(_, _, _, _, _, _, _, _)), "nn::gfx DrawIndexed instanced");
+        gfx!(0x300d8, crate::hle!(on_gfx_flush_memory(_, _)), "nn::gfx FlushMemory");
+        gfx!(0x30100, crate::hle!(on_gfx_invalidate_memory(_, _)), "nn::gfx InvalidateMemory");
         gfx!(0x2f7b4, crate::hle!(on_gfx_draw(_, _, _, _)), "nn::gfx Draw");
         gfx!(0x2f804, crate::hle!(on_gfx_draw_instanced(_, _, _, _, _, _)), "nn::gfx Draw instanced");
         gfx!(0x74ee70, crate::hle!(on_gfx_texture(_, _, _, _, _)), "nn::gfx SetTextureAndSampler");
