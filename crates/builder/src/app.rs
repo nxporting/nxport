@@ -294,8 +294,6 @@ struct Builder {
     expand_all: bool,
     /// iOS / Windows: the game files go into the app instead of external paths.
     bundle_game: bool,
-    /// The dump's RomFS size in bytes, measured in the background.
-    romfs_size: Arc<Mutex<Option<u64>>>,
     entitlements: bool,
     /// iOS: the GPU architecture to precompile the pipeline list for (empty: none).
     ios_gpu: String,
@@ -377,7 +375,6 @@ impl Builder {
             job: None,
             expand_all: false,
             bundle_game: false,
-            romfs_size: Arc::new(Mutex::new(None)),
             entitlements: true,
             ios_gpu: String::new(),
             prebuild_shaders: target.prebuilds_shaders(),
@@ -395,9 +392,6 @@ impl Builder {
             let _ = self.remember();
         }
         self.dump = dump;
-        self.romfs_size = Arc::new(Mutex::new(None));
-        let (size, romfs) = (self.romfs_size.clone(), Path::new(&self.dump).join("RomFS"));
-        std::thread::spawn(move || *size.lock().unwrap() = Some(dir_size(&romfs)));
         let path = Path::new(&self.dump);
         let id = nxport::profile::identify(path);
         let control = nxport::game::control_of(path);
@@ -514,7 +508,7 @@ impl Builder {
     /// ExeFS patches and plugins) is fixed here, and everything else is set in the app while it runs (its menu bar). The
     /// Apple targets run the game's code natively and take their settings when they are built (App settings).
     fn contents(&mut self, ui: &imgui::Ui) {
-        use nxport::settings::edit::{heading, ERROR, MUTED, OK, WARN};
+        use nxport::settings::edit::{ERROR, MUTED, OK, WARN};
         let running = self.job.as_ref().is_some_and(|j| j.lock().unwrap().result.is_none());
         const LABEL: f32 = 120.0;
         let tip = |ui: &imgui::Ui, text: &str| {
@@ -549,10 +543,6 @@ impl Builder {
             ui.text_colored(color, text);
         };
 
-        heading(ui, "nxport");
-        ui.same_line();
-        ui.text_colored(MUTED, "app builder");
-        ui.separator();
         let _disabled = ui.begin_disabled_with_cond(running);
 
         label(ui, "Target", "What the app runs on. A target builds only on its own kind of host.");
@@ -623,7 +613,6 @@ impl Builder {
 
         // What the target decides when it is built.
         label(ui, "Build", "Decided when the app is built.");
-        let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
         let mut first = true;
         let mut next = |ui: &imgui::Ui| {
             if !std::mem::replace(&mut first, false) {
@@ -639,7 +628,7 @@ impl Builder {
             next(ui);
             ui.checkbox("Include game files", &mut self.bundle_game);
             let off = if self.target == Target::Ipa { "they are copied into the app's Documents/Game." } else { "settings.toml names the dump, which must stay where it is." };
-            tip(ui, &format!("Copies ExeFS/ and RomFS/ into the app ({size}). Off: {off}"));
+            tip(ui, &format!("Copies ExeFS/ and RomFS/ into the app. Off: {off}"));
         }
         if self.target == Target::Ipa {
             next(ui);
@@ -1187,14 +1176,6 @@ fn mods_in(dir: &Path) -> Vec<(String, ModKinds)> {
     list.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
     list
 }
-
-fn dir_size(dir: &Path) -> u64 {
-    std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| {
-        let p = e.path();
-        if p.is_dir() { dir_size(&p) } else { e.metadata().map_or(0, |m| m.len()) }
-    }).sum()
-}
-
 
 /// The engine's settings groups, in the order the editor shows them.
 fn general_sections(s: &mut Settings) -> Vec<&mut dyn Section> {
