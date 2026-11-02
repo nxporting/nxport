@@ -16,6 +16,7 @@ mod material;
 mod occlusion;
 mod mem;
 mod perview;
+mod ping_pong;
 mod render_list;
 mod ring;
 mod snapshot;
@@ -580,6 +581,23 @@ pub unsafe extern "C" fn on_light_shape(ctx: usize, light: usize, view: u32) -> 
 #[no_mangle]
 pub unsafe extern "C" fn on_light_shape_end() -> u32 {
     LIGHT_SHAPES.end("light shapes", &LIGHT_SHAPE_EXPECTED)
+}
+
+static PING_PONGS: Checked = Checked::new();
+
+thread_local! {
+    static PING_PONG_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xc24c30(this, w): a pass between two render buffers (ping_pong.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_ping_pong(this: usize, w: usize) -> u32 {
+    PING_PONGS.run(&PING_PONG_EXPECTED, |p| ping_pong::draw(p, this, w))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_ping_pong_end() -> u32 {
+    PING_PONGS.end("ping-pong passes", &PING_PONG_EXPECTED)
 }
 
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
@@ -1481,6 +1499,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = PING_PONGS.summary("ping-pong passes") {
+        println!("{l}");
+    }
     if let Some(l) = LIGHT_SHAPES.summary("light shapes") {
         println!("{l}");
     }
@@ -1649,6 +1670,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_light_shape(_, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_light_shape_end())) as usize;
         hook(base, mem_space, 0x969d28, 0xd10683ff, pre, post, "Light shapes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_ping_pong(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_ping_pong_end())) as usize;
+        hook(base, mem_space, 0xc24c30, 0xd10283ff, pre, post, "Ping-pong passes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

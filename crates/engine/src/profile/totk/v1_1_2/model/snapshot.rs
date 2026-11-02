@@ -7,9 +7,6 @@ use super::draw::{Port, R};
 use super::lights::{shape_state, stream_draw, SHAPES, STREAMS};
 use super::vfx::{program_apply, program_block, program_texture};
 
-/// The viewport's vtable pointer and the default orientation.
-const VIEWPORT_VTABLE: usize = 0x46323b0;
-const ORIENTATION: usize = 0x46312d8;
 /// The context type the unbind casts the command buffer wrapper to (initialised once, guard byte bit 0).
 const CONTEXT_TYPE_GUARD: usize = 0x4634f30;
 const CONTEXT_TYPE: usize = 0x4634f38;
@@ -75,31 +72,7 @@ pub(super) unsafe fn draw(p: &mut Port, snap: usize, w: usize, index: u32, ctx: 
         for j in 0..targets {
             p.m.w::<u64>(record + 0x20 + j * 8, (level + j * 0xf0) as u64);
         }
-        // The viewport covering the buffer (sead::Viewport: vtable, x, y, far corner, orientation, depth range).
-        let orientation = p.m.i32(p.m.r64(p.base + ORIENTATION));
-        let (bw, bh) = (p.m.f32(record + 8), p.m.f32(record + 0xc));
-        let span = |v: f32| if v <= 0.0 { (v, 0.0) } else { (0.0, v) };
-        let (x, y, x2, y2) = match orientation as u32 {
-            0 | 3..=5 => {
-                let ((x, x2), (y, y2)) = (span(bw), span(bh));
-                (x, y, x2, y2)
-            }
-            1 | 2 => {
-                let ((x, x2), (y, y2)) = (span(bh), span(bw));
-                (x, y, x2, y2)
-            }
-            _ => (f32::MAX, f32::MAX, -f32::MAX, -f32::MAX),
-        };
-        let mut vp = [0u32; 10];
-        let vt = (p.m.r64(p.base + VIEWPORT_VTABLE) + 0x10) as u64;
-        vp[0] = vt as u32;
-        vp[1] = (vt >> 32) as u32;
-        for (n, v) in [x, y, x2, y2].into_iter().enumerate() {
-            vp[2 + n] = v.to_bits();
-        }
-        vp[6] = orientation as u32;
-        vp[7] = 0f32.to_bits();
-        vp[8] = 1f32.to_bits();
+        let vp = super::viewport::full(p, p.m.f32(record + 8), p.m.f32(record + 0xc));
         super::targets::bind(p, record, w)?;
         super::viewport::apply(p, vp.as_ptr() as usize, w, record);
         let n = if (k as u32) < p.m.r32(snap + 0x6b8) { k } else { 0 };

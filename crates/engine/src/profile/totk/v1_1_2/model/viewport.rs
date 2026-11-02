@@ -49,3 +49,36 @@ pub(super) unsafe fn apply(p: &mut Port, vp: usize, w: usize, fb: usize) {
     let set: unsafe extern "C" fn(u64, f32, f32) = std::mem::transmute(p.pfn(PFN_SET_DEPTH_RANGE));
     set(cmd as u64, near, far);
 }
+
+/// The viewport's vtable pointer and the frame's orientation.
+const VIEWPORT_VTABLE: usize = 0x46323b0;
+const ORIENTATION: usize = 0x46312d8;
+
+/// sead::Viewport's constructor from a frame buffer of size (w, h): the region from the origin to (w, h) (swapped for
+/// orientations 1 and 2, unset for unknown ones), the frame's orientation, depth range 0..1. As words for `apply`.
+pub(super) unsafe fn full(p: &Port, w: f32, h: f32) -> [u32; 10] {
+    let orientation = p.m.i32(p.m.r64(p.base + ORIENTATION));
+    let span = |v: f32| if v <= 0.0 { (v, 0.0) } else { (0.0, v) };
+    let (x, y, x2, y2) = match orientation as u32 {
+        0 | 3..=5 => {
+            let ((x, x2), (y, y2)) = (span(w), span(h));
+            (x, y, x2, y2)
+        }
+        1 | 2 => {
+            let ((x, x2), (y, y2)) = (span(h), span(w));
+            (x, y, x2, y2)
+        }
+        _ => (f32::MAX, f32::MAX, -f32::MAX, -f32::MAX),
+    };
+    let mut vp = [0u32; 10];
+    let vt = (p.m.r64(p.base + VIEWPORT_VTABLE) + 0x10) as u64;
+    vp[0] = vt as u32;
+    vp[1] = (vt >> 32) as u32;
+    for (n, v) in [x, y, x2, y2].into_iter().enumerate() {
+        vp[2 + n] = v.to_bits();
+    }
+    vp[6] = orientation as u32;
+    vp[7] = 0f32.to_bits();
+    vp[8] = 1f32.to_bits();
+    vp
+}
