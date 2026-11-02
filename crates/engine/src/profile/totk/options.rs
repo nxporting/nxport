@@ -1,13 +1,13 @@
-// Settings of The Legend of Zelda: Tears of the Kingdom (hooks into its code; version 1.1.2).
+// Settings of The Legend of Zelda: Tears of the Kingdom (hooks into its code; versions 1.0.0 and 1.1.2).
 
 use serde::Serialize;
 use struct_patch::Patch;
 
 crate::settings::group! {
-    /// Changes made to version 1.1.2's code.
-    Version112 "Tears of the Kingdom 1.1.2" [dynamic_aspect_ratio, dynamic_fps] {
-        /// Render at the screen's shape and follow it as the window is resized (camera, culling and HUD
-        /// layouts follow it; narrower than 16:9 shows more vertically)
+    /// Changes made to the game's code (the same on every version).
+    Enhancements "Tears of the Kingdom" [dynamic_aspect_ratio, dynamic_fps] {
+        /// Render at the window's shape and follow it as the window is resized (the camera, culling and HUD layouts
+        /// follow it; narrower than 16:9 shows more vertically). Can be switched while the game runs
         dynamic_aspect_ratio: bool = true,
         /// Workaround: hide HUD capture panes that sample the wrong screen region at shapes other than 16:9 (a ghost
         /// copy of the load screen's heading); their effect is lost there
@@ -47,11 +47,12 @@ crate::settings::group! {
 )))]
 #[patch(attribute(serde(default, rename_all = "kebab-case", deny_unknown_fields)))]
 pub struct Options {
+    // [totk.enhancements]; settings files and presets from before it covered every version still load from
+    // [totk."1.1.2"].
     #[patch(nesting)]
     #[patch(attribute(command(flatten)))]
-    #[serde(rename = "1.1.2")]
-    #[patch(attribute(serde(rename = "1.1.2")))]
-    pub v1_1_2: Version112,
+    #[patch(attribute(serde(alias = "1.1.2")))]
+    pub enhancements: Enhancements,
     #[patch(nesting)]
     #[patch(attribute(command(flatten)))]
     pub diagnostics: Diagnostics,
@@ -62,7 +63,7 @@ impl Options {
     #[cfg(any(target_os = "macos", windows))]
     pub fn sections(&mut self) -> Vec<(&'static str, &mut dyn crate::settings::edit::Section)> {
         vec![
-            ("1.1.2", &mut self.v1_1_2),
+            ("Enhancements", &mut self.enhancements),
             ("Diagnostics", &mut self.diagnostics),
         ]
     }

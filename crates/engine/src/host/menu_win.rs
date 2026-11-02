@@ -71,6 +71,7 @@ mod id {
     /// + the strength in percent.
     pub const STRENGTH: u16 = 500;
     pub const REAL_TIME: u16 = 60;
+    pub const DYNAMIC_ASPECT: u16 = 62;
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
@@ -204,6 +205,7 @@ pub fn attach(hwnd: usize) {
         sub(bar, &title_label(), |m| {
             if crate::profile::is_totk() {
                 item(m, id::REAL_TIME, "Variable Frame Rate");
+                item(m, id::DYNAMIC_ASPECT, "Dynamic Aspect Ratio");
                 separator(m);
             }
             sub(m, "Mods", |l| {
@@ -327,6 +329,7 @@ unsafe fn refresh(menu: *mut c_void) {
     }
     check(id::TOUCH, live::touch());
     check(id::REAL_TIME, live::real_time_speed());
+    check(id::DYNAMIC_ASPECT, live::dynamic_aspect());
 }
 
 /// Opens `dir` in Explorer.
@@ -385,6 +388,7 @@ fn command(cmd: u16) -> bool {
         c if (id::STRENGTH..id::STRENGTH + 201).contains(&c) => live::set_rumble_percent((c - id::STRENGTH) as u32),
         id::TOUCH => live::set_touch(!live::touch()),
         id::REAL_TIME => live::set_real_time_speed(!live::real_time_speed()),
+        id::DYNAMIC_ASPECT => live::set_dynamic_aspect(!live::dynamic_aspect()),
         id::SAVE_FOLDER => open(crate::settings::get().files.save_dir.clone().or_else(|| crate::profile::data_subdir("save"))),
         id::CAPTURE => {
             crate::gpu::history::request();

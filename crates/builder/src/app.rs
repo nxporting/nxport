@@ -1470,7 +1470,7 @@ mod tests {
             profile: Some(&nxport::profile::kirby::PROFILE),
             is_32bit: false,
         });
-        b.settings.totk.v1_1_2.dynamic_aspect_ratio = false;
+        b.settings.totk.enhancements.dynamic_aspect_ratio = false;
         let edits = b.edits();
         assert_eq!(edits.totk, nxport::profile::totk::OptionsPatch::default());
     }

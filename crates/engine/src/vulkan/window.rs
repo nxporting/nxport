@@ -3,7 +3,9 @@
 // window origin.
 //
 // On macOS the drawable takes the game's shape and the layer fits it into the window. A Win32 surface is the window's
-// client area itself, so there the picture is fitted into the swapchain image here, with black bars around it.
+// client area itself, so there the picture is fitted into the swapchain image here, with black bars around it: at the
+// shape the game renders at (profile::rendered_aspect: a game drawing a 16:9 image of another shape, which follows the
+// window's while the dynamic aspect ratio is on, so it fills the window), else at the shape it presents.
 
 use ash::vk;
 
@@ -29,6 +31,10 @@ pub(super) struct Window {
     done: Vec<vk::Semaphore>,
     /// The presented content size the drawable was last fitted to.
     content: (u32, u32),
+    /// The window shape last reported to the game (profile::screen_aspect_changed); 0 while the dynamic aspect ratio is
+    /// off, so turning it on reports the shape again.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    reported: f64,
 }
 
 struct Slot {
@@ -82,6 +88,7 @@ impl Window {
             next: 0,
             done: Vec::new(),
             content: (0, 0),
+            reported: 0.0,
         };
         w.recreate(dev)?;
         println!("[vulkan] presenting to the window ({}x{})", w.extent.width, w.extent.height);
@@ -193,18 +200,30 @@ impl Window {
             .subresource_range(range)];
         d.cmd_pipeline_barrier(slot.cb, vk::PipelineStageFlags::TOP_OF_PIPE, vk::PipelineStageFlags::TRANSFER, vk::DependencyFlags::empty(), &[], &[], &to_dst);
         let (full_w, full_h) = (self.extent.width as i32, self.extent.height as i32);
+        // The window's shape for a game that renders at it (macOS: host/display.rs follow_window_shape).
+        #[cfg(not(target_os = "macos"))]
+        if crate::host::live::dynamic_aspect() {
+            let a = full_w as f64 / full_h as f64;
+            if (a - self.reported).abs() >= 0.002 * a {
+                self.reported = a;
+                crate::profile::screen_aspect_changed(a);
+            }
+        } else {
+            self.reported = 0.0;
+        }
         // The picture's place in the image: all of it on macOS (the drawable has the picture's shape), else the largest
         // rectangle of the picture's shape, centred, with the rest cleared to black.
         #[cfg(target_os = "macos")]
         let (dx, dy, dw, dh) = (0, 0, full_w, full_h);
         #[cfg(not(target_os = "macos"))]
         let (dx, dy, dw, dh) = {
-            let (dw, dh) = if full_w as i64 * ch as i64 > full_h as i64 * cw as i64 {
-                ((full_h as i64 * cw as i64 / ch as i64) as i32, full_h)
+            let shape = crate::profile::rendered_aspect().unwrap_or(cw as f64 / ch as f64);
+            let (dw, dh) = if full_w as f64 > full_h as f64 * shape {
+                ((full_h as f64 * shape).round() as i32, full_h)
             } else {
-                (full_w, (full_w as i64 * ch as i64 / cw as i64) as i32)
+                (full_w, (full_w as f64 / shape).round() as i32)
             };
-            ((full_w - dw) / 2, (full_h - dh) / 2, dw.max(1), dh.max(1))
+            ((full_w - dw) / 2, (full_h - dh) / 2, dw.clamp(1, full_w), dh.clamp(1, full_h))
         };
         if (dw, dh) != (full_w, full_h) {
             let black = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] };

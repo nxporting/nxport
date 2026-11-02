@@ -278,28 +278,26 @@ pub fn real_time() -> bool {
 }
 
 /// The aspect the game renders at when a profile patch changed it from the game's own (the screen shape asked for).
-#[cfg(nx_native)]
 pub fn rendered_aspect() -> Option<f64> {
     match active().kind {
-        GameKind::TotK => totk::v1_1_2::aspect::rendered_aspect(),
+        GameKind::TotK => totk::aspect::rendered_aspect(),
         _ => None,
     }
 }
 
-/// Whether the game will render at a screen shape wider than 16:9 (known before its code is patched: the window
-/// opens at that shape).
+/// Whether the game will render at the screen's shape (known before its code is patched: the window opens at that
+/// shape).
 pub fn renders_screen_shape() -> bool {
     match active().kind {
-        GameKind::TotK => crate::settings::get().totk.v1_1_2.dynamic_aspect_ratio,
+        GameKind::TotK => crate::settings::get().totk.enhancements.dynamic_aspect_ratio,
         _ => false,
     }
 }
 
 /// The screen's shape changed (the window was resized): a game rendering at another shape follows it.
-#[cfg(nx_native)]
 pub fn screen_aspect_changed(aspect: f64) {
     if active().kind == GameKind::TotK {
-        totk::v1_1_2::aspect::set_aspect(aspect);
+        totk::aspect::set_aspect(aspect);
     }
 }
 
