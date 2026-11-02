@@ -3,7 +3,7 @@
 ## About
 This is a general-purpose Nintendo Switch recomp tool. It provides a generic layer for NVN translation and the like, as well as game-specific optimization and feature code. Every optimization and feature is toggleable either in the builder, via a runtime overlay, or both.
 
-Unfortunately, right now this only supports Apple Silicon. This will change in the near future. In the meantime, enjoy *The Legend of Zelda: Tears of the Kingdom* or *Kirby and the Forgotten Land* on your iPhone or MacBook, if you have one! Or try another game--those are just the main two I've been testing.
+It currently supports Apple Silicon MacOS and iOS as well as x86-64 Windows devices. Once I work through my backlog of fixes I'll get to x86-64 Linux.
 
 ## AI Disclosure
 People like to know if you're using AI to write something, which is understandable. Like many projects in this space, we are. However, since longevity is intended for this project, code quality is very important and will continually be iterated on.
