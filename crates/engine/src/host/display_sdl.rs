@@ -249,13 +249,15 @@ impl Host {
         let _ = self.window.set_size(width, height);
     }
 
-    /// The game's 16:9 picture is fitted into the window (letterboxed, vulkan/window.rs), so the panel position is the
-    /// cursor's fraction of that fitted rectangle (window coordinates, y grows downwards).
+    /// The game's picture is fitted into the window at the shape it renders at (16:9 letterboxed, or the window's own
+    /// with the dynamic aspect ratio: vulkan/window.rs), so the panel position is the cursor's fraction of that fitted
+    /// rectangle (window coordinates, y grows downwards).
     fn mouse_touch(&self, x: f32, y: f32) {
         let (bw, bh) = self.window.size();
         let (bw, bh) = (bw as f64, bh as f64);
         if bw > 0.0 && bh > 0.0 {
-            let (w, h) = if bw * 9.0 > bh * 16.0 { (bh * 16.0 / 9.0, bh) } else { (bw, bw * 9.0 / 16.0) };
+            let a = crate::profile::rendered_aspect().unwrap_or(16.0 / 9.0);
+            let (w, h) = if bw > bh * a { (bh * a, bh) } else { (bw, bw / a) };
             let (x0, y0) = ((bw - w) / 2.0, (bh - h) / 2.0);
             input::touch_moved(0, (x as f64 - x0) / w, (y as f64 - y0) / h);
         }

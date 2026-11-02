@@ -16,7 +16,6 @@ use std::time::Instant;
 use crate::settings::FpsMode;
 
 static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(false);
-static DYNAMIC_ASPECT: AtomicBool = AtomicBool::new(true);
 static FPS_MODE: AtomicU8 = AtomicU8::new(1); // 0 = Stock30, 1 = Unlocked
 static VSYNC: AtomicBool = AtomicBool::new(true);
 static ASYNC_SHADERS: AtomicBool = AtomicBool::new(true);
@@ -27,7 +26,6 @@ pub fn init() {
         return;
     }
     if let Some(s) = crate::settings::try_get() {
-        DYNAMIC_ASPECT.store(s.totk.v1_1_2.dynamic_aspect_ratio, Ordering::Relaxed);
         let fps_val = if s.system.fps == FpsMode::Stock30 { 0 } else { 1 };
         FPS_MODE.store(fps_val, Ordering::Relaxed);
         VSYNC.store(!s.display.no_vsync, Ordering::Relaxed);
@@ -49,17 +47,15 @@ pub fn toggle_overlay() -> bool {
     next
 }
 
+/// The live switch (host/live.rs), kept in the game's settings file.
 pub fn is_dynamic_aspect() -> bool {
-    init();
-    DYNAMIC_ASPECT.load(Ordering::Relaxed)
+    crate::host::live::dynamic_aspect()
 }
 
 pub fn set_dynamic_aspect(val: bool) {
-    init();
-    DYNAMIC_ASPECT.store(val, Ordering::Relaxed);
-    if !val {
-        crate::profile::screen_aspect_changed(16.0 / 9.0);
-    } else {
+    // Off: back to 16:9 at once (live::set_dynamic_aspect). On: the window's shape now.
+    crate::host::live::set_dynamic_aspect(val);
+    if val {
         #[cfg(target_os = "macos")]
         if let Some(aspect) = crate::host::display::current_window_aspect() {
             crate::profile::screen_aspect_changed(aspect);

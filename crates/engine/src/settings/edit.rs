@@ -698,6 +698,8 @@ impl<T: Edit + Initial> Edit for Vec<T> {
 pub fn field<T: Edit>(ui: &Ui, value: &mut T, name: &str, docs: &[&str]) -> bool {
     let label = match name {
         "launch_aspect" => "Launch aspect ratio".to_string(),
+        "hide_hud_captures" => "Hide HUD captures".to_string(),
+        "dynamic_fps" => "Dynamic FPS".to_string(),
         _ => {
             let mut label = name.replace('_', " ");
             if let Some(c) = label.get_mut(0..1) {

@@ -18,6 +18,7 @@ struct Live {
     swap_ab: AtomicBool,
     swap_xy: AtomicBool,
     real_time_speed: AtomicBool,
+    dynamic_aspect: AtomicBool,
     fps_in_title: AtomicBool,
 }
 
@@ -32,7 +33,8 @@ static LIVE: LazyLock<Live> = LazyLock::new(|| {
         touch: AtomicBool::new(!s.input.no_touch),
         swap_ab: AtomicBool::new(s.input.swap_ab),
         swap_xy: AtomicBool::new(s.input.swap_xy),
-        real_time_speed: AtomicBool::new(s.totk.v1_1_2.dynamic_fps),
+        real_time_speed: AtomicBool::new(s.totk.enhancements.dynamic_fps),
+        dynamic_aspect: AtomicBool::new(s.totk.enhancements.dynamic_aspect_ratio),
         fps_in_title: AtomicBool::new(s.display.fps_in_title),
     }
 });
@@ -149,5 +151,24 @@ pub fn real_time_speed() -> bool {
 
 pub fn set_real_time_speed(on: bool) {
     LIVE.real_time_speed.store(on, Relaxed);
-    crate::config::remember(|p| p.totk.v1_1_2.dynamic_fps = Some(on));
+    crate::config::remember(|p| p.totk.enhancements.dynamic_fps = Some(on));
+}
+
+/// TotK: the game renders at the window's shape and follows it (profile/totk/aspect.rs); off, its own 16:9 picture,
+/// letterboxed.
+pub fn dynamic_aspect() -> bool {
+    LIVE.dynamic_aspect.load(Relaxed)
+}
+
+pub fn set_dynamic_aspect(on: bool) {
+    apply_dynamic_aspect(on);
+    crate::config::remember(|p| p.totk.enhancements.dynamic_aspect_ratio = Some(on));
+}
+
+/// On, the window reports its shape at its next present (vulkan/window.rs; host/display.rs follow_window_shape); off,
+/// the game goes back to 16:9 at once.
+fn apply_dynamic_aspect(on: bool) {
+    if LIVE.dynamic_aspect.swap(on, Relaxed) != on && !on {
+        crate::profile::screen_aspect_changed(16.0 / 9.0);
+    }
 }

@@ -1,6 +1,8 @@
 // Profile definition for The Legend of Zelda: Tears of the Kingdom.
 
+pub mod aspect;
 pub mod frame_time;
+pub mod hud;
 pub mod options;
 pub mod v1_0_0;
 pub mod v1_1_2;

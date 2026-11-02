@@ -143,6 +143,27 @@ impl Ret for () {
     fn put(self, _cpu: &mut Cpu) {}
 }
 
+/// Two floats returned in s0 and s1 (AAPCS64 returns a homogeneous float aggregate in v registers).
+#[repr(C)]
+pub struct F32Pair(pub f32, pub f32);
+impl Ret for F32Pair {
+    fn put(self, cpu: &mut Cpu) {
+        cpu.v[0] = self.0.to_bits() as u128;
+        cpu.v[1] = self.1.to_bits() as u128;
+    }
+}
+
+/// Two integers returned in x0 and x1 (AAPCS64 returns a 16-byte composite in x0, x1): lets a hook hand a register back
+/// that a native call would clobber.
+#[repr(C)]
+pub struct U64Pair(pub u64, pub u64);
+impl Ret for U64Pair {
+    fn put(self, cpu: &mut Cpu) {
+        cpu.x[0] = self.0;
+        cpu.x[1] = self.1;
+    }
+}
+
 // Guest function pointers (callbacks) are guest addresses: the HLE function gets the address, as on arm64 hosts where
 // it calls it directly. A runtime running lifted code calls such pointers through guest::call (docs/windows-port.md).
 macro_rules! guest_fn_arg {

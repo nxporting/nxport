@@ -1,22 +1,19 @@
-// HUD layouts for screen shapes other than 16:9 (Tears of the Kingdom 1.1.2).
+// HUD layouts for screen shapes other than 16:9 (Tears of the Kingdom 1.0.0 and 1.1.2).
 //
 // The game draws its HUD into its 16:9 picture, which is then stretched to the screen: every layout's root pane is
 // narrowed by 1 / F (F = screen aspect / 16:9) so the HUD keeps its proportions, except full-screen layouts, which
 // should fill the screen. Elements at the screen edges then move outward by k * (F - 1) layout units (k = 960 keeps
 // their distance to the edge), and some panes are scaled by F^e (backgrounds widened back to the full screen). The
-// tables come from a 19.5:9 widescreen mod's edited layouts. The layout library calculates every layout once per frame (TotK 1.1.2 main+0x79d804, and
-// TotK 1.1.2 main+0x40e24 for the game's own layout class); a hook there calls `calculate` first, which writes the panes' scale
-// and position and marks them for recalculation. A value the game or an animation wrote since becomes the new base.
+// tables come from a 19.5:9 widescreen mod's edited layouts. The layout library calculates every layout once per frame
+// (TotK 1.1.2 main+0x79d804, 1.0.0 main+0x74f330; and 1.1.2 main+0x40e24, 1.0.0 main+0x40e94 for the game's own layout
+// class); aspect.rs hooks both to call `calculate` first, which writes the panes' scale and position and marks them for
+// recalculation. A value the game or an animation wrote since becomes the new base.
 // Narrower than 16:9 the picture is squeezed horizontally instead: the same panes are scaled vertically by f^-e
 // (f = screen aspect / 16:9 < 1), so the HUD keeps its proportions, and elements at the top and bottom edges move
 // outward by k * (1 / f - 1) (SHIFTS_Y).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-
-/// Layout::CalculateImpl entries (`sub sp, sp, #0x60`).
-pub const CALC_SITES: [usize; 2] = [0x79d804, 0x40e24];
-pub const CALC_ENTRY: u32 = 0xd101_83ff;
 
 // Layout fields.
 const LAYOUT_ROOT: usize = 0x18;
@@ -351,7 +348,8 @@ unsafe fn setup(name: &[u8], root: usize) -> Vec<Pane> {
     panes
 }
 
-pub extern "C" fn calculate(layout: usize) {
+/// Adjusts `layout`'s panes to the screen's shape (nothing until an aspect is set: the game's own layouts).
+pub fn calculate(layout: usize) {
     let Some(aspect) = super::aspect::rendered_aspect() else {
         return;
     };
@@ -388,7 +386,7 @@ pub extern "C" fn calculate(layout: usize) {
         // Wider than 16:9: x scales and edge offsets by F; narrower: y scales by f (each factor 1 for the other shapes,
         // so a window that changes between them gets the game's values back).
         let (fx, fy) = if f >= 1.0 { (f, 1.0) } else { (1.0, f) };
-        let hide = f != 1.0 && crate::settings::get().totk.v1_1_2.hide_hud_captures;
+        let hide = f != 1.0 && crate::settings::get().totk.enhancements.hide_hud_captures;
         for h in &mut entry.hidden {
             h.set(hide);
         }
