@@ -743,6 +743,35 @@ pub unsafe extern "C" fn on_view_composite_end() -> u32 {
     VIEW_COMPOSITES.end("view composites", &VIEW_COMPOSITE_EXPECTED)
 }
 
+static VIEW_GRIDS: Checked = Checked::new();
+static VIEW_FULLSCREENS: Checked = Checked::new();
+
+thread_local! {
+    static VIEW_GRID_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static VIEW_FULLSCREEN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x957448(this, w, view, ctx) / main+0x9737f8(this, w, view, scene) (scene_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_view_grid(this: usize, w: usize, view: u32, ctx: usize) -> u32 {
+    VIEW_GRIDS.run(&VIEW_GRID_EXPECTED, move |p| scene_passes::view_grid(p, this, w, view, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_grid_end() -> u32 {
+    VIEW_GRIDS.end("view grids", &VIEW_GRID_EXPECTED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_fullscreen(this: usize, w: usize, view: u32, scene: usize) -> u32 {
+    VIEW_FULLSCREENS.run(&VIEW_FULLSCREEN_EXPECTED, move |p| scene_passes::view_fullscreen(p, this, w, view, scene))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_fullscreen_end() -> u32 {
+    VIEW_FULLSCREENS.end("view full-screen passes", &VIEW_FULLSCREEN_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1180,8 +1209,8 @@ impl Checked {
                 ring::watch();
                 crate::nvn::api::capture_collect();
             }
-            // A texture the game finishes (re-registers) in this call: predicted after the game's call instead.
-            Err(what) if what.ends_with("texture still finishing") => {
+            // State the game's call itself sets up (a texture it finishes, a block it fills): predicted after it.
+            Err(what) if what.ends_with("still finishing") || what.ends_with("by the call") => {
                 ring::discard();
                 let key = self as *const Self as usize;
                 CHECK_AFTER.with(|r| r.borrow_mut().push((key, Box::new(f))));
@@ -1711,6 +1740,12 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = VIEW_GRIDS.summary("view grids") {
+        println!("{l}");
+    }
+    if let Some(l) = VIEW_FULLSCREENS.summary("view full-screen passes") {
+        println!("{l}");
+    }
     if let Some(l) = VIEW_COMPOSITES.summary("view composites") {
         println!("{l}");
     }
@@ -1937,6 +1972,12 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_composite(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_view_composite_end())) as usize;
         hook(base, mem_space, 0x955ff4, 0xd10383ff, pre, post, "View composites");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_grid(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_grid_end())) as usize;
+        hook(base, mem_space, 0x957448, 0xd10383ff, pre, post, "View grids");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_fullscreen(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_fullscreen_end())) as usize;
+        hook(base, mem_space, 0x9737f8, 0xd10403ff, pre, post, "View full-screen passes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
