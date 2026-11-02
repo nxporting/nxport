@@ -392,6 +392,31 @@ pub(super) unsafe fn draw_indexed_base(p: &mut Port, g: usize, topology: u32, fo
     p.draw_elements_base_vertex(cmd, mode, ty, count, addr, base_vertex);
 }
 
+/// main+0x68b364(g, topology, index format, addr, count, base vertex, instances, base instance): an instanced indexed
+/// draw.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn draw_indexed_instanced(p: &mut Port, g: usize, topology: u32, format: u32, addr: u64, count: i32, base_vertex: i32, instances: i32, base_instance: i32) {
+    let cmd = p.m.r64(g + 0xb0);
+    let mode = p.m.r32(p.base + TOPOLOGY_TABLE + topology as usize * 4) as i32;
+    let ty = p.m.r32(p.base + INDEX_FORMAT_TABLE + format as usize * 4) as i32;
+    p.draw_elements_instanced(cmd, mode, ty, count, addr, base_vertex, base_instance, instances);
+}
+
+/// main+0x300d8(g, flags): nn::gfx's flush before reads (flags 0x49c0): an ORDER_PRIMITIVES barrier.
+pub(super) unsafe fn flush_memory(p: &mut Port, g: usize, flags: u32) {
+    if flags & 0x49c0 != 0 {
+        p.barrier(p.m.r64(g + 0xb0), 1);
+    }
+}
+
+/// main+0x30100(g, flags): nn::gfx's invalidation (flags >> 6 bits 3 / 6, 0x4020 -> bit 4, 0x2050 -> bit 5).
+pub(super) unsafe fn invalidate_memory(p: &mut Port, g: usize, flags: u32) {
+    let bits = ((flags >> 6) & 0x48) | (((flags & 0x4020) != 0) as u32) << 4 | (((flags & 0x2050) != 0) as u32) << 5;
+    if bits != 0 {
+        p.barrier(p.m.r64(g + 0xb0), bits);
+    }
+}
+
 /// main+0x7650f4: vertex attribute and stream states.
 pub(super) unsafe fn bind_vertex_state(p: &mut Port, g: usize, s: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
