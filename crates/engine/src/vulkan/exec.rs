@@ -303,6 +303,8 @@ pub struct Ctx {
     window_tried: bool,
     /// --frame-history: the kept presented frames.
     history: Option<super::history::History>,
+    /// Frames still to record for a capture asked without --frame-history (keep_history).
+    history_ahead: usize,
     /// Commands warned about as not implemented (by name, by kind).
     unimplemented: HashSet<&'static str>,
     unimplemented_kinds: HashSet<std::mem::Discriminant<Cmd>>,
@@ -735,6 +737,7 @@ impl Ctx {
             window: None,
             window_tried: false,
             history: None,
+            history_ahead: 0,
             unimplemented_kinds: Default::default(),
         })
     }
@@ -1093,10 +1096,23 @@ impl Ctx {
     }
 
     /// Keeps presented frame `frame` for the frame history (gpu::history) and writes the history when a capture is due.
+    /// Without --frame-history nothing is kept: a capture then records the HISTORY_AHEAD frames that follow it.
     pub unsafe fn keep_history(&mut self, texture: usize, crop: [i32; 4], frame: u64) {
+        const HISTORY_AHEAD: usize = 60;
         let n = crate::gpu::history::len();
-        if n == 0 || self.lost {
+        if self.lost {
             return;
+        }
+        if n == 0 && self.history_ahead == 0 {
+            if !crate::gpu::history::due(frame) {
+                return;
+            }
+            // Kept for the next capture, which overwrites all of it.
+            if self.history.is_none() {
+                self.history = super::history::History::new(&self.dev, HISTORY_AHEAD);
+            }
+            self.history_ahead = HISTORY_AHEAD;
+            println!("[+] Frame history: recording the next {HISTORY_AHEAD} frames");
         }
         if self.history.is_none() {
             self.history = super::history::History::new(&self.dev, n);
@@ -1110,6 +1126,15 @@ impl Ctx {
                     h.keep(&self.dev, frame, image, level, layer, c, lower_left);
                 }
             }
+        }
+        if n == 0 {
+            self.history_ahead -= 1;
+            if self.history_ahead == 0 {
+                if let Some(h) = self.history.as_ref() {
+                    h.write(&self.dev, frame);
+                }
+            }
+            return;
         }
         crate::gpu::history::rotate(frame);
         if crate::gpu::history::due(frame) {
