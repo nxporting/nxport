@@ -180,3 +180,27 @@ pub(super) unsafe fn texture_quad(p: &mut Port, w: usize, prog: usize, tex: usiz
     stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1e8, w);
     Ok(())
 }
+
+/// The UI capture program: [[holder]+0x10] +0x168 when the holder has more than 0x2d programs (+8).
+const CAPTURE_PROGRAMS: usize = 0x4634e40;
+
+/// main+0x98aa34(w, tex, viewport, a, b, scale, offset, value in s0): the capture program applied, its uniforms 4
+/// (8 bytes at `a`), 5 (`value`) and 6 (8 bytes at `b`), then the texture quad (main+0xbe1b2c).
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn capture_quad(p: &mut Port, w: usize, tex: usize, vp: usize, a: usize, b: usize, scale: usize, offset: usize, value: u32) -> R<()> {
+    let holder = p.m.r64(p.base + CAPTURE_PROGRAMS);
+    let set = p.m.r64(holder);
+    if p.m.r32(set + 8) < 0x2e {
+        return Err("capture program missing");
+    }
+    let prog = p.m.r64(p.m.r64(set + 0x10) + 0x168);
+    program_apply(p, prog, w)?;
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let bytes = |p: &Port, at: usize| -> [u8; 8] { std::array::from_fn(|k| p.m.r8(at + k)) };
+    set_uniform(p, prog, w, 4, &bytes(p, a));
+    set_uniform(p, prog, w, 5, &value.to_le_bytes());
+    set_uniform(p, prog, w, 6, &bytes(p, b));
+    texture_quad(p, w, prog, tex, vp, scale, offset)
+}
