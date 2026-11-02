@@ -19,6 +19,11 @@ use super::shader::Prep;
 /// Bytes of a stage's start that select its candidates (the Metal shader cache's weak hash).
 pub const WEAK_LEN: usize = 0x130;
 
+/// The translator's source hash: translations made by another translator are not reused.
+pub fn translator() -> &'static str {
+    sass2spv::SOURCE_HASH
+}
+
 pub fn fnv1a64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {

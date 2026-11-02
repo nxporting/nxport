@@ -118,8 +118,7 @@ pub struct Identified {
 pub fn identify(dump: &std::path::Path) -> Identified {
     let title_id = crate::game::title_id_of(dump);
     let profile = title_id.and_then(for_title);
-    let build_id =
-        crate::guest::nso::nso_build_id(&dump.join("ExeFS/main").display().to_string());
+    let build_id = main_build_id_of(dump);
     let version = profile
         .zip(build_id)
         .and_then(|(p, id)| p.match_version(&id));
@@ -133,6 +132,11 @@ pub fn identify(dump: &std::path::Path) -> Identified {
         version,
         name,
     }
+}
+
+/// The build id of the main module in `dump`, which names the game's version.
+pub fn main_build_id_of(dump: &std::path::Path) -> Option<String> {
+    crate::guest::nso::nso_build_id(&dump.join("ExeFS/main").display().to_string())
 }
 
 /// The profile of a title id, if there is one.

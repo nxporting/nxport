@@ -423,7 +423,6 @@ impl Builder {
             let mut kept = SettingsPatch::default();
             kept.files.system_data_dir = edits.files.system_data_dir.take();
             kept.files.no_exefs_patches = edits.files.no_exefs_patches.take();
-            kept.guest.run_game_subsdk = edits.guest.run_game_subsdk.take();
             edits = kept;
         }
         if let Some(sys) = edits.files.system_data_dir.as_ref() {
@@ -665,9 +664,6 @@ impl Builder {
                 self.settings.files.no_exefs_patches = !patches;
             }
             tip(ui, "IPS / pchtxt patches in the mods' exefs/ are applied to the code before it is lifted (files.no-exefs-patches).");
-            indent(ui);
-            ui.checkbox("Run the game's own subsdk modules", &mut self.settings.guest.run_game_subsdk);
-            tip(ui, "Binds main's imports to the game's own subsdk libraries and lifts them with it (guest.run-game-subsdk; experiment).");
         }
         row(ui, "system_data", "System data", &mut self.system_data, "none", "Firmware system data archives (one folder per archive, named by its 16-digit id), for titles that mount them (files.system-data-dir).");
 
