@@ -1,6 +1,7 @@
 // Frame history (--frame-history=N): the backend keeps the last N presented frames at half resolution, and a journal
 // of engine events per frame (render passes, clears, texture creations and uploads, dispatches, occlusion reports,
-// conditional rendering). A capture (F9 / space, or --history-dump-at) writes them to /tmp/nxport_history_<frame>/:
+// conditional rendering). A capture (F9 / space, or --history-dump-at) writes them to the game's data folder,
+// captures/history_<frame>/ (the Vulkan backend records the frames after a capture when none are kept):
 // <frame>.ppm per frame and journal.txt, and logs the frames ranked by single-frame outlier pixels ([history]).
 
 use std::collections::VecDeque;
@@ -53,9 +54,11 @@ pub fn due(pn: u64) -> bool {
 
 /// The capture directory for presented frame `pn`.
 pub fn dir(pn: u64) -> String {
-    let d = format!("/tmp/nxport_history_{pn}");
+    let d = crate::profile::data_subdir("captures")
+        .unwrap_or_else(|| std::env::temp_dir().join("nxport"))
+        .join(format!("history_{pn}"));
     let _ = std::fs::create_dir_all(&d);
-    d
+    d.display().to_string()
 }
 
 /// Writes the journal of the kept frames.
