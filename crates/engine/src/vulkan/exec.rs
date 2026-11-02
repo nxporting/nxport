@@ -1195,6 +1195,7 @@ impl Ctx {
             Cmd::BindDepthStencilState(d) => st.depth_stencil != Some(*d),
             Cmd::BindPolygonState(p) => st.polygon != *p,
             Cmd::BindMultisampleState(m) => st.multisample != *m,
+            Cmd::SetPointSize(s) => st.point_size != *s,
             _ => false,
         };
         if changed {

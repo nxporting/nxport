@@ -184,12 +184,18 @@ impl Ctx {
         Some((vs?, gs, fs))
     }
 
-    /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions.
-    fn vertex_state(&self) -> (GraphicsState, u64) {
-        let s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
+    /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions, and for a
+    /// draw of points the point size the game set (Vulkan takes it from the stage, which writes it in every vertex stage:
+    /// left at 1, a pass the game splats with large points kept single pixels).
+    fn vertex_state(&self, points: bool) -> (GraphicsState, u64) {
+        let mut s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
         // An array hashes as the slice a Vec would (length included): the same keys, without an allocation per draw.
         let codes: [u8; 32] = s.attribute_types.map(attr_type_code);
         let key = hash(&(codes, s.depth_mode));
+        if points && self.st.point_size != 1.0 {
+            s.point_size = self.st.point_size;
+            return (s, hash(&(key, self.st.point_size.to_bits())));
+        }
         (s, key)
     }
 
@@ -270,7 +276,7 @@ impl Ctx {
             self.warn(format!("program {:#x} has no vertex stage", self.st.program));
             return None;
         };
-        let (vstate, vkey) = self.vertex_state();
+        let (vstate, vkey) = self.vertex_state(topology == vk::PrimitiveTopology::POINT_LIST);
         let vkey = hash(&(vkey, vh));
         if !self.stage(vd, vc, 0, vstate, vkey, 0, None, true) {
             return None;
