@@ -14,7 +14,7 @@ const UNIFORMS_HOLDER: usize = 0x4632818;
 const KIND_TABLE: usize = 0x386d4e8;
 
 /// The program's uniform `k` (+0x40 locations, 16-byte entries, count +0x38) set to `data` (nothing without one).
-unsafe fn set_uniform(p: &mut Port, prog: usize, w: usize, k: usize, data: &[u8]) {
+pub(super) unsafe fn set_uniform(p: &mut Port, prog: usize, w: usize, k: usize, data: &[u8]) {
     let n = p.m.r32(prog + 0x38) as usize;
     let loc = p.m.i32(p.m.r64(prog + 0x40) + if n > k { k * 16 } else { 0 });
     if loc == -1 {
