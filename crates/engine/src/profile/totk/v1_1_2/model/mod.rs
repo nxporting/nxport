@@ -618,6 +618,23 @@ pub unsafe extern "C" fn on_display_lists_end() -> u32 {
     DISPLAY_LISTS.end("display lists", &DISPLAY_LIST_EXPECTED)
 }
 
+static CLEARING_BINDS: Checked = Checked::new();
+
+thread_local! {
+    static CLEARING_BIND_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x8660b4(buffer, w, viewport, _, mask, values): a render buffer bind with clears (targets.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_clearing_bind(rb: usize, w: usize, vp: usize, _x3: u64, mask: u32, values: usize) -> u32 {
+    CLEARING_BINDS.run(&CLEARING_BIND_EXPECTED, |p| targets::bind_clear(p, rb, w, vp, mask, values))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_clearing_bind_end() -> u32 {
+    CLEARING_BINDS.end("clearing binds", &CLEARING_BIND_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1517,6 +1534,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = CLEARING_BINDS.summary("clearing binds") {
+        println!("{l}");
+    }
     if let Some(l) = DISPLAY_LISTS.summary("display lists") {
         println!("{l}");
     }
@@ -1697,6 +1717,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_display_lists(_, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_display_lists_end())) as usize;
         hook(base, mem_space, 0xbccb6c, 0xa9ba7bfd, pre, post, "Display lists");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_clearing_bind(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_clearing_bind_end())) as usize;
+        hook(base, mem_space, 0x8660b4, 0xd104c3ff, pre, post, "Clearing binds");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
