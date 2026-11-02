@@ -7,10 +7,6 @@ use super::draw::{Port, R};
 use super::lights::{shape_state, stream_draw, SHAPES, STREAMS};
 use super::vfx::{program_apply, program_block, program_texture};
 
-/// The context type the unbind casts the command buffer wrapper to (initialised once, guard byte bit 0).
-const CONTEXT_TYPE_GUARD: usize = 0x4634f30;
-const CONTEXT_TYPE: usize = 0x4634f38;
-const UNBOUND_NAME: usize = 0x37acc70;
 
 unsafe fn root(p: &Port, mut s: usize) -> usize {
     while p.m.r64(s + 0x168) != 0 {
@@ -78,30 +74,7 @@ pub(super) unsafe fn draw(p: &mut Port, snap: usize, w: usize, index: u32, ctx: 
         let n = if (k as u32) < p.m.r32(snap + 0x6b8) { k } else { 0 };
         program_block(p, prog, w, 2, p.m.r64(snap + 0x6c0) + n * 0x80, 0)?;
         stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x488, w);
-        unbind(p, w)?;
-    }
-    Ok(())
-}
-
-/// The wrapper's render buffer unbound (current buffer cleared, name "Unbound", the buffer saved at +0x100 bound again).
-unsafe fn unbind(p: &mut Port, w: usize) -> R<()> {
-    if p.m.r8(p.m.r64(p.base + CONTEXT_TYPE_GUARD)) & 1 == 0 {
-        return Err("context type not initialised");
-    }
-    if w == 0 {
-        return Ok(());
-    }
-    let g = p.query(p.base + p.vfn(w, 0), &[w as u64, p.m.r64(p.base + CONTEXT_TYPE) as u64]) as usize;
-    if g == 0 {
-        return Ok(());
-    }
-    p.m.w::<u64>(g + 0xf8, 0);
-    p.m.w::<u64>(g + 0x110, (p.base + UNBOUND_NAME) as u64);
-    p.m.w::<u8>(g + 0x108, p.m.r8(g + 0x108) & !2);
-    let saved = p.m.r64(g + 0x100);
-    if saved != 0 {
-        super::targets::bind(p, saved, g)?;
-        p.m.w::<u64>(g + 0x100, 0);
+        super::targets::unbind(p, w)?;
     }
     Ok(())
 }
