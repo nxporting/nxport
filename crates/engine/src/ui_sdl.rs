@@ -16,7 +16,7 @@ use sdl3::sys::pixels::{SDL_FColor, SDL_PIXELFORMAT_RGBA32};
 use sdl3::sys::render::{self as sr, SDL_Renderer, SDL_Texture, SDL_TEXTUREACCESS_STATIC};
 use sdl3::sys::rect::SDL_Rect;
 
-pub use crate::settings::edit::{heading, note, put_path, request_path, take_path, take_request, PathKind, ACCENT, ERROR, MUTED, OK, WARN};
+pub use crate::settings::edit::{note, put_path, request_path, take_path, take_request, PathKind, ERROR, MUTED, OK, WARN};
 
 pub type Frame = Box<dyn FnMut(&imgui::Ui) -> bool>;
 
@@ -38,7 +38,6 @@ pub fn new_context() -> imgui::Context {
     let mut ctx = imgui::Context::create();
     let _ = ctx.set_ini_filename(None::<String>);
     load_font(&mut ctx, 15.0);
-    crate::settings::edit::theme(ctx.style_mut());
     ctx
 }
 

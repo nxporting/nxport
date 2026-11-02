@@ -423,7 +423,6 @@ fn new_context() -> imgui::Context {
     let _ = ctx.set_ini_filename(None::<String>);
     ctx.io_mut().set_config_macosx_behaviors(true);
     load_font(&mut ctx, FONT_POINTS);
-    crate::settings::edit::theme(ctx.style_mut());
     ctx
 }
 
