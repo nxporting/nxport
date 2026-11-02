@@ -12,6 +12,11 @@
 // fast or slow. The step comes from the real time since the previous frame instead. The controllers' hold timers take
 // their own step from the interval (through a pointer the code loads); it follows the same real-time step.
 //
+// With vsync pacing frames (vblank_period), frames reach the screen a whole number of refreshes apart, but the game's
+// frames start unevenly between them (the swapchain lets a frame start once an image frees): real-time steps then moved
+// things unevenly across evenly shown frames, a stutter. There the step is rounded to whole refreshes, the remainder
+// carried into the next frames' steps, so game time keeps to real time.
+//
 // The hooks rewrite instructions and branch to HLE trampolines (no code of our own in guest memory), so they apply to
 // every runtime: natively, and to the image that is lifted.
 
@@ -74,6 +79,10 @@ const SAME_FRAME_NS: u64 = 1_000_000;
 
 static LAST_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_STEP: AtomicU32 = AtomicU32::new(0);
+/// The most refreshes a burst of frames may run ahead of real time (swapchain images and frames in flight).
+const MAX_AHEAD: f32 = 8.0;
+/// Real time not yet stepped (f32 bits, seconds; may be negative): what rounding to whole refreshes left over.
+static CARRY: AtomicU32 = AtomicU32::new(0);
 /// Whether the running title has the hooks (installed when it was loaded; a lifted game also had them when lifted).
 static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -103,6 +112,21 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
             ((now - last) as f64 / 1e9) as f32
         }
         .clamp(MIN_STEP_S, MAX_STEP_S);
+        let dt = match vblank_period() {
+            Some(period) => {
+                let real = dt + f32::from_bits(CARRY.load(Ordering::Relaxed));
+                let step = (real / period).round().max(1.0) * period;
+                // Frames started in a burst each show a refresh after the last: the time they are ahead is carried
+                // into the wait that follows (up to MAX_AHEAD refreshes). Time behind carries up to a refresh, so a
+                // stall is not made up over the frames after it.
+                CARRY.store((real - step).clamp(-MAX_AHEAD * period, period).to_bits(), Ordering::Relaxed);
+                step
+            }
+            None => {
+                CARRY.store(0, Ordering::Relaxed);
+                dt
+            }
+        };
         LAST_STEP.store(dt.to_bits(), Ordering::Relaxed);
         dt
     };
@@ -116,6 +140,15 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     if !CALLED.swap(true, Ordering::Relaxed) {
         println!("[+] Game time: the game steps by real time ({:.1} ms this frame)", dt * 1000.0);
     }
+}
+
+/// With vsync, the display's refresh period when the swapchain paces frames: the frame-rate limit is at or above the
+/// refresh rate (nvn::api's limiter then leaves pacing to the swapchain). Known on hosts that report the refresh rate.
+fn vblank_period() -> Option<f32> {
+    use crate::host::{live, overlay};
+    let hz = live::refresh_hz();
+    let paced = overlay::is_vsync() && overlay::fps_mode() != crate::settings::FpsMode::Stock30 && hz >= 30.0;
+    (paced && live::frame_limit() + 1 >= live::refresh_rate()).then(|| 1.0 / hz)
 }
 
 /// Replaces the controllers' hold-timer step (frames at 30 fps): the last step time_step took.

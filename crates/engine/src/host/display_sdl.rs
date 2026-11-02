@@ -124,7 +124,7 @@ pub fn run_main_thread() -> ! {
             host.update_title(&base_title);
             // The display's refresh rate, for the frame-rate limits vsync makes unreachable (the window may have moved).
             if let Ok(mode) = host.window.get_display().and_then(|d| d.get_mode()) {
-                crate::host::live::set_refresh_rate(mode.refresh_rate.round() as u32);
+                crate::host::live::set_refresh_rate(mode.refresh_rate);
             }
         }
         // Debug: --debug-close-after=N closes the window after N seconds, as its close button does.

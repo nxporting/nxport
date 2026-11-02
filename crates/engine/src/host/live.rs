@@ -41,15 +41,22 @@ static LIVE: LazyLock<Live> = LazyLock::new(|| {
     }
 });
 
-/// The display's refresh rate in Hz (0: unknown), which the window keeps current: with vsync the display paces at it.
+/// The display's refresh rate in Hz (f32 bits; 0: unknown), which the window keeps current: with vsync the display
+/// paces at it.
 static REFRESH: AtomicU32 = AtomicU32::new(0);
 
+/// The refresh rate in whole Hz (0: unknown).
 pub fn refresh_rate() -> u32 {
-    REFRESH.load(Relaxed)
+    refresh_hz().round() as u32
 }
 
-pub fn set_refresh_rate(hz: u32) {
-    REFRESH.store(hz, Relaxed);
+/// The refresh rate as the display reports it (59.94 Hz, 143.86 Hz).
+pub fn refresh_hz() -> f32 {
+    f32::from_bits(REFRESH.load(Relaxed))
+}
+
+pub fn set_refresh_rate(hz: f32) {
+    REFRESH.store(hz.to_bits(), Relaxed);
 }
 
 /// The frame-rate limit when the title may run faster than 30 fps (the 30 fps setting is overlay::fps_mode's).
