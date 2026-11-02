@@ -565,6 +565,23 @@ pub unsafe extern "C" fn on_snapshot_end() -> u32 {
     SNAPSHOTS.end("snapshots", &SNAPSHOT_EXPECTED)
 }
 
+static LIGHT_SHAPES: Checked = Checked::new();
+
+thread_local! {
+    static LIGHT_SHAPE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x969d28(ctx, light, view): one light with its own program (lights.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_light_shape(ctx: usize, light: usize, view: u32) -> u32 {
+    LIGHT_SHAPES.run(&LIGHT_SHAPE_EXPECTED, |p| lights::light_shape(p, ctx, light, view))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_light_shape_end() -> u32 {
+    LIGHT_SHAPES.end("light shapes", &LIGHT_SHAPE_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1464,6 +1481,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = LIGHT_SHAPES.summary("light shapes") {
+        println!("{l}");
+    }
     if let Some(l) = TRANSFORMED_QUADS.summary("transformed quads") {
         println!("{l}");
     }
@@ -1626,6 +1646,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_snapshot(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_snapshot_end())) as usize;
         hook(base, mem_space, 0xcc75ec, 0xd10403ff, pre, post, "Snapshots");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_light_shape(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_light_shape_end())) as usize;
+        hook(base, mem_space, 0x969d28, 0xd10683ff, pre, post, "Light shapes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

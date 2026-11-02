@@ -1877,6 +1877,16 @@ pub(super) unsafe fn program_block(p: &mut Port, prog: usize, w: usize, index: u
     p.bind_uniform_block(block, w, slots, element)
 }
 
+/// main+0x9632ac(prog, w, index, block, element): main+0x96306c for storage blocks (+0x60 table, count +0x58).
+pub(super) unsafe fn program_storage_block(p: &mut Port, prog: usize, w: usize, index: u32, block: usize, element: i32) -> R<bool> {
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let i = if p.m.r32(prog + 0x58) > index { index } else { 0 } as usize;
+    let slots = p.m.r32(p.m.r64(prog + 0x60) + i * 16);
+    p.bind_uniform_block(block, w, slots, element)
+}
+
 /// main+0x978ba4 / main+0xf216b4 / main+0x966e70: a shape's vertex states (+0x11c / +0x160), its vertex buffers (+0x108
 /// count, +0x110 buffers: address, size +0x118) and its indexed draw (+0x180 relative: prim +0xc, type +8, count
 /// +0x28, index buffer +0x30), `instances` times.
