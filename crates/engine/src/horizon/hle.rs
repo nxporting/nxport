@@ -2864,6 +2864,75 @@ pub unsafe extern "C" fn hle_strcmp(s1: *const c_char, s2: *const c_char) -> i32
     libc::strcmp(s1, s2)
 }
 
+/// printf, formatted here: the guest passes variadic arguments in registers (AAPCS64), where neither the host's C
+/// library on Apple (variadics on the stack) nor a call through an adapter (hle_abi) would find them. Integer, string
+/// and pointer conversions take x1..x7 in turn; floating-point ones (passed in v registers) print as "?".
+#[no_mangle]
+pub unsafe extern "C" fn hle_printf(fmt: *const c_char, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64, a7: u64) -> i32 {
+    if fmt.is_null() {
+        return 0;
+    }
+    let out = format_printf(std::ffi::CStr::from_ptr(fmt).to_bytes(), &[a1, a2, a3, a4, a5, a6, a7]);
+    print!("{}", String::from_utf8_lossy(&out));
+    out.len() as i32
+}
+
+fn format_printf(fmt: &[u8], args: &[u64]) -> Vec<u8> {
+    let mut args = args.iter().copied();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < fmt.len() {
+        if fmt[i] != b'%' {
+            out.push(fmt[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        // Flags, width, precision and length are skipped (a '*' takes an argument).
+        let mut long = false;
+        while i < fmt.len() && b"-+ #0123456789.*hlLqjzt".contains(&fmt[i]) {
+            match fmt[i] {
+                b'*' => drop(args.next()),
+                b'l' | b'L' | b'q' | b'j' | b'z' | b't' => long = true,
+                _ => {}
+            }
+            i += 1;
+        }
+        let Some(&c) = fmt.get(i) else { break };
+        i += 1;
+        let v = |a: Option<u64>| a.unwrap_or(0);
+        let s = match c {
+            b'%' => "%".to_string(),
+            b'd' | b'i' => if long { (v(args.next()) as i64).to_string() } else { (v(args.next()) as i32).to_string() },
+            b'u' => if long { v(args.next()).to_string() } else { (v(args.next()) as u32).to_string() },
+            b'x' => if long { format!("{:x}", v(args.next())) } else { format!("{:x}", v(args.next()) as u32) },
+            b'X' => if long { format!("{:X}", v(args.next())) } else { format!("{:X}", v(args.next()) as u32) },
+            b'o' => if long { format!("{:o}", v(args.next())) } else { format!("{:o}", v(args.next()) as u32) },
+            b'p' => format!("{:#x}", v(args.next())),
+            b'c' => char::from(v(args.next()) as u8).to_string(),
+            b's' => match v(args.next()) {
+                0 => "(null)".to_string(),
+                p => String::from_utf8_lossy(unsafe { std::ffi::CStr::from_ptr(p as *const c_char) }.to_bytes()).into_owned(),
+            },
+            b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => "?".to_string(),
+            _ => String::from_utf8_lossy(&fmt[start..i]).into_owned(),
+        };
+        out.extend_from_slice(s.as_bytes());
+    }
+    out
+}
+
+#[cfg(test)]
+mod printf_tests {
+    #[test]
+    fn formats_integers_strings_and_unknowns() {
+        let s = b"str\0";
+        let out = super::format_printf(b"%d %5u %lx %s %c %% %f %y", &[(-3i32) as u32 as u64, 7, 0xabc, s.as_ptr() as u64, b'z' as u64]);
+        assert_eq!(String::from_utf8(out).unwrap(), "-3 7 abc str z % ? %y");
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_GetSystemTickFrequency() -> u64 {
     crate::clock::frequency()

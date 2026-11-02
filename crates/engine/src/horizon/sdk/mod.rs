@@ -11,19 +11,9 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// A function pointer in a static table.
-#[derive(Clone, Copy)]
-pub struct Fp(pub *const ());
-// SAFETY: the pointers are function addresses, never written.
-unsafe impl Sync for Fp {}
-unsafe impl Send for Fp {}
-
 pub enum Bind {
     /// An extern "C" function, called through an HLE trampoline (or its adapter: crate::hle_abi).
     Func(crate::hle_abi::Hle),
-    /// A host function bound as it is, with no adapter (a variadic one: its arguments cannot be typed); native
-    /// trampolines warn about it, and a lifted runtime cannot call it.
-    Raw(Fp),
     /// The address of a data symbol.
     Data(fn() -> usize),
 }
@@ -174,7 +164,6 @@ fn chain() -> &'static Chain {
 fn target(b: &Bind) -> Target {
     match b {
         Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize),
-        Bind::Raw(f) => Target::Func(f.0 as usize),
         Bind::Data(d) => Target::Data(d()),
     }
 }
