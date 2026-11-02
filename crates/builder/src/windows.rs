@@ -60,9 +60,15 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         ));
     }
 
-    // Without the cache the app translates every shader as the game loads it.
+    // Without the cache the app translates every shader as the game loads it. Each step is skipped when what it was
+    // last built from is unchanged: the stages by the game's version (main's build id), the cache by that, the
+    // translator and the pipeline list.
     if prebuild {
-        steps.push(extract_stages_step(&job, &dump, &stages));
+        let main = nxport::profile::main_build_id_of(&dump).unwrap_or_default();
+        let stamp = Stamp { file: work.join("stages.from"), inputs: format!("main {main}\n"), output: stages.clone() };
+        let extract = extract_stages_step(&job, &dump, &stages);
+        steps.push((extract.0, Box::new(move || stamp.run("The shader stages are those of the last build", extract.1))));
+
         let list = cache.join("pipelines.txt");
         let w = Work {
             kind: WorkKind::Shaders,
@@ -70,12 +76,22 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             into: vulkan_cache.clone(),
             mods: None,
             stages: Some(stages.clone()),
-            pipeline_list: Some(list),
+            pipeline_list: Some(list.clone()),
             patched_image: None,
             edits: SettingsPatch::default(),
         };
-        let (job, file) = (job.clone(), work.join("shaders.toml"));
-        steps.push(("Building the shader cache".into(), Box::new(move || run_worker(&job, &file, &w))));
+        let (job, file, from, built) = (job.clone(), work.join("shaders.toml"), work.join("vulkan_cache.from"), vulkan_cache.clone());
+        steps.push((
+            "Building the shader cache".into(),
+            Box::new(move || {
+                // The list is written by an earlier step.
+                use nxport::vulkan::stage_cache::{fnv1a64, translator};
+                let pipelines = std::fs::read(&list).map_or(0, |b| fnv1a64(&b));
+                let inputs = format!("translator {}\nmain {main}\npipelines {pipelines:016x}\n", translator());
+                let stamp = Stamp { file: from, inputs, output: built.join(translator()) };
+                stamp.run("The shader cache is that of the last build", move || run_worker(&job, &file, &w))
+            }),
+        ));
     }
 
     {
@@ -248,6 +264,26 @@ pub struct Work {
     /// The settings above the game's profile (last: a table).
     #[serde(default)]
     edits: SettingsPatch,
+}
+
+/// What a step's `output` was last built from, kept in `file`: a later build from the same `inputs` skips the step.
+struct Stamp {
+    file: PathBuf,
+    inputs: String,
+    output: PathBuf,
+}
+
+impl Stamp {
+    fn run(self, kept: &str, step: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        if self.output.is_dir() && std::fs::read_to_string(&self.file).is_ok_and(|s| s == self.inputs) {
+            println!("  {kept} ({})", self.file.display());
+            return Ok(());
+        }
+        // Stale until the step finishes: a step that fails or is stopped leaves no stamp.
+        let _ = std::fs::remove_file(&self.file);
+        step()?;
+        std::fs::write(&self.file, &self.inputs).map_err(|e| format!("{}: {e}", self.file.display()))
+    }
 }
 
 /// The line prefix a worker reports progress with: `@ <fraction of the step> <done> <total> <what>`.
