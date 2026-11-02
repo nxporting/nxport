@@ -706,6 +706,25 @@ pub unsafe extern "C" fn on_texture_quad_end() -> u32 {
     TEXTURE_QUADS.end("texture quads", &TEXTURE_QUAD_EXPECTED)
 }
 
+static CAPTURE_QUADS: Checked = Checked::new();
+
+thread_local! {
+    static CAPTURE_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x98aa34(w, tex, viewport, a, b, scale, offset, value in s0): a capture quad (cubemap.rs; hook_float).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_capture_quad(w: usize, tex: usize, vp: usize, a: usize, b: usize, scale: usize, offset: usize, floats: usize) -> u32 {
+    let value = (floats as *const u32).read();
+    CAPTURE_QUADS.run(&CAPTURE_QUAD_EXPECTED, |p| cubemap::capture_quad(p, w, tex, vp, a, b, scale, offset, value))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_capture_quad_end() -> u32 {
+    CAPTURE_QUADS.end("capture quads", &CAPTURE_QUAD_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1631,6 +1650,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = CAPTURE_QUADS.summary("capture quads") {
+        println!("{l}");
+    }
     if let Some(l) = TEXTURE_QUADS.summary("texture quads") {
         println!("{l}");
     }
@@ -1845,6 +1867,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_texture_quad(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_texture_quad_end())) as usize;
         hook(base, mem_space, 0xbe1b2c, 0xd10643ff, pre, post, "Texture quads");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_capture_quad(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_capture_quad_end())) as usize;
+        hook_float(base, mem_space, 0x98aa34, 0xd10203ff, pre, post, "Capture quads");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
