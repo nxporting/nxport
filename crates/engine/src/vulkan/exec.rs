@@ -85,6 +85,8 @@ struct Nvn {
     render_disabled: bool,
     prim_restart: Option<u32>,
     depth_clamp: bool,
+    /// nvnCommandBufferSetRasterizerDiscard: draws are skipped (their vertex stages write nothing the engine keeps).
+    rasterizer_discard: bool,
     polygon_offset: (f32, f32, f32),
     point_size: f32,
 }
@@ -1112,6 +1114,7 @@ impl Ctx {
                 self.history = super::history::History::new(&self.dev, HISTORY_AHEAD);
             }
             self.history_ahead = HISTORY_AHEAD;
+            crate::gpu::history::record_ahead(HISTORY_AHEAD);
             println!("[+] Frame history: recording the next {HISTORY_AHEAD} frames");
         }
         if self.history.is_none() {
@@ -1128,11 +1131,13 @@ impl Ctx {
             }
         }
         if n == 0 {
+            crate::gpu::history::rotate(frame);
             self.history_ahead -= 1;
             if self.history_ahead == 0 {
                 if let Some(h) = self.history.as_ref() {
                     h.write(&self.dev, frame);
                 }
+                crate::gpu::history::record_ahead(0);
             }
             return;
         }
@@ -1229,6 +1234,7 @@ impl Ctx {
                 }
             }
             Cmd::SetDepthClamp(e) => self.st.depth_clamp = *e,
+            Cmd::SetRasterizerDiscard(e) => self.st.rasterizer_discard = *e,
             Cmd::SetPrimitiveRestart { enable, index } => self.st.prim_restart = enable.then_some(*index),
             Cmd::SetPolygonOffset { factor, units, clamp } => self.st.polygon_offset = (*factor, *units, *clamp),
             Cmd::SetBlendColor(c) => self.st.blend_color = *c,

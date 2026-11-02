@@ -119,6 +119,8 @@ pub enum Cmd {
     },
     /// Clamp depth instead of clipping at the near/far planes (shadow passes keep casters in front of the near plane).
     SetDepthClamp(bool),
+    /// Draws make no fragments: only their vertex work runs (nvnCommandBufferSetRasterizerDiscard).
+    SetRasterizerDiscard(bool),
     /// nvnCommandBufferSetPrimitiveRestart(enable, index).
     SetPrimitiveRestart {
         enable: bool,
@@ -649,6 +651,14 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetPrimitiveRestart(
             enable: enable != 0,
             index: index as u32
         }
+    );
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetRasterizerDiscard(cmd: usize, discard: u8) {
+    rec!(
+        "nvnCommandBufferSetRasterizerDiscard",
+        cmd,
+        Cmd::SetRasterizerDiscard(discard != 0)
     );
 }
 #[no_mangle]
@@ -1821,6 +1831,7 @@ pub fn lookup(name: &str) -> Option<usize> {
         "nvnCommandBufferBindImage" => f!(hle_typed_cb_BindImage(_, _, _, _)),
         "nvnCommandBufferBindImages" => f!(hle_typed_cb_BindImages(_, _, _, _, _)),
         "nvnCommandBufferSetDepthClamp" => f!(hle_nvnCommandBufferSetDepthClamp(_, _)),
+        "nvnCommandBufferSetRasterizerDiscard" => f!(hle_nvnCommandBufferSetRasterizerDiscard(_, _)),
         "nvnCommandBufferSetPrimitiveRestart" => f!(hle_nvnCommandBufferSetPrimitiveRestart(_, _, _)),
         "nvnCommandBufferSetPolygonOffsetClamp" => f!(hle_typed_cb_SetPolygonOffsetClamp(_, _, _, _)),
         "nvnCommandBufferSetBlendColor" => f!(hle_nvnCommandBufferSetBlendColor(_, _)),

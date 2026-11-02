@@ -5,7 +5,7 @@
 // <frame>.ppm per frame and journal.txt, and logs the frames ranked by single-frame outlier pixels ([history]).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// Frames kept (0: off).
@@ -16,10 +16,25 @@ pub fn len() -> usize {
 
 static JOURNAL: Mutex<(Vec<String>, VecDeque<(u64, Vec<String>)>)> = Mutex::new((Vec::new(), VecDeque::new()));
 static REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Frames a backend is recording for a capture asked without a kept history (0: none).
+static AHEAD: AtomicUsize = AtomicUsize::new(0);
+
+/// A capture without a kept history records `frames` frames, with their journal (0: the recording is over).
+pub fn record_ahead(frames: usize) {
+    AHEAD.store(frames, Ordering::Relaxed);
+    if frames == 0 {
+        JOURNAL.lock().unwrap().1.clear();
+    }
+}
+
+/// Frames whose journal is kept.
+fn journaled() -> usize {
+    len().max(AHEAD.load(Ordering::Relaxed))
+}
 
 #[inline]
 pub fn journal_on() -> bool {
-    len() > 0
+    len() > 0 || AHEAD.load(Ordering::Relaxed) > 0
 }
 
 /// Adds an event to the frame being recorded.
@@ -35,7 +50,7 @@ pub fn rotate(pn: u64) {
     let mut j = JOURNAL.lock().unwrap();
     let cur = std::mem::take(&mut j.0);
     j.1.push_back((pn, cur));
-    while j.1.len() > len() {
+    while j.1.len() > journaled() {
         j.1.pop_front();
     }
 }
@@ -63,6 +78,11 @@ pub fn dir(pn: u64) -> String {
 
 /// Writes the journal of the kept frames.
 pub fn write_journal(dir: &str) {
+    let _ = std::fs::write(format!("{dir}/journal.txt"), journal_text());
+}
+
+/// The journal of the kept frames, as write_journal writes it.
+pub fn journal_text() -> String {
     let j = JOURNAL.lock().unwrap();
     let mut out = String::new();
     for (f, lines) in &j.1 {
@@ -72,7 +92,7 @@ pub fn write_journal(dir: &str) {
             out.push('\n');
         }
     }
-    let _ = std::fs::write(format!("{dir}/journal.txt"), out);
+    out
 }
 
 /// Writes frames (presented frame, width, height, RGB rows top first) as <frame>.ppm, oldest first, and logs them

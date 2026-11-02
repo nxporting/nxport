@@ -363,7 +363,7 @@ impl Ctx {
             let cache = self.pipeline_cache();
             crate::vulkan::listed::start(self.dev.clone(), cache);
         }
-        if self.st.render_disabled || instances <= 0 || !self.begin_pass() {
+        if self.st.render_disabled || self.st.rasterizer_discard || instances <= 0 || !self.begin_pass() {
             return;
         }
         let memo_key = (mode, self.pipe_gen, self.pass_gen, crate::nvn::api::window_origin_mode(), crate::nvn::api::depth_mode());
