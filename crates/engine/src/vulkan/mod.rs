@@ -24,6 +24,7 @@ mod vcache;
 pub mod stage_cache;
 pub mod state;
 pub mod texture;
+mod pass_dump;
 mod window;
 
 use std::collections::BTreeMap;

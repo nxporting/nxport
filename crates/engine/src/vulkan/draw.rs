@@ -397,6 +397,15 @@ impl Ctx {
         };
         let DrawMemo { vs: (vd, vc, vkey), gs, fs, vl, pipe, layout, set_layout, push, .. } = m;
         let fkey = fs.map(|(fd, _, k)| (fd, k));
+        // Another program after a draw that rendered to an attachment copied in this feedback epoch: the epoch ends, so
+        // what it samples of that attachment is copied again. Draws of one program in a row share the copy (deferred
+        // decals: dozens a frame, each sampling the targets it renders to).
+        let program = (vd, fs.map_or(0, |f| f.0));
+        if self.fb_dirty.is_some_and(|w| w != program) {
+            self.fb_epoch += 1;
+            self.fb_taken.clear();
+            self.fb_dirty = None;
+        }
         let mut j = self.rec.job();
         self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut j.w);
         if let Some((gd, gc, k)) = gs {
@@ -419,6 +428,19 @@ impl Ctx {
         self.bind_bindless(layout);
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
+        // Rendering to an attachment copied in this feedback epoch.
+        if !self.fb_taken.is_empty() && self.fb_dirty.is_none() {
+            if let Some(p) = self.pass.as_ref() {
+                let bits = self.st.depth_stencil.unwrap_or_else(state::default_depth_stencil);
+                // Depth or stencil writes (state::depth_stencil); the depth target is attached last.
+                let depth_written = bits & 0b10 != 0 || bits & 1 << 6 != 0;
+                let colors = p.images.len() - p.depth.is_some() as usize;
+                let written = |i: &vk::Image| p.images[..colors].contains(i) || (depth_written && p.depth.is_some() && p.images.last() == Some(i));
+                if self.fb_taken.iter().any(written) {
+                    self.fb_dirty = Some(program);
+                }
+            }
+        }
         if let Some(p) = self.pass.as_mut() {
             p.draws += 1;
             if crate::gpu::history::journal_on() {
@@ -987,6 +1009,9 @@ impl Ctx {
                         } else {
                             self.texture_binding(handle, *view, at)
                         };
+                        if crate::gpu::history::journal_on() {
+                            self.journal_texture(handle);
+                        }
                         let s = match slot {
                             Some(first) => {
                                 let index = match table.iter().position(|&t| t == s) {
@@ -1018,6 +1043,9 @@ impl Ctx {
                             (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
                         })
                     };
+                    if crate::gpu::history::journal_on() {
+                        self.journal_texture(handle);
+                    }
                     let i = (*word as usize).min(self.bl_memo.len() - 1);
                     // The word's last resolution in this submit first (most draws bind what the draw before bound).
                     let m = self.bl_memo[i];
@@ -1263,6 +1291,21 @@ impl Ctx {
         fb.map_or((word, image, 0), |f| (f.1, image, f.0))
     }
 
+    /// The frame history's journal: the image a draw samples through texture handle `handle`, its NVN format and size,
+    /// and whether the current pass renders to it (sampled through its feedback copy).
+    unsafe fn journal_texture(&mut self, handle: Option<u64>) {
+        let Some(h) = handle else { return };
+        let Some((obj, _)) = crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32) else { return };
+        let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return };
+        let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
+        let image = img.image;
+        let fb = self.pass.as_ref().is_some_and(|p| p.images.contains(&image));
+        let (w, hgt, fmt) = (t.width, t.height, t.format);
+        crate::gpu::history::journal(|| {
+            format!("    sample {:x}:{fmt} {w}x{hgt} at {level}/{layer}{}", vk::Handle::as_raw(image), if fb { " feedback" } else { "" })
+        });
+    }
+
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
     /// has none: the pass ends for the copy and resumes at the next draw.
     unsafe fn feedback_view(&mut self, t: &NvnTexture, view: Option<&crate::nvn::api::NvnTextureView>, declared: vk::ImageViewType) -> Option<vk::ImageView> {
@@ -1290,6 +1333,7 @@ impl Ctx {
             let args = [src.extent.width as u64, src.extent.height as u64, src.levels as u64, src.layers as u64];
             let (si, di) = (src.image, snap.image);
             self.checkpoint("feedback snapshot (W, H, levels, layers)", args);
+            self.fb_taken.push(si);
             self.rec.cmd(move |d, cb| d.device.cmd_copy_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &regions));
             self.barrier();
             self.fb_snaps.get_mut(&d)?.0 = self.fb_epoch;

@@ -159,11 +159,17 @@ pub struct Ctx {
     gpu_dirty: Ranges,
     /// What earlier submits' GPU work writes, until they complete.
     inflight_dirty: Vec<(u64, Ranges)>,
-    /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it taken at the first such
-    /// draw after the last barrier that invalidates textures (NVN: it sees the writes from before the barrier; sampling
-    /// an attachment inside a Vulkan render pass is undefined). Copies by texture description, with their epoch.
+    /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it, taken at the first such
+    /// draw of a feedback epoch (sampling an attachment inside a Vulkan render pass is undefined). An epoch ends at a
+    /// barrier that invalidates textures and at a draw of another program after one that rendered to an attachment
+    /// copied in it: games read what the draws before rendered without a barrier between (TotK's shrine floors blend
+    /// into the ground drawn just before them, and blended into black). Copies by texture description, with their epoch.
     fb_snaps: rustc_hash::FxHashMap<texture::Desc, (u64, texture::Image)>,
     fb_epoch: u64,
+    /// The attachments copied in this feedback epoch.
+    fb_taken: Vec<vk::Image>,
+    /// The program (vertex, fragment code) of the draw that rendered to one of them.
+    fb_dirty: Option<(u64, u64)>,
     /// GPU texture compression: the game renders compressed blocks through an integer view of a block-compressed texture
     /// (one texel per block). Those passes render into an uncompressed proxy, copied into the texture's level when the
     /// pass ends. Proxies by (texture, level, view format); the ones the current pass renders.
@@ -307,6 +313,8 @@ pub struct Ctx {
     history: Option<super::history::History>,
     /// Frames still to record for a capture asked without --frame-history (keep_history).
     history_ahead: usize,
+    /// The frame after a capture's request, pass by pass (vulkan/pass_dump.rs).
+    pass_dump: Option<super::pass_dump::PassDump>,
     /// Commands warned about as not implemented (by name, by kind).
     unimplemented: HashSet<&'static str>,
     unimplemented_kinds: HashSet<std::mem::Discriminant<Cmd>>,
@@ -663,6 +671,8 @@ impl Ctx {
             gpu_dirty: Ranges::default(),
             inflight_dirty: Vec::new(),
             fb_snaps: Default::default(),
+            fb_taken: Vec::new(),
+            fb_dirty: None,
             bc_proxies: Default::default(),
             bc_pending: Vec::new(),
             rt_history: Default::default(),
@@ -740,6 +750,7 @@ impl Ctx {
             window_tried: false,
             history: None,
             history_ahead: 0,
+            pass_dump: None,
             unimplemented_kinds: Default::default(),
         })
     }
@@ -1105,10 +1116,22 @@ impl Ctx {
         if self.lost {
             return;
         }
+        // The pass dump of the frame after a capture's request: written once that frame is presented and done.
+        match self.pass_dump.as_mut() {
+            Some(d) if d.recording() => d.presented(frame),
+            Some(_) => {
+                let _ = self.dev.device.device_wait_idle();
+                if let Some(d) = self.pass_dump.take() {
+                    d.write(&self.dev);
+                }
+            }
+            None => {}
+        }
         if n == 0 && self.history_ahead == 0 {
             if !crate::gpu::history::due(frame) {
                 return;
             }
+            self.pass_dump.get_or_insert_with(|| super::pass_dump::PassDump::new(frame + 1));
             // Kept for the next capture, which overwrites all of it.
             if self.history.is_none() {
                 self.history = super::history::History::new(&self.dev, HISTORY_AHEAD);
@@ -1146,6 +1169,7 @@ impl Ctx {
             if let Some(h) = self.history.as_ref() {
                 h.write(&self.dev, frame);
             }
+            self.pass_dump.get_or_insert_with(|| super::pass_dump::PassDump::new(frame + 1));
         }
     }
 
@@ -1281,11 +1305,14 @@ impl Ctx {
             Cmd::BindPolygonState(p) => self.st.polygon = *p,
             Cmd::BindMultisampleState(m) => self.st.multisample = *m,
             Cmd::Barrier(bits) => {
+                crate::gpu::history::journal(|| format!("barrier {bits:#x}"));
                 self.end_pass();
                 self.barrier();
                 // INVALIDATE_TEXTURE: textures read after it see what was rendered before it.
                 if bits & 0x10 != 0 {
                     self.fb_epoch += 1;
+                    self.fb_taken.clear();
+                    self.fb_dirty = None;
                 }
             }
             Cmd::BindTexture { stage, index, handle } => {
@@ -1475,8 +1502,10 @@ impl Ctx {
         let n = colors.len();
         if crate::gpu::history::journal_on() {
             let mut l = format!("pass {}x{}", extent.0, extent.1);
-            for (i, (c, img)) in self.st.colors.iter().zip(&images).enumerate() {
-                if c.texture != 0 {
+            // images holds the bound slots' images only, in slot order.
+            let mut bound = images.iter();
+            for (i, c) in colors.iter().enumerate() {
+                if let (Some(_), Some(img)) = (c, bound.next()) {
                     l += &format!(" c{i} {:x}:{}", vk::Handle::as_raw(*img), nvn_colors.get(i).map_or(0, |f| f.0));
                 }
             }
@@ -1651,6 +1680,37 @@ impl Ctx {
                 self.pass_labels.push(format!("{}x{} {target}, {} draws", p.extent.0, p.extent.1, p.draws));
             }
             self.barrier();
+            if self.pass_dump.as_ref().is_some_and(|d| d.recording()) && p.samples == vk::SampleCountFlags::TYPE_1 {
+                // The colour targets a blit can scale (float formats), with their slots; images lists them first.
+                let mut images = p.images.iter();
+                let mut targets = Vec::new();
+                for (slot, c) in p.colors.iter().enumerate() {
+                    let Some((_, fmt, rendered)) = c else { continue };
+                    let Some(&image) = images.next() else { break };
+                    if format::kind(*rendered) == format::Kind::Float {
+                        targets.push((image, *fmt, slot));
+                    }
+                }
+                let mut pairs = p.pairs.clone();
+                pairs.sort_unstable();
+                let pairs: Vec<String> = pairs.iter().map(|(v, f, n)| format!("s_{v:016x}/s_{f:016x} x{n}")).collect();
+                let label = format!(
+                    "{}x{} {} draws, targets {:?}{}: {}",
+                    p.extent.0,
+                    p.extent.1,
+                    p.draws,
+                    p.colors.iter().map(|c| c.map(|c| c.1)).collect::<Vec<_>>(),
+                    p.depth.map_or(String::new(), |d| format!(", depth {:?}", d.1)),
+                    pairs.join(", ")
+                );
+                if let Some(d) = self.pass_dump.as_mut() {
+                    // The depth target is attached last.
+                    let depth = p.depth.zip(p.images.last()).map(|((_, f), &image)| (image, f));
+                    for c in d.pass(&self.dev, p.extent, &targets, depth, label) {
+                        self.rec.cmd(c);
+                    }
+                }
+            }
             self.resolve_bc_proxies();
             if chunk().is_some_and(|c| self.chunk_start.elapsed() > c) {
                 self.submit_chunk();
