@@ -772,6 +772,23 @@ pub unsafe extern "C" fn on_view_fullscreen_end() -> u32 {
     VIEW_FULLSCREENS.end("view full-screen passes", &VIEW_FULLSCREEN_EXPECTED)
 }
 
+static EFFECT_LAYERS: Checked = Checked::new();
+
+thread_local! {
+    static EFFECT_LAYER_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x95f810(this, w, view, _, k, flags) (scene_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_effect_layer(this: usize, w: usize, view: u32, _x3: u64, k: i32, flags: u32) -> u32 {
+    EFFECT_LAYERS.run(&EFFECT_LAYER_EXPECTED, move |p| scene_passes::effect_layer(p, this, w, view, k, flags as u8))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_effect_layer_end() -> u32 {
+    EFFECT_LAYERS.end("effect layers", &EFFECT_LAYER_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1740,6 +1757,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = EFFECT_LAYERS.summary("effect layers") {
+        println!("{l}");
+    }
     if let Some(l) = VIEW_GRIDS.summary("view grids") {
         println!("{l}");
     }
@@ -1978,6 +1998,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_fullscreen(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_view_fullscreen_end())) as usize;
         hook(base, mem_space, 0x9737f8, 0xd10403ff, pre, post, "View full-screen passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_effect_layer(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_effect_layer_end())) as usize;
+        hook(base, mem_space, 0x95f810, 0xd10483ff, pre, post, "Effect layers");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

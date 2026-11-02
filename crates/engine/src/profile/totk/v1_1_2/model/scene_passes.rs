@@ -143,3 +143,97 @@ pub(super) unsafe fn view_fullscreen(p: &mut Port, this: usize, w: usize, view: 
     fullscreen(p, w);
     Ok(())
 }
+
+/// The program set holder ([[[[[[holder]]+0x10]+0x5f8]+8]+0x10]+8) of main+0x95f810.
+const PROGRAM_HOLDER: usize = 0x4634e40;
+
+/// main+0x95f810(this, w, view, _, k, flags): layer `k` (0x1298 bytes from this) of an effect drawn when enabled
+/// (+0x210, the layer's +0x1518, intensity +0x1938 > 0): a render state from the layer's switches, the program variant
+/// they select, its ring block (+0x3e8 per view 0x720, the layer's 0xd0 bytes at +0x180) and blocks, two or four
+/// textures by the fade (+0x1578, +0x1598), the optional textures +0x3c0 / +0x3c8, then the layer's shape (flags bit 0:
+/// the shape at +0x5298 and its stream +0x478).
+pub(super) unsafe fn effect_layer(p: &mut Port, this: usize, w: usize, view: u32, k: i32, flags: u8) -> R<()> {
+    let v = if p.m.r32(this + 0x3e0) > view { view } else { 0 } as i32 as isize as usize;
+    if p.m.r8(this + 0x210) == 0 {
+        return Ok(());
+    }
+    let kk = k as isize as usize;
+    let c = this.wrapping_add(kk.wrapping_mul(0x1298));
+    if p.m.r8(c + 0x1518) == 0 || p.m.f32(c + 0x1938) <= 0.0 {
+        return Ok(());
+    }
+    let fading = p.m.r8(c + 0x1578) != 0;
+    let fade = p.m.f32(c + 0x1598);
+    let partial = fading && 0.0 < fade && fade < 1.0;
+    let mut u = (p.m.r8(c + 0x1dd8) != 0) as u32;
+    let second = p.m.r8(c + 0x2058) != 0;
+    if second {
+        u |= 2;
+    }
+    if p.m.r8(c + 0x2038) != 0 || p.m.r32(this + 0x5780) == 0 {
+        u |= 4;
+    }
+    if p.m.r8(c + 0x2078) != 0 || flags & 1 != 0 {
+        u |= 8;
+    }
+    if partial {
+        u |= 0x10;
+    }
+    let mut g = default_state(p);
+    let b = g.as_mut_ptr() as *mut u8;
+    *b = ((p.m.r8(this + 0x270) == 0) & (flags & 1 == 0)) as u8;
+    *b.add(1) = 0;
+    g[7] |= 0xf;
+    *b.add(0x28) = 5;
+    *b.add(0x29) = if p.m.r8(this + 0x230) != 0 || p.m.r8(this + 0x3d0) != 0 { 1 } else { 5 };
+    *b.add(0x2a) = if flags & 1 != 0 { 2 } else { 6 };
+    *b.add(0x2b) = 6;
+    g[0x16] = p.m.r32(this + 0x57ac);
+    g[0x17] = p.m.r32(this + 0x57b0);
+    g[0x18] = 0;
+    *b.add(0x65) = 0;
+    *b.add(0x6d) |= 1;
+    p.apply_graphics_context(g.as_ptr() as usize, w);
+    let h = p.m.r64(p.m.r64(p.base + PROGRAM_HOLDER));
+    let z = p.m.r64(p.m.r64(p.m.r64(p.m.r64(p.m.r64(h + 0x10) + 0x5f8) + 8) + 0x10) + 8);
+    let prog = if u == 0 {
+        p.m.r64(z + 0x10)
+    } else {
+        let i = if p.m.r32(z + 0x18) > u - 1 { u - 1 } else { 0 };
+        p.m.r64(z + 0x20) + i as usize * 0x158
+    };
+    program_apply(p, prog, w)?;
+    let shapes = p.m.r64(p.m.r64(p.base + SHAPES));
+    shape_state(p, shapes + 0x12c8, w);
+    let rec = p.m.r64(this + 0x3e8).wrapping_add(v.wrapping_mul(0x720));
+    let block = p.ring_block_direct(rec.wrapping_add(kk.wrapping_mul(0xd0)) + 0x180, 0xd0);
+    program_block(p, prog, w, 0, block, 0)?;
+    program_block(p, prog, w, 1, rec.wrapping_add(kk.wrapping_mul(0x80)), 0)?;
+    if !fading || !(fade >= 1.0) {
+        program_texture(p, prog, w, 0, c + 0x20c0)?;
+        program_texture(p, prog, w, 1, c + 0x21b0)?;
+        if fading {
+            program_texture(p, prog, w, 2, c + 0x22a0)?;
+            program_texture(p, prog, w, 3, c + 0x2390)?;
+        }
+    } else {
+        program_texture(p, prog, w, 0, c + 0x22a0)?;
+        program_texture(p, prog, w, 1, c + 0x2390)?;
+    }
+    if second && p.m.r64(this + 0x3c0) != 0 {
+        program_texture(p, prog, w, 4, p.m.r64(this + 0x3c0))?;
+    }
+    if p.m.r64(this + 0x3c8) != 0 {
+        program_texture(p, prog, w, 5, p.m.r64(this + 0x3c8))?;
+    }
+    let (shape, stream) = if flags & 1 != 0 {
+        (this + 0x5298, this + 0x5478)
+    } else if p.m.r8(c + 0x20b8) == 0 {
+        (this + 0x4ad8, this + 0x4e98)
+    } else {
+        (this + 0x4cb8, this + 0x4ef8)
+    };
+    shape_state(p, shape, w);
+    stream_draw(p, stream, w);
+    Ok(())
+}
