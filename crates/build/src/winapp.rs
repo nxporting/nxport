@@ -55,6 +55,15 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     let exe = o.app.join("nxport.exe");
     copy(&engine, &exe)?;
     gui_subsystem(&exe)?;
+    // The title's icon (the console's, from the dump's control data), for Explorer, the taskbar and the window.
+    match crate::app_icon::source(o.dump, tid) {
+        Some(src) => {
+            let ico = crate::app_icon::ico(&src)?;
+            crate::app_icon::set_exe_icon(&exe, &ico)?;
+            println!("  Icon from {}", src.display());
+        }
+        None => println!("  [!] No icon in the dump (control/icon_*.dat or Logo/{tid:016x}.png): the app keeps the default"),
+    }
     // Windows looks for a program's DLLs in its own directory first. libopus is optional: the engine loads opus.dll
     // when there is one (Opus streams are silent without it).
     // Beside the engine, or a directory up from it (cargo's deps/ for tests), or beside this program.

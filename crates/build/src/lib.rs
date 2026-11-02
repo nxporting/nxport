@@ -4,6 +4,8 @@
 
 #[cfg(target_os = "macos")]
 mod batch_kernels;
+/// The app icon from the dump, as a Windows .ico written into the app's program.
+pub mod app_icon;
 pub mod extract_shaders;
 #[cfg(target_os = "macos")]
 mod icon;
