@@ -689,6 +689,23 @@ pub unsafe extern "C" fn on_slots_deferred(w: usize, handles: usize, index: i32,
     primitive(|p| Ok(vfx::bind_slots_deferred(p, w, handles, index, slots) as u32))
 }
 
+static TEXTURE_QUADS: Checked = Checked::new();
+
+thread_local! {
+    static TEXTURE_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xbe1b2c(w, prog, tex, viewport, scale, offset): a texture quad in a viewport (cubemap.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_texture_quad(w: usize, prog: usize, tex: usize, vp: usize, scale: usize, offset: usize) -> u32 {
+    TEXTURE_QUADS.run(&TEXTURE_QUAD_EXPECTED, |p| cubemap::texture_quad(p, w, prog, tex, vp, scale, offset))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_texture_quad_end() -> u32 {
+    TEXTURE_QUADS.end("texture quads", &TEXTURE_QUAD_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1614,6 +1631,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = TEXTURE_QUADS.summary("texture quads") {
+        println!("{l}");
+    }
     if let Some(l) = DEPTH_BUFFER_ENDS.summary("shadow depth buffer ends") {
         println!("{l}");
     }
@@ -1822,6 +1842,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_end_depth_buffer(_, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_end_depth_buffer_end())) as usize;
         hook(base, mem_space, 0xa404ac, 0xa9bd7bfd, pre, post, "Shadow depth buffer ends");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_texture_quad(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_texture_quad_end())) as usize;
+        hook(base, mem_space, 0xbe1b2c, 0xd10643ff, pre, post, "Texture quads");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

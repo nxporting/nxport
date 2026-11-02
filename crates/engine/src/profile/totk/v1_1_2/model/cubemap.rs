@@ -103,3 +103,80 @@ pub(super) unsafe fn copy_quad(p: &mut Port, w: usize, tex: usize, m: usize, row
     let ones = [1.0f32; 4];
     transformed_quad(p, w, prog, tex, m, rows, ones.as_ptr() as usize)
 }
+
+/// sead's orthographic projection type (vtable holder), its matrix update and the frame's near / far.
+const ORTHO_VTABLE: usize = 0x4634ef8;
+const ORTHO_UPDATE: usize = 0xbe2488;
+const ORTHO_NEAR: usize = 0x4634ee8;
+const ORTHO_FAR: usize = 0x4634ef0;
+
+/// main+0xbe1b2c(w, prog, tex, viewport, scale, offset): `tex` drawn as a quad of `scale` (in texture sizes) at
+/// `offset` within the viewport: uniform 1 = (width, height, 1 / width, 1 / height) of the texture, uniform 0 = the
+/// viewport's orthographic device matrix (sead's own functions, on a projection laid out as the game's) times the
+/// quad's transform, texture slot 0, then the full-screen shape.
+pub(super) unsafe fn texture_quad(p: &mut Port, w: usize, prog: usize, tex: usize, vp: usize, scale: usize, offset: usize) -> R<()> {
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let tw = (p.m.r16(tex + 0x30) as u32).max(1);
+    let h = p.m.r16(tex + 0x32) as u32;
+    let th = { let v = if p.m.r16(tex + 0x3a) == 3 { h } else { 1 }; if v > h { v } else { h } };
+    let (fw, fh) = (tw as f32, th as f32);
+    let mut size = [0u8; 16];
+    for (k, v) in [fw, fh, 1.0 / fw, 1.0 / fh].iter().enumerate() {
+        size[k * 4..k * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    set_uniform(p, prog, w, 1, &size);
+    // The projection object (as at the game's sp+0x78).
+    let mut proj = [0u32; 0x2c];
+    let pp = proj.as_mut_ptr() as usize;
+    let f = |o: usize| p.m.f32(vp + o);
+    let (x, y, x2, y2) = (f(8), f(0xc), f(0x10), f(0x14));
+    let vt = (p.m.r64(p.base + ORTHO_VTABLE) + 0x10) as u64;
+    proj[0] = vt as u32;
+    proj[1] = (vt >> 32) as u32;
+    proj[2] = 0x101;
+    proj[0x23] = p.m.r32(vp + 0x18);
+    proj[0x24] = p.m.r32(p.m.r64(p.base + ORTHO_NEAR));
+    proj[0x25] = p.m.r32(p.m.r64(p.base + ORTHO_FAR));
+    proj[0x26] = 0f32.to_bits();
+    proj[0x27] = 1f32.to_bits();
+    let (dh, dw) = (y2 - y, x2 - x);
+    proj[0x28] = (dh * 0.5).to_bits();
+    proj[0x29] = (dh * -0.5).to_bits();
+    proj[0x2a] = (dw * -0.5).to_bits();
+    proj[0x2b] = (dw * 0.5).to_bits();
+    let cy = (y2 + y) * 0.5 - y;
+    let cx = (x2 + x) * 0.5 - x;
+    let sx = p.m.f32(scale) * fw;
+    let sy = p.m.f32(scale + 4) * fh;
+    let tx = (p.m.f32(offset) - cx) + sx * 0.5;
+    let ty = -((p.m.f32(offset + 4) - cy) + sy * 0.5);
+    p.query(p.base + ORTHO_UPDATE, &[pp as u64, (pp + 0xc) as u64]);
+    proj[2] = 0x100;
+    let update_device = p.m.r64(p.m.r64(pp) + 0x60);
+    p.query(update_device, &[pp as u64, (pp + 0x4c) as u64, (pp + 0xc) as u64, proj[0x23] as u64]);
+    // Each device-matrix row r: (sx, 0, 0, tx) * r0, fused with (0, sy, 0, ty) * r1 and 0 * r2, plus (0, 0, 0, r3).
+    let row_x = [sx, 0.0, 0.0, tx];
+    let row_y = [0.0, sy, 0.0, ty];
+    let mut m = [0u8; 64];
+    for r in 0..4 {
+        let d = |k: usize| f32::from_bits(proj[3 + r * 4 + k]);
+        for l in 0..4 {
+            let v = row_x[l] * d(0);
+            let v = row_y[l].mul_add(d(1), v);
+            let v = 0f32.mul_add(d(2), v);
+            let v = (if l == 3 { d(3) } else { 0.0 }) + v;
+            m[r * 16 + l * 4..r * 16 + l * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    program_texture(p, prog, w, 0, tex)?;
+    if p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    set_uniform(p, prog, w, 0, &m);
+    let shapes = p.m.r64(p.m.r64(p.base + SHAPES));
+    shape_state(p, shapes + 0xd28, w);
+    stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1e8, w);
+    Ok(())
+}
