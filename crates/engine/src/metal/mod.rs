@@ -111,6 +111,8 @@ pub(crate) struct State {
     images_bound: BindTable<u64>,
     /// Queue render enable (nvnCommandBufferSetRenderEnable): when false, draws and clears are discarded.
     render_enabled: bool,
+    /// nvnCommandBufferSetRasterizerDiscard: draws make no fragments, so they are skipped.
+    rasterizer_discard: bool,
     /// SAMPLES_PASSED occlusion queries (nvnCommandBufferResetCounter / ReportCounter counter 1).
     occl: Occlusion,
     /// TIMESTAMP reports recorded into the command buffer being built: (address, before any GPU work in it); see
@@ -539,6 +541,7 @@ impl Default for State {
             writeback: Default::default(),
             rt_history: HashMap::default(),
             render_enabled: true,
+            rasterizer_discard: false,
             occl: Occlusion::default(),
             point_size: 1.0,
             blend_states: [0; 8],
@@ -2746,6 +2749,15 @@ impl Gfx {
                     _ => {}
                 }
             }
+            if st.rasterizer_discard
+                && matches!(
+                    cmd,
+                    Cmd::DrawArrays { .. } | Cmd::DrawArraysInstanced { .. } | Cmd::DrawElements { .. } | Cmd::DrawElementsInstanced { .. }
+                )
+            {
+                journal(|| format!("  discard-skip program {:#x}", st.program.unwrap_or(0)));
+                continue;
+            }
             if !st.render_enabled
                 && matches!(
                     cmd,
@@ -3330,6 +3342,9 @@ impl Gfx {
                 }
                 Cmd::SetDepthClamp(on) => {
                     st.depth_clamp = *on;
+                }
+                Cmd::SetRasterizerDiscard(on) => {
+                    st.rasterizer_discard = *on;
                 }
                 Cmd::SetPrimitiveRestart { enable, index } => {
                     st.prim_restart = enable.then_some(*index);

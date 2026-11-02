@@ -1106,9 +1106,6 @@ pub fn resolve_proc(func_name: &str) -> *const () {
         "nvnCommandBufferSetProvokingVertexMode" => {
             crate::hle!(hle_nvnCommandBufferSetProvokingVertexMode(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetRasterizerDiscard" => {
-            crate::hle!(hle_nvnCommandBufferSetRasterizerDiscard(_, _, _, _, _, _))
-        }
         "nvnCommandBufferSetRenderEnable" => crate::hle!(hle_nvnCommandBufferSetRenderEnable(_, _, _, _, _, _)),
         "nvnCommandBufferSetRenderEnableConditional" => {
             crate::hle!(hle_nvnCommandBufferSetRenderEnableConditional(_, _, _, _, _, _))
@@ -2932,7 +2929,6 @@ nvn_command_recorders! {
     hle_nvnCommandBufferSetPolygonOffsetClamp => "nvnCommandBufferSetPolygonOffsetClamp",
     hle_nvnCommandBufferSetProgramSubroutines => "nvnCommandBufferSetProgramSubroutines",
     hle_nvnCommandBufferSetProvokingVertexMode => "nvnCommandBufferSetProvokingVertexMode",
-    hle_nvnCommandBufferSetRasterizerDiscard => "nvnCommandBufferSetRasterizerDiscard",
     hle_nvnCommandBufferSetRenderEnable => "nvnCommandBufferSetRenderEnable",
     hle_nvnCommandBufferSetRenderEnableConditional => "nvnCommandBufferSetRenderEnableConditional",
     hle_nvnCommandBufferSetSampleMask => "nvnCommandBufferSetSampleMask",

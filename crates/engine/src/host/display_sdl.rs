@@ -184,10 +184,8 @@ impl Host {
                     }
                     return;
                 }
-                // F9 or space (unless space is bound to a game input): capture the frame history at the next present,
-                // to show a glitch from a live session.
-                let space_free = || !input::bindings().iter().any(|b| b.key == Some(49));
-                if sc == Scancode::F9 || (sc == Scancode::Space && space_free()) {
+                // F9: capture the frame history at the next present, to show a glitch from a live session.
+                if sc == Scancode::F9 {
                     if !repeat {
                         crate::gpu::history::request();
                         println!("[+] Capture requested: the frame history is written at the next present");
