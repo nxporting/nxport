@@ -28,6 +28,7 @@ pub static SITES: Sites = Sites {
     step_code: frame_time::step_code(0xb001_eda8),           // adrp x8, main+0x455d000
     input: 0x8f68b8,
     input_code: frame_time::input_code(0x9001_e388, 0xf943_5108), // adrp x8, main+0x4566000; ldr x8, [x8, #0x6a0]
+    camera_rate: None,
 };
 
 /// Screen shapes other than 16:9: 1.1.2's sites at their 1.0.0 addresses (the code matches apart from pc-relative

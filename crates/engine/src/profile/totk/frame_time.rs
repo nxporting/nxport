@@ -17,6 +17,11 @@
 // things unevenly across evenly shown frames, a stutter. There the step is rounded to whole refreshes, the remainder
 // carried into the next frames' steps, so game time keeps to real time.
 //
+// Camera rate: a getter the camera code reads a per-frame amount through (1.1.2: main+0x1d3675c; UltraCam scales it
+// the same way: docs/ultracam-totk-112.md) is not stepped by the time manager, so the camera turned faster the faster
+// the game ran (Ultrahand's vertical camera). It branches to camera_rate, which scales the amount by the frame's step
+// in frames at 30 fps (1 at 30 fps).
+//
 // The hooks rewrite instructions and branch to HLE trampolines (no code of our own in guest memory), so they apply to
 // every runtime: natively, and to the image that is lifted.
 
@@ -34,12 +39,22 @@ pub struct Sites {
     /// The hold-timer step stored through a pointer; words 2 and 3 (adrp, ldr) load the pointer.
     pub input: usize,
     pub input_code: [u32; 8],
+    /// The camera-rate getter (`ldr s0, [x0, #0xc54]; ret`: CAMERA_RATE_CODE), where known.
+    pub camera_rate: Option<usize>,
 }
+
+pub const CAMERA_RATE_CODE: [u32; 2] = [
+    0xbd4c_5400, // ldr s0, [x0, #0xc54]
+    0xd65f_03c0, // ret
+];
 
 pub const MOVZ_X8_2: u32 = 0xd280_0048;
 pub const MOVZ_X8_1: u32 = 0xd280_0028;
 pub const CBNZ_VETO: u32 = 0x35ff_f908;
 pub const NOP: u32 = 0xd503_201f;
+/// BL and B, offset 0.
+const BL: u32 = 0x9400_0000;
+const B: u32 = 0x1400_0000;
 
 /// The step code (scvtf s0, w1 .. stp s0, s1, [x0, #8]) with the version's adrp as word 4.
 pub const fn step_code(adrp: u32) -> [u32; 9] {
@@ -151,17 +166,26 @@ fn vblank_period() -> Option<f32> {
     (paced && live::frame_limit() + 1 >= live::refresh_rate()).then(|| 1.0 / hz)
 }
 
+/// The last frame's step in frames at 30 fps: what time_step gave the game.
+fn frames_at_30() -> f32 {
+    if !crate::host::live::real_time_speed() {
+        return LAST_INTERVAL.load(Ordering::Relaxed) as f32 * 0.5;
+    }
+    let dt = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
+    if dt > 0.0 { dt * 30.0 } else { 1.0 }
+}
+
+/// Replaces the camera-rate getter (x0 = the camera's object): its per-frame amount, scaled to the frame's step.
+pub unsafe extern "C" fn camera_rate(obj: usize) -> f32 {
+    *((obj + 0xc54) as *const f32) * frames_at_30()
+}
+
 /// Replaces the controllers' hold-timer step (frames at 30 fps): the last step time_step took.
 pub unsafe extern "C" fn input_step(dest: usize) {
     if dest == 0 {
         return;
     }
-    if !crate::host::live::real_time_speed() {
-        *(dest as *mut f32) = LAST_INTERVAL.load(Ordering::Relaxed) as f32 * 0.5;
-        return;
-    }
-    let dt = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
-    *(dest as *mut f32) = if dt > 0.0 { dt * 30.0 } else { 0.5 };
+    *(dest as *mut f32) = frames_at_30();
 }
 
 #[cfg(nx_runtime)]
@@ -181,7 +205,7 @@ unsafe fn patch(base: usize, site: usize, from: u32, to: u32, what: &str) -> boo
     }
 }
 
-/// Replaces `expected` at main+`at` with `code`, whose word `call` becomes a bl to a trampoline for `hle_fn`.
+/// Replaces `expected` at main+`at` with `code`, whose word `call` (BL or B) gets the offset of a trampoline for `hle_fn`.
 #[cfg(nx_runtime)]
 unsafe fn replace_with_call(
     base: usize,
@@ -201,7 +225,7 @@ unsafe fn replace_with_call(
     if d.abs() >= 1 << 27 {
         return Err("the trampoline is out of branch range");
     }
-    code[call] = 0x9400_0000 | ((d >> 2) as u32 & 0x03ff_ffff);
+    code[call] |= (d >> 2) as u32 & 0x03ff_ffff;
     for (k, w) in code.iter().enumerate() {
         std::ptr::write(site.add(k), *w);
     }
@@ -215,7 +239,7 @@ unsafe fn replace_with_call(
 unsafe fn install_time_step(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) -> Result<(), String> {
     let step = vec![
         0xaa00_03f3, // mov x19, x0 (the timer, kept across the call)
-        0,           // bl <time_step trampoline>
+        BL,          // bl <time_step trampoline>
         NOP,
         NOP,
         s.step_code[4], // adrp x8, <page> (in place)
@@ -232,7 +256,7 @@ unsafe fn install_time_step(base: usize, mem_space: &mut crate::guest::loader::G
         s.input_code[2], // adrp x8, <page> (in place)
         s.input_code[3], // ldr x8, [x8, #<pointer>]
         0xaa08_03e0,     // mov x0, x8
-        0,               // bl <input_step trampoline>
+        BL,              // bl <input_step trampoline>
         s.input_code[4], // add x0, x19, #0x290 (the next call's argument)
         NOP,
     ];
@@ -249,6 +273,13 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
             println!("[+] Game time: each frame steps by the real time since the last one (1/240 to 1/15 s)")
         }
         Err(e) => println!("[!] Game time: {e}; the step stays tied to the present interval"),
+    }
+    if let Some(at) = s.camera_rate {
+        // b <camera_rate trampoline>: it returns to the getter's caller.
+        match replace_with_call(base, mem_space, at, &CAMERA_RATE_CODE, vec![B, NOP], 0, crate::hle!(camera_rate(_))) {
+            Ok(()) => println!("[+] Camera rate: scaled to the frame's step"),
+            Err(e) => println!("[!] Camera rate: main+{at:#x}: {e}; not scaled"),
+        }
     }
     // Both or neither: the lowest interval alone stays vetoed.
     let p = (base + s.veto) as *const u32;
