@@ -18,8 +18,6 @@ pub mod rumble;
 #[path = "live.rs"]
 pub mod live;
 
-#[path = "settings_win.rs"]
-pub mod settings_win;
 
 pub mod overlay {
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};

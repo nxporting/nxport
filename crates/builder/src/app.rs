@@ -150,6 +150,20 @@ impl Target {
     #[cfg(not(any(target_os = "macos", windows)))]
     pub const ALL: &'static [Target] = &[];
 
+    /// Every target, buildable here or not (the form lists them all).
+    pub const EVERY: [Target; 3] = [Target::WindowsApp, Target::MacApp, Target::Ipa];
+
+    /// Why this host cannot build the target, if it cannot.
+    pub fn unavailable(self) -> Option<&'static str> {
+        if self.offered() {
+            return None;
+        }
+        Some(match self {
+            Target::MacApp | Target::Ipa => "Builds on a macOS host: the Metal shader compiler, actool / iconutil and codesign.",
+            Target::WindowsApp => "Builds on a Windows host: the Windows engine (nxport.exe) the app carries, and the lifted code's toolchain.",
+        })
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Target::MacApp => "macOS app",
@@ -409,12 +423,14 @@ impl Builder {
         self.bundle_id = mem.bundle_id.unwrap_or_default();
         self.ios_gpu = mem.gpu.unwrap_or_default();
         let mut edits = mem.settings.unwrap_or_default();
-        // A Windows app's settings are set in the app (its menus and settings window), not here: only the system data
-        // folder, which the builder asks for, carries over.
+        // A Windows app's settings are set in the app (its menu bar), not here: only what the builder asks for carries
+        // over, the system data folder and what lifting reads (which code is in the app).
         if self.target == Target::WindowsApp {
-            let sys = edits.files.system_data_dir.take();
-            edits = SettingsPatch::default();
-            edits.files.system_data_dir = sys;
+            let mut kept = SettingsPatch::default();
+            kept.files.system_data_dir = edits.files.system_data_dir.take();
+            kept.files.no_exefs_patches = edits.files.no_exefs_patches.take();
+            kept.guest.run_game_subsdk = edits.guest.run_game_subsdk.take();
+            edits = kept;
         }
         if let Some(sys) = edits.files.system_data_dir.as_ref() {
             self.system_data = sys.display().to_string();
@@ -493,94 +509,150 @@ impl Builder {
         true
     }
 
+    /// The build form, for every target: the game, its mods, where the app goes, and what must be decided when it is
+    /// built. A Windows app runs the game's code lifted to C and compiled in, so the code it runs (the game's, mods'
+    /// ExeFS patches and plugins) is fixed here, and everything else is set in the app while it runs (its menu bar). The
+    /// Apple targets run the game's code natively and take their settings when they are built (App settings).
     fn contents(&mut self, ui: &imgui::Ui) {
+        use nxport::settings::edit::{heading, ERROR, MUTED, OK, WARN};
         let running = self.job.as_ref().is_some_and(|j| j.lock().unwrap().result.is_none());
-        #[cfg(windows)]
-        if self.target == Target::WindowsApp {
-            return self.contents_windows(ui, running);
-        }
-        let _width = ui.push_item_width(-260.0);
+        const LABEL: f32 = 120.0;
+        let tip = |ui: &imgui::Ui, text: &str| {
+            if ui.is_item_hovered_with_flags(imgui::ItemHoveredFlags::ALLOW_WHEN_DISABLED) {
+                ui.tooltip(|| {
+                    let _w = ui.push_text_wrap_pos(440.0);
+                    ui.text(text);
+                });
+            }
+        };
+        let label = |ui: &imgui::Ui, text: &str, help: &str| {
+            ui.align_text_to_frame_padding();
+            ui.text(text);
+            tip(ui, help);
+            ui.same_line_with_pos(LABEL);
+        };
+        // A row: label, path field, Browse.
+        let row = |ui: &imgui::Ui, id: &str, text_label: &str, text: &mut String, hint: &str, help: &str| -> bool {
+            label(ui, text_label, help);
+            ui.set_next_item_width((ui.content_region_avail()[0] - 90.0).max(120.0));
+            let changed = ui.input_text(format!("##{id}"), text).hint(hint).build();
+            ui.same_line();
+            if ui.button(format!("Browse##{id}")) {
+                window::request_path(id, PathKind::Directory);
+            }
+            changed
+        };
+        let indent = |ui: &imgui::Ui| ui.set_cursor_pos_x(LABEL);
+        // A line under a row, lined up with its field.
+        let detail = |ui: &imgui::Ui, color: [f32; 4], text: &str| {
+            indent(ui);
+            ui.text_colored(color, text);
+        };
+
+        heading(ui, "nxport");
+        ui.same_line();
+        ui.text_colored(MUTED, "app builder");
+        ui.separator();
         let _disabled = ui.begin_disabled_with_cond(running);
 
-        ui.separator_with_text("Game");
-        let mut dump = self.dump.clone();
-        if ui.input_text("Dump##dump", &mut dump).build() {
-            self.set_dump(dump);
+        label(ui, "Target", "What the app runs on. A target builds only on its own kind of host.");
+        ui.set_next_item_width(260.0);
+        if let Some(_c) = ui.begin_combo("##target", self.target.label()) {
+            for t in Target::EVERY {
+                let why = t.unavailable();
+                let picked = {
+                    let _d = ui.begin_disabled_with_cond(why.is_some());
+                    ui.selectable_config(t.label()).selected(t == self.target).build()
+                };
+                if let Some(w) = why {
+                    tip(ui, w);
+                }
+                if picked && t != self.target {
+                    self.set_target(t);
+                }
+            }
         }
-        ui.same_line();
-        if ui.button("Choose…##dump") {
-            window::request_path("dump", PathKind::Directory);
+
+        let mut dump = self.dump.clone();
+        if row(ui, "dump", "Game", &mut dump, "dump (ExeFS/, RomFS/)", "A dump folder with ExeFS/ and RomFS/ (Logo/ and control.nacp too, when the dump has them: the app's icon and name).") {
+            self.set_dump(dump);
         }
         match &self.game {
             Some(g) => {
-                ui.text(format!("{} {}", g.name, g.version.as_ref().map_or_else(|| "(unknown version)".to_string(), |v| format!("v{v}"))));
-                ui.same_line();
-                ui.text_disabled(format!("{:016X}{}", g.title_id, if g.profile.is_some() { "" } else { "  no game profile" }));
+                let version = g.version.as_ref().map_or_else(String::new, |v| format!(" {v}"));
+                let profile = if g.profile.is_some() { "" } else { "  no profile" };
+                detail(ui, if g.profile.is_some() { OK } else { WARN }, &format!("{}{version}  {:016X}{profile}", g.name, g.title_id));
                 if g.is_32bit {
-                    ui.text_colored([1.0, 0.45, 0.4, 1.0], "A 32-bit game: Apple CPUs cannot run 32-bit ARM code, so it is not supported");
+                    detail(ui, ERROR, "main.npdm: 32-bit (AArch32) program: unsupported");
                 }
             }
-            None if !self.dump.is_empty() => ui.text_colored([1.0, 0.45, 0.4, 1.0], "Not a game dump (needs ExeFS/main.npdm and RomFS/)"),
-            None => ui.text_disabled("A directory with ExeFS/, RomFS/, Logo/, and control.nacp if needed"),
-        }
-        self.preset_bar(ui);
-        ui.input_text("Mods##mods", &mut self.mods).build();
-        ui.same_line();
-        if ui.button("Choose…##mods") {
-            window::request_path("mods", PathKind::Directory);
-        }
-        ui.input_text("System Data##system_data", &mut self.system_data).build();
-        ui.same_line();
-        if ui.button("Choose…##system_data") {
-            window::request_path("system_data", PathKind::Directory);
+            None if !self.dump.trim().is_empty() => detail(ui, ERROR, "no ExeFS/main.npdm (or no RomFS/) under this path"),
+            None => {}
         }
 
-        ui.separator_with_text("Output");
-        let prev_target = self.target;
-        let mut t = Target::ALL.iter().position(|&x| x == self.target).unwrap_or(0);
-        let target_labels: Vec<_> = Target::ALL.iter().map(|&x| x.label()).collect();
-        if ui.combo_simple_string("Target", &mut t, &target_labels) {
-            let _ = self.remember();
-            self.target = Target::ALL[t];
-            if self.out_dir.trim().is_empty() || self.out_dir == default_out_dir(prev_target) {
-                self.out_dir = default_out_dir(self.target);
+        let lifted = self.target == Target::WindowsApp;
+        let mods_help = if lifted {
+            "Mods in Atmosphère layout: a folder of mods (one folder each) or one mod's folder. romfs/ is read while the game runs; exefs/ (IPS / pchtxt patches, subsdk plugins) changes the game's code, which is lifted into the app: changing it needs a new build."
+        } else {
+            "Mods in Atmosphère layout: a folder of mods (one folder each) or one mod's folder, copied into the app."
+        };
+        row(ui, "mods", "Mods", &mut self.mods, "none", mods_help);
+        if !self.mods.trim().is_empty() {
+            let dir = PathBuf::from(self.mods.trim());
+            let list = if dir.is_dir() { mods_in(&dir) } else { Vec::new() };
+            if list.is_empty() {
+                detail(ui, WARN, &format!("no romfs/ or exefs/ under {}", dir.display()));
             }
-            self.recall();
-            // A preset made for the other target no longer describes what is set.
-            if self.selected_preset_target().is_some_and(|pt| pt != self.target) {
-                self.preset_name.clear();
-                let _ = self.remember();
+            for (name, k) in list {
+                let mut parts = Vec::new();
+                if k.romfs {
+                    parts.push("romfs/");
+                }
+                if k.patches {
+                    parts.push(if lifted { "exefs/ patches (lifted)" } else { "exefs/ patches" });
+                }
+                if k.plugin {
+                    parts.push(if lifted { "exefs/subsdk plugin (lifted)" } else { "exefs/subsdk plugin" });
+                }
+                let parts = if parts.is_empty() { "no romfs/ or exefs/".to_string() } else { parts.join(", ") };
+                detail(ui, MUTED, &format!("{name}: {parts}"));
             }
         }
+
+        row(ui, "out", "Output", &mut self.out_dir, "folder", "Where the app goes. Saves, logs and the settings changed in the app stay in nxport's data, not in the app.");
+
+        // What the target decides when it is built.
+        label(ui, "Build", "Decided when the app is built.");
+        let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
+        let mut first = true;
+        let mut next = |ui: &imgui::Ui| {
+            if !std::mem::replace(&mut first, false) {
+                indent(ui);
+            }
+        };
         if self.target.prebuilds_shaders() {
-            ui.checkbox("Translate shaders ahead of time", &mut self.prebuild_shaders);
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Builds the game's shaders into the app (about 25 minutes); the app translates only shaders the cache lacks, and keeps them. Off, the app translates every shader as the game loads it: a much slower first start, then kept for later starts.");
-            }
+            next(ui);
+            ui.checkbox("Precompile shaders", &mut self.prebuild_shaders);
+            tip(ui, "Translates the game's shader stages into the app's shader cache now, and compiles its listed pipelines, so the game does not stall the first time it draws with them. Off, the app translates them as it meets them, and keeps them.");
         }
-        if self.target == Target::WindowsApp {
-            ui.checkbox("Game files inside the app", &mut self.bundle_game);
-            if ui.is_item_hovered() {
-                let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
-                ui.tooltip_text(format!("Copies the game files ({size}) into Dump/ inside the app folder. Without it, settings.toml points to the original dump."));
-            }
+        if matches!(self.target, Target::WindowsApp | Target::Ipa) {
+            next(ui);
+            ui.checkbox("Include game files", &mut self.bundle_game);
+            let off = if self.target == Target::Ipa { "they are copied into the app's Documents/Game." } else { "settings.toml names the dump, which must stay where it is." };
+            tip(ui, &format!("Copies ExeFS/ and RomFS/ into the app ({size}). Off: {off}"));
         }
         if self.target == Target::Ipa {
-            ui.checkbox("Game files inside the app", &mut self.bundle_game);
-            if ui.is_item_hovered() {
-                let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
-                ui.tooltip_text(format!("Makes the app as large as the game's files ({size}). Without it they are copied into the app's Documents/Game."));
-            }
+            next(ui);
             ui.checkbox("Request entitlements", &mut self.entitlements);
-            if ui.is_item_hovered() {
-                ui.tooltip_text("Increased memory limit and extended virtual addressing; off for signing setups that refuse them.");
-            }
+            tip(ui, "com.apple.developer.kernel.increased-memory-limit and extended-virtual-addressing; off for signing setups that refuse them.");
             #[cfg(target_os = "macos")]
             if self.prebuild_shaders {
+                next(ui);
                 let gpus = nxport_build::pipeline_archive::IOS_GPUS;
-                let current = gpus.iter().find(|g| g.1 == self.ios_gpu).map_or("None", |g| g.0);
-                if let Some(_c) = ui.begin_combo("Precompile pipelines for", current) {
-                    if ui.selectable_config("None").selected(self.ios_gpu.is_empty()).build() {
+                let current = gpus.iter().find(|g| g.1 == self.ios_gpu).map_or("no pipeline archive", |g| g.0);
+                ui.set_next_item_width(260.0);
+                if let Some(_c) = ui.begin_combo("Pipeline archive GPU", current) {
+                    if ui.selectable_config("no pipeline archive").selected(self.ios_gpu.is_empty()).build() {
                         self.ios_gpu.clear();
                     }
                     for g in gpus {
@@ -589,54 +661,85 @@ impl Builder {
                         }
                     }
                 }
-                if ui.is_item_hovered() {
-                    ui.tooltip_text("Compiles the game's known render pipelines for this device's GPU (needs Xcode), so the app does not compile them when the game first draws them. The app then works only as well as before on other devices.");
-                }
+                tip(ui, "Compiles the listed pipelines into a binary archive for this GPU (metal-tt, Xcode), so the app does not compile them at first draw; other devices compile them as before.");
             }
             let default_id = self.game.as_ref().map_or_else(String::new, |g| nxport::profile::bundle_id(g.title_id, g.profile));
-            ui.input_text("Bundle ID##bundle_id", &mut self.bundle_id).hint(default_id).build();
+            label(ui, "Bundle ID", "CFBundleIdentifier (empty: the default shown).");
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##bundle_id", &mut self.bundle_id).hint(default_id).build();
         }
-        ui.input_text("Folder##out", &mut self.out_dir).build();
-        ui.same_line();
-        if ui.button("Choose…##out") {
-            window::request_path("out", PathKind::Directory);
+        // The settings lifting reads (nxport_build::lift::game_settings): they decide which code is in the app.
+        if lifted {
+            label(ui, "Lifted code", "How the game's modules are loaded and patched before they are lifted to C.");
+            let mut patches = !self.settings.files.no_exefs_patches;
+            if ui.checkbox("Apply ExeFS patches", &mut patches) {
+                self.settings.files.no_exefs_patches = !patches;
+            }
+            tip(ui, "IPS / pchtxt patches in the mods' exefs/ are applied to the code before it is lifted (files.no-exefs-patches).");
+            indent(ui);
+            ui.checkbox("Run the game's own subsdk modules", &mut self.settings.guest.run_game_subsdk);
+            tip(ui, "Binds main's imports to the game's own subsdk libraries and lifts them with it (guest.run-game-subsdk; experiment).");
         }
+        row(ui, "system_data", "System data", &mut self.system_data, "none", "Firmware system data archives (one folder per archive, named by its 16-digit id), for titles that mount them (files.system-data-dir).");
 
-        ui.separator_with_text("Settings");
+        // The Apple apps take their settings when they are built.
+        if !lifted {
+            ui.separator();
+            if ui.collapsing_header("App settings", imgui::TreeNodeFlags::empty()) {
+                self.preset_bar(ui);
+                self.settings_editor(ui);
+            }
+        }
+        drop(_disabled);
+        ui.separator();
+        if let Some(m) = &self.message {
+            ui.text_colored(ERROR, m);
+        }
+        self.build_bar(ui, running);
+    }
+
+    /// Another target: what the builder remembers for it, and its default folder when the folder was the old default.
+    fn set_target(&mut self, t: Target) {
+        let _ = self.remember();
+        let prev = self.target;
+        self.target = t;
+        if self.out_dir.trim().is_empty() || self.out_dir == default_out_dir(prev) {
+            self.out_dir = default_out_dir(t);
+        }
+        self.prebuild_shaders = t.prebuilds_shaders();
+        self.recall();
+        // A preset made for the other target no longer describes what is set.
+        if self.selected_preset_target().is_some_and(|pt| pt != t) {
+            self.preset_name.clear();
+            let _ = self.remember();
+        }
+    }
+
+    /// The settings the app starts with, by section (the Apple targets: their apps take them when built).
+    fn settings_editor(&mut self, ui: &imgui::Ui) {
         let all = self.expand_all;
-        // The game's own settings, by section (shown first, under the game's full title).
         if let Some(g) = self.game.as_ref().and_then(|g| g.profile) {
-            let sections = game_sections(&mut self.settings, g);
-            let visible: Vec<_> = sections.into_iter().filter(|(_, s)| s.has(Audience::User)).collect();
-            if !visible.is_empty() {
-                header(ui, g.name, true, |ui| {
-                    for (title, s) in visible {
-                        if let Some(_n) = ui.tree_node_config(title).default_open(true).push() {
-                            s.edit(ui, Audience::User);
-                        }
+            for (title, s) in game_sections(&mut self.settings, g) {
+                if s.has(Audience::User) {
+                    if let Some(_n) = ui.tree_node_config(format!("{}: {title}", g.name)).default_open(true).push() {
+                        s.edit(ui, Audience::User);
                     }
-                });
+                }
             }
         }
-        for (i, section) in general_sections(&mut self.settings).into_iter().enumerate() {
+        for section in general_sections(&mut self.settings) {
             if section.has(Audience::User) {
-                header(ui, section.heading(), (self.game.is_none() && i == 0) || all, |ui| {
+                if let Some(_n) = ui.tree_node_config(section.heading()).default_open(all).push() {
                     section.edit(ui, Audience::User);
-                });
+                }
             }
         }
-        header(ui, "Developer", all, |ui| {
+        if let Some(_d) = ui.tree_node_config("Developer").default_open(all).push() {
             if let Some(g) = self.game.as_ref().and_then(|g| g.profile) {
-                let sections: Vec<_> = game_sections(&mut self.settings, g)
-                    .into_iter()
-                    .filter(|(_, s)| s.has(Audience::Developer))
-                    .collect();
-                if !sections.is_empty() {
-                    if let Some(_n) = ui.tree_node_config(g.name).default_open(all).push() {
-                        for (title, s) in sections {
-                            if let Some(_n2) = ui.tree_node_config(title).default_open(true).push() {
-                                s.edit(ui, Audience::Developer);
-                            }
+                for (title, s) in game_sections(&mut self.settings, g) {
+                    if s.has(Audience::Developer) {
+                        if let Some(_n) = ui.tree_node_config(format!("{}: {title}", g.name)).default_open(all).push() {
+                            s.edit(ui, Audience::Developer);
                         }
                     }
                 }
@@ -648,106 +751,7 @@ impl Builder {
                     }
                 }
             }
-        });
-        drop(_disabled);
-
-        ui.separator();
-        self.build_bar(ui, running);
-    }
-
-    /// The Windows target: what must be decided when the app is built. A Windows app runs the game's code lifted to C and
-    /// compiled in, so the code it runs (the game's, and mods' ExeFS patches and plugins) is fixed here; everything else
-    /// is set in the app while it runs (its menu bar and nxport > Settings…).
-    #[cfg(windows)]
-    fn contents_windows(&mut self, ui: &imgui::Ui, running: bool) {
-        use nxport::ui_sdl::{heading, ERROR, MUTED, OK, WARN};
-        const LABEL: f32 = 110.0;
-        let tip = |ui: &imgui::Ui, text: &str| {
-            if ui.is_item_hovered() {
-                ui.tooltip(|| {
-                    let _w = ui.push_text_wrap_pos(420.0);
-                    ui.text(text);
-                });
-            }
-        };
-        // A row: label, path field, Browse.
-        let row = |ui: &imgui::Ui, id: &str, label: &str, text: &mut String, hint: &str, help: &str| -> bool {
-            ui.align_text_to_frame_padding();
-            ui.text(label);
-            tip(ui, help);
-            ui.same_line_with_pos(LABEL);
-            ui.set_next_item_width((ui.content_region_avail()[0] - 90.0).max(120.0));
-            let changed = ui.input_text(format!("##{id}"), text).hint(hint).build();
-            ui.same_line();
-            if ui.button(format!("Browse##{id}")) {
-                window::request_path(id, PathKind::Directory);
-            }
-            changed
-        };
-        // A muted line under a row, lined up with its field.
-        let detail = |ui: &imgui::Ui, color: [f32; 4], text: &str| {
-            ui.set_cursor_pos_x(LABEL + ui.clone_style().window_padding()[0]);
-            ui.text_colored(color, text);
-        };
-
-        heading(ui, "nxport");
-        ui.same_line();
-        ui.text_colored(MUTED, "Windows app builder");
-        ui.separator();
-        let _disabled = ui.begin_disabled_with_cond(running);
-
-        let mut dump = self.dump.clone();
-        if row(ui, "dump", "Game", &mut dump, "dump folder (ExeFS, RomFS)", "A dump folder with ExeFS/ and RomFS/.") {
-            self.set_dump(dump);
         }
-        match &self.game {
-            Some(g) => {
-                let version = g.version.as_ref().map_or_else(String::new, |v| format!(" {v}"));
-                let profile = if g.profile.is_some() { "" } else { "  (no nxport profile)" };
-                detail(ui, if g.profile.is_some() { OK } else { WARN }, &format!("{}{version}  {:016X}{profile}", g.name, g.title_id));
-                if g.is_32bit {
-                    detail(ui, ERROR, "32-bit games are not supported");
-                }
-            }
-            None if !self.dump.trim().is_empty() => detail(ui, ERROR, "Not a game dump (needs ExeFS/main.npdm and RomFS/)"),
-            None => {}
-        }
-
-        row(ui, "mods", "Mods", &mut self.mods, "none", "A folder of mods in Atmosphère layout (one folder per mod), or one mod's folder. RomFS mods are data, loaded while the game runs. ExeFS patches and plugins change the game's code: they are compiled into the app, so changing them needs a new build.");
-        if !self.mods.trim().is_empty() {
-            let dir = PathBuf::from(self.mods.trim());
-            let list = if dir.is_dir() { mods_in(&dir) } else { Vec::new() };
-            if list.is_empty() {
-                detail(ui, WARN, "No mods there");
-            }
-            for (name, k) in list {
-                let kind = match (k.patches || k.plugin, k.romfs) {
-                    (true, true) => "code + data",
-                    (true, false) => "code",
-                    (false, true) => "data",
-                    (false, false) => "empty",
-                };
-                detail(ui, MUTED, &format!("{name}  ·  {kind}"));
-            }
-        }
-
-        row(ui, "out", "Output", &mut self.out_dir, "folder", "Where the app folder goes. Start nxport.exe in it to play; saves and settings stay in your nxport data.");
-        ui.set_cursor_pos_x(LABEL + ui.clone_style().window_padding()[0]);
-        ui.checkbox("Precompile shaders", &mut self.prebuild_shaders);
-        tip(ui, "Translates the game's shaders into the app now (a few minutes), so the game does not stutter the first time it draws something. Off, the app translates them as it meets them, and keeps them.");
-        ui.same_line();
-        ui.checkbox("Include game files", &mut self.bundle_game);
-        let size = self.romfs_size.lock().unwrap().map_or_else(|| "measuring".to_string(), |b| format!("{:.1} GB", b as f64 / 1e9));
-        tip(ui, &format!("Copies the game files into the app ({size}), so it does not need the dump folder."));
-        if let Some(_t) = ui.tree_node("More") {
-            row(ui, "system_data", "System data", &mut self.system_data, "none", "Firmware archives (one folder per archive, named by its id), for games that mount them.");
-        }
-        drop(_disabled);
-        ui.separator();
-        if let Some(m) = &self.message {
-            ui.text_colored(ERROR, m);
-        }
-        self.build_bar(ui, running);
     }
 
     /// The selected preset, if it is one of the game's.
@@ -1191,17 +1195,6 @@ fn dir_size(dir: &Path) -> u64 {
     }).sum()
 }
 
-fn tree_flags(open: bool) -> imgui::TreeNodeFlags {
-    if open { imgui::TreeNodeFlags::DEFAULT_OPEN } else { imgui::TreeNodeFlags::empty() }
-}
-
-/// A collapsing section.
-fn header(ui: &imgui::Ui, title: &str, open: bool, body: impl FnOnce(&imgui::Ui)) {
-    if ui.collapsing_header(title, tree_flags(open)) {
-        let _id = ui.push_id(title);
-        body(ui);
-    }
-}
 
 /// The engine's settings groups, in the order the editor shows them.
 fn general_sections(s: &mut Settings) -> Vec<&mut dyn Section> {
