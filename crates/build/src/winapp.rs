@@ -1,8 +1,8 @@
 // A Windows app: a folder that runs the game when nxport.exe in it is started without arguments. The engine finds what
 // the folder carries itself (nxport::config::app_bundle_layer, as a macOS app finds its Contents/Resources):
 //
-//   nxport.exe                 the engine, built from the same source as the builder (the lifted code must match the
-//                              code that source patches), marked a GUI program: no console window opens with it
+//   nxport.exe                 the engine: the builder itself, which runs the game by that name (the lifted code must
+//                              match the code its engine patches), marked a GUI program: no console window opens with it
 //   SDL3.dll                   the window, input and audio layer the engine links against (opus.dll too, when one
 //                              ships with the builder)
 //   settings.toml              the settings it was built with; it marks the folder as an app
@@ -31,18 +31,11 @@ pub struct Options<'a> {
     pub shader_cache: Option<&'a Path>,
 }
 
-/// The engine the app runs: built beside this program (cargo builds both into target/<profile>, a release ships both).
+/// The engine the app runs: this program, which links the engine and starts it when it is named nxport.exe
+/// (nxport-builder's main). The code it lifts calls into the engine it was built with (HLE trampolines, hooks), so the
+/// app carries that one.
 pub fn engine() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut candidates = vec![
-        exe.with_file_name("nxport.exe"),
-    ];
-    for ancestor in exe.ancestors() {
-        candidates.push(ancestor.join("nxport.exe"));
-        candidates.push(ancestor.join("release").join("nxport.exe"));
-        candidates.push(ancestor.join("debug").join("nxport.exe"));
-    }
-    candidates.into_iter().find(|p| p.is_file()).ok_or_else(|| "nxport.exe is missing beside the builder (cargo build --release -p nxport)".into())
+    std::env::current_exe().map_err(|e| e.to_string())
 }
 
 /// Lays out the app folder, all but the guest library: the engine, the settings, mods, the game files and the pipeline
@@ -69,15 +62,12 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     let copied = copy(&exe, &o.app.join("nxport.exe"));
     let _ = std::fs::remove_file(&exe);
     copied?;
-    // Windows looks for a program's DLLs in its own directory first. libopus is optional: the engine loads opus.dll
-    // when there is one (Opus streams are silent without it).
-    // Beside the engine, or a directory up from it (cargo's deps/ for tests), or beside this program.
-    let beside = |lib: &str| {
-        let dirs = engine.ancestors().skip(1).take(2).map(Path::to_path_buf);
-        dirs.chain(std::env::current_exe().ok().and_then(|e| Some(e.parent()?.to_path_buf()))).map(|d| d.join(lib)).find(|l| l.is_file())
-    };
-    let sdl = beside("SDL3.dll").ok_or_else(|| format!("SDL3.dll is missing beside {}", engine.display()))?;
-    copy(&sdl, &o.app.join("SDL3.dll"))?;
+    // Windows looks for a program's DLLs in its own directory first: SDL3.dll from the copy the engine carries. libopus
+    // is optional: the engine loads opus.dll when there is one beside the builder (Opus streams are silent without it).
+    let sdl = o.app.join("SDL3.dll");
+    std::fs::write(&sdl, nxport::sdl_library::DLL).map_err(|e| format!("{}: {e}", sdl.display()))?;
+    // Beside the engine, or a directory up from it (cargo's deps/ for tests).
+    let beside = |lib: &str| engine.ancestors().skip(1).take(2).map(|d| d.join(lib)).find(|l| l.is_file());
     for lib in ["opus.dll", "libopus-0.dll"] {
         if let Some(l) = beside(lib) {
             copy(&l, &o.app.join(lib))?;
