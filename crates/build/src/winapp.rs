@@ -52,7 +52,9 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     mkdir(o.app)?;
     println!("  Copying the engine");
     let engine = engine()?;
-    let exe = o.app.join("nxport.exe");
+    // Made in the temporary directory and copied in finished: Explorer holds an app's nxport.exe open while it reads
+    // its icon, and the icon's update needs it to itself.
+    let exe = std::env::temp_dir().join(format!("nxport-app-{}.exe", std::process::id()));
     copy(&engine, &exe)?;
     gui_subsystem(&exe)?;
     // The title's icon (the console's, from the dump's control data), for Explorer, the taskbar and the window.
@@ -64,6 +66,9 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
         }
         None => println!("  [!] No icon in the dump (control/icon_*.dat or Logo/{tid:016x}.png): the app keeps the default"),
     }
+    let copied = copy(&exe, &o.app.join("nxport.exe"));
+    let _ = std::fs::remove_file(&exe);
+    copied?;
     // Windows looks for a program's DLLs in its own directory first. libopus is optional: the engine loads opus.dll
     // when there is one (Opus streams are silent without it).
     // Beside the engine, or a directory up from it (cargo's deps/ for tests), or beside this program.
