@@ -17,8 +17,8 @@
 // things unevenly across evenly shown frames, a stutter. There the step is rounded to whole refreshes, the remainder
 // carried into the next frames' steps, so game time keeps to real time.
 //
-// Camera rate: a getter the camera code reads a per-frame amount through (1.1.2: main+0x1d3675c; UltraCam scales it
-// the same way: docs/ultracam-totk-112.md) is not stepped by the time manager, so the camera turned faster the faster
+// Camera rate: a getter the camera code reads a per-frame amount through (1.1.2: main+0x1d3675c, 1.0.0: main+0x1cd3678;
+// UltraCam scales it the same way in 1.1.2: docs/ultracam-totk-112.md) is not stepped by the time manager, so the camera turned faster the faster
 // the game ran (Ultrahand's vertical camera). It branches to camera_rate, which scales the amount by the frame's step
 // in frames at 30 fps (1 at 30 fps).
 //
@@ -39,14 +39,15 @@ pub struct Sites {
     /// The hold-timer step stored through a pointer; words 2 and 3 (adrp, ldr) load the pointer.
     pub input: usize,
     pub input_code: [u32; 8],
-    /// The camera-rate getter (`ldr s0, [x0, #0xc54]; ret`: CAMERA_RATE_CODE), where known.
-    pub camera_rate: Option<usize>,
+    /// The camera-rate getter and the field it reads (`ldr s0, [x0, #field]; ret`: camera_rate_code), where known.
+    pub camera_rate: Option<(usize, usize)>,
 }
 
-pub const CAMERA_RATE_CODE: [u32; 2] = [
-    0xbd4c_5400, // ldr s0, [x0, #0xc54]
-    0xd65f_03c0, // ret
-];
+/// The camera-rate getter: ldr s0, [x0, #field]; ret.
+pub const fn camera_rate_code(field: usize) -> [u32; 2] {
+    [0xbd40_0000 | ((field as u32 / 4) << 10), 0xd65f_03c0]
+}
+const _: () = assert!(camera_rate_code(0xc54)[0] == 0xbd4c_5400);
 
 pub const MOVZ_X8_2: u32 = 0xd280_0048;
 pub const MOVZ_X8_1: u32 = 0xd280_0028;
@@ -175,9 +176,12 @@ fn frames_at_30() -> f32 {
     if dt > 0.0 { dt * 30.0 } else { 1.0 }
 }
 
+/// The field the camera-rate getter reads (the version's).
+static CAMERA_FIELD: AtomicU64 = AtomicU64::new(0);
+
 /// Replaces the camera-rate getter (x0 = the camera's object): its per-frame amount, scaled to the frame's step.
 pub unsafe extern "C" fn camera_rate(obj: usize) -> f32 {
-    *((obj + 0xc54) as *const f32) * frames_at_30()
+    *((obj + CAMERA_FIELD.load(Ordering::Relaxed) as usize) as *const f32) * frames_at_30()
 }
 
 /// Replaces the controllers' hold-timer step (frames at 30 fps): the last step time_step took.
@@ -274,9 +278,10 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         }
         Err(e) => println!("[!] Game time: {e}; the step stays tied to the present interval"),
     }
-    if let Some(at) = s.camera_rate {
+    if let Some((at, field)) = s.camera_rate {
+        CAMERA_FIELD.store(field as u64, Ordering::Relaxed);
         // b <camera_rate trampoline>: it returns to the getter's caller.
-        match replace_with_call(base, mem_space, at, &CAMERA_RATE_CODE, vec![B, NOP], 0, crate::hle!(camera_rate(_))) {
+        match replace_with_call(base, mem_space, at, &camera_rate_code(field), vec![B, NOP], 0, crate::hle!(camera_rate(_))) {
             Ok(()) => println!("[+] Camera rate: scaled to the frame's step"),
             Err(e) => println!("[!] Camera rate: main+{at:#x}: {e}; not scaled"),
         }

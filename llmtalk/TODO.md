@@ -11,10 +11,13 @@ and update this file when you finish or drop it.
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
   For now, delta time only makes game time follow real time (no physics verification).
-- TotK 1.1.2 `dynamic_fps` (on by default, from windows-support-2) rewrites a time struct from real elapsed time at
-  main+0x7f7a58 and forces the pacer; nobody has checked it against a 1.1.2 binary. In 1.0.0 the game steps its time by
-  present interval / 2 itself (main+0x8f68b8), so the 1.1.2 counterpart of the 1.0.0 unlock (lowest interval 1 + no
-  veto) may be all 1.1.2 needs: verify on a Mac before relying on dynamic_fps.
+- **TotK at high fps, still wrong** (reported by the user): climbing ladders, and physics on a platform moving down a
+  rail. Not looked at yet; needs gameplay to reproduce.
+- **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
+  input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
+  draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
+  textures, so they hold black. The frame before samples the 768x432 texture uninitialized (garbage overlay). Cause
+  not found: why the game copies after the world stopped being drawn (ordering, aliasing or predicate timing).
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
   address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
   clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save).
@@ -45,6 +48,13 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **TotK fixes, 2026-11-02** (S41L0R Windows Machine, `f2063da`..`75b0aa1` and after): black fringe on the shrine
+  floor's rim (draws sampling their own targets now see the draws before them; F9 also dumps every pass); stutter
+  with VSync (steps rounded to whole refreshes, remainder carried); printf HLE ("has no adapter" gone); the camera-rate
+  getter scaled to the frame's step (Ultrahand camera; 1.1.2 main+0x1d3675c, 1.0.0 main+0x1cd3678, user to verify);
+  listed point pipelines built as points. 1.1.2's frame-rate hooks are the frame_time.rs sites (the old
+  windows-support-2 `dynamic_fps` time-struct rewrite is gone; the setting now switches real-time steps).
 
 - **Vulkan recording, fourth round: work moved to vk-record** (S41L0R Windows Machine, `361a5ad`, `e3b25c9`): uniform
   copies are made on vk-record (inline updates and reports log what they overwrite so late copies hold what their draws
