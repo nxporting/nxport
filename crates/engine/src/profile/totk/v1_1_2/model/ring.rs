@@ -85,6 +85,11 @@ pub(super) fn watch() {
     ALLOCATED.with(|a| *a.borrow_mut() = any.then(Vec::new));
 }
 
+/// Starts logging the game's allocations on this thread for a prediction made after the game's call.
+pub(super) fn watch_all() {
+    ALLOCATED.with(|a| *a.borrow_mut() = Some(Vec::new()));
+}
+
 /// Resolves the predicted commands against the game's allocations: Ok(expected with real addresses), Err(reason).
 pub(super) unsafe fn resolve(expected: Vec<String>) -> Result<Vec<String>, String> {
     resolve_with(expected, &[])
