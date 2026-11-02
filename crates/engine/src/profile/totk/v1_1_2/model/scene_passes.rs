@@ -237,3 +237,89 @@ pub(super) unsafe fn effect_layer(p: &mut Port, this: usize, w: usize, view: u32
     stream_draw(p, stream, w);
     Ok(())
 }
+
+/// Pure 4x4 and 3x4 matrix inverses (out, in).
+const INVERSE_4X4: usize = 0x93abb8;
+const INVERSE_3X4: usize = 0x93a4c4;
+/// The clamp floor (0.001) and scale (0.0001) the record uses.
+const SKY_FLOOR: usize = 0x380fc34;
+const SKY_SCALE: usize = 0x380e988;
+
+/// main+0x21d95d4(ctx, w, prog): the atmosphere pass's textures (sky object ctx[0] +0x318 / +0x4f8 / +0x408, its view
+/// record (+0x5f0, 0x998 each, index ctx +8) +8 / +0xf8 / +0x1e8 / [+0x2d8]), blocks (+0x9b8, record +0x2f0) and a
+/// 0xe0-byte ring block: the inverse view matrices (ctx[2] 4x4, ctx[3] 3x4) and range / scattering parameters, then
+/// the full-screen triangle. The optional offscreen textures (ctx[6] / ctx[7]) are left to the game.
+pub(super) unsafe fn atmosphere(p: &mut Port, ctx: usize, w: usize, prog: usize) -> R<()> {
+    if p.m.r64(ctx + 0x30) != 0 || p.m.r64(ctx + 0x38) != 0 {
+        return Err("atmosphere offscreen textures");
+    }
+    let b = p.m.r64(ctx);
+    let rec = |p: &Port| {
+        let i = p.m.r32(ctx + 8);
+        let i = if p.m.r32(b + 0x5e8) > i { i } else { 0 } as i32 as isize as usize;
+        p.m.r64(b + 0x5f0).wrapping_add(i.wrapping_mul(0x998))
+    };
+    program_texture(p, prog, w, 2, b + 0x318)?;
+    program_texture(p, prog, w, 3, b + 0x4f8)?;
+    program_texture(p, prog, w, 4, b + 0x408)?;
+    program_texture(p, prog, w, 5, rec(p) + 8)?;
+    program_texture(p, prog, w, 6, rec(p) + 0xf8)?;
+    program_texture(p, prog, w, 7, rec(p) + 0x1e8)?;
+    let t8 = p.m.r64(rec(p) + 0x2d8);
+    if t8 != 0 {
+        program_texture(p, prog, w, 8, t8)?;
+    }
+    program_block(p, prog, w, 0, b + 0x9b8, 0)?;
+    program_block(p, prog, w, 2, rec(p) + 0x2f0, 0)?;
+    let mut r = [0u32; 0x38];
+    let rp = r.as_mut_ptr() as usize;
+    p.query(p.base + INVERSE_4X4, &[rp as u64, p.m.r64(ctx + 0x10) as u64]);
+    p.query(p.base + INVERSE_3X4, &[(rp + 0x40) as u64, p.m.r64(ctx + 0x18) as u64]);
+    let f = |o: usize| p.m.f32(b + o);
+    let span = p.m.f32(ctx + 0x24) - p.m.f32(ctx + 0x20);
+    let d = f(0x7e0) - f(0x7c0);
+    let inv = 1.0 / d;
+    let put = |r: &mut [u32; 0x38], o: usize, v: f32| r[o / 4] = v.to_bits();
+    put(&mut r, 0x70, inv);
+    put(&mut r, 0x74, f(0x7c0) * inv);
+    put(&mut r, 0x78, f(0x7c0) / span);
+    put(&mut r, 0x7c, span / d);
+    put(&mut r, 0x80, f(0x820));
+    put(&mut r, 0x84, f(0x840));
+    put(&mut r, 0x88, f(0x800));
+    let d2 = f(0x880) - f(0x860);
+    let inv2 = 1.0 / d2;
+    put(&mut r, 0x90, inv2);
+    put(&mut r, 0x94, f(0x860) * inv2);
+    put(&mut r, 0x98, f(0x860) / span);
+    put(&mut r, 0x9c, span / d2);
+    let density = f(0x90c);
+    if density > 0.0 {
+        put(&mut r, 0xa0, f(0x8a0));
+        put(&mut r, 0xa4, f(0x8c0));
+        put(&mut r, 0xa8, f(0x8e0));
+    } else {
+        put(&mut r, 0xa8, 1.0);
+    }
+    put(&mut r, 0xac, density);
+    r[0xb0 / 4] = p.m.r32(b + 0x900);
+    r[0xb4 / 4] = p.m.r32(b + 0x904);
+    put(&mut r, 0xb8, f(0x908));
+    put(&mut r, 0xbc, 1.0);
+    let floor = p.m.f32(p.base + SKY_FLOOR);
+    let height = f(0x948).max(floor);
+    let scale = f(0x79c).max(floor);
+    let k = height * p.m.f32(p.base + SKY_SCALE);
+    put(&mut r, 0xc0, f(0x928) / scale);
+    put(&mut r, 0xc4, f(0x948));
+    let s7 = f(0x968) / k;
+    put(&mut r, 0xc8, s7);
+    put(&mut r, 0xcc, (1.0 - k) * s7);
+    put(&mut r, 0xd0, p.m.f32(ctx + 0x28));
+    put(&mut r, 0xd4, p.m.f32(ctx + 0x2c));
+    r[0xd8 / 4] = 0x3ecc_cccd;
+    let block = p.ring_block_known(rp, 0xdc, 0xe0);
+    program_block(p, prog, w, 1, block, 0)?;
+    fullscreen(p, w);
+    Ok(())
+}
