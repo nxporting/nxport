@@ -30,7 +30,11 @@ pub(super) struct Window {
     /// could be signaled again while the presentation engine still waited on it, which the slot's fence does not cover).
     done: Vec<vk::Semaphore>,
     /// The presented content size the drawable was last fitted to.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     content: (u32, u32),
+    /// Swapchains a resize replaced, with the presents left before their last frames are certainly done (each present
+    /// first waits for the slot it reuses): destroyed then, so a resize never waits for the frames in flight.
+    retired: Vec<(vk::SwapchainKHR, usize)>,
     /// The window shape last reported to the game (profile::screen_aspect_changed); 0 while the dynamic aspect ratio is
     /// off, so turning it on reports the shape again.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
@@ -58,9 +62,9 @@ impl Window {
         #[cfg(windows)]
         let surface = {
             extern "system" {
-                fn GetModuleHandleW(name: *const u16) -> isize;
+                fn GetModuleHandleW(name: *const u16) -> *mut std::ffi::c_void;
             }
-            let info = vk::Win32SurfaceCreateInfoKHR::default().hinstance(GetModuleHandleW(std::ptr::null())).hwnd(handle as isize);
+            let info = vk::Win32SurfaceCreateInfoKHR::default().hinstance(GetModuleHandleW(std::ptr::null()) as isize).hwnd(handle as isize);
             s.win32.create_win32_surface(&info, None).ok()?
         };
         if !s.surface.get_physical_device_surface_support(dev.pdev, dev.family, surface).unwrap_or(false) {
@@ -89,6 +93,7 @@ impl Window {
             done: Vec::new(),
             content: (0, 0),
             reported: 0.0,
+            retired: Vec::new(),
         };
         w.recreate(dev)?;
         println!("[vulkan] presenting to the window ({}x{})", w.extent.width, w.extent.height);
@@ -132,10 +137,8 @@ impl Window {
             .old_swapchain(self.swapchain);
         let new = s.swapchain.create_swapchain(&info, None).ok()?;
         if self.swapchain != vk::SwapchainKHR::null() {
-            // Its images may still be presented: wait for the slots first.
-            let fences: Vec<vk::Fence> = self.slots.iter().map(|s| s.fence).collect();
-            let _ = dev.device.wait_for_fences(&fences, true, 1_000_000_000);
-            s.swapchain.destroy_swapchain(self.swapchain, None);
+            // Its images may still be presented: destroyed once every slot has been reused.
+            self.retired.push((self.swapchain, SLOTS));
         }
         self.swapchain = new;
         self.images = s.swapchain.get_swapchain_images(new).ok()?;
@@ -170,18 +173,26 @@ impl Window {
         if (resized || self.vsync != crate::host::overlay::is_vsync()) && self.recreate(dev).is_none() {
             return;
         }
-        let slot = &self.slots[self.next];
-        if dev.device.wait_for_fences(&[slot.fence], true, 1_000_000_000).is_err() {
+        let (fence, sem) = (self.slots[self.next].fence, self.slots[self.next].acquired);
+        if dev.device.wait_for_fences(&[fence], true, 1_000_000_000).is_err() {
             return;
         }
-        let index = match s.swapchain.acquire_next_image(self.swapchain, 1_000_000_000, slot.acquired, vk::Fence::null()) {
-            Ok((i, _)) => i,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                let _ = self.recreate(dev);
+        self.retired.retain_mut(|(chain, left)| {
+            *left -= 1;
+            if *left == 0 {
+                s.swapchain.destroy_swapchain(*chain, None);
+            }
+            *left > 0
+        });
+        // The window may change size between the check above and the acquire (while it is dragged): made again once.
+        let mut acquired = s.swapchain.acquire_next_image(self.swapchain, 1_000_000_000, sem, vk::Fence::null());
+        if acquired == Err(vk::Result::ERROR_OUT_OF_DATE_KHR) {
+            if self.recreate(dev).is_none() {
                 return;
             }
-            Err(_) => return,
-        };
+            acquired = s.swapchain.acquire_next_image(self.swapchain, 1_000_000_000, sem, vk::Fence::null());
+        }
+        let Ok((index, _)) = acquired else { return };
         let slot = &self.slots[self.next];
         self.next = (self.next + 1) % SLOTS;
         let _ = dev.device.reset_fences(&[slot.fence]);
