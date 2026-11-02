@@ -62,6 +62,11 @@ pub fn run_main_thread() -> ! {
     };
     // Controllers keep working while another window has focus, as macOS's controller monitoring does.
     sdl3::hint::set("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
+    // The title's icon, which the builder writes into an app's program (icon group 1): the window and the taskbar show it.
+    if has_icon_resource() {
+        sdl3::hint::set("SDL_WINDOWS_INTRESOURCE_ICON", "1");
+        sdl3::hint::set("SDL_WINDOWS_INTRESOURCE_ICON_SMALL", "1");
+    }
     let sdl = sdl3::init().unwrap_or_else(|e| fail("SDL", &e));
     let video = sdl.video().unwrap_or_else(|e| fail("SDL video", &e));
     let gamepads = sdl.gamepad().unwrap_or_else(|e| fail("SDL game controllers", &e));
@@ -127,6 +132,16 @@ pub fn run_main_thread() -> ! {
             quit();
         }
     }
+}
+
+/// Whether this program carries an icon (group 1; the builder writes the title's into an app's program).
+fn has_icon_resource() -> bool {
+    extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut std::ffi::c_void;
+        fn FindResourceW(module: *mut std::ffi::c_void, name: *const u16, kind: *const u16) -> *mut std::ffi::c_void;
+    }
+    const RT_GROUP_ICON: usize = 14;
+    unsafe { !FindResourceW(GetModuleHandleW(std::ptr::null()), 1 as *const u16, RT_GROUP_ICON as *const u16).is_null() }
 }
 
 /// Starts this program again with the same arguments, then leaves (the guest has no clean shutdown).
