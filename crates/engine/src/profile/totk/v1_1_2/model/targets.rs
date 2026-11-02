@@ -14,6 +14,9 @@ const VIEW_SETUP: usize = 0x2a2f550;
 const PFN_VIEW_SET_DEFAULTS: usize = 0x466d9b0;
 const PFN_VIEW_SET_LEVELS: usize = 0x466d9b8;
 const PFN_VIEW_SET_LAYERS: usize = 0x466d9c0;
+/// The context type the wrapper is cast to (initialised once, guard byte bit 0).
+pub(super) const CONTEXT_TYPE_GUARD: usize = 0x4634f30;
+pub(super) const CONTEXT_TYPE: usize = 0x4634f38;
 
 pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
     if (p.m.r8(w + 0x108) >> 1) & 1 != 0 {
@@ -23,7 +26,6 @@ pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
         }
         p.m.w::<u64>(w + 0x100, 0);
     }
-    let holder = p.m.r64(p.m.r64(p.base + HOLDER));
     let targets: [usize; 9] = std::array::from_fn(|k| p.m.r64(rb + 0x20 + k * 8));
     let target = |k: usize| targets[k];
     // The name: the last colour target's, the depth target's only without colour targets, else "Empty".
@@ -41,6 +43,26 @@ pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
     p.m.w::<u64>(w + 0xf0, rb as u64);
     p.m.w::<u64>(w + 0xf8, rb as u64);
     p.m.w::<u8>(w + 0x108, p.m.r8(w + 0x108) | 2);
+    set_targets(p, rb, w)
+}
+
+/// The subclass bind main+0x8974e8(buffer, w): only the context's +0xf0 updated, then the same targets and clears.
+pub(super) unsafe fn bind_plain(p: &mut Port, rb: usize, w: usize) -> R<()> {
+    if p.m.r8(p.m.r64(p.base + CONTEXT_TYPE_GUARD)) & 1 == 0 {
+        return Err("context type not initialised");
+    }
+    let g = if w == 0 { 0 } else { p.query(p.base + p.vfn(w, 0), &[w as u64, p.m.r64(p.base + CONTEXT_TYPE) as u64]) as usize };
+    if g != w {
+        return Err("render buffer bind (context)");
+    }
+    p.m.w::<u64>(w + 0xf0, rb as u64);
+    set_targets(p, rb, w)
+}
+
+unsafe fn set_targets(p: &mut Port, rb: usize, w: usize) -> R<()> {
+    let holder = p.m.r64(p.m.r64(p.base + HOLDER));
+    let targets: [usize; 9] = std::array::from_fn(|k| p.m.r64(rb + 0x20 + k * 8));
+    let target = |k: usize| targets[k];
     let mut textures = [0u64; 9];
     let mut views = [0u64; 9];
     let mut count = 0i32;
@@ -168,16 +190,22 @@ unsafe fn first_use(p: &mut Port, holder: usize, targets: &[usize; 9], cmd: usiz
 /// -1): ORDER_FRAGMENTS, or ORDER_PRIMITIVES with graphics settings +0x780 bit 5, plus INVALIDATE_TEXTURE and, with
 /// +0x50c bit 1, INVALIDATE_SHADER.
 pub(super) unsafe fn barrier_targets(p: &mut Port, rb: usize, w: usize) {
-    let s = p.m.r64(p.m.r64(p.base + HOLDER));
-    let order = if p.m.r8(s + 0x780) & 0x20 == 0 { 2 } else { 1 };
-    let invalidate = if (p.m.r8(s + 0x50c) >> 1) & 1 == 0 { 0x10 } else { 0x110 };
+    let bits = barrier_bits(p);
     let cmd = p.m.r64(w + 0xb8);
     for o in (0x20..=0x60).step_by(8) {
         let t = p.m.r64(rb + o);
         if t != 0 && p.m.i32(t + 0x60) != -1 {
-            p.barrier(cmd, invalidate | order);
+            p.barrier(cmd, bits);
         }
     }
+}
+
+/// The barrier the game puts after rendering into a target to be sampled.
+pub(super) unsafe fn barrier_bits(p: &Port) -> u32 {
+    let s = p.m.r64(p.m.r64(p.base + HOLDER));
+    let order = if p.m.r8(s + 0x780) & 0x20 == 0 { 2 } else { 1 };
+    let invalidate = if (p.m.r8(s + 0x50c) >> 1) & 1 == 0 { 0x10 } else { 0x110 };
+    invalidate | order
 }
 
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): clears the render buffer's color target
