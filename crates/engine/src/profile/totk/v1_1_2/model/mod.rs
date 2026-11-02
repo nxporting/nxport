@@ -21,6 +21,7 @@ mod ping_pong;
 mod program_draws;
 mod render_list;
 mod ring;
+mod scene_passes;
 mod snapshot;
 mod targets;
 mod terrain;
@@ -508,7 +509,7 @@ thread_local! {
 #[no_mangle]
 pub unsafe extern "C" fn on_cubemap_face(w: usize, tex: usize, level: u32, face: u32, kind: u32, _x5: u64, _x6: u64, floats: usize) -> u32 {
     let value = (floats as *const u32).read();
-    CUBEMAP_FACES.run(&CUBEMAP_FACE_EXPECTED, |p| cubemap::face(p, w, tex, level, face, kind, value))
+    CUBEMAP_FACES.run(&CUBEMAP_FACE_EXPECTED, move |p| cubemap::face(p, w, tex, level, face, kind, value))
 }
 
 #[no_mangle]
@@ -525,7 +526,7 @@ thread_local! {
 /// main+0x877418(w, prog, tex, m, rows, v): a full-screen copy with a transform (cubemap.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_transformed_quad(w: usize, prog: usize, tex: usize, m: usize, rows: usize, v: usize) -> u32 {
-    TRANSFORMED_QUADS.run(&TRANSFORMED_QUAD_EXPECTED, |p| cubemap::transformed_quad(p, w, prog, tex, m, rows, v))
+    TRANSFORMED_QUADS.run(&TRANSFORMED_QUAD_EXPECTED, move |p| cubemap::transformed_quad(p, w, prog, tex, m, rows, v))
 }
 
 #[no_mangle]
@@ -543,7 +544,7 @@ thread_local! {
 #[no_mangle]
 pub unsafe extern "C" fn on_copy_quad(w: usize, tex: usize, m: usize, rows: usize, a: i32, b: u32, _x6: u64, floats: usize) -> u32 {
     let value = (floats as *const f32).read();
-    COPY_QUADS.run(&COPY_QUAD_EXPECTED, |p| cubemap::copy_quad(p, w, tex, m, rows, a, b, value))
+    COPY_QUADS.run(&COPY_QUAD_EXPECTED, move |p| cubemap::copy_quad(p, w, tex, m, rows, a, b, value))
 }
 
 #[no_mangle]
@@ -560,7 +561,7 @@ thread_local! {
 /// main+0xcc75ec(snap, w, index, ctx): a snapshot's mip levels (snapshot.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_snapshot(snap: usize, w: usize, index: u32, ctx: usize) -> u32 {
-    SNAPSHOTS.run(&SNAPSHOT_EXPECTED, |p| snapshot::draw(p, snap, w, index, ctx))
+    SNAPSHOTS.run(&SNAPSHOT_EXPECTED, move |p| snapshot::draw(p, snap, w, index, ctx))
 }
 
 #[no_mangle]
@@ -577,7 +578,7 @@ thread_local! {
 /// main+0x969d28(ctx, light, view): one light with its own program (lights.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_light_shape(ctx: usize, light: usize, view: u32) -> u32 {
-    LIGHT_SHAPES.run(&LIGHT_SHAPE_EXPECTED, |p| lights::light_shape(p, ctx, light, view))
+    LIGHT_SHAPES.run(&LIGHT_SHAPE_EXPECTED, move |p| lights::light_shape(p, ctx, light, view))
 }
 
 #[no_mangle]
@@ -594,7 +595,7 @@ thread_local! {
 /// main+0xc24c30(this, w): a pass between two render buffers (ping_pong.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_ping_pong(this: usize, w: usize) -> u32 {
-    PING_PONGS.run(&PING_PONG_EXPECTED, |p| ping_pong::draw(p, this, w))
+    PING_PONGS.run(&PING_PONG_EXPECTED, move |p| ping_pong::draw(p, this, w))
 }
 
 #[no_mangle]
@@ -611,7 +612,7 @@ thread_local! {
 /// main+0xbccb6c(set, w, rebuild): a set of recorded display lists (display_lists.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_display_lists(set: usize, w: usize, rebuild: u64) -> u32 {
-    DISPLAY_LISTS.run(&DISPLAY_LIST_EXPECTED, |p| display_lists::call(p, set, w, rebuild))
+    DISPLAY_LISTS.run(&DISPLAY_LIST_EXPECTED, move |p| display_lists::call(p, set, w, rebuild))
 }
 
 #[no_mangle]
@@ -628,7 +629,7 @@ thread_local! {
 /// main+0x8660b4(buffer, w, viewport, _, mask, values): a render buffer bind with clears (targets.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_clearing_bind(rb: usize, w: usize, vp: usize, _x3: u64, mask: u32, values: usize) -> u32 {
-    CLEARING_BINDS.run(&CLEARING_BIND_EXPECTED, |p| targets::bind_clear(p, rb, w, vp, mask, values))
+    CLEARING_BINDS.run(&CLEARING_BIND_EXPECTED, move |p| targets::bind_clear(p, rb, w, vp, mask, values))
 }
 
 #[no_mangle]
@@ -648,7 +649,7 @@ thread_local! {
 /// (program_draws.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_textured_draw(w: usize, prog: usize, tex: usize) -> u32 {
-    TEXTURED_DRAWS.run(&TEXTURED_DRAW_EXPECTED, |p| program_draws::textured(p, w, prog, tex))
+    TEXTURED_DRAWS.run(&TEXTURED_DRAW_EXPECTED, move |p| program_draws::textured(p, w, prog, tex))
 }
 
 #[no_mangle]
@@ -658,7 +659,7 @@ pub unsafe extern "C" fn on_textured_draw_end() -> u32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn on_tinted_draw(this: usize, w: usize, tex: usize, color: usize, blend: usize) -> u32 {
-    TINTED_DRAWS.run(&TINTED_DRAW_EXPECTED, |p| program_draws::tinted(p, this, w, tex, color, blend))
+    TINTED_DRAWS.run(&TINTED_DRAW_EXPECTED, move |p| program_draws::tinted(p, this, w, tex, color, blend))
 }
 
 #[no_mangle]
@@ -675,7 +676,7 @@ thread_local! {
 /// agl::sdw::ShadowMap::endDepthBuffer, main+0xa404ac(map, w, index) (targets.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_end_depth_buffer(map: usize, w: usize, index: u32) -> u32 {
-    DEPTH_BUFFER_ENDS.run(&DEPTH_BUFFER_END_EXPECTED, |p| targets::end_depth_buffer(p, map, w, index))
+    DEPTH_BUFFER_ENDS.run(&DEPTH_BUFFER_END_EXPECTED, move |p| targets::end_depth_buffer(p, map, w, index))
 }
 
 #[no_mangle]
@@ -698,7 +699,7 @@ thread_local! {
 /// main+0xbe1b2c(w, prog, tex, viewport, scale, offset): a texture quad in a viewport (cubemap.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_texture_quad(w: usize, prog: usize, tex: usize, vp: usize, scale: usize, offset: usize) -> u32 {
-    TEXTURE_QUADS.run(&TEXTURE_QUAD_EXPECTED, |p| cubemap::texture_quad(p, w, prog, tex, vp, scale, offset))
+    TEXTURE_QUADS.run(&TEXTURE_QUAD_EXPECTED, move |p| cubemap::texture_quad(p, w, prog, tex, vp, scale, offset))
 }
 
 #[no_mangle]
@@ -717,12 +718,29 @@ thread_local! {
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn on_capture_quad(w: usize, tex: usize, vp: usize, a: usize, b: usize, scale: usize, offset: usize, floats: usize) -> u32 {
     let value = (floats as *const u32).read();
-    CAPTURE_QUADS.run(&CAPTURE_QUAD_EXPECTED, |p| cubemap::capture_quad(p, w, tex, vp, a, b, scale, offset, value))
+    CAPTURE_QUADS.run(&CAPTURE_QUAD_EXPECTED, move |p| cubemap::capture_quad(p, w, tex, vp, a, b, scale, offset, value))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn on_capture_quad_end() -> u32 {
     CAPTURE_QUADS.end("capture quads", &CAPTURE_QUAD_EXPECTED)
+}
+
+static VIEW_COMPOSITES: Checked = Checked::new();
+
+thread_local! {
+    static VIEW_COMPOSITE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x955ff4(this, w, view, ctx) (scene_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_view_composite(this: usize, w: usize, view: u32, ctx: usize) -> u32 {
+    VIEW_COMPOSITES.run(&VIEW_COMPOSITE_EXPECTED, move |p| scene_passes::view_composite(p, this, w, view, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_composite_end() -> u32 {
+    VIEW_COMPOSITES.end("view composites", &VIEW_COMPOSITE_EXPECTED)
 }
 
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
@@ -1082,6 +1100,13 @@ pub unsafe extern "C" fn on_occlusion_end() -> u32 {
     0
 }
 
+type CheckFn = Box<dyn Fn(&mut draw::Port) -> draw::R<()>>;
+
+thread_local! {
+    /// Ports to predict after the game's call (keyed by their Checked), innermost last.
+    static CHECK_AFTER: std::cell::RefCell<Vec<(usize, CheckFn)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Calls, identical, different, stops of a port checked at its own entry hook (items).
 struct Checked {
     calls: AtomicU64,
@@ -1118,7 +1143,7 @@ impl Checked {
     }
 
     /// Apply mode: drawn undoably (1: the game's function is skipped); verify mode: predicted, compared at `end`.
-    unsafe fn run(&'static self, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>, f: impl Fn(&mut draw::Port) -> draw::R<()>) -> u32 {
+    unsafe fn run(&'static self, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>, f: impl Fn(&mut draw::Port) -> draw::R<()> + 'static) -> u32 {
         if crate::nvn::api::capturing() {
             return 0;
         }
@@ -1155,6 +1180,14 @@ impl Checked {
                 ring::watch();
                 crate::nvn::api::capture_collect();
             }
+            // A texture the game finishes (re-registers) in this call: predicted after the game's call instead.
+            Err(what) if what.ends_with("texture still finishing") => {
+                ring::discard();
+                let key = self as *const Self as usize;
+                CHECK_AFTER.with(|r| r.borrow_mut().push((key, Box::new(f))));
+                ring::watch_all();
+                crate::nvn::api::capture_collect();
+            }
             Err(what) => {
                 ring::discard();
                 self.stop(what);
@@ -1164,6 +1197,30 @@ impl Checked {
     }
 
     unsafe fn end(&self, name: &str, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>) -> u32 {
+        let key = self as *const Self as usize;
+        let after = CHECK_AFTER.with(|r| {
+            let mut r = r.borrow_mut();
+            if r.last().is_some_and(|x| x.0 == key) { r.pop().map(|x| x.1) } else { None }
+        });
+        if let Some(f) = after {
+            let got = crate::nvn::api::capture_collected();
+            let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
+            let mut result = Ok(());
+            let e = crate::nvn::api::capture_dry(|| result = f(&mut port));
+            if let Err(what) = result {
+                ring::discard();
+                self.stop(what);
+                return 0;
+            }
+            return match ring::resolve_with(e, &got) {
+                Ok(e) => self.compare(name, e, got),
+                Err(why) => {
+                    self.different.fetch_add(1, Ordering::Relaxed);
+                    println!("[model-draw] {name} mismatch (checked after the game's call): {why}");
+                    0
+                }
+            };
+        }
         let Some(e) = expected.with(|x| x.borrow_mut().take()) else { return 0 };
         let got = crate::nvn::api::capture_collected();
         let e = match ring::resolve_with(e, &got) {
@@ -1174,6 +1231,10 @@ impl Checked {
                 return 0;
             }
         };
+        self.compare(name, e, got)
+    }
+
+    fn compare(&self, name: &str, e: Vec<String>, got: Vec<String>) -> u32 {
         if e == got {
             self.same.fetch_add(1, Ordering::Relaxed);
             return 0;
@@ -1202,7 +1263,7 @@ thread_local! {
 /// An item's occlusion query, main+0x895ce8 (items.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_query_item(item: usize, ctx: usize) -> u32 {
-    QUERY_ITEMS.run(&QUERY_ITEM_EXPECTED, |p| items::query_item(p, item, ctx))
+    QUERY_ITEMS.run(&QUERY_ITEM_EXPECTED, move |p| items::query_item(p, item, ctx))
 }
 
 #[no_mangle]
@@ -1219,7 +1280,7 @@ thread_local! {
 /// An item drawn under its occlusion query, main+0x7fddf0 (items.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_object_item(item: usize, ctx: usize) -> u32 {
-    OBJECT_ITEMS.run(&OBJECT_ITEM_EXPECTED, |p| items::object_item(p, item, ctx))
+    OBJECT_ITEMS.run(&OBJECT_ITEM_EXPECTED, move |p| items::object_item(p, item, ctx))
 }
 
 #[no_mangle]
@@ -1650,6 +1711,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = VIEW_COMPOSITES.summary("view composites") {
+        println!("{l}");
+    }
     if let Some(l) = CAPTURE_QUADS.summary("capture quads") {
         println!("{l}");
     }
@@ -1870,6 +1934,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_capture_quad(_, _, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_capture_quad_end())) as usize;
         hook_float(base, mem_space, 0x98aa34, 0xd10203ff, pre, post, "Capture quads");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_composite(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_composite_end())) as usize;
+        hook(base, mem_space, 0x955ff4, 0xd10383ff, pre, post, "View composites");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
