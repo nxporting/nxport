@@ -666,6 +666,29 @@ pub unsafe extern "C" fn on_tinted_draw_end() -> u32 {
     TINTED_DRAWS.end("tinted draws", &TINTED_DRAW_EXPECTED)
 }
 
+static DEPTH_BUFFER_ENDS: Checked = Checked::new();
+
+thread_local! {
+    static DEPTH_BUFFER_END_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// agl::sdw::ShadowMap::endDepthBuffer, main+0xa404ac(map, w, index) (targets.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_end_depth_buffer(map: usize, w: usize, index: u32) -> u32 {
+    DEPTH_BUFFER_ENDS.run(&DEPTH_BUFFER_END_EXPECTED, |p| targets::end_depth_buffer(p, map, w, index))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_end_depth_buffer_end() -> u32 {
+    DEPTH_BUFFER_ENDS.end("shadow depth buffer ends", &DEPTH_BUFFER_END_EXPECTED)
+}
+
+/// main+0x74fd08(w, handles, index, slots): deferred texture binds by slot bytes (returns whether any slots).
+#[no_mangle]
+pub unsafe extern "C" fn on_slots_deferred(w: usize, handles: usize, index: i32, slots: u32) -> u32 {
+    primitive(|p| Ok(vfx::bind_slots_deferred(p, w, handles, index, slots) as u32))
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1591,6 +1614,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = DEPTH_BUFFER_ENDS.summary("shadow depth buffer ends") {
+        println!("{l}");
+    }
     if let Some(l) = TEXTURED_DRAWS.summary("textured draws") {
         println!("{l}");
     }
@@ -1730,6 +1756,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         gfx!(0x2f7a0, crate::hle!(on_gfx_dispatch(_, _, _, _)), "nn::gfx Dispatch");
         gfx!(0x68b364, crate::hle!(on_gfx_draw_indexed_instanced(_, _, _, _, _, _, _, _)), "nn::gfx DrawIndexed instanced");
         gfx!(0x300d8, crate::hle!(on_gfx_flush_memory(_, _)), "nn::gfx FlushMemory");
+        gfx!(0x74fd08, crate::hle!(on_slots_deferred(_, _, _, _)), "Deferred texture slots");
         gfx!(0x30100, crate::hle!(on_gfx_invalidate_memory(_, _)), "nn::gfx InvalidateMemory");
         gfx!(0x2f7b4, crate::hle!(on_gfx_draw(_, _, _, _)), "nn::gfx Draw");
         gfx!(0x2f804, crate::hle!(on_gfx_draw_instanced(_, _, _, _, _, _)), "nn::gfx Draw instanced");
@@ -1792,6 +1819,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_tinted_draw(_, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_tinted_draw_end())) as usize;
         hook(base, mem_space, 0xc55378, 0xd10343ff, pre, post, "Tinted draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_end_depth_buffer(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_end_depth_buffer_end())) as usize;
+        hook(base, mem_space, 0xa404ac, 0xa9bd7bfd, pre, post, "Shadow depth buffer ends");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

@@ -18,6 +18,7 @@ const PFN_VIEW_SET_LAYERS: usize = 0x466d9c0;
 /// The context type the wrapper is cast to (initialised once, guard byte bit 0).
 pub(super) const CONTEXT_TYPE_GUARD: usize = 0x4634f30;
 pub(super) const CONTEXT_TYPE: usize = 0x4634f38;
+const UNBOUND_NAME: usize = 0x37acc70;
 
 pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
     bind_prefix(p, rb, w)?;
@@ -295,6 +296,47 @@ pub(super) unsafe fn bind_clear(p: &mut Port, rb: usize, w: usize, vp: usize, ma
             p.clear_depth(cmd, p.m.f32(values + 0x80), (ds >> 1) & 1 != 0, p.m.i32(values + 0x84), if (ds >> 2) & 1 != 0 { 0xff } else { 0 });
         }
         ds = 0;
+    }
+    Ok(())
+}
+
+/// The wrapper's render buffer unbound (current buffer cleared, name "Unbound", the buffer saved at +0x100 bound again).
+pub(super) unsafe fn unbind(p: &mut Port, w: usize) -> R<()> {
+    if p.m.r8(p.m.r64(p.base + CONTEXT_TYPE_GUARD)) & 1 == 0 {
+        return Err("context type not initialised");
+    }
+    if w == 0 {
+        return Ok(());
+    }
+    let g = p.query(p.base + p.vfn(w, 0), &[w as u64, p.m.r64(p.base + CONTEXT_TYPE) as u64]) as usize;
+    if g == 0 {
+        return Ok(());
+    }
+    p.m.w::<u64>(g + 0xf8, 0);
+    p.m.w::<u64>(g + 0x110, (p.base + UNBOUND_NAME) as u64);
+    p.m.w::<u8>(g + 0x108, p.m.r8(g + 0x108) & !2);
+    let saved = p.m.r64(g + 0x100);
+    if saved != 0 {
+        super::targets::bind(p, saved, g)?;
+        p.m.w::<u64>(g + 0x100, 0);
+    }
+    Ok(())
+}
+
+/// agl::sdw::ShadowMap::endDepthBuffer, main+0xa404ac(map, w, index): the unbind, the target barrier when the map has
+/// storage (+0x618), and the map's current buffer (+0x1d0) reset to its first (+0x1e0) after the last cascade.
+pub(super) unsafe fn end_depth_buffer(p: &mut Port, map: usize, w: usize, index: u32) -> R<()> {
+    unbind(p, w)?;
+    if p.m.i32(map + 0x618) != -1 {
+        let bits = barrier_bits(p);
+        p.barrier(p.m.r64(w + 0xb8), bits);
+    }
+    let fmt = p.m.r16(map + 0x21a) as u32;
+    let n = p.m.r16(map + 0x214) as u32;
+    let layered = fmt == 4 || (fmt < 10 && (1u32 << (fmt & 31)) & 0x340 != 0);
+    let count = (if layered { n } else { 1 }).max(n);
+    if count.wrapping_sub(1) == index {
+        p.m.w::<u64>(map + 0x1d0, (map + 0x1e0) as u64);
     }
     Ok(())
 }

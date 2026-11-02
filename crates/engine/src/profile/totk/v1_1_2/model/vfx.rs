@@ -417,6 +417,23 @@ pub(super) unsafe fn invalidate_memory(p: &mut Port, g: usize, flags: u32) {
     }
 }
 
+/// main+0x74fd08(w, handles, index, slots): the texture handle at handles[index] bound deferred at the slots of stages
+/// 0, 1, 2 and 5; whether `slots` names any.
+pub(super) unsafe fn bind_slots_deferred(p: &mut Port, w: usize, handles: usize, index: i32, slots: u32) -> bool {
+    if slots == u32::MAX {
+        return false;
+    }
+    let cmd = p.m.r64(w + 0xb8);
+    let h = handles.wrapping_add((index as isize as usize).wrapping_mul(8));
+    for (stage, sh) in [(0, 0), (1, 8), (2, 16), (5, 24)] {
+        if (slots >> sh) & 0xff != 0xff {
+            p.m.w::<u8>(cmd + 0x10, 1);
+            p.bind_textures_deferred(cmd, stage, (slots >> sh) as i8 as i32, 1, h as u64);
+        }
+    }
+    true
+}
+
 /// main+0x7650f4: vertex attribute and stream states.
 pub(super) unsafe fn bind_vertex_state(p: &mut Port, g: usize, s: usize) {
     let cmd = p.m.r64(g + 0xb0) as u64;
