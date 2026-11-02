@@ -389,10 +389,6 @@ impl Ranges {
         }
         self.0.range(..b).next_back().is_some_and(|(_, &e)| e > a)
     }
-
-    pub(super) fn clear(&mut self) {
-        self.0.clear();
-    }
 }
 
 impl Ctx {

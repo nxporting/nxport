@@ -27,6 +27,8 @@ const HASH_BATCH: usize = 128;
 
 struct Chunk {
     buffer: vk::Buffer,
+    /// Bound to `buffer`: held with it (chunks last as long as the device).
+    #[allow(dead_code)]
     memory: vk::DeviceMemory,
     /// Free blocks by offset: length.
     free: BTreeMap<u64, u64>,

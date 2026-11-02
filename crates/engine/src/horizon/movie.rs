@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 
 // horizon::movie::Status
 const OK: u32 = 0;
+#[allow(dead_code)]
 const ERR_UNKNOWN: u32 = 0x1000;
 const ERR_INVALID_RANGE: u32 = 0x1001;
 const ERR_BUFFER_TOO_SMALL: u32 = 0x1005;

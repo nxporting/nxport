@@ -8,6 +8,8 @@
 // - Display mode (Docked 1080p vs Handheld 720p)
 // - VSync
 // - Asynchronous shader pipeline compilation
+// iOS has no menu bar: its settings screen sets some of these at launch, and the rest go unused there.
+#![cfg_attr(target_os = "ios", allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
