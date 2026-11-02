@@ -949,23 +949,7 @@ impl Builder {
         };
         match &j.result {
             None => ui.text(&overlay),
-            Some(Ok(app)) => {
-                ui.text_colored([0.5, 0.9, 0.5, 1.0], format!("Built {}", app.display()));
-                // Windows: the app is a folder with nxport.exe; start it, or show it.
-                #[cfg(windows)]
-                {
-                    if ui.button("Play") {
-                        let exe = app.join("nxport.exe");
-                        if let Err(e) = std::process::Command::new(&exe).current_dir(app).spawn() {
-                            println!("[!] {}: {e}", exe.display());
-                        }
-                    }
-                    ui.same_line();
-                    if ui.button("Open Folder") {
-                        let _ = std::process::Command::new("explorer.exe").arg(app).spawn();
-                    }
-                }
-            }
+            Some(Ok(app)) => ui.text_colored([0.5, 0.9, 0.5, 1.0], format!("Built {}", app.display())),
             Some(Err(e)) => ui.text_colored([1.0, 0.45, 0.4, 1.0], e),
         };
         drop(j);
