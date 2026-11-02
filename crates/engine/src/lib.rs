@@ -51,6 +51,9 @@ pub mod settings;
 /// Dear ImGui windows over SDL3 on Windows: the builder's and the game's settings window.
 #[cfg(windows)]
 pub mod ui_sdl;
+/// SDL3.dll carried in the program, for the builder (a single file).
+#[cfg(windows)]
+pub mod sdl_library;
 
 #[cfg(nx_native)]
 use std::thread;
@@ -204,7 +207,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut s = resolve_settings(layers);
+    let s = resolve_settings(layers);
     if s.graphics.gpu == settings::GpuBackend::Null {
         return Err("--gpu=null: only where guest code is lifted".into());
     }
@@ -1236,6 +1239,23 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         mod_modules,
         game_subsdk_inits,
     })
+}
+
+/// The engine's program: a game, by the command line's settings. nxport's own main, and a Windows app's (the builder
+/// copies itself in as the app's nxport.exe and starts here by that name).
+pub fn main() -> std::process::ExitCode {
+    let layers = match settings::from_args(std::env::args_os()) {
+        Ok(l) => l,
+        Err(e) => e.exit(),
+    };
+    match run(layers) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            config::app_error(&e.to_string());
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
 
 /// Runs a game. This host has no runtime (docs/windows-port.md).
