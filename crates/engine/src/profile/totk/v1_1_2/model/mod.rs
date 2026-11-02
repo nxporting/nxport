@@ -789,6 +789,23 @@ pub unsafe extern "C" fn on_effect_layer_end() -> u32 {
     EFFECT_LAYERS.end("effect layers", &EFFECT_LAYER_EXPECTED)
 }
 
+static ATMOSPHERES: Checked = Checked::new();
+
+thread_local! {
+    static ATMOSPHERE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x21d95d4(ctx, w, prog) (scene_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_atmosphere(ctx: usize, w: usize, prog: usize) -> u32 {
+    ATMOSPHERES.run(&ATMOSPHERE_EXPECTED, move |p| scene_passes::atmosphere(p, ctx, w, prog))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_atmosphere_end() -> u32 {
+    ATMOSPHERES.end("atmosphere passes", &ATMOSPHERE_EXPECTED)
+}
+
 /// main+0x98a150(rb, w, index, mask, color, stencil, viewport, depth in s0): a render buffer clear (targets.rs; hooked
 /// with hook_float: `floats` points at the saved d0..d7).
 #[no_mangle]
@@ -1757,6 +1774,9 @@ fn report() {
     if let Some(l) = SNAPSHOTS.summary("snapshots") {
         println!("{l}");
     }
+    if let Some(l) = ATMOSPHERES.summary("atmosphere passes") {
+        println!("{l}");
+    }
     if let Some(l) = EFFECT_LAYERS.summary("effect layers") {
         println!("{l}");
     }
@@ -2001,6 +2021,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_effect_layer(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_effect_layer_end())) as usize;
         hook(base, mem_space, 0x95f810, 0xd10483ff, pre, post, "Effect layers");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_atmosphere(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_atmosphere_end())) as usize;
+        hook(base, mem_space, 0x21d95d4, 0xd10543ff, pre, post, "Atmosphere passes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");

@@ -494,6 +494,14 @@ impl Port {
         out
     }
 
+    /// ring_block where only the first `known` bytes of the data are meaningful (the rest is the game's stack).
+    pub(super) unsafe fn ring_block_known(&mut self, data: usize, known: usize, size: usize) -> usize {
+        if self.m.predict() {
+            return super::ring::predict_known(self.base, data, known, size);
+        }
+        self.ring_block(data, size)
+    }
+
     /// main+0x960088: the same allocation, called with the ring and returning the block.
     /// ring_block where the game inlines the allocator (main+0x96b068's body).
     pub(super) unsafe fn ring_block_inline(&mut self, data: usize, size: usize) -> usize {
