@@ -445,7 +445,7 @@ static SUSPENDED: AtomicBool = AtomicBool::new(false);
 static SWAP_AB: AtomicBool = AtomicBool::new(false);
 static SWAP_XY: AtomicBool = AtomicBool::new(false);
 
-#[cfg(any(target_os = "ios", windows))]
+#[cfg_attr(target_os = "macos", allow(dead_code))] // the Windows menu bar and the iOS settings change them
 pub fn set_controller_swaps(ab: bool, xy: bool) {
     SWAP_AB.store(ab, Ordering::Relaxed);
     SWAP_XY.store(xy, Ordering::Relaxed);
@@ -456,6 +456,7 @@ static NPAD_STICKS: [[AtomicI32; 4]; MAX_PLAYERS] =
     [const { [const { AtomicI32::new(0) }; 4] }; MAX_PLAYERS];
 
 /// The current Npad state for player 0: (NpadButtonSet bits, [left x, left y, right x, right y]) in hid units (±0x7fff).
+#[cfg_attr(target_os = "ios", allow(dead_code))] // the macOS controls window
 pub fn npad_state() -> (u64, [i32; 4]) {
     player_npad_state(0)
 }
@@ -584,6 +585,7 @@ pub fn set_suspended(s: bool) {
     update_npad();
 }
 
+#[cfg_attr(target_os = "ios", allow(dead_code))] // the macOS controls window
 pub fn pad_value(e: PadElem) -> f32 {
     player_pad_value(0, e)
 }
@@ -731,6 +733,7 @@ pub fn log_hid(func: &str, id: u32, count: i32) {
 
 /// Takes each connected controller's element values (`PAD_ELEMS` order), controller i for player i (player 0 also has the
 /// keyboard and stays connected without one), and refreshes the Npad state if anything changed.
+#[cfg(windows)]
 pub fn set_players(pads: &[[f32; 25]]) {
     let mut changed = false;
     for p in 0..MAX_PLAYERS {

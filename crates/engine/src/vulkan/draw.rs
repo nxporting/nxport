@@ -61,7 +61,7 @@ const REPACK_CACHE_MAX: usize = 8 << 20;
 
 /// A vertex stream repacked for all its elements, with the hash of its guest bytes then and the last frame a draw
 /// used it.
-pub(super) struct RepackedStream {
+pub(in crate::vulkan) struct RepackedStream {
     pub(super) buf: crate::vulkan::device::HostBuffer,
     elems: usize,
     token: u64,
@@ -121,7 +121,7 @@ pub(super) const TEX_MEMO: usize = 48;
 /// feedback is checked against the pass), the texture's description and where it lives (Textures::locate), checked once
 /// per submit (`serial`: Textures::serial then).
 #[derive(Clone, Copy)]
-pub(super) struct BlEntry {
+pub(in crate::vulkan) struct BlEntry {
     word: u32,
     image: vk::Image,
     place: Option<(super::texture::Desc, (super::texture::Desc, u32, u32))>,
@@ -136,7 +136,7 @@ pub(super) struct BlEntry {
 /// Bindless textures: a push constant word's last resolution (Ctx::bl_memo), good within the submit (`serial`) while
 /// the image is not rendered to (`fb` 0) or, while it is, for the feedback copy of barrier epoch `fb`.
 #[derive(Clone, Copy, Default)]
-pub(super) struct BlMemo {
+pub(in crate::vulkan) struct BlMemo {
     pub(super) handle: u64,
     pub(super) declared: vk::ImageViewType,
     pub(super) serial: u64,
