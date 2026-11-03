@@ -54,6 +54,9 @@ and update this file when you finish or drop it.
   round-to-frames helpers f_7001a6ad90 / ae18 / aef4: the AO's reader takes +8 without the scale. Averaging the step
   over 5 frames (SkyboundTOTK) only trims it: 101 -> 80 switches. The old repro view drifted: on today's build use
   `-turn ",2400-2720:37,2740-2820:40"` (archway view, ~100 switches in 300 frames at 3300).
+  INVALID (user, 2026-11-03): everything from here to the end of this item measured the shrine entrance's animated green
+  glow (intended), not the AO bug: the switch metric (>3000 pixels moving one way) catches that animation, which follows
+  game time. Keep the tools, discard the conclusions. The real AO flicker still needs a repro and a metric checked by eye.
   2026-11-03 night (headless, archway view `-turn ",2400-2800:37,2820-2900:40"`, capture at 4200):
   - A hardware watchpoint on timer+8 (DR0 in every thread, VEH, guest.pdb via llvm-symbolizer) lists 27 code
     sites per frame. Most are the time manager recomputing channels (timer+0x10+0x28k = +8 * slot * +0x108, slots of
