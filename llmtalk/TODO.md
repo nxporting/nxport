@@ -13,13 +13,6 @@ and update this file when you finish or drop it.
   For now, delta time only makes game time follow real time (no physics verification).
 - **TotK at high fps, still wrong** (reported by the user): physics on a platform moving down a rail. Not looked at
   yet; needs gameplay to reproduce. (Ladders: fixed as of 2026-11-02, user-checked; the Ultrahand camera too.)
-- **TotK shrine walkway: dark wedge beside the walkway** (S41L0R Windows Machine, open): the ground material
-  (s_40b797f18632f7bc / s_6facd1ab0508d563) blends into what is under it at its screen position (normals, albedo:
-  feedback copies) by a weight from the linear depth of pass "s_0b38d2c1131e4c9b" (R32, sampled as tcb_10). Before
-  the render-target feedback fix the blend read stale copies (black outline around the walkway's base); with it a
-  wedge of the base goes dark. Where it goes dark nothing is under the ground yet, so the blend weight there (the R32
-  value for empty pixels) is the next suspect; the pass dump clamps R32 to 8 bits, so read it raw.
-  Repro: scripted run on the shrine-entrance save, `2400-2650:37,2680-2760:40` after the A presses, capture at 2900.
 - **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
@@ -55,6 +48,11 @@ and update this file when you finish or drop it.
   - Other games (Mario Kart 8 Deluxe first): aspect sites and HUD tables.
 
 ## Done recently
+
+- **TotK shrine walkway wedge fixed** (S41L0R Windows Machine): the ground material samples three of its own render
+  targets; the first one's feedback copy ended the pass, and the later two were then not seen as attachments and were
+  read live while being rendered to (stale linear depth: the ground blended into black beside the walkway). Repro:
+  headless scripted run on the shrine-entrance save, `2400-2650:37,2680-2760:40` after the A presses, capture at 2900.
 
 - **TotK fixes, 2026-11-02** (S41L0R Windows Machine, `f2063da`..`75b0aa1` and after): black fringe on the shrine
   floor's rim (draws sampling their own targets now see the draws before them; F9 also dumps every pass); stutter
