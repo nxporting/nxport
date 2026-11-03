@@ -22,8 +22,12 @@ and update this file when you finish or drop it.
   {seconds = factor / 30, ratio = factor} each rendered frame, ignoring the real-time step. 1.0.0 sites: inline at
   main+0x7b5988/0x7b598c and main+0x7b6b28/0x7b6b2c (`fmul s0, s8, s0; stp s0, s8, [x29, #-0x40]`), main+0x7f5ec4
   (`fmul s1, s0, s1`) / main+0x7f5ed0 (`str s0, [sp, #0x114]`), and the call at main+0x7b6358 (s2, s3). Each should
-  scale by the step (seconds = step seconds * factor, ratio = step * factor). 1.1.2 code differs in registers (byte
-  patterns don't match): find the sites with a function compare, check register liveness, patch like frame_time.rs.
+  scale by the step (seconds = step seconds * factor, ratio = step * factor). 1.1.2 differs (2026-11-03, by
+  disassembly): the same request struct ({1.0}, 0x100, then the clock pair, then -1) is built at main+0x69a198,
+  0x9d188c and 0x9f3c50 (the last is the 1.0.0 callee's counterpart), but the clock pair is set to {-1.0, -1.0}
+  (unset) and no 1/30 global is loaded; the callee no longer takes s2/s3. So 1.1.2 likely takes the clock from the time
+  manager (which follows our step) and may not have the bug: check hair/cloth speed at 60+ fps on 1.1.2 before porting
+  anything. 1.0.0 still needs the four patches.
 - **TotK ambient occlusion / green glow flickers while the camera moves** (S41L0R Windows Machine, open): the 320x180
   pass s_6189816858e66cfd / s_fa6a730d8cf66342 (early in the frame) reprojects the previous frame's low-res lit scene
   with a grid of per-cell depths; still camera: right; moving: streaks, the reprojection is off by far more than a
