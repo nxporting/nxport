@@ -1851,6 +1851,12 @@ unsafe fn npad_states(
     } else {
         (0, [0; 4])
     };
+    // TotK's menus over a captured world need whole steps while their buttons are held (frame_time::menu_buttons).
+    let buttons = if player == 0 {
+        crate::profile::totk::frame_time::menu_buttons(buttons as u64) as _
+    } else {
+        buttons
+    };
     // --log-hid-buttons: every read that returns pressed buttons (which id / style path the game polls).
     static LOG_BUTTONS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if buttons != 0 && *LOG_BUTTONS.get_or_init(|| crate::settings::get().log.log_hid_buttons) {

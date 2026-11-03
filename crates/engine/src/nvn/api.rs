@@ -6314,7 +6314,9 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         // Interval 0 is NVN's "no vsync": no wait here (frame-rate mods such as UltraCam use it with their own limiter;
         // a window's CAMetalLayer still paces presentation at the display's refresh rate).
         let interval = present_interval();
-        let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
+        // (Also while TotK takes whole 1/30 s steps for a menu: frame_time::whole_frames.)
+        let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30
+            || crate::profile::totk::frame_time::whole_frames();
         let vsync = crate::host::overlay::is_vsync();
         // Windows: the frame-rate limit paces (vsync only chooses how the swapchain presents). A title whose game time
         // does not follow real time is also held to its interval: running faster would run it fast.
