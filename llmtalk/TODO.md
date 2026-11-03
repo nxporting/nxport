@@ -116,7 +116,7 @@ and update this file when you finish or drop it.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
-- **TotK Ultrahand / ability wheel background is black** (fixed 2026-11-03 by the fallback below, bbebcba: headless hold-L run black on main, right on the fix; weapon menu (d-pad right) likewise): reproduced with an
+- **TotK Ultrahand / ability wheel background is black** (open: the fallback bbebcba was reverted, 9b3e4f1; the user wants the real fix, not a workaround) likewise): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
   textures, so they hold black. The frame before samples the 768x432 texture uninitialized (garbage overlay).
@@ -130,7 +130,7 @@ and update this file when you finish or drop it.
   SkyboundTOTK's fallback (nn_vi.c hos_frame_step_buttons, MIT): while L or d-pad left/up/right is held (at most 3 s)
   the step is 1/30 s and frames are held to 30 fps, and a new press reaches the game two frames late; the d-pad quick
   menus (weapons, shields, throw / fuse arrows) go black the same way, so check those too. Prefer finding the capture
-  code; this is the fallback. Fallback on main (bbebcba): 30 fps and whole steps while a menu button is held; the
+  code; this is the fallback. Fallback tried (bbebcba, reverted 9b3e4f1: no workarounds): 30 fps and whole steps while a menu button is held; the
   real fix would drop that. Static lead for it: the sequence node class named
   `SeqOneShotDRequestCaptureBeforeShortCutBG` (name getter main+0x2814bd8, vtable main+0x439c320..0x439c430). They also average the real-time step over 5 frames, which may calm the AO flicker
   above (a steady step flickered 11 times against 94).
