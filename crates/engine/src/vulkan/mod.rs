@@ -314,7 +314,11 @@ impl Backend for Vulkan {
     }
 
     fn before_host_write(&self, addr: usize, len: usize) {
-        unsafe { guard::before_host_write(addr, len) }
+        unsafe {
+            #[cfg(not(nx_native))]
+            crate::gpu::report_guard::before_host_write(addr, len);
+            guard::before_host_write(addr, len)
+        }
     }
 
     fn presented_frames(&self) -> u64 {

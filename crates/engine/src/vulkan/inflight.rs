@@ -17,7 +17,7 @@ pub(super) enum Occl {
     Report(u64),
 }
 
-/// What the watcher does once a submit completed.
+/// What the watcher does once a submit completed, or (serial 0) a chunk with occlusion reports.
 pub(super) struct Done {
     pub serial: u64,
     /// Null for a submit that queued nothing.

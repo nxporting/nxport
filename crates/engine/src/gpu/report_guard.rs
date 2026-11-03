@@ -396,6 +396,11 @@ pub(crate) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
     }
 }
 
+/// The engine writes guest memory at host address `a` (a report), through the alias while its page is guarded.
+pub(crate) unsafe fn engine_write(a: usize, src: &[u8]) {
+    std::ptr::copy_nonoverlapping(src.as_ptr(), engine_ptr(a) as *mut u8, src.len());
+}
+
 /// The report at host address `a` was written (or will never be): one less pending on its page; the last one opens it.
 pub(crate) fn close(a: usize) {
     if mode() == crate::settings::ReportGuard::Off || HIGH.load(Ordering::Acquire) == 0 {

@@ -155,6 +155,12 @@ pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
     imp::address_owner(addr)
 }
 
+/// The image of the loaded module containing `addr`: (start, end).
+#[cfg(windows)]
+pub fn image_range(addr: usize) -> Option<(usize, usize)> {
+    imp::image_range(addr)
+}
+
 /// Local time on the host: `t` (seconds since 1970) broken down, the time zone's abbreviation, whether daylight saving
 /// time is in effect, and the UTC offset in seconds.
 pub fn local_time(t: i64) -> (libc::tm, String, bool, i32) {
@@ -590,6 +596,25 @@ mod imp {
         let mut name = [0u16; 512];
         let n = unsafe { GetModuleFileNameW(m, name.as_mut_ptr(), name.len() as u32) } as usize;
         ((n > 0).then(|| String::from_utf16_lossy(&name[..n])), None)
+    }
+
+    pub fn image_range(addr: usize) -> Option<(usize, usize)> {
+        const FROM_ADDRESS: u32 = 0x4; // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+        const UNCHANGED_REFCOUNT: u32 = 0x2;
+        extern "system" {
+            fn GetModuleHandleExW(flags: u32, name: *const c_void, module: *mut *mut c_void) -> i32;
+        }
+        let mut m = std::ptr::null_mut();
+        if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, addr as *const c_void, &mut m) } == 0 {
+            return None;
+        }
+        // A module handle is its image's base: the PE header's offset at 0x3c, SizeOfImage at 0x50 in the header.
+        let base = m as usize;
+        let size = unsafe {
+            let pe = base + (((base + 0x3c) as *const u32).read_unaligned() as usize);
+            ((pe + 0x50) as *const u32).read_unaligned() as usize
+        };
+        Some((base, base + size))
     }
 
     extern "C" {
