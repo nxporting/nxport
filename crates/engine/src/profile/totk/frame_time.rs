@@ -22,6 +22,10 @@
 // the game ran (Ultrahand's vertical camera). It branches to camera_rate, which scales the amount by the frame's step
 // in frames at 30 fps (1 at 30 fps).
 //
+// Ground carry: a slow-motion check on the velocity Link keeps from what he stands on compares a value that grows with
+// the frame rate (30 / (step * time scale)) with 100; above 100 fps he slid off moving platforms. ground_carry takes out
+// the step (the same fix as MacNativeGames' and SkyboundTOTK's for 1.0.0).
+//
 // The hooks rewrite instructions and branch to HLE trampolines (no code of our own in guest memory), so they apply to
 // every runtime: natively, and to the image that is lifted.
 
@@ -41,6 +45,9 @@ pub struct Sites {
     pub input_code: [u32; 8],
     /// The camera-rate getter and the field it reads (`ldr s0, [x0, #field]; ret`: camera_rate_code), where known.
     pub camera_rate: Option<(usize, usize)>,
+    /// The slow-motion check on the velocity Link keeps from the ground he stands on (ground_carry_code) and the
+    /// version's word 1 (`ldr x8, [xN]`: the register differs), where known.
+    pub ground_carry: Option<(usize, u32)>,
 }
 
 /// The camera-rate getter: ldr s0, [x0, #field]; ret.
@@ -48,6 +55,19 @@ pub const fn camera_rate_code(field: usize) -> [u32; 2] {
     [0xbd40_0000 | ((field as u32 / 4) << 10), 0xd65f_03c0]
 }
 const _: () = assert!(camera_rate_code(0xc54)[0] == 0xbd4c_5400);
+
+/// The ground-carry check: a dummy load, the time object ([[xN] + 0xc8]), its +0x28 compared with 100 (b.gt follows).
+pub const fn ground_carry_code(ldr_obj: u32) -> [u32; 7] {
+    [
+        0xf940_36df, // ldr xzr, [x22, #0x68]
+        ldr_obj,     // ldr x8, [xN]
+        0xf940_6508, // ldr x8, [x8, #0xc8]
+        0xbd40_2900, // ldr s0, [x8, #0x28]
+        0x52a8_5908, // mov w8, #0x42c80000 (100.0)
+        0x1e27_0101, // fmov s1, w8
+        0x1e21_2000, // fcmp s0, s1
+    ]
+}
 
 pub const MOVZ_X8_2: u32 = 0xd280_0048;
 pub const MOVZ_X8_1: u32 = 0xd280_0028;
@@ -241,6 +261,14 @@ pub unsafe extern "C" fn camera_rate(obj: usize) -> f32 {
     *((obj + CAMERA_FIELD.load(Ordering::Relaxed) as usize) as *const f32) * frames_at_30()
 }
 
+/// The ground-carry check's value (x0 = the time object): Link keeps a tenth of the velocity of what he stands on when
+/// the object's +0x28, 30 / (step * time scale), is over 100: meant for time slowed below 0.3, but above 100 fps the
+/// step alone got it there and he slid off moving platforms and trampolines. Times the step (+0x38) it is 30 / time
+/// scale: the same at 30 fps, and independent of the frame rate.
+pub unsafe extern "C" fn ground_carry(obj: usize) -> f32 {
+    *((obj + 0x28) as *const f32) * *((obj + 0x38) as *const f32)
+}
+
 /// Replaces the controllers' hold-timer step (frames at 30 fps): the last step time_step took.
 pub unsafe extern "C" fn input_step(dest: usize) {
     if dest == 0 {
@@ -341,6 +369,21 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         match replace_with_call(base, mem_space, at, &camera_rate_code(field), vec![B, NOP], 0, crate::hle!(camera_rate(_))) {
             Ok(()) => println!("[+] Camera rate: scaled to the frame's step"),
             Err(e) => println!("[!] Camera rate: main+{at:#x}: {e}; not scaled"),
+        }
+    }
+    if let Some((at, ldr_obj)) = s.ground_carry {
+        let carry = vec![
+            ldr_obj,     // ldr x8, [xN]
+            0xf940_6500, // ldr x0, [x8, #0xc8]
+            BL,          // bl <ground_carry trampoline> (s0)
+            0x52a8_5908, // mov w8, #0x42c80000 (100.0)
+            0x1e27_0101, // fmov s1, w8
+            0x1e21_2000, // fcmp s0, s1
+            NOP,
+        ];
+        match replace_with_call(base, mem_space, at, &ground_carry_code(ldr_obj), carry, 2, crate::hle!(ground_carry(_))) {
+            Ok(()) => println!("[+] Ground carry: Link keeps moving platforms' velocity at any frame rate"),
+            Err(e) => println!("[!] Ground carry: main+{at:#x}: {e}; not patched"),
         }
     }
     // Both or neither: the lowest interval alone stays vetoed.
