@@ -54,6 +54,11 @@ and update this file when you finish or drop it.
   round-to-frames helpers f_7001a6ad90 / ae18 / aef4: the AO's reader takes +8 without the scale. Averaging the step
   over 5 frames (SkyboundTOTK) only trims it: 101 -> 80 switches. The old repro view drifted: on today's build use
   `-turn ",2400-2720:37,2740-2820:40"` (archway view, ~100 switches in 300 frames at 3300).
+  AO TEST (2026-11-03, checked by eye with the user): save-test, `--debug-input-script=600-620:6,900-920:6,1200-1220:6,
+  1500-1520:6,1800-2100:13,3200-3290:13,3350-3370:40 --frame-history=800 --history-dump-at=4200` headless: enters the
+  shrine, walks to the two stone heads, tilts down, still from 3400. The AO (bases of the heads, rail edges, cobbles)
+  switches on for a frame and off again ~180 times in 800 frames; count frames where >3000 pixels darken together, and
+  look at a few (red-/blue diff image) before trusting a result. The entrance glow is out of view.
   INVALID (user, 2026-11-03): everything from here to the end of this item measured the shrine entrance's animated green
   glow (intended), not the AO bug: the switch metric (>3000 pixels moving one way) catches that animation, which follows
   game time. Keep the tools, discard the conclusions. The real AO flicker still needs a repro and a metric checked by eye.
