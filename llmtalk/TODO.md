@@ -20,7 +20,10 @@ and update this file when you finish or drop it.
   by s_9723f00f727627e0 at frame start; per-cell depths by s_4af9460eb2550614 at the end of the previous frame), s1
   (matrix by s_b8c6271a88128a58 from s0 and cbuf c3) and cbuf c3. Ruled out: GPU latency (synchronous submits),
   storage read in place (copies), our frame-time hooks (30 fps, dynamic FPS off), the tile reduction's barrier (fixed in
-  dc36147 anyway). Next: read s0/s1/c3 values and do the math by hand. Repro: headless scripted run on the
+  dc36147 anyway). A probe of guest memory at the draw (synchronous submits) found the slot's 3x4 matrix sane but
+  the frustum corners it reads (slot + 288..384) and the per-cell depths (+832) look like garbage (2e-38 .. 8e8,
+  -1.7e38); the probe's cbuf/storage slot mapping was partly wrong (c3 read zeros), so confirm with a better probe
+  before trusting it, then look at s_9723f00f727627e0 (24 KB compute). Repro: headless scripted run on the
   shrine-entrance save, `2400-2650:37,2680-2760:40,2800-3000:37` after the A presses, capture at 3000.
 - **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
