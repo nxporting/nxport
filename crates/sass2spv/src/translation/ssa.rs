@@ -7,7 +7,8 @@ use crate::ir::{BlockId, Ir, NodeId, OperandId, OperandType};
 
 const GPRS_COUNT: i32 = 256;
 const PREDS_COUNT: i32 = 8;
-const FLAGS_COUNT: i32 = 4;
+// The four condition flags and the exited flag (EmitterContext::exited_flag).
+const FLAGS_COUNT: i32 = 5;
 const TOTAL_COUNT: i32 = GPRS_COUNT + PREDS_COUNT + FLAGS_COUNT;
 const GPRS_AND_PREDS_COUNT: i32 = GPRS_COUNT + PREDS_COUNT;
 
