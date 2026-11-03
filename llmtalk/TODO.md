@@ -68,6 +68,22 @@ and update this file when you finish or drop it.
     settings gave 72, 0, 25), so the physics result above is not established, and the earlier single-run conclusions
     (+8 = 1.0 -> 0 switches, etc.) need repeating. time_step is called once per frame on one thread (no race).
     Measure over longer windows / several runs before concluding anything.
+  - Long windows (900 frames, 3300..4200, two runs each, toggles from frame 2900 so the path is the same):
+    baseline 322 / 67 switches; +8 = 1.0 and +0xc = 1/30: 0 / 0; capped to 30 fps from 2900 (real step ~0.99..1.006,
+    game at real speed, the window covers 30 s of game time): 0 / 0; +8 = 1.0 with the fraction in +0x108 (derived
+    channels unchanged): 10 / 199; only +0xc = 1/30: 28 / 62; only the physics dt whole (preset its time object so
+    the update leaves it): 176 / 39. So: it needs steps under a frame, and the consumer reads a derived channel
+    (+0 = +8 * slot0 * +0x108, or channels at +0x10 / +0x38 / +0x60), not raw +8, +0xc or the physics step. The
+    switching usually starts late in the window.
+  - Watchpoints on +0, +0x10, +0x38, +0x60: 83 code sites. Besides the time manager: a getter-like f_70014df480
+    (30 reads of +0 a frame) and many small per-object accumulators (`obj.t += +0 * rate`, e.g. f_7000b089d0,
+    f_70007b9bc0, f_70008b064c, f_700286dac0): animation / timer components. Theory: something visual picks its state
+    per whole game frame of accumulated time (a pattern index or nearest-frame animation), so at ~140 fps it holds
+    for ~5 frames then jumps; at 30 fps it changes every frame and the temporal filter averages it. Next: find which
+    accumulator feeds a render pass (log the accumulators' owners, or compare the AO pass inputs on switch frames).
+  - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
+    against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
+    (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
 - **TotK Ultrahand / ability wheel background is black** (fixed 2026-11-03 by the fallback below, bbebcba: headless hold-L run black on main, right on the fix; weapon menu (d-pad right) likewise): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
