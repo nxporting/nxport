@@ -1133,14 +1133,18 @@ impl Ctx {
         // 1 MiB for bindings from the game's own buffers), and holding all of it made the game fault on every
         // neighbouring write (walking in Hateno: 49 -> 29 fps).
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
+        let rw = if write { "write" } else { "read" };
         if let Some((buf, off)) = self.shadow(a, size, write).filter(|(_, o)| o % align == 0) {
+            crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} shadow"));
             return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
         }
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
+                crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} imported"));
                 return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
             }
         }
+        crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} copy"));
         // Ones the stage writes are read back by the watcher: on discrete GPUs host-cached memory (the other arena is
         // write-combined, slow to read).
         let (buf, off, p) = if write && self.dev.discrete { self.readback.alloc(&self.dev, size)? } else { self.arena.alloc(&self.dev, size)? };
