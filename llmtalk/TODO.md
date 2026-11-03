@@ -8,6 +8,17 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **TotK device lost in the Depths** (2026-11-03, user, Windows): the GPU device was lost at presented frame 23651
+  (vkQueueSubmit: device lost; the game froze for good). It had just loaded `MinusObj_CheckPointRoots_A_90_*` (a
+  Lightroot) and first used texture format 59 (next item; a skipped texture is sampled as the placeholder, so
+  probably not the cause). Save near it: the user's slot_02 (2026-11-03 12:42); test on scratch copies, never the
+  real save.
+- **Texture format 59 is not mapped** (vulkan/format.rs `texture`): NVN 59 is RGB5A1 (58, RGB5, is missing too), so
+  `texture format 59 not supported` and the texture is skipped. Add both with the right channel order (cf. 57
+  A4B4G4R4 / 60 B5G6R5: packed formats name their channels from the low bits), and on Metal.
+- **TotK map: a texture flashes when zooming the map in and out very fast** (user report, 2026-11-03, Windows). Not
+  looked at yet.
+
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
   For now, delta time only makes game time follow real time (no physics verification).
@@ -29,7 +40,7 @@ and update this file when you finish or drop it.
   manager (which follows our step) and may not have the bug: check hair/cloth speed at 60+ fps on 1.1.2 before porting
   anything. 1.0.0: fixed 2026-11-03 (3e01322): all four sites read {step seconds, step frames} words time_step keeps
   after main's .bss (no call); lifted and run headless into the opening, not yet compared by eye at 60+ fps.
-- **TotK ambient occlusion / green glow flickers while the camera moves** (S41L0R Windows Machine, open): the 320x180
+- **TotK ambient occlusion / green glow flickers while the camera moves** (FIXED 2026-11-03, ab21579: compute stages read the dispatch's thread group counts at 0x200 of the driver constant buffer, which we left 0, so the depth-cell passes wrote only row 0 and the reprojection failed whenever the camera moved; user-checked in game. Notes below kept for the record): the 320x180
   pass s_6189816858e66cfd / s_fa6a730d8cf66342 (early in the frame) reprojects the previous frame's low-res lit scene
   with a grid of per-cell depths; still camera: right; moving: streaks, the reprojection is off by far more than a
   frame of motion (green blobs jump around in the final image). Its inputs: storage s0 (view data per slot, GPU-written
