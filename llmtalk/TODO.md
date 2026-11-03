@@ -13,6 +13,17 @@ and update this file when you finish or drop it.
   For now, delta time only makes game time follow real time (no physics verification).
 - **TotK at high fps, still wrong** (reported by the user): physics on a platform moving down a rail. Not looked at
   yet; needs gameplay to reproduce. (Ladders: fixed as of 2026-11-02, user-checked; the Ultrahand camera too.)
+  Likely cause (2026-11-03, from SkyboundTOTK's notes, MIT, their fix taken from MacNativeGames): a slow-motion check
+  (1.1.2 main+0xbbb4c0, 1.0.0 main+0xce3fec) keeps 0.1 of the ground body's velocity when the time object's +0x28,
+  30 / (step * time scale), is over 100, which happens at over 100 fps at normal speed. Fix on local branch
+  `ground-carry` (cae8b5d, builds, not run): compares +0x28 * +0x38 instead. Test on a moving platform at 144 fps,
+  then merge.
+- **TotK hair and cloth too fast above 30 fps** (from SkyboundTOTK's notes): the actor animation update builds a clock
+  {seconds = factor / 30, ratio = factor} each rendered frame, ignoring the real-time step. 1.0.0 sites: inline at
+  main+0x7b5988/0x7b598c and main+0x7b6b28/0x7b6b2c (`fmul s0, s8, s0; stp s0, s8, [x29, #-0x40]`), main+0x7f5ec4
+  (`fmul s1, s0, s1`) / main+0x7f5ed0 (`str s0, [sp, #0x114]`), and the call at main+0x7b6358 (s2, s3). Each should
+  scale by the step (seconds = step seconds * factor, ratio = step * factor). 1.1.2 code differs in registers (byte
+  patterns don't match): find the sites with a function compare, check register liveness, patch like frame_time.rs.
 - **TotK ambient occlusion / green glow flickers while the camera moves** (S41L0R Windows Machine, open): the 320x180
   pass s_6189816858e66cfd / s_fa6a730d8cf66342 (early in the frame) reprojects the previous frame's low-res lit scene
   with a grid of per-cell depths; still camera: right; moving: streaks, the reprojection is off by far more than a
