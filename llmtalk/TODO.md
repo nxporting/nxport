@@ -47,7 +47,11 @@ and update this file when you finish or drop it.
   Repro: headless, `3300-3700:14` (hold L) after the A presses, capture at 3600.
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
   address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
-  clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save).
+  clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save). Cause found 2026-11-03 (by reading the code):
+  HLE trampoline entries are 8 words, but the probe wrote its 15-word wrapper into one entry, overwriting the
+  post-call stub in the next; after the draw call the game branched into that overwritten stub, which reloaded x8/x30
+  from popped stack slots and ran `blr x8` again. The wrapper now takes two entries; the occlusion-read journal hook
+  (words 10..14, also past its entry) now uses words 3..7. Untested on macOS: check that it reports past frame 600.
 - `retro-work` has commits not on main.
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
   Players' lists carry the build id in their header and submissions send it, but the published list

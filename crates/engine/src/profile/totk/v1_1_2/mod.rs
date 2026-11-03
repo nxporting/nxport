@@ -103,7 +103,7 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
         let site = (base + SITE) as *mut u32;
         let tramp =
             mem_space.make_hle_trampoline(crate::hle!(crate::metal::journal_occl_read(_))) as usize;
-        let wrap = tramp + 40; // words 10..14 of the 16-word entry (make_hle_trampoline uses 0..9)
+        let wrap = tramp + 12; // words 3..7 of the 8-word entry (make_hle_trampoline uses 0..2)
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
             (d.abs() < 1 << 27).then(
@@ -137,10 +137,12 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
         let site = (base + SITE) as *mut u32;
         let tramp =
             mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize;
+        // Entries are 8 words, made one after another: the wrapper (15 words) takes two, the code after the call a third.
         let wrap =
-            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize; // its words: the wrapper
-        let post =
-            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize; // after the call
+            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize;
+        mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _)));
+        mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _)));
+        let post = wrap + 64;
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
             (d.abs() < 1 << 27).then(
@@ -165,7 +167,7 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
                 for (k, c) in pcode.iter().enumerate() {
                     std::ptr::write(pw.add(k), *c);
                 }
-                sys_icache_invalidate(pw as *mut libc::c_void, 64);
+                sys_icache_invalidate(pw as *mut libc::c_void, 32);
                 let w = wrap as *mut u32;
                 let code: [u32; 15] = [
                     0xa9ba07e0, // stp x0, x1, [sp, #-0x60]!
