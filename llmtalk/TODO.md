@@ -63,7 +63,9 @@ and update this file when you finish or drop it.
   SkyboundTOTK's fallback (nn_vi.c hos_frame_step_buttons, MIT): while L or d-pad left/up/right is held (at most 3 s)
   the step is 1/30 s and frames are held to 30 fps, and a new press reaches the game two frames late; the d-pad quick
   menus (weapons, shields, throw / fuse arrows) go black the same way, so check those too. Prefer finding the capture
-  code; this is the fallback. They also average the real-time step over 5 frames, which may calm the AO flicker
+  code; this is the fallback. Fallback written on local branch `wheel-step` (add144f, builds, not run): test with the
+  hold-L script and a d-pad hold. Static lead for the real fix: the sequence node class named
+  `SeqOneShotDRequestCaptureBeforeShortCutBG` (name getter main+0x2814bd8, vtable main+0x439c320..0x439c430). They also average the real-time step over 5 frames, which may calm the AO flicker
   above (a steady step flickered 11 times against 94).
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
   address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
