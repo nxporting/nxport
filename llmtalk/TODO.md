@@ -81,6 +81,10 @@ and update this file when you finish or drop it.
     per whole game frame of accumulated time (a pattern index or nearest-frame animation), so at ~140 fps it holds
     for ~5 frames then jumps; at 30 fps it changes every frame and the temporal filter averages it. Next: find which
     accumulator feeds a render pass (log the accumulators' owners, or compare the AO pass inputs on switch frames).
+  - GPU side, next: `--history-targets` is Metal-only; on Vulkan a scratch patch (passk.patch) makes the pass dump
+    cover K frames (every other frame), and dumpvar2.ps1 aligns passes by size / format / attachment. One try (10
+    dumps after 4100) caught a quiet stretch: depth drifts smoothly, nothing switches. Needs a burst inside the dump
+    window (bursts come late in the 3300..4200 range); ~840 MB per dumped frame.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
