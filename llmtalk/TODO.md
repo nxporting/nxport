@@ -105,6 +105,10 @@ and update this file when you finish or drop it.
     (the 320x180 reprojection pass and its per-cell depths, see the first symptom above).
   - Not GPU timing: waiting for every submit from frame 2900 (step then ~0.4 frames) still flickers, 319 / 193 in
     900 frames, so storage shadows chosen by what is in flight are not it either.
+  - Not a tick rhythm: a constant step of exactly 0.25 from 2900 still flickers (5 / 155), and the switches do not
+    lock to frame mod 4 (all phases alike; most gaps are 1 frame: one-frame dark or light blips). So it is not
+    "something updates every whole game frame"; the blips need steps under a frame, come in bursts, and land at
+    random frames within a burst.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
