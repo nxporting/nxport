@@ -28,8 +28,14 @@ and update this file when you finish or drop it.
 - **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
-  textures, so they hold black. The frame before samples the 768x432 texture uninitialized (garbage overlay). Cause
-  not found: why the game copies after the world stopped being drawn (ordering, aliasing or predicate timing).
+  textures, so they hold black. The frame before samples the 768x432 texture uninitialized (garbage overlay).
+  Cause narrowed (2026-11-02): the real-time game step (frame_time.rs time_step). With dynamic FPS off, or with the
+  stock step even at 144 fps, the capture runs in the last frame that draws the world and the background is right.
+  With steps under one game frame (0.5 at 60 fps, or 0.993 from jitter at a 30 fps cap) the capture comes a rendered
+  frame later, after the world stopped. The game keeps interval 2 (30 fps) and calls time_step once a frame, so the
+  wheel's capture seems to wait for a whole game frame of time while the world stops the next rendered frame. Next:
+  find the pause/capture code that reads the time manager (timer+8 / +0xc) and give that transition a whole frame.
+  Repro: headless, `3300-3700:14` (hold L) after the A presses, capture at 3600.
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
   address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
   clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save).
