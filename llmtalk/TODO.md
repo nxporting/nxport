@@ -49,6 +49,10 @@ and update this file when you finish or drop it.
   the same commands, textures and screen-pass constants. The timer is the object at *(main+0x462ab60) (1.1.2); ~150
   functions read +8 directly. Moving the fraction into the time scale (+0x108) with +8 = 1.0 also stopped it, but the
   camera and UI read +8 too (ran fast). Next: find which of those readers drives the AO.
+  2026-11-03: that experiment rules out readers that use +8 * +0x88 * +0x108 (the product did not change), e.g. the
+  round-to-frames helpers f_7001a6ad90 / ae18 / aef4: the AO's reader takes +8 without the scale. Averaging the step
+  over 5 frames (SkyboundTOTK) only trims it: 101 -> 80 switches. The old repro view drifted: on today's build use
+  `-turn ",2400-2720:37,2740-2820:40"` (archway view, ~100 switches in 300 frames at 3300).
 - **TotK Ultrahand / ability wheel background is black** (fixed 2026-11-03 by the fallback below, bbebcba: headless hold-L run black on main, right on the fix; weapon menu (d-pad right) likewise): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
