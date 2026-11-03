@@ -15,9 +15,9 @@ and update this file when you finish or drop it.
   yet; needs gameplay to reproduce. (Ladders: fixed as of 2026-11-02, user-checked; the Ultrahand camera too.)
   Likely cause (2026-11-03, from SkyboundTOTK's notes, MIT, their fix taken from MacNativeGames): a slow-motion check
   (1.1.2 main+0xbbb4c0, 1.0.0 main+0xce3fec) keeps 0.1 of the ground body's velocity when the time object's +0x28,
-  30 / (step * time scale), is over 100, which happens at over 100 fps at normal speed. Fix on local branch
-  `ground-carry` (cae8b5d, builds, not run): compares +0x28 * +0x38 instead. Test on a moving platform at 144 fps,
-  then merge.
+  30 / (step * time scale), is over 100, which happens at over 100 fps at normal speed. Fix merged 2026-11-03
+  (1bf994a): compares +0x28 * +0x38 (= 1 / (+0x20 * +0x44), checked in 1.1.2: f_70008f77b8 sets them) instead. Lifted
+  and run headless (hook installs, scripted run normal); the user should still try a moving platform at 144 fps.
 - **TotK hair and cloth too fast above 30 fps** (from SkyboundTOTK's notes): the actor animation update builds a clock
   {seconds = factor / 30, ratio = factor} each rendered frame, ignoring the real-time step. 1.0.0 sites: inline at
   main+0x7b5988/0x7b598c and main+0x7b6b28/0x7b6b2c (`fmul s0, s8, s0; stp s0, s8, [x29, #-0x40]`), main+0x7f5ec4
