@@ -403,6 +403,8 @@ impl Ctx {
         let program = (vd, fs.map_or(0, |f| f.0));
         if self.fb_dirty.is_some_and(|w| w != program) {
             self.fb_epoch += 1;
+            let epoch = self.fb_epoch;
+            crate::gpu::history::journal(|| format!("  feedback epoch {epoch}: another program after a write"));
             self.fb_taken.clear();
             self.fb_dirty = None;
         }
@@ -1051,7 +1053,7 @@ impl Ctx {
                     let m = self.bl_memo[i];
                     let hit = handle.is_some_and(|h| {
                         m.handle == h && m.declared == *view && m.serial == self.tex.serial && {
-                            let in_pass = self.pass.as_ref().is_some_and(|p| p.images.contains(&m.image));
+                            let in_pass = self.renders_to(&m.image);
                             if in_pass { m.fb == self.fb_epoch } else { m.fb == 0 }
                         }
                     });
@@ -1153,7 +1155,7 @@ impl Ctx {
     /// `at`: the bound texture slot (stage, index) it was read from, whose last resolution (Ctx::tex_memo) is tried first.
     unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
-        let in_pass = |me: &Self, img: vk::Image| me.pass.as_ref().is_some_and(|p| p.images.contains(&img));
+        let in_pass = |me: &Self, img: vk::Image| me.renders_to(&img);
         let memo = at.and_then(|(s, k)| Some((usize::try_from(s).ok().filter(|&s| s < 6)?, usize::try_from(k).ok().filter(|&k| k < TEX_MEMO)?)));
         if let Some((s, k)) = memo {
             let m = self.tex_memo[s][k];
@@ -1179,7 +1181,7 @@ impl Ctx {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
             image = self.tex.get(&self.dev, &t)?.0.image;
             // Every barrier ends the pass, so the current pass began after the last one.
-            if self.pass.as_ref().is_some_and(|p| p.images.contains(&image)) {
+            if self.renders_to(&image) {
                 feedback = true;
                 if !self.dev.feedback_in_place {
                     return self.feedback_view(&t, view.as_ref(), declared);
@@ -1232,7 +1234,7 @@ impl Ctx {
     /// Returns the word, the image and the barrier epoch of the feedback copy the word names (0: none).
     unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (u32, vk::Image, u64) {
         let Some(h) = handle else { return (0, vk::Image::null(), 0) };
-        let in_pass = |me: &Self, img: vk::Image| me.pass.as_ref().is_some_and(|p| p.images.contains(&img));
+        let in_pass = |me: &Self, img: vk::Image| me.renders_to(&img);
         let key = (h, declared);
         let serial = self.tex.serial;
         if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.resolved || e.serial == serial) {
@@ -1299,11 +1301,20 @@ impl Ctx {
         let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return };
         let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
         let image = img.image;
-        let fb = self.pass.as_ref().is_some_and(|p| p.images.contains(&image));
+        let fb = self.renders_to(&image);
         let (w, hgt, fmt) = (t.width, t.height, t.format);
         crate::gpu::history::journal(|| {
             format!("    sample {:x}:{fmt} {w}x{hgt} at {level}/{layer}{}", vk::Handle::as_raw(image), if fb { " feedback" } else { "" })
         });
+    }
+
+    /// Whether the draw being prepared renders to `image`: an attachment of the current pass, or of the pass a feedback
+    /// copy ended (the draw resumes it).
+    fn renders_to(&self, image: &vk::Image) -> bool {
+        match &self.pass {
+            Some(p) => p.images.contains(image),
+            None => self.fb_paused.contains(image),
+        }
     }
 
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
@@ -1316,7 +1327,9 @@ impl Ctx {
                 let snap = self.tex.create(&self.dev, &d)?;
                 self.fb_snaps.insert(d, (0, snap));
             }
+            let paused = self.pass.as_ref().map_or_else(|| std::mem::take(&mut self.fb_paused), |p| p.images.clone());
             self.end_pass();
+            self.fb_paused = paused;
             let src = self.tex.images.get(&d)?;
             let (_, snap) = self.fb_snaps.get(&d)?;
             let aspect = format::aspects(src.format);
@@ -1333,6 +1346,8 @@ impl Ctx {
             let args = [src.extent.width as u64, src.extent.height as u64, src.levels as u64, src.layers as u64];
             let (si, di) = (src.image, snap.image);
             self.checkpoint("feedback snapshot (W, H, levels, layers)", args);
+            let epoch = self.fb_epoch;
+            crate::gpu::history::journal(|| format!("  snapshot {:x} {}x{} epoch {epoch}", vk::Handle::as_raw(si), args[0], args[1]));
             self.fb_taken.push(si);
             self.rec.cmd(move |d, cb| d.device.cmd_copy_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &regions));
             self.barrier();

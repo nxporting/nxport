@@ -170,6 +170,9 @@ pub struct Ctx {
     fb_taken: Vec<vk::Image>,
     /// The program (vertex, fragment code) of the draw that rendered to one of them.
     fb_dirty: Option<(u64, u64)>,
+    /// The attachments of the pass a feedback copy ended, until the draw resumes it: the textures the draw binds after
+    /// the copy are attachments too (they were bound live, read while being rendered to).
+    fb_paused: Vec<vk::Image>,
     /// GPU texture compression: the game renders compressed blocks through an integer view of a block-compressed texture
     /// (one texel per block). Those passes render into an uncompressed proxy, copied into the texture's level when the
     /// pass ends. Proxies by (texture, level, view format); the ones the current pass renders.
@@ -673,6 +676,7 @@ impl Ctx {
             fb_snaps: Default::default(),
             fb_taken: Vec::new(),
             fb_dirty: None,
+            fb_paused: Vec::new(),
             bc_proxies: Default::default(),
             bc_pending: Vec::new(),
             rt_history: Default::default(),
@@ -1446,6 +1450,7 @@ impl Ctx {
         if self.pass.is_some() {
             return true;
         }
+        self.fb_paused.clear();
         let mut colors = Vec::new();
         let mut nvn_colors = [(0u32, 0u32); 8];
         let mut nvn_depth = (0u32, 0u32);
@@ -1658,6 +1663,7 @@ impl Ctx {
         // A pass with only clears still performs them.
         self.ensure_begun();
         self.end_query();
+        self.fb_paused.clear();
         if let Some(p) = self.pass.take() {
             self.rec.cmd(|d, cb| d.device.cmd_end_rendering(cb));
             self.checkpoint("end pass (W, H, color targets)", [p.extent.0 as u64, p.extent.1 as u64, p.colors.len() as u64, 0]);
