@@ -539,6 +539,7 @@ impl Ctx {
             }
         };
         let mut j = self.rec.job();
+        self.dispatch_size = [x, y, z];
         self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut j.w);
         let s = &self.stages[&(data, content)];
         let (set_layout, full) = (s.set_layout, s.known.full);
@@ -709,8 +710,12 @@ impl Ctx {
             3 => 0x210,
             _ => 0x310,
         };
-        // Compute stages also find their uniform buffers' descriptors here.
+        // Compute stages also find the dispatch's thread group counts here (TotK's depth-cell passes index cells by them) and
+        // their uniform buffers' descriptors.
         if stage == 5 {
+            for (k, n) in self.dispatch_size.iter().enumerate() {
+                c[0x200 + 4 * k..0x204 + 4 * k].copy_from_slice(&n.to_le_bytes());
+            }
             for i in 0..14 {
                 if let Some((addr, size)) = self.st.uniforms.get(5, i) {
                     let o = 0x210 + 0x10 * i as usize;
@@ -765,7 +770,14 @@ impl Ctx {
                 Draw::Arrays { first, .. } => *first,
                 Draw::Elements { base_vertex, .. } => *base_vertex,
             };
-            let k = (stage, base_vertex, base_instance, self.storage_gen, if stage == 5 { self.uniform_gen } else { 0 });
+            let k = (
+                stage,
+                base_vertex,
+                base_instance,
+                self.storage_gen,
+                if stage == 5 { self.uniform_gen } else { 0 },
+                if stage == 5 { self.dispatch_size } else { [0; 3] },
+            );
             if self.driver_key != Some(k) {
                 self.driver_cbuf(stage, call, base_instance, &mut driver);
                 self.driver_key = Some(k);

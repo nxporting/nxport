@@ -224,9 +224,11 @@ pub struct Ctx {
     pub(super) vb_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
     /// Scratch for the driver constant buffer of a draw (draw.rs driver_cbuf).
     pub(super) driver_scratch: Vec<u8>,
-    /// What driver_scratch was built for: (stage, base vertex, base instance, storage_gen, uniform_gen for compute); and
-    /// the hash of its first n bytes (n, hash) once taken.
-    pub(super) driver_key: Option<(i32, i32, i32, u64, u64)>,
+    /// What driver_scratch was built for: (stage, base vertex, base instance, storage_gen, uniform_gen and dispatch size
+    /// for compute); and the hash of its first n bytes (n, hash) once taken.
+    pub(super) driver_key: Option<(i32, i32, i32, u64, u64, [i32; 3])>,
+    /// The dispatch being recorded: its thread group counts (the compute driver constant buffer holds them).
+    pub(super) dispatch_size: [i32; 3],
     pub(super) driver_hash: Option<(usize, u64)>,
     /// Advanced at every storage / uniform buffer binding.
     pub(super) storage_gen: u64,
@@ -705,6 +707,7 @@ impl Ctx {
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
             driver_key: None,
+            dispatch_size: [0; 3],
             driver_hash: None,
             storage_gen: 0,
             uniform_gen: 0,
