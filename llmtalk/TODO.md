@@ -89,7 +89,9 @@ and update this file when you finish or drop it.
     this way needs the dump to cost nothing to the step (e.g. keep time_step at the pre-dump frame time while dumping). Tried that
     (passk-replay.patch: replays the 128 steps before the dump): two more 20-frame dumps (after 3800, 4100) quiet
     too, and no switches in the 60 frames before either. Five quiet windows in a row: the bursts are rarer in
-    short-history runs than in the 900-frame runs, or the extra capture work changes timing enough to avoid them.
+    short-history runs than in the 900-frame runs, or the extra capture work changes timing enough to avoid them. Not the ground-carry fix (merged
+    meanwhile): 900-frame A/B, before 2 / 294, after 223 / 124. Per-run variance is that large; compare several
+    long runs per setting.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
