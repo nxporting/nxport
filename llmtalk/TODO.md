@@ -63,8 +63,11 @@ and update this file when you finish or drop it.
   - Redirecting all 181 direct `ldr` reads of +8 to a constant whole frame: still flickers.
   - Making only those two physics loads (main+0x7f6da8, 0x7f72cc) read +0xc, with time_step writing the step in
     frames into +0xc: 0 / 0 / 2 switches over three runs, against 101 / 29 / 72 / 52 / 94 without (same view). +0xc as
-    frames without the physics change: still flickers. A log shows physics receiving the same values either way, so
-    why this helps is not understood yet (a race on +8 between time_step's two callers?).
+    frames without the physics change: still flickers. A log shows physics receiving the same values either way.
+  - CORRECTION, same night: identical runs vary from 0 to 101 switches per 300 frames (the plain build with the same
+    settings gave 72, 0, 25), so the physics result above is not established, and the earlier single-run conclusions
+    (+8 = 1.0 -> 0 switches, etc.) need repeating. time_step is called once per frame on one thread (no race).
+    Measure over longer windows / several runs before concluding anything.
 - **TotK Ultrahand / ability wheel background is black** (fixed 2026-11-03 by the fallback below, bbebcba: headless hold-L run black on main, right on the fix; weapon menu (d-pad right) likewise): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
