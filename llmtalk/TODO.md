@@ -92,6 +92,12 @@ and update this file when you finish or drop it.
     short-history runs than in the 900-frame runs, or the extra capture work changes timing enough to avoid them. Not the ground-carry fix (merged
     meanwhile): 900-frame A/B, before 2 / 294, after 223 / 124. Per-run variance is that large; compare several
     long runs per setting.
+  - Journal of a flickering 900-frame run: the frames follow a 9-frame round-robin of work (events per frame repeat:
+    ~2860, 2970, 2420, 2420, 3110, 3480, 2800, 2900, 13540), but dark / light does not lock to it. A dark and a light
+    frame at the same position in the cycle (3980 vs 3989) issue the same passes, draws, samples and barriers (only a
+    200x112 pass s_5d49414c2a11700b drew 18 vs 19, and that count does not follow dark / light). So the switch is in
+    buffer or texture contents, not in what is drawn: next, hash uniform / storage contents per pass (all passes, not
+    only screen passes) on dark vs light frames.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
