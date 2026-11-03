@@ -182,13 +182,6 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
         LAST_STEP.store(dt.to_bits(), Ordering::Relaxed);
         dt
     };
-    let dt = if whole_frames() {
-        CARRY.store(0, Ordering::Relaxed);
-        LAST_STEP.store((1.0f32 / 30.0).to_bits(), Ordering::Relaxed);
-        1.0 / 30.0
-    } else {
-        dt
-    };
     LAST_INTERVAL.store(interval.max(1) as u32, Ordering::Relaxed);
     // Real-time game speed off (the menu): the stock step, from the interval the game picked.
     let dt = if crate::host::live::real_time_speed() { dt } else { interval.max(1) as f32 / 60.0 };
@@ -204,56 +197,6 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     if !CALLED.swap(true, Ordering::Relaxed) {
         println!("[+] Game time: the game steps by real time ({:.1} ms this frame)", dt * 1000.0);
     }
-}
-
-/// The buttons that open menus over a captured, blurred picture of the world: L (ability wheel) and d-pad left, up and
-/// right (shield, throw / arrow, weapon menus) (NpadButton bits 6, 12, 13, 14).
-const MENU_BUTTONS: u64 = 1 << 6 | 1 << 12 | 1 << 13 | 1 << 14;
-/// The menus capture the world in the frame it stops drawing only when the game steps by whole 1/30 s frames; at
-/// shorter steps the world was already gone and the background came out black. While a menu button is held (at most
-/// HOLD_NS a press) steps are 1/30 s and presents keep to 30 fps (so the world keeps its speed where no menu opens).
-const HOLD_NS: u64 = 3_000_000_000;
-/// A new press reaches the game this late (and at most PRESS_DELAY_FRAMES frames), after frames at the whole step
-/// have begun: taking the step only from the read that saw the press still left half the menus black.
-const PRESS_DELAY_NS: u64 = 80_000_000;
-const PRESS_DELAY_FRAMES: u64 = 2;
-/// Until when (clock::now_ns) frames take whole steps; when the current press began (0: none) and at which frame.
-static WHOLE_UNTIL: AtomicU64 = AtomicU64::new(0);
-static HELD_SINCE: AtomicU64 = AtomicU64::new(0);
-static HELD_FRAME: AtomicU64 = AtomicU64::new(0);
-
-/// The first player's buttons as the game reads them (horizon::hle npad_states): notes menu buttons held, and holds back
-/// a new press for its first frames.
-pub fn menu_buttons(buttons: u64) -> u64 {
-    if !real_time() {
-        return buttons;
-    }
-    if buttons & MENU_BUTTONS == 0 {
-        HELD_SINCE.store(0, Ordering::Relaxed);
-        return buttons;
-    }
-    let now = crate::clock::now_ns();
-    let frame = crate::gpu::backend().presented_frames();
-    let since = match HELD_SINCE.load(Ordering::Relaxed) {
-        0 => {
-            HELD_SINCE.store(now, Ordering::Relaxed);
-            HELD_FRAME.store(frame, Ordering::Relaxed);
-            now
-        }
-        s => s,
-    };
-    if now - since < HOLD_NS {
-        WHOLE_UNTIL.store(now + 100_000_000, Ordering::Relaxed);
-    }
-    if frame.saturating_sub(HELD_FRAME.load(Ordering::Relaxed)) < PRESS_DELAY_FRAMES && now - since < PRESS_DELAY_NS {
-        return buttons & !MENU_BUTTONS;
-    }
-    buttons
-}
-
-/// Whether frames now take whole 1/30 s steps at 30 fps (a menu button held; menu_buttons).
-pub fn whole_frames() -> bool {
-    real_time() && crate::clock::now_ns() < WHOLE_UNTIL.load(Ordering::Relaxed)
 }
 
 /// With vsync, the display's refresh period when the swapchain paces frames: the frame-rate limit is at or above the
