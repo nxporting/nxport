@@ -49,7 +49,7 @@ and update this file when you finish or drop it.
   the same commands, textures and screen-pass constants. The timer is the object at *(main+0x462ab60) (1.1.2); ~150
   functions read +8 directly. Moving the fraction into the time scale (+0x108) with +8 = 1.0 also stopped it, but the
   camera and UI read +8 too (ran fast). Next: find which of those readers drives the AO.
-- **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
+- **TotK Ultrahand / ability wheel background is black** (fixed 2026-11-03 by the fallback below, bbebcba: headless hold-L run black on main, right on the fix; weapon menu (d-pad right) likewise): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
   textures, so they hold black. The frame before samples the 768x432 texture uninitialized (garbage overlay).
@@ -63,8 +63,8 @@ and update this file when you finish or drop it.
   SkyboundTOTK's fallback (nn_vi.c hos_frame_step_buttons, MIT): while L or d-pad left/up/right is held (at most 3 s)
   the step is 1/30 s and frames are held to 30 fps, and a new press reaches the game two frames late; the d-pad quick
   menus (weapons, shields, throw / fuse arrows) go black the same way, so check those too. Prefer finding the capture
-  code; this is the fallback. Fallback written on local branch `wheel-step` (add144f, builds, not run): test with the
-  hold-L script and a d-pad hold. Static lead for the real fix: the sequence node class named
+  code; this is the fallback. Fallback on main (bbebcba): 30 fps and whole steps while a menu button is held; the
+  real fix would drop that. Static lead for it: the sequence node class named
   `SeqOneShotDRequestCaptureBeforeShortCutBG` (name getter main+0x2814bd8, vtable main+0x439c320..0x439c430). They also average the real-time step over 5 frames, which may calm the AO flicker
   above (a steady step flickered 11 times against 94).
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
