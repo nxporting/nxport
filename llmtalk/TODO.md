@@ -53,6 +53,18 @@ and update this file when you finish or drop it.
   round-to-frames helpers f_7001a6ad90 / ae18 / aef4: the AO's reader takes +8 without the scale. Averaging the step
   over 5 frames (SkyboundTOTK) only trims it: 101 -> 80 switches. The old repro view drifted: on today's build use
   `-turn ",2400-2720:37,2740-2820:40"` (archway view, ~100 switches in 300 frames at 3300).
+  2026-11-03 night (headless, archway view `-turn ",2400-2800:37,2820-2900:40"`, capture at 4200):
+  - A hardware watchpoint on timer+8 (DR0 in every thread, VEH, guest.pdb via llvm-symbolizer) lists 27 code
+    sites per frame. Most are the time manager recomputing channels (timer+0x10+0x28k = +8 * slot * +0x108, slots of
+    {value, target} at +0x88 + 8i); a static scan misses them (cached timer pointer).
+  - The physics world's step: the time manager (f_70008f6c8c, main+0x7f6c8c) passes +8 to f_70008f77b8, which sets
+    the object [[main+0x462ac90]+0xc8] (the one ground carry reads): +0x38 = step, +0x24 = dt = min(+0x20 * +0x44 *
+    step, cap), +0x28 = 1/dt.
+  - Redirecting all 181 direct `ldr` reads of +8 to a constant whole frame: still flickers.
+  - Making only those two physics loads (main+0x7f6da8, 0x7f72cc) read +0xc, with time_step writing the step in
+    frames into +0xc: 0 / 0 / 2 switches over three runs, against 101 / 29 / 72 / 52 / 94 without (same view). +0xc as
+    frames without the physics change: still flickers. A log shows physics receiving the same values either way, so
+    why this helps is not understood yet (a race on +8 between time_step's two callers?).
 - **TotK Ultrahand / ability wheel background is black** (fixed 2026-11-03 by the fallback below, bbebcba: headless hold-L run black on main, right on the fix; weapon menu (d-pad right) likewise): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
