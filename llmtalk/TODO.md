@@ -109,6 +109,10 @@ and update this file when you finish or drop it.
     lock to frame mod 4 (all phases alike; most gaps are 1 frame: one-frame dark or light blips). So it is not
     "something updates every whole game frame"; the blips need steps under a frame, come in bursts, and land at
     random frames within a burst.
+  - Confirmed from the other side: raw +8 and +0xc real, time scale +0x108 = 1 / step so every derived channel is a
+    whole frame (NXPORT_EXP_INV): 0 / 0 in 900 frames. The consumer reads +0 or a channel (all use slot 0 while
+    +0x10c is 0). Next: of the ~25 readers of +0 (watchpoint list), redirect halves to a field time_step controls
+    (slot 15 value +0x100, if its target +0x104 stays NaN), switched at frame 2900 so the path is the same.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
