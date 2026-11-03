@@ -2,6 +2,7 @@
 // and depth targets are copied at the end of every pass and written to captures/passes_<frame>/ once the frame is
 // done: <pass>_<w>x<h>_<format>_c<slot>.ppm (RGB) and .a.pgm (alpha), <pass>_<w>x<h>_<format>_depth.pgm (16-bit,
 // stretched over the depths drawn: neither 0 nor 1), and passes.txt. Shows which pass a glitch first appears in.
+// R32_SFLOAT targets (linear depths) are written raw instead: <pass>_..._c<slot>.f32, little-endian floats row by row.
 // Integer and multisampled targets are left out (a blit cannot convert them).
 
 use ash::vk;
@@ -18,6 +19,8 @@ struct Item {
     image: Option<(vk::Image, vk::DeviceMemory)>,
     /// A depth copy's format (2 bytes a texel for D16, else 4); None for colour.
     depth: Option<vk::Format>,
+    /// An R32_SFLOAT target copied straight to `buf` (written raw).
+    float: bool,
     buf: HostBuffer,
 }
 
@@ -61,10 +64,22 @@ impl PassDump {
             if self.bytes + bytes > MAX_BYTES {
                 break;
             }
+            let name = format!("{n:03}_{w}x{h}_{format:?}_c{slot}");
+            if format == vk::Format::R32_SFLOAT {
+                let Ok(buf) = dev.readback_buffer(bytes, vk::BufferUsageFlags::TRANSFER_DST) else { break };
+                self.bytes += bytes;
+                let dst_buf = buf.buffer;
+                self.items.push(Item { name, size: (w, h), image: None, depth: None, float: true, buf });
+                cmds.push(Box::new(move |d: &Dev, cb: vk::CommandBuffer| {
+                    let layers = vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1);
+                    let copy = vk::BufferImageCopy::default().image_subresource(layers).image_extent(vk::Extent3D { width: w, height: h, depth: 1 });
+                    d.device.cmd_copy_image_to_buffer(cb, src, vk::ImageLayout::GENERAL, dst_buf, &[copy]);
+                }));
+                continue;
+            }
             let Some((image, memory, buf)) = scratch(dev, (w, h)) else { break };
             self.bytes += bytes;
-            let name = format!("{n:03}_{w}x{h}_{format:?}_c{slot}");
-            self.items.push(Item { name, size: (w, h), image: Some((image, memory)), depth: None, buf });
+            self.items.push(Item { name, size: (w, h), image: Some((image, memory)), depth: None, float: false, buf });
             let dst_buf = self.items.last().unwrap().buf.buffer;
             let (sw, sh) = (w as i32, h as i32);
             cmds.push(Box::new(move |d: &Dev, cb: vk::CommandBuffer| {
@@ -100,7 +115,7 @@ impl PassDump {
             let Ok(buf) = dev.readback_buffer(bytes, vk::BufferUsageFlags::TRANSFER_DST) else { return cmds };
             self.bytes += bytes;
             let dst_buf = buf.buffer;
-            self.items.push(Item { name: format!("{n:03}_{w}x{h}_{format:?}_depth"), size: (w, h), image: None, depth: Some(format), buf });
+            self.items.push(Item { name: format!("{n:03}_{w}x{h}_{format:?}_depth"), size: (w, h), image: None, depth: Some(format), float: false, buf });
             cmds.push(Box::new(move |d: &Dev, cb: vk::CommandBuffer| {
                 let layers = vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::DEPTH).layer_count(1);
                 let copy = vk::BufferImageCopy::default().image_subresource(layers).image_extent(vk::Extent3D { width: w, height: h, depth: 1 });
@@ -127,7 +142,7 @@ impl PassDump {
         for it in self.items {
             let texel = if it.depth == Some(vk::Format::D16_UNORM) { 2 } else { 4 };
             let bytes = std::slice::from_raw_parts(it.buf.ptr, (it.size.0 * it.size.1 * texel) as usize).to_vec();
-            out.push((it.name, it.size, it.depth, bytes));
+            out.push((it.name, it.size, it.depth, it.float, bytes));
             dev.free_host_buffer(&it.buf);
             if let Some((image, memory)) = it.image {
                 dev.device.destroy_image(image, None);
@@ -139,7 +154,11 @@ impl PassDump {
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 return eprintln!("[!] Pass dump: {}: {e}", dir.display());
             }
-            for (name, (w, h), depth, data) in &out {
+            for (name, (w, h), depth, float, data) in &out {
+                if *float {
+                    let _ = std::fs::write(dir.join(format!("{name}.f32")), data);
+                    continue;
+                }
                 if let Some(format) = depth {
                     let _ = std::fs::write(dir.join(format!("{name}.pgm")), depth_pgm(*format, (*w, *h), data));
                     continue;
