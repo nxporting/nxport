@@ -25,6 +25,15 @@ and update this file when you finish or drop it.
   -1.7e38); the probe's cbuf/storage slot mapping was partly wrong (c3 read zeros), so confirm with a better probe
   before trusting it, then look at s_9723f00f727627e0 (24 KB compute). Repro: headless scripted run on the
   shrine-entrance save, `2400-2650:37,2680-2760:40,2800-3000:37` after the A presses, capture at 3000.
+  Second symptom, still camera (2026-11-02, user capture + headless): the AO along slab edges / wall bases switches
+  between two states, a sharp one-signed step of ~3.6 levels over ~7,000 pixels at half res, every few frames
+  (`2400-2650:37,2680-2760:40`, capture at 3300 with --frame-history=300: ~140 switches). Cause: the real-time step's
+  fraction of a 30 fps frame at timer+8 (same as the ability wheel). Turning dynamic FPS off at frame 2900: 0 switches;
+  only timer+8 forced to 1.0: 0; only timer+0xc forced: still flickers; synchronous submits, steady timestamps, render
+  resolution: not it. A constant 0.2 step flickers far less (11) than a varying one (94). Dark and light frames issue
+  the same commands, textures and screen-pass constants. The timer is the object at *(main+0x462ab60) (1.1.2); ~150
+  functions read +8 directly. Moving the fraction into the time scale (+0x108) with +8 = 1.0 also stopped it, but the
+  camera and UI read +8 too (ran fast). Next: find which of those readers drives the AO.
 - **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
