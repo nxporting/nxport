@@ -61,6 +61,11 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **Lifted code's CPU target measured, left native** (S41L0R Windows Machine): `zig cc -target x86_64-windows-gnu`
+  (the x86-64-v3 flags, generic tuning) ran TotK 11% slower than the default `-mcpu=native` (shrine, headless,
+  uncapped: 147 -> 131 fps steady), so apps stay built for the building machine. Objects now recompile when the
+  compiler or its flags change (obj/flags.txt).
+
 - **TotK shrine walkway wedge fixed** (S41L0R Windows Machine): the ground material samples three of its own render
   targets; the first one's feedback copy ended the pass, and the later two were then not seen as attachments and were
   read live while being rendered to (stale linear depth: the ground blended into black beside the walkway). Repro:
