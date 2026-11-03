@@ -34,6 +34,7 @@ pub static SITES: Sites = Sites {
     input: 0x8f633c,
     input_code: frame_time::input_code(0xf001_ea08, 0xf945_cd08), // adrp x8, main+0x4639000; ldr x8, [x8, #0xb98]
     camera_rate: Some((0x1d3675c, 0xc54)),
+    ground_carry: Some((0xbbb4b4, 0xf940_0348)), // ldr x8, [x26]
 };
 
 /// Screen shapes other than 16:9 (aspect.rs, hud.rs).
