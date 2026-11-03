@@ -13,6 +13,15 @@ and update this file when you finish or drop it.
   For now, delta time only makes game time follow real time (no physics verification).
 - **TotK at high fps, still wrong** (reported by the user): physics on a platform moving down a rail. Not looked at
   yet; needs gameplay to reproduce. (Ladders: fixed as of 2026-11-02, user-checked; the Ultrahand camera too.)
+- **TotK ambient occlusion / green glow flickers while the camera moves** (S41L0R Windows Machine, open): the 320x180
+  pass s_6189816858e66cfd / s_fa6a730d8cf66342 (early in the frame) reprojects the previous frame's low-res lit scene
+  with a grid of per-cell depths; still camera: right; moving: streaks, the reprojection is off by far more than a
+  frame of motion (green blobs jump around in the final image). Its inputs: storage s0 (view data per slot, GPU-written
+  by s_9723f00f727627e0 at frame start; per-cell depths by s_4af9460eb2550614 at the end of the previous frame), s1
+  (matrix by s_b8c6271a88128a58 from s0 and cbuf c3) and cbuf c3. Ruled out: GPU latency (synchronous submits),
+  storage read in place (copies), our frame-time hooks (30 fps, dynamic FPS off), the tile reduction's barrier (fixed in
+  dc36147 anyway). Next: read s0/s1/c3 values and do the math by hand. Repro: headless scripted run on the
+  shrine-entrance save, `2400-2650:37,2680-2760:40,2800-3000:37` after the A presses, capture at 3000.
 - **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
