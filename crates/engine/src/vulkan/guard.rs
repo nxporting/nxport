@@ -66,6 +66,8 @@ unsafe fn set_prot(a: usize, len: usize, write: bool) -> bool {
     if write {
         crate::guest::dirty_track::reprotect_held(a, len);
     }
+    // Occlusion report pages stay inaccessible until written, whatever this does to the range around them.
+    crate::gpu::report_guard::reprotect_held(a, len);
     ok
 }
 
@@ -122,7 +124,10 @@ pub(super) fn hold_hot() {
     SAVED_N.store(0, Ordering::Release);
     HOT_HELD.store(true, Ordering::Release);
     for &(a, b) in ranges.iter() {
-        let _ = unsafe { crate::os::protect(a, b - a, crate::os::Prot::Read) };
+        unsafe {
+            let _ = crate::os::protect(a, b - a, crate::os::Prot::Read);
+            crate::gpu::report_guard::reprotect_held(a, b - a);
+        }
     }
 }
 

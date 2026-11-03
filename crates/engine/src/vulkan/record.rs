@@ -368,7 +368,7 @@ pub(super) fn clear_overwritten() {
 /// since the submit began take their saved contents (guard::patch), and what the submit's own later writes replaced is
 /// put back (latest first, so the earliest of them, which held the epoch's bytes, is last).
 unsafe fn copy_guest(src: usize, dst: *mut u8, len: usize, epoch: u64) {
-    std::ptr::copy_nonoverlapping(src as *const u8, dst, len);
+    crate::gpu::report_guard::engine_copy(std::slice::from_raw_parts_mut(dst, len), src as *const u8);
     crate::vulkan::guard::patch(src, dst, len);
     std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
     if OVERWRITTEN_LATEST.load(std::sync::atomic::Ordering::SeqCst) <= epoch {

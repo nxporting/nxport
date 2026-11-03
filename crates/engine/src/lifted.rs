@@ -130,6 +130,11 @@ impl GuestLibrary {
         }
     }
 
+    /// An address in the library's code.
+    pub fn entry(&self) -> usize {
+        self.enter as usize
+    }
+
     /// Runs guest code from `cpu.pc` until it returns to `RETURN_TO_HOST` (the caller sets x30 to it).
     /// # Safety
     /// `cpu` is a guest thread's state, with guest memory mapped where its code expects it.

@@ -143,7 +143,7 @@ pub struct Ctx {
     /// Allocated from `rec_pool` for vk-record to record into next.
     spare_cbs: Vec<vk::CommandBuffer>,
     /// Chunks handed to vk-record to end, with their uploads, to queue once it has (submit_chunk).
-    unqueued: std::collections::VecDeque<smallvec::SmallVec<[vk::CommandBuffer; 2]>>,
+    unqueued: std::collections::VecDeque<(smallvec::SmallVec<[vk::CommandBuffer; 2]>, Option<EarlyReports>)>,
     pass: Option<Pass>,
     /// The device was lost: nothing more is submitted.
     lost: bool,
@@ -338,9 +338,11 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
         return;
     }
     super::guard::note_write(a, 16);
-    let p = crate::gpu::report_guard::engine_ptr(a);
-    std::ptr::write_unaligned(p as *mut u64, value);
-    std::ptr::write_unaligned((p + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
+    let time = if timestamp { crate::clock::now_ns() } else { 0 };
+    let mut report = [0u8; 16];
+    report[..8].copy_from_slice(&value.to_le_bytes());
+    report[8..].copy_from_slice(&time.to_le_bytes());
+    crate::gpu::report_guard::engine_write(a, &report);
 }
 
 /// A report at guest `addr` is about to be written, beginning uniform epoch `epoch` (record::overwriting).
@@ -550,6 +552,15 @@ impl Occlusion {
                 .unwrap_or(vk::QueryPool::null())
         }
     }
+}
+
+/// Reports written when the chunk holding them completed, not the whole submit: the page guard (gpu::report_guard) holds
+/// the game's reader until they are written, and the Switch's GPU has run the culling pass by the time it reads.
+struct EarlyReports {
+    pool: vk::QueryPool,
+    /// Queries below this have ended by the end of the chunk.
+    queries: u32,
+    events: Vec<super::inflight::Occl>,
 }
 
 /// A submit the GPU may still be running, with what it uses: freed once its serial completed (inflight.rs).
@@ -1343,7 +1354,9 @@ impl Ctx {
                 if pending {
                     self.st.render_disabled = false;
                 } else if a > 0x10000 {
-                    let (x, y) = (std::ptr::read_unaligned(a as *const u64), std::ptr::read_unaligned((a + 16) as *const u64));
+                    // Report pages the guard holds are read through it (the engine never waits for them).
+                    let read = |at: usize| std::ptr::read_unaligned(crate::gpu::report_guard::engine_ptr(at) as *const u64);
+                    let (x, y) = (read(a), read(a + 16));
                     values = (x, y);
                     self.st.render_disabled = if *mode == 0 { x != y } else { x == y };
                 }
@@ -1721,7 +1734,9 @@ impl Ctx {
                 }
             }
             self.resolve_bc_proxies();
-            if chunk().is_some_and(|c| self.chunk_start.elapsed() > c) {
+            // Reports wait for nothing else in the frame: the game reads them soon after the submit starts (EarlyReports).
+            let reports = self.occl.events.iter().any(|e| matches!(e, super::inflight::Occl::Report(_)));
+            if chunk().is_some_and(|c| reports || self.chunk_start.elapsed() > c) {
                 self.submit_chunk();
             }
         }
@@ -1743,12 +1758,24 @@ impl Ctx {
         upload.into_iter().chain(std::iter::once(cb)).collect()
     }
 
+    /// The occlusion work recorded so far, if it holds a report: it goes with the chunk ending now.
+    fn early_reports(&mut self) -> Option<EarlyReports> {
+        use super::inflight::Occl;
+        if !self.occl.events.iter().any(|e| matches!(e, Occl::Report(_))) {
+            return None;
+        }
+        let events = std::mem::take(&mut self.occl.events);
+        let queries = events.iter().map(|e| if let Occl::Query(q) = e { *q + 1 } else { 0 }).max().unwrap_or(0);
+        Some(EarlyReports { pool: self.occl.pool, queries, events })
+    }
+
     /// The command buffer ends on vk-record and is queued once it has (at a later chunk or the submit's end): waiting for
     /// vk-record at every chunk (one a millisecond) was a fifth of the recording.
     unsafe fn submit_chunk(&mut self) {
         self.rec.end_async();
         let cbs = self.with_uploads(self.cb);
-        self.unqueued.push_back(cbs);
+        let early = self.early_reports();
+        self.unqueued.push_back((cbs, early));
         if self.spare_cbs.is_empty() {
             // vk-record is done with the pool once it ended them all.
             self.queue_chunks(true);
@@ -1772,18 +1799,39 @@ impl Ctx {
             } else if !self.rec.try_ended() {
                 break;
             }
-            let cbs = self.unqueued.pop_front().unwrap();
+            let (cbs, early) = self.unqueued.pop_front().unwrap();
             // Bindless texture entries its commands name are written first.
             if let Some(s) = self.bl.as_mut() {
                 s.flush(&self.dev);
             }
             let d = &self.dev.device;
-            if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()) {
+            let mut fence = match early {
+                Some(_) => d.create_fence(&vk::FenceCreateInfo::default(), None).unwrap_or(vk::Fence::null()),
+                None => vk::Fence::null(),
+            };
+            if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
                 println!("[vulkan] vkQueueSubmit: {e}");
                 if e == vk::Result::ERROR_DEVICE_LOST {
                     super::device::report_lost("vkQueueSubmit of a chunk");
                 }
                 self.lost = true;
+            }
+            if self.lost && fence != vk::Fence::null() {
+                d.destroy_fence(fence, None);
+                fence = vk::Fence::null();
+            }
+            if let Some(e) = early {
+                super::inflight::watch(super::inflight::Done {
+                    serial: 0,
+                    fence,
+                    occl_pool: e.pool,
+                    queries: e.queries,
+                    occl: e.events,
+                    writebacks: Vec::new(),
+                    timestamps: vk::QueryPool::null(),
+                    pass_labels: Vec::new(),
+                    rt_writebacks: Vec::new(),
+                });
             }
             self.chunks.extend_from_slice(&cbs);
         }

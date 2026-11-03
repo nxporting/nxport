@@ -1160,7 +1160,7 @@ impl Ctx {
         // Ones the stage writes are read back by the watcher: on discrete GPUs host-cached memory (the other arena is
         // write-combined, slow to read).
         let (buf, off, p) = if write && self.dev.discrete { self.readback.alloc(&self.dev, size)? } else { self.arena.alloc(&self.dev, size)? };
-        std::ptr::copy_nonoverlapping(a as *const u8, p, size);
+        crate::gpu::report_guard::engine_copy(std::slice::from_raw_parts_mut(p, size), a as *const u8);
         crate::vulkan::guard::patch(a, p, size);
         if write {
             self.writebacks.push((a, p, size));

@@ -1317,6 +1317,11 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     }
     lifted::install(&lib, &modules, lifted_handlers())?;
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
+    // --report-guard waits only for faults from guest code.
+    #[cfg(windows)]
+    if let Some((start, end)) = os::image_range(lifted::library().entry()) {
+        gpu::report_guard::set_guest_code_range(start, end);
+    }
     // --aot-dump: the code as plugin mods patch it, for the lift that holds their patches (guest_modules). Their
     // initialisers and early hooks write it while the game runs; the image is written at --aot-dump-frame.
     let dump_after_mods = matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !mod_inits.is_empty();

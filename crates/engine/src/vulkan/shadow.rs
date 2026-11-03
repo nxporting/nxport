@@ -131,7 +131,7 @@ impl Shadows {
                 upload(pbuf, poff, buffer, off, n as u64);
             }
             None => {
-                std::ptr::copy_nonoverlapping(start as *const u8, ptr, n);
+                crate::gpu::report_guard::engine_copy(std::slice::from_raw_parts_mut(ptr, n), start as *const u8);
                 super::guard::patch(start, ptr, n);
             }
         }
