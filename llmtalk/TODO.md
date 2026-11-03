@@ -97,7 +97,11 @@ and update this file when you finish or drop it.
     frame at the same position in the cycle (3980 vs 3989) issue the same passes, draws, samples and barriers (only a
     200x112 pass s_5d49414c2a11700b drew 18 vs 19, and that count does not follow dark / light). So the switch is in
     buffer or texture contents, not in what is drawn: next, hash uniform / storage contents per pass (all passes, not
-    only screen passes) on dark vs light frames.
+    only screen passes) on dark vs light frames. Done (cbh.patch, scratch: hash of every constant buffer of every
+    draw): the best split was the 200x112 pass s_5d49414c2a11700b, vertex slot 12, but its changing words are a
+    position drifting ~1e-4 a frame (Link or the camera), not two states; the dark / light labels from the switch
+    signs are approximate. Constant buffers do not show the switch. Next: storage buffers and the GPU-written data
+    (the 320x180 reprojection pass and its per-cell depths, see the first symptom above).
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
