@@ -56,6 +56,11 @@ and update this file when you finish or drop it.
   wheel's capture seems to wait for a whole game frame of time while the world stops the next rendered frame. Next:
   find the pause/capture code that reads the time manager (timer+8 / +0xc) and give that transition a whole frame.
   Repro: headless, `3300-3700:14` (hold L) after the A presses, capture at 3600.
+  SkyboundTOTK's fallback (nn_vi.c hos_frame_step_buttons, MIT): while L or d-pad left/up/right is held (at most 3 s)
+  the step is 1/30 s and frames are held to 30 fps, and a new press reaches the game two frames late; the d-pad quick
+  menus (weapons, shields, throw / fuse arrows) go black the same way, so check those too. Prefer finding the capture
+  code; this is the fallback. They also average the real-time step over 5 frames, which may calm the AO flicker
+  above (a steady step flickered 11 times against 94).
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
   address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
   clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save). Cause found 2026-11-03 (by reading the code):
