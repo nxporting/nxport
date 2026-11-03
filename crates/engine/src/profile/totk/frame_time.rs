@@ -26,6 +26,11 @@
 // the frame rate (30 / (step * time scale)) with 100; above 100 fps he slid off moving platforms. ground_carry takes out
 // the step (the same fix as MacNativeGames' and SkyboundTOTK's for 1.0.0).
 //
+// Hair and cloth (1.0.0): the actor animation update builds a clock {seconds = factor / 30, ratio = factor} each rendered
+// frame from a 1/30 s constant, so above 30 fps hair and cloth swung too fast. Its four places (three inline, one before a
+// call) load two words time_step keeps at {step seconds, step frames} instead, and scale both by the factor at once
+// (`ldr d`, `fmul v.2s, v.2s, v.s[0]`, `str d`): the same instruction count, no call. 1.1.2 leaves that clock unset.
+//
 // The hooks rewrite instructions and branch to HLE trampolines (no code of our own in guest memory), so they apply to
 // every runtime: natively, and to the image that is lifted.
 
@@ -48,7 +53,15 @@ pub struct Sites {
     /// The slow-motion check on the velocity Link keeps from the ground he stands on (ground_carry_code) and the
     /// version's word 1 (`ldr x8, [xN]`: the register differs), where known.
     pub ground_carry: Option<(usize, u32)>,
+    /// The hair and cloth clock: two words in main's mapping that time_step keeps at {step seconds, step frames}, and
+    /// the instructions that read them in place of the 1/30 s constant (cloth_clock).
+    pub cloth: Option<(usize, &'static [ClothSite])>,
 }
+
+/// An instruction of the hair and cloth clock: (offset, the code expected, its replacement; ADRP_TO_CLOTH: `adrp x8` to
+/// the clock words' page).
+pub type ClothSite = (usize, u32, u32);
+pub const ADRP_TO_CLOTH: u32 = 0;
 
 /// The camera-rate getter: ldr s0, [x0, #field]; ret.
 pub const fn camera_rate_code(field: usize) -> [u32; 2] {
@@ -119,6 +132,9 @@ static LAST_STEP: AtomicU32 = AtomicU32::new(0);
 const MAX_AHEAD: f32 = 8.0;
 /// Real time not yet stepped (f32 bits, seconds; may be negative): what rounding to whole refreshes left over.
 static CARRY: AtomicU32 = AtomicU32::new(0);
+/// The hair and cloth clock words (guest address; 0: none): {step seconds, step frames at 30 fps}.
+static CLOTH: AtomicU64 = AtomicU64::new(0);
+
 /// Whether the running title has the hooks (installed when it was loaded; a lifted game also had them when lifted).
 static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -178,6 +194,11 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     let dt = if crate::host::live::real_time_speed() { dt } else { interval.max(1) as f32 / 60.0 };
     *((timer + 8) as *mut f32) = dt * 30.0;
     *((timer + 0xc) as *mut f32) = dt;
+    let cloth = CLOTH.load(Ordering::Relaxed) as usize;
+    if cloth != 0 {
+        let frames = frames_at_30();
+        *(cloth as *mut [f32; 2]) = [frames / 30.0, frames];
+    }
     // Installing the hook says it is in the code; this says the game calls it (a lifted game calls what it was lifted with).
     static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !CALLED.swap(true, Ordering::Relaxed) {
@@ -369,6 +390,31 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         match replace_with_call(base, mem_space, at, &camera_rate_code(field), vec![B, NOP], 0, crate::hle!(camera_rate(_))) {
             Ok(()) => println!("[+] Camera rate: scaled to the frame's step"),
             Err(e) => println!("[!] Camera rate: main+{at:#x}: {e}; not scaled"),
+        }
+    }
+    if let Some((data, sites)) = s.cloth {
+        // adrp x8, <the clock words' page> at `at` (both offsets in main: the same at lift and run time).
+        let adrp = |at: usize| {
+            let d = ((data & !0xfff) as i64 - (at & !0xfff) as i64) >> 12;
+            0x9000_0008 | (d as u32 & 3) << 29 | ((d >> 2) as u32 & 0x7_ffff) << 5
+        };
+        match sites.iter().find(|(at, from, to)| {
+            let w = std::ptr::read((base + at) as *const u32);
+            w != *from && w != if *to == ADRP_TO_CLOTH { adrp(*at) } else { *to }
+        }) {
+            Some((at, from, _)) => println!(
+                "[!] Hair and cloth: main+{at:#x} is {:#010x}, not {from:#010x}; their clock stays at 1/30 s a frame",
+                std::ptr::read((base + at) as *const u32)
+            ),
+            None => {
+                *((base + data) as *mut [f32; 2]) = [1.0 / 30.0, 1.0];
+                CLOTH.store((base + data) as u64, Ordering::Relaxed);
+                for (at, _, to) in sites {
+                    std::ptr::write((base + at) as *mut u32, if *to == ADRP_TO_CLOTH { adrp(*at) } else { *to });
+                    crate::os::flush_icache(base + at, 4);
+                }
+                println!("[+] Hair and cloth: their clock follows the frame's step");
+            }
         }
     }
     if let Some((at, ldr_obj)) = s.ground_carry {

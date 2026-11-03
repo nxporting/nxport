@@ -21,6 +21,34 @@ pub static PROFILE: VersionProfile = VersionProfile {
     draw_item: None,
 };
 
+/// The hair and cloth clock (frame_time::cloth): {seconds, ratio} from the clock words instead of factor / 30 and factor.
+const CLOTH: [frame_time::ClothSite; 15] = {
+    use frame_time::ADRP_TO_CLOTH as ADRP;
+    [
+        // Inline (twice): ldr s0, 1/30 -> ldr d0; fmul s0, s8, s0 -> fmul v0.2s, v0.2s, v8.s[0];
+        // stp s0, s8, [x29, #-0x40] -> stur d0, [x29, #-0x40]
+        (0x7b5958, 0xb001_7e08, ADRP),
+        (0x7b5960, 0xbd41_a500, 0xfd47_fd00),
+        (0x7b5988, 0x1e20_0900, 0x0f88_9000),
+        (0x7b598c, 0x2d38_23a0, 0xfc1c_03a0),
+        (0x7b6afc, 0x9001_7e08, ADRP),
+        (0x7b6b04, 0xbd41_a500, 0xfd47_fd00),
+        (0x7b6b28, 0x1e20_0900, 0x0f88_9000),
+        (0x7b6b2c, 0x2d38_23a0, 0xfc1c_03a0),
+        // Inline (factor in s0): ldr s1, 1/30 -> ldr d1; fmul s1, s0, s1 -> fmul v1.2s, v1.2s, v0.s[0];
+        // str s1, [sp, #0x110] -> str d1, [sp, #0x110] (after the ratio's own store at 0x114)
+        (0x7f5eac, 0xb001_7c08, ADRP),
+        (0x7f5eb4, 0xbd41_a501, 0xfd47_fd01),
+        (0x7f5ec4, 0x1e21_0801, 0x0f80_9021),
+        (0x7f5ee0, 0xbd01_13e1, 0xfd00_8be1),
+        // Before the call at main+0x7b6358 (s2 seconds, s3 ratio): ldr s5, 1/30 -> ldr d5;
+        // mov v3.16b, v8.16b -> fmul s3, s8, v5.s[1] (fmul s2, s8, s5 stays)
+        (0x7b631c, 0x9001_7e08, ADRP),
+        (0x7b6324, 0xbd41_a505, 0xfd47_fd05),
+        (0x7b634c, 0x4ea8_1d03, 0x5fa5_9103),
+    ]
+};
+
 pub static SITES: Sites = Sites {
     lowest: 0xe9a018,
     veto: 0x8f6d74,
@@ -30,6 +58,7 @@ pub static SITES: Sites = Sites {
     input_code: frame_time::input_code(0x9001_e388, 0xf943_5108), // adrp x8, main+0x4566000; ldr x8, [x8, #0x6a0]
     camera_rate: Some((0x1cd3678, 0xc2c)),
     ground_carry: Some((0xce3fe0, 0xf940_0328)), // ldr x8, [x25]
+    cloth: Some((0x4666ff8, &CLOTH)), // the last words of the page after .bss
 };
 
 /// Screen shapes other than 16:9: 1.1.2's sites at their 1.0.0 addresses (the code matches apart from pc-relative
