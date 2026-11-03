@@ -11,8 +11,15 @@ and update this file when you finish or drop it.
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
   For now, delta time only makes game time follow real time (no physics verification).
-- **TotK at high fps, still wrong** (reported by the user): climbing ladders, and physics on a platform moving down a
-  rail. Not looked at yet; needs gameplay to reproduce.
+- **TotK at high fps, still wrong** (reported by the user): physics on a platform moving down a rail. Not looked at
+  yet; needs gameplay to reproduce. (Ladders: fixed as of 2026-11-02, user-checked; the Ultrahand camera too.)
+- **TotK shrine walkway: dark wedge beside the walkway** (S41L0R Windows Machine, open): the ground material
+  (s_40b797f18632f7bc / s_6facd1ab0508d563) blends into what is under it at its screen position (normals, albedo:
+  feedback copies) by a weight from the linear depth of pass "s_0b38d2c1131e4c9b" (R32, sampled as tcb_10). Before
+  the render-target feedback fix the blend read stale copies (black outline around the walkway's base); with it a
+  wedge of the base goes dark. Where it goes dark nothing is under the ground yet, so the blend weight there (the R32
+  value for empty pixels) is the next suspect; the pass dump clamps R32 to 8 bits, so read it raw.
+  Repro: scripted run on the shrine-entrance save, `2400-2650:37,2680-2760:40` after the A presses, capture at 2900.
 - **TotK Ultrahand / ability wheel background is black** (S41L0R Windows Machine looked, not fixed): reproduced with an
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
