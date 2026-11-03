@@ -50,6 +50,11 @@ and update this file when you finish or drop it.
   clobbered. Seen 2026-10-28 on main (3 of 3 runs on the Hateno save).
 - `retro-work` has commits not on main.
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
+  Players' lists carry the build id in their header and submissions send it, but the published list
+  (`<title>.txt`, header `build -`) is merged across builds, so the client cannot filter it. Fix on the publishing
+  side (nxporting/pipelines merge + submit worker, outside this repo): one list per build, fetched as
+  `<title>_<build>.txt` (pipeline_list.rs FETCH_URL), with the title-only file as the fallback. Needs the user (repo
+  and worker are theirs).
 - VP8 movies have no decoder (crates/media); everything else the old ffmpeg shim covered is built in.
 - CPU side on lifted hosts: null-GPU gameplay ~69 fps; threads wait on each other's jobs (see the CPU notes in
   docs/windows-port.md, kept local). Tried without effect: timer resolution, thread priorities, restrict + noescape,
