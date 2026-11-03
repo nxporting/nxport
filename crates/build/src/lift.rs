@@ -91,6 +91,8 @@ pub fn compile(
     let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
     // The x86-64-v3 features, spelled out (zig cc 0.13 misreads -march=x86-64-v3): above all hardware FMA, which the
     // lifted floating-point code needs to round like the guest's. zig cc builds any of -O1 to -O3 as clang -O2.
+    // No -target: zig cc then builds for the building machine's CPU (-mcpu=native), which is where the app runs. Pinned
+    // to x86_64-windows-gnu (generic tuning, only these features) TotK ran 11% slower (shrine, 147 -> 131 fps).
     let flags = [
         "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c",
         "-mpopcnt", "-msse4.2", "-mcx16",
@@ -114,6 +116,11 @@ pub fn compile(
         .filter(|e| e.path().extension().is_some_and(|x| x == "h"))
         .filter_map(|e| e.metadata().and_then(|m| m.modified()).ok())
         .max();
+    // Objects compiled with other flags (and the compiler they came from) are compiled again: flags.txt holds them
+    // (none: objects from before it, taken as they are).
+    let stamp = obj_dir.join("flags.txt");
+    let stamp_text = format!("{}\n{}\n", cc.join(" "), flags.join(" "));
+    let flags_changed = std::fs::read_to_string(&stamp).is_ok_and(|t| t != stamp_text);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let finished = || on_file(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, sources.len());
@@ -133,7 +140,7 @@ pub fn compile(
                     (Some(h), Ok(o)) => h > o,
                     _ => false,
                 };
-                if obj.is_file() && !newer(src, obj) && !stale_headers {
+                if obj.is_file() && !newer(src, obj) && !stale_headers && !flags_changed {
                     finished();
                     continue;
                 }
@@ -158,6 +165,7 @@ pub fn compile(
     if let Some(f) = failed.first() {
         return Err(format!("{} of {} C files failed to compile; the first: {f}", failed.len(), sources.len()).into());
     }
+    std::fs::write(&stamp, &stamp_text)?;
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
