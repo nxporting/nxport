@@ -72,14 +72,18 @@ and update this file when you finish or drop it.
   post-call stub in the next; after the draw call the game branched into that overwritten stub, which reloaded x8/x30
   from popped stack slots and ran `blr x8` again. The wrapper now takes two entries; the occlusion-read journal hook
   (words 10..14, also past its entry) now uses words 3..7. Untested on macOS: check that it reports past frame 600.
-- `retro-work` has commits not on main.
+- `retro-work` has commits not on main: checked 2026-11-03, all are on main (same subjects; `git cherry` shows the
+  lifter, guest::call and WIP commits as applied) except README 5af9a32's credit line "BelmanteGu - Referenced
+  SuperMarioWonderRecomp as well." Up to the user whether to add it; then the branch can go.
 - Shared pipeline list is per title, not per version: TotK 1.0.0 matches 9 of 1,825 stages of the 1.1.2 list.
   Players' lists carry the build id in their header and submissions send it, but the published list
   (`<title>.txt`, header `build -`) is merged across builds, so the client cannot filter it. Fix on the publishing
   side (nxporting/pipelines merge + submit worker, outside this repo): one list per build, fetched as
   `<title>_<build>.txt` (pipeline_list.rs FETCH_URL), with the title-only file as the fallback. Needs the user (repo
   and worker are theirs).
-- VP8 movies have no decoder (crates/media); everything else the old ffmpeg shim covered is built in.
+- VP8 movies have no decoder (crates/media); everything else the old ffmpeg shim covered is built in. Candidate crate
+  (2026-11-03): `zvidlib-vp8` 0.5 (pure Rust, MIT, decoder + encoder, but new: Oct 2026, ~800 downloads); default
+  feature `hardware` should be off. Needs the user's OK for the dependency and a game whose movies are VP8 to test.
 - CPU side on lifted hosts: null-GPU gameplay ~69 fps; threads wait on each other's jobs (see the CPU notes in
   docs/windows-port.md, kept local). Tried without effect: timer resolution, thread priorities, restrict + noescape,
   spinning before parking.
