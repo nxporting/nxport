@@ -20,7 +20,7 @@ and update this file when you finish or drop it.
   a slowed build, a survival there is not. Repro: a save at Lookout Landing, walk from frame 1800; about 75 s.
 - **Texture formats 58 and 59 added** (vulkan/format.rs): stored as A1R5G5B5 with red and blue swapped in views. Not the
   cause of the device loss. Colours not checked by eye yet.
-- **TotK rare hang as gameplay starts: NOT shown fixed** (Windows, headless, frame ~1600; five threads in WaitLightEvent on events paired 0x58 apart, no device
+- **TotK rare hang as gameplay starts: NOT fixed (hung again 2026-11-04 with STLR and the import rule, frame 1600, right after loading M_EquipmentNoise_LSword_Stone, every time)** (Windows, headless, frame ~1600; five threads in WaitLightEvent on events paired 0x58 apart, no device
   loss). The STLR change (lifter/runtime/cpu.h: sequentially consistent store, as ARM orders STLR with a later LDAR) is correct by the architecture, but this hang
   is not shown to be its doing. Same exe, guests alternating, every hang counted: old store 0 of 30, new store 0 of 30. All runs of the two guests compiled
   from this lift: old store 1 of 43, new store 0 of 70, no real difference. The ~10% rate (5 of about 50) was only ever on guest.dll from an earlier compile
@@ -42,8 +42,9 @@ and update this file when you finish or drop it.
   frames ago makes a write on a just-opened page look like another module's fault: a crash. On Windows this crashed 2 of
   3 long runs once reports were written early; Metal opens pages less often, so rarer. Fix as in report_guard_lifted.rs
   `repeated`: a repeat only within 1 ms of the retry it follows.
-- **TotK map: a texture flashes when zooming the map in and out very fast** (user report, 2026-11-03, Windows). Not
-  looked at yet.
+- **TotK map: a texture flashes when zooming the map in and out very fast** (user report, 2026-11-03, Windows). Repro 2026-11-04, stock fps, a save outside a shrine: `-`
+  at frame 2100 opens the map, right stick up and down alternating every 6 frames from 2300; at a zoom reversal (2313, 2325, 12 apart) the terrain goes blurry and pale for a frame, 13,000 px
+  (half-size frame). Not known yet whether the Switch shows this too (a low-detail layer while zooming) or it is ours.
 
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
