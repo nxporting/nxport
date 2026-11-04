@@ -42,7 +42,7 @@ and update this file when you finish or drop it.
   `repeated`: a repeat only within 1 ms of the retry it follows.
 - **TotK map: a texture flashes when zooming the map in and out very fast** (user report, 2026-11-03, Windows). Repro 2026-11-04, stock fps, a save outside a shrine: `-`
   at frame 2100 opens the map, right stick up and down alternating every 6 frames from 2300; at a zoom reversal (2313, 2325, 12 apart) the terrain goes blurry and pale for a frame, 13,000 px
-  (half-size frame). Not known yet whether the Switch shows this too (a low-detail layer while zooming) or it is ours.
+  (half-size frame). Not known whether the Switch shows this too (a low-detail layer while zooming) or it is ours: needs a reference (a Switch video, or the Metal build) before more work. Passes barely change on those frames and nothing is uploaded around them (no late upload). The detector also fires on most zoom steps, so it may be catching the zoom itself; only the one blurry frame was checked by eye.
 
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
