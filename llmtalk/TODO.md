@@ -8,14 +8,40 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
-- **TotK device lost in the Depths** (2026-11-03, user, Windows): the GPU device was lost at presented frame 23651
-  (vkQueueSubmit: device lost; the game froze for good). It had just loaded `MinusObj_CheckPointRoots_A_90_*` (a
-  Lightroot) and first used texture format 59 (next item; a skipped texture is sampled as the placeholder, so
-  probably not the cause). Save near it: the user's slot_02 (2026-11-03 12:42); test on scratch copies, never the
-  real save.
-- **Texture format 59 is not mapped** (vulkan/format.rs `texture`): NVN 59 is RGB5A1 (58, RGB5, is missing too), so
-  `texture format 59 not supported` and the texture is skipped. Add both with the right channel order (cf. 57
-  A4B4G4R4 / 60 B5G6R5: packed formats name their channels from the low bits), and on Metal.
+- **TotK device lost entering the Depths: FIXED, 2026-11-03** (RTX 4080). Read-only pages under a live host-memory import
+  lose the device, even with nothing using the import: a fresh 64 MB import with some pages then made read-only was lost
+  one frame later, the same import left alone was fine. Write tracking kept TotK's 252 MB pool's textures read-only, so
+  its first import (bindings of guessed size, 1 MiB, entering the Depths) killed the GPU; hence no fault report and
+  checkpoints stopping in varying places. Now no page under a live import is protected (dirty_track::imported, until its
+  GPU memory is freed): dirty_track, the write guard and the report guard all skip them, and textures there are checked
+  by hash. 3 of 3 runs to frame 4850, record ~8.6 ms, GPU ~12.5 ms. Not known: why the driver does this (no public source
+  found, inferred: it locks imported pages for writing when making them resident), and why one 17 MB pool was protected
+  twice without a loss. Lesson: heavy logging makes crashes disappear, it does not make them: a death is evidence even in
+  a slowed build, a survival there is not. Repro: a save at Lookout Landing, walk from frame 1800; about 75 s.
+- **Texture formats 58 and 59 added** (vulkan/format.rs): stored as A1R5G5B5 with red and blue swapped in views. Not the
+  cause of the device loss. Colours not checked by eye yet.
+- **TotK rare hang as gameplay starts: NOT shown fixed** (Windows, headless, frame ~1600; five threads in WaitLightEvent on events paired 0x58 apart, no device
+  loss). The STLR change (lifter/runtime/cpu.h: sequentially consistent store, as ARM orders STLR with a later LDAR) is correct by the architecture, but this hang
+  is not shown to be its doing. Same exe, guests alternating, every hang counted: old store 0 of 30, new store 0 of 30. All runs of the two guests compiled
+  from this lift: old store 1 of 43, new store 0 of 70, no real difference. The ~10% rate (5 of about 50) was only ever on guest.dll from an earlier compile
+  (337 MB against 329 MB, 2026-11-03 05:26), so most of the drop came from that guest differing (older commit or other compile flags, not yet told apart), not
+  from the fix. Later: that older guest on today's exe, 0 of 24 (one more run ended by out of memory, below), so the older guest alone does not hang either: the
+  ~10% was on exes from before the import rule (dirty_track::imported), the 1 of 43 after it. So the import rule may have done it, not STLR; neither shown. Hangs were all headless. cdb and lldb do not run on this machine
+  (dbgeng.dll ordinal 1002, python3.dll): an in-process thread walker did the dump. No measurable cost from STLR uncapped.
+- **TotK claims 7.5 GB private at the title and 11 GB in play (measured 2026-11-04, RTX 4080 machine, working set 4-6 GB)**: against a commit limit of 33.9 GB with 15.3 GB
+  already committed by the rest of the system, one copy leaves under 8 GB. A test copy died with `memory allocation of 1179648 bytes failed` while the user played
+  another game, whose freeze at about that time may be this. Do not run tests while the user is playing. From the code and log, not measured per allocation: the guest's heap 2.9 GB, committed whole at SetMemoryHeapSize, and
+  address regions 1.4 GB (3,419 pools) make about 4.3 GB; the other ~3 GB is not accounted for, driver memory likely (9,422 pipelines made at startup). Private 7.5 GB
+  against a 4 GB working set: about 3.5 GB committed and untouched, the heap most likely. The tracking arrays and the 16 GB arena (reserved only) are small. Committing the heap
+  on demand from the fault handler would be the saving; not tried, not obviously worth its risk. A larger page file avoids it.
+- **The report guard costs about 4% uncapped** (shrine view, 135 fps off, 130 on; measured 2026-11-03): the game now waits
+  for reports it used to read too early, as on the Switch. Its chunk split at passes holding reports moves the reported GPU
+  time (5.2 to 6.0 ms, the timestamps span more) but not the frame rate (135 with, 133 without). Not worth chasing unless
+  the guard's waits (0.2-0.7 ms a frame, up to ~10 ms at worst) show up as hitches in play.
+- **Metal report guard: same retry bug as the Windows one had** (gpu/report_guard.rs `fault`, changed to `repeated` as on Windows, type-checked, NOT run: needs a Mac): LAST_RETRY is not cleared when a retry works, and games touch the same report slots every frame, so a retry from
+  frames ago makes a write on a just-opened page look like another module's fault: a crash. On Windows this crashed 2 of
+  3 long runs once reports were written early; Metal opens pages less often, so rarer. Fix as in report_guard_lifted.rs
+  `repeated`: a repeat only within 1 ms of the retry it follows.
 - **TotK map: a texture flashes when zooming the map in and out very fast** (user report, 2026-11-03, Windows). Not
   looked at yet.
 
@@ -135,7 +161,22 @@ and update this file when you finish or drop it.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
-- **TotK Ultrahand / ability wheel background is black** (open: the fallback bbebcba was reverted, 9b3e4f1; the user wants the real fix, not a workaround) likewise): reproduced with an
+- **TotK Ultrahand / ability wheel background is black** (open: the fallback bbebcba was reverted, 9b3e4f1; the user wants the real fix, not a workaround).
+  Located 2026-11-03: ONE whole step (1/30 s, timer+8 = 1.0) on the one frame in which the game makes the transition fixes it, uncapped. Measured with
+  the headless repro below, by the mean brightness of the screen's left edge at frame 3600 (black 6, right 69-70, stock timing 70, checked by eye):
+  whole step on the frame just before the state byte below is first seen by time_step: right; one frame earlier or on the frame it is seen: black. So
+  whole steps once the state has changed come too late, and the step has to be chosen before the transition is visible. Unknown yet: what in that frame
+  reads the step (timer+8 / +0xc), and whether it needs 1.0 or some threshold (try 0.75). Next: find that reader, then give it what it wants there
+  rather than change the step for the whole game (the frame's other users get a jump of ~26 ms at 144 fps). The manager: lookup f_7001aaf400(x0 =
+  [[0x700472cb20]], x1 = 0xc5a49707). +0x16e state: 0, 1 opening (from ~14 frames after L at 144 fps), 2 open, 3 closing. +0x176 bit 0x20: capture
+  requested (SeqOneShotRequestCaptureShortCutBG, f_7001abaaa8, also sets +0x175 bit 2), cleared by SeqOneShotDRequestCaptureBeforeShortCutBG
+  (f_7001aaf468). SeqQueryGetShortCutBGRestFrame (f_7001ae119c): a total minus the float at [+0x28]->[+0x60 or +0x68]+0x20. main starts at guest
+  Search for the reader (page-protect the timer, single-step each read, swap the value for chosen readers; patches kept out of the repo): NOTHING usable. With the
+  real step the single-stepping slows the game to ~16 fps, so the step is over 1.0 for everyone and every subset passes. With the step held at 0.5: control
+  black 3 of 3, all 35 readers given 1.0 black, but one earlier run on that build gave 69 for subsets of 17 and 8: unexplained. f_70028ff8c4 / f_70028ffc08 are
+  wrap-around timers (6000, 600), not the cause (black 3 of 3). The one-frame results above came from single runs and may not repeat: repeat them first. A
+  better next step: a journal of the capture frame in both cases, instead of swapping values.
+  0x7000100000. Earlier notes:
   input script (hold L from frame 3300). The frame after the wheel opens draws no world: it clears the scene target,
   draws only the UI, then (conditional render) copies and blurs that target into the 768x432 / 960x540 background
   textures, so they hold black. The frame before samples the 768x432 texture uninitialized (garbage overlay).
@@ -151,7 +192,7 @@ and update this file when you finish or drop it.
   menus (weapons, shields, throw / fuse arrows) go black the same way, so check those too. Prefer finding the capture
   code; this is the fallback. Fallback tried (bbebcba, reverted 9b3e4f1: no workarounds): 30 fps and whole steps while a menu button is held; the
   real fix would drop that. Static lead for it: the sequence node class named
-  `SeqOneShotDRequestCaptureBeforeShortCutBG` (name getter main+0x2814bd8, vtable main+0x439c320..0x439c430). They also average the real-time step over 5 frames, which may calm the AO flicker
+  `SeqOneShotDRequestCaptureBeforeShortCutBG` (name getter main+0x2814bd8, vtable main+0x439c320..0x439c430; main starts at guest 0x7000100000, so the getter is lifted f_7002914bd8). They also average the real-time step over 5 frames, which may calm the AO flicker
   above (a steady step flickered 11 times against 94).
 - `--log-drawables` (TotK) crashes about 2 s after its first report (frame 600): SIGBUS with PC = x8 = a guest stack
   address on ModuleSystemWorker2, i.e. the drawable probe's wrapper (it calls the original through blr x8) ran with x8
