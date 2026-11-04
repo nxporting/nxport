@@ -33,6 +33,10 @@ and update this file when you finish or drop it.
   address regions 1.4 GB (3,419 pools) make about 4.3 GB; the other ~3 GB is not accounted for, driver memory likely (9,422 pipelines made at startup). Private 7.5 GB
   against a 4 GB working set: about 3.5 GB committed and untouched, the heap most likely. The tracking arrays and the 16 GB arena (reserved only) are small. Committing the heap
   on demand from the fault handler would be the saving; not tried, not obviously worth its risk. A larger page file avoids it.
+  Measured 2026-11-04 (Depths save, frame 2900, 9.9 GB private; address-space walk from outside, plus temporary counters on vkAllocateMemory and os::alloc/commit):
+  guest heap 2932 MB (only 1437 in the working set); address regions 1409; a 1022 MB and a 727 MB block, both almost all resident, requested through neither of those counters (Rust heap or driver, unknown; the pipeline cache file is only 73 MB);
+  write-combined 3.2 GB, 2432 of it in 76 blocks of exactly 32 MB with 390 resident. Live textures total about 2250 MB in about 3500 images, close to those blocks, so they look like the driver's heap for small images; that link is by size only, not shown.
+  Largest textures: ASTC decoded to RGBA8, ASTC_8X8_SRGB 14 images = 671 MB, ASTC_8X8_UNORM 2 = 161, ASTC_8X6_UNORM 8 = 63 (one run; list cut at 12 rows, so more may be below). 8x8 is 2 bits per pixel on the Switch and 32 here, 16 times. Transcoding those to a BC format would save roughly 0.7 GB of commit and VRAM; it needs a compute encoder and a quality check, not started. Also spare staging at its 256 MB cap. Hair and cloth on 1.1.2 still needs a look by eye at 60+ fps.
 - **The report guard costs about 4% uncapped** (shrine view, 135 fps off, 130 on; measured 2026-11-03): the game now waits
   for reports it used to read too early, as on the Switch. Its chunk split at passes holding reports moves the reported GPU
   time (5.2 to 6.0 ms, the timestamps span more) but not the frame rate (135 with, 133 without). Not worth chasing unless
