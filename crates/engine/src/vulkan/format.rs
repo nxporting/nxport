@@ -59,6 +59,8 @@ pub fn texture(fmt: i32) -> Option<vk::Format> {
         55 | 56 => F::R8G8B8A8_SRGB,
         // Packed 16-bit formats name their channels from the low bits (red lowest).
         57 => F::A4B4G4R4_UNORM_PACK16,
+        // Blue lowest: views swap red and blue (packed_swizzle). Vulkan 1.3 has no core format with red lowest here.
+        58 | 59 => F::A1R5G5B5_UNORM_PACK16,
         60 => F::B5G6R5_UNORM_PACK16,
         61 => F::A2B10G10R10_UNORM_PACK32,
         62 => F::A2B10G10R10_UINT_PACK32,
@@ -248,6 +250,20 @@ pub fn vertex(fmt: u32) -> Option<(vk::Format, sass2spv::types::AttributeType)> 
 
 /// Whether an image of NVN format `image` can be viewed as NVN format `view`: same texel block (size and dimensions), as
 /// Vulkan's format compatibility classes require. A compressed texture's one-block-per-texel views are not.
+/// A sampling swizzle (0 zero, 1 one, 2..5 red..alpha) on NVN format `fmt`, as codes for the Vulkan format it is stored
+/// in: RGB5 and RGB5A1 keep red in the low bits, where A1R5G5B5 has blue, and RGB5 has no alpha.
+pub fn packed_swizzle(fmt: i32, swizzle: [u8; 4]) -> [u8; 4] {
+    if !matches!(fmt, 58 | 59) {
+        return swizzle;
+    }
+    swizzle.map(|s| match s {
+        2 => 4,
+        4 => 2,
+        5 if fmt == 58 => 1,
+        s => s,
+    })
+}
+
 pub fn view_compatible(image: i32, view: i32) -> bool {
     match (crate::nvn::layout::format_info(image), crate::nvn::layout::format_info(view)) {
         (Some(a), Some(b)) => a.bytes == b.bytes && a.block_w == b.block_w && a.block_h == b.block_h,
