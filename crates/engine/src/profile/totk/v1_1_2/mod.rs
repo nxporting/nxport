@@ -36,6 +36,7 @@ pub static SITES: Sites = Sites {
     camera_rate: Some((0x1d3675c, 0xc54)),
     ground_carry: Some((0xbbb4b4, 0xf940_0348)), // ldr x8, [x26]
     cloth: None, // 1.1.2 leaves that clock unset
+    short_cut_bg: Some((0x462cb20, 0x19af400, 0xc5a4_9707)),
 };
 
 /// Screen shapes other than 16:9 (aspect.rs, hud.rs).
