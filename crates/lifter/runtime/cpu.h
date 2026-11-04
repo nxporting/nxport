@@ -105,6 +105,11 @@ typedef uint8_t __attribute__((may_alias)) u8a;
 #define LD16(a) (*(const u16u *)(uintptr_t)(a))
 #define LD32(a) (*(const u32u *)(uintptr_t)(a))
 #define LD64(a) (*(const u64u *)(uintptr_t)(a))
+// Loads in loops (module.rs reload_in_loops): the same instruction, but read every time.
+#define LDV8(a) (*(const volatile u8a *)(uintptr_t)(a))
+#define LDV16(a) (*(const volatile u16u *)(uintptr_t)(a))
+#define LDV32(a) (*(const volatile u32u *)(uintptr_t)(a))
+#define LDV64(a) (*(const volatile u64u *)(uintptr_t)(a))
 #define ST8(a, v) (*(u8a *)(uintptr_t)(a) = (uint8_t)(v))
 #define ST16(a, v) (*(u16u *)(uintptr_t)(a) = (uint16_t)(v))
 #define ST32(a, v) (*(u32u *)(uintptr_t)(a) = (uint32_t)(v))

@@ -1021,6 +1021,31 @@ fn keep_registers(lines: &mut [Line]) -> (Regs, Regs) {
     (kept, live_in.first().copied().unwrap_or(0))
 }
 
+/// Loads inside a loop read memory every time round. Other threads may change it, which C does not know: from a plain load
+/// the compiler made `read once; if (held) for (;;);` of spinlocks' `ldr; cmp; b.eq` loops (203 such jumps to themselves in
+/// TotK), and a thread that found the lock held spun forever, however soon it was released.
+fn reload_in_loops(lines: &mut [Line]) {
+    let labels: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    let mut in_loop = vec![false; lines.len()];
+    for (i, line) in lines.iter().enumerate() {
+        let mut rest = line.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            rest = &rest[j + 7..];
+            let hex = rest.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(rest.len());
+            let target = u64::from_str_radix(&rest[..hex], 16).ok().and_then(|t| labels.get(&t));
+            if let Some(&first) = target.filter(|&&first| first <= i) {
+                in_loop[first..=i].fill(true);
+            }
+        }
+    }
+    for (line, _) in lines.iter_mut().zip(in_loop).filter(|(_, looped)| *looped) {
+        for width in ["8", "16", "32", "64"] {
+            let (plain, reloaded) = (format!("LD{width}("), format!("LDV{width}("));
+            line.code = line.code.replace(&plain, &reloaded);
+        }
+    }
+}
+
 fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut BTreeSet<u64>) {
     let s = scan(l, entry, end);
     let jump = |t: u64, refs: &mut BTreeSet<u64>| -> String {
@@ -1077,6 +1102,7 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
     optimize_flags(&mut lines);
     let (vkept, ventry_live) = keep_vregs(&mut lines);
     let (kept, entry_live) = keep_registers(&mut lines);
+    reload_in_loops(&mut lines);
     let _ = write!(out, "RT_FN void {}(Cpu *c) {{\n   ", fname(entry));
     for r in (0..32).filter(|r| vkept & (1 << r) != 0) {
         if ventry_live & (1 << r) != 0 {
@@ -1327,6 +1353,19 @@ mod tests {
         assert!(body.contains("u128 gv0; u128 gv1 = c->v[1]; u128 gv2 = c->v[2]; u128 gv3 = c->v[3];"), "{body}");
         assert!(body.contains("(gv0 = fb_s(op_s(c, FOP_ADD, (*(saf32 *)&gv0), (*(saf32 *)&gv3), 0)))"), "{body}");
         assert!(body.contains("c->v[0] = gv0; return;"), "{body}");
+    }
+
+    #[test]
+    fn loads_in_loops_are_reloaded() {
+        // 0x1000: ldr w1, [x0], not in a loop; 0x1004: ldr w8, [x0]; cmp w8, #1; b.eq 0x1004; ret
+        let mut img = Vec::new();
+        for w in [0xb9400001u32, 0xb9400008, 0x7100051f, 0x54ffffc0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert_eq!(body.matches("LDV32(").count(), 1, "{body}");
+        assert_eq!(body.matches(" LD32(").count() + body.matches("(LD32(").count(), 1, "{body}");
     }
 
     #[test]
