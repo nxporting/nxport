@@ -59,6 +59,7 @@ pub static SITES: Sites = Sites {
     camera_rate: Some((0x1cd3678, 0xc2c)),
     ground_carry: Some((0xce3fe0, 0xf940_0328)), // ldr x8, [x25]
     cloth: Some((0x4666ff8, &CLOTH)), // the last words of the page after .bss
+    short_cut_bg: None, // not looked up in 1.0.0
 };
 
 /// Screen shapes other than 16:9: 1.1.2's sites at their 1.0.0 addresses (the code matches apart from pc-relative

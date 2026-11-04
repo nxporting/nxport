@@ -56,6 +56,9 @@ pub struct Sites {
     /// The hair and cloth clock: two words in main's mapping that time_step keeps at {step seconds, step frames}, and
     /// the instructions that read them in place of the 1/30 s constant (cloth_clock).
     pub cloth: Option<(usize, &'static [ClothSite])>,
+    /// The screen behind the ability wheel and the quick menus (open_short_cut_bg): where the UI manager's pointer is, the
+    /// function that finds a screen by its hash, the hash.
+    pub short_cut_bg: Option<(usize, usize, u64)>,
 }
 
 /// An instruction of the hair and cloth clock: (offset, the code expected, its replacement; ADRP_TO_CLOTH: `adrp x8` to
@@ -185,6 +188,7 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     LAST_INTERVAL.store(interval.max(1) as u32, Ordering::Relaxed);
     // Real-time game speed off (the menu): the stock step, from the interval the game picked.
     let dt = if crate::host::live::real_time_speed() { dt } else { interval.max(1) as f32 / 60.0 };
+    open_short_cut_bg();
     *((timer + 8) as *mut f32) = dt * 30.0;
     *((timer + 0xc) as *mut f32) = dt;
     let cloth = CLOTH.load(Ordering::Relaxed) as usize;
@@ -196,6 +200,39 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !CALLED.swap(true, Ordering::Relaxed) {
         println!("[+] Game time: the game steps by real time ({:.1} ms this frame)", dt * 1000.0);
+    }
+}
+
+/// main's base and Sites::short_cut_bg.
+static SHORT_CUT_BG: std::sync::OnceLock<(usize, usize, usize, u64)> = std::sync::OnceLock::new();
+
+/// The ability wheel captures the world for its background when its opening animation has reached frame 1, and the world
+/// stops being drawn 4 rendered frames after it starts opening, however long a frame is. The capture lands 3 rendered
+/// frames after the animation's frame reaches 1, so with steps under a whole game frame it came after the world stopped
+/// and the background was black (at a held step: 2.0 and 1.0 right, 0.99, 0.5 and 0.25 black). So the opening animation
+/// starts at frame 1 of its 6.
+unsafe fn open_short_cut_bg() {
+    let Some(&(base, manager, find, hash)) = SHORT_CUT_BG.get() else { return };
+    let manager = *((base + manager) as *const usize);
+    let manager = if manager != 0 { *(manager as *const usize) } else { 0 };
+    if manager == 0 {
+        return;
+    }
+    let screen = crate::guest::call(base + find, &[manager as u64, hash]) as usize;
+    if screen == 0 || *((screen + 0x16e) as *const u8) != 1 {
+        return;
+    }
+    let layout = *((screen + 0x28) as *const usize);
+    if layout == 0 {
+        return;
+    }
+    let animation = match *((layout + 0x60) as *const usize) {
+        0 => *((layout + 0x68) as *const usize),
+        a => a,
+    };
+    if animation != 0 {
+        let frame = (animation + 0x20) as *mut f32;
+        *frame = (*frame).max(1.0);
     }
 }
 
@@ -320,6 +357,9 @@ unsafe fn install_time_step(base: usize, mem_space: &mut crate::guest::loader::G
 /// Game time from real time, and the pacer free to run at any interval (the engine caps it while the game runs).
 #[cfg(nx_runtime)]
 pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) {
+    if let Some((manager, find, hash)) = s.short_cut_bg {
+        let _ = SHORT_CUT_BG.set((base, manager, find, hash));
+    }
     match install_time_step(base, mem_space, s) {
         Ok(()) => {
             INSTALLED.store(true, Ordering::Relaxed);
