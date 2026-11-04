@@ -61,6 +61,10 @@ fn wait_done(serial: u64) -> bool {
 
 /// Protection as this guard needs it; pages the write tracking (guest::dirty_track) holds stay read-only.
 unsafe fn set_prot(a: usize, len: usize, write: bool) -> bool {
+    // Never read-only under a live import (dirty_track::imported): the caller treats the range as not held.
+    if !write && crate::guest::dirty_track::imported(a, len) {
+        return false;
+    }
     let prot = if write { crate::os::Prot::ReadWrite } else { crate::os::Prot::Read };
     let ok = crate::os::protect(a, len, prot).is_ok();
     if write {
@@ -124,6 +128,9 @@ pub(super) fn hold_hot() {
     SAVED_N.store(0, Ordering::Release);
     HOT_HELD.store(true, Ordering::Release);
     for &(a, b) in ranges.iter() {
+        if crate::guest::dirty_track::imported(a, b - a) {
+            continue;
+        }
         unsafe {
             let _ = crate::os::protect(a, b - a, crate::os::Prot::Read);
             crate::gpu::report_guard::reprotect_held(a, b - a);
@@ -485,7 +492,7 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
         }
         if t.released[i].load(Ordering::Acquire) == 0 {
             let (x, y) = (s.max(addr & !(PAGE - 1)), e.min((addr + len + PAGE - 1) & !(PAGE - 1)));
-            if x < y {
+            if x < y && !crate::guest::dirty_track::imported(x, y - x) {
                 let _ = crate::os::protect(x, y - x, crate::os::Prot::Read);
                 // Released meanwhile (release_slot made it writable before this mprotect): writable again.
                 if t.released[i].load(Ordering::Acquire) != 0 {

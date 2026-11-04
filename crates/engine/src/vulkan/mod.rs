@@ -602,7 +602,7 @@ pub(crate) struct Imports {
     failed: std::collections::HashSet<(usize, usize)>,
     gen: u64,
     /// Imports dropped while a submit was being recorded: its command buffers may still use them.
-    pub(super) retired: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    pub(super) retired: Vec<(vk::Buffer, vk::DeviceMemory, usize, usize)>,
 }
 
 impl Imports {
@@ -616,8 +616,8 @@ impl Imports {
             for (a, s, _) in crate::nvn::api::take_released_ranges() {
                 let gone: Vec<usize> = self.by_start.range(..a + s).filter(|(&st, v)| st + v.0 > a).map(|(&st, _)| st).collect();
                 for st in gone {
-                    let (_, b, m) = self.by_start.remove(&st).unwrap();
-                    self.retired.push((b, m));
+                    let (size, b, m) = self.by_start.remove(&st).unwrap();
+                    self.retired.push((b, m, st, size));
                 }
             }
             self.failed.clear();
@@ -635,6 +635,8 @@ impl Imports {
         if self.failed.contains(&(start, end)) {
             return None;
         }
+        // Before the pages are made writable, so that nothing protects them again in between.
+        crate::guest::dirty_track::imported_add(start, end - start);
         // The driver maps imported pages with the protection they have now (NVIDIA on Windows): pages the write guard or
         // the write tracking hold read-only would stay read-only for the GPU, and its first write there loses the device.
         // They are made writable first, as a host write would: the guard waits for the GPU work reading them, and the
@@ -651,6 +653,7 @@ impl Imports {
                 }
                 // Still read-only (protected by something else): copies until the pools change, then tried again.
                 if !crate::os::read_only_ranges(start, end - start).is_empty() {
+                    crate::guest::dirty_track::imported_remove(start, end - start);
                     self.failed.insert((start, end));
                     return None;
                 }
@@ -662,6 +665,7 @@ impl Imports {
                 Some((b, (addr - start) as u64))
             }
             None => {
+                crate::guest::dirty_track::imported_remove(start, end - start);
                 self.failed.insert((start, end));
                 None
             }

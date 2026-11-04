@@ -147,6 +147,10 @@ unsafe fn open_page(i: usize, page: usize) {
 
 /// Copies slot `i`'s page and makes it inaccessible. Read-only during the copy: a write then faults and waits here.
 unsafe fn close_page(i: usize, page: usize, shadow: usize) -> bool {
+    // Never inaccessible under a live import (dirty_track::imported): counted as a protect failure, its reports unguarded.
+    if crate::guest::dirty_track::imported(page, PAGE) {
+        return false;
+    }
     lock_slot(i);
     let ok = crate::os::protect(page, PAGE, Prot::Read).is_ok();
     if ok {

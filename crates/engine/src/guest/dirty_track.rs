@@ -160,6 +160,29 @@ pub fn tracking(addr: usize) -> bool {
 }
 
 /// Whether [start, start+len) can be tracked.
+/// Guest memory imported as GPU buffers (VK_EXT_external_memory_host), from before the import until its GPU memory is
+/// freed. Its pages must stay writable: on an RTX 4080, read-only pages under a live import lose the device, even with
+/// nothing using the import (a fresh 64 MB import with some pages made read-only: lost one frame later; the same import
+/// left alone: fine). TotK's 252 MB pool holds textures this tracking protected, and importing it lost the device on
+/// entering the Depths. Textures there are checked by hash instead.
+static IMPORTED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn imported_add(start: usize, len: usize) {
+    IMPORTED.lock().unwrap().push((start, start + len));
+}
+
+pub fn imported_remove(start: usize, len: usize) {
+    let mut l = IMPORTED.lock().unwrap();
+    if let Some(i) = l.iter().position(|&r| r == (start, start + len)) {
+        l.swap_remove(i);
+    }
+}
+
+/// Whether any of [start, start + len) is under a live import: nothing may remove write access from it.
+pub fn imported(start: usize, len: usize) -> bool {
+    IMPORTED.lock().unwrap().iter().any(|&(a, b)| a < start + len && start < b)
+}
+
 pub fn trackable(start: usize, len: usize) -> bool {
     len >= PAGE / 2 && locate(start, len).is_some()
 }
@@ -181,6 +204,9 @@ pub fn generation(start: usize, len: usize) -> Option<u64> {
 /// (Re)protects the pages of [start, start+len) and returns the token to remember for this check. Call before reading
 /// the contents, so writes made during the check change it. None if the range cannot be tracked now.
 pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
+    if imported(start, len) {
+        return None;
+    }
     let (g, f, first, last) = locate(start, len)?;
     if (first..=last).any(|p| f[p].load(Ordering::Acquire) & GPU != 0) {
         return None;

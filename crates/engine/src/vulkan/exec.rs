@@ -575,7 +575,7 @@ struct InFlight {
     readback_chunks: Vec<super::device::HostBuffer>,
     occl_pool: vk::QueryPool,
     timestamps: vk::QueryPool,
-    imports: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    imports: Vec<(vk::Buffer, vk::DeviceMemory, usize, usize)>,
     /// Occlusion report addresses, written by the watcher.
     reports: Vec<u64>,
     /// Images whose guest bytes the watcher rewrote (render-target write-back).
@@ -1053,9 +1053,10 @@ impl Ctx {
             for b in f.staging {
                 self.tex.recycle_staging(&self.dev, b);
             }
-            for (b, m) in f.imports {
+            for (b, m, start, size) in f.imports {
                 d.destroy_buffer(b, None);
                 d.free_memory(m, None);
+                crate::guest::dirty_track::imported_remove(start, size);
             }
         }
     }
