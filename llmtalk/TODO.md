@@ -20,14 +20,12 @@ and update this file when you finish or drop it.
   a slowed build, a survival there is not. Repro: a save at Lookout Landing, walk from frame 1800; about 75 s.
 - **Texture formats 58 and 59 added** (vulkan/format.rs): stored as A1R5G5B5 with red and blue swapped in views. Not the
   cause of the device loss. Colours not checked by eye yet.
-- **TotK rare hang as gameplay starts: NOT fixed (hung again 2026-11-04 with STLR and the import rule, frame 1600, right after loading M_EquipmentNoise_LSword_Stone, every time)** (Windows, headless, frame ~1600; five threads in WaitLightEvent on events paired 0x58 apart, no device
-  loss). The STLR change (lifter/runtime/cpu.h: sequentially consistent store, as ARM orders STLR with a later LDAR) is correct by the architecture, but this hang
-  is not shown to be its doing. Same exe, guests alternating, every hang counted: old store 0 of 30, new store 0 of 30. All runs of the two guests compiled
-  from this lift: old store 1 of 43, new store 0 of 70, no real difference. The ~10% rate (5 of about 50) was only ever on guest.dll from an earlier compile
-  (337 MB against 329 MB, 2026-11-03 05:26), so most of the drop came from that guest differing (older commit or other compile flags, not yet told apart), not
-  from the fix. Later: that older guest on today's exe, 0 of 24 (one more run ended by out of memory, below), so the older guest alone does not hang either: the
-  ~10% was on exes from before the import rule (dirty_track::imported), the 1 of 43 after it. So the import rule may have done it, not STLR; neither shown. Hangs were all headless. cdb and lldb do not run on this machine
-  (dbgeng.dll ordinal 1002, python3.dll): an in-process thread walker did the dump. No measurable cost from STLR uncapped.
+- **TotK hang as gameplay starts: CAUSE FOUND, FIXED in the lifter 2026-11-04.** A thread dump caught BaseProcExecutor0 not waiting, in f_7000fbc368 at a `jmp` to itself, with the others waiting for it.
+  Guest spinlock (obj+0x1120): `ldr w8, [x20]; cmp w8, #1; b.eq` lifted to a plain load in a loop with nothing else in it, which the compiler made `read once; if (held) for (;;);`: a thread finding the
+  lock held spun forever. Loads in loops are now volatile (module.rs reload_in_loops, cpu.h LDV*): the jump in that function is gone, and no remaining jump to itself sits on a plain load (203 -> 171, mostly bare
+  `b .` traps and code split across functions, not each checked by hand). No cost uncapped (141.0 vs 140.6 fps). Needs the guest lifted and compiled again. NOT shown by counting: hang rate is too low (old guest 0 of 40, new 0 of 40
+  alternating, though the old caught at 1 in 16 once); the evidence is the dump and the disassembly. Why it looked like other things: STLR (042e045, correct by the rules, not this) and the import rule
+  changed timing. A per-operation lock in the event code hid it entirely (0 of 78). Tools: an in-process thread walker (cdb and lldb do not run on this machine, dbgeng.dll ordinal 1002, python3.dll).
 - **TotK claims 7.5 GB private at the title and 11 GB in play (measured 2026-11-04, RTX 4080 machine, working set 4-6 GB)**: against a commit limit of 33.9 GB with 15.3 GB
   already committed by the rest of the system, one copy leaves under 8 GB. A test copy died with `memory allocation of 1179648 bytes failed` while the user played
   another game, whose freeze at about that time may be this. Do not run tests while the user is playing. From the code and log, not measured per allocation: the guest's heap 2.9 GB, committed whole at SetMemoryHeapSize, and
