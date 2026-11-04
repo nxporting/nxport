@@ -1008,6 +1008,7 @@ impl Textures {
             _ if t.swizzle != [0; 4] => t.swizzle,
             _ => [2, 3, 4, 5],
         };
+        let swizzle = format::packed_swizzle(fmt_nvn, swizzle);
         let layers = match declared {
             vk::ImageViewType::CUBE => 6,
             vk::ImageViewType::TYPE_2D | vk::ImageViewType::TYPE_1D | vk::ImageViewType::TYPE_3D => 1,
