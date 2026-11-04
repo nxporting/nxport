@@ -129,8 +129,10 @@ typedef uint8_t __attribute__((may_alias)) u8a;
     static inline uint64_t lda##N(uint64_t a) {                                            \
         return __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_ACQUIRE);                       \
     }                                                                                      \
+    /* STLR is not reordered with a later LDAR on ARM; a release store and an acquire load */ \
+    /* are on x86, and "store mine, then read yours" on both sides then misses both. */    \
     static inline void stl##N(uint64_t a, uint64_t v) {                                    \
-        __atomic_store_n((T *)(uintptr_t)a, (T)v, __ATOMIC_RELEASE);                       \
+        __atomic_store_n((T *)(uintptr_t)a, (T)v, __ATOMIC_SEQ_CST);                       \
     }
 EXCL(8, uint8_t)
 EXCL(16, uint16_t)
