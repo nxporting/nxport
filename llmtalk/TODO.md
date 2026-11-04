@@ -161,7 +161,7 @@ and update this file when you finish or drop it.
   - Tools (scratch, not committed): watch_win.rs (DR0..DR3 watchpoints + VEH, symbolize with llvm-symbolizer
     against guest.pdb at ImageBase 0x10000000 + RVA), a private build root at C:\Users\Greenlord\nxport-build\r8
     (short path: the scratch path is too long for the compiler), ao2.ps1 (900-frame capture, count, delete).
-- **TotK Ultrahand / ability wheel background is black** (open: the fallback bbebcba was reverted, 9b3e4f1; the user wants the real fix, not a workaround).
+- **TotK Ultrahand / ability wheel background is black: FIXED on 1.1.2, 2026-11-04** (frame_time.rs open_short_cut_bg; 1.0.0 needs its addresses, Sites::short_cut_bg). Uncapped 8 of 8 and stock 4 of 4 right (left edge brightness 69-70, black 6; by eye like stock), a second opening right, 142.7 fps. The capture lands 3 rendered frames after the opening animation's frame reaches 1, the world stops 4 frames after it starts opening: the animation now starts at frame 1 of 6. Not by eye in play yet. NOT tested: the d-pad quick menus, which the notes say go black too: holding d-pad keys 123, 124, 126 in the shrine opened no menu, so try where they open. Notes:
   Located 2026-11-03: ONE whole step (1/30 s, timer+8 = 1.0) on the one frame in which the game makes the transition fixes it, uncapped. Measured with
   the headless repro below, by the mean brightness of the screen's left edge at frame 3600 (black 6, right 69-70, stock timing 70, checked by eye):
   whole step on the frame just before the state byte below is first seen by time_step: right; one frame earlier or on the frame it is seen: black. So
@@ -171,6 +171,11 @@ and update this file when you finish or drop it.
   [[0x700472cb20]], x1 = 0xc5a49707). +0x16e state: 0, 1 opening (from ~14 frames after L at 144 fps), 2 open, 3 closing. +0x176 bit 0x20: capture
   requested (SeqOneShotRequestCaptureShortCutBG, f_7001abaaa8, also sets +0x175 bit 2), cleared by SeqOneShotDRequestCaptureBeforeShortCutBG
   (f_7001aaf468). SeqQueryGetShortCutBGRestFrame (f_7001ae119c): a total minus the float at [+0x28]->[+0x60 or +0x68]+0x20. main starts at guest
+  CAUSE, measured 2026-11-04 (step held at S from frame 3200, journal, repeated runs): the world stops at state+4 rendered frames whatever the step, the capture lands at state +
+  2 + ceil(1/S): S 2.0 and 1.0 +3 (right), 0.99 and 0.5 +4, 0.25 +6 (black). It works only if it comes before the world stops. So something accumulates the step and acts at >= 1, while
+  the world stops by counting rendered frames. Timer channels carrying the step: +0, +8, +0x10, +0x38, +0x60, +0x154, seconds +4, +0xc, +0x14, +0x3c, +0x64, +0x150; swapping all of them
+  for readers of the timer does not move the capture (hold timers do move), so it reads a copy (about 300 floats hold the step). It is the wheel's opening animation (frame 0 to 6 at
+  the step, [[+0x28]+0x60]+0x20): at a held 0.25, setting that frame to 1 when the state shows moved the capture from +6 to +3, 69 (2 of 2). Writer f_700084e408 (frame += rate * step).
   Search for the reader (page-protect the timer, single-step each read, swap the value for chosen readers; patches kept out of the repo): NOTHING usable. With the
   real step the single-stepping slows the game to ~16 fps, so the step is over 1.0 for everyone and every subset passes. With the step held at 0.5: control
   black 3 of 3, all 35 readers given 1.0 black, but one earlier run on that build gave 69 for subsets of 17 and 8: unexplained. f_70028ff8c4 / f_70028ffc08 are
