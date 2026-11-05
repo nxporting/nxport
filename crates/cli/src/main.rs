@@ -26,6 +26,9 @@ enum Command {
     /// Shader stages and caches
     #[command(subcommand)]
     Shaders(Shaders),
+    /// Build the engine for iOS from this checkout, without Apple's tools (needs LLVM and the Rust target)
+    #[cfg(windows)]
+    IosEngine,
     #[cfg(any(target_os = "macos", windows))]
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
@@ -446,6 +449,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    Pipelines compiled: {} ({} skipped)", stats.pipelines_compiled, stats.pipelines_skipped);
             println!("    Pipeline cache: {} bytes", stats.vkcache_bytes);
             println!("    Output cache directory: {}", stats.cache_dir.display());
+        }
+        #[cfg(windows)]
+        Command::IosEngine => {
+            let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
+            println!("[+] {}", nxport_build::ios_engine::build(&toolchains)?.display());
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
