@@ -669,11 +669,37 @@ pub unsafe fn flush_code_views() -> usize {
     shadows.iter_mut().map(|v| flush_one(v)).sum()
 }
 
+/// flush_code_views for the page holding `addr`, in a view or in the code it views: a cache flush names its address, and
+/// comparing whole views at each line of one is slow.
+#[cfg(windows)]
+pub unsafe fn flush_code_view_at(addr: usize) -> usize {
+    let mut shadows = SHADOWS.lock().unwrap();
+    let mut written = 0;
+    for v in shadows.iter_mut() {
+        let off = if (v.src..v.src + v.size).contains(&addr) {
+            addr - v.src
+        } else if (v.dst..v.dst + v.size).contains(&addr) {
+            addr - v.dst
+        } else {
+            continue;
+        };
+        let page_off = ((v.src + off) & !0xfff).saturating_sub(v.src);
+        written += flush_range(v, page_off, off + 1);
+    }
+    written
+}
+
 unsafe fn flush_one(v: &mut Shadow) -> usize {
+    let size = v.size;
+    flush_range(v, 0, size)
+}
+
+/// Copies what changed in the 4 KiB pages of [start, end) of a view into the code it views. `start` begins a page, or the view.
+unsafe fn flush_range(v: &mut Shadow, start: usize, end: usize) -> usize {
     let mut written = 0;
     let mut touched: Vec<usize> = Vec::new();
-    let mut off = 0;
-    while off < v.size {
+    let mut off = start;
+    while off < end {
         let n = (0x1000 - (v.src + off) % 0x1000).min(v.size - off);
         let view = std::slice::from_raw_parts((v.dst + off) as *const u8, n);
         if view != &v.baseline[off..off + n] {

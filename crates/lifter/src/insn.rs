@@ -372,6 +372,10 @@ fn system(wd: u32) -> R {
         if !l && op1 == 3 && crn == 7 && crm == 4 && op2 == 1 {
             return op(format!("memset((void *)(uintptr_t)({} & ~63ull), 0, 64);", x(rt))); // dc zva
         }
+        if !l && op1 == 3 && crn == 7 && crm == 5 && op2 == 1 {
+            // ic ivau: code written through a mapping is due to take effect.
+            return op(format!("rt_code_changed({});", x(rt)));
+        }
         if !l && crn == 7 {
             return op("/* cache maintenance */".into());
         }
