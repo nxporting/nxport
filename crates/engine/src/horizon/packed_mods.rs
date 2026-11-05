@@ -45,7 +45,8 @@ fn pfs0_files(r: &mut (impl Read + Seek), len: u64) -> Result<Vec<(String, u64, 
             let (off, size, name) = (u64_at(e, 0).unwrap(), u64_at(e, 8).unwrap(), u32_at(e, 16).unwrap() as usize);
             let name = names.get(name..).ok_or("a file name lies outside the table")?;
             let name = String::from_utf8_lossy(name.split(|b| *b == 0).next().unwrap_or(name)).into_owned();
-            if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+            // A mod names these, and they become host paths: on Windows `C:x` joined to a folder leaves it.
+            if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':']) {
                 return Err(format!("bad file name '{name}'"));
             }
             let start = inside(data, off, size, len).ok_or_else(|| format!("{name} lies outside the file"))?;
