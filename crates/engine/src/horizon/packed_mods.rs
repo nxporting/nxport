@@ -269,6 +269,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn pfs0_names_that_would_leave_the_folder_are_refused() {
+        for bad in ["../x", "a/b", "a\\b", "..", ".", "C:x", "x:stream"] {
+            // One empty file: header, one entry, the name.
+            let mut names = bad.as_bytes().to_vec();
+            names.push(0);
+            let mut f = Vec::new();
+            f.extend_from_slice(b"PFS0");
+            f.extend_from_slice(&1u32.to_le_bytes());
+            f.extend_from_slice(&(names.len() as u32).to_le_bytes());
+            f.extend_from_slice(&0u32.to_le_bytes());
+            f.extend_from_slice(&0u64.to_le_bytes());
+            f.extend_from_slice(&0u64.to_le_bytes());
+            f.extend_from_slice(&0u32.to_le_bytes());
+            f.extend_from_slice(&0u32.to_le_bytes());
+            f.extend_from_slice(&names);
+            let len = f.len() as u64;
+            assert!(pfs0_files(&mut Cursor::new(&f), len).is_err(), "{bad} was accepted");
+        }
+    }
+
+    #[test]
     fn pfs0_lists_its_files() {
         let f = pfs0(&[("main", b"code"), ("main.npdm", b"meta!")]);
         let files = pfs0_files(&mut Cursor::new(&f), f.len() as u64).unwrap();
