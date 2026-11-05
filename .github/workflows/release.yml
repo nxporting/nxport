@@ -1,0 +1,163 @@
+# A version tag: builds the builder for Windows and macOS and publishes a GitHub Release with the two archives.
+# Run by hand (Actions > Release > Run workflow): the same builds, the archives as run artifacts, no release.
+#
+# An archive holds tools only. Each job lists exactly what goes in and fails on anything else: no game's files, lifted
+# code or caches can come along.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+  OPUS_VERSION: "1.6.1"
+  OPUS_SHA256: 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      # The sources as committed: some are hashed or embedded, so a checkout with CRLF would differ from macOS's.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      # The debug output main's CI saved, for the tests and nxport-cli. Release output is not worth a cache entry.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows
+          save-if: false
+      # See ci.yml: the test programs and nxport-cli link SDL3.dll at start. The builder carries its own.
+      - run: Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\vendor\SDL3\lib"
+      - name: Test
+        run: cargo test --workspace --locked --lib --bins
+      - name: Build the builder
+        run: cargo build --release --locked -p nxport-builder
+      # A release cannot build the iOS engine where it runs (no source): it takes ios/nxport beside the builder, which
+      # must come from the same commit, as the engine refuses a guest image patched by other code. nxport-cli only
+      # drives the build, so debug will do.
+      - name: Build the engine for iOS
+        run: |
+          if (-not (Test-Path 'C:\Program Files\LLVM\bin\ld64.lld.exe')) { choco install llvm -y --no-progress }
+          cargo run --locked -p nxport-cli -- ios-engine
+      # The engine loads opus.dll for the game's Opus streams (music in TotK), silent without it, and winapp::pack copies
+      # it into every app it makes. Static C runtime, as the engine: no Visual C++ Redistributable needed.
+      - name: Build libopus
+        shell: bash
+        run: |
+          curl -fsSL --retry 3 -o opus.tar.gz "https://downloads.xiph.org/releases/opus/opus-$OPUS_VERSION.tar.gz"
+          echo "$OPUS_SHA256  opus.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/opus"
+          tar -xzf opus.tar.gz -C "$RUNNER_TEMP/opus" --strip-components=1
+          rm opus.tar.gz
+          cmake -S "$RUNNER_TEMP/opus" -B "$RUNNER_TEMP/opus-build" -A x64 -DBUILD_SHARED_LIBS=ON -DOPUS_STATIC_RUNTIME=ON
+          cmake --build "$RUNNER_TEMP/opus-build" --config Release --target opus
+          grep -q opus_decoder_create "$RUNNER_TEMP/opus-build/Release/opus.dll"
+          if grep -qi vcruntime "$RUNNER_TEMP/opus-build/Release/opus.dll"; then
+            echo "opus.dll needs the Visual C++ Redistributable"; exit 1
+          fi
+      - name: Assemble the archive
+        shell: bash
+        run: |
+          root="nxport-builder-$VERSION"
+          stage="$RUNNER_TEMP/stage/$root"
+          mkdir -p "$stage/ios" dist
+          cp target/release/nxport-builder.exe "$stage/"
+          cp "$RUNNER_TEMP/opus-build/Release/opus.dll" "$stage/"
+          cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
+          cp README.md LICENSE "$stage/"
+          cp crates/sass2spv/LICENSE "$stage/LICENSE-sass2spv"
+          cp crates/lifter/LICENSE-LASRecomp "$stage/LICENSE-LASRecomp"
+          cp "$RUNNER_TEMP/opus/COPYING" "$stage/LICENSE-opus"
+          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-opus LICENSE-sass2spv README.md ios/nxport nxport-builder.exe opus.dll \
+            | LC_ALL=C sort > "$RUNNER_TEMP/expected"
+          (cd "$stage" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+          "$stage/nxport-builder.exe" --help
+          (cd "$RUNNER_TEMP/stage" && 7z a -tzip -bd "$GITHUB_WORKSPACE/dist/$root-windows-x86_64.zip" "$root")
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos
+          save-if: false
+      # nxport-build's build script builds the two engines into target/engines first.
+      - name: Build the builder and the engines
+        run: cargo build --release --locked -p nxport-builder
+      - name: Test
+        run: cargo test --locked -p nxport -p nxport-build -p nxport-builder -p nxport-lifter -p nxport-pipelines -p sass2spv --lib --bins
+      - name: Assemble the archive
+        run: |
+          root="nxport-builder-$VERSION"
+          stage="$RUNNER_TEMP/stage/$root"
+          mkdir -p "$stage/ios" dist
+          cp target/release/nxport-builder "$stage/"
+          cp target/engines/aarch64-apple-darwin/release/nxport "$stage/nxport"
+          cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
+          cp README.md LICENSE "$stage/"
+          cp crates/sass2spv/LICENSE "$stage/LICENSE-sass2spv"
+          cp crates/lifter/LICENSE-LASRecomp "$stage/LICENSE-LASRecomp"
+          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-sass2spv README.md ios/nxport nxport nxport-builder \
+            | LC_ALL=C sort > "$RUNNER_TEMP/expected"
+          (cd "$stage" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+          "$stage/nxport-builder" --help
+          tar -czf "dist/$root-macos-arm64.tar.gz" -C "$RUNNER_TEMP/stage" "$root"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  # Windows is required; a macOS failure leaves its archive out and says so, as nobody here can build for a Mac to fix
+  # it before a release. This is the only job with write access, and it runs no third-party code.
+  publish:
+    needs: [windows, macos]
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS.txt
+          notes="Windows: unpack and run nxport-builder.exe. macOS: unpack, then run xattr -dr com.apple.quarantine on the folder (not signed or notarized). Opus audio needs brew install opus. iOS apps built on Windows have not been run on a device yet."
+          if [ "$MACOS_RESULT" != success ]; then
+            notes="$notes
+
+          **This release has no macOS build: that job did not succeed.**"
+          fi
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$VERSION" --verify-tag --title "$VERSION" --notes "$notes" --generate-notes "${prerelease[@]}" -- *
