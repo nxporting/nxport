@@ -112,7 +112,9 @@ pub struct Stage {
     pub id: StageId,
     /// Its shader cache name and input locations.
     pub known: std::sync::Arc<super::stage_cache::Known>,
-    pub module: vk::ShaderModule,
+    /// Its SPIR-V when the stage cache does not hold it; otherwise read from there for each pipeline (`module`). A driver
+    /// shader module costs far more than its code, and pipeline lists name thousands that are never drawn.
+    pub spirv: Option<std::sync::Arc<[u32]>>,
     /// Its bindings, numbered from the stage's binding base (graphics stages share one set: vertex 0.., fragment
     /// FRAGMENT_BINDING_BASE..).
     pub bindings: std::sync::Arc<[Binding]>,
@@ -130,6 +132,34 @@ pub struct Stage {
     pub inputs: Vec<u32>,
     /// User output locations it declares (a vertex stage's varyings; bit N = location N).
     pub outputs: u32,
+}
+
+/// A shader module for as long as a pipeline is being made from it.
+pub struct Module<'a> {
+    dev: &'a Dev,
+    pub module: vk::ShaderModule,
+}
+
+impl Drop for Module<'_> {
+    fn drop(&mut self) {
+        unsafe { self.dev.device.destroy_shader_module(self.module, None) };
+    }
+}
+
+impl Stage {
+    pub unsafe fn module<'a>(&self, dev: &'a Dev) -> Result<Module<'a>, vk::Result> {
+        let from_cache;
+        let words: &[u32] = match &self.spirv {
+            Some(w) => w,
+            None => {
+                let bytes = super::stage_cache::load_spirv(self.id.key).ok_or(vk::Result::ERROR_INITIALIZATION_FAILED)?;
+                from_cache = bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>();
+                &from_cache
+            }
+        };
+        let module = dev.device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)?;
+        Ok(Module { dev, module })
+    }
 }
 
 /// Geometry stages' first binding (vertex starts at 0, geometry at 128, fragment at 256).
@@ -377,10 +407,7 @@ unsafe fn build_stage(
                 | Feed::Bindless { cbuf_slot: 0, .. }
                 | Feed::Image { cbuf_slot: 0, .. })
     });
-    let module = dev
-        .device
-        .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
-        .map_err(|e| format!("vkCreateShaderModule: {e}"))?;
+    let kept = (!super::stage_cache::has(id.key)).then(|| words.as_slice().into());
     let stage_flags = if compute {
         vk::ShaderStageFlags::COMPUTE
     } else if hint == 1 {
@@ -420,7 +447,7 @@ unsafe fn build_stage(
     Ok(Stage {
         id,
         known,
-        module,
+        spirv: kept,
         bindings: out.into(),
         reads_driver,
         set_layout,
