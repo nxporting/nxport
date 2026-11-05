@@ -75,6 +75,7 @@ pub fn write_base_code(s: nxport::settings::Settings, out: &Path) -> Result<(), 
 }
 
 /// (module, code start, code) of a base_code.bin.
+#[cfg(windows)]
 fn read_base_code(path: &Path) -> Result<Vec<(String, u64, Vec<u8>)>, Box<dyn std::error::Error>> {
     let d = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (mut p, mut out) = (0, Vec::new());
@@ -100,6 +101,7 @@ pub fn lift_overlay(
     base_library: &Path,
     out_dir: &Path,
 ) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
+    let run_game_subsdk = s.guest.run_game_subsdk;
     let base = read_base_code(&base_library.with_file_name(BASE_CODE_FILE))?;
     let library = nxport::os::Library::open(base_library)?;
     let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
@@ -107,6 +109,10 @@ pub fn lift_overlay(
     let seeds = cross_module_seeds(&modules);
     let mut lifted = Vec::new();
     for (m, mut seeds) in modules.into_iter().zip(seeds) {
+        // The game's own subsdk modules are in the map only for the module indices mods count by; nothing runs them.
+        if m.name.starts_with("game_subsdk") && !run_game_subsdk {
+            continue;
+        }
         let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
         let Some((_, start, code)) = base.iter().find(|(n, ..)| *n == m.name) else {
             let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
