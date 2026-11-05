@@ -308,6 +308,34 @@ pub fn compile(
     Ok(())
 }
 
+/// Downloads the gzipped file at `url` to `dest`, unpacked. A failure leaves nothing at `dest`.
+pub fn fetch_gzipped(url: &str, dest: &Path) -> Result<(), String> {
+    let dir = dest.parent().ok_or("no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let gz = dest.with_extension("gz.download");
+    let tmp = dest.with_extension("download");
+    let result = (|| {
+        // curl ships with Windows (System32) since Windows 10 1803.
+        let got = command("curl.exe")
+            .args(["-fsSL", "--retry", "2", "--max-time", "300", "-o"])
+            .arg(&gz)
+            .arg(url)
+            .status()
+            .map_err(|e| format!("curl: {e}"))?;
+        if !got.success() {
+            return Err(format!("{url}: not available"));
+        }
+        let file = std::fs::File::open(&gz).map_err(|e| e.to_string())?;
+        let mut unpacked = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        std::io::copy(&mut flate2::read::GzDecoder::new(file), &mut unpacked).map_err(|e| format!("{url}: {e}"))?;
+        drop(unpacked);
+        std::fs::rename(&tmp, dest).map_err(|e| e.to_string())
+    })();
+    let _ = std::fs::remove_file(&gz);
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
 /// What identifies the lifted C in `c_dir`, which is what a profile is made for: the names and contents of its C files
 /// and headers, hashed.
 pub fn lifted_hash(c_dir: &Path) -> Result<String, String> {
@@ -559,5 +587,39 @@ mod tests {
         assert_eq!((out.functions, out.jump_tables), (3, 1));
         assert!(dir.join("c/cpu.h").is_file() && dir.join("c/main_table.c").is_file());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::fetch_gzipped;
+    use std::io::Write;
+
+    #[test]
+    fn a_gzipped_file_arrives_unpacked_and_a_missing_one_leaves_nothing() {
+        let dir = std::env::temp_dir().join(format!("nx_fetch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let gz = dir.join("p.profdata.gz");
+        let mut e = flate2::write::GzEncoder::new(std::fs::File::create(&gz).unwrap(), flate2::Compression::fast());
+        e.write_all(b"profile").unwrap();
+        e.finish().unwrap();
+        let url = |p: &std::path::Path| format!("file:///{}", p.display().to_string().replace('\\', "/"));
+
+        let dest = dir.join("sub").join("p.profdata");
+        fetch_gzipped(&url(&gz), &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"profile");
+
+        let none = dir.join("none.profdata");
+        assert!(fetch_gzipped(&url(&dir.join("missing.gz")), &none).is_err());
+        assert!(!none.exists());
+
+        // Not gzip: a failure, nothing left behind.
+        let bad = dir.join("bad.gz");
+        std::fs::write(&bad, b"not gzip").unwrap();
+        let out = dir.join("bad.profdata");
+        assert!(fetch_gzipped(&url(&bad), &out).is_err());
+        assert!(!out.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
