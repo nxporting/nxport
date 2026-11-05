@@ -28,6 +28,11 @@ mod guest {
 pub use guest::nso;
 #[cfg(nx_runtime)]
 mod horizon;
+/// How mods are found, for the tools that package them.
+#[cfg(nx_runtime)]
+pub mod mods {
+    pub use crate::horizon::fs::{discover_mods, mod_subdir, patch_sets};
+}
 #[cfg(nx_native)]
 mod host;
 #[cfg(all(nx_runtime, not(nx_native)))]
