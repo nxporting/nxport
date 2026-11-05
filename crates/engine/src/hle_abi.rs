@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn adapters_built_at_compile_time() {
-        static ADD3: Hle = Hle::of_const(add3 as unsafe extern "C" fn(_, _, _) -> _, add3 as *const ());
+        static ADD3: Hle = Hle::of_const(add3 as unsafe extern "C" fn(_, _, _) -> _, add3 as *const (), "test");
         assert_eq!(record(ADD3), add3 as *const ());
         let mut c = cpu();
         c.x[0] = 1;
