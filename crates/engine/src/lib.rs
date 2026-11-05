@@ -484,6 +484,10 @@ fn guest_chain(
     if dump_after_mods {
         cpu::aot::snapshot_premod();
     }
+    #[cfg(all(nx_runtime, windows))]
+    if !mod_inits.is_empty() {
+        live_patch::empty_present_layer();
+    }
     for (label, init) in &mod_inits {
         println!("[+] Mods: running {} init at {:#x}", label, init);
         unsafe { guest::call(*init, &[0, 0]) };
@@ -882,6 +886,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //     instructions Darwin traps (FlushDataCache).
     if let Some(sdk_mod) = sdk.as_ref() {
         let default_stub = mem_space.default_stub_ptr;
+        #[cfg(all(nx_runtime, windows))]
+        live_patch::set_sdk(
+            sdk_mod.base + sdk_mod.ro_off,
+            sdk_mod.base + sdk_mod.image_size,
+            sdk_mod.text_start,
+            sdk_mod.text_start + sdk_mod.text_size,
+        );
         // --list-hle-imports: report every game import not bound to the SDK's own definition.
         if crate::settings::get().log.list_hle_imports {
             for (off, name) in mem_space.imports() {
