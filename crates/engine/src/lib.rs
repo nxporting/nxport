@@ -707,7 +707,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //     symbols in the main binary that are defined in the SDK (sead, nn::gfx,
     //     libc++ internals, etc.) resolve to live SDK addresses rather than 0.
     //     Also binds SDK's external relocations (malloc, free, etc.) via mem_space trampolines.
-    let sdk_path_buf = game::exefs_file("sdk");
+    let sdk_path_buf = horizon::fs::exefs_override("sdk").unwrap_or_else(|| game::exefs_file("sdk"));
     let sdk_path = sdk_path_buf.to_str().unwrap();
     let sdk = match guest::sdk_loader::load_sdk(sdk_path, &mut mem_space) {
         Ok(m) => {
@@ -923,7 +923,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     if run_game_subsdk
         || crate::horizon::fs::mods()
             .iter()
-            .any(|(_, d)| (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file()))
+            .any(|(_, d)| (0..10).any(|i| crate::horizon::fs::mod_subdir(d, "exefs").join(format!("subsdk{}", i)).is_file()))
     {
         use horizon::svc::{
             add_region, Region, MEM_CODE_MUTABLE, MEM_CODE_STATIC, PERM_R, PERM_RW, PERM_RX,
@@ -1119,7 +1119,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
         for (mod_name, dir) in crate::horizon::fs::mods() {
             for i in 0..10 {
-                let path = dir.join("exefs").join(format!("subsdk{}", i));
+                let path = crate::horizon::fs::mod_subdir(dir, "exefs").join(format!("subsdk{}", i));
                 if !path.is_file() {
                     continue;
                 }

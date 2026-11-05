@@ -89,7 +89,7 @@ pub(crate) unsafe fn register_writable_mount(kind: &str, name: *const c_char) {
             let target_cfg = root.join("UltraCam/TOTK/Config/maxlastbreath.ini");
             if !target_cfg.exists() {
                 for (_, mod_path) in mods() {
-                    let src_cfg = mod_path.join("romfs/UltraCam/maxlastbreath.ini");
+                    let src_cfg = mod_subdir(mod_path, "romfs").join("UltraCam/maxlastbreath.ini");
                     if src_cfg.exists() {
                         if let Some(parent) = target_cfg.parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -168,9 +168,124 @@ struct OpenFile {
 
 static OPEN_FILES: Mutex<Vec<Option<OpenFile>>> = Mutex::new(Vec::new());
 
+/// A mod's `romfs` or `exefs` folder, whatever its case: mods ship both `romfs` and `RomFS`, and iOS's file system is
+/// case sensitive.
+pub fn mod_subdir(dir: &Path, name: &str) -> PathBuf {
+    let exact = dir.join(name);
+    if exact.is_dir() {
+        return exact;
+    }
+    std::fs::read_dir(dir)
+        .ok()
+        .and_then(|rd| rd.flatten().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name) && e.path().is_dir()))
+        .map_or(exact, |e| e.path())
+}
+
+fn is_mod_dir(dir: &Path) -> bool {
+    mod_subdir(dir, "romfs").is_dir() || mod_subdir(dir, "exefs").is_dir()
+}
+
+/// Folders mods are packaged in on the way to their contents: `atmosphere/contents/<title id>/`, Ryujinx's
+/// `mods/contents/<title id>/`, or a bare `<title id>/`.
+fn is_layout_dir(name: &str) -> bool {
+    ["atmosphere", "contents", "mods"].iter().any(|d| name.eq_ignore_ascii_case(d)) || title_dir(name).is_some()
+}
+
+fn title_dir(name: &str) -> Option<u64> {
+    (name.len() == 16).then(|| u64::from_str_radix(name, 16).ok()).flatten()
+}
+
+fn sorted_dirs(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut v: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().filter(|e| e.path().is_dir()).map(|e| (e.file_name().to_string_lossy().into_owned(), e.path())).collect())
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// The mods under `root`: `root` itself if it is one, else the folders in it, through the folders mods are packaged
+/// in (is_layout_dir). A folder named for another title is skipped. Other folders inside a mod are not looked into:
+/// a download's variants would all turn on at once.
+fn discover_mods(root: &Path, title: Option<u64>) -> Vec<(String, PathBuf)> {
+    let name_of = |p: &Path| p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    if is_mod_dir(root) {
+        return vec![(name_of(root), root.to_path_buf())];
+    }
+    let mut out = Vec::new();
+    for (name, path) in sorted_dirs(root) {
+        if let (Some(t), Some(game)) = (title_dir(&name), title) {
+            if t != game {
+                println!("[!] Mods: '{name}' is for another program, not this game ({game:016X}); skipped");
+                continue;
+            }
+        }
+        if is_layout_dir(&name) {
+            out.extend(discover_mods(&path, title));
+        } else if is_mod_dir(&path) {
+            out.push((name, path));
+        } else if sorted_dirs(&path).iter().any(|(n, _)| is_layout_dir(n)) {
+            // A download holding the layout: named for its own folder, which is what decides its priority.
+            for (i, (_, p)) in discover_mods(&path, title).into_iter().enumerate() {
+                out.push((if i == 0 { name.clone() } else { format!("{name} {i}") }, p));
+            }
+        } else {
+            if name != "exefs_patches" {
+                println!("[!] Mods: '{name}' has no romfs or exefs folder; ignored");
+            }
+        }
+    }
+    out
+}
+
+/// A code file the mods replace (`main`, `sdk`), highest priority first, as Atmosphere's exefs override.
+pub fn exefs_override(name: &str) -> Option<PathBuf> {
+    let found = mods().iter().find_map(|(m, d)| {
+        let p = mod_subdir(d, "exefs").join(name);
+        p.is_file().then(|| (m.clone(), p))
+    })?;
+    println!("[+] Mods: '{}' replaces exefs/{name}", found.0);
+    Some(found.1)
+}
+
+/// Atmosphere's patch sets under `root`: `[.../]exefs_patches/<set>/`, up to two folders down.
+fn patch_sets(root: &Path, depth: u32) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for (name, path) in sorted_dirs(root) {
+        if name.eq_ignore_ascii_case("exefs_patches") {
+            out.extend(sorted_dirs(&path));
+        } else if depth > 0 {
+            out.extend(patch_sets(&path, depth - 1));
+        }
+    }
+    out
+}
+
+/// Every folder of IPS and pchtxt files: the mods' exefs folders, then the patch sets.
+pub fn exefs_patch_dirs() -> Vec<(String, PathBuf)> {
+    let mut v: Vec<(String, PathBuf)> = mods().iter().map(|(n, d)| (n.clone(), mod_subdir(d, "exefs"))).collect();
+    if let Some(root) = crate::settings::get().files.mods_dir.clone().or_else(|| crate::profile::data_subdir("mods")) {
+        v.extend(patch_sets(&root, 2));
+    }
+    v
+}
+
+/// Files a host's file manager leaves in folders, which a game listing a RomFS directory must not see.
+fn is_host_junk(name: &str) -> bool {
+    name == ".DS_Store" || name.starts_with("._") || name.eq_ignore_ascii_case("Thumbs.db") || name.eq_ignore_ascii_case("desktop.ini")
+}
+
+/// Names the game mounted its RomFS under (nn::fs::MountRom), besides the usual ones.
+static ROM_MOUNTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The RomFS-relative part of "<rom mount>:/rest", if the path names a RomFS mount.
+fn rom_mount_rel(clean_path: &str) -> Option<&str> {
+    let (name, rest) = clean_path.split_once(':')?;
+    (name == "rom" || name == "content" || ROM_MOUNTS.lock().unwrap().iter().any(|m| m == name)).then_some(rest)
+}
+
 /// Enabled mods, highest priority first: (name, mod directory). A mod directory has the Ryujinx / Atmosphere layout
 /// (`romfs/` replaces or adds game files; `exefs/` holds code mods). Mods come from --mods-dir (a directory of mod
-/// folders, e.g. Ryujinx's mods/contents/0100f2c0115b6000), else ./mods if it exists; --no-mods disables them.
+/// folders, one mod, or Atmosphere's or Ryujinx's tree: discover_mods), else ./mods if it exists; --no-mods disables them.
 /// Priority is alphabetical (that is why mods use names like "!!!TOTK Optimizer"). A mod whose exefs/main.npdm names
 /// another program is made for another game and skipped.
 pub fn mods() -> &'static [(String, PathBuf)] {
@@ -182,37 +297,17 @@ pub fn mods() -> &'static [(String, PathBuf)] {
         let Some(root) = crate::settings::get().files.mods_dir.clone().or_else(|| crate::profile::data_subdir("mods")) else {
             return Vec::new();
         };
-        let Ok(rd) = std::fs::read_dir(&root) else { return Vec::new() };
-        let mut v: Vec<(String, PathBuf)> = rd
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
-            .filter(|(name, path)| {
-                let mod_npdm = [path.join("exefs/main.npdm"), path.join("ExeFS/main.npdm")]
-                    .into_iter()
-                    .find(|p| p.is_file());
-                let target = mod_npdm.as_deref().and_then(crate::game::npdm_program_id);
-                let current_tid = crate::game::title_id()
-                    .or_else(|| {
-                        let act = crate::profile::active();
-                        (act.title_id != 0).then_some(act.title_id)
-                    });
-                match (target, current_tid) {
-                    (Some(t), Some(game)) if t != game => {
-                        println!("[!] Mods: '{name}' is for program {t:016X}, not this game ({game:016X}); skipped");
-                        false
-                    }
-                    (Some(t), None) => {
-                        println!("[!] Mods: '{name}' is for program {t:016X}, but current game program ID is unknown; skipped");
-                        false
-                    }
-                    _ => true,
-                }
-            })
-            .collect();
+        // A mod's main.npdm does not say which game it is for: Atmosphere overwrites its program ids with the running
+        // program's (ldr_meta.cpp), and exlaunch's template names a fixed one. Which folder it is in decides (discover_mods).
+        let mut v = discover_mods(&root, crate::game::title_id());
         v.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, path) in &v {
-            println!("[+] Mods: '{}' ({}{})", name, if path.join("romfs").is_dir() { "romfs " } else { "" }, if path.join("exefs").is_dir() { "exefs" } else { "" });
+            println!("[+] Mods: '{}' ({}{})", name, if mod_subdir(path, "romfs").is_dir() { "romfs " } else { "" }, if mod_subdir(path, "exefs").is_dir() { "exefs" } else { "" });
+            for packed in ["romfs.bin", "exefs.nsp"] {
+                if path.join(packed).is_file() {
+                    println!("[!] Mods: '{name}': {packed} is not supported yet; unpack it into a folder");
+                }
+            }
         }
         v
     })
@@ -224,7 +319,7 @@ fn mod_romfs_roots() -> &'static [PathBuf] {
     ROOTS.get_or_init(|| {
         mods()
             .iter()
-            .map(|(_, p)| p.join("romfs"))
+            .map(|(_, p)| mod_subdir(p, "romfs"))
             .filter(|p| p.is_dir())
             .collect()
     })
@@ -258,10 +353,7 @@ fn romfs_dirs(rel: &str) -> Vec<PathBuf> {
 /// The RomFS-relative part of a guest path, if it names the game's RomFS.
 fn romfs_rel(guest_path: &str) -> Option<&str> {
     let clean_path = guest_path.trim_start_matches('/');
-    if let Some(rel) = clean_path
-        .strip_prefix("rom:")
-        .or_else(|| clean_path.strip_prefix("content:"))
-    {
+    if let Some(rel) = rom_mount_rel(clean_path) {
         return Some(rel);
     }
     if clean_path.starts_with("data:")
@@ -279,9 +371,7 @@ pub(crate) fn resolve_path(guest_path: &str) -> Option<PathBuf> {
     // Paths like "content://Sound/x" (double slash) occur; Path::join with a leading "/" would replace
     // the root entirely, so strip every leading slash after the mount name.
     let clean_path = guest_path.trim_start_matches('/');
-    if let Some(rel) = clean_path.strip_prefix("rom:") {
-        Some(romfs_path(rel))
-    } else if let Some(rel) = clean_path.strip_prefix("content:") {
+    if let Some(rel) = rom_mount_rel(clean_path) {
         Some(romfs_path(rel))
     } else if let Some(rel) = clean_path
         .strip_prefix("data:")
@@ -326,6 +416,12 @@ pub unsafe extern "C" fn hle_nn_fs_MountRom(
     } else {
         "unknown".to_string()
     };
+    {
+        let mut mounts = ROM_MOUNTS.lock().unwrap();
+        if !mounts.contains(&name_str) {
+            mounts.push(name_str.clone());
+        }
+    }
     println!(
         "[+] HLE: nn::fs::MountRom('{}') -> mapped to '{}'",
         name_str,
@@ -650,7 +746,9 @@ pub unsafe extern "C" fn hle_nn_fs_GetEntryType(out_type: *mut i32, path: *const
         None => return RESULT_PATH_NOT_FOUND,
     };
 
-    let Ok(meta) = std::fs::metadata(&host_path) else {
+    // As OpenFile: a file may be stored with an extra .zs suffix.
+    let zs = PathBuf::from(format!("{}.zs", host_path.display()));
+    let Ok(meta) = std::fs::metadata(&host_path).or_else(|_| std::fs::metadata(&zs)) else {
         log_fs_miss(
             "GetEntryType",
             &path_str,
@@ -869,7 +967,7 @@ static OPEN_DIRS: Mutex<Vec<Option<OpenDir>>> = Mutex::new(Vec::new());
 pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
     out_handle: *mut u64,
     path: *const c_char,
-    _open_mode: i32,
+    open_mode: i32,
 ) -> i32 {
     crate::horizon::hle::sanitize_darwin_tpidrro();
     if path.is_null() || out_handle.is_null() {
@@ -910,6 +1008,9 @@ pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
                 continue;
             }
             let name_str = file_name.to_string_lossy();
+            if is_host_junk(&name_str) {
+                continue;
+            }
             let name_bytes = name_str.as_bytes();
 
             let mut raw_entry = DirectoryEntryRaw {
@@ -926,6 +1027,10 @@ pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
             raw_entry.name[len] = 0;
 
             if let Ok(meta) = entry.metadata() {
+                // OpenDirectoryMode: bit 0 directories, bit 1 files.
+                if open_mode & 3 != 0 && open_mode & if meta.is_dir() { 1 } else { 2 } == 0 {
+                    continue;
+                }
                 if meta.is_dir() {
                     raw_entry.entry_type = 0; // DirectoryEntryType_Directory
                     raw_entry.attributes = 1;
@@ -1238,5 +1343,89 @@ pub unsafe extern "C" fn hle_nn_fs_SetFileSize(handle: u64, size: i64) -> i32 {
             FileData::Buf(_) => RESULT_PATH_NOT_FOUND,
         },
         _ => RESULT_PATH_NOT_FOUND,
+    }
+}
+
+#[cfg(test)]
+mod mod_layout_tests {
+    use super::*;
+
+    const TOTK: u64 = 0x0100f2c0115b6000;
+
+    fn tree(tag: &str, dirs: &[&str]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("nxport-mods-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in dirs {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        root
+    }
+
+    fn names(root: &Path) -> Vec<String> {
+        let v = discover_mods(root, Some(TOTK));
+        let names = v.iter().map(|(n, _)| n.clone()).collect();
+        let _ = std::fs::remove_dir_all(root);
+        names
+    }
+
+    #[test]
+    fn a_folder_of_mods() {
+        assert_eq!(names(&tree("list", &["b/romfs", "a/exefs", "c/RomFS"])), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn the_root_is_one_mod() {
+        let r = tree("one", &["romfs/Pack", "exefs"]);
+        let got = discover_mods(&r, Some(TOTK));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, r);
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn atmosphere_and_ryujinx_trees() {
+        assert_eq!(names(&tree("atm", &["atmosphere/contents/0100F2C0115B6000/romfs"])), ["0100F2C0115B6000"]);
+        assert_eq!(names(&tree("ryu", &["mods/contents/0100f2c0115b6000/A/romfs", "mods/contents/0100f2c0115b6000/B/exefs"])), ["A", "B"]);
+    }
+
+    #[test]
+    fn a_download_holding_the_tree_keeps_its_name() {
+        assert_eq!(names(&tree("dl", &["!First/atmosphere/contents/0100f2c0115b6000/romfs", "Second/romfs"])), ["!First", "Second"]);
+    }
+
+    #[test]
+    fn other_titles_are_skipped() {
+        assert_eq!(names(&tree("other", &["atmosphere/contents/01006f8002326000/romfs", "atmosphere/contents/0100f2c0115b6000/romfs"])), ["0100f2c0115b6000"]);
+    }
+
+    #[test]
+    fn variants_inside_a_mod_do_not_all_turn_on() {
+        assert!(names(&tree("var", &["Mod/Option A/romfs", "Mod/Option B/romfs"])).is_empty());
+    }
+
+    #[test]
+    fn patch_sets_are_found_where_atmosphere_keeps_them() {
+        let r = tree("sets", &["atmosphere/exefs_patches/60fps", "exefs_patches/other", "Mod/romfs/exefs_patches_not"]);
+        let got: Vec<String> = patch_sets(&r, 2).into_iter().map(|x| x.0).collect();
+        let _ = std::fs::remove_dir_all(&r);
+        assert_eq!(got, ["60fps", "other"]);
+    }
+
+    #[test]
+    fn mod_subdir_finds_any_case() {
+        let r = tree("case", &["RomFS"]);
+        assert!(mod_subdir(&r, "romfs").is_dir());
+        assert!(!mod_subdir(&r, "exefs").is_dir());
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn rom_mounts_by_name() {
+        assert_eq!(rom_mount_rel("rom:/a"), Some("/a"));
+        assert_eq!(rom_mount_rel("content:/a"), Some("/a"));
+        assert_eq!(rom_mount_rel("zz_test:/a"), None);
+        ROM_MOUNTS.lock().unwrap().push("zz_test".into());
+        assert_eq!(rom_mount_rel("zz_test:/a"), Some("/a"));
+        assert_eq!(rom_mount_rel("no/mount"), None);
     }
 }

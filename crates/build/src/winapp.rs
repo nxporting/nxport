@@ -130,10 +130,9 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     Ok(any_mods.then_some(mods))
 }
 
-/// Whether a mod is for program `tid` (one that names no program is taken for any).
+/// Whether a mod is for program `tid` (one whose folder names no program is taken for any).
 fn for_program(m: &Path, tid: u64) -> bool {
-    let npdm = [m.join("exefs/main.npdm"), m.join("ExeFS/main.npdm")].into_iter().find(|f| f.is_file());
-    npdm.as_deref().and_then(nxport::game::npdm_program_id).is_none_or(|t| t == tid)
+    !nxport::game::is_other_title_dir(m, tid)
 }
 
 /// Marks the program at `exe` a GUI program (the PE optional header's subsystem field): started from Explorer, a
