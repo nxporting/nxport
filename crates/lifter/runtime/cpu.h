@@ -77,6 +77,7 @@ void rt_svc(Cpu *c, uint32_t imm, uint64_t pc);
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) __attribute__((noreturn));
 void rt_udf(Cpu *c, uint64_t pc) __attribute__((noreturn));
 uint64_t rt_ticks(void);
+void rt_code_changed(uint64_t addr);
 
 // msr fpcr. The thread's MXCSR follows FPCR.FZ: DAZ and FTZ flush denormal operands and tiny results as FZ does, so
 // FP instructions under FZ (how games run) are host instructions (simd_fp.h, FN(op)). Each host thread runs one Cpu.

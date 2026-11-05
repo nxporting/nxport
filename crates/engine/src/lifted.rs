@@ -33,6 +33,7 @@ struct RtHost {
     ticks: unsafe extern "C" fn() -> u64,
     resolve_hle: unsafe extern "C" fn(u64) -> *const crate::hle_abi::Hle,
     call_hle: unsafe extern "C" fn(*const crate::hle_abi::Hle, *mut Cpu),
+    code_changed: unsafe extern "C" fn(u64),
 }
 
 fn handlers() -> &'static Handlers {
@@ -83,6 +84,18 @@ unsafe extern "C" fn host_call_hle(h: *const crate::hle_abi::Hle, c: *mut Cpu) {
     }
     (*h).call(&mut *c);
     CURRENT.with(|cur| cur.set(prev));
+}
+
+/// A guest `ic ivau`: what a plugin mod wrote through a mapping it keeps takes effect now, not at its next svc.
+unsafe extern "C" fn host_code_changed(addr: u64) {
+    let _ = addr;
+    #[cfg(windows)]
+    if crate::live_patch::enabled() {
+        let pages = crate::horizon::svc::flush_code_view_at(addr as usize);
+        if pages > 0 {
+            println!("[+] Live patches: {pages} code pages written, seen at a cache flush");
+        }
+    }
 }
 
 unsafe extern "C" fn host_svc(c: *mut Cpu, imm: u32, pc: u64) {
@@ -211,6 +224,7 @@ impl GuestLibrary {
                 ticks: host_ticks,
                 resolve_hle: host_resolve_hle,
                 call_hle: host_call_hle,
+                code_changed: host_code_changed,
             }));
             let lib = crate::os::Library::open(path)?;
             let base_tables = tables(&lib, path, modules)?;

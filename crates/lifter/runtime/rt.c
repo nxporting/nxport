@@ -15,6 +15,8 @@ typedef struct RtHost {
     void *(*resolve_hle)(uint64_t pc);
     // Runs HLE function `h` (from resolve_hle) as call would.
     void (*call_hle)(void *h, Cpu *c);
+    // The guest invalidated instruction cache: code it wrote through a mapping may now run.
+    void (*code_changed)(uint64_t addr);
 } RtHost;
 
 static RtHost host;
@@ -121,3 +123,4 @@ void rt_udf(Cpu *c, uint64_t pc) {
 }
 
 uint64_t rt_ticks(void) { return host.ticks(); }
+void rt_code_changed(uint64_t addr) { host.code_changed(addr); }
