@@ -122,11 +122,10 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         ));
     }
 
-    // The game's code without mods, kept between builds: lifting and compiling it takes minutes. What the mods change
-    // goes into an overlay library beside it (nxport_build::lift::lift_overlay). Code mods change the code as it loads
-    // (IPS, pchtxt) and plugin mods (exefs/subsdkN modules) while it runs: the first overlay holds their modules but not
-    // those patches; the app then runs headless until they patched it and writes that code out (--aot-dump), and a
-    // second overlay takes it from there (nxport::guest_modules).
+    // The game's code without mods, kept between builds: lifting and compiling it takes minutes. Code mods change it as
+    // it loads (IPS, pchtxt): that, and the modules of plugin mods, go into an overlay library beside it
+    // (nxport_build::lift::lift_overlay). What plugin mods patch while the game runs is handled while it runs
+    // (engine live_patch.rs, which the overlay's presence turns on): a run ahead of time could not know a patch's moment.
     let base = work.join("base");
     {
         let (dump, c_dir, job, edits, toolchains, app) = (dump.clone(), c_dir.clone(), job.clone(), edits.clone(), toolchains.clone(), app.clone());
@@ -179,8 +178,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         ));
     }
     let overlay = app.join("overlay");
-    let patched = work.join("mods_patched.img");
-    let lift_overlay = |patched_image: Option<PathBuf>, file: &str| {
+    let lift_overlay = |file: &str| {
         let (dump, into, job, app_mods, edits, file, base, toolchains, overlay) = (
             dump.clone(),
             work.join("lifted_overlay"),
@@ -194,10 +192,8 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         );
         Box::new(move || {
             let mods = app_mods.lock().unwrap().clone();
-            if patched_image.is_none() {
-                let _ = std::fs::remove_dir_all(&overlay);
-            }
-            if !has_code_mods(mods.as_deref(), title_id) || patched_image.as_ref().is_some_and(|p| !p.is_file()) {
+            let _ = std::fs::remove_dir_all(&overlay);
+            if !has_code_mods(mods.as_deref(), title_id) {
                 return Ok(());
             }
             let _ = std::fs::remove_dir_all(&into);
@@ -208,7 +204,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                 mods,
                 stages: None,
                 pipeline_list: None,
-                patched_image,
+                patched_image: None,
                 base: Some(base),
                 bundle_game: false,
                 entitlements: false,
@@ -220,23 +216,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             compile_guest(&toolchains, &into, &overlay.join("guest_overlay.dll"), &job)
         }) as Box<dyn FnOnce() -> Result<(), String> + Send>
     };
-    steps.push(("Lifting what the mods change".into(), lift_overlay(None, "overlay.toml")));
-    {
-        let (app, app_mods, patched, run_dir) = (app.clone(), app_mods.clone(), patched.clone(), work.join("mods_run"));
-        steps.push((
-            "Recording the plugin mods' patches".into(),
-            Box::new(move || {
-                let _ = std::fs::remove_file(&patched);
-                let plugins = plugin_mods(app_mods.lock().unwrap().as_deref(), title_id);
-                if plugins.is_empty() {
-                    return Ok(());
-                }
-                println!("  plugin mods: {}", plugins.join(", "));
-                record_mod_patches(&app, &patched, &run_dir)
-            }),
-        ));
-    }
-    steps.push(("Lifting the plugin mods' patches".into(), lift_overlay(Some(patched.clone()), "overlay_patched.toml")));
+    steps.push(("Lifting what the mods change".into(), lift_overlay("overlay.toml")));
     let out: Output = Arc::new(Mutex::new(None));
     {
         let (out, app) = (out.clone(), app.clone());
@@ -316,49 +296,12 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, job: &Arc<Mute
     Ok(())
 }
 
-/// The mods in `mods` with modules of their own (exefs/subsdkN): plugin mods.
-fn plugin_mods(mods: Option<&Path>, title: u64) -> Vec<String> {
-    let Some(mods) = mods else { return Vec::new() };
-    nxport::mods::discover_mods(mods, Some(title))
-        .into_iter()
-        .filter(|(_, d)| (0..10).any(|i| nxport::mods::mod_subdir(d, "exefs").join(format!("subsdk{i}")).is_file()))
-        .map(|(name, _)| name)
-        .collect()
-}
-
 /// Whether any mod in `mods` has code: an exefs folder or a patch set. Mods of files only need no lifting at all.
 fn has_code_mods(mods: Option<&Path>, title: u64) -> bool {
     let Some(mods) = mods else { return false };
     let code = |d: &Path| std::fs::read_dir(d).is_ok_and(|mut rd| rd.next().is_some());
     nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| code(&nxport::mods::mod_subdir(d, "exefs")))
         || !nxport::mods::patch_sets(mods, 2).is_empty()
-}
-
-/// Runs the app (its guest.dll and first overlay, which holds the plugin mods' modules) headless until its mods patched the game's
-/// code, which it writes to `image` (--aot-dump). The run keeps its saves in `run_dir`, not the player's; what it prints
-/// goes to `run_dir`/log.txt.
-fn record_mod_patches(app: &Path, image: &Path, run_dir: &Path) -> Result<(), String> {
-    let saves = run_dir.join("save");
-    std::fs::create_dir_all(&saves).map_err(|e| format!("{}: {e}", saves.display()))?;
-    let log_path = run_dir.join("log.txt");
-    let log = std::fs::File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
-    let status = nxport_build::lift::command(app.join("nxport.exe"))
-        .arg("--headless")
-        .arg("--gpu=null")
-        .arg(format!("--aot-dump={}", image.display()))
-        .arg(format!("--save-dir={}", saves.display()))
-        .stdout(log.try_clone().map_err(|e| e.to_string())?)
-        .stderr(log)
-        .status()
-        .map_err(|e| format!("starting the app: {e}"))?;
-    let text = std::fs::read_to_string(&log_path).unwrap_or_default();
-    for line in text.lines().filter(|l| l.contains("Mods:") || l.contains("AOT:") || l.starts_with("[-] Lifted")) {
-        println!("  {line}");
-    }
-    if !status.success() || !image.is_file() {
-        return Err(format!("the run with the plugin mods did not write their patches ({status}; {})", log_path.display()));
-    }
-    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]

@@ -11,8 +11,13 @@ use crate::abi::Cpu;
 /// Why `run` returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stop {
-    /// Execution goes on at `c.pc`, which `interpreted` says is not this interpreter's.
-    Leave,
+    /// A branch: execution goes on at `c.pc`, which `interpreted` says is not this interpreter's.
+    Branch,
+    /// A call to `c.pc`, which returns to the address given. Always reported, like Return: the caller nests calls as lifted
+    /// code does, so each return goes back to the frame that made its call, wherever that frame runs.
+    Call(u64),
+    /// A return, to `c.pc`.
+    Return,
     /// The instruction at `c.pc` is not one this interpreter runs; nothing of it has happened.
     Unsupported(u32),
 }
@@ -653,6 +658,18 @@ unsafe fn step(c: &mut Cpu, w: u32, pc: u64) -> Option<u64> {
         }
         return Some(next);
     }
+    // Load-acquire, store-release: stronger than the host needs for its own loads, so a fence each.
+    if w & 0x3FFF_FC00 == 0x08DF_FC00 {
+        let v = load(rsp(c, rn), bits(w, 31, 30));
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+        wz(c, rd, v, true);
+        return Some(next);
+    }
+    if w & 0x3FFF_FC00 == 0x089F_FC00 {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+        store(rsp(c, rn), bits(w, 31, 30), rz(c, rd));
+        return Some(next);
+    }
     // Load / store pair.
     if w & 0x3A00_0000 == 0x2800_0000 {
         let mode = bits(w, 24, 23);
@@ -761,8 +778,14 @@ pub unsafe fn run(c: &mut Cpu, interpreted: &dyn Fn(u64) -> bool) -> Stop {
         match step(c, w, pc) {
             Some(next) => {
                 c.pc = next;
+                if w & 0xFC00_0000 == 0x9400_0000 || w & 0xFFFF_FC1F == 0xD63F_0000 {
+                    return Stop::Call(pc.wrapping_add(4));
+                }
+                if w & 0xFFFF_FC1F == 0xD65F_0000 {
+                    return Stop::Return;
+                }
                 if !interpreted(next) {
-                    return Stop::Leave;
+                    return Stop::Branch;
                 }
             }
             None => return Stop::Unsupported(w),
@@ -781,6 +804,12 @@ mod tests {
 
     /// Runs words as code, ending by leaving at the address after them.
     fn exec(c: &mut Cpu, code: &[u32]) -> Stop {
+        let (start, end) = (code.as_ptr() as u64, code.as_ptr() as u64 + code.len() as u64 * 4);
+        c.pc = start;
+        unsafe { run(c, &move |a| a >= start && a < end) }
+    }
+
+    fn exec_from_x30_ret(c: &mut Cpu, code: &[u32]) -> Stop {
         let (start, end) = (code.as_ptr() as u64, code.as_ptr() as u64 + code.len() as u64 * 4);
         c.pc = start;
         unsafe { run(c, &move |a| a >= start && a < end) }
@@ -907,6 +936,21 @@ mod tests {
     }
 
     #[test]
+    fn acquire_and_release() {
+        let mut c = cpu();
+        let mut v = [0x1122_3344_5566_7788u64];
+        c.x[8] = v.as_mut_ptr() as u64;
+        // ldarb w8, [x8]
+        exec(&mut c, &[0x08DF_FD08]);
+        assert_eq!(c.x[8], 0x88);
+        c.x[1] = v.as_mut_ptr() as u64;
+        c.x[0] = 0xAB;
+        // stlr x0, [x1]
+        exec(&mut c, &[0xC89F_FC20]);
+        assert_eq!(v[0], 0xAB);
+    }
+
+    #[test]
     fn pairs_as_a_hook_saves_and_restores_them() {
         let mut c = cpu();
         let mut stack = [0u64; 8];
@@ -947,9 +991,25 @@ mod tests {
         let mut c = cpu();
         let code = [0x9400_0100u32]; // bl +0x400: outside the code
         let start = code.as_ptr() as u64;
-        assert_eq!(exec(&mut c, &code), Stop::Leave);
+        assert_eq!(exec(&mut c, &code), Stop::Call(start + 4));
         assert_eq!(c.pc, start + 0x400);
         assert_eq!(c.x[30], start + 4);
+    }
+
+    #[test]
+    fn calls_and_returns_stop_even_inside_interpreted_code() {
+        let mut c = cpu();
+        // bl +4 (the next word, still interpreted)
+        let code = [0x9400_0001u32, 0xD280_0020];
+        let start = code.as_ptr() as u64;
+        assert_eq!(exec(&mut c, &code), Stop::Call(start + 4));
+        assert_eq!(c.pc, start + 4);
+        // ret to an address inside the code
+        let mut c = cpu();
+        let code = [0xD65F_03C0u32, 0xD280_0020];
+        c.x[30] = code.as_ptr() as u64 + 4;
+        assert_eq!(exec_from_x30_ret(&mut c, &code), Stop::Return);
+        assert_eq!(c.x[0], 0, "it did not run on");
     }
 
     #[test]
@@ -957,11 +1017,11 @@ mod tests {
         let mut c = cpu();
         c.x[16] = 0x1234_0000;
         // br x16
-        assert_eq!(exec(&mut c, &[0xD61F_0200]), Stop::Leave);
+        assert_eq!(exec(&mut c, &[0xD61F_0200]), Stop::Branch);
         assert_eq!(c.pc, 0x1234_0000);
         c.x[30] = 0x5678_0000;
         // ret
-        assert_eq!(exec(&mut c, &[0xD65F_03C0]), Stop::Leave);
+        assert_eq!(exec(&mut c, &[0xD65F_03C0]), Stop::Return);
         assert_eq!(c.pc, 0x5678_0000);
         // cbz x0, +8; movz x1, #1; tbnz w2, #3, +8; movz x3, #1; movz x4, #1
         c.x[2] = 8;

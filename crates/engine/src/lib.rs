@@ -1341,6 +1341,11 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .into());
     }
     lifted::install(&lib, &modules, overlay.as_deref().map(|o| (o, overlay_modules.as_slice())), lifted_handlers())?;
+    #[cfg(windows)]
+    {
+        let (start, len) = mem_space.trampoline_range();
+        live_patch::set_hle_pool(start, len);
+    }
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
     // --report-guard waits only for faults from guest code.
     #[cfg(windows)]

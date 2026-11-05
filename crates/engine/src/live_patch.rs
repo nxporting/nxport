@@ -1,14 +1,17 @@
-// Guest code that mods patch while the game runs, on a host running lifted code: the base library's version of a changed
+// Guest code that mods patch while the game runs, on a host running lifted code. The base library's version of a changed
 // function is out of date, so its x86 entry is pointed at a stub that runs the current guest instructions in
-// nxport_lifter::interp and goes back to lifted code at the next branch out. `guest.live-patches` turns this on.
+// nxport_lifter::interp, at once; meanwhile the function is lifted and compiled in the background (or found compiled, by
+// the hash of its code, from an earlier run) and its entry is pointed at the result. Code the interpreter declines waits
+// for that compile. `guest.live-patches` turns all this on.
 //
-// Not done yet: compiling a changed function in the background to replace the interpreter, which is also what code the
-// interpreter declines has to wait for. Until then such code stops the game with a message.
+// Calls nest and returns return here as in lifted code (cpu.h, RT_RETURNED), so a return always goes back to the frame
+// that made its call, whichever side that frame runs on.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::c_void;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 
 use nxport_lifter::abi::Cpu;
 use nxport_lifter::interp::{self, Stop};
@@ -18,22 +21,38 @@ use nxport_lifter::interp::{self, Stop};
 pub struct Table {
     pub addrs: &'static [u64],
     pub fns: &'static [usize],
-    /// An overlay's table of a module's changed functions: the gaps between them belong to other functions.
+    /// A table of a module's changed functions: the gaps between them belong to other functions.
     pub scattered: bool,
 }
 
+/// A library's nx_rt_add_module.
+pub type AddModule = unsafe extern "C" fn(*const u64, *const c_void, u64) -> i32;
+
 struct State {
-    tables: Vec<Table>,
+    tables: RwLock<Vec<Table>>,
     /// Starts of the functions whose lifted version is out of date.
     patched: RwLock<HashSet<u64>>,
-    /// x86 entries already pointed at a stub.
-    redirected: Mutex<HashSet<usize>>,
+    /// Where each x86 entry was last pointed.
+    redirected: Mutex<HashMap<usize, usize>>,
     stubs: Mutex<StubPool>,
+    /// The loaded libraries' add functions: a function compiled later must be found by their dispatchers.
+    adds: Vec<AddModule>,
+    /// The host callbacks, for libraries compiled later.
+    host: usize,
+    queue: Mutex<Vec<(u64, u64)>>,
+    wake: Condvar,
+    /// One compile of a given name at a time.
+    compiling: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Applying a compiled function: one at a time.
+    applying: Mutex<()>,
+    version: u64,
 }
 
 struct StubPool {
     next: usize,
     end: usize,
+    /// The stub of each function start.
+    of: HashMap<u64, usize>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -45,45 +64,67 @@ const STUB_SIZE: usize = 32;
 const STUB_POOL: usize = 1 << 20;
 /// `jmp [rip]` and its address, written over a function's entry. Lifted functions are 16-byte aligned.
 const ENTRY_JUMP: usize = 14;
+const COMPILERS: usize = 4;
+/// How far past a function jump tables may lie (rodata follows a module's text).
+const IMAGE_SPAN: usize = 0x500_0000;
 
 pub fn enabled() -> bool {
     STATE.get().is_some()
 }
 
 /// Called with the guest library's tables (the overlay's first), before guest code runs.
-pub fn enable(tables: Vec<Table>, rt_dispatch: usize) -> Result<(), String> {
+pub fn enable(tables: Vec<Table>, rt_dispatch: usize, adds: Vec<AddModule>, host: usize) -> Result<(), String> {
     let pool = unsafe { crate::os::alloc(STUB_POOL, crate::os::Prot::ReadWriteExec) }.map_err(|e| format!("live patches: {e}"))?;
     NX_LIVE_RT_DISPATCH.store(rt_dispatch, Ordering::Relaxed);
+    let version = std::env::current_exe().ok().and_then(|e| std::fs::read(e).ok()).map_or(0, |b| fnv(&b));
     let state = State {
-        tables,
+        tables: RwLock::new(tables),
         patched: RwLock::new(HashSet::new()),
-        redirected: Mutex::new(HashSet::new()),
-        stubs: Mutex::new(StubPool { next: pool as usize, end: pool as usize + STUB_POOL }),
+        redirected: Mutex::new(HashMap::new()),
+        stubs: Mutex::new(StubPool { next: pool as usize, end: pool as usize + STUB_POOL, of: HashMap::new() }),
+        adds,
+        host,
+        queue: Mutex::new(Vec::new()),
+        wake: Condvar::new(),
+        compiling: Mutex::new(HashMap::new()),
+        applying: Mutex::new(()),
+        version,
     };
     STATE.set(state).map_err(|_| "live patches: already on".to_string())?;
+    for i in 0..COMPILERS {
+        let _ = std::thread::Builder::new().name(format!("live-compile{i}")).spawn(compiler);
+    }
     println!("[+] Live patches: on");
     Ok(())
 }
 
+fn fnv(d: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for &b in d {
+        h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+    }
+    h
+}
+
 impl State {
-    /// The function holding `pc`, by the start at or below it in a table of a whole module. Code in no module's table
-    /// (what a mod generates) is no function: it reaches the interpreter through Handlers::unknown.
+    /// The function holding `pc`, by the start at or below it in a table of a whole module: (start, next start). Code in
+    /// no module's table (what a mod generates) is no function: it reaches the interpreter through Handlers::unknown.
     fn function(&self, pc: u64) -> Option<(u64, u64)> {
-        self.tables.iter().filter(|t| !t.scattered).find_map(|t| {
+        self.tables.read().unwrap().iter().filter(|t| !t.scattered).find_map(|t| {
             let (first, last) = (*t.addrs.first()?, *t.addrs.last()?);
             if pc < first || pc > last.saturating_add(0x10000) {
                 return None;
             }
             let i = t.addrs.partition_point(|&a| a <= pc);
-            Some((t.addrs[i - 1], t.addrs.get(i).copied().unwrap_or(u64::MAX)))
+            Some((t.addrs[i - 1], t.addrs.get(i).copied().unwrap_or(last.saturating_add(0x10000))))
         })
     }
 
     /// Every lifted function starting in [start, end), in any table: an overlay may have split the base's function, and
-    /// the dispatcher looks in overlays first, so each version needs its entry pointed at the interpreter.
+    /// the dispatcher looks in overlays first, so each version needs its entry pointed at the current one.
     fn versions(&self, start: u64, end: u64) -> Vec<(u64, usize)> {
         let mut v = Vec::new();
-        for t in &self.tables {
+        for t in self.tables.read().unwrap().iter() {
             let (lo, hi) = (t.addrs.partition_point(|&a| a < start), t.addrs.partition_point(|&a| a < end));
             v.extend((lo..hi).map(|i| (t.addrs[i], t.fns[i])));
         }
@@ -91,28 +132,90 @@ impl State {
     }
 
     fn is_start(&self, pc: u64) -> bool {
-        self.tables.iter().any(|t| t.addrs.binary_search(&pc).is_ok())
+        self.tables.read().unwrap().iter().any(|t| t.addrs.binary_search(&pc).is_ok())
     }
 
     /// Whether the interpreter runs `pc`: code with no lifted function starting there (trampolines mods wrote, the middle
-    /// of a function), and functions out of date. Not HLE functions, which the dispatcher calls.
+    /// of a function), functions out of date, and HLE trampolines a mod hooked. Not the others, which the dispatcher calls,
+    /// nor the common code all trampolines branch to (run_hle).
     fn interpreted(&self, pc: u64) -> bool {
-        if pc == nxport_lifter::abi::RETURN_TO_HOST {
+        if pc == nxport_lifter::abi::RETURN_TO_HOST || pc == HLE_POOL.load(Ordering::Relaxed) as u64 {
             return false;
         }
         if self.is_start(pc) {
             return self.patched.read().unwrap().contains(&pc);
         }
-        crate::hle_abi::entry(pc).is_none()
+        if crate::hle_abi::entry(pc).is_some() {
+            return hle_hooked(pc);
+        }
+        true
     }
 }
 
-/// Runs guest code from c.pc until it leaves for lifted code or the host; c.pc is where it goes on.
-fn interpret(c: &mut Cpu) {
+/// The HLE trampolines' pool (its first entry is where they all branch to): (start, length).
+static HLE_POOL: AtomicUsize = AtomicUsize::new(0);
+static HLE_POOL_LEN: AtomicUsize = AtomicUsize::new(0);
+/// HLE trampolines a mod patched: lifted code must not call their functions directly any more.
+static HLE_HOOKED: RwLock<Option<HashSet<u64>>> = RwLock::new(None);
+
+pub fn set_hle_pool(start: usize, len: usize) {
+    HLE_POOL.store(start, Ordering::Relaxed);
+    HLE_POOL_LEN.store(len, Ordering::Relaxed);
+}
+
+/// Whether the HLE trampoline at `pc` was patched by a mod.
+pub fn hle_hooked(pc: u64) -> bool {
+    HLE_HOOKED.read().unwrap().as_ref().is_some_and(|s| s.contains(&pc))
+}
+
+/// The common code of HLE trampolines, reached by a mod calling through its hook to the original. A trampoline's first
+/// instructions pushed x29 and x30 and loaded the function into x16; natively the common code calls it, pops and returns.
+unsafe fn run_hle(c: &mut Cpu) {
+    let sp = c.sp;
+    c.x[29] = std::ptr::read(sp as *const u64);
+    c.x[30] = std::ptr::read((sp + 8) as *const u64);
+    c.sp = sp + 16;
+    let f = c.x[16] as *const ();
+    match crate::hle_abi::adapter(f) {
+        Some(h) => crate::lifted::call_hle(h, c),
+        None => {
+            eprintln!("[-] Live patches: {f:p} is not an HLE function");
+            std::process::abort();
+        }
+    }
+}
+
+/// Runs guest code from c.pc until it leaves. True: go on at c.pc through the dispatcher; false: return to the caller.
+unsafe fn interpret(c: &mut Cpu) -> bool {
     let state = STATE.get().expect("live patches: not on");
+    let dispatch: unsafe extern "sysv64" fn(*mut Cpu) = std::mem::transmute(NX_LIVE_RT_DISPATCH.load(Ordering::Relaxed));
+    let pool = HLE_POOL.load(Ordering::Relaxed) as u64;
     loop {
-        match unsafe { interp::run(c, &|pc| state.interpreted(pc)) } {
-            Stop::Leave => return,
+        // Ends as a return: the common code pops the trampoline's frame and returns.
+        if pool != 0 && c.pc == pool {
+            run_hle(c);
+            return false;
+        }
+        match interp::run(c, &|pc| state.interpreted(pc)) {
+            Stop::Branch => {
+                if c.pc != pool {
+                    return true;
+                }
+            }
+            Stop::Return => return false,
+            // As lifted code calls: nested, and on here if it came back here (RT_RETURNED), or through the dispatcher.
+            Stop::Call(ra) => {
+                if c.pc == pool || state.interpreted(c.pc) {
+                    if interpret(c) {
+                        dispatch(c);
+                    }
+                } else {
+                    dispatch(c);
+                }
+                if c.pc != ra {
+                    return true;
+                }
+            }
             Stop::Unsupported(w) => {
                 // svc: as lifted code does it.
                 if w & 0xFFE0_001F == 0xD400_0001 {
@@ -120,38 +223,56 @@ fn interpret(c: &mut Cpu) {
                     (crate::lifted::svc_handler())(c, (w >> 5) & 0xffff, pc);
                     c.pc = pc + 4;
                     if !state.interpreted(c.pc) {
-                        return;
+                        return true;
                     }
                     continue;
                 }
-                eprintln!("[-] Live patches: {:#x}: {w:#010x} is not an instruction the interpreter runs, and compiling it is not done", c.pc);
-                std::process::abort();
+                // Anything else: this thread waits for the compiled function, entered at this instruction.
+                let pc = c.pc;
+                let (func, end) = state.function(pc).unwrap_or((pc, pc + 0x100));
+                println!("[+] Live patches: {pc:#x} ({w:#010x}) waits for a compile");
+                if let Err(e) = compile_and_apply(state, func, end, Some(pc)) {
+                    eprintln!("[-] Live patches: {pc:#x}: {w:#010x} needs a compile, which failed: {e}");
+                    std::process::abort();
+                }
+                return true;
             }
         }
     }
 }
 
-/// For Handlers::unknown: a branch to code no lifted function starts at. False when live patches are off.
+/// For Handlers::unknown: a branch to code no lifted function starts at. False when live patches are off. Reached through
+/// the dispatcher, which returns to its caller when this does, so what the code goes on to runs nested here: the caller's
+/// return check must see the return, not the branch.
 pub fn run_unknown(c: &mut Cpu) -> bool {
     if !enabled() {
         return false;
     }
-    interpret(c);
+    unsafe {
+        if interpret(c) {
+            let dispatch: unsafe extern "sysv64" fn(*mut Cpu) = std::mem::transmute(NX_LIVE_RT_DISPATCH.load(Ordering::Relaxed));
+            dispatch(c);
+        }
+    }
     true
 }
 
-unsafe extern "sysv64" fn stub_entry(c: *mut Cpu) {
-    interpret(&mut *c);
+unsafe extern "sysv64" fn stub_entry(c: *mut Cpu) -> u64 {
+    interpret(&mut *c) as u64
 }
 
-// A stub's common tail, in the lifted code's convention (System V, rdi = Cpu): run the interpreter, then continue in the
-// dispatcher as a tail call, so a long chain of hooks does not grow the host stack.
+// A stub's common tail, in the lifted code's convention (System V, rdi = Cpu): run the interpreter, then return as a
+// lifted function does, or continue in the dispatcher as a tail call, so a long chain of hooks does not grow the stack.
 std::arch::global_asm!(
     ".globl nx_live_tail",
     "nx_live_tail:",
     "push rdi",
     "call {entry}",
     "pop rdi",
+    "test rax, rax",
+    "jnz 2f",
+    "ret",
+    "2:",
     "jmp qword ptr [rip + {dispatch}]",
     entry = sym stub_entry,
     dispatch = sym NX_LIVE_RT_DISPATCH,
@@ -286,51 +407,216 @@ unsafe fn write_entries(jumps: &[(usize, [u8; ENTRY_JUMP])]) -> Result<(), Strin
     result.map_err(str::to_string)
 }
 
-/// Guest code in [start, start + len) has changed: its functions run in the interpreter from now on.
+/// Points `entries` (x86 entry, where to) there, skipping those already pointing there.
+fn redirect(state: &State, entries: &[(usize, usize)]) -> Result<(), String> {
+    let mut done = state.redirected.lock().unwrap();
+    let jumps: Vec<(usize, [u8; ENTRY_JUMP])> = entries
+        .iter()
+        .filter(|&&(at, to)| at != to && done.get(&at) != Some(&to))
+        .map(|&(at, to)| (at, entry_jump(to as u64)))
+        .collect();
+    if jumps.is_empty() {
+        return Ok(());
+    }
+    unsafe { write_entries(&jumps)? };
+    for &(at, to) in entries {
+        done.insert(at, to);
+    }
+    Ok(())
+}
+
+/// Guest code in [start, start + len) has changed: its functions run in the interpreter from now on, until compiled.
 pub fn code_written(start: usize, len: usize) {
     let Some(state) = STATE.get() else { return };
-    let mut new: Vec<(u64, usize)> = Vec::new();
-    {
-        let mut patched = state.patched.write().unwrap();
-        let mut seen = HashSet::new();
-        let mut pc = start as u64 & !3;
-        while pc < (start + len) as u64 {
-            if let Some((func, end)) = state.function(pc) {
-                if seen.insert(func) {
-                    for (start, x86) in state.versions(func, end) {
-                        patched.insert(start);
-                        new.push((start, x86));
-                    }
-                }
-            }
-            pc += 4;
+    let (pool, pool_len) = (HLE_POOL.load(Ordering::Relaxed), HLE_POOL_LEN.load(Ordering::Relaxed));
+    if start >= pool && start < pool + pool_len {
+        // An HLE trampoline's own code: entries are 32 bytes.
+        let entry = (pool + ((start - pool) & !31)) as u64;
+        let mut hooked = HLE_HOOKED.write().unwrap();
+        if hooked.get_or_insert_with(HashSet::new).insert(entry) {
+            println!("[+] Live patches: HLE trampoline {entry:#x} hooked");
         }
-    }
-    // A function already patched by an earlier write has its stubs.
-    let mut done = state.redirected.lock().unwrap();
-    new.retain(|&(_, x86)| done.insert(x86));
-    drop(done);
-    if new.is_empty() {
         return;
     }
-    let mut pool = state.stubs.lock().unwrap();
-    let tail = nx_live_tail as *const () as u64;
-    let mut jumps = Vec::with_capacity(new.len());
-    for &(func, x86) in &new {
-        if pool.next + STUB_SIZE > pool.end {
-            eprintln!("[-] Live patches: out of stubs");
-            std::process::abort();
+    let mut funcs = BTreeSet::new();
+    let mut pc = start as u64 & !3;
+    while pc < (start + len) as u64 {
+        if let Some(f) = state.function(pc) {
+            funcs.insert(f);
         }
-        let stub = pool.next;
-        pool.next += STUB_SIZE;
-        unsafe { std::ptr::copy_nonoverlapping(stub_bytes(func, tail).as_ptr(), stub as *mut u8, STUB_SIZE) };
-        jumps.push((x86, entry_jump(stub as u64)));
+        pc += 4;
     }
-    if let Err(e) = unsafe { write_entries(&jumps) } {
+    if funcs.is_empty() {
+        return;
+    }
+    let tail = nx_live_tail as *const () as u64;
+    let mut entries = Vec::new();
+    {
+        let mut patched = state.patched.write().unwrap();
+        let mut stubs = state.stubs.lock().unwrap();
+        for &(func, end) in &funcs {
+            for (s, x86) in state.versions(func, end) {
+                patched.insert(s);
+                let stub = match stubs.of.get(&s) {
+                    Some(&st) => st,
+                    None => {
+                        if stubs.next + STUB_SIZE > stubs.end {
+                            eprintln!("[-] Live patches: out of stubs");
+                            std::process::abort();
+                        }
+                        let st = stubs.next;
+                        stubs.next += STUB_SIZE;
+                        unsafe { std::ptr::copy_nonoverlapping(stub_bytes(s, tail).as_ptr(), st as *mut u8, STUB_SIZE) };
+                        stubs.of.insert(s, st);
+                        st
+                    }
+                };
+                entries.push((x86, stub));
+            }
+        }
+    }
+    if let Err(e) = redirect(state, &entries) {
         eprintln!("[-] {e}");
         std::process::abort();
     }
-    println!("[+] Live patches: {} more functions interpreted", new.len());
+    println!("[+] Live patches: {} more functions interpreted", funcs.len());
+    let mut q = state.queue.lock().unwrap();
+    q.extend(funcs.iter().copied());
+    state.wake.notify_all();
+}
+
+/// A thread compiling changed functions, in the background of the running game.
+fn compiler() {
+    let state = STATE.get().expect("live patches: not on");
+    loop {
+        let (func, end) = {
+            let mut q = state.queue.lock().unwrap();
+            loop {
+                if let Some(f) = q.pop() {
+                    break f;
+                }
+                q = state.wake.wait(q).unwrap();
+            }
+        };
+        if let Err(e) = compile_and_apply(state, func, end, None) {
+            println!("[!] Live patches: {func:#x} stays interpreted: {e}");
+        }
+    }
+}
+
+fn cache_root() -> Result<PathBuf, String> {
+    let tid = crate::game::title_id().unwrap_or(0);
+    Ok(crate::config::support_dir().ok_or("no data directory")?.join("games").join(format!("{tid:016x}")).join("live_patches"))
+}
+
+fn zig() -> Result<PathBuf, String> {
+    let dir = crate::config::support_dir().ok_or("no data directory")?.join("toolchains");
+    std::fs::read_dir(&dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.path().join("zig.exe"))
+        .find(|p| p.is_file())
+        .ok_or_else(|| format!("no C compiler in {}", dir.display()))
+}
+
+/// Lifts and compiles [func, end) as it is now, unless an earlier run did: the library's path.
+fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
+    let dir = cache_root()?.join(name);
+    let dll = dir.join("f.dll");
+    let lock = state.compiling.lock().unwrap().entry(name.to_string()).or_default().clone();
+    let _guard = lock.lock().unwrap();
+    if dll.is_file() {
+        return Ok(dll);
+    }
+    // Jump tables lie in the module's rodata: the image reaches past the code. Only what the lifter asks for is read.
+    let image = unsafe { std::slice::from_raw_parts(func as *const u8, IMAGE_SPAN) };
+    let module = nxport_lifter::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone() };
+    let out = nxport_lifter::lift_module(&module, &Default::default());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for (file, body) in nxport_lifter::RUNTIME_FILES {
+        std::fs::write(dir.join(file), body).map_err(|e| e.to_string())?;
+    }
+    let mut sources = vec!["rt.c".to_string()];
+    for (file, body) in &out.files {
+        std::fs::write(dir.join(file), body).map_err(|e| e.to_string())?;
+        sources.push(file.clone());
+    }
+    let tmp = dir.join("f.tmp.dll");
+    let result = std::process::Command::new(zig()?)
+        .current_dir(&dir)
+        .args(["cc", "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-w", "-shared", "-o"])
+        .arg(&tmp)
+        .args(&sources)
+        .output()
+        .map_err(|e| format!("the C compiler: {e}"))?;
+    if !result.status.success() {
+        return Err(format!("the C compiler: {}", String::from_utf8_lossy(&result.stderr).lines().next().unwrap_or("failed")));
+    }
+    std::fs::rename(&tmp, &dll).map_err(|e| e.to_string())?;
+    Ok(dll)
+}
+
+/// The function [func, end) compiled as its code stands, and its entries pointed there.
+fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> Result<(), String> {
+    let versions = state.versions(func, end);
+    let mut seeds: BTreeSet<u64> = versions.iter().map(|v| v.0).collect();
+    seeds.insert(func);
+    seeds.extend(extra);
+    let hash_of = |seeds: &BTreeSet<u64>| {
+        let code = unsafe { std::slice::from_raw_parts(func as *const u8, (end - func) as usize) };
+        let mut h = fnv(code) ^ state.version;
+        for s in seeds {
+            h = (h ^ s).wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    };
+    let hash = hash_of(&seeds);
+    let name = format!("live_{func:x}_{hash:016x}");
+    let dll = compiled(state, &name, func, end, &seeds)?;
+    // A write meanwhile queued this function again: that compile applies.
+    if hash_of(&seeds) != hash {
+        return Ok(());
+    }
+    let _applying = state.applying.lock().unwrap();
+    unsafe {
+        let lib = crate::os::Library::open(&dll)?;
+        let sym = |n: &str| -> Result<*mut c_void, String> {
+            let p = lib.symbol(n);
+            if p.is_null() {
+                Err(format!("{}: no symbol {n}", dll.display()))
+            } else {
+                Ok(p)
+            }
+        };
+        let init: unsafe extern "C" fn(usize) = std::mem::transmute(sym("nx_rt_init")?);
+        let add: AddModule = std::mem::transmute(sym("nx_rt_add_module")?);
+        let count = *(sym(&format!("{name}_fn_count"))? as *const u64) as usize;
+        let addrs = std::slice::from_raw_parts(sym(&format!("{name}_fn_addrs"))? as *const u64, count);
+        let fns = std::slice::from_raw_parts(sym(&format!("{name}_fn_ptrs"))? as *const usize, count);
+        init(state.host);
+        add(addrs.as_ptr(), fns.as_ptr() as *const c_void, count as u64);
+        for t in state.tables.read().unwrap().iter() {
+            if !t.scattered {
+                add(t.addrs.as_ptr(), t.fns.as_ptr() as *const c_void, t.addrs.len() as u64);
+            }
+        }
+        for a in &state.adds {
+            a(addrs.as_ptr(), fns.as_ptr() as *const c_void, count as u64);
+        }
+        let entries: Vec<(usize, usize)> = state
+            .versions(func, end)
+            .into_iter()
+            .filter_map(|(s, x86)| addrs.binary_search(&s).ok().map(|i| (x86, fns[i])))
+            .collect();
+        state.tables.write().unwrap().insert(0, Table { addrs, fns, scattered: true });
+        redirect(state, &entries)?;
+        let mut patched = state.patched.write().unwrap();
+        for s in addrs {
+            patched.remove(s);
+        }
+    }
+    println!("[+] Live patches: {func:#x} compiled");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -354,33 +640,35 @@ mod tests {
         assert_eq!(&j[6..14], &0x1234u64.to_le_bytes());
     }
 
-    fn state(tables: Vec<Table>) -> State {
-        State {
-            tables,
-            patched: RwLock::new(HashSet::new()),
-            redirected: Mutex::new(HashSet::new()),
-            stubs: Mutex::new(StubPool { next: 0, end: 0 }),
-        }
-    }
-
     static BASE_A: [u64; 3] = [0x1000, 0x1100, 0x1200];
     static BASE_F: [usize; 3] = [1, 2, 3];
     static OV_A: [u64; 2] = [0x1100, 0x1180];
     static OV_F: [usize; 2] = [11, 12];
 
     fn tables() -> State {
-        state(vec![
-            Table { addrs: &OV_A, fns: &OV_F, scattered: true },
-            Table { addrs: &BASE_A, fns: &BASE_F, scattered: false },
-        ])
+        State {
+            tables: RwLock::new(vec![
+                Table { addrs: &OV_A, fns: &OV_F, scattered: true },
+                Table { addrs: &BASE_A, fns: &BASE_F, scattered: false },
+            ]),
+            patched: RwLock::new(HashSet::new()),
+            redirected: Mutex::new(HashMap::new()),
+            stubs: Mutex::new(StubPool { next: 0, end: 0, of: HashMap::new() }),
+            adds: Vec::new(),
+            host: 0,
+            queue: Mutex::new(Vec::new()),
+            wake: Condvar::new(),
+            compiling: Mutex::new(HashMap::new()),
+            applying: Mutex::new(()),
+            version: 0,
+        }
     }
 
     #[test]
     fn a_gap_in_an_overlay_is_not_the_function_below_it() {
         // 0x1190 is past the overlay's 0x1180, which only split 0x1100: the function is still the base's.
         assert_eq!(tables().function(0x1190), Some((0x1100, 0x1200)));
-        // 0x1204 has no overlay version nearby at all.
-        assert_eq!(tables().function(0x1204), Some((0x1200, u64::MAX)));
+        assert_eq!(tables().function(0x1204), Some((0x1200, 0x1200 + 0x10000)));
         assert_eq!(tables().function(0xffc), None);
     }
 

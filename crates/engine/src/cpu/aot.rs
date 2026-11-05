@@ -50,6 +50,7 @@ static CAPTURED: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 /// This process patches guest code to run natively even though it does not run it: a host making an image for iOS.
 static FOR_NATIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(windows)]
 pub fn patch_for_native() {
     FOR_NATIVE.store(true, std::sync::atomic::Ordering::Relaxed);
 }

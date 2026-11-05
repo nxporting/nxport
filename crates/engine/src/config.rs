@@ -81,6 +81,9 @@ pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
         p.files.guest_library = Some(resources.join("guest.dll")).filter(|l| l.is_file());
         // What the app's mods change (nxport_build::lift::lift_overlay).
         p.files.guest_overlay = Some(resources.join("overlay").join("guest_overlay.dll")).filter(|l| l.is_file());
+        if p.files.guest_overlay.is_some() {
+            p.guest.live_patches = Some(true);
+        }
     }
     p
 }
