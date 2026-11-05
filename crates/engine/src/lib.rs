@@ -33,7 +33,7 @@ mod horizon;
 /// How mods are found, for the tools that package them.
 #[cfg(nx_runtime)]
 pub mod mods {
-    pub use crate::horizon::fs::{discover_mods, mod_subdir, patch_sets};
+    pub use crate::horizon::fs::{discover_mods, has_exefs_nsp, is_mod_dir, mod_subdir, patch_sets};
 }
 #[path = "host/perf_stats.rs"]
 pub mod perf_stats;
@@ -727,9 +727,14 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //     symbols in the main binary that are defined in the SDK (sead, nn::gfx,
     //     libc++ internals, etc.) resolve to live SDK addresses rather than 0.
     //     Also binds SDK's external relocations (malloc, free, etc.) via mem_space trampolines.
-    let sdk_path_buf = horizon::fs::exefs_override("sdk").unwrap_or_else(|| game::exefs_file("sdk"));
+    let sdk_path_buf = horizon::fs::exefs_code_file("sdk").unwrap_or_default();
     let sdk_path = sdk_path_buf.to_str().unwrap();
-    let sdk = match guest::sdk_loader::load_sdk(sdk_path, &mut mem_space) {
+    let loaded = if sdk_path.is_empty() {
+        Err("a mod removes it".into())
+    } else {
+        guest::sdk_loader::load_sdk(sdk_path, &mut mem_space)
+    };
+    let sdk = match loaded {
         Ok(m) => {
             println!("[+] SDK loaded successfully ({} symbols)", m.symbols.len());
             Some(m)
@@ -952,7 +957,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     if run_game_subsdk
         || crate::horizon::fs::mods()
             .iter()
-            .any(|(_, d)| (0..10).any(|i| crate::horizon::fs::mod_subdir(d, "exefs").join(format!("subsdk{}", i)).is_file()))
+            .any(|(_, d)| crate::horizon::fs::mod_has_plugin(d))
     {
         use horizon::svc::{
             add_region, Region, MEM_CODE_MUTABLE, MEM_CODE_STATIC, PERM_R, PERM_RW, PERM_RX,
@@ -1101,6 +1106,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             if !path.is_file() {
                 continue;
             }
+            if horizon::fs::game_module_removed(&format!("subsdk{}", i)) {
+                println!("[+] Mods: the game's subsdk{i} is removed");
+                continue;
+            }
             let label = format!("game/subsdk{}", i);
             match unsafe {
                 guest::module_loader::load(
@@ -1148,10 +1157,9 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
         for (mod_name, dir) in crate::horizon::fs::mods() {
             for i in 0..10 {
-                let path = crate::horizon::fs::mod_subdir(dir, "exefs").join(format!("subsdk{}", i));
-                if !path.is_file() {
+                let Some(path) = crate::horizon::fs::mod_exefs_file(dir, &format!("subsdk{}", i)) else {
                     continue;
-                }
+                };
                 let label = format!("{}/subsdk{}", mod_name, i);
                 if crate::settings::get().files.no_plugin_mods {
                     println!("[!] Mods: {label} left out: plugin mods are not supported on this platform");

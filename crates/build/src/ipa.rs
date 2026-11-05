@@ -29,7 +29,7 @@ pub fn app_settings(dump: &Path, mods: Option<&Path>, edits: SettingsPatch) -> S
             return false;
         }
         let Some(tid) = dump_id.title_id else { return true };
-        let is_single = m.join("romfs").is_dir() || m.join("exefs").is_dir() || m.join("ExeFS").is_dir() || m.join("RomFS").is_dir();
+        let is_single = nxport::mods::is_mod_dir(m);
         if is_single {
             mod_matches_tid(m, tid)
         } else {
@@ -142,7 +142,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     if let Some(m) = o.mods {
         if m.is_dir() {
             let dest_mods = app.join("mods");
-            let is_single = m.join("romfs").is_dir() || m.join("exefs").is_dir() || m.join("ExeFS").is_dir() || m.join("RomFS").is_dir();
+            let is_single = nxport::mods::is_mod_dir(m);
             if is_single {
                 if mod_matches_tid(m, tid) {
                     packaged_any_mods = true;

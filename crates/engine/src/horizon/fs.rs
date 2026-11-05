@@ -7,6 +7,8 @@ use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use super::packed_mods::{self, ImageDirEntry, RomfsImage};
+
 /// pread: reads at `off` (Windows also moves the file position, which nothing here uses).
 fn read_at(f: &File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
     #[cfg(unix)]
@@ -164,6 +166,8 @@ struct OpenFile {
     #[allow(dead_code)]
     path: String,
     size: i64,
+    /// Where it starts in `data`'s file: non-zero for a file inside a mod's romfs.bin (opened read-only, so writes fail).
+    base: u64,
 }
 
 static OPEN_FILES: Mutex<Vec<Option<OpenFile>>> = Mutex::new(Vec::new());
@@ -181,8 +185,22 @@ pub fn mod_subdir(dir: &Path, name: &str) -> PathBuf {
         .map_or(exact, |e| e.path())
 }
 
-fn is_mod_dir(dir: &Path) -> bool {
-    mod_subdir(dir, "romfs").is_dir() || mod_subdir(dir, "exefs").is_dir()
+/// A file directly in a mod's folder, whatever its case: `romfs.bin`, `exefs.nsp`.
+fn mod_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    let exact = dir.join(name);
+    if exact.is_file() {
+        return Some(exact);
+    }
+    std::fs::read_dir(dir).ok()?.flatten().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name) && e.path().is_file()).map(|e| e.path())
+}
+
+/// Whether the mod in `dir` has its code packed: Atmosphere's exefs.nsp.
+pub fn has_exefs_nsp(dir: &Path) -> bool {
+    mod_file(dir, "exefs.nsp").is_some()
+}
+
+pub fn is_mod_dir(dir: &Path) -> bool {
+    mod_subdir(dir, "romfs").is_dir() || mod_subdir(dir, "exefs").is_dir() || mod_file(dir, "romfs.bin").is_some() || has_exefs_nsp(dir)
 }
 
 /// Folders mods are packaged in on the way to their contents: `atmosphere/contents/<title id>/`, Ryujinx's
@@ -237,14 +255,126 @@ pub fn discover_mods(root: &Path, title: Option<u64>) -> Vec<(String, PathBuf)> 
     out
 }
 
-/// A code file the mods replace (`main`, `sdk`), highest priority first, as Atmosphere's exefs override.
-pub fn exefs_override(name: &str) -> Option<PathBuf> {
-    let found = mods().iter().find_map(|(m, d)| {
-        let p = mod_subdir(d, "exefs").join(name);
-        p.is_file().then(|| (m.clone(), p))
-    })?;
-    println!("[+] Mods: '{}' replaces exefs/{name}", found.0);
-    Some(found.1)
+/// What one mod says of an ExeFS file.
+#[derive(Debug, PartialEq)]
+enum ExefsEntry {
+    File(PathBuf),
+    /// `<name>.stub`: the file is removed from what lies below.
+    Stub,
+    Absent,
+}
+
+/// As Atmosphere's SdCardRedirectionCodeFileSystem: a file in the mod's exefs folder, else its stub, else the exefs.nsp's
+/// file (`unpacked`, a folder).
+fn exefs_entry(exefs: &Path, unpacked: Option<&Path>, name: &str) -> ExefsEntry {
+    let loose = exefs.join(name);
+    if loose.is_file() {
+        ExefsEntry::File(loose)
+    } else if exefs.join(format!("{name}.stub")).is_file() {
+        ExefsEntry::Stub
+    } else {
+        match unpacked.map(|d| d.join(name)).filter(|p| p.is_file()) {
+            Some(p) => ExefsEntry::File(p),
+            None => ExefsEntry::Absent,
+        }
+    }
+}
+
+/// The exefs.nsp files of the enabled mods, unpacked once: (mod directory, folder). Modules are loaded from paths, and
+/// these are small. Under the game's data directory, named for the file's path, size and time, so a changed file is
+/// unpacked again and a mod's folder may be read-only (an iOS app's). Nothing is written without an exefs.nsp.
+fn unpacked_nsps() -> &'static [(PathBuf, PathBuf)] {
+    static DIRS: std::sync::OnceLock<Vec<(PathBuf, PathBuf)>> = std::sync::OnceLock::new();
+    DIRS.get_or_init(|| {
+        use std::hash::{Hash, Hasher};
+        let root = crate::profile::data_subdir("mods_unpacked").unwrap_or_else(|| std::env::temp_dir().join("nxport_mods_unpacked"));
+        let mut out = Vec::new();
+        for (name, dir) in mods() {
+            let Some(nsp) = mod_file(dir, "exefs.nsp") else { continue };
+            let unpack = || -> Result<PathBuf, String> {
+                let meta = nsp.metadata().map_err(|e| e.to_string())?;
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (&nsp, meta.len(), meta.modified().ok()).hash(&mut h);
+                let key = format!("{:016x}", h.finish());
+                let dest = root.join(&key);
+                if !dest.is_dir() {
+                    let tmp = root.join(format!("{key}.{}.tmp", std::process::id()));
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    packed_mods::unpack_pfs0(&nsp, &tmp)?;
+                    // Another process may have got there first: its copy is the same.
+                    if std::fs::rename(&tmp, &dest).is_err() && !dest.is_dir() {
+                        return Err(format!("cannot create {}", dest.display()));
+                    }
+                    let _ = std::fs::remove_dir_all(&tmp);
+                }
+                Ok(dest)
+            };
+            match unpack() {
+                Ok(d) => out.push((dir.clone(), d)),
+                Err(e) => println!("[!] Mods: '{name}': exefs.nsp not used: {e}"),
+            }
+        }
+        // What older versions of the mods unpacked.
+        if !out.is_empty() {
+            for e in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+                if !out.iter().any(|(_, d)| *d == e.path()) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        out
+    })
+}
+
+fn mod_exefs_entry(dir: &Path, name: &str) -> ExefsEntry {
+    let unpacked = unpacked_nsps().iter().find(|(d, _)| d == dir).map(|(_, u)| u.as_path());
+    exefs_entry(&mod_subdir(dir, "exefs"), unpacked, name)
+}
+
+/// The file a mod in `dir` holds as ExeFS `name`, from its folder or its exefs.nsp.
+pub fn mod_exefs_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    match mod_exefs_entry(dir, name) {
+        ExefsEntry::File(p) => Some(p),
+        _ => None,
+    }
+}
+
+/// Whether the mod in `dir` holds a plugin module (`subsdk0`..`subsdk9`).
+pub fn mod_has_plugin(dir: &Path) -> bool {
+    (0..10).any(|i| mod_exefs_file(dir, &format!("subsdk{i}")).is_some())
+}
+
+/// Whether the game's own ExeFS file is out: a mod has a stub for it, or an exefs.nsp, which stands for the whole ExeFS.
+fn game_exefs_removed(entries: &[ExefsEntry], any_nsp: bool) -> bool {
+    any_nsp || entries.iter().any(|e| *e == ExefsEntry::Stub)
+}
+
+/// Whether the game's own module `name` stays out of the module map. Mods' modules of that name still load: they add up.
+pub fn game_module_removed(name: &str) -> bool {
+    let entries: Vec<ExefsEntry> = mods().iter().map(|(_, d)| mod_exefs_entry(d, name)).collect();
+    game_exefs_removed(&entries, !unpacked_nsps().is_empty())
+}
+
+/// The file to load as ExeFS `name` (`main`, `sdk`), the mods' first, highest priority first; None if it was removed.
+pub fn exefs_code_file(name: &str) -> Option<PathBuf> {
+    for (m, d) in mods() {
+        match mod_exefs_entry(d, name) {
+            ExefsEntry::File(p) => {
+                println!("[+] Mods: '{m}' replaces exefs/{name}");
+                return Some(p);
+            }
+            ExefsEntry::Stub => {
+                println!("[!] Mods: '{m}' removes exefs/{name}");
+                return None;
+            }
+            ExefsEntry::Absent => {}
+        }
+    }
+    if !unpacked_nsps().is_empty() {
+        println!("[!] Mods: an exefs.nsp replaces the ExeFS and holds no {name}");
+        return None;
+    }
+    Some(crate::game::exefs_file(name))
 }
 
 /// Atmosphere's patch sets under `root`: `[.../]exefs_patches/<set>/`, up to two folders down.
@@ -304,8 +434,8 @@ pub fn mods() -> &'static [(String, PathBuf)] {
         for (name, path) in &v {
             println!("[+] Mods: '{}' ({}{})", name, if mod_subdir(path, "romfs").is_dir() { "romfs " } else { "" }, if mod_subdir(path, "exefs").is_dir() { "exefs" } else { "" });
             for packed in ["romfs.bin", "exefs.nsp"] {
-                if path.join(packed).is_file() {
-                    println!("[!] Mods: '{name}': {packed} is not supported yet; unpack it into a folder");
+                if mod_file(path, packed).is_some() {
+                    println!("[+] Mods: '{name}': {packed}");
                 }
             }
         }
@@ -313,22 +443,84 @@ pub fn mods() -> &'static [(String, PathBuf)] {
     })
 }
 
-/// RomFS directories of the enabled mods, highest priority first.
-fn mod_romfs_roots() -> &'static [PathBuf] {
-    static ROOTS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
-    ROOTS.get_or_init(|| {
-        mods()
-            .iter()
-            .map(|(_, p)| mod_subdir(p, "romfs"))
-            .filter(|p| p.is_dir())
-            .collect()
+/// One source of RomFS files of a mod.
+enum RomfsLayer {
+    Dir(PathBuf),
+    Image(RomfsImage),
+}
+
+/// The enabled mods' RomFS sources, highest priority first. Within a mod the folder comes before its romfs.bin, as
+/// Atmosphere's layered RomFS builder adds them, and the first to add a path keeps it.
+fn mod_romfs_layers() -> &'static [RomfsLayer] {
+    static LAYERS: std::sync::OnceLock<Vec<RomfsLayer>> = std::sync::OnceLock::new();
+    LAYERS.get_or_init(|| {
+        let mut v = Vec::new();
+        for (name, dir) in mods() {
+            let root = mod_subdir(dir, "romfs");
+            if root.is_dir() {
+                v.push(RomfsLayer::Dir(root));
+            }
+            if let Some(bin) = mod_file(dir, "romfs.bin") {
+                match RomfsImage::open(&bin) {
+                    Ok(i) => v.push(RomfsLayer::Image(i)),
+                    Err(e) => println!("[!] Mods: '{name}': romfs.bin not used: {e}"),
+                }
+            }
+        }
+        v
     })
 }
 
-/// A RomFS-relative path resolved through the mods first (the game's own .zs fallback applies to mod files too).
+/// What a RomFS path finds in a romfs.bin.
+enum ImageEntry<'a> {
+    Dir,
+    /// The image, where the file lies in it, its size, and whether the path found its `.zs` (OpenFile's fallback).
+    File(&'a RomfsImage, u64, u64, bool),
+}
+
+/// `rel` in the first of `layers` that has it, if that is an image. Otherwise the host paths below apply.
+fn image_entry_in<'a>(layers: &'a [RomfsLayer], rel: &str) -> Option<ImageEntry<'a>> {
+    let rel = rel.trim_start_matches('/');
+    let zs = format!("{rel}.zs");
+    for layer in layers {
+        match layer {
+            RomfsLayer::Dir(root) => {
+                if root.join(rel).exists() || root.join(&zs).exists() {
+                    return None;
+                }
+            }
+            RomfsLayer::Image(i) => {
+                if i.dir(rel).is_some() {
+                    return Some(ImageEntry::Dir);
+                }
+                if let Some((off, size)) = i.file(rel) {
+                    return Some(ImageEntry::File(i, off, size, false));
+                }
+                if let Some((off, size)) = i.file(&zs) {
+                    return Some(ImageEntry::File(i, off, size, true));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// What a guest path finds in a mod's romfs.bin. None without such files, whatever the path.
+fn image_entry(guest_path: &str) -> Option<ImageEntry<'static>> {
+    let layers = mod_romfs_layers();
+    if !layers.iter().any(|l| matches!(l, RomfsLayer::Image(_))) {
+        return None;
+    }
+    image_entry_in(layers, romfs_rel(guest_path)?)
+}
+
+/// A RomFS-relative path resolved through the mods first (the game's own .zs fallback applies to mod files too). Host
+/// paths only: what a romfs.bin holds is found by image_entry first. (The movie player opens files by host path, so it
+/// does not see a movie in a romfs.bin.)
 fn romfs_path(rel: &str) -> PathBuf {
     let rel = rel.trim_start_matches('/');
-    for root in mod_romfs_roots() {
+    for layer in mod_romfs_layers() {
+        let RomfsLayer::Dir(root) = layer else { continue };
         let p = root.join(rel);
         let zs = PathBuf::from(format!("{}.zs", p.display()));
         if p.exists() || zs.exists() {
@@ -338,16 +530,52 @@ fn romfs_path(rel: &str) -> PathBuf {
     romfs_root().join(rel)
 }
 
-/// Every directory a RomFS-relative directory path exists in: the mods' (highest priority first), then the game's.
-fn romfs_dirs(rel: &str) -> Vec<PathBuf> {
+/// A folder to list, in a RomFS merge or on its own.
+enum ListedDir<'a> {
+    Host(PathBuf),
+    Image(&'a [ImageDirEntry]),
+}
+
+/// Everywhere a RomFS-relative directory path exists in `layers` (highest priority first), then `game`'s.
+fn romfs_dirs_in<'a>(layers: &'a [RomfsLayer], game: &Path, rel: &str) -> Vec<ListedDir<'a>> {
     let rel = rel.trim_start_matches('/');
-    let mut v: Vec<PathBuf> = mod_romfs_roots()
+    let mut v: Vec<ListedDir> = layers
         .iter()
-        .map(|r| r.join(rel))
-        .filter(|p| p.is_dir())
+        .filter_map(|l| match l {
+            RomfsLayer::Dir(r) => Some(r.join(rel)).filter(|p| p.is_dir()).map(ListedDir::Host),
+            RomfsLayer::Image(i) => i.dir(rel).map(ListedDir::Image),
+        })
         .collect();
-    v.push(romfs_root().join(rel));
+    v.push(ListedDir::Host(game.join(rel)));
     v
+}
+
+/// What `dirs` hold, the first of a name winning: (name, whether a folder and size, if known). None if none could be read.
+fn merged_listing(dirs: &[ListedDir]) -> Option<Vec<(String, Option<(bool, u64)>)>> {
+    let (mut found, mut seen, mut out) = (false, std::collections::HashSet::new(), Vec::new());
+    for d in dirs {
+        match d {
+            ListedDir::Host(p) => {
+                let Ok(rd) = std::fs::read_dir(p) else { continue };
+                found = true;
+                for e in rd.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if seen.insert(name.clone()) {
+                        out.push((name, e.metadata().ok().map(|m| (m.is_dir(), m.len()))));
+                    }
+                }
+            }
+            ListedDir::Image(entries) => {
+                found = true;
+                for e in *entries {
+                    if seen.insert(e.name.clone()) {
+                        out.push((e.name.clone(), Some((e.is_dir, e.size))));
+                    }
+                }
+            }
+        }
+    }
+    found.then_some(out)
 }
 
 /// The RomFS-relative part of a guest path, if it names the game's RomFS.
@@ -470,6 +698,7 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
             data: FileData::Fd(f),
             path: path_str.to_string(),
             size,
+            base: 0,
         }));
         *out_handle = files.len() as u64;
         println!(
@@ -480,6 +709,12 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
             size
         );
         return 0;
+    }
+
+    match image_entry(&path_str) {
+        Some(ImageEntry::Dir) => return 0x00202602, // ResultTargetIsDirectory, as below
+        Some(ImageEntry::File(image, off, size, zs)) => return open_image_file(out_handle, &path_str, image, off, size, zs),
+        None => {}
     }
 
     // Try the bare path first, then fall back to the .zs compressed variant
@@ -563,6 +798,7 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
         data: file_data,
         path: path_str.to_string(),
         size,
+        base: 0,
     }));
 
     let handle_id = (handle_idx + 1) as u64;
@@ -574,6 +810,33 @@ pub unsafe extern "C" fn hle_nn_fs_OpenFile(
         chosen_path.display(),
         size
     );
+    0
+}
+
+/// OpenFile of a file in a mod's romfs.bin, with its fallback: a path that found only `<path>.zs` reads decompressed.
+unsafe fn open_image_file(out_handle: *mut u64, path: &str, image: &RomfsImage, off: u64, size: u64, zs: bool) -> i32 {
+    let opened = File::open(&image.path).and_then(|mut f| {
+        if !zs {
+            return Ok((FileData::Fd(f), size, off));
+        }
+        use std::io::{Read, Seek};
+        f.seek(std::io::SeekFrom::Start(off))?;
+        let mut out = Vec::new();
+        zstd::stream::copy_decode(f.take(size), &mut out)?;
+        let n = out.len() as u64;
+        Ok((FileData::Buf(out), n, 0))
+    });
+    let (data, size, base) = match opened {
+        Ok(o) => o,
+        Err(e) => {
+            println!("[-] HLE: nn::fs::OpenFile '{path}' in {}: {e}", image.path.display());
+            return RESULT_PATH_NOT_FOUND;
+        }
+    };
+    let mut files = OPEN_FILES.lock().unwrap();
+    files.push(Some(OpenFile { data, path: path.to_string(), size: size as i64, base }));
+    *out_handle = files.len() as u64;
+    println!("[+] HLE: nn::fs::OpenFile handle={} path='{path}' -> {}+{off:#x} ({size} bytes)", files.len(), image.path.display());
     0
 }
 
@@ -612,11 +875,13 @@ pub unsafe extern "C" fn hle_nn_fs_ReadFile(
             FileData::Fd(f) => {
                 // The kernel cannot write write-tracked (read-only) pages: unprotect them first, and retry if the
                 // executor re-protected them in between (a buffer fault).
+                // A file inside a romfs.bin ends at its size, not the image's end.
+                let size = if entry.base != 0 { size.min((entry.size - offset).max(0) as usize) } else { size };
                 let dst = std::slice::from_raw_parts_mut(buffer, size);
                 let mut n = Err(std::io::ErrorKind::Other.into());
                 for _ in 0..4 {
                     crate::guest::dirty_track::before_host_write(buffer as usize, size);
-                    n = read_at(f, dst, offset as u64);
+                    n = read_at(f, dst, entry.base + offset as u64);
                     if !n.as_ref().is_err_and(is_buffer_fault) {
                         break;
                     }
@@ -741,6 +1006,17 @@ pub unsafe extern "C" fn hle_nn_fs_GetEntryType(out_type: *mut i32, path: *const
         return RESULT_PATH_NOT_FOUND;
     }
     let path_str = CStr::from_ptr(path).to_string_lossy();
+    match image_entry(&path_str) {
+        Some(ImageEntry::Dir) => {
+            *out_type = 0;
+            return 0;
+        }
+        Some(ImageEntry::File(..)) => {
+            *out_type = 1;
+            return 0;
+        }
+        None => {}
+    }
     let host_path = match resolve_path(&path_str) {
         Some(p) => p,
         None => return RESULT_PATH_NOT_FOUND,
@@ -981,69 +1257,55 @@ pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
 
     // RomFS directories merge the mods' contents with the game's (a mod's entry wins over the game's of the same name).
     let dirs_to_read = match romfs_rel(&path_str) {
-        Some(rel) => romfs_dirs(rel),
-        None => vec![host_path.clone()],
+        Some(rel) => romfs_dirs_in(mod_romfs_layers(), romfs_root(), rel),
+        None => vec![ListedDir::Host(host_path.clone())],
     };
-    let mut read_dirs = Vec::new();
-    for d in &dirs_to_read {
-        if let Ok(rd) = std::fs::read_dir(d) {
-            read_dirs.push(rd);
-        }
-    }
-    if read_dirs.is_empty() {
+    let Some(listing) = merged_listing(&dirs_to_read) else {
         println!(
             "[-] HLE: nn::fs::OpenDirectory failed for '{}' -> '{}'",
             path_str,
             host_path.display()
         );
         return RESULT_PATH_NOT_FOUND;
-    }
-    let mut seen_names = std::collections::HashSet::new();
+    };
 
     let mut entries = Vec::new();
-    for entry_res in read_dirs.into_iter().flatten() {
-        if let Ok(entry) = entry_res {
-            let file_name = entry.file_name();
-            if !seen_names.insert(file_name.clone()) {
-                continue;
-            }
-            let name_str = file_name.to_string_lossy();
-            if is_host_junk(&name_str) {
-                continue;
-            }
-            let name_bytes = name_str.as_bytes();
-
-            let mut raw_entry = DirectoryEntryRaw {
-                name: [0; 0x301],
-                attributes: 0,
-                pad1: [0; 2],
-                entry_type: 1, // nn::fs::DirectoryEntryType_File
-                pad2: [0; 3],
-                file_size: 0,
-            };
-
-            let len = name_bytes.len().min(0x300);
-            raw_entry.name[..len].copy_from_slice(&name_bytes[..len]);
-            raw_entry.name[len] = 0;
-
-            if let Ok(meta) = entry.metadata() {
-                // OpenDirectoryMode: bit 0 directories, bit 1 files.
-                if open_mode & 3 != 0 && open_mode & if meta.is_dir() { 1 } else { 2 } == 0 {
-                    continue;
-                }
-                if meta.is_dir() {
-                    raw_entry.entry_type = 0; // DirectoryEntryType_Directory
-                    raw_entry.attributes = 1;
-                    raw_entry.file_size = 0;
-                } else {
-                    raw_entry.entry_type = 1; // DirectoryEntryType_File
-                    raw_entry.attributes = 0;
-                    raw_entry.file_size = meta.len() as i64;
-                }
-            }
-
-            entries.push(raw_entry);
+    for (name_str, meta) in listing {
+        if is_host_junk(&name_str) {
+            continue;
         }
+        let name_bytes = name_str.as_bytes();
+
+        let mut raw_entry = DirectoryEntryRaw {
+            name: [0; 0x301],
+            attributes: 0,
+            pad1: [0; 2],
+            entry_type: 1, // nn::fs::DirectoryEntryType_File
+            pad2: [0; 3],
+            file_size: 0,
+        };
+
+        let len = name_bytes.len().min(0x300);
+        raw_entry.name[..len].copy_from_slice(&name_bytes[..len]);
+        raw_entry.name[len] = 0;
+
+        if let Some((is_dir, len)) = meta {
+            // OpenDirectoryMode: bit 0 directories, bit 1 files.
+            if open_mode & 3 != 0 && open_mode & if is_dir { 1 } else { 2 } == 0 {
+                continue;
+            }
+            if is_dir {
+                raw_entry.entry_type = 0; // DirectoryEntryType_Directory
+                raw_entry.attributes = 1;
+                raw_entry.file_size = 0;
+            } else {
+                raw_entry.entry_type = 1; // DirectoryEntryType_File
+                raw_entry.attributes = 0;
+                raw_entry.file_size = len as i64;
+            }
+        }
+
+        entries.push(raw_entry);
     }
 
     let mut dirs = OPEN_DIRS.lock().unwrap();
@@ -1416,6 +1678,86 @@ mod mod_layout_tests {
         let r = tree("case", &["RomFS"]);
         assert!(mod_subdir(&r, "romfs").is_dir());
         assert!(!mod_subdir(&r, "exefs").is_dir());
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn packed_forms_make_a_mod() {
+        let r = tree("packed", &["a", "b", "c", "d"]);
+        std::fs::write(r.join("a/exefs.nsp"), []).unwrap();
+        std::fs::write(r.join("b/ROMFS.BIN"), []).unwrap();
+        std::fs::write(r.join("c/other.bin"), []).unwrap();
+        let got: Vec<String> = discover_mods(&r, Some(TOTK)).into_iter().map(|x| x.0).collect();
+        assert_eq!(got, ["a", "b"]);
+        assert!(has_exefs_nsp(&r.join("a")) && !has_exefs_nsp(&r.join("b")));
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn exefs_file_then_stub_then_nsp() {
+        let r = tree("exefs", &["exefs", "out"]);
+        std::fs::write(r.join("nsp"), packed_mods::tests::pfs0(&[("main", b"nsp main"), ("sdk", b"nsp sdk"), ("subsdk0", b"nsp 0")])).unwrap();
+        packed_mods::unpack_pfs0(&r.join("nsp"), &r.join("out")).unwrap();
+        let (x, out) = (r.join("exefs"), r.join("out"));
+        std::fs::write(x.join("main"), b"loose main").unwrap();
+        std::fs::write(x.join("main.stub"), b"").unwrap();
+        std::fs::write(x.join("sdk.stub"), b"").unwrap();
+        // A file beats its stub; a stub hides the nsp's file; the nsp's file stands otherwise.
+        assert_eq!(exefs_entry(&x, Some(&out), "main"), ExefsEntry::File(x.join("main")));
+        assert_eq!(exefs_entry(&x, Some(&out), "sdk"), ExefsEntry::Stub);
+        assert_eq!(exefs_entry(&x, Some(&out), "subsdk0"), ExefsEntry::File(out.join("subsdk0")));
+        assert_eq!(std::fs::read(out.join("subsdk0")).unwrap(), b"nsp 0");
+        assert_eq!(exefs_entry(&x, Some(&out), "subsdk1"), ExefsEntry::Absent);
+        assert_eq!(exefs_entry(&x, None, "subsdk0"), ExefsEntry::Absent);
+        let _ = std::fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn the_game_keeps_a_module_unless_stubbed_or_replaced() {
+        assert!(!game_exefs_removed(&[ExefsEntry::Absent, ExefsEntry::File("x".into())], false));
+        assert!(game_exefs_removed(&[ExefsEntry::Absent, ExefsEntry::Stub], false));
+        assert!(game_exefs_removed(&[ExefsEntry::Absent], true));
+        assert!(!game_exefs_removed(&[], false));
+    }
+
+    #[test]
+    fn romfs_layers_merge_by_priority() {
+        let r = tree("layers", &["high/Pack", "low/Pack", "game/Pack", "game/Gone"]);
+        std::fs::write(r.join("high/Pack/both"), b"folder").unwrap();
+        std::fs::write(r.join("low/Pack/low_only"), b"low").unwrap();
+        std::fs::write(r.join("game/Pack/both"), b"the game").unwrap();
+        std::fs::write(r.join("game/Pack/game_only"), b"game").unwrap();
+        std::fs::write(r.join("image.bin"), packed_mods::tests::romfs(&[("Pack/both", b"image"), ("Pack/in_image", b"12345"), ("Pack/low_only", b"image too"), ("Pack/z.zs", b"zz"), ("New/f", b"f")])).unwrap();
+        let image = RomfsLayer::Image(RomfsImage::open(&r.join("image.bin")).unwrap());
+        let layers = [RomfsLayer::Dir(r.join("high")), image, RomfsLayer::Dir(r.join("low"))];
+
+        // The folder above the image wins; the image wins over the folder below it.
+        assert!(image_entry_in(&layers, "Pack/both").is_none());
+        let bytes = std::fs::read(r.join("image.bin")).unwrap();
+        let in_image = |rel: &str| match image_entry_in(&layers, rel) {
+            Some(ImageEntry::File(_, off, size, zs)) => (bytes[off as usize..][..size as usize].to_vec(), zs),
+            _ => panic!("{rel} is not a file of the image"),
+        };
+        assert_eq!(in_image("/Pack/low_only"), (b"image too".to_vec(), false));
+        assert_eq!(in_image("Pack/in_image"), (b"12345".to_vec(), false));
+        // The game's .zs fallback, and the .zs asked for by name.
+        assert_eq!(in_image("Pack/z"), (b"zz".to_vec(), true));
+        assert_eq!(in_image("Pack/z.zs"), (b"zz".to_vec(), false));
+        assert!(matches!(image_entry_in(&layers, "New"), Some(ImageEntry::Dir)));
+        // What only the game has stays with the host paths.
+        assert!(image_entry_in(&layers, "Pack/game_only").is_none());
+        assert!(image_entry_in(&[], "Pack/both").is_none());
+
+        let listing = |rel: &str| {
+            let mut v = merged_listing(&romfs_dirs_in(&layers, &r.join("game"), rel)).unwrap();
+            v.sort();
+            v
+        };
+        let sizes: Vec<(String, u64)> = listing("Pack").into_iter().map(|(n, m)| (n, m.unwrap().1)).collect();
+        let want = [("both", 6), ("game_only", 4), ("in_image", 5), ("low_only", 9), ("z.zs", 2)];
+        assert_eq!(sizes, want.map(|(n, s)| (n.to_string(), s)));
+        assert_eq!(listing("/").iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["Gone", "New", "Pack"]);
+        assert!(merged_listing(&romfs_dirs_in(&layers, &r.join("game"), "Nowhere")).is_none());
         let _ = std::fs::remove_dir_all(&r);
     }
 
