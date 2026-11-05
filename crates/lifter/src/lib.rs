@@ -3,6 +3,7 @@
 // rt_dispatch / rt_svc / rt_brk / rt_udf / rt_ticks.
 
 pub mod abi;
+pub mod interp;
 pub mod bits;
 pub mod ehframe;
 pub mod insn;
