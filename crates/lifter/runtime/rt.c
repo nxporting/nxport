@@ -100,6 +100,9 @@ static RT_CC void dispatch_miss(Cpu *c) {
     host.call(c);
 }
 
+// The dispatcher, for code outside this library that continues in it (the engine's live patches).
+RT_EXPORT GuestFn nx_rt_dispatcher(void) { return rt_dispatch; }
+
 // The host's entry: runs guest code from c->pc until it returns to RT_RETURN_TO_HOST (x30 set by the host).
 RT_EXPORT void nx_rt_enter(Cpu *c) {
     while (c->pc != RT_RETURN_TO_HOST) rt_dispatch(c);

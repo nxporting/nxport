@@ -100,6 +100,12 @@ impl FnTable {
 /// An address in the overlay library's code, 0 without one.
 static OVERLAY_CODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// The embedder's svc handler, for code outside the guest library that makes one.
+#[cfg(windows)]
+pub fn svc_handler() -> fn(&mut Cpu, u32, u64) {
+    handlers().svc
+}
+
 /// An address in the overlay library's code, if one is loaded.
 pub fn overlay_code() -> Option<usize> {
     Some(OVERLAY_CODE.load(std::sync::atomic::Ordering::Relaxed)).filter(|&a| a != 0)
@@ -206,6 +212,24 @@ impl GuestLibrary {
                 Ok(())
             };
             register(&lib, path)?;
+            #[cfg(windows)]
+            if crate::settings::get().guest.live_patches {
+                let dispatcher = lib.symbol("nx_rt_dispatcher");
+                if dispatcher.is_null() {
+                    return Err(format!("{}: too old for live patches (no nx_rt_dispatcher): lift it again", path.display()));
+                }
+                let get: unsafe extern "C" fn() -> usize = std::mem::transmute(dispatcher);
+                let names = overlay.map_or(&[][..], |(_, n)| n).iter().chain(modules);
+                let tables = over_tables.iter().chain(&base_tables).zip(names).map(|(t, name)| {
+                    let (addrs, fns) = t.entries();
+                    crate::live_patch::Table {
+                        addrs: std::slice::from_raw_parts(addrs.as_ptr(), addrs.len()),
+                        fns: std::slice::from_raw_parts(fns.as_ptr(), fns.len()),
+                        scattered: name.starts_with("ov_"),
+                    }
+                }).collect();
+                crate::live_patch::enable(tables, get())?;
+            }
             if let Some((l, _, p)) = &over {
                 register(l, p)?;
                 redirect_entries(&base_tables, over_tables)?;
