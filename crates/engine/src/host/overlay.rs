@@ -12,16 +12,15 @@
 #![cfg_attr(target_os = "ios", allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Mutex;
-use std::time::Instant;
 
 use crate::settings::FpsMode;
 
-static OVERLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 static FPS_MODE: AtomicU8 = AtomicU8::new(1); // 0 = Stock30, 1 = Unlocked
 static VSYNC: AtomicBool = AtomicBool::new(true);
 static ASYNC_SHADERS: AtomicBool = AtomicBool::new(true);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+pub use crate::perf_stats::*;
 
 pub fn init() {
     if INITIALIZED.swap(true, Ordering::Relaxed) {
@@ -33,20 +32,6 @@ pub fn init() {
         VSYNC.store(!s.display.no_vsync, Ordering::Relaxed);
         ASYNC_SHADERS.store(s.graphics.async_pipelines, Ordering::Relaxed);
     }
-}
-
-pub fn is_overlay_enabled() -> bool {
-    OVERLAY_ENABLED.load(Ordering::Relaxed)
-}
-
-pub fn set_overlay_enabled(val: bool) {
-    OVERLAY_ENABLED.store(val, Ordering::Relaxed);
-}
-
-pub fn toggle_overlay() -> bool {
-    let next = !is_overlay_enabled();
-    set_overlay_enabled(next);
-    next
 }
 
 /// The live switch (host/live.rs), kept in the game's settings file.
@@ -128,127 +113,6 @@ pub fn toggle_async_shaders() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Frame Performance Metrics
-// ---------------------------------------------------------------------------
-
-pub const HISTORY_LEN: usize = 120;
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FrameStats {
-    pub fps: f32,
-    pub avg_fps: f32,
-    pub p1_low_fps: f32,
-    pub frame_time_ms: f32,
-    pub gpu_time_ms: f32,
-    pub submit_wait_ms: f32,
-    pub vsync_wait_ms: f32,
-    pub submits: u64,
-    pub draws: u64,
-    pub passes: u64,
-    pub memory_mb: u64,
-}
-
-struct FrameHistory {
-    times: [f32; HISTORY_LEN],
-    head: usize,
-    count: usize,
-    last_present: Option<Instant>,
-    stats: FrameStats,
-}
-
-impl FrameHistory {
-    const fn new() -> Self {
-        Self {
-            times: [0.0; HISTORY_LEN],
-            head: 0,
-            count: 0,
-            last_present: None,
-            stats: FrameStats {
-                fps: 0.0,
-                avg_fps: 0.0,
-                p1_low_fps: 0.0,
-                frame_time_ms: 0.0,
-                gpu_time_ms: 0.0,
-                submit_wait_ms: 0.0,
-                vsync_wait_ms: 0.0,
-                submits: 0,
-                draws: 0,
-                passes: 0,
-                memory_mb: 0,
-            },
-        }
-    }
-}
-
-static HISTORY: Mutex<FrameHistory> = Mutex::new(FrameHistory::new());
-
-/// Record performance metrics for the frame just presented.
-pub fn record_present(
-    gpu_ms: f32,
-    submit_wait_ms: f32,
-    vsync_wait_ms: f32,
-    submits: u64,
-    draws: u64,
-    passes: u64,
-    memory_bytes: u64,
-) {
-    let now = Instant::now();
-    let mut h = HISTORY.lock().unwrap();
-    let dt_ms = match h.last_present {
-        Some(last) => now.duration_since(last).as_secs_f32() * 1000.0,
-        None => 16.67,
-    };
-    h.last_present = Some(now);
-
-    let idx = h.head;
-    h.times[idx] = dt_ms;
-    h.head = (idx + 1) % HISTORY_LEN;
-    if h.count < HISTORY_LEN {
-        h.count += 1;
-    }
-
-    let n = h.count;
-    if n > 0 {
-        let mut sum = 0.0f32;
-        let mut sorted = [0.0f32; HISTORY_LEN];
-        for i in 0..n {
-            let t = h.times[i];
-            sum += t;
-            sorted[i] = t;
-        }
-        let avg_dt = sum / n as f32;
-        let avg_fps = if avg_dt > 0.0 { 1000.0 / avg_dt } else { 0.0 };
-        let inst_fps = if dt_ms > 0.0 { 1000.0 / dt_ms } else { 0.0 };
-
-        // 1% low: 99th percentile frame duration
-        let slice = &mut sorted[..n];
-        slice.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let p99_idx = ((n as f32 * 0.99) as usize).min(n - 1);
-        let p99_dt = slice[p99_idx];
-        let p1_low_fps = if p99_dt > 0.0 { 1000.0 / p99_dt } else { 0.0 };
-
-        h.stats = FrameStats {
-            fps: inst_fps,
-            avg_fps,
-            p1_low_fps,
-            frame_time_ms: dt_ms,
-            gpu_time_ms: gpu_ms,
-            submit_wait_ms,
-            vsync_wait_ms,
-            submits,
-            draws,
-            passes,
-            memory_mb: memory_bytes / (1024 * 1024),
-        };
-    }
-}
-
-#[allow(dead_code)]
-pub fn current_stats() -> FrameStats {
-    HISTORY.lock().unwrap().stats
-}
-
-// ---------------------------------------------------------------------------
 // macOS ImGui Overlay Renderer
 // ---------------------------------------------------------------------------
 
@@ -279,18 +143,8 @@ mod render_impl {
             return;
         }
 
-        let (stats, ordered_times) = {
-            let h = HISTORY.lock().unwrap();
-            let mut buf = [0.0f32; HISTORY_LEN];
-            let n = h.count;
-            if n > 0 {
-                let start = (h.head + HISTORY_LEN - n) % HISTORY_LEN;
-                for i in 0..n {
-                    buf[i] = h.times[(start + i) % HISTORY_LEN];
-                }
-            }
-            (h.stats, (buf, n))
-        };
+        let (stats, buf, n) = snapshot();
+        let ordered_times = (buf, n);
 
         OVERLAY_STATE.with(|st| {
             let mut lock = st.borrow_mut();
@@ -331,68 +185,7 @@ mod render_impl {
             let frame = state.ctx.begin_frame();
             {
                 let ui = frame.ui();
-                let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.78]);
-                let _border = ui.push_style_color(imgui::StyleColor::Border, [0.35, 0.35, 0.45, 0.6]);
-                let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(6.0));
-                let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([10.0, 8.0]));
-
-                unsafe {
-                    imgui::sys::igSetNextWindowPos(
-                        imgui::sys::ImVec2 { x: w - 16.0, y: 16.0 },
-                        imgui::Condition::Always as i32,
-                        imgui::sys::ImVec2 { x: 1.0, y: 0.0 },
-                    );
-                }
-
-                ui.window("Performance##Overlay")
-                    .flags(
-                        imgui::WindowFlags::NO_TITLE_BAR
-                            | imgui::WindowFlags::NO_RESIZE
-                            | imgui::WindowFlags::NO_MOVE
-                            | imgui::WindowFlags::NO_SCROLLBAR
-                            | imgui::WindowFlags::ALWAYS_AUTO_RESIZE
-                            | imgui::WindowFlags::NO_SAVED_SETTINGS
-                            | imgui::WindowFlags::NO_FOCUS_ON_APPEARING
-                            | imgui::WindowFlags::NO_NAV_INPUTS
-                            | imgui::WindowFlags::NO_NAV_FOCUS
-                            | imgui::WindowFlags::NO_MOUSE_INPUTS,
-                    )
-                    .build(|| {
-                        // Line 1: Colored FPS indicator + instantaneous frame time
-                        let fps_color = if stats.fps >= 58.0 {
-                            [0.25, 0.95, 0.35, 1.0]
-                        } else if stats.fps >= 28.0 {
-                            [0.95, 0.85, 0.2, 1.0]
-                        } else {
-                            [0.95, 0.3, 0.2, 1.0]
-                        };
-                        ui.text_colored(fps_color, format!("{:.1} FPS", stats.fps));
-                        ui.same_line();
-                        ui.text_disabled(format!("({:.2} ms)", stats.frame_time_ms));
-                        ui.same_line();
-                        ui.text_disabled(format!("|  1% Low: {:.1}  |  Avg: {:.1}", stats.p1_low_fps, stats.avg_fps));
-
-                        // Line 2: Frame-time plot history
-                        let (vals, count) = ordered_times;
-                        if count > 1 {
-                            ui.plot_lines_config("##frametime", &vals[..count])
-                                .scale_min(0.0)
-                                .scale_max(35.0)
-                                .graph_size([250.0, 40.0])
-                                .overlay_text(format!("{:.1} ms", stats.frame_time_ms))
-                                .build();
-                        }
-
-                        // Line 3 & 4: Hardware & Presentation statistics
-                        ui.text_disabled(format!(
-                            "GPU: {:.1} ms   Submit Wait: {:.1} ms   VSync Wait: {:.1} ms",
-                            stats.gpu_time_ms, stats.submit_wait_ms, stats.vsync_wait_ms
-                        ));
-                        ui.text_disabled(format!(
-                            "Submits: {}   Draws: {}   Passes: {}   Memory: {} MB",
-                            stats.submits, stats.draws, stats.passes, stats.memory_mb
-                        ));
-                    });
+                draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1]);
             }
 
             let pending = frame.render(state.renderer.consumer());

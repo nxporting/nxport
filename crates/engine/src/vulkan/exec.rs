@@ -922,6 +922,7 @@ impl Ctx {
             self.lost = true;
         }
         super::SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        super::count_for_overlay(&super::OVERLAY_SUBMITS);
         let record = t0.elapsed().as_nanos() as u64;
         super::RECORD_NS.fetch_add(record, std::sync::atomic::Ordering::Relaxed);
         super::LAST_RECORD_NS.store(record, std::sync::atomic::Ordering::Relaxed);
@@ -1671,6 +1672,7 @@ impl Ctx {
                     info = info.stencil_attachment(d);
                 }
             }
+            super::count_for_overlay(&super::OVERLAY_PASSES);
             d.device.cmd_begin_rendering(cb, &info);
         });
         self.begin_query();

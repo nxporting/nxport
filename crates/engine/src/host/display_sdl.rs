@@ -184,6 +184,13 @@ impl Host {
                     }
                     return;
                 }
+                // F10: the performance overlay.
+                if sc == Scancode::F10 {
+                    if !repeat {
+                        crate::host::overlay::toggle_overlay();
+                    }
+                    return;
+                }
                 // F9: capture the frame history at the next present, to show a glitch from a live session.
                 if sc == Scancode::F9 {
                     if !repeat {

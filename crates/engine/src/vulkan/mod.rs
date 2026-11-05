@@ -26,6 +26,8 @@ pub mod state;
 pub mod texture;
 mod pass_dump;
 mod window;
+#[cfg(windows)]
+mod overlay;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,10 +59,46 @@ static LAST_RECORD_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_WAIT_NS: AtomicU64 = AtomicU64::new(0);
 /// Submits, and blocking one-time submits (texture creation and uploads, reads) with their wait time.
 static SUBMITS: AtomicU64 = AtomicU64::new(0);
+/// This frame's draws, render passes and submits, counted while the performance overlay is on.
+static OVERLAY_DRAWS: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_PASSES: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_SUBMITS: AtomicU64 = AtomicU64::new(0);
+
+fn count_for_overlay(counter: &AtomicU64) {
+    if crate::host::overlay::is_overlay_enabled() {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
 static ONE_SHOTS: AtomicU64 = AtomicU64::new(0);
 static ONE_SHOT_NS: AtomicU64 = AtomicU64::new(0);
 /// Frames per second over the last fps line (the window title shows it).
 static DISPLAY_FPS: AtomicU64 = AtomicU64::new(0);
+
+/// The process's physical memory in use, for the performance overlay.
+#[cfg(windows)]
+fn working_set_bytes() -> u64 {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Counters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set: usize,
+        working_set: usize,
+        quota: [usize; 4],
+        pagefile: usize,
+        peak_pagefile: usize,
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn K32GetProcessMemoryInfo(process: *mut std::ffi::c_void, counters: *mut Counters, size: u32) -> i32;
+    }
+    let mut c = Counters { cb: std::mem::size_of::<Counters>() as u32, ..Default::default() };
+    if unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0 {
+        c.working_set as u64
+    } else {
+        0
+    }
+}
 
 pub fn display_fps() -> f32 {
     f64::from_bits(DISPLAY_FPS.load(Ordering::Relaxed)) as f32
@@ -206,6 +244,25 @@ impl Backend for Vulkan {
             }
         }
         self.frames.fetch_add(1, Ordering::AcqRel);
+        #[cfg(windows)]
+        if n == 1 && crate::settings::get().display.perf_overlay {
+            crate::host::overlay::set_overlay_enabled(true);
+        }
+        #[cfg(windows)]
+        if crate::host::overlay::is_overlay_enabled() {
+            static LAST_SLEEP_US: AtomicU64 = AtomicU64::new(0);
+            let sleep = crate::nvn::api::ACQUIRE_SLEEP_US.load(Ordering::Relaxed);
+            let ms = |ns: &AtomicU64| ns.load(Ordering::Relaxed) as f32 / 1e6;
+            crate::host::overlay::record_present(
+                ms(&LAST_GPU_NS),
+                ms(&LAST_WAIT_NS),
+                sleep.saturating_sub(LAST_SLEEP_US.swap(sleep, Ordering::Relaxed)) as f32 / 1000.0,
+                OVERLAY_SUBMITS.swap(0, Ordering::Relaxed),
+                OVERLAY_DRAWS.swap(0, Ordering::Relaxed),
+                OVERLAY_PASSES.swap(0, Ordering::Relaxed),
+                working_set_bytes(),
+            );
+        }
         crate::gpu::report_guard::frame_end(n);
         async_pipe::ASYNC_WAITED_US.store(0, Ordering::Relaxed);
         log_hitch(n);

@@ -35,6 +35,8 @@ mod horizon;
 pub mod mods {
     pub use crate::horizon::fs::{discover_mods, mod_subdir, patch_sets};
 }
+#[path = "host/perf_stats.rs"]
+pub mod perf_stats;
 #[cfg(nx_native)]
 mod host;
 #[cfg(all(nx_runtime, not(nx_native)))]
