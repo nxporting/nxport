@@ -160,6 +160,7 @@ static HLE_POOL: AtomicUsize = AtomicUsize::new(0);
 static HLE_POOL_LEN: AtomicUsize = AtomicUsize::new(0);
 /// HLE trampolines a mod patched: lifted code must not call their functions directly any more.
 static HLE_HOOKED: RwLock<Option<HashSet<u64>>> = RwLock::new(None);
+static HLE_HOOKED_FILTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_hle_pool(start: usize, len: usize) {
     HLE_POOL.store(start, Ordering::Relaxed);
@@ -168,7 +169,16 @@ pub fn set_hle_pool(start: usize, len: usize) {
 
 /// Whether the HLE trampoline at `pc` was patched by a mod.
 pub fn hle_hooked(pc: u64) -> bool {
+    // On every HLE call of a game with plugin mods, most of them not hooked: no lock for those.
+    if HLE_HOOKED_FILTER.load(Ordering::Relaxed) & hle_filter_bit(pc) == 0 {
+        return false;
+    }
     HLE_HOOKED.read().unwrap().as_ref().is_some_and(|s| s.contains(&pc))
+}
+
+fn hle_filter_bit(pc: u64) -> u64 {
+    // Entries are 32 bytes.
+    1 << (pc >> 5 & 63)
 }
 
 /// The common code of HLE trampolines, reached by a mod calling through its hook to the original. A trampoline's first
@@ -475,6 +485,7 @@ pub fn code_written(start: usize, len: usize) {
         let entry = (pool + ((start - pool) & !31)) as u64;
         let mut hooked = HLE_HOOKED.write().unwrap();
         if hooked.get_or_insert_with(HashSet::new).insert(entry) {
+            HLE_HOOKED_FILTER.fetch_or(hle_filter_bit(entry), Ordering::Relaxed);
             println!("[+] Live patches: HLE trampoline {entry:#x} hooked");
         }
         return;
