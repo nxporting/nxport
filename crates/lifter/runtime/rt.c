@@ -25,7 +25,7 @@ typedef struct {
     uint64_t count;
 } FnTable;
 
-#define MAX_MODULES 32
+#define MAX_MODULES 4096
 static FnTable tables[MAX_MODULES];
 static int table_count;
 

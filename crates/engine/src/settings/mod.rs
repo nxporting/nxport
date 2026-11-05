@@ -199,7 +199,7 @@ group! {
         aot_dump: Option<PathBuf> = None,
         /// Presented frame at which the image is written (with mods that patch code at run time)
         aot_dump_frame: u64 = 300,
-        /// Where guest code is lifted: code mods patch while the game runs goes to an interpreter (experimental)
+        /// Where guest code is lifted: code mods patch while the game runs is interpreted and compiled as they patch it (on for an app built with code mods)
         live_patches: bool = false,
         /// Check that no anonymous executable memory exists
         aot_audit: bool = false,

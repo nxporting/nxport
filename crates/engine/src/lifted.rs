@@ -52,7 +52,11 @@ pub fn current() -> *mut Cpu {
 unsafe extern "C" fn host_call(c: *mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
     let c = &mut *c;
-    match crate::hle_abi::entry(c.pc) {
+    #[cfg(windows)]
+    let hooked = crate::live_patch::enabled() && crate::live_patch::hle_hooked(c.pc);
+    #[cfg(not(windows))]
+    let hooked = false;
+    match crate::hle_abi::entry(c.pc).filter(|_| !hooked) {
         Some(h) => h.call(c),
         None => (handlers().unknown)(c),
     }
@@ -61,6 +65,10 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
 
 /// The dispatcher's cache of HLE targets (runtime/rt.c): what `host_call` would find for `pc`.
 unsafe extern "C" fn host_resolve_hle(pc: u64) -> *const crate::hle_abi::Hle {
+    #[cfg(windows)]
+    if crate::live_patch::enabled() && crate::live_patch::hle_hooked(pc) {
+        return std::ptr::null();
+    }
     crate::hle_abi::entry_ref(pc).map_or(std::ptr::null(), |h| h as *const _)
 }
 
@@ -99,6 +107,14 @@ impl FnTable {
 
 /// An address in the overlay library's code, 0 without one.
 static OVERLAY_CODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Calls an HLE function for code outside the guest library, as host_call_hle does.
+#[cfg(windows)]
+pub unsafe fn call_hle(h: crate::hle_abi::Hle, c: &mut Cpu) {
+    let prev = CURRENT.with(|cur| cur.replace(c));
+    h.call(c);
+    CURRENT.with(|cur| cur.set(prev));
+}
 
 /// The embedder's svc handler, for code outside the guest library that makes one.
 #[cfg(windows)]
@@ -181,14 +197,14 @@ impl GuestLibrary {
                     })
                     .collect()
             };
-            let host = RtHost {
+            let host: &'static RtHost = Box::leak(Box::new(RtHost {
                 call: host_call,
                 svc: host_svc,
                 trap: host_trap,
                 ticks: host_ticks,
                 resolve_hle: host_resolve_hle,
                 call_hle: host_call_hle,
-            };
+            }));
             let lib = crate::os::Library::open(path)?;
             let base_tables = tables(&lib, path, modules)?;
             let over = overlay.map(|(p, names)| -> Result<_, String> {
@@ -203,7 +219,7 @@ impl GuestLibrary {
                 let init: unsafe extern "C" fn(*const RtHost) = std::mem::transmute(sym(l, p, "nx_rt_init")?);
                 let add: unsafe extern "C" fn(*const u64, *const c_void, u64) -> i32 =
                     std::mem::transmute(sym(l, p, "nx_rt_add_module")?);
-                init(&host);
+                init(host);
                 for t in over_tables.iter().chain(&base_tables) {
                     if add(t.addrs, t.fns as *const c_void, t.count) != 0 {
                         return Err("lifted: too many modules".to_string());
@@ -228,7 +244,14 @@ impl GuestLibrary {
                         scattered: name.starts_with("ov_"),
                     }
                 }).collect();
-                crate::live_patch::enable(tables, get())?;
+                let add_of = |l: &crate::os::Library, p: &std::path::Path| -> Result<crate::live_patch::AddModule, String> {
+                    Ok(std::mem::transmute(sym(l, p, "nx_rt_add_module")?))
+                };
+                let mut adds = vec![add_of(&lib, path)?];
+                if let Some((l, _, p)) = &over {
+                    adds.push(add_of(l, p)?);
+                }
+                crate::live_patch::enable(tables, get(), adds, host as *const RtHost as usize)?;
             }
             if let Some((l, _, p)) = &over {
                 register(l, p)?;

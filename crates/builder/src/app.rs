@@ -1358,8 +1358,10 @@ mod tests {
         b.apply_preset_by_name("iPhone SE").unwrap();
         assert_eq!(b.settings.display.launch_aspect.map(|a| a.to_string()), Some("16:9".into()));
         b.apply_preset_by_name("Mac").unwrap();
-        assert_eq!(b.target, Target::MacApp);
-        assert_eq!(b.out_dir, default_out_dir(Target::MacApp));
+        // A target this host does not build keeps the one selected.
+        let mac = if Target::MacApp.offered() { Target::MacApp } else { switched(Target::Ipa) };
+        assert_eq!(b.target, mac);
+        assert_eq!(b.out_dir, default_out_dir(mac));
     }
 
     #[test]
@@ -1468,7 +1470,7 @@ mod tests {
         assert_eq!(b.target, switched(Target::Ipa));
         assert_eq!(b.preset_name, "iPhone SE");
         b.apply_preset_by_name("Mac").unwrap();
-        assert_eq!(b.target, Target::MacApp);
+        assert_eq!(b.target, if Target::MacApp.offered() { Target::MacApp } else { switched(Target::Ipa) });
         assert_eq!(b.preset_name, "Mac");
     }
 
