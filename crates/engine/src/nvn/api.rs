@@ -5017,6 +5017,8 @@ pub fn present_interval() -> i32 {
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interval: i32) {
+    #[cfg(all(nx_runtime, windows))]
+    crate::live_patch::present_interval_set(interval);
     // Debug: --log-pacing prints the inputs of TotK's frame-pacing decision (guest+0x8f6670): the measured frame
     // duration in ticks at obj+0x118, the tick frequency it divides by, and the state at obj+0x248 (max, min, bias,
     // current interval). obj is the caller's saved x19 (stored at its frame pointer + 0x38).
@@ -6325,6 +6327,13 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
                 fps = 30;
             } else if !crate::profile::real_time() && interval > 0 {
                 fps = fps.min(60 / interval as u32);
+            }
+            // A mod's own interval, which vsync holds a Switch to. The game goes on seeing the one it asked for.
+            #[cfg(all(nx_runtime, windows))]
+            if let Some(forced) = crate::live_patch::forced_interval() {
+                if !is_stock30 {
+                    fps = fps.min(60 / forced as u32);
+                }
             }
             // With vsync at or above the display's refresh, the swapchain's wait for the vblank paces: a limiter above it
             // let frames out faster than the display takes them, and the swapchain then held the game back unevenly

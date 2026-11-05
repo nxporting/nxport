@@ -10,7 +10,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::c_void;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 
 use nxport_lifter::abi::Cpu;
@@ -761,6 +761,8 @@ mod tests {
 
 /// The vtable slot of Surface::queueBuffer, counted from the vtable's address point.
 const QUEUE_BUFFER_SLOT: usize = 8;
+/// The same for Surface::setSwapInterval.
+const SET_SWAP_INTERVAL_SLOT: usize = 11;
 const ARM64_MOV_W0_0: u32 = 0x5280_0000;
 const ARM64_RET: u32 = 0xD65F_03C0;
 /// mov w0, #0; then returns, wherever a hook's jump back lands: a hook may overwrite more than one instruction.
@@ -769,6 +771,49 @@ const EMPTY_FUNCTION: [u32; 6] = [ARM64_MOV_W0_0, ARM64_RET, ARM64_RET, ARM64_RE
 /// (start of rodata, end of the image, start of text, end of text) of the SDK.
 static SDK_RANGES: Mutex<Option<(usize, usize, usize, usize)>> = Mutex::new(None);
 static QUEUE_BUFFER: AtomicUsize = AtomicUsize::new(0);
+/// Surface::setSwapInterval, its first instruction as the SDK has it, and the Surface field it stores the interval in.
+static SET_SWAP_INTERVAL: AtomicUsize = AtomicUsize::new(0);
+static SET_SWAP_INTERVAL_FIRST: AtomicU32 = AtomicU32::new(0);
+static SWAP_INTERVAL_FIELD: AtomicUsize = AtomicUsize::new(0);
+/// The interval a mod's hook made of the game's, -1 when none did.
+static FORCED_INTERVAL: AtomicI32 = AtomicI32::new(-1);
+
+/// The field `str wN, [x0, #field]` writes, in a function's first instructions.
+fn field_stored(code: &[u32]) -> Option<usize> {
+    code.iter().find(|&&w| w & 0xFFC0_03E0 == 0xB900_0000).map(|&w| ((w >> 10 & 0xFFF) * 4) as usize)
+}
+
+/// The Surface the engine has none of: for mods to pass on, or write to.
+fn surface() -> usize {
+    static SURFACE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SURFACE.get_or_init(|| Box::leak(vec![0u64; 0x800].into_boxed_slice()).as_mut_ptr() as usize)
+}
+
+/// The game set its present interval, which on a Switch reaches Surface::setSwapInterval: what a hook there makes of it.
+pub fn present_interval_set(interval: i32) {
+    let addr = SET_SWAP_INTERVAL.load(Ordering::Acquire);
+    if addr == 0 {
+        return;
+    }
+    unsafe {
+        if std::ptr::read_volatile(addr as *const u32) == SET_SWAP_INTERVAL_FIRST.load(Ordering::Relaxed) {
+            return;
+        }
+        let this = surface();
+        let field = (this + SWAP_INTERVAL_FIELD.load(Ordering::Relaxed)) as *mut i32;
+        std::ptr::write_volatile(field, interval);
+        crate::guest::call(addr, &[this as u64, interval as u32 as u64]);
+        let forced = std::ptr::read_volatile(field);
+        if FORCED_INTERVAL.swap(forced, Ordering::Relaxed) != forced {
+            println!("[+] Live patches: a mod makes the present interval {forced} (the game asked for {interval})");
+        }
+    }
+}
+
+/// The present interval a mod forces, if one does: a Switch's vsync would hold frames to it.
+pub fn forced_interval() -> Option<i32> {
+    Some(FORCED_INTERVAL.load(Ordering::Relaxed)).filter(|&i| i > 0)
+}
 
 pub fn set_sdk(rodata: usize, image_end: usize, text: usize, text_end: usize) {
     *SDK_RANGES.lock().unwrap() = Some((rodata, image_end, text, text_end));
@@ -814,6 +859,15 @@ pub fn empty_present_layer() {
     }
     code_written(addr, len);
     QUEUE_BUFFER.store(addr, Ordering::Release);
+    let setter = unsafe { vtable_slot(b"N7android7SurfaceE", SET_SWAP_INTERVAL_SLOT, ranges) };
+    if let Some(setter) = setter {
+        let code = unsafe { std::slice::from_raw_parts(setter as *const u32, 12) };
+        if let Some(field) = field_stored(code).filter(|&f| f + 4 <= 0x800 * 8) {
+            SWAP_INTERVAL_FIELD.store(field, Ordering::Relaxed);
+            SET_SWAP_INTERVAL_FIRST.store(code[0], Ordering::Relaxed);
+            SET_SWAP_INTERVAL.store(setter, Ordering::Release);
+        }
+    }
     println!("[+] Live patches: android::Surface::queueBuffer at {addr:#x} emptied for hooks");
 }
 
@@ -827,10 +881,19 @@ pub fn presented() {
         if std::ptr::read_volatile(addr as *const u32) == ARM64_MOV_W0_0 {
             return;
         }
-        // The Surface is the mod's to pass on, to the empty original.
-        static SURFACE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-        let surface = *SURFACE.get_or_init(|| Box::leak(vec![0u64; 0x400].into_boxed_slice()).as_mut_ptr() as usize);
         const NO_FENCE: u64 = 0xFFFF_FFFF;
-        crate::guest::call(addr, &[surface as u64, 0, NO_FENCE]);
+        crate::guest::call(addr, &[surface() as u64, 0, NO_FENCE]);
+    }
+}
+
+#[cfg(test)]
+mod surface_tests {
+    #[test]
+    fn the_field_set_swap_interval_stores() {
+        // TotK 1.1.2's SDK: ldp, cmp, csel, cmp, csel, str w8, [x0, #0xf24], mov, ret.
+        let code = [0x2949a408, 0x6b01011f, 0x1a81c108, 0x6b09011f, 0x1a88c128, 0xb90f2408, 0x2a1f03e0, 0xd65f03c0];
+        assert_eq!(super::field_stored(&code), Some(0xf24));
+        // A store through another register is not one.
+        assert_eq!(super::field_stored(&[0xb90f2428]), None);
     }
 }
