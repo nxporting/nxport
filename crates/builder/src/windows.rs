@@ -349,11 +349,11 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Optio
     Ok(())
 }
 
-/// Whether any mod in `mods` has code: an exefs folder or a patch set. Mods of files only need no lifting at all.
+/// Whether any mod in `mods` has code: an exefs folder, an exefs.nsp or a patch set. Mods of files only need no lifting at all.
 fn has_code_mods(mods: Option<&Path>, title: u64) -> bool {
     let Some(mods) = mods else { return false };
     let code = |d: &Path| std::fs::read_dir(d).is_ok_and(|mut rd| rd.next().is_some());
-    nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| code(&nxport::mods::mod_subdir(d, "exefs")))
+    nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| code(&nxport::mods::mod_subdir(d, "exefs")) || nxport::mods::has_exefs_nsp(d))
         || !nxport::mods::patch_sets(mods, 2).is_empty()
 }
 
