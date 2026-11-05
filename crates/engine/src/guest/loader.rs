@@ -104,7 +104,7 @@ pub struct GuestMemorySpace {
     trampoline_pool: *mut u32,
     trampoline_next: usize,
     /// shared_hle_trampoline's trampolines by function.
-    trampolines: std::collections::HashMap<usize, usize>,
+    trampolines: std::collections::HashMap<&'static str, usize>,
     trampoline_capacity: usize,
     pub guest_x9_value: usize,
     pub default_stub_ptr: usize,
@@ -272,7 +272,6 @@ impl GuestMemorySpace {
         let (plt_start, plt_end) = (base + d.jmprel, base + d.jmprel + d.pltrelsz);
         let (dyn_start, dyn_end) = (base + d.rela, base + d.rela + d.relasz);
         let mut applied = 0;
-        let mut entries: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for (r_offset, r_info, r_addend) in self.rela_entries() {
             let r_type = (r_info & 0xFFFFFFFF) as u32;
             let r_sym = (r_info >> 32) as usize;
@@ -286,15 +285,8 @@ impl GuestMemorySpace {
                 }
                 .map(|(s, engine_fn)| {
                     // Engine functions are entered through a trampoline like every other HLE call.
-                    let s = if engine_fn {
-                        match entries.get(&s) {
-                            Some(&t) => t,
-                            None => {
-                                let t = self.shared_hle_trampoline(s as *const ()) as usize;
-                                entries.insert(s, t);
-                                t
-                            }
-                        }
+                    let s = if let Some(id) = engine_fn {
+                        self.shared_hle_trampoline(s as *const (), id) as usize
                     } else {
                         s
                     };
@@ -419,11 +411,11 @@ impl GuestMemorySpace {
         dyn_start: usize,
         dyn_end: usize,
         sdk: Option<&SdkModule>,
-    ) -> Option<(usize, bool)> {
+    ) -> Option<(usize, Option<&'static str>)> {
         let (name, st_info, st_shndx, st_value) = self.dynsym(idx);
         if st_shndx != 0 {
             // Defined within this module.
-            return Some((base + st_value, false));
+            return Some((base + st_value, None));
         }
         // Undefined: resolve by name.
 
@@ -436,30 +428,30 @@ impl GuestMemorySpace {
             _ => None,
         };
         if let Some(a) = marker {
-            return Some((a, false));
+            return Some((a, None));
         }
         match crate::horizon::sdk::lookup(&name) {
-            Some(crate::horizon::sdk::Target::Func(f)) => return Some((f, true)),
-            Some(crate::horizon::sdk::Target::Data(a)) => return Some((a, false)),
+            Some(crate::horizon::sdk::Target::Func(f, id)) => return Some((f, Some(id))),
+            Some(crate::horizon::sdk::Target::Data(a)) => return Some((a, None)),
             None => {}
         }
         // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and nn::gfx's
         // GlslcDll::Initialize() fails exactly as on hardware.
         if let Some(sdk_mod) = sdk {
             if let Some(&addr) = sdk_mod.symbols.get::<str>(name.as_ref()) {
-                return Some((addr, false));
+                return Some((addr, None));
             }
         }
         if (st_info >> 4) == 2 {
             // STB_WEAK undefined: null, per the ELF rules the game was linked under.
             println!("[+] Weak undefined symbol '{}' -> null", name);
-            return Some((0, false));
+            return Some((0, None));
         }
         println!("[!] Unresolved external relocation symbol '{}' -> binding to default HLE stub", name);
         Some(if self.default_stub_ptr != 0 {
-            (self.default_stub_ptr, false)
+            (self.default_stub_ptr, None)
         } else {
-            (crate::hle!(hle::hle_default_stub()) as usize, true)
+            (crate::hle!(hle::hle_default_stub()) as usize, Some("hle_default_stub"))
         })
     }
 
@@ -476,10 +468,10 @@ impl GuestMemorySpace {
         self.guest_x9_value = x18_value;
         // The arm64 entry code the trampolines branch to. A lifted runtime never runs trampolines: it recognises their
         // addresses and calls the function's adapter (hle_abi).
-        #[cfg(nx_native)]
-        unsafe {
-            self.write_hle_entry_stub()
-        };
+        #[cfg(any(nx_native, windows))]
+        if crate::cpu::aot::native_rewrites() {
+            unsafe { self.write_hle_entry_stub() };
+        }
         self.trampoline_next = HLE_STUB_ENTRIES;
         Ok(())
     }
@@ -514,13 +506,15 @@ impl GuestMemorySpace {
     ///   ldr  x18, <x18 value>         ; literal of entry 0
     ///   ldp  x29, x30, [sp], #16
     ///   ret                           ; x0..x7 / v0..v7 return values intact
-    #[cfg(nx_native)]
+    #[cfg(any(nx_native, windows))]
     unsafe fn write_hle_entry_stub(&mut self) {
         let lit = gen_area() + GEN_TRAMPOLINE_LITERALS;
         ptr::write((lit + 8) as *mut usize, self.guest_x9_value);
         let slot = |off: usize| ((off / 8) as u32) << 10;
         let hle = slot(crate::cpu::tls::hle_stack_offset());
         let tls = slot(crate::cpu::tls::guest_tls_offset());
+        // A literal, not code: an image made elsewhere does not hold it.
+        #[cfg(nx_native)]
         ptr::write((lit + 16) as *mut usize, crate::horizon::cores::entry() as usize);
         let code: [u32; 23] = [
             0x9100_03E9,             // mov x9, sp
@@ -571,12 +565,12 @@ impl GuestMemorySpace {
     ///   b    <entry stub>             ; write_hle_entry_stub
     /// The trampoline the registry's bindings of `rust_fn` share (horizon::sdk: imports, sdk references,
     /// interposition, mods); created once.
-    pub fn shared_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
-        if let Some(&t) = self.trampolines.get(&(rust_fn as usize)) {
+    pub fn shared_hle_trampoline(&mut self, rust_fn: *const (), id: &'static str) -> *const () {
+        if let Some(&t) = self.trampolines.get(id) {
             return t as *const ();
         }
         let t = self.make_hle_trampoline(rust_fn);
-        self.trampolines.insert(rust_fn as usize, t as usize);
+        self.trampolines.insert(id, t as usize);
         t
     }
 

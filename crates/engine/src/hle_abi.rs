@@ -255,6 +255,10 @@ hle_fn!(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9);
 pub struct Hle {
     addr: *const (),
     adapter: unsafe fn(*const (), &mut Cpu),
+    /// Which function this is in a table, as written in the source (of_const). Not its address: a linker may fold
+    /// identical functions into one on one host and not on another, and trampolines made per function must come out
+    /// the same on every host (the iOS guest image, cpu/aot.rs).
+    id: &'static str,
 }
 
 // Function addresses and adapters are plain code pointers.
@@ -267,13 +271,18 @@ unsafe fn call_through<F: HleFn>(p: *const (), cpu: &mut Cpu) {
 
 impl Hle {
     pub fn of<F: HleFn>(f: F) -> Hle {
-        Hle { addr: f.addr(), adapter: call_through::<F> }
+        Hle { addr: f.addr(), adapter: call_through::<F>, id: "" }
     }
 
     /// `of` for static tables: `addr` is `f`'s address, taken by the caller (`HleFn::addr` cannot run at compile
     /// time). `func!` in horizon::sdk passes both from the same path.
-    pub const fn of_const<F: HleFn>(_f: F, addr: *const ()) -> Hle {
-        Hle { addr, adapter: call_through::<F> }
+    pub const fn of_const<F: HleFn>(_f: F, addr: *const (), id: &'static str) -> Hle {
+        Hle { addr, adapter: call_through::<F>, id }
+    }
+
+    /// Which function this is in a table.
+    pub fn id(self) -> &'static str {
+        self.id
     }
 
     /// The function's address.

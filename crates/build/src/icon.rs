@@ -1,5 +1,6 @@
 // App icons from a dump's Logo/<title id>.png (512x512), scaled with macOS's sips.
 
+#[cfg(target_os = "macos")]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,6 +31,7 @@ pub fn scaled_png(src: &Path, px: u32, out: &Path) -> Result<(), String> {
 }
 
 /// Writes a macOS icon file (.icns) made from `src` to `out`.
+#[cfg(target_os = "macos")]
 pub fn icns(src: &Path, out: &Path) -> Result<(), String> {
     let set = out.with_extension("iconset");
     let _ = fs::remove_dir_all(&set);

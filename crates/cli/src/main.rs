@@ -3,7 +3,9 @@
 use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
 #[cfg(target_os = "macos")]
-use nxport_build::{ipa, macho, msl_specialize, pack, shader_cache_build, translation};
+use nxport_build::{msl_specialize, pack, shader_cache_build, translation};
+#[cfg(any(target_os = "macos", windows))]
+use nxport_build::{ipa, macho};
 
 use std::path::PathBuf;
 
@@ -24,7 +26,7 @@ enum Command {
     /// Shader stages and caches
     #[command(subcommand)]
     Shaders(Shaders),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
         /// Game dump (ExeFS/ and RomFS/)
@@ -52,7 +54,7 @@ enum Command {
         #[arg(long)]
         bundle_id: Option<String>,
     },
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     /// The signed guest code image an iOS app runs: the game's code patched as the app patches it at startup
     GuestImage {
         /// Game dump (ExeFS/ and RomFS/)
@@ -445,7 +447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    Pipeline cache: {} bytes", stats.vkcache_bytes);
             println!("    Output cache directory: {}", stats.cache_dir.display());
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
             let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
             std::fs::create_dir_all(&out)?;
@@ -464,10 +466,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("[+] Wrote {}", ipa.display());
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         Command::GuestImage { dump, mods, settings, out, macos } => {
             let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
-            let img = nxport::guest_image(ipa::app_settings(&dump, mods.as_deref(), edits))?;
+            let s = ipa::app_settings(&dump, mods.as_deref(), edits);
+            #[cfg(target_os = "macos")]
+            let img = nxport::guest_image(s)?;
+            #[cfg(windows)]
+            let img = nxport::guest_image_for_native(s)?;
             let (platform, name) = if macos {
                 (macho::Platform::MacOS, "@rpath/libnxport_guest.dylib")
             } else {

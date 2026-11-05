@@ -82,6 +82,13 @@ pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
     cpu::aot::take_image().ok_or_else(|| "no image was built".to_string())
 }
 
+/// guest_image for a host that runs guest code natively (iOS), made on one that does not.
+#[cfg(all(nx_runtime, windows))]
+pub fn guest_image_for_native(s: settings::Settings) -> Result<Vec<u8>, String> {
+    cpu::aot::patch_for_native();
+    guest_image(s)
+}
+
 /// Guest code as the lifter takes it (nxport-build's lift): a module's memory from `base`, with its executable range.
 #[cfg(nx_runtime)]
 pub struct GuestModule {
@@ -834,8 +841,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //    where the kernel does not (iOS, the simulator, a macOS build without that link flag) every x18 use of main
     //    and the SDK is rewritten into an island of stubs that keep the value in a TSD slot. Before the SDK
     //    interposition and the tpidr rewrite, so `mrs x18, tpidr_el0` sites are handled by the x18 stubs.
-    #[cfg(nx_native)]
-    if cpu::trampoline::x18_trampolines() {
+    #[cfg(any(nx_native, windows))]
+    if !cpu::aot::native_rewrites() {
+        // Lifted code keeps x18 in its Cpu.
+    } else if cpu::trampoline::x18_trampolines() {
         let island = cpu::trampoline::TrampolineIsland::new(
             guest::loader::x18_island_area(),
             guest::loader::X18_ISLAND_SIZE,
@@ -891,8 +900,8 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         names.sort();
         let mut interposed = 0usize;
         for name in names {
-            if let Some(horizon::sdk::Target::Func(f)) = horizon::sdk::lookup(name) {
-                let tramp = mem_space.shared_hle_trampoline(f as *const ()) as usize;
+            if let Some(horizon::sdk::Target::Func(f, id)) = horizon::sdk::lookup(name) {
+                let tramp = mem_space.shared_hle_trampoline(f as *const (), id) as usize;
                 if sdk_mod.interpose(name, tramp) {
                     interposed += 1;
                 }
@@ -1029,8 +1038,8 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         // Everything horizon::sdk binds, as the game's imports get it.
         for name in horizon::sdk::names() {
             match horizon::sdk::lookup(name) {
-                Some(horizon::sdk::Target::Func(f)) => {
-                    syms.insert(name.to_string(), mem_space.shared_hle_trampoline(f as *const ()) as usize);
+                Some(horizon::sdk::Target::Func(f, id)) => {
+                    syms.insert(name.to_string(), mem_space.shared_hle_trampoline(f as *const (), id) as usize);
                 }
                 Some(horizon::sdk::Target::Data(a)) => {
                     syms.insert(name.to_string(), a);
@@ -1164,10 +1173,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         guest::module_loader::set_symbols(syms);
     }
 
-    #[cfg(nx_native)]
     // 4a'. Guest reads of tpidr_el0 get XNU's per-CPU value after a reschedule; point them at the stable
     //      copy of the guest TLS pointer (cpu/tpidr_rewrite.rs). Main text is still writable here; the SDK's is R-X.
-    {
+    #[cfg(any(nx_native, windows))]
+    if cpu::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
         if let Some(sdk_mod) = sdk.as_ref() {
             ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
@@ -1185,9 +1194,9 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
-    #[cfg(nx_native)]
     // Plain load-exclusives become acquire loads (cpu/exclusive_rewrite.rs).
-    {
+    #[cfg(any(nx_native, windows))]
+    if cpu::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
         if let Some(sdk_mod) = sdk.as_ref() {
             ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
@@ -1230,7 +1239,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 4c. Finalize trampolines (W^X + icache flush) before marking .text exec.
     mem_space.finalize_trampoline_pool();
-    #[cfg(nx_native)]
+    #[cfg(any(nx_native, windows))]
     if let Some(island) = cpu::trampoline::ISLAND.lock().unwrap().as_ref() {
         island.finalize().map_err(|e| format!("x18 island: {e}"))?;
     }
