@@ -296,15 +296,20 @@ fn profiles_listed(dir: &Path, main: &str) -> String {
     found.concat()
 }
 
-/// Where profiles are published, gzipped, as `<main's build id>-<lift::lifted_hash>.profdata.gz`.
+/// Where profiles are published, gzipped, as `<main's build id>.profdata.gz`.
 const PROFILES_URL: &str = "https://github.com/nxporting/profiles/releases/latest/download";
 /// Beside PROFILES_DIR: profiles downloaded. Not in profiles_listed, so one published later does not rebuild the code by itself.
 const FETCHED_PROFILES_DIR: &str = "profiles_fetched";
 
-/// The profile made for this version of the game and this lifted C: one put in `dir`, or one published. Without one the
-/// code is built without: slower, and otherwise the same.
+/// The profile for this version of the game: one put in `dir`, made for exactly this lifted C or for the version, or one
+/// published. The compiler matches functions by their control flow and builds those a lifter change has altered without
+/// it, so an older profile only gains less. Without one the code is built without: slower, and otherwise the same.
 fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, String> {
-    let name = format!("{main}-{}.profdata", nxport_build::lift::lifted_hash(c_dir)?);
+    let exact = dir.join(format!("{main}-{}.profdata", nxport_build::lift::lifted_hash(c_dir)?));
+    if exact.is_file() {
+        return Ok(Some(exact));
+    }
+    let name = format!("{main}.profdata");
     let profile = dir.join(&name);
     if profile.is_file() {
         return Ok(Some(profile));
