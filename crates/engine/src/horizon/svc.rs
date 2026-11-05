@@ -699,8 +699,18 @@ unsafe fn flush_one(v: &mut Shadow) -> usize {
                 IMAGE_MISMATCH.fetch_add(differ, std::sync::atomic::Ordering::Relaxed);
             } else {
                 let span = ((v.src + off + n + 0x3fff) & !0x3fff) - page;
+                // Only the words that really change: a page is copied whole.
+                #[cfg(windows)]
+                let changed: Vec<usize> = {
+                    let code = std::slice::from_raw_parts((v.src + off) as *const u8, n);
+                    (0..n).step_by(4).filter(|&i| view.get(i..(i + 4).min(n)) != code.get(i..(i + 4).min(n))).map(|i| v.src + off + i).collect()
+                };
                 let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
                 std::ptr::copy_nonoverlapping(view.as_ptr(), (v.src + off) as *mut u8, n);
+                #[cfg(windows)]
+                for a in changed {
+                    crate::live_patch::code_written(a, 4);
+                }
                 let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadExec);
                 crate::os::flush_icache(((v.src + off)) as usize, n);
                 if !touched.contains(&page) {

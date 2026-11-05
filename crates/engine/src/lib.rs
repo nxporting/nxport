@@ -15,6 +15,8 @@ mod cpu;
 pub mod game;
 pub mod hle_abi;
 pub mod lifted;
+#[cfg(all(nx_runtime, windows))]
+mod live_patch;
 pub mod os;
 #[cfg(nx_runtime)]
 mod gpu;
@@ -1416,6 +1418,10 @@ fn lifted_handlers() -> lifted::Handlers {
         stop(cpu, &if kind == 0 { format!("brk #{imm:#x}") } else { "an instruction that was not lifted".to_string() })
     }
     fn unknown(cpu: &mut nxport_lifter::abi::Cpu) {
+        #[cfg(windows)]
+        if live_patch::run_unknown(cpu) {
+            return;
+        }
         stop(cpu, "a branch to code that was not lifted")
     }
     lifted::Handlers { svc, trap, unknown, ticks: guest::regs::lifted_ticks }
