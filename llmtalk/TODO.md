@@ -270,6 +270,9 @@ and update this file when you finish or drop it.
   post-call stub in the next; after the draw call the game branched into that overwritten stub, which reloaded x8/x30
   from popped stack slots and ran `blr x8` again. The wrapper now takes two entries; the occlusion-read journal hook
   (words 10..14, also past its entry) now uses words 3..7. Untested on macOS: check that it reports past frame 600.
+  Reread 2026-11-05: cannot reproduce on Windows, the hook is in install_native_hooks (`cfg(nx_native)`), so the flag
+  installs no wrapper there. The fix (e07410a) is on main. Its entries, branch offsets and icache lengths check out by
+  reading, and no other cause showed; no code changed. Only the Mac run above can confirm it.
 - `retro-work` has commits not on main: checked 2026-11-03, all are on main (same subjects; `git cherry` shows the
   lifter, guest::call and WIP commits as applied) except README 5af9a32's credit line "BelmanteGu - Referenced
   SuperMarioWonderRecomp as well." Up to the user whether to add it; then the branch can go.
