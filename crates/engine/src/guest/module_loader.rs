@@ -11,7 +11,7 @@
 // Stubs live in the module's own mapping (after its image), so every site is within branch range. The caller runs
 // the module's DT_INIT (exlaunch's module entry) before the game's nnMain.
 
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 use crate::cpu::aot::encode_b;
 use crate::horizon::svc::{self, Region};
 use std::ptr;
@@ -30,11 +30,11 @@ pub struct LoadedModule {
 
 const STUB_AREA: usize = 0x2_0000;
 // System register reads native_rewrites redirects.
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 const MRS_TPIDR: u32 = 0xD53B_D040;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 const MRS_TPIDRRO: u32 = 0xD53B_D060;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 const MRS_CTR: u32 = 0xD53B_0020;
 
 fn r_u32(d: &[u8], off: usize) -> u32 {
@@ -45,7 +45,7 @@ fn r_u32(d: &[u8], off: usize) -> u32 {
 /// The rewrites guest code needs to run natively (docs/windows-port.md): x18 uses (cpu::trampoline), svc into
 /// calls of horizon::svc, reads of TPIDR_EL0 / TPIDRRO_EL0 / CTR_EL0 into stubs (in `stubs`, STUB_AREA bytes), and
 /// load-exclusives into acquire forms. Returns what was rewritten, for the log.
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
     if crate::cpu::trampoline::x18_trampolines() {
         crate::cpu::trampoline::rewrite_module(name, text, text_len).map_err(|e| e.to_string())?;
@@ -332,10 +332,14 @@ pub unsafe fn load(
     }
 
     // ── make the code runnable here ──
-    #[cfg(nx_native)]
-    let rewritten = native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?;
-    // Lifted code handles svc, the system registers and exclusives itself.
-    #[cfg(not(nx_native))]
+    #[cfg(any(nx_native, windows))]
+    let rewritten = if crate::cpu::aot::native_rewrites() {
+        native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?
+    } else {
+        // Lifted code handles svc, the system registers and exclusives itself.
+        "no sites".to_string()
+    };
+    #[cfg(not(any(nx_native, windows)))]
     let rewritten = {
         let _ = svc_entry;
         "no sites"

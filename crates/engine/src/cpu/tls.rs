@@ -13,7 +13,17 @@
 // recovers any fault caused by a kernel thread ID in a base register.
 
 // The guest TLS blocks themselves are guest::tls (they exist on every CPU path).
+#[cfg(nx_native)]
 pub use crate::guest::tls::{is_guest_thread, mark_guest_thread, CURRENT_GUEST_TLS_BLOCK, FAKE_TLR_SLOT};
+#[cfg(not(nx_native))]
+pub use crate::guest::tls::FAKE_TLR_SLOT;
+
+// The same keys and offsets where an image for iOS is made on another host (Windows has no pthread keys, and these
+// only need to be numbers there).
+#[cfg(nx_native)]
+type Key = libc::pthread_key_t;
+#[cfg(not(nx_native))]
+type Key = u32;
 
 /// Byte offset from tpidrro_el0 (Darwin's TSD array) of the slot holding this thread's guest TLS block, read by every
 /// rewritten `mrs Xt, tpidr_el0`. It is a pthread key created for the purpose: the fixed slot 60 used before is
@@ -26,10 +36,10 @@ pub fn guest_tls_offset() -> usize {
 
 /// Fixed TSD keys: their offsets are baked into patched guest code, which must be the same on every launch (AOT
 /// images, cpu/aot.rs). pthread_key_create hands out the lowest free key, so keys are created until these come up.
-const GUEST_TLS_KEY: libc::pthread_key_t = 400;
-const ERRNO_SAVE_KEY: libc::pthread_key_t = 401;
-const X18_KEY: libc::pthread_key_t = 402;
-const HLE_STACK_KEY: libc::pthread_key_t = 403;
+const GUEST_TLS_KEY: Key = 400;
+const ERRNO_SAVE_KEY: Key = 401;
+const X18_KEY: Key = 402;
+const HLE_STACK_KEY: Key = 403;
 
 /// Byte offset (from tpidrro_el0) of the slot holding the guest's x18 when x18 uses are rewritten (cpu/trampoline.rs).
 pub fn x18_slot_offset() -> usize {
@@ -38,7 +48,7 @@ pub fn x18_slot_offset() -> usize {
 }
 
 /// The pthread key of the x18 slot (pthread_setspecific).
-pub fn x18_key() -> libc::pthread_key_t {
+pub fn x18_key() -> Key {
     x18_slot_offset();
     X18_KEY
 }
@@ -58,7 +68,13 @@ pub fn errno_save_offset() -> usize {
 
 /// A new pthread key's TSD slot as a byte offset; on Darwin a key indexes the TSD array tpidrro_el0 points to. Must
 /// fit an `ldr Xt, [Xn, #imm]` (offset <= 32760).
-fn tsd_key_offset(what: &str, want: libc::pthread_key_t) -> usize {
+#[cfg(not(nx_native))]
+fn tsd_key_offset(_what: &str, want: Key) -> usize {
+    want as usize * 8
+}
+
+#[cfg(nx_native)]
+fn tsd_key_offset(what: &str, want: Key) -> usize {
     let mut key: libc::pthread_key_t = 0;
     let mut r;
     loop {
@@ -84,6 +100,7 @@ fn tsd_key_offset(what: &str, want: libc::pthread_key_t) -> usize {
     off
 }
 
+#[cfg(nx_native)]
 pub fn get_current_guest_tls_block() -> usize {
     let mut block = CURRENT_GUEST_TLS_BLOCK.with(|c| c.get());
     if block == 0 {
@@ -106,6 +123,7 @@ pub fn get_current_guest_tls_block() -> usize {
 
 /// Installs the calling OS thread's guest TLS block (guest::tls::thread_block) as its tpidr_el0 and in its TSD slot.
 /// Must be called on each thread (main thread included) before any guest code runs on it.
+#[cfg(nx_native)]
 pub unsafe fn install_guest_tls() -> usize {
     let block = crate::guest::tls::thread_block();
 

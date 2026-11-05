@@ -118,12 +118,11 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 
     log(IpaBuildPhase::PatchingCode);
     let s = app_settings(o.dump, o.mods, o.edits.clone());
-    // Elsewhere guest_image is the image the lifter takes, without the rewrites native code needs (x18, tpidr, svc):
-    // on a device that would crash, so it is not packaged. Making it here is not done yet (llmtalk/TODO.md).
-    if !cfg!(target_os = "macos") {
-        return Err("the iOS guest image can only be built on a Mac for now".into());
-    }
+    #[cfg(target_os = "macos")]
     let image = nxport::guest_image(s.clone())?;
+    // guest_image elsewhere is what the lifter takes, without the rewrites native code needs.
+    #[cfg(windows)]
+    let image = nxport::guest_image_for_native(s.clone())?;
 
     let work = o.out_dir.join(format!(".{}.ipa.work", sanitize(&name)));
     let _ = fs::remove_dir_all(&work);
@@ -314,6 +313,7 @@ fn ios_artifact(name: &str) -> Option<PathBuf> {
         built,
         PathBuf::from("target/engines/aarch64-apple-ios/release").join(name),
         PathBuf::from("target/aarch64-apple-ios/release").join(name),
+        PathBuf::from("target/xios/aarch64-apple-ios/release").join(name),
         PathBuf::from("target/ios").join(name),
         PathBuf::from("target/ios/work/Payload/Kirby.app/Frameworks").join(name),
         PathBuf::from("target/work/Payload/TotK.app/Frameworks").join(name),

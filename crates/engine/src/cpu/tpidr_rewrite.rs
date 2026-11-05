@@ -15,6 +15,7 @@ const MRS_TPIDR: u32 = 0xD53B_D040;
 const MRS_TPIDRRO: u32 = 0xD53B_D060;
 const BRANCH_RANGE: isize = 128 << 20;
 
+#[cfg(nx_native)]
 extern "C" {
     static mach_task_self_: u32;
     fn mach_vm_allocate(task: u32, addr: *mut u64, size: u64, flags: i32) -> i32;
@@ -80,6 +81,10 @@ pub unsafe fn rewrite(
         island = slot.0;
         candidates.clear();
     }
+    // Elsewhere (an image made for iOS) the slot is always in range: main and the SDK sit at fixed distances.
+    #[cfg(not(nx_native))]
+    let _ = candidates;
+    #[cfg(nx_native)]
     for a in candidates {
         let mut addr = a as u64;
         let kr = mach_vm_allocate(

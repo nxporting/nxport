@@ -24,7 +24,8 @@ pub struct Entry(pub &'static str, pub Bind);
 /// What a name resolves to.
 #[derive(Clone, Copy, Debug)]
 pub enum Target {
-    Func(usize),
+    /// Its address, and which function it is (crate::hle_abi::Hle::id).
+    Func(usize, &'static str),
     Data(usize),
 }
 
@@ -34,6 +35,7 @@ macro_rules! func {
         $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
             $($f)::+ as unsafe extern "C" fn($($a),*) -> _,
             $($f)::+ as *const (),
+            stringify!($($f)::+),
         ))
     };
 }
@@ -46,6 +48,7 @@ macro_rules! adapt {
         $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
             adapter as unsafe extern "C" fn($($t),*) $(-> $r)?,
             adapter as *const (),
+            concat!(file!(), ":", line!(), ":", column!()),
         ))
     }};
 }
@@ -163,7 +166,7 @@ fn chain() -> &'static Chain {
 
 fn target(b: &Bind) -> Target {
     match b {
-        Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize),
+        Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize, h.id()),
         Bind::Data(d) => Target::Data(d()),
     }
 }
@@ -182,7 +185,7 @@ pub fn lookup(name: &str) -> Option<Target> {
     // Libraries kept as tables of their own (the movie library ships in its own module).
     crate::horizon::movie::lookup(name)
         .or_else(|| crate::horizon::audio::out::lookup(name))
-        .map(Target::Func)
+        .map(|f| Target::Func(f, Box::leak(name.to_string().into_boxed_str())))
 }
 
 /// Every name the layers bind.
