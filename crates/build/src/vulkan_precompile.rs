@@ -408,10 +408,8 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                                     dev.device.destroy_descriptor_set_layout(lay.0, None);
                                 }
                             }
-                            dev.device.destroy_shader_module(v.module, None);
                             dev.device.destroy_descriptor_set_layout(v.set_layout, None);
                             if let Some(f) = f {
-                                dev.device.destroy_shader_module(f.module, None);
                                 dev.device.destroy_descriptor_set_layout(f.set_layout, None);
                             }
                         }
