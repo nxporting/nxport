@@ -109,6 +109,8 @@ group! {
         no_mods: bool = false,
         /// Apply no ExeFS code patches (IPS / pchtxt) from mods
         no_exefs_patches: bool = false,
+        /// Leave out mods' code modules (exefs/subsdkN, exlaunch plugins); their other files still apply
+        no_plugin_mods: bool = false,
         /// Save data directory (default: the platform's application data directory)
         save_dir: Option<PathBuf> = None,
         /// Shader cache directory (default: the app's, else the game's data directory's shader_cache/)

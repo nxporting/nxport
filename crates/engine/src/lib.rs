@@ -1151,6 +1151,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                     continue;
                 }
                 let label = format!("{}/subsdk{}", mod_name, i);
+                if crate::settings::get().files.no_plugin_mods {
+                    println!("[!] Mods: {label} left out: plugin mods are not supported on this platform");
+                    continue;
+                }
                 // Imports that land in raw SDK code (not an HLE the game's imports use) may reach kernel services the
                 // engine does not emulate: list them.
                 let sdk_range = sdk

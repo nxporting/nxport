@@ -269,6 +269,8 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
         }
     }
     let mut edits = o.edits.clone();
+    // The app reads this file, not the platform profile the image was made with: it must leave out what the image did.
+    edits.files.no_plugin_mods = Some(true);
     if !packaged_any_mods {
         edits.files.no_mods = Some(true);
     }
