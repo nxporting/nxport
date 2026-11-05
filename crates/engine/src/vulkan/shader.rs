@@ -120,7 +120,7 @@ pub struct Stage {
     pub bindings: std::sync::Arc<[Binding]>,
     /// Whether a binding reads the driver constant buffer (constant buffer 0).
     pub reads_driver: bool,
-    /// A set of its bindings alone (compute).
+    /// A set of its bindings alone (compute; null for graphics stages).
     pub set_layout: vk::DescriptorSetLayout,
     pub stage_flags: vk::ShaderStageFlags,
     /// The binding base it was translated with.
@@ -428,10 +428,12 @@ unsafe fn build_stage(
                 .stage_flags(stage_flags)
         })
         .collect();
-    let set_layout = dev
-        .device
-        .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&lb), None)
-        .map_err(|e| e.to_string())?;
+    // Graphics stages share a set made from their pipeline's stages (pipelines.rs).
+    let set_layout = if compute {
+        dev.device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&lb), None).map_err(|e| e.to_string())?
+    } else {
+        vk::DescriptorSetLayout::null()
+    };
     let samplers = out
         .iter()
         .filter(|b| matches!(b.ty, vk::DescriptorType::COMBINED_IMAGE_SAMPLER | vk::DescriptorType::SAMPLER))
