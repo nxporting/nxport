@@ -84,6 +84,59 @@ unsafe extern "C" fn host_ticks() -> u64 {
 
 type Enter = unsafe extern "C" fn(*mut Cpu);
 
+#[derive(Clone, Copy)]
+struct FnTable {
+    count: u64,
+    addrs: *const u64,
+    fns: *const usize,
+}
+
+impl FnTable {
+    unsafe fn entries(&self) -> (&[u64], &[usize]) {
+        (std::slice::from_raw_parts(self.addrs, self.count as usize), std::slice::from_raw_parts(self.fns, self.count as usize))
+    }
+}
+
+/// An address in the overlay library's code, 0 without one.
+static OVERLAY_CODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// An address in the overlay library's code, if one is loaded.
+pub fn overlay_code() -> Option<usize> {
+    Some(OVERLAY_CODE.load(std::sync::atomic::Ordering::Relaxed)).filter(|&a| a != 0)
+}
+
+/// Points the base library's functions at the overlay's versions: base code calls its functions directly, without the
+/// dispatcher. Before any guest code runs. Functions are 16-byte aligned, so `jmp [rip]; address` (14 bytes) fits each.
+unsafe fn redirect_entries(base: &[FnTable], over: &[FnTable]) -> Result<(), String> {
+    let (mut replaced, mut added) = (0usize, 0usize);
+    for o in over {
+        let (addrs, fns) = o.entries();
+        for (&a, &to) in addrs.iter().zip(fns) {
+            let Some(from) = base.iter().find_map(|b| {
+                let (ba, bf) = b.entries();
+                ba.binary_search(&a).ok().map(|i| bf[i])
+            }) else {
+                added += 1;
+                continue;
+            };
+            if from % 16 != 0 {
+                return Err(format!("lifted: the function at {a:#x} is not 16-byte aligned"));
+            }
+            let page = from & !0xfff;
+            let span = ((from + 14 + 0xfff) & !0xfff) - page;
+            crate::os::protect(page, span, crate::os::Prot::ReadWriteExec).map_err(|e| e.to_string())?;
+            let mut jmp = [0xffu8, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            jmp[6..14].copy_from_slice(&to.to_le_bytes());
+            std::ptr::copy_nonoverlapping(jmp.as_ptr(), from as *mut u8, 14);
+            crate::os::protect(page, span, crate::os::Prot::ReadExec).map_err(|e| e.to_string())?;
+            crate::os::flush_icache(from, 14);
+            replaced += 1;
+        }
+    }
+    println!("[+] Lifted: overlay replaces {replaced} functions and adds {added}");
+    Ok(())
+}
+
 /// A loaded guest library.
 pub struct GuestLibrary {
     enter: Enter,
@@ -92,12 +145,16 @@ pub struct GuestLibrary {
 impl GuestLibrary {
     /// Loads the library at `path` and registers the function tables of `modules` (the names the lifter was given).
     /// The first library loaded installs `handlers`; one per process.
-    pub fn load(path: &std::path::Path, modules: &[&str], handlers: Handlers) -> Result<GuestLibrary, String> {
+    pub fn load(
+        path: &std::path::Path,
+        modules: &[&str],
+        overlay: Option<(&std::path::Path, &[&str])>,
+        handlers: Handlers,
+    ) -> Result<GuestLibrary, String> {
         if HANDLERS.set(handlers).is_err() {
             return Err("lifted: a guest library is already loaded".into());
         }
-        let lib = crate::os::Library::open(path)?;
-        let sym = |name: &str| -> Result<*mut c_void, String> {
+        let sym = |lib: &crate::os::Library, path: &std::path::Path, name: &str| -> Result<*mut c_void, String> {
             let p = lib.symbol(name);
             if p.is_null() {
                 Err(format!("{}: no symbol {name}", path.display()))
@@ -106,9 +163,18 @@ impl GuestLibrary {
             }
         };
         unsafe {
-            let init: unsafe extern "C" fn(*const RtHost) = std::mem::transmute(sym("nx_rt_init")?);
-            let add: unsafe extern "C" fn(*const u64, *const c_void, u64) -> i32 =
-                std::mem::transmute(sym("nx_rt_add_module")?);
+            let tables = |lib: &crate::os::Library, path: &std::path::Path, names: &[&str]| -> Result<Vec<FnTable>, String> {
+                names
+                    .iter()
+                    .map(|m| {
+                        Ok(FnTable {
+                            count: *(sym(lib, path, &format!("{m}_fn_count"))? as *const u64),
+                            addrs: sym(lib, path, &format!("{m}_fn_addrs"))? as *const u64,
+                            fns: sym(lib, path, &format!("{m}_fn_ptrs"))? as *const usize,
+                        })
+                    })
+                    .collect()
+            };
             let host = RtHost {
                 call: host_call,
                 svc: host_svc,
@@ -117,16 +183,35 @@ impl GuestLibrary {
                 resolve_hle: host_resolve_hle,
                 call_hle: host_call_hle,
             };
-            init(&host);
-            for m in modules {
-                let count = *(sym(&format!("{m}_fn_count"))? as *const u64);
-                let addrs = sym(&format!("{m}_fn_addrs"))? as *const u64;
-                let fns = sym(&format!("{m}_fn_ptrs"))? as *const c_void;
-                if add(addrs, fns, count) != 0 {
-                    return Err(format!("lifted: too many modules ({m})"));
+            let lib = crate::os::Library::open(path)?;
+            let base_tables = tables(&lib, path, modules)?;
+            let over = overlay.map(|(p, names)| -> Result<_, String> {
+                let l = crate::os::Library::open(p)?;
+                let t = tables(&l, p, names)?;
+                Ok((l, t, p))
+            }).transpose()?;
+            // Each library has its own dispatcher (its rt.c), which looks an address up in tables in order: the overlay's
+            // versions first in both.
+            let over_tables: &[FnTable] = over.as_ref().map_or(&[], |o| &o.1);
+            let register = |l: &crate::os::Library, p: &std::path::Path| -> Result<(), String> {
+                let init: unsafe extern "C" fn(*const RtHost) = std::mem::transmute(sym(l, p, "nx_rt_init")?);
+                let add: unsafe extern "C" fn(*const u64, *const c_void, u64) -> i32 =
+                    std::mem::transmute(sym(l, p, "nx_rt_add_module")?);
+                init(&host);
+                for t in over_tables.iter().chain(&base_tables) {
+                    if add(t.addrs, t.fns as *const c_void, t.count) != 0 {
+                        return Err("lifted: too many modules".to_string());
+                    }
                 }
+                Ok(())
+            };
+            register(&lib, path)?;
+            if let Some((l, _, p)) = &over {
+                register(l, p)?;
+                redirect_entries(&base_tables, over_tables)?;
+                OVERLAY_CODE.store(sym(l, p, "nx_rt_enter")? as usize, std::sync::atomic::Ordering::Relaxed);
             }
-            Ok(GuestLibrary { enter: std::mem::transmute::<*mut c_void, Enter>(sym("nx_rt_enter")?) })
+            Ok(GuestLibrary { enter: std::mem::transmute::<*mut c_void, Enter>(sym(&lib, path, "nx_rt_enter")?) })
         }
     }
 
@@ -163,8 +248,13 @@ impl GuestLibrary {
 static LIBRARY: OnceLock<GuestLibrary> = OnceLock::new();
 
 /// Loads the process's guest library (GuestLibrary::load), which guest::call and guest threads then run in.
-pub fn install(path: &std::path::Path, modules: &[&str], handlers: Handlers) -> Result<(), String> {
-    let lib = GuestLibrary::load(path, modules, handlers)?;
+pub fn install(
+    path: &std::path::Path,
+    modules: &[&str],
+    overlay: Option<(&std::path::Path, &[&str])>,
+    handlers: Handlers,
+) -> Result<(), String> {
+    let lib = GuestLibrary::load(path, modules, overlay, handlers)?;
     LIBRARY.set(lib).map_err(|_| "lifted: a guest library is already installed".to_string())
 }
 

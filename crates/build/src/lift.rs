@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use nxport_lifter::{ehframe, lift_module, Module, Options};
+use nxport_lifter::{ehframe, lift_module, Module, Options, Overlay};
 pub use nxport_lifter::Output;
 
 const R_AARCH64_RELATIVE: u64 = 1027;
@@ -22,7 +22,7 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
         img[s.mem_off..s.mem_off + s.data.len()].copy_from_slice(&s.data);
     }
     let text = base + n.text.mem_off as u64..base + (n.text.mem_off + n.text.data.len()) as u64;
-    let out = lift_image(name, base, &img, text, n.dynamic().ok(), BTreeSet::new());
+    let out = lift_image(name, base, &img, text, n.dynamic().ok(), BTreeSet::new(), None);
     write_files(out_dir, &[&out])?;
     Ok(out)
 }
@@ -46,8 +46,93 @@ pub fn lift_game(
     for ((i, m), seeds) in modules.into_iter().enumerate().zip(seeds) {
         on_module(i, n, &m.name);
         let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
-        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds);
+        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
         lifted.push((m.name, out));
+    }
+    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
+    let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
+    std::fs::write(out_dir.join(MODULES_FILE), names)?;
+    Ok(lifted)
+}
+
+/// The code a guest library was lifted from, beside it: what lift_overlay compares against.
+pub const BASE_CODE_FILE: &str = "base_code.bin";
+
+/// Writes the code of the game loaded with `s`, as lift_game would lift it, for lift_overlay.
+#[cfg(any(target_vendor = "apple", windows))]
+pub fn write_base_code(s: nxport::settings::Settings, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut f = Vec::new();
+    for m in nxport::guest_modules(s, None)? {
+        let code = &m.image[(m.text.start - m.base) as usize..(m.text.end - m.base) as usize];
+        f.extend_from_slice(&(m.name.len() as u64).to_le_bytes());
+        f.extend_from_slice(m.name.as_bytes());
+        f.extend_from_slice(&m.text.start.to_le_bytes());
+        f.extend_from_slice(&(code.len() as u64).to_le_bytes());
+        f.extend_from_slice(code);
+    }
+    std::fs::write(out, f)?;
+    Ok(())
+}
+
+/// (module, code start, code) of a base_code.bin.
+fn read_base_code(path: &Path) -> Result<Vec<(String, u64, Vec<u8>)>, Box<dyn std::error::Error>> {
+    let d = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (mut p, mut out) = (0, Vec::new());
+    let u64_at = |o: usize| u64::from_le_bytes(d[o..o + 8].try_into().unwrap());
+    while p < d.len() {
+        let n = u64_at(p) as usize;
+        let name = String::from_utf8_lossy(&d[p + 8..p + 8 + n]).into_owned();
+        p += 8 + n;
+        let (start, len) = (u64_at(p), u64_at(p + 8) as usize);
+        out.push((name, start, d[p + 16..p + 16 + len].to_vec()));
+        p += 16 + len;
+    }
+    Ok(out)
+}
+
+/// Lifts what mods change against `base_library` (a guest library of the game without them, its base_code.bin beside
+/// it), into `out_dir`: the modules the base does not have, whole, and of those it has only the functions that differ
+/// (as `ov_<module>`). The engine points the base's functions at these (--guest-overlay). `patched` as lift_game's.
+#[cfg(windows)]
+pub fn lift_overlay(
+    s: nxport::settings::Settings,
+    patched: Option<&Path>,
+    base_library: &Path,
+    out_dir: &Path,
+) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
+    let base = read_base_code(&base_library.with_file_name(BASE_CODE_FILE))?;
+    let library = nxport::os::Library::open(base_library)?;
+    let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
+    let modules = nxport::guest_modules(s, image.as_deref())?;
+    let seeds = cross_module_seeds(&modules);
+    let mut lifted = Vec::new();
+    for (m, mut seeds) in modules.into_iter().zip(seeds) {
+        let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
+        let Some((_, start, code)) = base.iter().find(|(n, ..)| *n == m.name) else {
+            let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
+            lifted.push((m.name, out));
+            continue;
+        };
+        let now = &m.image[(m.text.start - m.base) as usize..(m.text.end - m.base) as usize];
+        if *start != m.text.start || code.len() != now.len() {
+            return Err(format!("{}: the base library holds other code ({start:#x}+{:#x}, now {:#x}+{:#x})", m.name, code.len(), m.text.start, now.len()).into());
+        }
+        let changed: Vec<u64> = now.chunks(4).zip(code.chunks(4)).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| *start + i as u64 * 4).collect();
+        let count = library.symbol(&format!("{}_fn_count", m.name));
+        let addrs = library.symbol(&format!("{}_fn_addrs", m.name));
+        if count.is_null() || addrs.is_null() {
+            return Err(format!("{}: {} has no table for it", m.name, base_library.display()).into());
+        }
+        let base_starts: BTreeSet<u64> = unsafe { std::slice::from_raw_parts(addrs as *const u64, *(count as *const u64) as usize) }.iter().copied().collect();
+        if changed.is_empty() && seeds.iter().all(|a| !m.text.contains(a) || base_starts.contains(a)) {
+            println!("[+] {}: same as the base", m.name);
+            continue;
+        }
+        println!("[+] {}: {} instructions differ from the base", m.name, changed.len());
+        seeds.extend(base_starts.iter().copied());
+        let name = format!("ov_{}", m.name);
+        let out = lift_image(&name, m.base, &m.image, m.text, dynamic, seeds, Some(Overlay { base_starts, changed }));
+        lifted.push((name, out));
     }
     write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
     let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
@@ -346,6 +431,7 @@ fn lift_image(
     text: std::ops::Range<u64>,
     dynamic: Option<nxport::nso::Dynamic>,
     extra_seeds: BTreeSet<u64>,
+    overlay: Option<Overlay>,
 ) -> Output {
     let mut seeds = BTreeSet::from([text.start]);
     seeds.extend(extra_seeds);
@@ -391,7 +477,7 @@ fn lift_image(
         }
     }
     let m = Module { name: name.to_string(), base, image: img, text, seeds };
-    lift_module(&m, &Options::default())
+    lift_module(&m, &Options { overlay, ..Options::default() })
 }
 
 #[cfg(test)]

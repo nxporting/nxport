@@ -71,6 +71,16 @@ thread_local! {
 }
 
 /// Guest code: the lifted guest library's image.
+/// The overlay library's code (nxport-cli lift-overlay), guest code too.
+static OVERLAY_START: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_END: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(windows)]
+pub(crate) fn set_overlay_code_range(start: usize, end: usize) {
+    OVERLAY_START.store(start, Ordering::Release);
+    OVERLAY_END.store(end, Ordering::Release);
+}
+
 pub(crate) fn set_guest_code_range(start: usize, end: usize) {
     CODE_START.store(start, Ordering::Release);
     CODE_END.store(end, Ordering::Release);
@@ -393,8 +403,8 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, _lr: usize, write: bool) -> b
     }
     LAST_RETRY.with(|r| r.set((0, None)));
     let guest = crate::guest::tls::is_guest_thread()
-        && pc >= CODE_START.load(Ordering::Acquire)
-        && pc < CODE_END.load(Ordering::Acquire);
+        && ((pc >= CODE_START.load(Ordering::Acquire) && pc < CODE_END.load(Ordering::Acquire))
+            || (pc >= OVERLAY_START.load(Ordering::Acquire) && pc < OVERLAY_END.load(Ordering::Acquire)));
     if mode() == crate::settings::ReportGuard::Log || !guest {
         record_hit(pc, addr, write);
         if !guest {

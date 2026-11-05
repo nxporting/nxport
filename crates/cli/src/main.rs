@@ -158,6 +158,33 @@ enum Command {
         #[arg(long)]
         patched_image: Option<PathBuf>,
     },
+    /// Write the game's code as lift-game would lift it without mods, for lift-overlay (base_code.bin beside the library)
+    #[cfg(windows)]
+    BaseCode {
+        /// Game dump (ExeFS/ and RomFS/)
+        dump: PathBuf,
+        /// The file to write
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    /// Lift only what mods change against a guest library of the game without them
+    #[cfg(windows)]
+    LiftOverlay {
+        /// Game dump (ExeFS/ and RomFS/)
+        dump: PathBuf,
+        /// The base guest library (its base_code.bin beside it)
+        #[arg(long)]
+        base: PathBuf,
+        /// Output directory for the C files
+        #[arg(long, short)]
+        out: PathBuf,
+        /// Mods directory
+        #[arg(long)]
+        mods: PathBuf,
+        /// The image a run with a first overlay dumped (nxport --aot-dump)
+        #[arg(long)]
+        patched_image: Option<PathBuf>,
+    },
     /// Compile lifted C (lift / lift-game) into the guest library
     CompileGuest {
         /// The directory of the C files
@@ -473,6 +500,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::LiftGame { dump, out, mods, patched_image } => {
             let s = nxport_build::lift::game_settings(&dump, Default::default(), mods.as_deref());
             for (name, r) in nxport_build::lift::lift_game(s, patched_image.as_deref(), &out, &|_, _, _| {})? {
+                nxport_build::lift::report(&name, &r);
+            }
+        }
+        #[cfg(windows)]
+        Command::BaseCode { dump, out } => {
+            let s = nxport_build::lift::game_settings(&dump, Default::default(), None);
+            nxport_build::lift::write_base_code(s, &out)?;
+            println!("[+] {}", out.display());
+        }
+        #[cfg(windows)]
+        Command::LiftOverlay { dump, base, out, mods, patched_image } => {
+            let s = nxport_build::lift::game_settings(&dump, Default::default(), Some(&mods));
+            for (name, r) in nxport_build::lift::lift_overlay(s, patched_image.as_deref(), &base, &out)? {
                 nxport_build::lift::report(&name, &r);
             }
         }

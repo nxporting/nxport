@@ -1306,21 +1306,34 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         game_subsdk_inits,
     } = load()?;
     let modules: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+    let overlay = s.files.guest_overlay.clone();
+    let overlay_names = match &overlay {
+        Some(o) => {
+            let list = o.with_file_name("modules.txt");
+            std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?
+        }
+        None => String::new(),
+    };
+    let overlay_modules: Vec<&str> = overlay_names.lines().filter(|l| !l.is_empty()).collect();
     // A plugin mod's code runs only if the library was lifted with it (and with its patches: nxport-cli lift-game
     // --patched-image, or the builder).
-    if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.contains(&mod_module_name(label).as_str())) {
+    if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.iter().chain(&overlay_modules).any(|m| *m == mod_module_name(label).as_str())) {
         return Err(format!(
             "{label} is a plugin mod, and {} was lifted without it: lift and compile the game again with its mods (the builder does)",
             lib.display()
         )
         .into());
     }
-    lifted::install(&lib, &modules, lifted_handlers())?;
+    lifted::install(&lib, &modules, overlay.as_deref().map(|o| (o, overlay_modules.as_slice())), lifted_handlers())?;
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
     // --report-guard waits only for faults from guest code.
     #[cfg(windows)]
     if let Some((start, end)) = os::image_range(lifted::library().entry()) {
         gpu::report_guard::set_guest_code_range(start, end);
+    }
+    #[cfg(windows)]
+    if let Some((start, end)) = lifted::overlay_code().and_then(os::image_range) {
+        gpu::report_guard::set_overlay_code_range(start, end);
     }
     // --aot-dump: the code as plugin mods patch it, for the lift that holds their patches (guest_modules). Their
     // initialisers and early hooks write it while the game runs; the image is written at --aot-dump-frame.
