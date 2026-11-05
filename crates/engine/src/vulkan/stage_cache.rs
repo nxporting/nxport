@@ -165,6 +165,18 @@ pub fn code(full: u64) -> Option<Vec<u8>> {
     std::fs::read(dir()?.join("code").join(format!("{full:016x}.bin"))).ok()
 }
 
+/// Whether a translation is stored.
+pub fn has(key: u64) -> bool {
+    dir().is_some_and(|d| d.join("t").join(format!("{key:016x}.bin")).is_file())
+}
+
+/// A translation's SPIR-V alone.
+pub fn load_spirv(key: u64) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;
+    let n = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap()) as usize;
+    Some(bytes.get(4..4 + n)?.to_vec())
+}
+
 /// A translation: SPIR-V and its manifest.
 pub fn load(key: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
     let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;

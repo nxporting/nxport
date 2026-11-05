@@ -521,8 +521,16 @@ impl Ctx {
                         l
                     }
                 };
+                let dev = self.dev.clone();
+                let module = match s.module(&dev) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        self.warn(format!("compute shader module for {data:#x}: {e}"));
+                        return;
+                    }
+                };
                 let info = vk::ComputePipelineCreateInfo::default()
-                    .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(s.module).name(c"main"))
+                    .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(module.module).name(c"main"))
                     .layout(layout);
                 let cache = self.pipeline_cache();
                 crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
