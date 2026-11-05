@@ -115,7 +115,7 @@ impl GuestMemorySpace {
         if crate::game::is_32bit_of(crate::game::dir()) {
             return Err("this game is a 32-bit program: Apple CPUs cannot run 32-bit ARM code, so it is not supported".into());
         }
-        let path = crate::game::exefs_file("main");
+        let path = crate::horizon::fs::exefs_override("main").unwrap_or_else(|| crate::game::exefs_file("main"));
         let nso = crate::guest::nso::Nso::read(&path)?;
         let dynamic = nso.dynamic()?;
         println!("[+] Main NSO {}: text {:#x}+{:#x}, rodata {:#x}+{:#x}, data {:#x}+{:#x}, bss {:#x}+{:#x}; {:x?}",
@@ -136,7 +136,7 @@ impl GuestMemorySpace {
         let fixed = !cfg!(nx_native)
             || (crate::cpu::aot::active()
                 && crate::horizon::fs::mods().iter().any(|(_, d)| {
-                    (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file())
+                    (0..10).any(|i| crate::horizon::fs::mod_subdir(d, "exefs").join(format!("subsdk{}", i)).is_file())
                 }))
             || crate::settings::get().guest.fixed_guest_base;
 

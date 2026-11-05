@@ -482,12 +482,5 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
 }
 
 fn mod_matches_tid(p: &Path, tid: u64) -> bool {
-    let npdm = [p.join("exefs/main.npdm"), p.join("ExeFS/main.npdm")]
-        .into_iter()
-        .find(|f| f.is_file());
-    let target_tid = npdm.as_deref().and_then(nxport::game::npdm_program_id);
-    match target_tid {
-        Some(t) if t != tid => false,
-        _ => true,
-    }
+    !nxport::game::is_other_title_dir(p, tid)
 }

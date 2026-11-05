@@ -149,8 +149,7 @@ pub unsafe fn apply(
         return 0;
     }
     let mut applied = 0;
-    for (mod_name, dir) in crate::horizon::fs::mods() {
-        let exefs = dir.join("exefs");
+    for (mod_name, exefs) in crate::horizon::fs::exefs_patch_dirs() {
         let Ok(rd) = std::fs::read_dir(&exefs) else {
             continue;
         };
