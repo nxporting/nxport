@@ -34,6 +34,8 @@ struct State {
     patched: RwLock<HashSet<u64>>,
     /// Where each x86 entry was last pointed.
     redirected: Mutex<HashMap<usize, usize>>,
+    /// What each redirected entry held before its first jump.
+    originals: Mutex<HashMap<usize, [u8; ENTRY_JUMP]>>,
     stubs: Mutex<StubPool>,
     /// The loaded libraries' add functions: a function compiled later must be found by their dispatchers.
     adds: Vec<AddModule>,
@@ -81,6 +83,7 @@ pub fn enable(tables: Vec<Table>, rt_dispatch: usize, adds: Vec<AddModule>, host
         tables: RwLock::new(tables),
         patched: RwLock::new(HashSet::new()),
         redirected: Mutex::new(HashMap::new()),
+        originals: Mutex::new(HashMap::new()),
         stubs: Mutex::new(StubPool { next: pool as usize, end: pool as usize + STUB_POOL, of: HashMap::new() }),
         adds,
         host,
@@ -407,14 +410,24 @@ unsafe fn write_entries(jumps: &[(usize, [u8; ENTRY_JUMP])]) -> Result<(), Strin
     result.map_err(str::to_string)
 }
 
-/// Points `entries` (x86 entry, where to) there, skipping those already pointing there.
+/// Points `entries` (x86 entry, where to) there, skipping those already pointing there. An entry pointed at itself gets its
+/// own code back: a compiled function can become current again when its code returns to what it was compiled from.
 fn redirect(state: &State, entries: &[(usize, usize)]) -> Result<(), String> {
     let mut done = state.redirected.lock().unwrap();
-    let jumps: Vec<(usize, [u8; ENTRY_JUMP])> = entries
-        .iter()
-        .filter(|&&(at, to)| at != to && done.get(&at) != Some(&to))
-        .map(|&(at, to)| (at, entry_jump(to as u64)))
-        .collect();
+    let mut originals = state.originals.lock().unwrap();
+    let mut jumps: Vec<(usize, [u8; ENTRY_JUMP])> = Vec::new();
+    for &(at, to) in entries {
+        if at == to {
+            if let (Some(&was), Some(&code)) = (done.get(&at), originals.get(&at)) {
+                if was != at {
+                    jumps.push((at, code));
+                }
+            }
+        } else if done.get(&at) != Some(&to) {
+            originals.entry(at).or_insert_with(|| unsafe { std::ptr::read(at as *const [u8; ENTRY_JUMP]) });
+            jumps.push((at, entry_jump(to as u64)));
+        }
+    }
     if jumps.is_empty() {
         return Ok(());
     }
@@ -479,9 +492,21 @@ pub fn code_written(start: usize, len: usize) {
         eprintln!("[-] {e}");
         std::process::abort();
     }
-    println!("[+] Live patches: {} more functions interpreted", funcs.len());
+    // Compiled by an earlier run: in use at once, before anything can wait for it.
+    let mut waiting = Vec::new();
+    let mut cached = 0;
+    for &(func, end) in &funcs {
+        let name = cache_name(state, func, end);
+        let ready = entry_points(state, &name, func, end, None).and_then(|s| library_path(&name, &s)).is_ok_and(|d| d.is_file());
+        if ready && compile_and_apply(state, func, end, None).is_ok() {
+            cached += 1;
+        } else {
+            waiting.push((func, end));
+        }
+    }
+    println!("[+] Live patches: {} functions changed, {cached} already compiled", funcs.len());
     let mut q = state.queue.lock().unwrap();
-    q.extend(funcs.iter().copied());
+    q.extend(waiting);
     state.wake.notify_all();
 }
 
@@ -519,10 +544,34 @@ fn zig() -> Result<PathBuf, String> {
         .ok_or_else(|| format!("no C compiler in {}", dir.display()))
 }
 
+/// The cache's name for [func, end) with its code as it is now.
+fn cache_name(state: &State, func: u64, end: u64) -> String {
+    let code = unsafe { std::slice::from_raw_parts(func as *const u8, (end - func) as usize) };
+    format!("live_{func:x}_{:016x}", fnv(code) ^ state.version)
+}
+
+/// Where a function must be enterable, as earlier runs found: what the base knows, and where the interpreter stopped.
+fn entry_points(state: &State, name: &str, func: u64, end: u64, extra: Option<u64>) -> Result<BTreeSet<u64>, String> {
+    let mut seeds: BTreeSet<u64> = state.versions(func, end).iter().map(|v| v.0).collect();
+    seeds.insert(func);
+    seeds.extend(extra);
+    let text = std::fs::read_to_string(cache_root()?.join(name).join("entries.txt")).unwrap_or_default();
+    seeds.extend(text.lines().filter_map(|l| u64::from_str_radix(l, 16).ok()).filter(|a| (func..end).contains(a)));
+    Ok(seeds)
+}
+
+fn library_path(name: &str, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
+    let mut h = 0u64;
+    for s in seeds {
+        h = (h ^ s).wrapping_mul(0x0100_0000_01b3);
+    }
+    Ok(cache_root()?.join(name).join(format!("f_{h:016x}.dll")))
+}
+
 /// Lifts and compiles [func, end) as it is now, unless an earlier run did: the library's path.
 fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
     let dir = cache_root()?.join(name);
-    let dll = dir.join("f.dll");
+    let dll = library_path(name, seeds)?;
     let lock = state.compiling.lock().unwrap().entry(name.to_string()).or_default().clone();
     let _guard = lock.lock().unwrap();
     if dll.is_file() {
@@ -541,7 +590,7 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
         std::fs::write(dir.join(file), body).map_err(|e| e.to_string())?;
         sources.push(file.clone());
     }
-    let tmp = dir.join("f.tmp.dll");
+    let tmp = dll.with_extension("tmp.dll");
     let result = std::process::Command::new(zig()?)
         .current_dir(&dir)
         .args(["cc", "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-w", "-shared", "-o"])
@@ -553,28 +602,18 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
         return Err(format!("the C compiler: {}", String::from_utf8_lossy(&result.stderr).lines().next().unwrap_or("failed")));
     }
     std::fs::rename(&tmp, &dll).map_err(|e| e.to_string())?;
+    let list: String = seeds.iter().map(|a| format!("{a:x}\n")).collect();
+    std::fs::write(dir.join("entries.txt"), list).map_err(|e| e.to_string())?;
     Ok(dll)
 }
 
 /// The function [func, end) compiled as its code stands, and its entries pointed there.
 fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> Result<(), String> {
-    let versions = state.versions(func, end);
-    let mut seeds: BTreeSet<u64> = versions.iter().map(|v| v.0).collect();
-    seeds.insert(func);
-    seeds.extend(extra);
-    let hash_of = |seeds: &BTreeSet<u64>| {
-        let code = unsafe { std::slice::from_raw_parts(func as *const u8, (end - func) as usize) };
-        let mut h = fnv(code) ^ state.version;
-        for s in seeds {
-            h = (h ^ s).wrapping_mul(0x0100_0000_01b3);
-        }
-        h
-    };
-    let hash = hash_of(&seeds);
-    let name = format!("live_{func:x}_{hash:016x}");
+    let name = cache_name(state, func, end);
+    let seeds = entry_points(state, &name, func, end, extra)?;
     let dll = compiled(state, &name, func, end, &seeds)?;
     // A write meanwhile queued this function again: that compile applies.
-    if hash_of(&seeds) != hash {
+    if cache_name(state, func, end) != name {
         return Ok(());
     }
     let _applying = state.applying.lock().unwrap();
@@ -653,6 +692,7 @@ mod tests {
             ]),
             patched: RwLock::new(HashSet::new()),
             redirected: Mutex::new(HashMap::new()),
+            originals: Mutex::new(HashMap::new()),
             stubs: Mutex::new(StubPool { next: 0, end: 0, of: HashMap::new() }),
             adds: Vec::new(),
             host: 0,
