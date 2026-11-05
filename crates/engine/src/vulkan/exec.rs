@@ -1778,13 +1778,15 @@ impl Ctx {
         self.rec.end_async();
         let cbs = self.with_uploads(self.cb);
         let early = self.early_reports();
+        // The game may be waiting for these reports (gpu::report_guard): queued now, not at the next chunk's end.
+        let reports = early.is_some();
         self.unqueued.push_back((cbs, early));
         if self.spare_cbs.is_empty() {
             // vk-record is done with the pool once it ended them all.
             self.queue_chunks(true);
             self.alloc_cbs();
         }
-        self.queue_chunks(false);
+        self.queue_chunks(reports);
         self.bound = Bound::default();
         self.rec.op(record::Op::Unbound);
         match self.next_cb() {
