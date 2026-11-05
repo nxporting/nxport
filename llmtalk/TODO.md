@@ -294,9 +294,11 @@ and update this file when you finish or drop it.
 - **Breath of the Wild**:
   - Water: Link stands on the pond floor instead of swimming (`work/saves/botw-pool`).
   - One-frame black foliage (~130 per 600 frames at `work/saves/botw-sunk`); blue-grey haze over the image.
-- **Uncommitted work in ../nxport-nxnative (reviewed 2026-10-25)**:
-  - Guest image cache (`lib.rs`, `aot.rs`): returns cached image even when settings differ (mods, x18 mode) and ignores
-    failed settings install. Key cache on settings and keep error.
+- **Uncommitted work in ../nxport-nxnative (reviewed 2026-10-25)**: checked 2026-11-05: that folder no longer exists and
+  no worktree or branch carries it, so what was uncommitted there is gone unless the user has a copy. What follows is
+  what main still lacks.
+  - Guest image cache: no action. Main has no such cache: `guest_image` and `guest_modules` build once per process, and
+    a second call returns try_install's error rather than an image of other settings. The bug was only in that work.
   - Shared-font fallback (`nn.rs`, `ios_env.rs`, `ipa.rs`, cli `--shared-fonts`): iOS font paths and fonts folder in
     the app are right; drop cwd/Documents searches and embedded dummy_font.ttf; provide console shared font from
     system data like Mii data.
