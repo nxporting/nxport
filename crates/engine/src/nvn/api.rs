@@ -6682,6 +6682,8 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
             crate::gpu::backend().present((*_window).textures[index as usize], (*_window).crop);
         }
     }
+    #[cfg(all(nx_runtime, windows))]
+    crate::live_patch::presented();
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnQueueWaitSync(_queue: *mut NvnQueue, _sync: usize) -> u8 {

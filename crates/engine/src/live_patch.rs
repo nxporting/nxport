@@ -754,3 +754,83 @@ mod tests {
         assert_eq!(v, [(0x1100, 11), (0x1180, 12), (0x1100, 2)]);
     }
 }
+
+// A present layer for mods. The engine replaces NVN, so nothing reaches what is below it in the SDK, and a hook there would
+// never run: android::Surface::queueBuffer is where frame limiters hook, as a Switch calls it once per present. With plugin
+// mods it is emptied before they load, a hook's call of the original then being harmless, and a present calls it if hooked.
+
+/// The vtable slot of Surface::queueBuffer, counted from the vtable's address point.
+const QUEUE_BUFFER_SLOT: usize = 8;
+const ARM64_MOV_W0_0: u32 = 0x5280_0000;
+const ARM64_RET: u32 = 0xD65F_03C0;
+/// mov w0, #0; then returns, wherever a hook's jump back lands: a hook may overwrite more than one instruction.
+const EMPTY_FUNCTION: [u32; 6] = [ARM64_MOV_W0_0, ARM64_RET, ARM64_RET, ARM64_RET, ARM64_RET, ARM64_RET];
+
+/// (start of rodata, end of the image, start of text, end of text) of the SDK.
+static SDK_RANGES: Mutex<Option<(usize, usize, usize, usize)>> = Mutex::new(None);
+static QUEUE_BUFFER: AtomicUsize = AtomicUsize::new(0);
+
+pub fn set_sdk(rodata: usize, image_end: usize, text: usize, text_end: usize) {
+    *SDK_RANGES.lock().unwrap() = Some((rodata, image_end, text, text_end));
+}
+
+/// Finds the address held in slot `slot` of the vtable of the class with this mangled name, through its type info.
+unsafe fn vtable_slot(mangled: &[u8], slot: usize, (rodata, image_end, text, text_end): (usize, usize, usize, usize)) -> Option<usize> {
+    let image = std::slice::from_raw_parts(rodata as *const u8, image_end - rodata);
+    let name_at = rodata + image.windows(mangled.len() + 2).position(|w| w[0] == 0 && &w[1..=mangled.len()] == mangled && w[mangled.len() + 1] == 0)? + 1;
+    let words = std::slice::from_raw_parts(rodata.next_multiple_of(8) as *const usize, (image_end - rodata.next_multiple_of(8)) / 8);
+    let at = |i: usize| rodata.next_multiple_of(8) + i * 8;
+    let type_info = words.iter().enumerate().filter(|&(_, &w)| w == name_at).map(|(i, _)| at(i) - 8);
+    for ti in type_info {
+        for (i, _) in words.iter().enumerate().filter(|&(_, &w)| w == ti) {
+            // The primary vtable: offset to top 0, then code.
+            if i == 0 || words[i - 1] != 0 {
+                continue;
+            }
+            let Some(slots) = words.get(i + 1..i + 1 + slot + 1) else { continue };
+            if slots.iter().all(|&a| (text..text_end).contains(&a)) {
+                return Some(slots[slot]);
+            }
+        }
+    }
+    None
+}
+
+/// Before plugin mods' initialisers.
+pub fn empty_present_layer() {
+    let Some(_) = STATE.get() else { return };
+    let Some(ranges) = *SDK_RANGES.lock().unwrap() else { return };
+    let Some(addr) = (unsafe { vtable_slot(b"N7android7SurfaceE", QUEUE_BUFFER_SLOT, ranges) }) else {
+        println!("[!] Live patches: no android::Surface in the SDK; mods hooking its present will not run");
+        return;
+    };
+    let len = EMPTY_FUNCTION.len() * 4;
+    let page = addr & !0x3fff;
+    let span = ((addr + len + 0x3fff) & !0x3fff) - page;
+    unsafe {
+        let _ = crate::os::protect(page, span, crate::os::Prot::ReadWrite);
+        std::ptr::copy_nonoverlapping(EMPTY_FUNCTION.as_ptr(), addr as *mut u32, EMPTY_FUNCTION.len());
+        crate::cpu::aot::protect_rx(page, span);
+    }
+    code_written(addr, len);
+    QUEUE_BUFFER.store(addr, Ordering::Release);
+    println!("[+] Live patches: android::Surface::queueBuffer at {addr:#x} emptied for hooks");
+}
+
+/// A frame was presented: what a mod hooked on queueBuffer. An unhooked function is not called.
+pub fn presented() {
+    let addr = QUEUE_BUFFER.load(Ordering::Acquire);
+    if addr == 0 {
+        return;
+    }
+    unsafe {
+        if std::ptr::read_volatile(addr as *const u32) == ARM64_MOV_W0_0 {
+            return;
+        }
+        // The Surface is the mod's to pass on, to the empty original.
+        static SURFACE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let surface = *SURFACE.get_or_init(|| Box::leak(vec![0u64; 0x400].into_boxed_slice()).as_mut_ptr() as usize);
+        const NO_FENCE: u64 = 0xFFFF_FFFF;
+        crate::guest::call(addr, &[surface as u64, 0, NO_FENCE]);
+    }
+}
