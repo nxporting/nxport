@@ -22,6 +22,10 @@ fn run(cmd: &mut Command) -> Result<(), String> {
 
 /// Writes `src` scaled to `px` square pixels as the PNG `out`.
 pub fn scaled_png(src: &Path, px: u32, out: &Path) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        let img = image::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+        return img.resize_exact(px, px, image::imageops::FilterType::Lanczos3).save(out).map_err(|e| format!("{}: {e}", out.display()));
+    }
     run(Command::new("/usr/bin/sips").args(["-s", "format", "png", "-z", &px.to_string(), &px.to_string()]).arg(src).arg("--out").arg(out))
 }
 

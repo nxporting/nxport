@@ -118,6 +118,11 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 
     log(IpaBuildPhase::PatchingCode);
     let s = app_settings(o.dump, o.mods, o.edits.clone());
+    // Elsewhere guest_image is the image the lifter takes, without the rewrites native code needs (x18, tpidr, svc):
+    // on a device that would crash, so it is not packaged. Making it here is not done yet (llmtalk/TODO.md).
+    if !cfg!(target_os = "macos") {
+        return Err("the iOS guest image can only be built on a Mac for now".into());
+    }
     let image = nxport::guest_image(s.clone())?;
 
     let work = o.out_dir.join(format!(".{}.ipa.work", sanitize(&name)));
@@ -336,11 +341,14 @@ fn write(p: &Path, s: &str) -> Result<(), String> {
 
 /// A copy-on-write clone (APFS), else a copy.
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
     let _ = fs::remove_file(to);
-    if unsafe { libc::clonefile(c(from).as_ptr(), c(to).as_ptr(), 0) } == 0 {
-        return Ok(());
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        if unsafe { libc::clonefile(c(from).as_ptr(), c(to).as_ptr(), 0) } == 0 {
+            return Ok(());
+        }
     }
     fs::copy(from, to).map(|_| ()).map_err(|e| format!("{} -> {}: {e}", from.display(), to.display()))
 }
@@ -362,8 +370,32 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 fn set_executable(p: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(p, fs::Permissions::from_mode(0o755)).map_err(|e| format!("{}: {e}", p.display()))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(p, fs::Permissions::from_mode(0o755)).map_err(|e| format!("{}: {e}", p.display()))
+    }
+    // No modes here: zip_mode gives Mach-O files theirs.
+    #[cfg(not(unix))]
+    {
+        let _ = p;
+        Ok(())
+    }
+}
+
+/// A file's mode in the zip. Hosts without modes: Mach-O files are executable.
+fn zip_mode(p: &Path) -> std::io::Result<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(p).map(|m| m.permissions().mode())
+    }
+    #[cfg(not(unix))]
+    {
+        let mut magic = [0u8; 4];
+        let is_macho = std::io::Read::read_exact(&mut fs::File::open(p)?, &mut magic).is_ok() && u32::from_le_bytes(magic) == 0xfeed_facf;
+        Ok(if is_macho { 0o755 } else { 0o644 })
+    }
 }
 
 /// App icons from the game's logo in the dump; the plist entries, or none without one.
@@ -455,7 +487,7 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
     let base = payload.parent().unwrap();
     let mut stack = vec![payload.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let rel = dir.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+        let rel = dir.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
         z.add_directory(format!("{rel}/"), SimpleFileOptions::default()).map_err(|e| err(&e))?;
         let mut entries: Vec<_> = fs::read_dir(&dir).map_err(|e| err(&e))?.flatten().map(|e| e.path()).collect();
         entries.sort();
@@ -464,10 +496,9 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
                 stack.push(p);
                 continue;
             }
-            use std::os::unix::fs::PermissionsExt;
-            let rel = p.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+            let rel = p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
             let stored = rel.contains(".app/Game/");
-            let mode = fs::metadata(&p).map_err(|e| err(&e))?.permissions().mode();
+            let mode = zip_mode(&p).map_err(|e| err(&e))?;
             let opts = SimpleFileOptions::default()
                 .compression_method(if stored { zip::CompressionMethod::Stored } else { zip::CompressionMethod::Deflated })
                 .unix_permissions(mode & 0o777)
