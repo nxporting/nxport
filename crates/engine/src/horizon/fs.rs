@@ -206,7 +206,7 @@ fn sorted_dirs(dir: &Path) -> Vec<(String, PathBuf)> {
 /// The mods under `root`: `root` itself if it is one, else the folders in it, through the folders mods are packaged
 /// in (is_layout_dir). A folder named for another title is skipped. Other folders inside a mod are not looked into:
 /// a download's variants would all turn on at once.
-fn discover_mods(root: &Path, title: Option<u64>) -> Vec<(String, PathBuf)> {
+pub fn discover_mods(root: &Path, title: Option<u64>) -> Vec<(String, PathBuf)> {
     let name_of = |p: &Path| p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     if is_mod_dir(root) {
         return vec![(name_of(root), root.to_path_buf())];
@@ -248,7 +248,7 @@ pub fn exefs_override(name: &str) -> Option<PathBuf> {
 }
 
 /// Atmosphere's patch sets under `root`: `[.../]exefs_patches/<set>/`, up to two folders down.
-fn patch_sets(root: &Path, depth: u32) -> Vec<(String, PathBuf)> {
+pub fn patch_sets(root: &Path, depth: u32) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     for (name, path) in sorted_dirs(root) {
         if name.eq_ignore_ascii_case("exefs_patches") {
