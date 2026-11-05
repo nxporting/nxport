@@ -81,6 +81,18 @@ pub(crate) fn set_overlay_code_range(start: usize, end: usize) {
     OVERLAY_END.store(end, Ordering::Release);
 }
 
+fn live_guest_code(pc: usize) -> bool {
+    #[cfg(windows)]
+    {
+        crate::live_patch::is_guest_code(pc)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pc;
+        false
+    }
+}
+
 pub(crate) fn set_guest_code_range(start: usize, end: usize) {
     CODE_START.store(start, Ordering::Release);
     CODE_END.store(end, Ordering::Release);
@@ -404,7 +416,8 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, _lr: usize, write: bool) -> b
     LAST_RETRY.with(|r| r.set((0, None)));
     let guest = crate::guest::tls::is_guest_thread()
         && ((pc >= CODE_START.load(Ordering::Acquire) && pc < CODE_END.load(Ordering::Acquire))
-            || (pc >= OVERLAY_START.load(Ordering::Acquire) && pc < OVERLAY_END.load(Ordering::Acquire)));
+            || (pc >= OVERLAY_START.load(Ordering::Acquire) && pc < OVERLAY_END.load(Ordering::Acquire))
+            || live_guest_code(pc));
     if mode() == crate::settings::ReportGuard::Log || !guest {
         record_hit(pc, addr, write);
         if !guest {

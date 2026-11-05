@@ -188,8 +188,36 @@ unsafe fn run_hle(c: &mut Cpu) {
     }
 }
 
+thread_local! {
+    /// How deep this thread is in the interpreter.
+    static INTERPRETING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Code ranges of the libraries compiled while the game runs, for is_guest_code: (start, end), filled in order.
+const MAX_RANGES: usize = 4096;
+static RANGES: [[AtomicUsize; 2]; MAX_RANGES] = [const { [AtomicUsize::new(0), AtomicUsize::new(0)] }; MAX_RANGES];
+static RANGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether a fault at `pc` on this thread comes from guest code that is not in the guest library: the interpreter's, or a
+/// function compiled while the game runs. For report_guard, from its fault handler: reads atomics and a thread local.
+pub fn is_guest_code(pc: usize) -> bool {
+    if INTERPRETING.with(|i| i.get()) > 0 {
+        return true;
+    }
+    (0..RANGE_COUNT.load(Ordering::Acquire).min(MAX_RANGES)).any(|i| {
+        pc >= RANGES[i][0].load(Ordering::Relaxed) && pc < RANGES[i][1].load(Ordering::Relaxed)
+    })
+}
+
 /// Runs guest code from c.pc until it leaves. True: go on at c.pc through the dispatcher; false: return to the caller.
 unsafe fn interpret(c: &mut Cpu) -> bool {
+    INTERPRETING.with(|i| i.set(i.get() + 1));
+    let go_on = interpret_inner(c);
+    INTERPRETING.with(|i| i.set(i.get() - 1));
+    go_on
+}
+
+unsafe fn interpret_inner(c: &mut Cpu) -> bool {
     let state = STATE.get().expect("live patches: not on");
     let dispatch: unsafe extern "sysv64" fn(*mut Cpu) = std::mem::transmute(NX_LIVE_RT_DISPATCH.load(Ordering::Relaxed));
     let pool = HLE_POOL.load(Ordering::Relaxed) as u64;
@@ -634,6 +662,14 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
         let fns = std::slice::from_raw_parts(sym(&format!("{name}_fn_ptrs"))? as *const usize, count);
         init(state.host);
         add(addrs.as_ptr(), fns.as_ptr() as *const c_void, count as u64);
+        if let Some((lo, hi)) = fns.first().and_then(|&f| crate::os::image_range(f)) {
+            let i = RANGE_COUNT.load(Ordering::Relaxed);
+            if i < MAX_RANGES {
+                RANGES[i][0].store(lo, Ordering::Relaxed);
+                RANGES[i][1].store(hi, Ordering::Relaxed);
+                RANGE_COUNT.store(i + 1, Ordering::Release);
+            }
+        }
         for t in state.tables.read().unwrap().iter() {
             if !t.scattered {
                 add(t.addrs.as_ptr(), t.fns.as_ptr() as *const c_void, t.addrs.len() as u64);
