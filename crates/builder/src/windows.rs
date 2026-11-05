@@ -296,14 +296,30 @@ fn profiles_listed(dir: &Path, main: &str) -> String {
     found.concat()
 }
 
-/// The profile made for this version of the game and this lifted C, if there is one.
+/// Where profiles are published, gzipped, as `<main's build id>-<lift::lifted_hash>.profdata.gz`.
+const PROFILES_URL: &str = "https://github.com/nxporting/profiles/releases/latest/download";
+/// Beside PROFILES_DIR: profiles downloaded. Not in profiles_listed, so one published later does not rebuild the code by itself.
+const FETCHED_PROFILES_DIR: &str = "profiles_fetched";
+
+/// The profile made for this version of the game and this lifted C: one put in `dir`, or one published. Without one the
+/// code is built without: slower, and otherwise the same.
 fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, String> {
-    let profile = dir.join(format!("{main}-{}.profdata", nxport_build::lift::lifted_hash(c_dir)?));
+    let name = format!("{main}-{}.profdata", nxport_build::lift::lifted_hash(c_dir)?);
+    let profile = dir.join(&name);
     if profile.is_file() {
         return Ok(Some(profile));
     }
-    println!("  No profile for this code: building without one ({} is not there)", profile.display());
-    Ok(None)
+    let fetched = dir.with_file_name(FETCHED_PROFILES_DIR).join(&name);
+    if fetched.is_file() {
+        return Ok(Some(fetched));
+    }
+    match nxport_build::lift::fetch_gzipped(&format!("{PROFILES_URL}/{name}.gz"), &fetched) {
+        Ok(()) => Ok(Some(fetched)),
+        Err(e) => {
+            println!("  No profile for this code: building without one ({} is not there; {e})", profile.display());
+            Ok(None)
+        }
+    }
 }
 
 /// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt), optimised by `profile`. A
