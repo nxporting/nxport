@@ -605,11 +605,13 @@ fn prune_cache(root: &std::path::Path, now: std::time::SystemTime, kept_for: std
 
 fn zig() -> Result<PathBuf, String> {
     let dir = crate::config::support_dir().ok_or("no data directory")?.join("toolchains");
+    // The last by name, the newest, when a builder update left an older one here.
     std::fs::read_dir(&dir)
         .map_err(|e| format!("{}: {e}", dir.display()))?
         .flatten()
         .map(|e| e.path().join("zig.exe"))
-        .find(|p| p.is_file())
+        .filter(|p| p.is_file())
+        .max()
         .ok_or_else(|| format!("no C compiler in {}", dir.display()))
 }
 
@@ -662,7 +664,7 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
     let tmp = dll.with_extension("tmp.dll");
     let result = std::process::Command::new(zig()?)
         .current_dir(&dir)
-        .args(["cc", "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-w", "-shared", "-o"])
+        .args(["cc", "-O1", "-g0", "-fno-strict-aliasing", "-fomit-frame-pointer", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-w", "-shared", "-o"])
         .arg(&tmp)
         .args(&sources)
         .output()

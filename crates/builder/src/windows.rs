@@ -130,14 +130,16 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     {
         let (dump, c_dir, job, edits, toolchains, app) = (dump.clone(), c_dir.clone(), job.clone(), edits.clone(), toolchains.clone(), app.clone());
         let (base, lift_file, base_file, from) = (base.clone(), work.join("lift.toml"), work.join("base_code.toml"), work.join("base.from"));
+        let profiles = work.join(PROFILES_DIR);
         steps.push((
             "Lifting and compiling the game's code".into(),
             Box::new(move || {
                 let engine = std::env::current_exe().and_then(std::fs::read).map_err(|e| e.to_string())?;
                 let main = nxport::profile::main_build_id_of(&dump).unwrap_or_default();
                 let inputs = format!(
-                    "engine {:016x}\nmain {main}\n{}",
+                    "engine {:016x}\nmain {main}\n{}{}",
                     nxport::vulkan::stage_cache::fnv1a64(&engine),
+                    profiles_listed(&profiles, &main),
                     toml::to_string(&edits).unwrap_or_default()
                 );
                 let stamp = Stamp { file: from, inputs, output: base.clone() };
@@ -160,7 +162,8 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                         edits: edits.clone(),
                     };
                     run_worker(&job, &lift_file, &work(WorkKind::Lift, c_dir.clone()))?;
-                    compile_guest(&toolchains, &c_dir, &built.join("guest.dll"), &job)?;
+                    let profile = profile_for(&profiles, &main, &c_dir)?;
+                    compile_guest(&toolchains, &c_dir, &built.join("guest.dll"), profile.as_deref(), &job)?;
                     run_worker(&job, &base_file, &work(WorkKind::BaseCode, built.join(nxport_build::lift::BASE_CODE_FILE)))?;
                     // Gigabytes of C and objects, needed again only with a new base.
                     let _ = std::fs::remove_dir_all(&c_dir);
@@ -213,7 +216,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             };
             run_worker(&job, &file, &w)?;
             std::fs::create_dir_all(&overlay).map_err(|e| format!("{}: {e}", overlay.display()))?;
-            compile_guest(&toolchains, &into, &overlay.join("guest_overlay.dll"), &job)
+            compile_guest(&toolchains, &into, &overlay.join("guest_overlay.dll"), None, &job)
         }) as Box<dyn FnOnce() -> Result<(), String> + Send>
     };
     steps.push(("Lifting what the mods change".into(), lift_overlay("overlay.toml")));
@@ -277,15 +280,49 @@ fn ipa_steps(r: Request, steps: &mut Vec<Step>) -> Output {
     out
 }
 
-/// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt).
-fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, job: &Arc<Mutex<Job>>) -> Result<(), String> {
+/// The folder of a game's build directory that holds its profiles, each <main's build id>-<lift::lifted_hash>.profdata.
+const PROFILES_DIR: &str = "profiles";
+
+/// This version of the game's profiles, by name and size: one added or taken away builds the code again.
+fn profiles_listed(dir: &Path, main: &str) -> String {
+    let mut found: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| !main.is_empty() && e.file_name().to_string_lossy().starts_with(main))
+        .map(|e| format!("profile {} {}\n", e.file_name().to_string_lossy(), e.metadata().map_or(0, |m| m.len())))
+        .collect();
+    found.sort();
+    found.concat()
+}
+
+/// The profile made for this version of the game and this lifted C, if there is one.
+fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, String> {
+    let profile = dir.join(format!("{main}-{}.profdata", nxport_build::lift::lifted_hash(c_dir)?));
+    if profile.is_file() {
+        return Ok(Some(profile));
+    }
+    println!("  No profile for this code: building without one ({} is not there)", profile.display());
+    Ok(None)
+}
+
+/// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt), optimised by `profile`. A
+/// profile the compiler cannot read costs the optimisation, not the build.
+fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Option<&Path>, job: &Arc<Mutex<Job>>) -> Result<(), String> {
     let cc = nxport_build::zig::cc(toolchains, &|_, _| {})?;
     let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
+    let jobs = cpus.saturating_sub(2).max(2);
+    let on_file = |done, total| progress(job, "C files".into(), done, total);
     // Also copies modules.txt beside the library.
-    nxport_build::lift::compile(c_dir, library, &cc, cpus.saturating_sub(2).max(2), &|done, total| {
-        progress(job, "C files".into(), done, total)
-    })
-    .map_err(|e| e.to_string())?;
+    if let Err(e) = nxport_build::lift::compile(c_dir, library, &cc, jobs, profile, &on_file) {
+        if profile.is_none() {
+            return Err(e.to_string());
+        }
+        println!("  The profile did not work, building without it: {e}");
+        // A failed compile records no flags, and what it did compile would be taken as it is.
+        let _ = std::fs::remove_dir_all(c_dir.join("obj"));
+        nxport_build::lift::compile(c_dir, library, &cc, jobs, None, &on_file).map_err(|e| e.to_string())?;
+    }
     // The linker's import library (the engine loads the library at run time; the .pdb stays, for crashes).
     let dir = library.parent().unwrap_or(Path::new("."));
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {

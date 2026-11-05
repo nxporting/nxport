@@ -85,10 +85,10 @@ fn llvm_bin() -> Result<PathBuf, String> {
         .ok_or_else(|| "building the iOS engine needs LLVM (clang and ld64.lld): https://github.com/llvm/llvm-project/releases".to_string())
 }
 
-/// zig's headers for macOS on arm64, as clang arguments.
+/// zig's headers for Apple platforms, as clang arguments.
 fn libc_includes(zig: &Path) -> String {
     let inc = zig.join("lib/libc/include");
-    ["aarch64-macos-none", "any-macos-any"]
+    ["any-darwin-any"]
         .iter()
         .map(|d| format!("-isystem {}", inc.join(d).display().to_string().replace('\\', "/")))
         .collect::<Vec<_>>()
@@ -130,7 +130,7 @@ pub fn build(toolchains: &Path) -> Result<PathBuf, String> {
         .env(
             "CXX_aarch64_apple_ios",
             format!(
-                "clang++ {target} -nostdlibinc -nostdinc++ -isystem {cxx}/include -isystem {cxxabi}/include {libc} -D_LIBCPP_ABI_VERSION=1 -D_LIBCPP_ABI_NAMESPACE=__1 -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE -D_LIBCPP_PSTL_CPU_BACKEND_SERIAL -D_LIBCPP_DISABLE_AVAILABILITY -Wno-everything"
+                "clang++ {target} -nostdlibinc -nostdinc++ -isystem {cxx}/include -isystem {cxxabi}/include {libc} -D_LIBCPP_ABI_VERSION=1 -D_LIBCPP_ABI_NAMESPACE=__1 -D_LIBCPP_HAS_THREADS=1 -D_LIBCPP_HAS_MONOTONIC_CLOCK -D_LIBCPP_HAS_TERMINAL -D_LIBCPP_HAS_MUSL_LIBC=0 -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS -D_LIBCPP_HAS_VENDOR_AVAILABILITY_ANNOTATIONS=0 -D_LIBCPP_HAS_FILESYSTEM=1 -D_LIBCPP_HAS_RANDOM_DEVICE -D_LIBCPP_HAS_LOCALIZATION -D_LIBCPP_HAS_UNICODE -D_LIBCPP_HAS_WIDE_CHARACTERS -D_LIBCPP_HAS_NO_STD_MODULES -D_LIBCPP_PSTL_BACKEND_SERIAL -D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_NONE -D_LIBCPP_ASSERTION_SEMANTIC_DEFAULT=_LIBCPP_ASSERTION_SEMANTIC_IGNORE -D_LIBCPP_DISABLE_AVAILABILITY -Wno-everything"
             ),
         )
         .env("AR_aarch64_apple_ios", "llvm-ar")

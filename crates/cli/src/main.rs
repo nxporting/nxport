@@ -203,6 +203,9 @@ enum Command {
         /// Files compiled at once (default: the CPU count)
         #[arg(short)]
         j: Option<usize>,
+        /// An LLVM profile to optimise by (made by llvm-profdata merge of this compiler's LLVM or older)
+        #[arg(long)]
+        profile: Option<PathBuf>,
     },
 }
 
@@ -530,10 +533,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nxport_build::lift::report(&name, &r);
             }
         }
-        Command::CompileGuest { c_dir, out, cc, j } => {
+        Command::CompileGuest { c_dir, out, cc, j, profile } => {
             let cc: Vec<String> = cc.split_whitespace().map(String::from).collect();
             let jobs = j.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, &|_, _| {})?;
+            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, profile.as_deref(), &|_, _| {})?;
             println!("[+] {}", out.display());
         }
     }

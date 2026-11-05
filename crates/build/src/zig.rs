@@ -6,13 +6,14 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// The zig release lift::compile's flags are made for (0.13 misreads -march=x86-64-v3, for example).
-pub const VERSION: &str = "0.13.0";
-const NAME: &str = "zig-windows-x86_64-0.13.0";
-const URL: &str = "https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip";
+/// The zig release lift::compile's flags are made for, and game profiles: LLVM reads a profile from its own format
+/// version or older, and this zig holds LLVM 22.
+pub const VERSION: &str = "0.17.1";
+const NAME: &str = "zig-x86_64-windows-0.17.1";
+const URL: &str = "https://ziglang.org/download/0.17.1/zig-x86_64-windows-0.17.1.zip";
 /// From https://ziglang.org/download/index.json.
-const SIZE: u64 = 79_163_968;
-const SHA256: &str = "d859994725ef9402381e557c60bb57497215682e355204d754ee3df75ee3c158";
+const SIZE: u64 = 100_343_666;
+const SHA256: &str = "b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e";
 
 /// The C compiler command line (zig.exe cc) of the zig in `toolchains`, downloading it there first if needed;
 /// `on_download(bytes, total)` follows the download.

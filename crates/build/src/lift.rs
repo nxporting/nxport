@@ -170,24 +170,37 @@ pub const MODULES_FILE: &str = "modules.txt";
 
 /// Compiles the C files in `c_dir` (lift_game's or lift_nso's) into the guest library `out` (a DLL / shared library),
 /// running `cc` (a C compiler command line: clang, or `zig cc`) on `jobs` files at once. The objects stay in
-/// `c_dir/obj` and are reused while newer than their source. `on_file(done, total)` is told as each file is done
-/// (compiled or reused), from the compiling threads.
+/// `c_dir/obj` and are reused while newer than their source. `profile`: an LLVM profile to optimise by; it matches
+/// functions by name and control flow, so one the C has changed, or does not have, is just built without. `on_file(done,
+/// total)` is told as each file is done (compiled or reused), from the compiling threads.
 pub fn compile(
     c_dir: &Path,
     out: &Path,
     cc: &[String],
     jobs: usize,
+    profile: Option<&Path>,
     on_file: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
-    // The x86-64-v3 features, spelled out (zig cc 0.13 misreads -march=x86-64-v3): above all hardware FMA, which the
-    // lifted floating-point code needs to round like the guest's. zig cc builds any of -O1 to -O3 as clang -O2.
-    // No -target: zig cc then builds for the building machine's CPU (-mcpu=native), which is where the app runs. Pinned
-    // to x86_64-windows-gnu (generic tuning, only these features) TotK ran 11% slower (shrine, 147 -> 131 fps).
+    // The x86-64-v3 features, spelled out: above all hardware FMA, which the lifted floating-point code needs to round
+    // like the guest's. zig cc builds any of -O1 to -O3 as clang -O2, tunes for generic x86-64 once any -m flag is given,
+    // and keeps frame pointers (a register) unless told not to.
     let flags = [
-        "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c",
-        "-mpopcnt", "-msse4.2", "-mcx16",
+        "-O1", "-g0", "-fno-strict-aliasing", "-fomit-frame-pointer", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt",
+        "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16",
     ];
+    // The profile's hash is a flag too: zig's cache of objects need not look inside a file the flags name.
+    let profile = profile.map(std::path::absolute).transpose()?;
+    let profile_flags: Vec<String> = match &profile {
+        Some(p) => {
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?);
+            let hash: String = hash.iter().take(8).map(|b| format!("{b:02x}")).collect();
+            vec![format!("-fprofile-use={}", p.display()), format!("-DNX_PROFILE=0x{hash}")]
+        }
+        None => Vec::new(),
+    };
+    let c_dir_full = std::path::absolute(c_dir)?;
     outside_git(c_dir)?;
     outside_git(out.parent().unwrap_or(Path::new(".")))?;
     let obj_dir = c_dir.join("obj");
@@ -210,12 +223,13 @@ pub fn compile(
     // Objects compiled with other flags (and the compiler they came from) are compiled again: flags.txt holds them
     // (none: objects from before it, taken as they are).
     let stamp = obj_dir.join("flags.txt");
-    let stamp_text = format!("{}\n{}\n", cc.join(" "), flags.join(" "));
+    let stamp_text = format!("{}\n{}\n{}\n", cc.join(" "), flags.join(" "), profile_flags.join(" "));
     let flags_changed = std::fs::read_to_string(&stamp).is_ok_and(|t| t != stamp_text);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let finished = || on_file(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, sources.len());
     let failed = std::sync::Mutex::new(Vec::new());
+    let unmatched = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
         for _ in 0..jobs.max(1) {
             scope.spawn(|| loop {
@@ -235,16 +249,25 @@ pub fn compile(
                     finished();
                     continue;
                 }
-                let r = command(prog)
-                    .args(pre)
-                    .args(flags)
-                    .arg("-c")
-                    .arg(src)
-                    .arg("-o")
-                    .arg(obj)
-                    .output();
+                // In the C directory, by the file's bare name: a profile names static functions by the path they were
+                // compiled from, and one made on another machine must find them.
+                let r = std::path::absolute(obj).and_then(|obj| {
+                    command(prog)
+                        .current_dir(&c_dir_full)
+                        .args(pre)
+                        .args(flags)
+                        .args(&profile_flags)
+                        .arg("-c")
+                        .arg(src.file_name().unwrap())
+                        .arg("-o")
+                        .arg(obj)
+                        .output()
+                });
                 match r {
-                    Ok(o) if o.status.success() => {}
+                    Ok(o) if o.status.success() => {
+                        let warnings = String::from_utf8_lossy(&o.stderr);
+                        unmatched.fetch_add(warnings.matches("(hash mismatch)").count(), std::sync::atomic::Ordering::Relaxed);
+                    }
                     Ok(o) => failed.lock().unwrap().push(format!("{}: {}", src.display(), String::from_utf8_lossy(&o.stderr))),
                     Err(e) => failed.lock().unwrap().push(format!("{}: {e}", src.display())),
                 }
@@ -255,6 +278,9 @@ pub fn compile(
     let failed = failed.into_inner().unwrap();
     if let Some(f) = failed.first() {
         return Err(format!("{} of {} C files failed to compile; the first: {f}", failed.len(), sources.len()).into());
+    }
+    if let Some(p) = &profile {
+        println!("  Optimised by {}: {} functions changed since it was made, built without it", p.display(), unmatched.into_inner());
     }
     std::fs::write(&stamp, &stamp_text)?;
     if let Some(dir) = out.parent() {
@@ -280,6 +306,25 @@ pub fn compile(
         std::fs::copy(&modules, dest)?;
     }
     Ok(())
+}
+
+/// What identifies the lifted C in `c_dir`, which is what a profile is made for: the names and contents of its C files
+/// and headers, hashed.
+pub fn lifted_hash(c_dir: &Path) -> Result<String, String> {
+    use sha2::Digest;
+    let mut files: Vec<_> = std::fs::read_dir(c_dir)
+        .map_err(|e| format!("{}: {e}", c_dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "c" || e == "h"))
+        .collect();
+    files.sort();
+    let mut hash = sha2::Sha256::new();
+    for f in files {
+        hash.update(f.file_name().unwrap_or_default().as_encoded_bytes());
+        hash.update(std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?);
+    }
+    Ok(hash.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect())
 }
 
 /// A command for a tool run in the background: on Windows without a console window of its own (a builder started
