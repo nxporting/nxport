@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use nxport::settings::SettingsPatch;
 
-use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step};
+use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step, Target};
 
 /// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile).
 pub const PRECOMPILES_SHADERS: bool = true;
@@ -25,6 +25,9 @@ fn progress(job: &Mutex<Job>, sub: String, done: usize, total: usize) {
 }
 
 pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
+    if r.target == Target::Ipa {
+        return ipa_steps(r, steps);
+    }
     let Request { name, title_id, work, dump, mods, out_dir, edits, prebuild, bundle_game, job, .. } = r;
 
     let app = out_dir.join(name.replace([':', '/'], " -"));
@@ -79,6 +82,9 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             pipeline_list: Some(list.clone()),
             patched_image: None,
             base: None,
+            bundle_game: false,
+            entitlements: false,
+            bundle_id: None,
             edits: SettingsPatch::default(),
         };
         let (job, file, from, built) = (job.clone(), work.join("shaders.toml"), work.join("vulkan_cache.from"), vulkan_cache.clone());
@@ -149,6 +155,9 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                         pipeline_list: None,
                         patched_image: None,
                         base: None,
+                        bundle_game: false,
+                        entitlements: false,
+                        bundle_id: None,
                         edits: edits.clone(),
                     };
                     run_worker(&job, &lift_file, &work(WorkKind::Lift, c_dir.clone()))?;
@@ -201,6 +210,9 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                 pipeline_list: None,
                 patched_image,
                 base: Some(base),
+                bundle_game: false,
+                entitlements: false,
+                bundle_id: None,
                 edits,
             };
             run_worker(&job, &file, &w)?;
@@ -232,6 +244,52 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             "Finishing the app".into(),
             Box::new(move || {
                 *out.lock().unwrap() = Some(app);
+                Ok(())
+            }),
+        ));
+    }
+    out
+}
+
+/// The iOS target: the engine for iOS from this checkout, then the app in a worker (the guest image needs a process of
+/// its own). Apple's Metal compiler being Mac-only, the app has no shader cache: it translates as the game loads.
+fn ipa_steps(r: Request, steps: &mut Vec<Step>) -> Output {
+    let Request { name, work, dump, mods, out_dir, edits, bundle_game, entitlements, bundle_id, job, .. } = r;
+    let toolchains = crate::app::data_dir().join("toolchains");
+    steps.push((
+        "Building the engine for iOS".into(),
+        Box::new(move || {
+            if nxport_build::ios_engine::source_root().is_some() {
+                let engine = nxport_build::ios_engine::build(&toolchains)?;
+                println!("  {}", engine.display());
+            }
+            Ok(())
+        }),
+    ));
+    let out: Output = Arc::new(Mutex::new(None));
+    {
+        let (out, file) = (out.clone(), work.join("ipa.toml"));
+        steps.push((
+            "Building the iOS app".into(),
+            Box::new(move || {
+                std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
+                std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+                let w = Work {
+                    kind: WorkKind::Ipa,
+                    dump,
+                    into: out_dir.clone(),
+                    mods,
+                    stages: None,
+                    pipeline_list: None,
+                    patched_image: None,
+                    base: None,
+                    bundle_game,
+                    entitlements,
+                    bundle_id,
+                    edits,
+                };
+                run_worker(&job, &file, &w)?;
+                *out.lock().unwrap() = Some(nxport_build::ipa::path_for(&out_dir, &name));
                 Ok(())
             }),
         ));
@@ -312,6 +370,8 @@ enum WorkKind {
     BaseCode,
     /// What `mods` change against `base`, lifted to C files in `into` (nxport_build::lift::lift_overlay).
     Overlay,
+    /// The iOS app, in the folder `into` (nxport_build::ipa).
+    Ipa,
     /// The Vulkan shader cache in `into` from the shader stages in `stages` and the pipelines `pipeline_list` names
     /// (nxport_build::vulkan_precompile).
     Shaders,
@@ -333,6 +393,13 @@ pub struct Work {
     /// Overlay: the guest library of the game without mods.
     #[serde(default)]
     base: Option<PathBuf>,
+    /// Ipa: as nxport_build::ipa::Options.
+    #[serde(default)]
+    bundle_game: bool,
+    #[serde(default)]
+    entitlements: bool,
+    #[serde(default)]
+    bundle_id: Option<String>,
     /// The settings above the game's profile (last: a table).
     #[serde(default)]
     edits: SettingsPatch,
@@ -438,6 +505,22 @@ pub fn worker(file: &Path) -> Result<(), String> {
             for (name, r) in &lifted {
                 nxport_build::lift::report(name, r);
             }
+        }
+        WorkKind::Ipa => {
+            let ipa = nxport_build::ipa::build(
+                &nxport_build::ipa::Options {
+                    dump: &w.dump,
+                    mods: w.mods.as_deref(),
+                    cache: None,
+                    out_dir: &w.into,
+                    edits: w.edits,
+                    bundle_game: w.bundle_game,
+                    entitlements: w.entitlements,
+                    bundle_id: w.bundle_id,
+                },
+                &|step| println!("[+] {step}"),
+            )?;
+            println!("  {}", ipa.display());
         }
         WorkKind::Shaders => {
             use nxport_build::vulkan_precompile::{self as vp, VulkanPrecompilePhase as Phase};

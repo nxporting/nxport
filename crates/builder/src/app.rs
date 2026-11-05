@@ -146,7 +146,7 @@ impl Target {
     #[cfg(target_os = "macos")]
     pub const ALL: &'static [Target] = &[Target::MacApp, Target::Ipa];
     #[cfg(windows)]
-    pub const ALL: &'static [Target] = &[Target::WindowsApp];
+    pub const ALL: &'static [Target] = &[Target::WindowsApp, Target::Ipa];
     #[cfg(not(any(target_os = "macos", windows)))]
     pub const ALL: &'static [Target] = &[];
 
@@ -187,7 +187,9 @@ impl Target {
     /// Whether the app's shaders can be translated when it is built (Windows: windows::PRECOMPILES_SHADERS).
     pub fn prebuilds_shaders(self) -> bool {
         match self {
-            Target::MacApp | Target::Ipa => true,
+            Target::MacApp => true,
+            // The Metal shader compiler is Apple's: on Windows the iOS app translates shaders as the game loads them.
+            Target::Ipa => cfg!(target_os = "macos"),
             #[cfg(windows)]
             Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
             #[cfg(not(windows))]
@@ -1203,7 +1205,7 @@ struct Args {
 
 impl Builder {
     /// Runs a build as the Build button starts it, waiting for it and printing where it is.
-    fn build_now(&mut self, preset: Option<&str>, out: Option<PathBuf>) -> Result<PathBuf, String> {
+    fn build_now(&mut self, preset: Option<&str>, mods: Option<PathBuf>, out: Option<PathBuf>) -> Result<PathBuf, String> {
         if let Some(name) = preset {
             let p = self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(name)).cloned();
             let p = p.ok_or_else(|| format!("no preset {name} for this game"))?;
@@ -1211,6 +1213,10 @@ impl Builder {
             if let Some(e) = self.message.take() {
                 return Err(e);
             }
+        }
+        // After the preset: changing target recalls what that target last used.
+        if let Some(m) = mods {
+            self.mods = m.display().to_string();
         }
         if let Some(o) = out {
             self.out_dir = o.display().to_string();
@@ -1262,10 +1268,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut b = Builder::new(dump);
     b.expand_all = expand;
     if build {
-        if let Some(m) = mods {
-            b.mods = m.display().to_string();
-        }
-        let app = b.build_now(preset.as_deref(), out)?;
+        let app = b.build_now(preset.as_deref(), mods, out)?;
         println!("Built {}", app.display());
         return Ok(());
     }
