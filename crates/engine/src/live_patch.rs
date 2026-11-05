@@ -551,6 +551,15 @@ pub fn code_written(start: usize, len: usize) {
 
 /// A thread compiling changed functions, in the background of the running game.
 fn compiler() {
+    static PRUNE: std::sync::Once = std::sync::Once::new();
+    PRUNE.call_once(|| {
+        if let Ok(root) = cache_root() {
+            let removed = prune_cache(&root, std::time::SystemTime::now(), CACHE_KEPT_FOR);
+            if removed > 0 {
+                println!("[+] Live patches: {removed} unused functions removed from the cache");
+            }
+        }
+    });
     let state = STATE.get().expect("live patches: not on");
     loop {
         let (func, end) = {
@@ -571,6 +580,27 @@ fn compiler() {
 fn cache_root() -> Result<PathBuf, String> {
     let tid = crate::game::title_id().unwrap_or(0);
     Ok(crate::config::support_dir().ok_or("no data directory")?.join("games").join(format!("{tid:016x}")).join("live_patches"))
+}
+
+/// Functions no run has used for this long leave the cache: a new engine build or a changed mod orphans its entries.
+const CACHE_KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+/// Marks when an entry was last used.
+const CACHE_USED: &str = "used";
+
+/// Removes the cache's entries last used more than `kept_for` before `now`: how many.
+fn prune_cache(root: &std::path::Path, now: std::time::SystemTime, kept_for: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    let mut removed = 0;
+    for dir in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        // An entry being made has no mark yet: its directory's time stands in.
+        let used = std::fs::metadata(dir.join(CACHE_USED)).or_else(|_| std::fs::metadata(&dir)).and_then(|m| m.modified());
+        let old = used.is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > kept_for));
+        // A library another run has loaded refuses, and stays until a later launch.
+        if old && std::fs::remove_dir_all(&dir).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 fn zig() -> Result<PathBuf, String> {
@@ -655,6 +685,9 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
     if cache_name(state, func, end) != name {
         return Ok(());
     }
+    if let Some(dir) = dll.parent() {
+        let _ = std::fs::write(dir.join(CACHE_USED), b"");
+    }
     let _applying = state.applying.lock().unwrap();
     unsafe {
         let lib = crate::os::Library::open(&dll)?;
@@ -708,6 +741,28 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cache_loses_only_what_was_not_used_lately() {
+        let root = std::env::temp_dir().join(format!("nx_prune_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["recent", "stale", "unmarked"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::fs::write(root.join("recent").join(CACHE_USED), b"").unwrap();
+        std::fs::write(root.join("stale").join(CACHE_USED), b"").unwrap();
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        let now = std::time::SystemTime::now();
+        let f = std::fs::File::options().write(true).open(root.join("stale").join(CACHE_USED)).unwrap();
+        f.set_modified(now - 40 * day).unwrap();
+        drop(f);
+        assert_eq!(prune_cache(&root, now, 30 * day), 1);
+        assert!(root.join("recent").is_dir() && root.join("unmarked").is_dir());
+        assert!(!root.join("stale").exists());
+        // A root that does not exist yet.
+        assert_eq!(prune_cache(&root.join("none"), now, 30 * day), 0);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn a_stub_sets_pc_and_jumps_to_the_tail() {
