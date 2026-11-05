@@ -30,6 +30,8 @@ pub mod translation;
 pub mod vulkan_precompile;
 // The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts.
 #[cfg(windows)]
+pub mod ios_engine;
+#[cfg(windows)]
 pub mod winapp;
 #[cfg(windows)]
 pub mod zig;

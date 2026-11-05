@@ -309,11 +309,14 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 /// to this program (a release).
 fn ios_artifact(name: &str) -> Option<PathBuf> {
     let built = Path::new(env!("NXPORT_ENGINE_IOS")).with_file_name(name);
+    #[cfg(windows)]
+    if let Some(p) = crate::ios_engine::built_engine().map(|e| e.with_file_name(name)).filter(|p| p.is_file()) {
+        return Some(p);
+    }
     let mut candidates = vec![
         built,
         PathBuf::from("target/engines/aarch64-apple-ios/release").join(name),
         PathBuf::from("target/aarch64-apple-ios/release").join(name),
-        PathBuf::from("target/xios/aarch64-apple-ios/release").join(name),
         PathBuf::from("target/ios").join(name),
         PathBuf::from("target/ios/work/Payload/Kirby.app/Frameworks").join(name),
         PathBuf::from("target/work/Payload/TotK.app/Frameworks").join(name),
@@ -325,6 +328,11 @@ fn ios_artifact(name: &str) -> Option<PathBuf> {
         }
     }
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The .ipa `build` writes for game `name` in `out_dir`.
+pub fn path_for(out_dir: &Path, name: &str) -> PathBuf {
+    out_dir.join(format!("{}.ipa", sanitize(name)))
 }
 
 fn sanitize(name: &str) -> String {
