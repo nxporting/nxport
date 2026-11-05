@@ -6737,6 +6737,11 @@ static GUEST_ENTRIES: std::sync::OnceLock<std::collections::HashMap<usize, usize
 /// the AOT image), and without one an NVN call would run on the game's stack buffer (horizon/thread_stack.rs).
 pub fn set_guest_entries(images: &[(usize, usize)], make: &mut dyn FnMut(*const ()) -> usize) {
     let mut map = std::collections::HashMap::new();
+    // A trampoline per name, not per function address: linkers fold identical functions on some hosts and not on others,
+    // and the trampolines must come out the same on every host (the iOS guest image). Only the names no function
+    // implements share one, the generic stub's.
+    let stub = crate::hle!(hle_nvn_generic_stub());
+    let mut seen = std::collections::HashSet::new();
     for &(start, len) in images {
         let bytes = unsafe { std::slice::from_raw_parts(start as *const u8, len) };
         let mut i = 0;
@@ -6748,13 +6753,20 @@ pub fn set_guest_entries(images: &[(usize, usize)], make: &mut dyn FnMut(*const 
                 continue;
             }
             let name = std::str::from_utf8(&bytes[at..end]).unwrap_or("");
-            for f in [Some(resolve_proc(name)), bootstrap_fn(name)].into_iter().flatten() {
-                map.entry(f as usize).or_insert_with(|| make(f));
+            if !seen.insert(name.to_string()) {
+                continue;
+            }
+            let (proc, boot) = (resolve_proc(name), bootstrap_fn(name));
+            for f in [Some(proc), boot.filter(|&b| b != proc)].into_iter().flatten() {
+                if f == stub {
+                    map.entry(f as usize).or_insert_with(|| make(f));
+                } else {
+                    map.insert(f as usize, make(f));
+                }
             }
         }
     }
-    let f = crate::hle!(hle_nvn_generic_stub());
-    map.entry(f as usize).or_insert_with(|| make(f));
+    map.entry(stub as usize).or_insert_with(|| make(stub));
     println!("[+] NVN: {} functions behind HLE trampolines", map.len());
     let _ = GUEST_ENTRIES.set(map);
 }
