@@ -334,8 +334,14 @@ unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, sets: &mut Sets, op: Op, en
         Op::Words(..) => unreachable!(),
         Op::VertexBuffer(binding, b, o) => d.cmd_bind_vertex_buffers(c, binding, &[b], &[o]),
         Op::IndexBuffer(b, o, ty) => d.cmd_bind_index_buffer(c, b, o, ty),
-        Op::Draw(n, i, first, base) => d.cmd_draw(c, n, i, first, base),
-        Op::DrawIndexed(n, i, first, base_vertex, base) => d.cmd_draw_indexed(c, n, i, first, base_vertex, base),
+        Op::Draw(n, i, first, base) => {
+            crate::vulkan::count_for_overlay(&crate::vulkan::OVERLAY_DRAWS);
+            d.cmd_draw(c, n, i, first, base)
+        }
+        Op::DrawIndexed(n, i, first, base_vertex, base) => {
+            crate::vulkan::count_for_overlay(&crate::vulkan::OVERLAY_DRAWS);
+            d.cmd_draw_indexed(c, n, i, first, base_vertex, base)
+        }
         Op::Barrier => dev.full_barrier(c),
         Op::Checkpoint(what, args) => dev.checkpoint(c, what, *args),
         Op::Fill(src, dst, len, epoch) => copy_guest(src, dst as *mut u8, len as usize, epoch),

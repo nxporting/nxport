@@ -193,6 +193,8 @@ impl Window {
             acquired = s.swapchain.acquire_next_image(self.swapchain, 1_000_000_000, sem, vk::Fence::null());
         }
         let Ok((index, _)) = acquired else { return };
+        #[cfg(windows)]
+        let slot_index = self.next;
         let slot = &self.slots[self.next];
         self.next = (self.next + 1) % SLOTS;
         let _ = dev.device.reset_fences(&[slot.fence]);
@@ -258,13 +260,22 @@ impl Window {
             .dst_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
             .dst_offsets([vk::Offset3D { x: dx, y: dy, z: 0 }, vk::Offset3D { x: dx + dw, y: dy + dh, z: 1 }]);
         d.cmd_blit_image(slot.cb, src, vk::ImageLayout::GENERAL, dst, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region], vk::Filter::LINEAR);
+        #[cfg(windows)]
+        let drawn_over = super::overlay::record(dev, slot.cb, dst, self.extent, slot_index, SLOTS);
+        #[cfg(not(windows))]
+        let drawn_over = false;
+        let (old_layout, src_access, src_stage) = if drawn_over {
+            (vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL, vk::AccessFlags::COLOR_ATTACHMENT_WRITE, vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+        } else {
+            (vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::AccessFlags::TRANSFER_WRITE, vk::PipelineStageFlags::TRANSFER)
+        };
         let to_present = [vk::ImageMemoryBarrier::default()
             .image(dst)
-            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .old_layout(old_layout)
             .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .src_access_mask(src_access)
             .subresource_range(range)];
-        d.cmd_pipeline_barrier(slot.cb, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::BOTTOM_OF_PIPE, vk::DependencyFlags::empty(), &[], &[], &to_present);
+        d.cmd_pipeline_barrier(slot.cb, src_stage, vk::PipelineStageFlags::BOTTOM_OF_PIPE, vk::DependencyFlags::empty(), &[], &[], &to_present);
         let _ = d.end_command_buffer(slot.cb);
         let (cbs, waits, stages, signals) = ([slot.cb], [slot.acquired], [vk::PipelineStageFlags::TRANSFER], [self.done[index as usize]]);
         let submit = vk::SubmitInfo::default().command_buffers(&cbs).wait_semaphores(&waits).wait_dst_stage_mask(&stages).signal_semaphores(&signals);

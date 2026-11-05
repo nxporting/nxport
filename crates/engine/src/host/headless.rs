@@ -20,6 +20,7 @@ pub mod live;
 
 
 pub mod overlay {
+    pub use crate::perf_stats::*;
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
     use std::sync::LazyLock;
 
