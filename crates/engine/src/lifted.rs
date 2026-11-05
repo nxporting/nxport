@@ -74,6 +74,13 @@ unsafe extern "C" fn host_resolve_hle(pc: u64) -> *const crate::hle_abi::Hle {
 
 unsafe extern "C" fn host_call_hle(h: *const crate::hle_abi::Hle, c: *mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
+    // The dispatcher's cache keeps what it resolved: a mod may have hooked this trampoline since.
+    #[cfg(windows)]
+    if crate::live_patch::enabled() && crate::live_patch::hle_hooked((*c).pc) {
+        (handlers().unknown)(&mut *c);
+        CURRENT.with(|cur| cur.set(prev));
+        return;
+    }
     (*h).call(&mut *c);
     CURRENT.with(|cur| cur.set(prev));
 }
