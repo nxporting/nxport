@@ -7,11 +7,12 @@ mod batch_kernels;
 /// The app icon from the dump, as a Windows .ico written into the app's program.
 pub mod app_icon;
 pub mod extract_shaders;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod icon;
 // The Apple packaging (app bundles, signed Mach-O images, Metal shader caches through xcrun) runs on macOS hosts.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub mod ipa;
+pub mod adhoc_sign;
 pub mod lift;
 pub mod macho;
 pub use nxport::metal::msl_specialize;
