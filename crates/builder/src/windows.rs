@@ -126,14 +126,21 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     // it loads (IPS, pchtxt): that, and the modules of plugin mods, go into an overlay library beside it
     // (nxport_build::lift::lift_overlay). What plugin mods patch while the game runs is handled while it runs
     // (engine live_patch.rs, which the overlay's presence turns on): a run ahead of time could not know a patch's moment.
+    // With code mods, a library of its own, whose functions are not inlined (runtime/cpu.h), kept beside the plain one: changing
+    // mods does not cost a compile of either.
+    let base_for_mods = work.join("base_mods");
     let base = work.join("base");
     {
         let (dump, c_dir, job, edits, toolchains, app) = (dump.clone(), c_dir.clone(), job.clone(), edits.clone(), toolchains.clone(), app.clone());
-        let (base, lift_file, base_file, from) = (base.clone(), work.join("lift.toml"), work.join("base_code.toml"), work.join("base.from"));
+        let (plain_base, mods_base, code_mods_of) = (base.clone(), base_for_mods.clone(), app_mods.clone());
+        let (lift_file, base_file, from) = (work.join("lift.toml"), work.join("base_code.toml"), work.join("base.from"));
         let profiles = work.join(PROFILES_DIR);
         steps.push((
             "Lifting and compiling the game's code".into(),
             Box::new(move || {
+                let code_mods = has_code_mods(code_mods_of.lock().unwrap().as_deref(), title_id);
+                let base = if code_mods { mods_base } else { plain_base };
+                let from = if code_mods { from.with_file_name("base_mods.from") } else { from };
                 let engine = std::env::current_exe().and_then(std::fs::read).map_err(|e| e.to_string())?;
                 let main = nxport::profile::main_build_id_of(&dump).unwrap_or_default();
                 let inputs = format!(
@@ -163,7 +170,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                     };
                     run_worker(&job, &lift_file, &work(WorkKind::Lift, c_dir.clone()))?;
                     let profile = profile_for(&profiles, &main, &c_dir)?;
-                    compile_guest(&toolchains, &c_dir, &built.join("guest.dll"), profile.as_deref(), &job)?;
+                    compile_guest(&toolchains, &c_dir, &built.join("guest.dll"), profile.as_deref(), code_mods, &job)?;
                     run_worker(&job, &base_file, &work(WorkKind::BaseCode, built.join(nxport_build::lift::BASE_CODE_FILE)))?;
                     // Gigabytes of C and objects, needed again only with a new base.
                     let _ = std::fs::remove_dir_all(&c_dir);
@@ -189,7 +196,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             app_mods.clone(),
             edits.clone(),
             work.join(file),
-            base.join("guest.dll"),
+            base_for_mods.join("guest.dll"),
             toolchains.clone(),
             overlay.clone(),
         );
@@ -216,7 +223,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             };
             run_worker(&job, &file, &w)?;
             std::fs::create_dir_all(&overlay).map_err(|e| format!("{}: {e}", overlay.display()))?;
-            compile_guest(&toolchains, &into, &overlay.join("guest_overlay.dll"), None, &job)
+            compile_guest(&toolchains, &into, &overlay.join("guest_overlay.dll"), None, true, &job)
         }) as Box<dyn FnOnce() -> Result<(), String> + Send>
     };
     steps.push(("Lifting what the mods change".into(), lift_overlay("overlay.toml")));
@@ -335,8 +342,11 @@ fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, 
 
 /// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt), optimised by `profile`. A
 /// profile the compiler cannot read costs the optimisation, not the build.
-fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Option<&Path>, job: &Arc<Mutex<Job>>) -> Result<(), String> {
-    let cc = nxport_build::zig::cc(toolchains, &|_, _| {})?;
+fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Option<&Path>, no_inline: bool, job: &Arc<Mutex<Job>>) -> Result<(), String> {
+    let mut cc = nxport_build::zig::cc(toolchains, &|_, _| {})?;
+    if no_inline {
+        cc.push("-DNX_NO_INLINE".into());
+    }
     let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
     let jobs = cpus.saturating_sub(2).max(2);
     let on_file = |done, total| progress(job, "C files".into(), done, total);
