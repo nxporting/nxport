@@ -56,13 +56,14 @@ fn parse_ips(data: &[u8]) -> Option<Vec<Patch>> {
             p += size;
             b
         };
-        if offset < 0x100 {
-            continue; // patches the NSO header itself: nothing in memory
+        // What falls in the NSO header is nothing in memory.
+        let skip = 0x100usize.saturating_sub(offset).min(bytes.len());
+        if skip < bytes.len() {
+            out.push(Patch {
+                offset: (offset + skip) - 0x100,
+                bytes: bytes[skip..].to_vec(),
+            });
         }
-        out.push(Patch {
-            offset: offset - 0x100,
-            bytes,
-        });
     }
 }
 
@@ -71,28 +72,37 @@ fn parse_pchtxt(text: &str, build_id: &str) -> Vec<Patch> {
     let mut out = Vec::new();
     let mut matches = false;
     let mut enabled = true;
+    let mut little_endian = false;
     let mut shift: i64 = 0;
-    for line in text.lines() {
-        let line = line.split("//").next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let line = line.trim();
         if let Some(id) = line.strip_prefix("@nsobid-") {
-            matches = id_matches(id, build_id);
+            matches = id_matches(strip_comment(id).trim(), build_id);
             continue;
         }
-        if line == "@stop" {
-            break;
+        let bare = strip_comment(line).trim();
+        match bare {
+            "" => continue,
+            "@stop" => break,
+            "@enabled" => {
+                enabled = true;
+                continue;
+            }
+            "@disabled" => {
+                enabled = false;
+                continue;
+            }
+            "@little-endian" => {
+                little_endian = true;
+                continue;
+            }
+            "@big-endian" => {
+                little_endian = false;
+                continue;
+            }
+            _ => {}
         }
-        if line == "@enabled" {
-            enabled = true;
-            continue;
-        }
-        if line == "@disabled" {
-            enabled = false;
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("@flag") {
+        if let Some(rest) = bare.strip_prefix("@flag") {
             let mut it = rest.split_whitespace();
             if it.next() == Some("offset_shift") {
                 if let Some(v) = it.next() {
@@ -105,24 +115,37 @@ fn parse_pchtxt(text: &str, build_id: &str) -> Vec<Patch> {
             }
             continue;
         }
-        if line.starts_with('@') || !matches || !enabled {
+        if bare.starts_with('@') || !matches || !enabled {
             continue;
         }
-        let mut it = line.split_whitespace();
-        let (Some(off), Some(hex)) = (it.next(), it.next()) else {
+        let Some((off, value)) = line.split_once(char::is_whitespace) else {
             continue;
         };
         let Ok(off) = i64::from_str_radix(off.trim_start_matches("0x"), 16) else {
             continue;
         };
-        let hex: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        if hex.len() % 2 != 0 {
-            continue;
-        }
-        let bytes: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-            .collect();
+        let value = value.trim_start();
+        let bytes = if let Some(quoted) = value.strip_prefix('"') {
+            match quoted_bytes(quoted) {
+                Some(b) => b,
+                None => {
+                    println!("[!] Mods: pchtxt: an unclosed string in '{line}': skipped");
+                    continue;
+                }
+            }
+        } else {
+            let hex: String = strip_comment(value).chars().filter(|c| !c.is_whitespace()).collect();
+            let valid = hex.len() % 2 == 0 && !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit());
+            if !valid {
+                println!("[!] Mods: pchtxt: not hex in '{line}': skipped");
+                continue;
+            }
+            let mut b: Vec<u8> = (0..hex.len()).step_by(2).filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok()).collect();
+            if little_endian {
+                b.reverse();
+            }
+            b
+        };
         let offset = off + shift - 0x100;
         if offset >= 0 {
             out.push(Patch {
@@ -132,6 +155,32 @@ fn parse_pchtxt(text: &str, build_id: &str) -> Vec<Patch> {
         }
     }
     out
+}
+
+/// `line` up to a `//` comment.
+fn strip_comment(line: &str) -> &str {
+    line.split("//").next().unwrap_or("")
+}
+
+/// The bytes of a string whose opening quote has gone, up to its closing quote: no terminator is added.
+fn quoted_bytes(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut chars = s.chars();
+    let mut buf = [0u8; 4];
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push(b'\n'),
+                'r' => out.push(b'\r'),
+                't' => out.push(b'\t'),
+                '0' => out.push(0),
+                other => out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes()),
+            },
+            _ => out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes()),
+        }
+    }
+    None
 }
 
 /// Applies every enabled mod's exefs patches for the module with `build_id`, loaded at `base` with `size` bytes of
@@ -183,8 +232,9 @@ pub unsafe fn apply(
                         }
                     }
                 }
+                // Lossy: comments are often in another encoding, and the patches are ASCII.
                 Some("pchtxt") => parse_pchtxt(
-                    &std::fs::read_to_string(&path).unwrap_or_default(),
+                    &String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()),
                     build_id,
                 ),
                 _ => continue,
@@ -228,5 +278,44 @@ unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot
     if in_text {
         let _ = crate::os::protect(page, span, text_prot);
         crate::os::flush_icache(addr as usize, bytes.len());
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+    const ID: &str = "AABBCCDDEEFF00112233445566778899AABBCCDD";
+
+    fn bytes(text: &str) -> Vec<(usize, Vec<u8>)> {
+        parse_pchtxt(text, ID).into_iter().map(|p| (p.offset, p.bytes)).collect()
+    }
+
+    #[test]
+    fn pchtxt_values() {
+        let head = "\u{feff}@nsobid-AABBCCDDEEFF0011\n@flag offset_shift 0x100\n";
+        assert_eq!(bytes(&format!("{head}00000010 01020304 // note\n")), [(0x10, vec![1, 2, 3, 4])]);
+        assert_eq!(bytes(&format!("{head}00000010 01 02\t03\n")), [(0x10, vec![1, 2, 3])]);
+        assert_eq!(bytes(&format!("{head}@little-endian\n00000010 01020304\n@big-endian\n00000020 0506\n")), [(0x10, vec![4, 3, 2, 1]), (0x20, vec![5, 6])]);
+        assert_eq!(bytes(&format!("{head}00000010 \"a//b\\n\"\n")), [(0x10, b"a//b\n".to_vec())]);
+        // Not read as the hex digits a string holds.
+        assert_eq!(bytes(&format!("{head}00000010 \"abcd\"\n")), [(0x10, b"abcd".to_vec())]);
+        assert!(bytes(&format!("{head}00000010 \"open\n00000020 zz\n00000030 123\n")).is_empty());
+    }
+
+    #[test]
+    fn pchtxt_selection() {
+        assert!(bytes("@nsobid-0011223344556677\n@flag offset_shift 0x100\n00000010 01\n").is_empty());
+        assert_eq!(bytes("@nsobid-AABBCCDDEEFF0011 // v1.1\n@flag offset_shift 0x100\n@disabled\n00000010 01\n@enabled\n00000020 02\n@stop\n00000030 03\n"), [(0x20, vec![2])]);
+    }
+
+    #[test]
+    fn ips_record_across_the_header() {
+        let mut f = b"PATCH".to_vec();
+        f.extend_from_slice(&[0x00, 0x00, 0xFE, 0x00, 0x04, 1, 2, 3, 4]);
+        f.extend_from_slice(&[0x00, 0x00, 0x10, 0x00, 0x01, 9]);
+        f.extend_from_slice(b"EOF");
+        let p = parse_ips(&f).unwrap();
+        assert_eq!(p.len(), 1);
+        assert_eq!((p[0].offset, p[0].bytes.clone()), (0, vec![3, 4]));
     }
 }
