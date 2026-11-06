@@ -55,17 +55,17 @@ Peiikai - Offered LASRecomp code for referencing. Also seems nice.
 Nintendo - For being awesome. I hope. Please don't take this down.  
 
 ## This project has been tested on:
-* Tears of the Kingdom, iOS, MacOS
+* Tears of the Kingdom, Windows, MacOS, iOS
   * Runs well. A few visual bugs here and there.
-* Kirby and the Forgotten Land, iOS, MacOS
+* Kirby and the Forgotten Land, MacOS, iOS
   * Runs very well so far. A few small visual bugs. 
 * Super Mario Wonder, MacOS
   * Runs very well so far.
 * Mario Kart 8 Deluxe v3.0.4, MacOS
   * Runs very well. A few small visual bugs.
-* Super Mario Odyssey
+* Super Mario Odyssey, MacOS
   * Runs very well so far.
-* Breath of the Wild
+* Breath of the Wild, MacOS
   * Still in the weeds of making this playable.
 
 [^1]: I know this is a very common thing to provide, but anti-circumvention laws have been weaponized in the past to take down a certain emulator that we all know and love. Recomps are really making a stir right now, so I won't include or direct users to any code that provides this functionality.
