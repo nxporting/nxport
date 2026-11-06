@@ -604,6 +604,10 @@ fn prune_cache(root: &std::path::Path, now: std::time::SystemTime, kept_for: std
 }
 
 fn zig() -> Result<PathBuf, String> {
+    // The builder puts one in an app with a plugin mod, so the app works on a PC that never ran the builder.
+    if let Some(beside) = std::env::current_exe().ok().map(|e| e.with_file_name("zig").join("zig.exe")).filter(|p| p.is_file()) {
+        return Ok(beside);
+    }
     let dir = crate::config::support_dir().ok_or("no data directory")?.join("toolchains");
     // The last by name, the newest, when a builder update left an older one here.
     std::fs::read_dir(&dir)

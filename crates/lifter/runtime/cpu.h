@@ -52,10 +52,11 @@ typedef void (RT_CC *GuestFn)(Cpu *);
 // and an explicit export turns off the MinGW linker's export-everything default.
 #ifdef _WIN32
 #define RT_EXPORT __declspec(dllexport)
-#define RT_FN RT_CC
+// noinline: a mod patches a function at its entry, and a caller holding an inlined copy would never see it.
+#define RT_FN __attribute__((noinline)) RT_CC
 #else
 #define RT_EXPORT __attribute__((visibility("default")))
-#define RT_FN __attribute__((visibility("hidden"))) RT_CC
+#define RT_FN __attribute__((noinline, visibility("hidden"))) RT_CC
 #endif
 
 #define RT_RETURN_TO_HOST 0ull

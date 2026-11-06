@@ -222,10 +222,16 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     steps.push(("Lifting what the mods change".into(), lift_overlay("overlay.toml")));
     let out: Output = Arc::new(Mutex::new(None));
     {
-        let (out, app) = (out.clone(), app.clone());
+        let (out, app, app_mods, toolchains) = (out.clone(), app.clone(), app_mods.clone(), toolchains.clone());
         steps.push((
             "Finishing the app".into(),
             Box::new(move || {
+                let mods = app_mods.lock().unwrap().clone();
+                if has_plugin_mods(mods.as_deref(), title_id) {
+                    nxport_build::zig::copy_into_app(&toolchains, &app)?;
+                } else {
+                    let _ = std::fs::remove_dir_all(app.join("zig"));
+                }
                 *out.lock().unwrap() = Some(app);
                 Ok(())
             }),
@@ -352,6 +358,15 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Optio
         }
     }
     Ok(())
+}
+
+/// Whether any mod in `mods` brings code of its own that patches the game as it runs: a subsdk module, loose or in an exefs.nsp.
+fn has_plugin_mods(mods: Option<&Path>, title: u64) -> bool {
+    let Some(mods) = mods else { return false };
+    nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| {
+        let exefs = nxport::mods::mod_subdir(d, "exefs");
+        exefs.join("exefs.nsp").is_file() || (0..10).any(|i| exefs.join(format!("subsdk{i}")).is_file())
+    })
 }
 
 /// Whether any mod in `mods` has code: an exefs folder, an exefs.nsp or a patch set. Mods of files only need no lifting at all.
