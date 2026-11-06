@@ -2436,7 +2436,11 @@ fn kill_overlapping_lists(m: &mut CommandMemory, pool: usize, start: i64, len: u
         ev.insert(h, LIST_DEAD);
     }
     drop(ev);
-    drop(freed);
+    // Off the game's thread, as a replaced list: EndRecording made about 1,400 frees a frame in TotK, and here they were
+    // under the COMMAND_MEMORY lock.
+    for l in freed {
+        free_later(l);
+    }
 }
 
 /// Handles by command memory location (pool, offset) of the command set (see EndRecording).
