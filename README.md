@@ -69,4 +69,4 @@ Nintendo - For being awesome. I hope. Please don't take this down.
 * Breath of the Wild
   * Still in the weeds of making this playable.
 
-[^1] Exlaunch will probably never be supported (or at least performant) on non-jailbroken iOS devices due to W^X limitations.
+[^1]: Exlaunch will probably never be supported (or at least performant) on non-jailbroken iOS devices due to W^X limitations.
