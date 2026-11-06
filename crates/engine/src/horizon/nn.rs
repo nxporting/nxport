@@ -764,6 +764,13 @@ fn load_shared_font(ty: usize) -> Vec<u8> {
     for candidate in HOST_FONT_CANDIDATES {
         paths.push((*candidate).into());
     }
+    #[cfg(windows)]
+    {
+        let windows = std::env::var_os("WINDIR").map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from);
+        for name in ["arial.ttf", "segoeui.ttf", "tahoma.ttf", "verdana.ttf"] {
+            paths.push(windows.join("Fonts").join(name));
+        }
+    }
 
     for p in &paths {
         if let Ok(bytes) = std::fs::read(p) {
