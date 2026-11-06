@@ -413,6 +413,49 @@ unsafe fn unprotect_pages(
     }
 }
 
+/// Runs `write`, the engine storing GPU contents into [start, start+len), so that it does not count as a CPU write: the
+/// pages' generations stay and protected pages are protected again after. A CPU write to one of those pages in that moment
+/// goes unseen, which only matters for other data sharing a page, as the GPU's and the CPU's writes to the same bytes
+/// have no order anyway.
+pub unsafe fn write_unseen(start: usize, len: usize, write: impl FnOnce()) {
+    let Some((_, f, first, last)) = locate(start, len) else {
+        write();
+        return;
+    };
+    let page0 = start & !(PAGE - 1);
+    let mut claimed: Vec<usize> = Vec::new();
+    for p in first..=last {
+        loop {
+            let cur = f[p].load(Ordering::Acquire);
+            match cur & STATE_MASK {
+                PG_PROT => {
+                    if f[p].compare_exchange_weak(cur, (cur & !STATE_MASK) | PG_BUSY, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                        let at = page0 + (p - first) * PAGE;
+                        let _ = crate::os::protect(at, PAGE, crate::os::Prot::ReadWrite);
+                        crate::gpu::backend().pages_reprotected(at, PAGE);
+                        claimed.push(p);
+                        break;
+                    }
+                }
+                PG_BUSY => {
+                    if !busy_wait(&f[p]) {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+    write();
+    for p in claimed {
+        let at = page0 + (p - first) * PAGE;
+        let _ = crate::os::protect(at, PAGE, crate::os::Prot::Read);
+        crate::gpu::backend().pages_reprotected(at, PAGE);
+        let cur = f[p].load(Ordering::Acquire);
+        f[p].store((cur & !STATE_MASK) | PG_PROT, Ordering::Release);
+    }
+}
+
 /// Before the host kernel writes [addr, addr+len) (e.g. read() into a guest buffer): unprotect its pages and mark
 /// them written.
 pub unsafe fn before_host_write(addr: usize, len: usize) {

@@ -162,7 +162,7 @@ group! {
 
 group! {
     /// Controllers, keyboard, touch and rumble.
-    Input "Input" [swap_ab, swap_xy, no_touch, no_rumble, rumble_scale, direct_keyboard] {
+    Input "Input" [swap_ab, swap_xy, no_touch, no_rumble, rumble_scale, direct_keyboard, direct_mouse] {
         /// Controls file (default: the application data directory's controls.cfg)
         controls_file: Option<PathBuf> = None,
         /// Physical controllers: A and B by position, as on a Switch controller
@@ -177,6 +177,8 @@ group! {
         rumble_scale: f32 = 1.0,
         /// Direct keyboard access: games and mods that read a USB keyboard see this one, as well as its bindings
         direct_keyboard: bool = false,
+        /// Direct mouse access: games and mods that read a USB mouse see this one, and the mouse stops being the touch screen
+        direct_mouse: bool = false,
         /// Text the software keyboard returns (default: the game's initial text, else "Player"; "<cancel>" cancels)
         keyboard_text: Option<String> = None,
     }
@@ -296,6 +298,8 @@ group! {
         ubo_zero_copy: bool = false,
         /// Vulkan: graphics stages sample textures through global descriptor arrays indexed by push constants (where the device has descriptor indexing)
         vk_bindless_textures: bool = true,
+        /// Vulkan: textures over memory another image wrote see those bytes in every game, also in titles known not to need it
+        exact_texture_overlaps: bool = false,
         /// Which work the GPU executor does
         gfx_mode: GfxMode = GfxMode::All,
         /// The GPU backend

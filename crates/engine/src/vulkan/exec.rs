@@ -109,6 +109,9 @@ struct Pass {
     begun: bool,
     color_clears: Vec<Option<vk::ClearColorValue>>,
     depth_clear: Option<(vk::ImageAspectFlags, vk::ClearDepthStencilValue)>,
+    /// The targets to load or replace when rendering begins: each attachment's image, if the attachment is all of it.
+    color_targets: Vec<Option<(texture::Desc, bool)>>,
+    depth_target: Option<(texture::Desc, bool)>,
     pub(super) draws: u32,
 }
 
@@ -202,6 +205,8 @@ pub struct Ctx {
     /// Advanced when `bindings` is emptied; the bound texture slots' last resolutions (draw.rs texture_binding) are valid
     /// at the generation they were made in.
     bindings_gen: u64,
+    /// What `target` last resolved: image, whether the attachment is all of it, its size.
+    last_target: Option<(texture::Desc, bool, (u32, u32))>,
     tex_memo: Box<[[draw::TexMemo; draw::TEX_MEMO]; 6]>,
     /// Bindless textures (vulkan/bindless.rs): the indices given out (made with the first draw), what handles resolved
     /// to across submits (draw.rs bindless_word; slots registered again are dropped when a submit begins: pools change
@@ -704,6 +709,7 @@ impl Ctx {
             repacked: Default::default(),
             bindings: Default::default(),
             bindings_gen: 1,
+            last_target: None,
             ubo_memo_gen: 1,
             ubo_slot_memo: Box::new([[(0, (0, 0, 0), (0, 0, 0, None)); draw::UBO_MEMO]; 6]),
             tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
@@ -1457,19 +1463,20 @@ impl Ctx {
     unsafe fn target(&mut self, r: &RtRef) -> Option<(NvnTexture, vk::ImageView, vk::Format, (u32, u32), vk::SampleCountFlags, vk::Image)> {
         let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
         let (_, t) = crate::nvn::api::texture_snapshot(addr)?;
+        self.last_target = None;
         if r.view_format != 0 {
             if let Some(p) = self.bc_proxy(&t, r) {
                 return Some(p);
             }
         }
-        let (img, at_level, at_layer) = self.tex.get(&self.dev, &t)?;
-        img.mark_gpu_write();
+        let (desc, img, at_level, at_layer) = self.tex.target_image(&self.dev, &t)?;
         let fmt = if r.view_format != 0 && format::view_compatible(t.format, r.view_format as i32) {
             texture::device_format(&self.dev, r.view_format as i32)
                 .filter(|f| format::aspects(*f) == format::aspects(img.format))
                 .unwrap_or(img.format)
         } else {
-            img.format
+            // The image may be shared with another format over the same memory (format::alias_compatible).
+            texture::device_format(&self.dev, t.format).filter(|f| format::aspects(*f) == format::aspects(img.format)).unwrap_or(img.format)
         };
         // A 3D texture renders into one depth slice (the reference's layer) through a 2D view of its 2D_ARRAY_COMPATIBLE
         // image; the slice counts as the view's layer.
@@ -1477,7 +1484,10 @@ impl Ctx {
         let extent = ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1));
         let samples = img.samples;
         let image = img.image;
+        let all_of_it = img.levels == 1 && img.layers == 1 && img.extent.depth == 1;
+        let target = (desc, all_of_it, extent);
         let view = Textures::view(&self.dev, img, ty, fmt, level, 1, layer, 1, [2, 3, 4, 5], false)?;
+        self.last_target = Some(target);
         Some((t, view, fmt, extent, samples, image))
     }
 
@@ -1491,10 +1501,12 @@ impl Ctx {
         let mut nvn_depth = (0u32, 0u32);
         let mut images = Vec::new();
         let mut extent = (u32::MAX, u32::MAX);
+        let mut color_targets: Vec<Option<(texture::Desc, bool, (u32, u32))>> = Vec::new();
         let mut samples = vk::SampleCountFlags::TYPE_1;
         for r in self.st.colors.clone() {
             if r.texture == 0 {
                 colors.push(None);
+                color_targets.push(None);
                 continue;
             }
             match self.target(&r) {
@@ -1513,13 +1525,19 @@ impl Ctx {
                     if colors.len() < 8 {
                         nvn_colors[colors.len()] = (t.format as u32, r.view_format as u32);
                     }
+                    color_targets.push(self.last_target.take());
                     colors.push(Some((view, fmt, rendered)));
                 }
-                None => colors.push(None),
+                None => {
+                    color_targets.push(None);
+                    colors.push(None);
+                }
             }
         }
+        let mut depth_target = None;
         let depth = match self.st.depth {
             Some(r) if r.texture != 0 => self.target(&r).map(|(t, view, fmt, e, s, image)| {
+                depth_target = self.last_target.take();
                 nvn_depth = (t.format as u32, r.view_format as u32);
                 extent = (extent.0.min(e.0), extent.1.min(e.1));
                 samples = s;
@@ -1554,8 +1572,13 @@ impl Ctx {
             }
             crate::gpu::history::journal(|| l);
         }
+        let whole = |t: (texture::Desc, bool, (u32, u32))| (t.0, t.1 && t.2 == extent);
+        let color_targets: Vec<_> = color_targets.into_iter().take(n).map(|t| t.map(whole)).collect();
+        let depth_target = depth_target.map(whole);
         self.pass_gen += 1;
         self.pass = Some(Pass {
+            color_targets,
+            depth_target,
             images,
             colors,
             depth,
@@ -1632,6 +1655,26 @@ impl Ctx {
         if p.begun {
             return;
         }
+        // Before rendering begins, so an upload goes ahead of it. A target a clear replaces loads nothing.
+        let (colors, depth) = (std::mem::take(&mut p.color_targets), p.depth_target.take());
+        let depth_replaced = p.depth.zip(p.depth_clear).is_some_and(|((_, f), (mask, _))| mask.contains(format::aspects(f)));
+        let cleared: Vec<bool> = p.color_clears.iter().map(|c| c.is_some()).collect();
+        for (i, t) in colors.iter().enumerate() {
+            let Some((d, all_of_it)) = t else { continue };
+            if *all_of_it && cleared.get(i).copied().unwrap_or(false) {
+                self.tex.target_replaced(d);
+            } else {
+                self.tex.load_target(&self.dev, d);
+            }
+        }
+        if let Some((d, all_of_it)) = &depth {
+            if *all_of_it && depth_replaced {
+                self.tex.target_replaced(d);
+            } else {
+                self.tex.load_target(&self.dev, d);
+            }
+        }
+        let Some(p) = self.pass.as_mut() else { return };
         p.begun = true;
         self.dynamic_memo = None;
         self.dynamic_seen = None;
