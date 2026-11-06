@@ -1351,7 +1351,8 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         game_subsdk_inits,
     } = load()?;
     let modules: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
-    let overlay = s.files.guest_overlay.clone();
+    // The overlay holds the code of the mods, and calls trampolines only a run with them makes.
+    let overlay = s.files.guest_overlay.clone().filter(|_| !s.files.no_mods);
     let overlay_names = match &overlay {
         Some(o) => {
             let list = o.with_file_name("modules.txt");
