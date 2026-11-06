@@ -595,6 +595,40 @@ fn romfs_rel(guest_path: &str) -> Option<&str> {
     Some(clean_path)
 }
 
+/// resolve_path for a reader that needs a real file (the movie decoder): a file in a romfs.bin is copied out once, to the system's/// temporary folder, as nothing but this one reader needs it there.
+pub(crate) fn resolve_to_file(guest_path: &str) -> Option<PathBuf> {
+    let Some(ImageEntry::File(image, off, size, zs)) = image_entry(guest_path) else {
+        return resolve_path(guest_path);
+    };
+    use std::hash::{Hash, Hasher};
+    use std::io::{Read, Seek};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let changed = std::fs::metadata(&image.path).and_then(|m| m.modified()).ok();
+    (&image.path, off, size, changed).hash(&mut h);
+    let name = Path::new(guest_path).file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let out = std::env::temp_dir().join(format!("nxport-{:016x}-{name}", h.finish()));
+    if !out.is_file() {
+        let copied = (|| -> std::io::Result<()> {
+            let mut f = File::open(&image.path)?;
+            f.seek(std::io::SeekFrom::Start(off))?;
+            let tmp = out.with_extension("part");
+            let mut to = File::create(&tmp)?;
+            if zs {
+                zstd::stream::copy_decode(f.take(size), &mut to)?;
+            } else {
+                std::io::copy(&mut f.take(size), &mut to)?;
+            }
+            drop(to);
+            std::fs::rename(&tmp, &out)
+        })();
+        if let Err(e) = copied {
+            println!("[!] Mods: {guest_path} from a romfs.bin: {e}");
+            return None;
+        }
+    }
+    Some(out)
+}
+
 pub(crate) fn resolve_path(guest_path: &str) -> Option<PathBuf> {
     // Paths like "content://Sound/x" (double slash) occur; Path::join with a leading "/" would replace
     // the root entirely, so strip every leading slash after the mount name.
