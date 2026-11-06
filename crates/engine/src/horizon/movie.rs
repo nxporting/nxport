@@ -583,7 +583,7 @@ unsafe fn x_open(this: *mut usize, uri: *const c_char) -> u32 {
         return NULL_EXTRACTOR;
     };
     let s = media();
-    let Some(path) = crate::horizon::fs::resolve_path(&u) else {
+    let Some(path) = crate::horizon::fs::resolve_to_file(&u) else {
         return ERR_IO;
     };
     let Ok(cpath) = CString::new(path.display().to_string()) else {
