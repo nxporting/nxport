@@ -48,15 +48,22 @@ _Static_assert(sizeof(Cpu) == 1024, "size");
 
 typedef void (RT_CC *GuestFn)(Cpu *);
 
+// Builds for games with code mods: a mod patches a function at its entry, and a caller holding an inlined copy would never
+// see it. Without mods the compiler is free to inline.
+#ifdef NX_NO_INLINE
+#define RT_NOINLINE __attribute__((noinline))
+#else
+#define RT_NOINLINE
+#endif
+
 // The guest library exports only its function tables: a game has more functions than a PE export table holds (64K),
 // and an explicit export turns off the MinGW linker's export-everything default.
 #ifdef _WIN32
 #define RT_EXPORT __declspec(dllexport)
-// noinline: a mod patches a function at its entry, and a caller holding an inlined copy would never see it.
-#define RT_FN __attribute__((noinline)) RT_CC
+#define RT_FN RT_NOINLINE RT_CC
 #else
 #define RT_EXPORT __attribute__((visibility("default")))
-#define RT_FN __attribute__((noinline, visibility("hidden"))) RT_CC
+#define RT_FN RT_NOINLINE __attribute__((visibility("hidden"))) RT_CC
 #endif
 
 #define RT_RETURN_TO_HOST 0ull
