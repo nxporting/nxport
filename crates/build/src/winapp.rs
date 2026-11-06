@@ -62,17 +62,9 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     let copied = copy(&exe, &o.app.join("nxport.exe"));
     let _ = std::fs::remove_file(&exe);
     copied?;
-    // Windows looks for a program's DLLs in its own directory first: SDL3.dll from the copy the engine carries. libopus
-    // is optional: the engine loads opus.dll when there is one beside the builder (Opus streams are silent without it).
+    // Windows looks for a program's DLLs in its own directory first: SDL3.dll from the copy the engine carries.
     let sdl = o.app.join("SDL3.dll");
     std::fs::write(&sdl, nxport::sdl_library::DLL).map_err(|e| format!("{}: {e}", sdl.display()))?;
-    // Beside the engine, or a directory up from it (cargo's deps/ for tests).
-    let beside = |lib: &str| engine.ancestors().skip(1).take(2).map(|d| d.join(lib)).find(|l| l.is_file());
-    for lib in ["opus.dll", "libopus-0.dll"] {
-        if let Some(l) = beside(lib) {
-            copy(&l, &o.app.join(lib))?;
-        }
-    }
 
     let mods = o.app.join("Mods");
     let _ = std::fs::remove_dir_all(&mods);

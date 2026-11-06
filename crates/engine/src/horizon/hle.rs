@@ -4678,7 +4678,7 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
     if bytes > out_buf_size {
         return 0x4E;
     }
-    // Real decoding through libopus (horizon/audio/opus.rs); silence with the same accounting when it is unavailable or fails.
+    // Real decoding (horizon/audio/opus.rs); silence with the same accounting for what it cannot decode.
     match (!out_buf.is_null())
         .then(|| {
             crate::horizon::audio::opus::decode(
