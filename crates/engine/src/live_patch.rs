@@ -662,7 +662,8 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
         sources.push(file.clone());
     }
     let tmp = dll.with_extension("tmp.dll");
-    let result = std::process::Command::new(zig()?)
+    // CREATE_NO_WINDOW: a game started from Explorer has no console to share, so each compiler would open one.
+    let result = std::os::windows::process::CommandExt::creation_flags(&mut std::process::Command::new(zig()?), 0x0800_0000)
         .current_dir(&dir)
         .args(["cc", "-O1", "-g0", "-fno-strict-aliasing", "-fomit-frame-pointer", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-w", "-shared", "-o"])
         .arg(&tmp)
