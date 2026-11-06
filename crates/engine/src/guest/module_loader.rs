@@ -645,6 +645,10 @@ pub unsafe extern "C" fn fs_mount_sdcard(name: *const libc::c_char) -> u32 {
     0
 }
 
+/// nn::oe::EnableGamePlayRecording(void*, size_t): memory for the system's video capture, which there is none of here. The game
+/// keeps the memory.
+pub unsafe extern "C" fn oe_enable_game_play_recording(_memory: *mut u8, _size: usize) {}
+
 /// nn::oe::GetDisplayVersion(DisplayVersion*): the game's version string (char[16], always terminated), from its
 /// control data, else the version its main build id matched. Plugin mods choose their addresses by this.
 pub unsafe extern "C" fn oe_get_display_version(out: *mut u8) {
