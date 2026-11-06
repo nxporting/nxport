@@ -108,7 +108,10 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
             }
         }
     } else {
-        let dump = std::fs::canonicalize(o.dump).map_err(|e| format!("{}: {e}", o.dump.display()))?;
+        // Some mounted file systems cannot give a final path (ERROR_UNRECOGNIZED_VOLUME), though they read as any other.
+        let dump = std::fs::canonicalize(o.dump)
+            .or_else(|_| std::path::absolute(o.dump))
+            .map_err(|e| format!("{}: {e}", o.dump.display()))?;
         settings.files.game_dir = Some(plain(dump));
     }
     nxport::settings::save_preset(&o.app.join("settings.toml"), &settings)?;
