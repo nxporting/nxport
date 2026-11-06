@@ -148,6 +148,8 @@ enum Handle {
     Process,
     EventWritable(Arc<EventObj>),
     EventReadable(Arc<EventObj>),
+    /// svcCreateTransferMemory: services here share the process's memory, so a handle is all it takes.
+    TransferMemory,
 }
 
 static LOCK_WAITERS: Mutex<Option<HashMap<u64, Vec<LockWaiter>>>> = Mutex::new(None);
@@ -242,6 +244,11 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         }
         0x11 => signal_event(r),
         0x12 => clear_event(r),
+        0x15 => {
+            // svcCreateTransferMemory(out handle, addr, size, perm).
+            r[1] = new_handle(Handle::TransferMemory) as u64;
+            RESULT_OK
+        }
         0x16 => {
             let removed = HANDLES
                 .lock()
@@ -262,6 +269,19 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         0x1E => {
             r[0] = crate::horizon::hle::hle_nn_os_GetSystemTick();
             return;
+        }
+        0x26 => {
+            // svcBreak(reason, info, size). The game has given up: it would otherwise spin where it called this. Bit 31 only
+            // tells a debugger, and the game goes on.
+            const NOTIFICATION_ONLY: u64 = 0x8000_0000;
+            println!("[!] svcBreak: reason {:#x}, info {:#x}, size {:#x}", r[0], r[1], r[2]);
+            if r[0] & NOTIFICATION_ONLY == 0 {
+                let message = format!("The game stopped itself (svcBreak, reason {:#x}): it met something this engine does not do yet.", r[0]);
+                eprintln!("[-] {message}");
+                crate::config::app_error(&message);
+                std::process::exit(1);
+            }
+            RESULT_OK
         }
         0x21 => send_sync_request(r),
         0x34 => wait_for_address(r),
