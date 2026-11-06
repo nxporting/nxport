@@ -566,6 +566,68 @@ pub fn touches() -> Vec<Touch> {
     t.clone()
 }
 
+static MOUSE_XY: [AtomicI32; 2] = [const { AtomicI32::new(0) }; 2];
+static MOUSE_DELTA: [AtomicI32; 2] = [const { AtomicI32::new(0) }; 2];
+static MOUSE_WHEEL: AtomicI32 = AtomicI32::new(0);
+static MOUSE_BUTTONS: AtomicU32 = AtomicU32::new(0);
+static MOUSE_SAMPLE: AtomicU64 = AtomicU64::new(0);
+
+/// The cursor moved, in the game's 1280x720 screen. Only the SDL hosts have this so far.
+#[cfg(not(target_vendor = "apple"))]
+pub fn mouse_moved(x: i32, y: i32, dx: i32, dy: i32) {
+    MOUSE_XY[0].store(x, Ordering::Relaxed);
+    MOUSE_XY[1].store(y, Ordering::Relaxed);
+    MOUSE_DELTA[0].fetch_add(dx, Ordering::Relaxed);
+    MOUSE_DELTA[1].fetch_add(dy, Ordering::Relaxed);
+}
+
+/// A mouse button went down or up: its bit of nn::hid::MouseButtonSet (left 0, right 1, middle 2, forward 3, back 4).
+#[cfg(not(target_vendor = "apple"))]
+pub fn mouse_button(bit: u32, down: bool) {
+    if down {
+        MOUSE_BUTTONS.fetch_or(1 << bit, Ordering::Relaxed);
+    } else {
+        MOUSE_BUTTONS.fetch_and(!(1 << bit), Ordering::Relaxed);
+    }
+}
+
+#[cfg(not(target_vendor = "apple"))]
+pub fn mouse_wheel(delta: i32) {
+    MOUSE_WHEEL.fetch_add(delta, Ordering::Relaxed);
+}
+
+/// nn::hid::MouseState: sampling number, x, y, the deltas and wheel since the last state, 4 reserved bytes, buttons,
+/// attributes (bit 1: connected).
+fn mouse_state(sample: u64, connected: bool, xy: [i32; 2], delta: [i32; 2], wheel: i32, buttons: u32) -> [u8; 0x28] {
+    let mut state = [0u8; 0x28];
+    state[0..8].copy_from_slice(&sample.to_le_bytes());
+    if connected {
+        for (i, v) in [xy[0], xy[1], delta[0], delta[1], wheel].iter().enumerate() {
+            state[8 + i * 4..12 + i * 4].copy_from_slice(&v.to_le_bytes());
+        }
+        state[32..36].copy_from_slice(&buttons.to_le_bytes());
+        state[36..40].copy_from_slice(&2u32.to_le_bytes());
+    }
+    state
+}
+
+/// What a game reading the mouse sees now: nothing connected unless direct mouse access is on. Deltas are consumed.
+pub fn next_mouse_state() -> [u8; 0x28] {
+    let on = crate::settings::try_get().is_some_and(|s| s.input.direct_mouse);
+    let sample = MOUSE_SAMPLE.fetch_add(1, Ordering::Relaxed) + 1;
+    if !on {
+        return mouse_state(sample, false, [0; 2], [0; 2], 0, 0);
+    }
+    mouse_state(
+        sample,
+        true,
+        std::array::from_fn(|i| MOUSE_XY[i].load(Ordering::Relaxed)),
+        std::array::from_fn(|i| MOUSE_DELTA[i].swap(0, Ordering::Relaxed)),
+        MOUSE_WHEEL.swap(0, Ordering::Relaxed),
+        MOUSE_BUTTONS.load(Ordering::Relaxed),
+    )
+}
+
 /// Keys held for nn::hid::KeyboardState, by USB HID usage. Read when the setting allows, so a key held while it is
 /// turned on still counts.
 static USB_KEYS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
@@ -622,6 +684,7 @@ pub fn set_key(code: u16, down: bool) {
 }
 
 pub fn clear_keys() {
+    MOUSE_BUTTONS.store(0, Ordering::Relaxed);
     for word in &USB_KEYS {
         word.store(0, Ordering::Relaxed);
     }
@@ -1120,6 +1183,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mouse_state_layout() {
+        let s = mouse_state(9, true, [640, 360], [-3, 4], 120, 0b101);
+        let word = |o: usize| i32::from_le_bytes(s[o..o + 4].try_into().unwrap());
+        assert_eq!(u64::from_le_bytes(s[0..8].try_into().unwrap()), 9);
+        assert_eq!([word(8), word(12), word(16), word(20), word(24)], [640, 360, -3, 4, 120]);
+        assert_eq!(word(28), 0, "reserved");
+        assert_eq!(word(32), 0b101);
+        assert_eq!(word(36), 2, "connected");
+        let off = mouse_state(9, false, [640, 360], [-3, 4], 120, 1);
+        assert!(off[8..].iter().all(|b| *b == 0));
+    }
+
+    #[test]
     fn keyboard_state_layout() {
         // A (usage 4), left Shift (225), right Alt (230).
         let keys = [1 << 4, 0, 0, 1 << 33 | 1 << 38];
@@ -1156,9 +1232,8 @@ mod tests {
             let mut buf = [0xaau8; 0x60];
             let mut written = -1;
             assert_eq!(hle_nn_hid_detail_GetMouseStates(&mut written, buf.as_mut_ptr(), 2), 0);
-            assert_eq!(written, 2);
-            assert!(buf[..0x50].iter().all(|b| *b == 0));
-            assert!(buf[0x50..].iter().all(|b| *b == 0xaa));
+            assert_eq!(written, 1);
+            assert!(buf[0x28..].iter().all(|b| *b == 0xaa));
         }
     }
 
