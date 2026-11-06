@@ -396,7 +396,8 @@ fn outside_git(dir: &Path) -> std::io::Result<()> {
     let mut at = std::path::absolute(dir)?;
     // The nearest existing ancestor: the directory may not be created yet.
     while !at.exists() && at.pop() {}
-    let at = std::fs::canonicalize(&at)?;
+    // Some mounted file systems cannot give a final path; `at` is absolute already.
+    let at = std::fs::canonicalize(&at).unwrap_or(at);
     if let Some(repo) = at.ancestors().find(|a| a.join(".git").exists()) {
         return Err(std::io::Error::other(format!(
             "{} is inside the git work tree {}: game code must not be written there",
