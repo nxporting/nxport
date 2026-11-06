@@ -210,6 +210,14 @@ impl Host {
                     input::set_key(code, false);
                 }
             }
+            // Direct mouse access: the game reads the mouse itself.
+            Event::MouseMotion { x, y, xrel, yrel, .. } if direct_mouse() => {
+                let (sx, sy) = self.game_position(x, y);
+                input::mouse_moved((sx * 1280.0) as i32, (sy * 720.0) as i32, xrel as i32, yrel as i32);
+            }
+            Event::MouseButtonDown { mouse_btn, .. } if direct_mouse() => mouse_button(mouse_btn, true),
+            Event::MouseButtonUp { mouse_btn, .. } if direct_mouse() => mouse_button(mouse_btn, false),
+            Event::MouseWheel { y, .. } if direct_mouse() => input::mouse_wheel((y * 120.0) as i32),
             // The mouse (left button) is the touch screen: one finger at the cursor while the button is down.
             Event::MouseButtonDown { mouse_btn: MouseButton::Left, x, y, .. } => self.mouse_touch(x, y),
             Event::MouseMotion { mousestate, x, y, .. } if mousestate.left() => self.mouse_touch(x, y),
@@ -260,14 +268,21 @@ impl Host {
     /// with the dynamic aspect ratio: vulkan/window.rs), so the panel position is the cursor's fraction of that fitted
     /// rectangle (window coordinates, y grows downwards).
     fn mouse_touch(&self, x: f32, y: f32) {
+        let (nx, ny) = self.game_position(x, y);
+        input::touch_moved(0, nx, ny);
+    }
+
+    /// A window position in the game's picture, 0 to 1 across each side (outside the picture when it is letterboxed).
+    fn game_position(&self, x: f32, y: f32) -> (f64, f64) {
         let (bw, bh) = self.window.size();
         let (bw, bh) = (bw as f64, bh as f64);
-        if bw > 0.0 && bh > 0.0 {
-            let a = crate::profile::rendered_aspect().unwrap_or(16.0 / 9.0);
-            let (w, h) = if bw > bh * a { (bh * a, bh) } else { (bw, bw / a) };
-            let (x0, y0) = ((bw - w) / 2.0, (bh - h) / 2.0);
-            input::touch_moved(0, (x as f64 - x0) / w, (y as f64 - y0) / h);
+        if bw <= 0.0 || bh <= 0.0 {
+            return (0.0, 0.0);
         }
+        let a = crate::profile::rendered_aspect().unwrap_or(16.0 / 9.0);
+        let (w, h) = if bw > bh * a { (bh * a, bh) } else { (bw, bw / a) };
+        let (x0, y0) = ((bw - w) / 2.0, (bh - h) / 2.0);
+        ((x as f64 - x0) / w, (y as f64 - y0) / h)
     }
 
     /// Reads every open controller into host/input.rs's controller elements, in the order they were connected: the first
@@ -348,6 +363,22 @@ fn dead_zone(x: f32, y: f32) -> (f32, f32) {
     }
     let k = ((m - DEAD) / (1.0 - DEAD)).min(1.0) / m;
     (x * k, y * k)
+}
+
+fn direct_mouse() -> bool {
+    crate::settings::get().input.direct_mouse
+}
+
+fn mouse_button(button: MouseButton, down: bool) {
+    let bit = match button {
+        MouseButton::Left => 0,
+        MouseButton::Right => 1,
+        MouseButton::Middle => 2,
+        MouseButton::X2 => 3,
+        MouseButton::X1 => 4,
+        _ => return,
+    };
+    input::mouse_button(bit, down);
 }
 
 /// The macOS virtual key code (Carbon kVK_*, what controls.cfg stores) of the key at SDL scancode `sc` (USB HID usage):
