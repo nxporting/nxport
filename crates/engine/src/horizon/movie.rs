@@ -7,6 +7,7 @@
 // after the Itanium ABI's two destructor entries. The decoder follows the MediaCodec-style decoder contract:
 // input / output buffer indices, BufferFlags_EndOfStream, and nn::os events signaled when buffers become available.
 
+use nxport_media::Format;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::OnceLock;
@@ -50,7 +51,7 @@ struct Media {
     advance: unsafe fn(*mut c_void),
     seek: unsafe fn(*mut c_void, i64) -> c_int,
     close: unsafe fn(*mut c_void),
-    md_open: unsafe fn(*mut c_void, c_int, c_int) -> *mut c_void,
+    md_open: unsafe fn(*mut c_void, c_int, Format) -> *mut c_void,
     md_send: unsafe fn(*mut c_void, *const u8, c_int, i64, c_int) -> c_int,
     md_receive: unsafe fn(*mut c_void, *mut u8, c_int, *mut i64, *mut c_int, *mut c_int, *mut c_int, *mut c_int) -> c_int,
     md_flush: unsafe fn(*mut c_void),
@@ -58,7 +59,7 @@ struct Media {
 }
 
 fn media() -> &'static Media {
-    use nxport_media::{Codec, Decoder, Format, Kind, Output, Source};
+    use nxport_media::{Codec, Decoder, Kind, Output, Source};
     unsafe fn src<'a>(h: *mut c_void) -> &'a mut Source {
         &mut *(h as *mut Source)
     }
@@ -127,14 +128,8 @@ fn media() -> &'static Media {
             }
         },
         close: |h| unsafe { drop(Box::from_raw(h as *mut Source)) },
-        md_open: |file, track, fmt| unsafe {
+        md_open: |file, track, format| unsafe {
             let Some(t) = src(file).tracks().get(track as usize) else { return std::ptr::null_mut() };
-            // movie::DecoderOutputFormat: 1 PCM16, 3 ABGR (bytes R, G, B, A), 4 NV12.
-            let format = match fmt {
-                1 => Format::Pcm16,
-                3 => Format::Rgba,
-                _ => Format::Nv12,
-            };
             match Decoder::new(t, format) {
                 Ok(d) => Box::into_raw(Box::new(d)) as *mut c_void,
                 Err(e) => {
@@ -896,7 +891,7 @@ struct OutFrame {
     flags: u32,
 }
 struct Decoder {
-    out_format: i32,
+    out_format: Format,
     events: [usize; 4], // input available, output available, format changed, error
     dec: usize,         // media decoder handle
     is_video: bool,
@@ -973,14 +968,10 @@ unsafe extern "C" fn d_configure(this: *mut usize, md: *mut usize) -> u32 {
     d.height = t.height;
     d.sample_rate = t.sample_rate;
     d.channels = t.channels;
-    let fmt = if d.is_video {
-        if d.out_format == 4 {
-            4
-        } else {
-            3
-        }
-    } else {
-        1
+    let fmt = match (d.is_video, d.out_format) {
+        (false, _) => Format::Pcm16,
+        (true, Format::Pcm16) => Format::Rgba,
+        (true, f) => f,
     };
     let h = (s.md_open)(file as *mut c_void, track, fmt);
     if h.is_null() {
@@ -992,7 +983,7 @@ unsafe extern "C" fn d_configure(this: *mut usize, md: *mut usize) -> u32 {
     d.inputs = (0..IN_SLOTS).map(|_| (vec![0u8; in_size], true)).collect();
     d.outputs = (0..OUT_SLOTS).map(|_| None).collect();
     println!(
-        "[movie] Decoder configured: track {} {} {}x{} {} Hz x{} -> output format {}",
+        "[movie] Decoder configured: track {} {} {}x{} {} Hz x{} -> output format {:?}",
         track,
         mime(&t),
         t.width,
@@ -1022,14 +1013,14 @@ fn fill_format(d: &Decoder, md: *mut usize) {
         md_set(
             md,
             "stride",
-            Val::I32(if d.out_format == 4 {
+            Val::I32(if d.out_format == Format::Nv12 {
                 d.width
             } else {
                 d.width * 4
             }),
         );
         md_set(md, "slice-height", Val::I32(d.height));
-        if d.out_format == 4 {
+        if d.out_format == Format::Nv12 {
             // Plane offsets inside an NV12 output buffer (the decoder writes tightly packed planes).
             md_set(md, "nv12-y-offset", Val::I32(0));
             md_set(md, "nv12-uv-offset", Val::I32(d.width * d.height));
@@ -1338,7 +1329,7 @@ unsafe extern "C" fn d_output_size(this: *mut usize, size: *mut i32, align: *mut
         return NULL_DECODER;
     };
     let s = if d.is_video {
-        if d.out_format == 4 {
+        if d.out_format == Format::Nv12 {
             d.width * d.height * 3 / 2
         } else {
             d.width * d.height * 4
@@ -1396,11 +1387,32 @@ guest_vtable!(DECODER_VTABLE, register_decoder_hle, [
     d_get_output_with_format(_, _, _, _),
     d_output_buffer_format(_, _, _),
 ]);
-pub unsafe extern "C" fn decoder_ctor(this: *mut usize, ty: i32, format: i32, mode: i32, _n: i32) {
-    println!(
-        "[movie] Decoder(type={}, output format={}, mode={})",
-        ty, format, mode
-    );
+/// movie::DecoderOutputFormat where the Decoder constructor takes a mode: 1 PCM16, 3 bytes R, G, B, A, 4 NV12.
+fn output_format(raw: i32) -> Format {
+    match raw {
+        1 => Format::Pcm16,
+        4 => Format::Nv12,
+        _ => Format::Rgba,
+    }
+}
+/// movie::DecoderOutputFormat where it does not (library 3.5.1's DecoderImpl::GetOutputBufferSize and ConvertToArgb):
+/// 1 PCM16, 2 bytes A, R, G, B, 3 NV12.
+fn output_format_before_modes(raw: i32) -> Format {
+    match raw {
+        1 => Format::Pcm16,
+        3 => Format::Nv12,
+        _ => Format::Argb,
+    }
+}
+pub unsafe extern "C" fn decoder_ctor(this: *mut usize, ty: i32, format: i32, _mode: i32, _n: i32) {
+    new_decoder(this, ty, output_format(format));
+}
+/// The constructor before it took a mode.
+unsafe extern "C" fn decoder_ctor_before_modes(this: *mut usize, ty: i32, format: i32) {
+    new_decoder(this, ty, output_format_before_modes(format));
+}
+unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
+    println!("[movie] Decoder(type={ty}, output format {format:?})");
     *this = vtable(&DECODER_VTABLE, true);
     let d = Decoder {
         out_format: format,
@@ -1443,6 +1455,7 @@ pub fn lookup(name: &str) -> Option<usize> {
         "_ZN5movie9ExtractorC1ENS_13ContainerTypeE"
         | "_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE" => a!(extractor_ctor(_)),
         "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi" => a!(decoder_ctor(_, _, _, _, _)),
+        "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatE" => a!(decoder_ctor_before_modes(_, _, _)),
         "_ZN5movie9MediaDataC1Ev" => a!(md_ctor(_)),
         "_ZN5movie9MediaDataD1Ev" => a!(md_dtor(_)),
         "_ZN5movie9MediaDataC1ERKS0_" => a!(md_copy_ctor(_, _)),
@@ -1482,5 +1495,18 @@ pub fn lookup(name: &str) -> Option<usize> {
         "_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_"
         | "_ZN5movie11SetCoreMaskEm" => a!(noop()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn each_library_numbering_has_its_own_meaning() {
+        assert_eq!(output_format(3), Format::Rgba);
+        assert_eq!(output_format(4), Format::Nv12);
+        assert_eq!(output_format_before_modes(2), Format::Argb);
+        assert_eq!(output_format_before_modes(3), Format::Nv12);
     }
 }

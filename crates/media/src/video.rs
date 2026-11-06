@@ -193,6 +193,13 @@ impl Decode for Avc {
     }
 }
 
+/// Bytes R, G, B, A to bytes A, R, G, B.
+pub(crate) fn rgba_to_argb(pixels: &mut [u8]) {
+    for px in pixels.chunks_exact_mut(4) {
+        px.rotate_right(1);
+    }
+}
+
 /// BT.601 limited-range 4:2:0 to RGBA (bytes R, G, B, A).
 pub(crate) fn yuv420_to_rgba(out: &mut [u8], w: usize, h: usize, y: &[u8], u: &[u8], v: &[u8]) {
     let cw = (w + 1) / 2;
@@ -207,5 +214,15 @@ pub(crate) fn yuv420_to_rgba(out: &mut [u8], w: usize, h: usize, y: &[u8], u: &[
             px[2] = ((yy + 516 * d + 128) >> 8).clamp(0, 255) as u8;
             px[3] = 255;
         }
+    }
+}
+
+#[cfg(test)]
+mod argb_tests {
+    #[test]
+    fn alpha_moves_to_the_first_byte() {
+        let mut px = [1, 2, 3, 255, 4, 5, 6, 255];
+        super::rgba_to_argb(&mut px);
+        assert_eq!(px, [255, 1, 2, 3, 255, 4, 5, 6]);
     }
 }
