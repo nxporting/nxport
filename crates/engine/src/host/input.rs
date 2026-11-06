@@ -566,6 +566,54 @@ pub fn touches() -> Vec<Touch> {
     t.clone()
 }
 
+/// Keys held for nn::hid::KeyboardState, by USB HID usage. Read when the setting allows, so a key held while it is
+/// turned on still counts.
+static USB_KEYS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static KEYBOARD_SAMPLE: AtomicU64 = AtomicU64::new(0);
+
+/// A key of the host keyboard went down or up, by USB HID usage (what SDL scancodes are). Only the SDL hosts have this
+/// so far: on Apple devices a game still sees a keyboard with nothing pressed.
+#[cfg(not(target_vendor = "apple"))]
+pub fn set_usb_key(usage: usize, down: bool) {
+    if let Some(word) = USB_KEYS.get(usage / 64) {
+        let bit = 1u64 << (usage % 64);
+        if down {
+            word.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            word.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+}
+
+/// nn::hid::KeyboardState: sampling number, modifier bits, attributes (bit 0: connected), then a bit per USB HID usage.
+/// Caps, Scroll and Num Lock (modifier bits 8..10) are not reported.
+fn keyboard_state(sample: u64, connected: bool, keys: [u64; 4]) -> [u8; 0x30] {
+    let mut state = [0u8; 0x30];
+    state[0..8].copy_from_slice(&sample.to_le_bytes());
+    if connected {
+        // Usages 224..231 are left Control, Shift, Alt, GUI, then right Control, Shift, Alt, GUI.
+        let held = |usage: u32| (keys[3] >> (usage - 192)) as u32 & 1;
+        let modifiers = (held(224) | held(228))
+            | (held(225) | held(229)) << 1
+            | held(226) << 2
+            | held(230) << 3
+            | (held(227) | held(231)) << 4;
+        state[8..12].copy_from_slice(&modifiers.to_le_bytes());
+        state[12..16].copy_from_slice(&1u32.to_le_bytes());
+        for (i, word) in keys.iter().enumerate() {
+            state[16 + i * 8..24 + i * 8].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+    state
+}
+
+/// What a game reading the keyboard sees now: nothing connected unless direct keyboard access is on.
+pub fn next_keyboard_state() -> [u8; 0x30] {
+    let on = crate::settings::try_get().is_some_and(|s| s.input.direct_keyboard);
+    let keys = std::array::from_fn(|i| USB_KEYS[i].load(Ordering::Relaxed));
+    keyboard_state(KEYBOARD_SAMPLE.fetch_add(1, Ordering::Relaxed) + 1, on, keys)
+}
+
 pub fn set_key(code: u16, down: bool) {
     if let Some(k) = KEYS.get(code as usize) {
         k.store(down, Ordering::Relaxed);
@@ -574,6 +622,9 @@ pub fn set_key(code: u16, down: bool) {
 }
 
 pub fn clear_keys() {
+    for word in &USB_KEYS {
+        word.store(0, Ordering::Relaxed);
+    }
     if KEYS.iter().any(|k| k.swap(false, Ordering::Relaxed)) {
         update_npad();
     }
@@ -1067,6 +1118,49 @@ pub fn modifier_down(code: u16, flags: usize) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyboard_state_layout() {
+        // A (usage 4), left Shift (225), right Alt (230).
+        let keys = [1 << 4, 0, 0, 1 << 33 | 1 << 38];
+        let s = keyboard_state(7, true, keys);
+        assert_eq!(u64::from_le_bytes(s[0..8].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(s[8..12].try_into().unwrap()), 0b0_1010);
+        assert_eq!(u32::from_le_bytes(s[12..16].try_into().unwrap()), 1);
+        assert_eq!(s[16], 1 << 4);
+        assert_eq!(s[44], 1 << 1 | 1 << 6);
+    }
+
+    #[test]
+    fn keyboard_state_off_shows_no_keys() {
+        let s = keyboard_state(7, false, [u64::MAX; 4]);
+        assert_eq!(u64::from_le_bytes(s[0..8].try_into().unwrap()), 7);
+        assert!(s[8..].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn keyboard_and_mouse_calls_stay_in_their_buffers() {
+        use crate::horizon::hle::*;
+        unsafe {
+            let mut buf = [0xaau8; 0x40];
+            hle_nn_hid_GetKeyboardState(buf.as_mut_ptr());
+            assert!(buf[0x30..].iter().all(|b| *b == 0xaa));
+
+            // Asked for two, given one, and the second is left alone.
+            let mut buf = [0xaau8; 0x70];
+            let mut written = -1;
+            assert_eq!(hle_nn_hid_detail_GetKeyboardStates(&mut written, buf.as_mut_ptr(), 2), 0);
+            assert_eq!(written, 1);
+            assert!(buf[0x30..].iter().all(|b| *b == 0xaa));
+
+            let mut buf = [0xaau8; 0x60];
+            let mut written = -1;
+            assert_eq!(hle_nn_hid_detail_GetMouseStates(&mut written, buf.as_mut_ptr(), 2), 0);
+            assert_eq!(written, 2);
+            assert!(buf[..0x50].iter().all(|b| *b == 0));
+            assert!(buf[0x50..].iter().all(|b| *b == 0xaa));
+        }
+    }
 
     #[test]
     fn test_multiplayer_player_slots() {

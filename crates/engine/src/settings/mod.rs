@@ -162,7 +162,7 @@ group! {
 
 group! {
     /// Controllers, keyboard, touch and rumble.
-    Input "Input" [swap_ab, swap_xy, no_touch, no_rumble, rumble_scale] {
+    Input "Input" [swap_ab, swap_xy, no_touch, no_rumble, rumble_scale, direct_keyboard] {
         /// Controls file (default: the application data directory's controls.cfg)
         controls_file: Option<PathBuf> = None,
         /// Physical controllers: A and B by position, as on a Switch controller
@@ -175,6 +175,8 @@ group! {
         no_rumble: bool = false,
         /// Rumble strength factor
         rumble_scale: f32 = 1.0,
+        /// Direct keyboard access: games and mods that read a USB keyboard see this one, as well as its bindings
+        direct_keyboard: bool = false,
         /// Text the software keyboard returns (default: the game's initial text, else "Player"; "<cancel>" cancels)
         keyboard_text: Option<String> = None,
     }
