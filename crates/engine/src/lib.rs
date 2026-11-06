@@ -490,6 +490,7 @@ fn guest_chain(
     if !mod_inits.is_empty() {
         live_patch::empty_present_layer();
     }
+    horizon::fs::seed_sd_card();
     for (label, init) in &mod_inits {
         println!("[+] Mods: running {} init at {:#x}", label, init);
         unsafe { guest::call(*init, &[0, 0]) };

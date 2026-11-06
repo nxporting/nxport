@@ -443,6 +443,47 @@ pub fn mods() -> &'static [(String, PathBuf)] {
     })
 }
 
+/// Puts the folders a mod carries for the SD card (UltraCam/TOTK/Config) on the game's SD card, for the mod's code to
+/// find. A file already there stays: the mod or the player may have changed it, and higher priority mods come first.
+pub fn seed_sd_card() {
+    let sd = Path::new(save_root()).join("mount_sd");
+    for (name, dir) in mods() {
+        match seed_from_mod(dir, &sd) {
+            Ok(0) => {}
+            Ok(n) => println!("[+] Mods: '{name}': {n} files put on the SD card"),
+            Err(e) => println!("[!] Mods: '{name}': its SD card files: {e}"),
+        }
+    }
+}
+
+fn seed_from_mod(dir: &Path, sd: &Path) -> std::io::Result<usize> {
+    const NOT_FOR_SD: [&str; 3] = ["exefs", "romfs", "cheats"];
+    let mut copied = 0;
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name();
+        let wanted = !NOT_FOR_SD.iter().any(|n| name.to_string_lossy().eq_ignore_ascii_case(n));
+        if wanted && entry.path().is_dir() {
+            copied += copy_missing(&entry.path(), &sd.join(&name))?;
+        }
+    }
+    Ok(copied)
+}
+
+fn copy_missing(from: &Path, to: &Path) -> std::io::Result<usize> {
+    let mut copied = 0;
+    for entry in std::fs::read_dir(from)?.flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copied += copy_missing(&entry.path(), &target)?;
+        } else if !target.exists() {
+            std::fs::create_dir_all(to)?;
+            std::fs::copy(entry.path(), &target)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
 /// One source of RomFS files of a mod.
 enum RomfsLayer {
     Dir(PathBuf),
@@ -1707,6 +1748,24 @@ mod mod_layout_tests {
         let got: Vec<String> = patch_sets(&r, 2).into_iter().map(|x| x.0).collect();
         let _ = std::fs::remove_dir_all(&r);
         assert_eq!(got, ["60fps", "other"]);
+    }
+
+    #[test]
+    fn sd_card_gets_a_mods_other_folders_and_keeps_its_files() {
+        let r = tree("sdseed", &["m/UltraCam/Config", "m/exefs", "m/RomFS", "sd/UltraCam/Config"]);
+        std::fs::write(r.join("m/UltraCam/Config/new.ini"), "mod").unwrap();
+        std::fs::write(r.join("m/UltraCam/Config/kept.ini"), "mod").unwrap();
+        std::fs::write(r.join("m/exefs/subsdk3"), "code").unwrap();
+        std::fs::write(r.join("m/RomFS/file"), "data").unwrap();
+        std::fs::write(r.join("m/loose.txt"), "text").unwrap();
+        std::fs::write(r.join("sd/UltraCam/Config/kept.ini"), "player").unwrap();
+        assert_eq!(seed_from_mod(&r.join("m"), &r.join("sd")).unwrap(), 1);
+        let read = |p: &str| std::fs::read_to_string(r.join("sd").join(p)).unwrap();
+        assert_eq!(read("UltraCam/Config/new.ini"), "mod");
+        assert_eq!(read("UltraCam/Config/kept.ini"), "player");
+        assert!(!r.join("sd/exefs").exists() && !r.join("sd/RomFS").exists() && !r.join("sd/loose.txt").exists());
+        assert_eq!(seed_from_mod(&r.join("m"), &r.join("sd")).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&r);
     }
 
     #[test]
