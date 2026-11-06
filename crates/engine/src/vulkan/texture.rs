@@ -20,6 +20,23 @@ pub struct Desc {
 }
 
 impl Desc {
+    /// The description of the image that holds this memory. A 4-byte colour texture's bytes are read through views in
+    /// whatever format each texture has, as on the console: textures that differ only in that, or in flags that do not
+    /// change where texels lie, are one image, whether or not they exist at the same time. Games re-create texture objects
+    /// over the same memory every frame, and separate images would pass their contents through guest memory.
+    pub fn canonical(&self) -> Desc {
+        let mut d = *self;
+        if format::is_four_byte_color(d.params.format) && d.params.samples <= 1 {
+            const RGBA8: i32 = 37;
+            const LAYOUT_FLAGS: i32 = layout::NVN_TEXTURE_FLAGS_LINEAR_BIT
+                | layout::NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT
+                | layout::NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT;
+            d.params.format = RGBA8;
+            d.params.flags &= LAYOUT_FLAGS;
+        }
+        d
+    }
+
     pub fn of(t: &NvnTexture) -> Desc {
         Desc {
             storage: t.storage,
@@ -58,6 +75,8 @@ pub struct Image {
     checked: u64,
     hash: u64,
     token: Option<u64>,
+    /// The write-tracking token of the whole pages inside its memory: a change there is the CPU's, as those hold nothing else.
+    interior_token: Option<u64>,
     /// A GPU-written image's hash and token were taken (`settle`).
     settled: bool,
     /// GPU work wrote it since its contents were last written to guest memory; when (a global sequence, ordering the
@@ -68,8 +87,11 @@ pub struct Image {
     /// Bytes of guest memory its description covers; whether that memory's pool is CPU-writable, at a pool generation.
     guest_len: usize,
     cpu_writable: (u64, bool),
-    /// Write-back generation when this image was last uploaded from guest memory.
-    pub wb_gen: u64,
+    /// Made for a render target and not loaded from guest memory yet (`target_image`).
+    never_loaded: bool,
+    /// The write sequence its contents are as of: its last GPU write, or the upload. A GPU write over the same memory with a
+    /// later one has made them stale; the memory's bytes need not be looked at to know.
+    content_seq: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,6 +121,9 @@ pub struct Textures {
     /// Settled images with unflushed GPU contents, by storage address (`flush_overlaps`), and the largest one's size.
     unflushed: std::collections::BTreeMap<usize, Vec<Desc>>,
     unflushed_span: usize,
+    /// Every image by storage address, and the largest one's size: what lies over a range of guest memory.
+    by_storage: std::collections::BTreeMap<usize, Vec<Desc>>,
+    by_storage_span: usize,
     /// While a submit is recorded: image creation and uploads go into a command buffer queued ahead of the submit's next
     /// chunk (Ctx::submit_chunk), instead of blocking one-time submits; with the staging memory to free once it ran.
     batch: Option<Batch>,
@@ -181,25 +206,6 @@ static GPU_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// Images written to guest memory by flush_overlaps (reported with the fps line).
 pub static FLUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-static WB_LANDED_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static WB_LANDED_AT: std::sync::Mutex<Option<rustc_hash::FxHashMap<usize, u64>>> = std::sync::Mutex::new(None);
-
-/// Notes that GPU render-target write-back landed at guest address `addr`.
-pub fn note_wb_landed(addr: usize) {
-    let g = WB_LANDED_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    let mut map = WB_LANDED_AT.lock().unwrap();
-    map.get_or_insert_with(rustc_hash::FxHashMap::default).insert(addr, g);
-}
-
-/// True if GPU write-back landed at `addr` after `gen`.
-pub fn is_wb_newer(addr: usize, gen: u64) -> bool {
-    if WB_LANDED_GEN.load(std::sync::atomic::Ordering::Relaxed) <= gen {
-        return false;
-    }
-    let map = WB_LANDED_AT.lock().unwrap();
-    map.as_ref().and_then(|m| m.get(&addr)).copied().unwrap_or(0) > gen
-}
-
 impl Image {
     /// GPU work of the submit being recorded writes this image.
     pub fn mark_gpu_write(&mut self) {
@@ -207,6 +213,7 @@ impl Image {
         self.gpu_written = true;
         self.unflushed = true;
         self.gpu_seq = GPU_SEQ.fetch_add(1, Relaxed) + 1;
+        self.content_seq = self.gpu_seq;
         self.gpu_submit = SUBMIT.load(Relaxed);
     }
 }
@@ -251,7 +258,7 @@ impl Textures {
 
     /// `locate` by the texture's description.
     pub unsafe fn locate_desc(&mut self, d: &Desc) -> (Desc, u32, u32) {
-        let d = *d;
+        let d = d.canonical();
         if let Some(&r) = self.roots.get(&d) {
             return r;
         }
@@ -285,7 +292,7 @@ impl Textures {
         };
         let mut best: Option<(u64, Desc, u32, u32)> = None;
         for (_, _, c) in crate::nvn::api::textures_reaching(d.storage, crate::nvn::api::max_texture_span()) {
-            let cd = Desc::of(&c);
+            let cd = Desc::of(&c).canonical();
             if cd == *d || c.samples > 1 || c.width <= 0 || c.height <= 0 || c.target == layout::NVN_TARGET_BUFFER {
                 continue;
             }
@@ -335,11 +342,43 @@ impl Textures {
         if !self.images.contains_key(&d) {
             let img = self.create(dev, &d)?;
             self.images.insert(d, img);
+            self.index_image(&d);
             self.refresh(dev, &d, true);
         } else {
-            self.refresh(dev, &d, false);
+            let first = self.images.get_mut(&d).is_some_and(|i| std::mem::take(&mut i.never_loaded));
+            self.refresh(dev, &d, first);
         }
         self.images.get_mut(&d)
+    }
+
+    /// The image a render target names, with its contents not brought up to date: a pass loads them when a draw could see
+    /// them (`load_target`), and a clear of the whole image makes that unnecessary (`target_replaced`).
+    pub unsafe fn target_image(&mut self, dev: &Dev, t: &NvnTexture) -> Option<(Desc, &mut Image, u32, u32)> {
+        let (d, level, layer) = self.locate(t);
+        if !self.images.contains_key(&d) {
+            let mut img = self.create(dev, &d)?;
+            img.never_loaded = true;
+            self.images.insert(d, img);
+            self.index_image(&d);
+        }
+        Some((d, self.images.get_mut(&d)?, level, layer))
+    }
+
+    /// A pass's first draw can see this target's old contents: they come up to date, then GPU work writes it.
+    pub unsafe fn load_target(&mut self, dev: &Dev, d: &Desc) {
+        if let Some(img) = self.get_desc(dev, d) {
+            img.mark_gpu_write();
+        }
+    }
+
+    /// A pass clears the whole image: nothing it held or that guest memory holds can be seen. Guest memory may have changed
+    /// since its baseline, so it takes a new one when this submit completes (`settle`).
+    pub fn target_replaced(&mut self, d: &Desc) {
+        if let Some(img) = self.images.get_mut(d) {
+            img.never_loaded = false;
+            img.settled = false;
+            img.mark_gpu_write();
+        }
     }
 
     /// Uploads the texture again when the CPU wrote its guest memory since the last upload (the game fills textures
@@ -369,25 +408,20 @@ impl Textures {
         if len == 0 {
             return;
         }
-        use crate::guest::dirty_track;
-        let wb_stale = is_wb_newer(d.storage, img.wb_gen);
-        if !first && !wb_stale && img.token.is_some() && dirty_track::generation(d.storage, len) == img.token {
+        // Two questions: did the CPU write this memory, and did the GPU write over it after these contents?
+        let overwritten = self.overwritten_since(d);
+        let changed = self.cpu_changed(d);
+        if !first && !overwritten && !changed {
             return;
         }
         // GPU contents of other images over this memory reach it first.
         self.flush_overlaps(dev, d);
         let Some(img) = self.images.get_mut(d) else { return };
-        // Protect before hashing: writes during the hash change the token.
-        img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
-        let h = hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len));
-        if !first && !wb_stale && h == img.hash {
-            return;
-        }
-        img.hash = h;
+        Self::take_baseline(d, img);
+        img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         img.gpu_written = false;
         img.settled = false;
         img.unflushed = false;
-        img.wb_gen = WB_LANDED_GEN.load(std::sync::atomic::Ordering::Relaxed);
         self.upload(dev, d);
     }
 
@@ -408,19 +442,151 @@ impl Textures {
         }
     }
 
-    /// Before guest memory under `d` is read for an upload: images over that memory that GPU work wrote in completed
-    /// submits, whose guest bytes the CPU has not changed since, are written to guest memory first, oldest write first, so
-    /// the memory holds what the GPU left there (Ryujinx's texture cache flushes such overlaps likewise).
+    /// Before guest memory under `d` is read for an upload: GPU contents of other images over those bytes reach it, oldest
+    /// write first, so the bytes are what the GPU's writes in their order left there. Only the rows holding those bytes are
+    /// read back, in one wait; the images stay unflushed, as the rest of their memory is not written.
+    ///
+    /// Whether the CPU changed an image's bytes is decided before any write (it drops that image's GPU contents), and the
+    /// images these writes touch take the bytes as their new baseline: a write-back is not a CPU write.
     unsafe fn flush_overlaps(&mut self, dev: &Dev, d: &Desc) {
-        if self.unflushed.is_empty() || d.storage <= 0x10000 {
+        if self.unflushed.is_empty() || d.storage <= 0x10000 || !exact_overlaps() {
             return;
         }
-        let end = d.storage + layout::compute_layout(&d.params).total as usize;
-        let mut hits: Vec<(u64, Desc)> = Vec::new();
-        for (_, v) in self.unflushed.range(d.storage.saturating_sub(self.unflushed_span)..end) {
+        let (start, end) = (d.storage, d.storage + layout::compute_layout(&d.params).total as usize);
+        let mut group: Vec<(u64, Desc)> = self.unflushed_over(start, end).into_iter().filter(|h| h.1 != *d).collect();
+        group.retain(|(_, o)| {
+            let keep = self.guest_can_take(o) && !self.cpu_changed(o);
+            if !keep {
+                self.no_longer_unflushed(o);
+            }
+            keep
+        });
+        if group.is_empty() {
+            return;
+        }
+        group.sort_by_key(|h| h.0);
+        // (image, level, layer, the buffer offset, rows, where the rows go in guest memory)
+        struct Part {
+            d: Desc,
+            level: u32,
+            layer: u32,
+            offset: u64,
+            y: u32,
+            width: u32,
+            rows: u32,
+            region: vk::BufferImageCopy,
+        }
+        let mut parts: Vec<Part> = Vec::new();
+        let mut total = 0u64;
+        let (mut low, mut high) = (usize::MAX, 0usize);
+        for (_, o) in &group {
+            let Some(img) = self.images.get(o) else { continue };
+            let lay = layout::compute_layout(&o.params);
+            if o.params.target == layout::NVN_TARGET_3D {
+                continue;
+            }
+            for layer in 0..img.layers {
+                let slice = o.storage + layer as usize * lay.layer_stride as usize;
+                for level in 0..img.levels {
+                    let at = slice + lay.level_offsets[level as usize] as usize;
+                    let (from, to) = (start.saturating_sub(at) as u64, end.saturating_sub(at) as u64);
+                    let Some((y, rows)) = layout::rows_of_bytes(&o.params, level as usize, from, to) else { continue };
+                    let Some((mut region, width, _, _)) = Self::read_region(img, o.params.format, level, layer) else { continue };
+                    let info = layout::format_info(o.params.format).unwrap();
+                    region.buffer_offset = total;
+                    region.image_offset.y = y as i32;
+                    region.image_extent.height = rows;
+                    let bytes = width.div_ceil(info.block_w) as u64 * rows.div_ceil(info.block_h) as u64 * info.bytes as u64;
+                    parts.push(Part { d: *o, level, layer, offset: total, y, width, rows, region });
+                    total += bytes;
+                    low = low.min(at);
+                    high = high.max(at + lay.level_sizes[level as usize] as usize);
+                }
+            }
+        }
+        if parts.is_empty() {
+            return;
+        }
+        // The images these writes touch that the CPU had not changed.
+        let others: Vec<Desc> = self.images_over(low, high).into_iter().filter(|o| self.guest_can_take(o) && !self.cpu_changed(o)).collect();
+        let Ok(buf) = dev.host_buffer(total, vk::BufferUsageFlags::TRANSFER_DST) else { return };
+        let done = dev.one_shot(|cb| {
+            dev.full_barrier(cb);
+            for p in &parts {
+                let image = self.images[&p.d].image;
+                dev.device.cmd_copy_image_to_buffer(cb, image, vk::ImageLayout::GENERAL, buf.buffer, &[p.region]);
+            }
+        });
+        if done.is_ok() {
+            for p in &parts {
+                let lay = layout::compute_layout(&p.d.params);
+                layout::write_texels_2d(
+                    p.d.storage as *mut u8,
+                    p.layer as usize * lay.layer_stride as usize,
+                    &p.d.params,
+                    p.level as usize,
+                    0,
+                    p.y as i32,
+                    p.width as i32,
+                    p.rows as i32,
+                    buf.ptr.add(p.offset as usize),
+                );
+                FLUSHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        dev.free_host_buffer(&buf);
+        for o in &others {
+            if let Some(img) = self.images.get_mut(o) {
+                Self::take_baseline(o, img);
+            }
+        }
+    }
+
+    fn index_image(&mut self, d: &Desc) {
+        self.by_storage.entry(d.storage).or_default().push(*d);
+        self.by_storage_span = self.by_storage_span.max(layout::compute_layout(&d.params).total as usize);
+    }
+
+    /// The images over this range of guest memory.
+    fn images_over(&self, start: usize, end: usize) -> Vec<Desc> {
+        let mut over = Vec::new();
+        for (_, v) in self.by_storage.range(start.saturating_sub(self.by_storage_span)..end) {
             for o in v {
-                let o_end = o.storage + layout::compute_layout(&o.params).total as usize;
-                if o == d || o_end <= d.storage {
+                if o.storage + layout::compute_layout(&o.params).total as usize > start {
+                    over.push(*o);
+                }
+            }
+        }
+        over
+    }
+
+    /// Whether GPU work of a completed submit wrote over image `d`'s memory after the contents it holds. Work of the
+    /// submit being recorded cannot be read back yet.
+    fn overwritten_since(&self, d: &Desc) -> bool {
+        if !exact_overlaps() {
+            return false;
+        }
+        let Some(img) = self.images.get(d) else { return false };
+        let end = d.storage + layout::compute_layout(&d.params).total as usize;
+        for (_, v) in self.by_storage.range(d.storage.saturating_sub(self.by_storage_span)..end) {
+            for o in v {
+                if o == d || o.storage + layout::compute_layout(&o.params).total as usize <= d.storage {
+                    continue;
+                }
+                if self.images.get(o).is_some_and(|i| i.gpu_seq > img.content_seq && i.gpu_submit != self.serial) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// (write sequence, image) of each image with unflushed GPU contents from completed submits over this memory.
+    fn unflushed_over(&self, start: usize, end: usize) -> Vec<(u64, Desc)> {
+        let mut hits = Vec::new();
+        for (_, v) in self.unflushed.range(start.saturating_sub(self.unflushed_span)..end) {
+            for o in v {
+                if o.storage + layout::compute_layout(&o.params).total as usize <= start {
                     continue;
                 }
                 if let Some(img) = self.images.get(o) {
@@ -430,61 +596,60 @@ impl Textures {
                 }
             }
         }
-        hits.sort_by_key(|h| h.0);
-        for (_, o) in hits {
-            self.flush(dev, &o);
-        }
+        hits
     }
 
-    /// Writes image `d`'s contents to its guest memory (every level and layer) if the CPU has not changed that memory
-    /// since the GPU work completed; either way it no longer counts as unflushed.
-    unsafe fn flush(&mut self, dev: &Dev, d: &Desc) {
+    fn no_longer_unflushed(&mut self, d: &Desc) {
         if let Some(v) = self.unflushed.get_mut(&d.storage) {
             v.retain(|o| o != d);
             if v.is_empty() {
                 self.unflushed.remove(&d.storage);
             }
         }
-        let Some(img) = self.images.get_mut(d) else { return };
-        img.unflushed = false;
-        let p = d.params;
-        let lay = layout::compute_layout(&p);
-        let len = lay.total as usize;
-        if !crate::nvn::api::memory_pool_cpu_writable(d.storage) || crate::nvn::api::containing_pool(d.storage, len).is_none() {
-            return;
+        if let Some(img) = self.images.get_mut(d) {
+            img.unflushed = false;
         }
+    }
+
+    /// Whether image `d`'s guest memory is in a pool the CPU can reach, so what it holds can matter.
+    fn guest_can_take(&self, d: &Desc) -> bool {
+        let len = layout::compute_layout(&d.params).total as usize;
+        crate::nvn::api::memory_pool_cpu_writable(d.storage) && crate::nvn::api::containing_pool(d.storage, len).is_some()
+    }
+
+    /// Whether the CPU changed image `d`'s bytes since its baseline. Pages at its ends may hold other data, whose writes
+    /// also change its token: there the bytes decide.
+    unsafe fn cpu_changed(&self, d: &Desc) -> bool {
+        let Some(img) = self.images.get(d) else { return true };
+        Self::cpu_changed_of(d, img)
+    }
+
+    unsafe fn cpu_changed_of(d: &Desc, img: &Image) -> bool {
         use crate::guest::dirty_track;
-        let unchanged = img.token.is_some_and(|t| dirty_track::generation(d.storage, len) == Some(t))
-            || hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len)) == img.hash;
-        if !unchanged {
-            return;
+        let len = layout::compute_layout(&d.params).total as usize;
+        if img.token.is_some() && dirty_track::generation(d.storage, len) == img.token {
+            return false;
         }
-        let img = &self.images[d];
-        let is3d = p.target == layout::NVN_TARGET_3D;
-        for level in 0..img.levels {
-            let n = if is3d { (img.extent.depth >> level).max(1) } else { img.layers };
-            for layer in 0..n {
-                let Some(t) = Self::read(dev, img, p.format, level, layer) else { continue };
-                if is3d {
-                    layout::write_texels_3d_slice(d.storage as *mut u8, &p, level as usize, layer as usize, t.data.as_ptr());
-                } else {
-                    layout::write_texels_2d(
-                        d.storage as *mut u8,
-                        layer as usize * lay.layer_stride as usize,
-                        &p,
-                        level as usize,
-                        0,
-                        0,
-                        t.width as i32,
-                        t.height as i32,
-                        t.data.as_ptr(),
-                    );
-                }
+        if img.token.is_some() {
+            let (at, n) = interior_pages(d.storage, len);
+            if n > 0 && dirty_track::generation(at, n) != img.interior_token {
+                return true;
             }
         }
-        FLUSHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // Its own contents now: the baseline for later CPU writes.
-        self.resettle(d);
+        baseline_hash(d.storage, len, img.token.is_some()) != img.hash
+    }
+
+    /// The bytes guest memory holds now become image `d`'s baseline for detecting CPU writes.
+    unsafe fn take_baseline(d: &Desc, img: &mut Image) {
+        use crate::guest::dirty_track;
+        let len = layout::compute_layout(&d.params).total as usize;
+        // Protect before hashing: writes during the hash change the token.
+        img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
+        if img.token.is_some() {
+            let (at, n) = interior_pages(d.storage, len);
+            img.interior_token = if n > 0 { dirty_track::generation(at, n) } else { None };
+        }
+        img.hash = baseline_hash(d.storage, len, img.token.is_some());
     }
 
     /// settle for one image (also after a write-back changed its guest bytes).
@@ -501,10 +666,7 @@ impl Textures {
         if d.storage <= 0x10000 || !crate::nvn::api::memory_pool_cpu_writable(d.storage) {
             return;
         }
-        let len = layout::compute_layout(&d.params).total as usize;
-        use crate::guest::dirty_track;
-        img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
-        img.hash = hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len));
+        Self::take_baseline(d, img);
     }
 
     pub unsafe fn create(&mut self, dev: &Dev, d: &Desc) -> Option<Image> {
@@ -554,6 +716,11 @@ impl Textures {
             usage |= vk::ImageUsageFlags::STORAGE;
         }
         let mut flags = vk::ImageCreateFlags::MUTABLE_FORMAT;
+        // Viewed as any 4-byte colour format (format::alias_compatible), each with the usages it supports.
+        if format::is_four_byte_color(p.format) && p.samples <= 1 {
+            flags |= vk::ImageCreateFlags::EXTENDED_USAGE;
+            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::STORAGE;
+        }
         if matches!(p.target, layout::NVN_TARGET_CUBEMAP | layout::NVN_TARGET_CUBEMAP_ARRAY) && layers % 6 == 0 {
             flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
         }
@@ -650,7 +817,9 @@ impl Textures {
             gpu_submit: 0,
             guest_len: layout::compute_layout(&d.params).total as usize,
             cpu_writable: (u64::MAX, false),
-            wb_gen: 0,
+            never_loaded: false,
+            interior_token: None,
+            content_seq: 0,
         })
     }
 
@@ -1141,6 +1310,35 @@ impl Textures {
             a.destroy(dev);
         }
     }
+}
+
+/// Whether a texture over memory that an image of another shape has written since should see those bytes, as it would on the
+/// console. Rebuilding them is the most expensive thing the cache does. What a game can read there is what another layout
+/// left behind, so a title known not to depend on it can go without (profile::assumes_no_cross_shape_reads).
+fn exact_overlaps() -> bool {
+    static EXACT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *EXACT.get_or_init(|| crate::settings::get().graphics.exact_texture_overlaps || !crate::profile::assumes_no_cross_shape_reads())
+}
+
+/// The whole tracking pages inside [start, start + len): (address, bytes).
+fn interior_pages(start: usize, len: usize) -> (usize, usize) {
+    const PAGE: usize = 0x4000;
+    let at = start.next_multiple_of(PAGE);
+    let end = (start + len) / PAGE * PAGE;
+    (at, end.saturating_sub(at))
+}
+
+/// What is hashed of an image's bytes for detecting CPU writes. With write tracking, only the bytes on pages it shares
+/// with other data: the rest is known from the pages' generations. Without, all of them.
+unsafe fn baseline_hash(start: usize, len: usize, tracked: bool) -> u64 {
+    let (at, n) = if tracked { interior_pages(start, len) } else { (start, 0) };
+    if n == 0 {
+        return hash_bytes(std::slice::from_raw_parts(start as *const u8, len));
+    }
+    let head = hash_bytes(std::slice::from_raw_parts(start as *const u8, at - start));
+    let tail_at = at + n;
+    let tail = hash_bytes(std::slice::from_raw_parts(tail_at as *const u8, start + len - tail_at));
+    head.rotate_left(1) ^ tail
 }
 
 /// A content hash of guest bytes (change detection): four independent lanes over 32-byte steps.

@@ -215,6 +215,25 @@ impl Ctx {
                 if format::is_depth(fmt) {
                     let v = vk::ClearDepthStencilValue { depth: f32::from_bits(p.color[0]), stencil: p.color[1] };
                     self.rec.cmd(move |d, cb| d.device.cmd_clear_depth_stencil_image(cb, image, vk::ImageLayout::GENERAL, &v, &[range]));
+                } else if let Some(view_fmt) = texture::device_format(&self.dev, t.format).filter(|v| *v != fmt) {
+                    // An image shared with another format (format::alias_compatible): the value is in the texture's format,
+                    // so the clear goes through a view in it.
+                    let v = vk::ClearValue { color: vk::ClearColorValue { uint32: p.color } };
+                    let img = self.tex.images.get_mut(&d).unwrap();
+                    for layer in range.base_array_layer..range.base_array_layer + range.layer_count {
+                        let Some(view) = Textures::view(&self.dev, img, vk::ImageViewType::TYPE_2D, view_fmt, g.level, 1, layer, 1, [2, 3, 4, 5], false) else { continue };
+                        let area = vk::Rect2D { offset: vk::Offset2D::default(), extent: vk::Extent2D { width: level_extent.0, height: level_extent.1 } };
+                        self.rec.cmd(move |d, cb| {
+                            let a = [vk::RenderingAttachmentInfo::default()
+                                .image_view(view)
+                                .image_layout(vk::ImageLayout::GENERAL)
+                                .load_op(vk::AttachmentLoadOp::CLEAR)
+                                .store_op(vk::AttachmentStoreOp::STORE)
+                                .clear_value(v)];
+                            d.device.cmd_begin_rendering(cb, &vk::RenderingInfo::default().render_area(area).layer_count(1).color_attachments(&a));
+                            d.device.cmd_end_rendering(cb);
+                        });
+                    }
                 } else {
                     // The raw words of the float / int / uint value.
                     let v = vk::ClearColorValue { uint32: p.color };

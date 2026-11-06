@@ -26,9 +26,9 @@ pub const NVN_TARGET_CUBEMAP_ARRAY: i32 = 9;
 pub const NVN_TARGET_BUFFER: i32 = 10;
 
 const NVN_TEXTURE_FLAGS_COMPRESSIBLE_BIT: i32 = 0x08;
-const NVN_TEXTURE_FLAGS_LINEAR_BIT: i32 = 0x10;
-const NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT: i32 = 0x40;
-const NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT: i32 = 0x200;
+pub const NVN_TEXTURE_FLAGS_LINEAR_BIT: i32 = 0x10;
+pub const NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT: i32 = 0x40;
+pub const NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT: i32 = 0x200;
 
 /// Texture storage must be at least this aligned / padded.
 pub const TEXTURE_STORAGE_ALIGNMENT: usize = 0x1000;
@@ -410,6 +410,31 @@ fn linear_pitch(p: &TextureParams, info: &FormatInfo) -> Option<usize> {
     Some(if p.stride > 0 { p.stride as usize } else { align(wb * info.bytes as u64, 32) as usize })
 }
 
+/// The texel rows of `level` holding bytes [start, end) of it, as (first row, rows): whole rows of the layout's blocks, so
+/// they may hold more than those bytes. None if none of them lie in the level.
+pub fn rows_of_bytes(p: &TextureParams, level: usize, start: u64, end: u64) -> Option<(u32, u32)> {
+    let info = format_info(p.format)?;
+    let layout = compute_layout(p);
+    let size = *layout.level_sizes.get(level)? as u64;
+    let end = end.min(size);
+    if start >= end {
+        return None;
+    }
+    let lw = ((p.width.max(1) as u64) >> level).max(1);
+    let lh = ((p.height.max(1) as u64) >> level).max(1);
+    let wb = (lw + info.block_w as u64 - 1) / info.block_w as u64;
+    let (row_bytes, texel_rows) = match linear_pitch(p, &info) {
+        Some(pitch) => (pitch as u64, info.block_h as u64),
+        None => {
+            let bh = level_bh(p, &info, level) as u64;
+            (align(wb * info.bytes as u64, 64) * 8 * bh, 8 * bh * info.block_h as u64)
+        }
+    };
+    let first = (start / row_bytes) * texel_rows;
+    let last = (end.div_ceil(row_bytes) * texel_rows).min(lh);
+    (first < last).then_some((first as u32, (last - first) as u32))
+}
+
 pub unsafe fn write_texels_2d(
     storage: *mut u8,
     slice: usize,
@@ -715,6 +740,67 @@ unsafe fn read_texels_2d_reference(
 
 #[cfg(test)]
 mod tests {
+
+    /// Every byte of the range lies in the rows given: writing only those rows must reach all of them.
+    #[test]
+    fn rows_of_bytes_cover_the_bytes_asked_for() {
+        let shape = |width, height, format, flags, stride| TextureParams {
+            target: NVN_TARGET_2D,
+            width,
+            height,
+            depth: 1,
+            levels: 3,
+            format,
+            flags,
+            samples: 1,
+            stride,
+        };
+        const RGBA8: i32 = 37;
+        const R8: i32 = 1;
+        let shapes = [
+            shape(1600, 900, RGBA8, 0, 0),
+            shape(100, 56, RGBA8, 0, 0),
+            shape(257, 129, R8, 0, 0),
+            shape(64, 64, RGBA8, NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT, 0),
+        ];
+        for p in shapes {
+            let lay = compute_layout(&p);
+            let info = format_info(p.format).unwrap();
+            for level in 0..lay.level_offsets.len() {
+                let size = lay.level_sizes[level] as usize;
+                let (w, h) = (((p.width as usize) >> level).max(1), ((p.height as usize) >> level).max(1));
+                let texels = vec![0xABu8; w * h * info.bytes as usize];
+                // Which bytes of the level texels reach at all: the rest (padding) no row can write.
+                let mut all = vec![0u8; lay.total as usize];
+                unsafe { write_texels_2d(all.as_mut_ptr(), 0, &p, level, 0, 0, w as i32, h as i32, texels.as_ptr()) };
+                let base = lay.level_offsets[level] as usize;
+                for (start, end) in [(0, size.min(1)), (0, size / 2), (size / 3, size / 3 + 4096), (size / 2, size), (size.saturating_sub(1), size)] {
+                    let end = end.min(size);
+                    if start >= end {
+                        continue;
+                    }
+                    let Some((y, rows)) = rows_of_bytes(&p, level, start as u64, end as u64) else {
+                        assert!(all[base + start..base + end].iter().all(|b| *b == 0), "{p:?} level {level}: no rows for written bytes");
+                        continue;
+                    };
+                    assert!((y + rows) as usize <= h, "{p:?} level {level}: rows past the level");
+                    let mut got = vec![0u8; lay.total as usize];
+                    unsafe { write_texels_2d(got.as_mut_ptr(), 0, &p, level, 0, y as i32, w as i32, rows as i32, texels.as_ptr()) };
+                    for b in base + start..base + end {
+                        assert!(all[b] == 0 || got[b] != 0, "{p:?} level {level}: byte {b} of {start}..{end} not in rows {y}+{rows}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rows_of_bytes_outside_a_level_are_none() {
+        let p = TextureParams { target: NVN_TARGET_2D, width: 64, height: 64, depth: 1, levels: 1, format: 37, flags: 0, samples: 1, stride: 0 };
+        let size = compute_layout(&p).level_sizes[0];
+        assert_eq!(rows_of_bytes(&p, 0, size, size + 100), None);
+        assert_eq!(rows_of_bytes(&p, 5, 0, 100), None);
+    }
 
     #[test]
     fn read_texels_2d_matches_reference() {

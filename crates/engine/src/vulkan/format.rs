@@ -271,8 +271,15 @@ pub fn view_compatible(image: i32, view: i32) -> bool {
     }
 }
 
-/// Whether textures of NVN formats `a` and `b` over the same memory share one image: the same format, or its sRGB /
-/// linear twin (what the Metal backend aliases; other reinterpretations stay separate images).
+/// An uncompressed colour format of 4 bytes a texel. All are view-compatible in Vulkan, and RGBA8 supports every usage.
+pub fn is_four_byte_color(f: i32) -> bool {
+    let Some(i) = crate::nvn::layout::format_info(f) else { return false };
+    i.bytes == 4 && i.block_w == 1 && i.block_h == 1 && texture(f).is_some_and(|v| aspects(v) == vk::ImageAspectFlags::COLOR)
+}
+
+/// Whether textures of NVN formats `a` and `b` over the same memory share one image: the same format, its linear twin,
+/// or another 4-byte colour format. Those are the same bytes read differently, on the console as through a Vulkan format
+/// view, and separate images would have to pass their contents through guest memory.
 pub fn alias_compatible(a: i32, b: i32) -> bool {
     use vk::Format as F;
     let base = |f: i32| match texture(f) {
@@ -284,5 +291,5 @@ pub fn alias_compatible(a: i32, b: i32) -> bool {
         Some(F::BC7_SRGB_BLOCK) => Some(F::BC7_UNORM_BLOCK),
         f => f,
     };
-    a == b || (base(a).is_some() && base(a) == base(b))
+    a == b || (base(a).is_some() && base(a) == base(b)) || (is_four_byte_color(a) && is_four_byte_color(b))
 }
