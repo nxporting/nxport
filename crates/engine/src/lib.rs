@@ -777,6 +777,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     unsafe {
         let exefs_buf = game::exefs();
         let exefs = exefs_buf.to_str().unwrap();
+        let main_id = guest::mod_patches::nso_build_id(&format!("{}/main", exefs));
+        let sdk_id = guest::mod_patches::nso_build_id(sdk_path);
+        let loaded: Vec<&str> = [&main_id, &sdk_id].into_iter().flatten().map(String::as_str).collect();
+        guest::mod_patches::report_other_builds(&loaded);
         if let Some(id) = guest::mod_patches::nso_build_id(&format!("{}/main", exefs)) {
             profile::set_main_build_id(&id);
             profile::log_version(&id);

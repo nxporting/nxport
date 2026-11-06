@@ -183,6 +183,39 @@ fn quoted_bytes(s: &str) -> Option<Vec<u8>> {
     None
 }
 
+/// Whether a patch file names only other builds: `name` an .ips file's name, or `pchtxt` its text. A file naming no build
+/// says nothing about its version.
+fn for_other_build(name: &str, pchtxt: Option<&str>, build_ids: &[&str]) -> bool {
+    let named: Vec<&str> = match pchtxt {
+        Some(text) => text.lines().filter_map(|l| l.trim().strip_prefix("@nsobid-")).map(|id| strip_comment(id).trim()).collect(),
+        None => name.rsplit_once('.').map(|(stem, _)| stem).into_iter().filter(|s| s.len() >= 16 && s.chars().all(|c| c.is_ascii_hexdigit())).collect(),
+    };
+    !named.is_empty() && !named.iter().any(|id| build_ids.iter().any(|b| id_matches(id, b)))
+}
+
+/// Says which patch files apply to none of `build_ids`, the modules loaded: a mod for another version of the game does
+/// nothing otherwise, and looks like a bug in the mod or in this program. Atmosphere and the emulators skip them too.
+pub fn report_other_builds(build_ids: &[&str]) {
+    if crate::settings::get().files.no_exefs_patches {
+        return;
+    }
+    for (mod_name, exefs) in crate::horizon::fs::exefs_patch_dirs() {
+        let Ok(rd) = std::fs::read_dir(&exefs) else { continue };
+        for path in rd.filter_map(|e| e.ok()).map(|e| e.path()) {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+            let other = match ext.as_deref() {
+                Some("ips") => for_other_build(&name, None, build_ids),
+                Some("pchtxt") => for_other_build(&name, Some(&String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default())), build_ids),
+                _ => false,
+            };
+            if other {
+                println!("[!] Mods: '{mod_name}' {name} matches no loaded module, so it is probably for another version of the game: not applied");
+            }
+        }
+    }
+}
+
 /// Applies every enabled mod's exefs patches for the module with `build_id`, loaded at `base` with `size` bytes of
 /// image. `text` is the module's text range (start, len) and `text_prot` its current protection, restored after each
 /// write into it. Returns the number of patches applied.
@@ -300,6 +333,18 @@ mod format_tests {
         // Not read as the hex digits a string holds.
         assert_eq!(bytes(&format!("{head}00000010 \"abcd\"\n")), [(0x10, b"abcd".to_vec())]);
         assert!(bytes(&format!("{head}00000010 \"open\n00000020 zz\n00000030 123\n")).is_empty());
+    }
+
+    #[test]
+    fn patch_files_for_other_builds() {
+        let ids = [ID, "1122334455667788000000000000000000000000"];
+        assert!(for_other_build("0011223344556677.ips", None, &ids));
+        assert!(!for_other_build("AABBCCDDEEFF0011.ips", None, &ids));
+        assert!(!for_other_build("aabbccddeeff0011.IPS", None, &ids));
+        assert!(!for_other_build("readme.ips", None, &ids));
+        assert!(for_other_build("x.pchtxt", Some("@nsobid-0011223344556677\n"), &ids));
+        assert!(!for_other_build("x.pchtxt", Some("@nsobid-0011223344556677\n@nsobid-1122334455667788 // 1.1\n"), &ids));
+        assert!(!for_other_build("x.pchtxt", Some("00000010 01\n"), &ids));
     }
 
     #[test]
