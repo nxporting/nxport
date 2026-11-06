@@ -87,7 +87,8 @@ jobs:
           cp crates/sass2spv/LICENSE "$stage/LICENSE-sass2spv"
           cp crates/lifter/LICENSE-LASRecomp "$stage/LICENSE-LASRecomp"
           cp "$RUNNER_TEMP/opus/COPYING" "$stage/LICENSE-opus"
-          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-opus LICENSE-sass2spv README.md ios/nxport nxport-builder.exe opus.dll \
+          perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" x86_64-pc-windows-msvc
+          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-opus LICENSE-sass2spv README.md THIRD_PARTY_LICENSES.txt ios/nxport nxport-builder.exe opus.dll \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"
           (cd "$stage" && find . -type f -not -path './zig/*' | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
           test -f "$stage/zig/zig.exe"
@@ -129,7 +130,8 @@ jobs:
           cp README.md LICENSE "$stage/"
           cp crates/sass2spv/LICENSE "$stage/LICENSE-sass2spv"
           cp crates/lifter/LICENSE-LASRecomp "$stage/LICENSE-LASRecomp"
-          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-sass2spv README.md ios/nxport nxport nxport-builder \
+          perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" aarch64-apple-darwin
+          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-sass2spv README.md THIRD_PARTY_LICENSES.txt ios/nxport nxport nxport-builder \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"
           (cd "$stage" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
           "$stage/nxport-builder" --help
