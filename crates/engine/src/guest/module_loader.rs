@@ -645,11 +645,22 @@ pub unsafe extern "C" fn fs_mount_sdcard(name: *const libc::c_char) -> u32 {
     0
 }
 
-/// nn::oe::GetDisplayVersion(DisplayVersion*): the game's version string (char[16]); our dump is 1.1.2.
+/// nn::oe::GetDisplayVersion(DisplayVersion*): the game's version string (char[16], always terminated), from its
+/// control data, else the version its main build id matched. Plugin mods choose their addresses by this.
 pub unsafe extern "C" fn oe_get_display_version(out: *mut u8) {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let version = VERSION.get_or_init(|| {
+        crate::game::control_of(crate::game::dir())
+            .and_then(|c| c.version)
+            .or_else(|| {
+                let build_id = crate::profile::main_build_id()?;
+                Some(crate::profile::active().match_version(build_id)?.version_string.to_string())
+            })
+            .unwrap_or_default()
+    });
     if !out.is_null() {
         std::ptr::write_bytes(out, 0, 16);
-        std::ptr::copy_nonoverlapping(b"1.1.2".as_ptr(), out, 5);
+        std::ptr::copy_nonoverlapping(version.as_ptr(), out, version.len().min(15));
     }
 }
 
