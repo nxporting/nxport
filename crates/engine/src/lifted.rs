@@ -336,6 +336,11 @@ thread_local! {
     static THREAD_CPU: std::cell::Cell<*mut Cpu> = const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
 
+/// The guest CPU state this thread has made, if any. For the crash report, which must not make one.
+pub fn existing_thread_cpu() -> *mut Cpu {
+    THREAD_CPU.with(|c| c.get())
+}
+
 /// The calling thread's guest CPU state: on first use zeroed, with its guest TLS block in TPIDR_EL0 and its Horizon
 /// thread-local region in TPIDRRO_EL0 (guest::tls), and no stack yet (sp 0). It lives as long as the thread.
 #[cfg(nx_runtime)]
