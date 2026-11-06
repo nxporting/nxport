@@ -1269,6 +1269,13 @@ impl Ctx {
             return;
         }
         match c {
+            // Handles resolve when draws are recorded, in order; caches keyed by handle hold the pools in the key.
+            Cmd::SetTexturePool(pool) => {
+                crate::nvn::api::set_active_texture_pool(*pool);
+            }
+            Cmd::SetSamplerPool(pool) => {
+                crate::nvn::api::set_active_sampler_pool(*pool);
+            }
             Cmd::SetRenderTargets { colors, depth } => {
                 self.end_pass();
                 self.st.colors = colors.clone();

@@ -280,6 +280,10 @@ pub enum Cmd {
     },
     /// `color` holds the raw 32-bit words of the float / int / uint clear value.
     ClearTexture(Box<ClearTextureParams>),
+    /// nvnCommandBufferSetTexturePool: handles resolve in this pool (nvn::api::texture_pool_number) from here on.
+    SetTexturePool(u32),
+    /// nvnCommandBufferSetSamplerPool: likewise.
+    SetSamplerPool(u32),
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -837,6 +841,14 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindPolygonState(cmd: usize, s: *co
             std::ptr::read_unaligned(s) & 0xFF
         })
     );
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetTexturePool(cmd: usize, pool: *const crate::nvn::api::NvnTexturePool) {
+    rec!("nvnCommandBufferSetTexturePool", cmd, Cmd::SetTexturePool(crate::nvn::api::texture_pool_number(pool)));
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetSamplerPool(cmd: usize, pool: *const crate::nvn::api::NvnSamplerPool) {
+    rec!("nvnCommandBufferSetSamplerPool", cmd, Cmd::SetSamplerPool(crate::nvn::api::sampler_pool_number(pool)));
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferBindTexture(
@@ -1821,6 +1833,8 @@ pub fn lookup(name: &str) -> Option<usize> {
         "nvnCommandBufferSetViewport" => f!(hle_nvnCommandBufferSetViewport(_, _, _, _, _)),
         "nvnCommandBufferSetViewports" => f!(hle_nvnCommandBufferSetViewports(_, _, _, _)),
         "nvnCommandBufferSetScissor" => f!(hle_nvnCommandBufferSetScissor(_, _, _, _, _)),
+        "nvnCommandBufferSetTexturePool" => f!(hle_nvnCommandBufferSetTexturePool(_, _)),
+        "nvnCommandBufferSetSamplerPool" => f!(hle_nvnCommandBufferSetSamplerPool(_, _)),
         "nvnCommandBufferSetScissors" => f!(hle_nvnCommandBufferSetScissors(_, _, _, _)),
         "nvnCommandBufferSetDepthRange" => f!(hle_nvnCommandBufferSetDepthRange(_, _, _)),
         "nvnCommandBufferSetDepthRanges" => f!(hle_nvnCommandBufferSetDepthRanges(_, _, _, _)),

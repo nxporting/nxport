@@ -1111,7 +1111,6 @@ pub fn resolve_proc(func_name: &str) -> *const () {
             crate::hle!(hle_nvnCommandBufferSetRenderEnableConditional(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetSampleMask" => crate::hle!(hle_nvnCommandBufferSetSampleMask(_, _, _, _, _, _)),
-        "nvnCommandBufferSetSamplerPool" => crate::hle!(hle_nvnCommandBufferSetSamplerPool(_, _, _, _, _, _)),
         "nvnCommandBufferSetScissors" => {
             crate::hle!(crate::nvn::cmd::hle_nvnCommandBufferSetScissors(_, _, _, _))
         }
@@ -1129,7 +1128,6 @@ pub fn resolve_proc(func_name: &str) -> *const () {
         "nvnCommandBufferSetSubpixelPrecisionBias" => {
             crate::hle!(hle_nvnCommandBufferSetSubpixelPrecisionBias(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetTexturePool" => crate::hle!(hle_nvnCommandBufferSetTexturePool(_, _, _, _, _, _)),
         "nvnCommandBufferSetTiledCacheAction" => {
             crate::hle!(hle_nvnCommandBufferSetTiledCacheAction(_, _, _, _, _, _))
         }
@@ -2936,14 +2934,12 @@ nvn_command_recorders! {
     hle_nvnCommandBufferSetRenderEnable => "nvnCommandBufferSetRenderEnable",
     hle_nvnCommandBufferSetRenderEnableConditional => "nvnCommandBufferSetRenderEnableConditional",
     hle_nvnCommandBufferSetSampleMask => "nvnCommandBufferSetSampleMask",
-    hle_nvnCommandBufferSetSamplerPool => "nvnCommandBufferSetSamplerPool",
     hle_nvnCommandBufferSetShaderScratchMemory => "nvnCommandBufferSetShaderScratchMemory",
     hle_nvnCommandBufferSetStencilCullCriteria => "nvnCommandBufferSetStencilCullCriteria",
     hle_nvnCommandBufferSetStencilMask => "nvnCommandBufferSetStencilMask",
     hle_nvnCommandBufferSetStencilRef => "nvnCommandBufferSetStencilRef",
     hle_nvnCommandBufferSetStencilValueMask => "nvnCommandBufferSetStencilValueMask",
     hle_nvnCommandBufferSetSubpixelPrecisionBias => "nvnCommandBufferSetSubpixelPrecisionBias",
-    hle_nvnCommandBufferSetTexturePool => "nvnCommandBufferSetTexturePool",
     hle_nvnCommandBufferSetTiledCacheAction => "nvnCommandBufferSetTiledCacheAction",
     hle_nvnCommandBufferSetTiledCacheTileSize => "nvnCommandBufferSetTiledCacheTileSize",
     hle_nvnCommandBufferSetViewportSwizzles => "nvnCommandBufferSetViewportSwizzles",
@@ -5774,10 +5770,70 @@ struct PoolSlot {
     copy: Option<Box<NvnTexture>>,
 }
 
+/// Each texture or sampler pool is its own namespace of ids: a game's and a mod's may both use id 0x101. A pool is known
+/// by its descriptor memory, as on the console, and numbered as first seen, so with one pool slots keep their plain ids.
+/// A slot's key is the pool's number above the id's 20 bits (the id bits of a texture handle).
+static TEXTURE_POOLS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+static SAMPLER_POOLS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+/// The pools commands executed last bound (nvnCommandBufferSetTexturePool, SetSamplerPool); handles resolve in them.
+static ACTIVE_TEXTURE_POOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static ACTIVE_SAMPLER_POOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn pool_number(pools: &std::sync::Mutex<Vec<(usize, usize)>>, memory: (usize, usize)) -> u32 {
+    let mut pools = pools.lock().unwrap();
+    if let Some(i) = pools.iter().position(|p| *p == memory) {
+        return i as u32;
+    }
+    pools.push(memory);
+    pools.len() as u32 - 1
+}
+
+const fn pool_slot_key(pool: u32, id: i32) -> i32 {
+    ((pool << 20) as i32) | id
+}
+
+/// The number of a texture pool object, for Cmd::SetTexturePool.
+pub unsafe fn texture_pool_number(pool: *const NvnTexturePool) -> u32 {
+    if pool.is_null() {
+        return 0;
+    }
+    pool_number(&TEXTURE_POOLS, ((*pool).memory_pool, (*pool).memory_offset))
+}
+
+/// The number of a sampler pool object, for Cmd::SetSamplerPool.
+pub unsafe fn sampler_pool_number(pool: *const NvnSamplerPool) -> u32 {
+    if pool.is_null() {
+        return 0;
+    }
+    pool_number(&SAMPLER_POOLS, ((*pool).memory_pool, (*pool).memory_offset))
+}
+
+/// Cmd::SetTexturePool ran. Whether that changed the pool handles resolve in.
+pub fn set_active_texture_pool(pool: u32) -> bool {
+    ACTIVE_TEXTURE_POOL.swap(pool, std::sync::atomic::Ordering::Relaxed) != pool
+}
+
+/// Cmd::SetSamplerPool ran. Whether that changed the pool handles resolve in.
+pub fn set_active_sampler_pool(pool: u32) -> bool {
+    ACTIVE_SAMPLER_POOL.swap(pool, std::sync::atomic::Ordering::Relaxed) != pool
+}
+
+/// Bits above a texture handle's 32 that name the pools it resolves in now, for caches keyed by handle.
+pub fn active_pools_bits() -> u64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    (ACTIVE_TEXTURE_POOL.load(Relaxed) as u64) << 32 | (ACTIVE_SAMPLER_POOL.load(Relaxed) as u64) << 48
+}
+
+/// The key of texture slot `id` in the active pool: what pool_changes_since reports.
+pub fn active_texture_slot(id: i32) -> i32 {
+    pool_slot_key(ACTIVE_TEXTURE_POOL.load(std::sync::atomic::Ordering::Relaxed), id)
+}
+
 static POOL_TEXTURES: std::sync::Mutex<Option<rustc_hash::FxHashMap<i32, PoolSlot>>> =
     std::sync::Mutex::new(None);
 
 pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
+    let id = active_texture_slot(id);
     let mut map = POOL_TEXTURES.lock().unwrap();
     let slot = map.as_mut()?.get_mut(&id)?;
     let live_gen = texture_snapshot(slot.obj).map_or(0, |(g, _)| g);
@@ -5876,26 +5932,26 @@ fn view_bytes(v: NvnTextureView) -> [u8; std::mem::size_of::<NvnTextureView>()] 
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTexturePoolRegisterTexture(
-    _pool: *const NvnTexturePool,
+    pool: *const NvnTexturePool,
     id: i32,
     texture: *const NvnTexture,
     view: *const (),
 ) {
     record_hle_call("hle_nvnTexturePoolRegisterTexture");
     let view = (!view.is_null()).then(|| *(view as *const NvnTextureView));
-    register_pool_slot(id, texture, view);
+    register_pool_slot(pool_slot_key(texture_pool_number(pool), id), texture, view);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTexturePoolRegisterImage(
-    _pool: *const NvnTexturePool,
+    pool: *const NvnTexturePool,
     id: i32,
     texture: *const NvnTexture,
     view: *const (),
 ) {
     record_hle_call("hle_nvnTexturePoolRegisterImage");
     let view = (!view.is_null()).then(|| *(view as *const NvnTextureView));
-    register_pool_slot(id, texture, view);
+    register_pool_slot(pool_slot_key(texture_pool_number(pool), id), texture, view);
 }
 
 #[repr(C)]
@@ -5995,6 +6051,7 @@ static POOL_SAMPLERS: std::sync::OnceLock<
 
 /// Sampler registered under `id` (handle bits 20.. of an NVNtextureHandle).
 pub fn lookup_pool_sampler(id: i32) -> Option<SamplerDesc> {
+    let id = pool_slot_key(ACTIVE_SAMPLER_POOL.load(std::sync::atomic::Ordering::Relaxed), id);
     POOL_SAMPLERS.get()?.lock().unwrap().get(&id).copied()
 }
 
@@ -6003,6 +6060,12 @@ static SAMPLERS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 pub fn samplers_gen() -> u64 {
     SAMPLERS_GEN.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// The active pools changed, for backends memoizing resolutions by handle alone.
+pub fn active_pools_changed() {
+    SAMPLERS_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
+    bump_tex_table_epoch();
 }
 
 fn register_pool_sampler(id: i32, d: SamplerDesc) {
@@ -6023,7 +6086,7 @@ fn register_pool_sampler(id: i32, d: SamplerDesc) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSampler(
-    _pool: *const NvnSamplerPool,
+    pool: *const NvnSamplerPool,
     id: i32,
     sampler: *const NvnSampler,
 ) {
@@ -6033,7 +6096,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSampler(
     }
     let s = &*sampler;
     register_pool_sampler(
-        id,
+        pool_slot_key(sampler_pool_number(pool), id),
         SamplerDesc {
             min_filter: s.min_filter,
             mag_filter: s.mag_filter,
@@ -6053,7 +6116,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSampler(
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSamplerBuilder(
-    _pool: *const NvnSamplerPool,
+    pool: *const NvnSamplerPool,
     id: i32,
     builder: *const NvnSamplerBuilder,
 ) {
@@ -6063,7 +6126,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSamplerBuilder(
     }
     let b = &*builder;
     register_pool_sampler(
-        id,
+        pool_slot_key(sampler_pool_number(pool), id),
         SamplerDesc {
             min_filter: b.min_filter,
             mag_filter: b.mag_filter,
@@ -7085,4 +7148,40 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
     COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes, calls));
     COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
     NEXT_COMMAND_HANDLE.fetch_max(handle + 1, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod pool_namespace_tests {
+    use super::*;
+
+    #[test]
+    fn pool_slot_keys_keep_plain_ids_in_the_first_pool_and_differ_between_pools() {
+        assert_eq!(pool_slot_key(0, 0x101), 0x101);
+        assert_ne!(pool_slot_key(1, 0x101), 0x101);
+        assert_ne!(pool_slot_key(1, 0x101), pool_slot_key(2, 0x101));
+        assert_eq!(pool_slot_key(1, 0x101) & 0xFFFFF, 0x101);
+    }
+
+    #[test]
+    fn a_pool_is_its_descriptor_memory() {
+        let pools = std::sync::Mutex::new(Vec::new());
+        assert_eq!(pool_number(&pools, (0x1000, 0x20)), 0);
+        assert_eq!(pool_number(&pools, (0x2000, 0)), 1);
+        // Another object over the same memory is the same pool.
+        assert_eq!(pool_number(&pools, (0x1000, 0x20)), 0);
+    }
+
+    #[test]
+    fn samplers_of_two_pools_do_not_replace_each_other() {
+        let mut a: SamplerDesc = unsafe { std::mem::zeroed() };
+        let mut b: SamplerDesc = unsafe { std::mem::zeroed() };
+        a.max_anisotropy = 1.0;
+        b.max_anisotropy = 2.0;
+        register_pool_sampler(pool_slot_key(0, 0x101), a);
+        register_pool_sampler(pool_slot_key(1, 0x101), b);
+        set_active_sampler_pool(1);
+        assert_eq!(lookup_pool_sampler(0x101).unwrap().max_anisotropy, 2.0);
+        set_active_sampler_pool(0);
+        assert_eq!(lookup_pool_sampler(0x101).unwrap().max_anisotropy, 1.0);
+    }
 }

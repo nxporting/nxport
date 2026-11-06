@@ -3179,6 +3179,17 @@ impl Gfx {
                 Cmd::SetScissor { x, y, w, h } => {
                     st.scissor = Some((*x, *y, *w, *h));
                 }
+                // Bindings and sampler states are memoized by handle: a pool change invalidates them.
+                Cmd::SetTexturePool(pool) => {
+                    if crate::nvn::api::set_active_texture_pool(*pool) {
+                        crate::nvn::api::active_pools_changed();
+                    }
+                }
+                Cmd::SetSamplerPool(pool) => {
+                    if crate::nvn::api::set_active_sampler_pool(*pool) {
+                        crate::nvn::api::active_pools_changed();
+                    }
+                }
                 Cmd::BindVertexBuffer { index, addr, size } => {
                     st.vertex_buffers.insert(*index, (*addr, *size));
                 }
