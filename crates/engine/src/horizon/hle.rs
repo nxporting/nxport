@@ -2091,34 +2091,60 @@ pub unsafe extern "C" fn hle_nn_hid_InitializeTouchScreen() -> i32 {
     0
 }
 
+/// sizeof(nn::hid::MouseState). There is no mouse: the left button is the touch screen.
+const MOUSE_STATE_SIZE: usize = 0x28;
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetMouseState(state: *mut u8) {
     if !state.is_null() {
-        std::ptr::write_bytes(state, 0, 64);
+        std::ptr::write_bytes(state, 0, MOUSE_STATE_SIZE);
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetMouseStates(states: *mut u8, count: i32) -> i32 {
     if !states.is_null() && count > 0 {
-        std::ptr::write_bytes(states, 0, (count as usize) * 64);
+        std::ptr::write_bytes(states, 0, count as usize * MOUSE_STATE_SIZE);
     }
     count
+}
+
+/// nn::hid::detail::GetMouseStates(int* written, MouseState*, int): takes the count's address and returns a Result.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_detail_GetMouseStates(written: *mut i32, states: *mut u8, count: i32) -> u32 {
+    let n = hle_nn_hid_GetMouseStates(states, count);
+    if !written.is_null() {
+        *written = n;
+    }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetKeyboardState(state: *mut u8) {
     if !state.is_null() {
-        std::ptr::write_bytes(state, 0, 64);
+        let bytes = crate::host::input::next_keyboard_state();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), state, bytes.len());
     }
 }
 
+/// The newest state only, as there is no history to give: a caller gets one state however many it asks for.
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetKeyboardStates(states: *mut u8, count: i32) -> i32 {
-    if !states.is_null() && count > 0 {
-        std::ptr::write_bytes(states, 0, (count as usize) * 64);
+    if states.is_null() || count <= 0 {
+        return 0;
     }
-    count
+    hle_nn_hid_GetKeyboardState(states);
+    1
+}
+
+/// nn::hid::detail::GetKeyboardStates(int* written, KeyboardState*, int): takes the count's address and returns a Result.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_detail_GetKeyboardStates(written: *mut i32, states: *mut u8, count: i32) -> u32 {
+    let n = hle_nn_hid_GetKeyboardStates(states, count);
+    if !written.is_null() {
+        *written = n;
+    }
+    0
 }
 
 #[no_mangle]

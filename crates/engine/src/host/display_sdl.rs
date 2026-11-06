@@ -177,6 +177,7 @@ impl Host {
                 _ => {}
             },
             Event::KeyDown { scancode: Some(sc), keymod, repeat, .. } => {
+                input::set_usb_key(sc.to_i32() as usize, true);
                 let alt = keymod.intersects(Mod::LALTMOD | Mod::RALTMOD);
                 if sc == Scancode::F11 || (sc == Scancode::Return && alt) {
                     if !repeat {
@@ -204,6 +205,7 @@ impl Host {
                 }
             }
             Event::KeyUp { scancode: Some(sc), .. } => {
+                input::set_usb_key(sc.to_i32() as usize, false);
                 if let Some(code) = mac_key(sc) {
                     input::set_key(code, false);
                 }
