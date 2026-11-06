@@ -1179,21 +1179,23 @@ impl Ctx {
     /// `at`: the bound texture slot (stage, index) it was read from, whose last resolution (Ctx::tex_memo) is tried first.
     unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
+        // The handle with the pools it resolves in: the same handle in another pool is another texture.
+        let hq = h | crate::nvn::api::active_pools_bits();
         let in_pass = |me: &Self, img: vk::Image| me.renders_to(&img);
         let memo = at.and_then(|(s, k)| Some((usize::try_from(s).ok().filter(|&s| s < 6)?, usize::try_from(k).ok().filter(|&k| k < TEX_MEMO)?)));
         if let Some((s, k)) = memo {
             let m = self.tex_memo[s][k];
-            if m.gen == self.bindings_gen && m.handle == h && m.declared == declared && !in_pass(self, m.image) {
+            if m.gen == self.bindings_gen && m.handle == hq && m.declared == declared && !in_pass(self, m.image) {
                 return (m.view, m.sampler);
             }
         }
         // Pools change between submits only (registration is CPU work): a handle resolves the same way within one,
         // except where its image is an attachment of the current pass (render-target feedback).
-        let key = (h, declared);
+        let key = (hq, declared);
         if let Some(&(img, v, s)) = self.bindings.get(&key) {
             if !in_pass(self, img) {
                 if let Some((ms, mk)) = memo {
-                    self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: h, declared, image: img, view: v, sampler: s };
+                    self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, image: img, view: v, sampler: s };
                 }
                 return (v, s);
             }
@@ -1218,7 +1220,7 @@ impl Ctx {
         if !feedback {
             self.bindings.insert(key, (image, r.0, r.1));
             if let Some((ms, mk)) = memo {
-                self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: h, declared, image, view: r.0, sampler: r.1 };
+                self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, image, view: r.0, sampler: r.1 };
             }
         }
         r
@@ -1259,7 +1261,7 @@ impl Ctx {
     unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (u32, vk::Image, u64) {
         let Some(h) = handle else { return (0, vk::Image::null(), 0) };
         let in_pass = |me: &Self, img: vk::Image| me.renders_to(&img);
-        let key = (h, declared);
+        let key = (h | crate::nvn::api::active_pools_bits(), declared);
         let serial = self.tex.serial;
         if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.resolved || e.serial == serial) {
             if in_pass(self, e.image) {
@@ -1312,7 +1314,7 @@ impl Ctx {
         self.bl = Some(slots);
         let resolved = view.is_some();
         if self.bl_cache.insert(key, BlEntry { word, image, place, serial, resolved, fb: fb.unwrap_or((0, 0)) }).is_none() {
-            self.bl_by_slot.entry(tex_id).or_default().push(key);
+            self.bl_by_slot.entry(crate::nvn::api::active_texture_slot(tex_id)).or_default().push(key);
         }
         fb.map_or((word, image, 0), |f| (f.1, image, f.0))
     }
