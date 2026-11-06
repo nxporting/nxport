@@ -1022,7 +1022,7 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, size: usize) -> i32 {
-    let Ok(ptr) = crate::os::alloc(size, crate::os::Prot::ReadWrite) else {
+    let Ok(ptr) = crate::os::alloc_on_demand(size) else {
         eprintln!(
             "[-] HLE: AllocateMemoryBlock failed for {} bytes",
             size

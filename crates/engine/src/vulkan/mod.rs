@@ -700,6 +700,8 @@ impl Imports {
         // tracking counts its pages as written (their textures are checked again).
         #[cfg(windows)]
         {
+            // The driver takes only committed pages, and a page it imports stays mapped: commit it before the import.
+            unsafe { crate::os::ensure_committed(start, end - start) };
             let read_only = crate::os::read_only_ranges(start, end - start);
             if !read_only.is_empty() {
                 guard::before_host_write(start, end - start);
