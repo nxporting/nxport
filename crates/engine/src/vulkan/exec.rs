@@ -1219,6 +1219,16 @@ impl Ctx {
         let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
         let (image, size) = (img.image, ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1)));
         if let Some(w) = self.window.as_mut() {
+            {
+                // What the game presents, and at what size: a change is rare, and the first thing to check against a console.
+                static LAST: std::sync::Mutex<(u32, u32, i32, i32)> = std::sync::Mutex::new((0, 0, 0, 0));
+                let now = (size.0, size.1, crop[2], crop[3]);
+                let mut last = LAST.lock().unwrap();
+                if *last != now {
+                    *last = now;
+                    println!("[+] Vulkan: presenting {}x{}, showing {}x{} of it", size.0, size.1, crop[2], crop[3]);
+                }
+            }
             w.present(&self.dev, image, level, layer, size, crop);
         }
     }

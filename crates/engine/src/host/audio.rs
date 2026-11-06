@@ -185,6 +185,11 @@ fn finish_wav(w: &mut Wav) {
         .and_then(|_| w.file.seek(SeekFrom::End(0)));
 }
 
+/// How much sound waits in the ring now, in ms: what the player hears it late by, before the device's buffers.
+pub fn queued_ms() -> usize {
+    RING.lock().unwrap().samples.len() / (48 * 2)
+}
+
 /// (trims of an overfull ring, underruns) since start, for logs.
 pub fn stats() -> (u64, u64) {
     let r = RING.lock().unwrap();

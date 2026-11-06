@@ -1057,12 +1057,12 @@ impl Renderer {
     fn mix_frame(&mut self) {
         if self.elapsed_frames % 2000 == 0 {
             let (trims, underruns) = crate::host::audio::stats();
-            if trims + underruns > 0 {
-                println!(
-                    "[audio] output ring: {} trims, {} underruns so far",
-                    trims, underruns
-                );
-            }
+            println!(
+                "[audio] output ring: {} ms queued, {} trims, {} underruns so far",
+                crate::host::audio::queued_ms(),
+                trims,
+                underruns
+            );
         }
         let n = self.sample_count as usize;
         if self.mixes.is_empty() || self.sink_inputs.is_empty() || n == 0 {
