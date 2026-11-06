@@ -317,7 +317,7 @@ pub fn fetch_gzipped(url: &str, dest: &Path) -> Result<(), String> {
     let result = (|| {
         // curl ships with Windows (System32) since Windows 10 1803.
         let got = command("curl.exe")
-            .args(["-fsSL", "--retry", "2", "--max-time", "300", "-o"])
+            .args(["-fsL", "--retry", "2", "--max-time", "300", "-o"])
             .arg(&gz)
             .arg(url)
             .status()
