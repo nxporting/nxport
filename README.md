@@ -6,7 +6,7 @@ This tool prepares Nintendo Switch games for direct execution on x86 Windows and
 ## How do I get set up?
 1. Dump your game and extract it. You should have a folder that contains folders titled ExeFS, RomFS, and Logo. (It would be legally dubious to make this project support that extraction, so sorry[^1].)
 2. Download nxport-builder from the releases tab (okay there's no release yet, for now clone and build). Run it, and give it the path to your extracted game. Choose a build target and build!
-3. After a long wait (I'm sorry) you should have your processed game in the output location. Building for Windows, this is a folder with an executable that you can run to start the game. For MacOS, this is a .app package that you can run. For iOS, this is an .ipa file that you can sideload with something like [Impactor](https://github.com/claration/Impactor).
+3. After a long wait you should have your processed game in the output location. Building for Windows, this is a folder with an executable that you can run to start the game. For MacOS, this is a .app package that you can run. For iOS, this is an .ipa file that you can sideload with something like [Impactor](https://github.com/claration/Impactor).
 4. Have fun! Report bugs!
 
 ## How does it work?
