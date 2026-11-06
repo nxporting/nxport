@@ -22,6 +22,28 @@ pub fn cc(toolchains: &Path, on_download: &dyn Fn(u64, u64)) -> Result<Vec<Strin
     Ok(vec![zig.display().to_string(), "cc".into()])
 }
 
+/// Copies the zig in `toolchains` into the app folder `app`, as `zig`: a plugin mod's code is compiled while the game runs
+/// (engine live_patch.rs), on whichever PC that is. The builder has it by now: it compiled the game with it.
+pub fn copy_into_app(toolchains: &Path, app: &Path) -> Result<(), String> {
+    fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)?.flatten() {
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if src.is_dir() {
+                copy_tree(&src, &dst)?;
+            } else {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+        Ok(())
+    }
+    let zig = find(toolchains).ok_or("no C compiler to put in the app")?;
+    let from = zig.parent().ok_or("no folder")?;
+    let to = app.join("zig");
+    let _ = std::fs::remove_dir_all(&to);
+    copy_tree(from, &to).map_err(|e| format!("{}: {e}", to.display()))
+}
+
 /// A zig shipped beside this program, else one downloaded before.
 fn find(toolchains: &Path) -> Option<PathBuf> {
     let beside = std::env::current_exe().ok()?.with_file_name("zig").join("zig.exe");
