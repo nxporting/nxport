@@ -77,7 +77,7 @@ pub fn run_main_thread() -> ! {
     // The window opens at the screen shape asked for when the game can render at it.
     let shape = s.display.launch_aspect.map(|a| a.ratio()).filter(|_| crate::profile::renders_screen_shape());
     let (w, h) = (shape.map_or(1280.0, |a| (720.0 * a).round()), 720.0);
-    let base_title = format!("{} - native", crate::profile::app_title());
+    let base_title = crate::profile::app_title();
     let window = video
         .window(&base_title, w as u32, h as u32)
         .position_centered()
