@@ -26,6 +26,22 @@ while (defined(my $id = shift @todo)) {
 
 my @crates = sort { $a->{name} cmp $b->{name} || $a->{version} cmp $b->{version} }
     grep { $reached{ $_->{id} } && !$member{ $_->{id} } } @{ $meta->{packages} };
+(my $notices = $0) =~ s{[^\\/]*$}{};
+$notices .= "../notices";
+sub slurp {
+    my ($path) = @_;
+    open(my $i, '<:raw', $path) or die "$path: $!\n";
+    local $/;
+    return scalar(<$i>);
+}
+sub kept_for {
+    my ($name) = @_;
+    return ('MPL-2.0.txt') if $name =~ /^symphonia/;
+    return ('opus-decoder.txt') if $name eq 'opus-decoder';
+    return ('dear-imgui-rs.txt', 'dear-imgui.txt') if $name =~ /^dear-imgui/;
+    return ('openh264-rs.txt', 'openh264.txt') if $name =~ /^openh264/;
+    return ();
+}
 open(my $o, '>:raw', $out) or die "$out: $!\n";
 my $missing = 0;
 for my $c (@crates) {
@@ -42,10 +58,22 @@ for my $c (@crates) {
         print {$o} scalar(<$i>), "\n\n";
     }
     if (!@files) {
-        print $o "(the crate holds no licence file; its manifest says: $license)\n\n";
-        print STDERR "no licence file: $c->{name} $c->{version} ($license)\n";
-        $missing++;
+        # Crates published without one: the text from their project, kept in .github/notices.
+        my @kept = kept_for($c->{name});
+        for my $k (@kept) {
+            print {$o} slurp("$notices/$k"), "\n\n";
+        }
+        if (!@kept) {
+            print $o "(the crate holds no licence file; its manifest says: $license)\n\n";
+            print STDERR "no licence file: $c->{name} $c->{version} ($license)\n";
+            $missing++;
+        }
     }
 }
+# What the archive holds beside the crates.
+for my $k (['SDL3', 'SDL3.txt'], ['zig', 'zig.txt']) {
+    print $o ('=' x 72) . "\n$k->[0]\n" . ('=' x 72) . "\n\n";
+    print {$o} slurp("$notices/$k->[1]"), "\n\n";
+}
 close $o;
-printf "%d crates, %d without a licence file, %d bytes\n", scalar @crates, $missing, -s $out;
+printf"%d crates, %d without a licence file, %d bytes\n", scalar @crates, $missing, -s $out;
