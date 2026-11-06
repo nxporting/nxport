@@ -55,6 +55,7 @@ mod id {
     pub const VSYNC: u16 = 20;
     pub const FULL_SCREEN: u16 = 21;
     pub const FPS_TITLE: u16 = 22;
+    pub const PERF_OVERLAY: u16 = 23;
     /// + the limit in fps.
     pub const LIMIT: u16 = 100;
     /// + the window height (720, 1080, 1440).
@@ -161,6 +162,7 @@ pub fn attach(hwnd: usize) {
         });
         sub(bar, "Display", |m| {
             item(m, id::VSYNC, "VSync");
+            item(m, id::PERF_OVERLAY, "Performance Overlay");
             sub(m, "Frame Rate Limit", |l| {
                 for fps in LIMITS {
                     radio(l, id::LIMIT + fps as u16, &limit_label(fps));
@@ -301,6 +303,7 @@ unsafe fn refresh(menu: *mut c_void) {
     check(id::HANDHELD, handheld);
     check(id::VSYNC, overlay::is_vsync());
     check(id::FPS_TITLE, fps_in_title());
+    check(id::PERF_OVERLAY, overlay::is_overlay_enabled());
     let current = limit();
     for fps in LIMITS {
         let why = unreachable(fps);
@@ -359,6 +362,10 @@ fn command(cmd: u16) -> bool {
             crate::config::remember(|p| p.display.no_vsync = Some(!on));
         }
         id::FULL_SCREEN => REQUEST.store(1, Ordering::Relaxed),
+        id::PERF_OVERLAY => {
+            let on = overlay::toggle_overlay();
+            crate::config::remember(|p| p.display.perf_overlay = Some(on));
+        }
         id::FPS_TITLE => {
             live::set_fps_in_title(!live::fps_in_title());
         }

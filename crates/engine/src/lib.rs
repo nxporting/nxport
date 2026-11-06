@@ -133,7 +133,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
     settings::try_install(s)?;
     let l = load().map_err(|e| e.to_string())?;
     if let (Some((label, _)), None) = (l.mod_inits.first(), patched) {
-        println!("[!] {label} is a plugin mod: lifted without its patches (they need a run: --aot-dump, then a lift with that image)");
+        println!("[+] {label} is a plugin mod: its code is lifted, and what it patches is handled when it runs");
     }
     let copy = |start: usize, len: usize| unsafe { std::slice::from_raw_parts(start as *const u8, len) }.to_vec();
     let main = l.mem_space.base_ptr as usize;

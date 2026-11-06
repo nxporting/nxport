@@ -86,9 +86,8 @@ static WAV: OnceLock<Option<Mutex<Wav>>> = OnceLock::new();
 
 fn playback_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        !crate::settings::get().display.headless && crate::settings::get().audio.audio
-    })
+    // Whatever the mute setting: it can be turned off while the game runs, and live::gain silences the output meanwhile.
+    *ON.get_or_init(|| !crate::settings::get().display.headless)
 }
 
 /// Appends interleaved stereo frames (float, ±1.0 full scale).
