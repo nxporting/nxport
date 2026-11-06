@@ -12,7 +12,7 @@ This tool prepares Nintendo Switch games for direct execution on x86 Windows and
 ## How does it work?
 Many switch games dynamically link against an SDK provided by Nintendo. Reimplementing parts of this SDK turns out to be enough to replace dependence on a Switch system with dependence on some non-Switch system. Of course, we also need to recompile everything for non-ARM64 systems, but that's not too hard.
 
-This whole process is pretty generalizable, which is nice. There however are some cases where we want to be a little bit more specific in our approach, so this tool also contains a library of game--specific patches. None of these game-specific patches will ever be necessary for compatibility, but they can provide niceties like dynamic aspect ratio and NVN skipping.
+This whole process is pretty generalizable, which is nice. There however are some cases where we want to be a little bit more specific in our approach, so this tool also contains a library of game-specific patches. None of these game-specific patches will ever be necessary for compatibility, but they can provide niceties like dynamic aspect ratio and NVN skipping.
 
 Traditional mods are also supported well (I hope! I'll do more comprehensive testing in the coming days). This includes ExeFS patches and exlaunch[^2] mods as well as RomFS mods.
 
