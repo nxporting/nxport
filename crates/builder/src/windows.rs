@@ -375,7 +375,7 @@ fn has_plugin_mods(mods: Option<&Path>, title: u64) -> bool {
     let Some(mods) = mods else { return false };
     nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| {
         let exefs = nxport::mods::mod_subdir(d, "exefs");
-        exefs.join("exefs.nsp").is_file() || (0..10).any(|i| exefs.join(format!("subsdk{i}")).is_file())
+        nxport::mods::has_exefs_nsp(d) || (0..10).any(|i| exefs.join(format!("subsdk{i}")).is_file())
     })
 }
 
