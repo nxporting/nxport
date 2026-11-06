@@ -18,6 +18,10 @@ env:
   VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
   OPUS_VERSION: "1.6.1"
   OPUS_SHA256: 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
+  # crates/build/src/zig.rs: the version and checksum the builder would download. Beside it, none is downloaded.
+  ZIG_NAME: zig-x86_64-windows-0.17.1
+  ZIG_VERSION: "0.17.1"
+  ZIG_SHA256: b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e
 
 jobs:
   windows:
@@ -73,6 +77,10 @@ jobs:
           stage="$RUNNER_TEMP/stage/$root"
           mkdir -p "$stage/ios" dist
           cp target/release/nxport-builder.exe "$stage/"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/zig.zip" "https://ziglang.org/download/$ZIG_VERSION/$ZIG_NAME.zip"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.zip" | sha256sum -c -
+          7z x -bd -o"$RUNNER_TEMP/zig-unpacked" "$RUNNER_TEMP/zig.zip" > /dev/null
+          mv "$RUNNER_TEMP/zig-unpacked/$ZIG_NAME" "$stage/zig"
           cp "$RUNNER_TEMP/opus-build/Release/opus.dll" "$stage/"
           cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
           cp README.md LICENSE "$stage/"
@@ -81,7 +89,8 @@ jobs:
           cp "$RUNNER_TEMP/opus/COPYING" "$stage/LICENSE-opus"
           printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-opus LICENSE-sass2spv README.md ios/nxport nxport-builder.exe opus.dll \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"
-          (cd "$stage" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+          (cd "$stage" && find . -type f -not -path './zig/*' | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+          test -f "$stage/zig/zig.exe"
           "$stage/nxport-builder.exe" --help
           (cd "$RUNNER_TEMP/stage" && 7z a -tzip -bd "$GITHUB_WORKSPACE/dist/$root-windows-x86_64.zip" "$root")
       - uses: actions/upload-artifact@v7
