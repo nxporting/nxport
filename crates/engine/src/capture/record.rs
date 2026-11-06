@@ -206,6 +206,7 @@ pub(crate) fn write_capture(
             #[cfg(not(nx_native))]
             let ok = crate::os::readable_len(p as usize, PAGE) == PAGE;
             if ok {
+                unsafe { crate::os::ensure_committed(p as usize, PAGE) }; // it may be written to a file as it is
                 mw.page(Some(unsafe { std::slice::from_raw_parts(p as *const u8, PAGE) }))?;
             } else {
                 unreadable += 1;

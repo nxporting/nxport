@@ -612,6 +612,7 @@ pub unsafe extern "C" fn hle_nn_fs_ReadFile(
             FileData::Fd(f) => {
                 // The kernel cannot write write-tracked (read-only) pages: unprotect them first, and retry if the
                 // executor re-protected them in between (a buffer fault).
+                crate::os::ensure_committed(buffer as usize, size);
                 let dst = std::slice::from_raw_parts_mut(buffer, size);
                 let mut n = Err(std::io::ErrorKind::Other.into());
                 for _ in 0..4 {
@@ -1298,6 +1299,7 @@ pub unsafe extern "C" fn hle_nn_fs_WriteFile(
     match files.get_mut((handle - 1) as usize) {
         Some(Some(entry)) => match &entry.data {
             FileData::Fd(f) => {
+                crate::os::ensure_committed(buffer as usize, size);
                 let src = if size == 0 { &[][..] } else { std::slice::from_raw_parts(buffer, size) };
                 if write_at(f, src, offset as u64).ok() != Some(size) {
                     eprintln!(
