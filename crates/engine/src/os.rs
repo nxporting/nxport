@@ -1013,6 +1013,45 @@ mod imp {
     extern "system" {
         fn SetUnhandledExceptionFilter(filter: Option<VectoredHandler>) -> Option<VectoredHandler>;
         fn GetModuleHandleExW(flags: u32, addr: *const c_void, module: *mut *mut c_void) -> i32;
+        fn IsBadReadPtr(addr: *const c_void, len: usize) -> i32;
+    }
+
+    /// The crashing thread's guest registers as of its last call between lifted functions, and what looks like guest
+    /// code on its guest stack, newest first. An exlaunch plugin that gives up writes its result to 0x6969696969696969.
+    unsafe fn guest_state(pc: usize) {
+        let cpu = crate::lifted::existing_thread_cpu();
+        if cpu.is_null() {
+            return;
+        }
+        let cpu = &*cpu;
+        let readable = |addr: u64, len: usize| IsBadReadPtr(addr as *const c_void, len) == 0;
+        let code = pc.wrapping_sub(8) as u64;
+        if readable(code, 8) && std::ptr::read_unaligned(code as *const u64) == 0x6969_6969_6969_6969 {
+            let result = cpu.x[0];
+            let value = if readable(result, 4) {
+                format!("{:#x}", std::ptr::read_unaligned(result as *const u32))
+            } else {
+                "unreadable".to_string()
+            };
+            eprintln!("[crash] a plugin mod aborted itself (exlaunch), result {value}");
+        }
+        for (i, row) in cpu.x.chunks(4).enumerate() {
+            let values: Vec<String> = row.iter().map(|v| format!("{v:#018x}")).collect();
+            eprintln!("[crash] x{:<2} {}", i * 4, values.join(" "));
+        }
+        eprintln!("[crash] sp {:#x}", cpu.sp);
+        let mut found = Vec::new();
+        for i in 0..512u64 {
+            let at = cpu.sp.wrapping_add(i * 8);
+            if !readable(at, 8) {
+                break;
+            }
+            let v = std::ptr::read_unaligned(at as *const u64);
+            if (0x70_0000_0000..0x71_0000_0000).contains(&v) && v & 3 == 0 && found.len() < 32 {
+                found.push(format!("sp+{:#x}: {v:#x}", i * 8));
+            }
+        }
+        eprintln!("[crash] guest addresses on the stack: {}", found.join(", "));
     }
 
     // An exception nothing handled (the process ends after this): what and where, the module and offset of the faulting
@@ -1042,6 +1081,7 @@ mod imp {
             };
             eprintln!("[crash] {what} of {:#x}", r.information[1]);
         }
+        guest_state(pc);
         eprintln!("[crash] stack:\n{}", std::backtrace::Backtrace::force_capture());
         EXCEPTION_CONTINUE_SEARCH
     }
