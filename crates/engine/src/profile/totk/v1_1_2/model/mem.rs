@@ -11,21 +11,23 @@ pub(super) struct Mem {
     owned: Vec<(usize, usize)>,
     /// Applying undoably: (address, length, old bytes) of every write, in order.
     undo: Option<Vec<(usize, u8, u64)>>,
+    /// Applying undoably until `commit`: past it the run calls game code and can no longer be undone.
+    committed: bool,
 }
 
 impl Mem {
     pub(super) fn predicting() -> Self {
-        Mem { overlay: Some(HashMap::default()), owned: Vec::new(), undo: None }
+        Mem { overlay: Some(HashMap::default()), owned: Vec::new(), undo: None, committed: false }
     }
 
     pub(super) fn applying() -> Self {
-        Mem { overlay: None, owned: Vec::new(), undo: None }
+        Mem { overlay: None, owned: Vec::new(), undo: None, committed: false }
     }
 
     /// Applying, with every write undoable until rollback: the run stops where predicting would (calls into game
     /// code that records commands or keeps state are left to the game's own run).
     pub(super) fn applying_undoably() -> Self {
-        Mem { overlay: None, owned: Vec::new(), undo: Some(Vec::new()) }
+        Mem { overlay: None, owned: Vec::new(), undo: Some(Vec::new()), committed: false }
     }
 
     pub(super) fn predict(&self) -> bool {
@@ -35,6 +37,18 @@ impl Mem {
     /// Does the run stop at game code the port does not run (predicting, or applying undoably)?
     pub(super) fn stops(&self) -> bool {
         self.overlay.is_some() || self.undo.is_some()
+    }
+
+    /// Applying undoably: the port has checked everything it may stop at; from here it calls the game's side-effecting
+    /// functions itself and keeps its writes. Predicting still stops there.
+    pub(super) fn commit(&mut self) {
+        if self.undo.take().is_some() {
+            self.committed = true;
+        }
+    }
+
+    pub(super) fn committed(&self) -> bool {
+        self.committed
     }
 
     /// Restores every byte written since applying_undoably, newest first.
