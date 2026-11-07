@@ -80,6 +80,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
         for (src, dest) in candidates {
             if for_program(&src, tid) {
                 println!("  Copying mod {}", src.display());
+                crate::mod_check::report(&src, tid, o.dump);
                 copy_tree(&src, &dest)?;
                 any_mods = true;
             } else {

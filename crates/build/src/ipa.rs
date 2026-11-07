@@ -146,6 +146,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
             if is_single {
                 if mod_matches_tid(m, tid) {
                     packaged_any_mods = true;
+                    crate::mod_check::report(m, tid, o.dump);
                     copy_tree(m, &dest_mods)?;
                 } else {
                     println!("  [!] Skipping mod '{}': target program does not match {tid:016X}", m.display());
@@ -155,6 +156,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
                     let path = entry.path();
                     if path.is_dir() && mod_matches_tid(&path, tid) {
                         packaged_any_mods = true;
+                        crate::mod_check::report(&path, tid, o.dump);
                         copy_tree(&path, &dest_mods.join(entry.file_name()))?;
                     } else if path.is_dir() {
                         println!("  [!] Skipping mod '{}': target program does not match {tid:016X}", entry.file_name().to_string_lossy());

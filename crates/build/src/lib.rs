@@ -15,6 +15,7 @@ pub mod ipa;
 pub mod adhoc_sign;
 pub mod lift;
 pub mod macho;
+pub mod mod_check;
 pub use nxport::metal::msl_specialize;
 #[cfg(target_os = "macos")]
 pub mod pack;

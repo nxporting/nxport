@@ -185,7 +185,7 @@ fn quoted_bytes(s: &str) -> Option<Vec<u8>> {
 
 /// Whether a patch file names only other builds: `name` an .ips file's name, or `pchtxt` its text. A file naming no build
 /// says nothing about its version.
-fn for_other_build(name: &str, pchtxt: Option<&str>, build_ids: &[&str]) -> bool {
+pub fn for_other_build(name: &str, pchtxt: Option<&str>, build_ids: &[&str]) -> bool {
     let named: Vec<&str> = match pchtxt {
         Some(text) => text.lines().filter_map(|l| l.trim().strip_prefix("@nsobid-")).map(|id| strip_comment(id).trim()).collect(),
         None => name.rsplit_once('.').map(|(stem, _)| stem).into_iter().filter(|s| s.len() >= 16 && s.chars().all(|c| c.is_ascii_hexdigit())).collect(),
