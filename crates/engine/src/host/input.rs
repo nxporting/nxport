@@ -4,7 +4,8 @@
 // binding; both are active at once. Bindings are edited in the Controls window (host/controls_ui.rs, Cmd-,) and saved to
 // ~/Library/Application Support/nxport/controls.cfg (--controls-file overrides the path). Windows reads the same file
 // from %APPDATA%\nxport\controls.cfg: keys are macOS virtual key codes there too (host/display_sdl.rs translates SDL's
-// scancodes into them), so a controls file means the same keys on both.
+// scancodes into them), so a controls file means the same keys on both. Past them, codes 128 to 132 are the mouse's
+// buttons (MOUSE_KEYS: key=MouseLeft and so on in the file), pressed while mouse look holds the mouse.
 //
 // Threading: AppKit and GameController objects are only touched on the main thread (keyboard events arrive there; a
 // 250 Hz timer polls controllers), and guest threads must not call into Objective-C (they clobber thread-local state
@@ -390,7 +391,10 @@ fn load() -> Bindings {
         for kv in parts {
             match kv.split_once('=') {
                 Some(("key", "none")) => slot.key = None,
-                Some(("key", v)) => slot.key = v.parse().ok().or(slot.key),
+                Some(("key", v)) => {
+                    let mouse = MOUSE_KEYS.iter().find(|(_, n)| n.eq_ignore_ascii_case(v)).map(|&(c, _)| c);
+                    slot.key = mouse.or_else(|| v.parse().ok()).or(slot.key);
+                }
                 Some(("pad", "none")) => slot.pad = None,
                 Some(("pad", v)) => slot.pad = PadElem::from_id(v).or(slot.pad),
                 _ => println!("[!] Input: {}: ignoring '{}'", path.display(), kv),
@@ -413,7 +417,9 @@ fn save(b: &Bindings) -> std::io::Result<()> {
     out.push_str("# <input> key=<macOS virtual key code | none> pad=<controller element | none>\n");
     for s in SWITCH_INPUTS {
         let bd = b[s.index()];
-        let key = bd.key.map_or("none".to_string(), |k| k.to_string());
+        let key = bd.key.map_or("none".to_string(), |k| {
+            MOUSE_KEYS.iter().find(|&&(c, _)| c == k).map_or_else(|| k.to_string(), |&(_, n)| n.to_string())
+        });
         let pad = bd.pad.map_or("none", |p| p.id());
         out.push_str(&format!(
             "{:<12} key={:<4} pad={}   # {}\n",
@@ -430,7 +436,11 @@ fn save(b: &Bindings) -> std::io::Result<()> {
 
 pub const MAX_PLAYERS: usize = 8;
 
-static KEYS: [AtomicBool; 128] = [const { AtomicBool::new(false) }; 128];
+static KEYS: [AtomicBool; 133] = [const { AtomicBool::new(false) }; 133];
+/// The mouse buttons as key codes past the keyboard's: (code, name in controls.cfg), in nn::hid::MouseButtonSet's bit
+/// order (left, right, middle, forward, back).
+pub const MOUSE_KEYS: [(u16, &str); 5] =
+    [(128, "MouseLeft"), (129, "MouseRight"), (130, "MouseMiddle"), (131, "MouseForward"), (132, "MouseBack")];
 static PLAYER_PADS: [[AtomicU32; 25]; MAX_PLAYERS] =
     [const { [const { AtomicU32::new(0) }; 25] }; MAX_PLAYERS];
 static PLAYER_CONNECTED: [AtomicBool; MAX_PLAYERS] = {
@@ -1236,6 +1246,11 @@ pub fn key_name(code: u16) -> &'static str {
         124 => "→",
         125 => "↓",
         126 => "↑",
+        128 => "Mouse Left",
+        129 => "Mouse Right",
+        130 => "Mouse Middle",
+        131 => "Mouse Forward",
+        132 => "Mouse Back",
         _ => "?",
     }
 }
@@ -1263,6 +1278,16 @@ pub fn modifier_down(code: u16, flags: usize) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_buttons_are_keys() {
+        for (i, &(code, name)) in MOUSE_KEYS.iter().enumerate() {
+            assert!((code as usize) < KEYS.len(), "{name}");
+            #[cfg(target_os = "macos")]
+            assert_ne!(key_name(code), "?", "{name}");
+            assert_eq!(code, 128 + i as u16);
+        }
+    }
 
     #[test]
     fn mouse_look_deflection_follows_speed() {

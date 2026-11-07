@@ -235,7 +235,9 @@ impl Host {
             Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } if input::mouse_look_on() && !self.mouse_held => {
                 self.hold_mouse(true)
             }
-            Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } if self.mouse_held => {}
+            // While held, the buttons are keys that controls.cfg can bind (input::MOUSE_KEYS).
+            Event::MouseButtonDown { mouse_btn, .. } if self.mouse_held => mouse_key(mouse_btn, true),
+            Event::MouseButtonUp { mouse_btn, .. } if self.mouse_held => mouse_key(mouse_btn, false),
             // The mouse (left button) is the touch screen: one finger at the cursor while the button is down.
             Event::MouseButtonDown { mouse_btn: MouseButton::Left, x, y, .. } => self.mouse_touch(x, y),
             Event::MouseMotion { mousestate, x, y, .. } if mousestate.left() => self.mouse_touch(x, y),
@@ -391,6 +393,19 @@ fn dead_zone(x: f32, y: f32) -> (f32, f32) {
 
 fn direct_mouse() -> bool {
     crate::settings::get().input.direct_mouse
+}
+
+/// A mouse button as a bindable key (input::MOUSE_KEYS).
+fn mouse_key(button: MouseButton, down: bool) {
+    let i = match button {
+        MouseButton::Left => 0,
+        MouseButton::Right => 1,
+        MouseButton::Middle => 2,
+        MouseButton::X2 => 3,
+        MouseButton::X1 => 4,
+        _ => return,
+    };
+    input::set_key(input::MOUSE_KEYS[i].0, down);
 }
 
 fn mouse_button(button: MouseButton, down: bool) {
