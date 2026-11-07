@@ -126,6 +126,27 @@ impl Port {
         crate::guest::call(f, args)
     }
 
+    /// A side-effecting game function at main+`addr` taking up to twelve integer arguments (the ones past eight in
+    /// 8-byte stack slots); stops while predicting or applying undoably, like `helper`.
+    #[cfg(nx_native)]
+    pub(super) unsafe fn call_stack(&self, name: &'static str, addr: usize, args: &[u64]) -> R<u64> {
+        if self.m.stops() {
+            return Err(name);
+        }
+        assert!(args.len() <= 12, "call_stack: {} arguments", args.len());
+        self.flush();
+        let mut a = [0u64; 12];
+        a[..args.len()].copy_from_slice(args);
+        type F = unsafe extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64) -> u64;
+        let f: F = std::mem::transmute(self.base + addr);
+        Ok(f(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11]))
+    }
+
+    #[cfg(not(nx_native))]
+    pub(super) unsafe fn call_stack(&self, name: &'static str, _addr: usize, _args: &[u64]) -> R<u64> {
+        Err(name)
+    }
+
     /// An NVN entry point that records nothing (addresses, handles).
     pub(super) unsafe fn query(&self, f: usize, args: &[u64]) -> u64 {
         crate::guest::call(f, args)

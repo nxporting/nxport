@@ -1226,6 +1226,15 @@ impl Checked {
             });
             ring::discard();
             if let Err(what) = r {
+                if port.m.committed() {
+                    // Past the commit point the game's state already changed: the game's call cannot run on top.
+                    println!("[model-draw] stopped after its commit point: {what}");
+                    self.stop("after the commit point");
+                    port.flush();
+                    crate::nvn::api::commit_buffered(commands);
+                    self.stop(what);
+                    return 1;
+                }
                 port.discard();
                 port.m.rollback();
                 self.stop(what);
