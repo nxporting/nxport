@@ -185,9 +185,12 @@ pub fn compile(
     // The x86-64-v3 features, spelled out: above all hardware FMA, which the lifted floating-point code needs to round
     // like the guest's. zig cc builds any of -O1 to -O3 as clang -O2, tunes for generic x86-64 once any -m flag is given,
     // and keeps frame pointers (a register) unless told not to.
+    // -grow-region-complexity-budget: a few lifted functions of megabytes of C spent most of a build in the register
+    // allocator's region splitting (TotK main_033: 923 s against 411 s with the budget at 100; the whole build about 19
+    // minutes against 13.4). The same scene ran at the same speed (99.4 and 99.3 fps against 100.1 and 100.2).
     let flags = [
         "-O1", "-g0", "-fno-strict-aliasing", "-fomit-frame-pointer", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt",
-        "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16",
+        "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-mllvm", "-grow-region-complexity-budget=100",
     ];
     // The profile's hash is a flag too: zig's cache of objects need not look inside a file the flags name.
     let profile = profile.map(std::path::absolute).transpose()?;
