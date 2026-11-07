@@ -166,6 +166,11 @@ impl Mem {
 
     /// The game's exclusive-monitor `*a |= bits`, returning the old value.
     pub(super) unsafe fn fetch_or32(&mut self, a: usize, bits: u32) -> u32 {
+        if self.owned.iter().any(|&(s, n)| a >= s && a < s + n) {
+            let old = std::ptr::read_unaligned(a as *const u32);
+            std::ptr::write_unaligned(a as *mut u32, old | bits);
+            return old;
+        }
         match &self.overlay {
             None => {
                 let old = (*(a as *const std::sync::atomic::AtomicU32)).fetch_or(bits, std::sync::atomic::Ordering::AcqRel);

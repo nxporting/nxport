@@ -11,13 +11,13 @@ const GRAPHICS_CONTEXT_INIT: usize = 0x688a38;
 const DEFAULT_TEXTURES: usize = 0x4631740;
 
 /// A default render state as words, for the caller's changes.
-unsafe fn default_state(p: &Port) -> [u32; 0x20] {
+pub(super) unsafe fn default_state(p: &Port) -> [u32; 0x20] {
     let mut g = [0u32; 0x20];
     p.query(p.base + GRAPHICS_CONTEXT_INIT, &[g.as_mut_ptr() as u64]);
     g
 }
 
-unsafe fn fullscreen(p: &mut Port, w: usize) {
+pub(super) unsafe fn fullscreen(p: &mut Port, w: usize) {
     let shapes = p.m.r64(p.m.r64(p.base + SHAPES));
     shape_state(p, shapes + 0x10e8, w);
     stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x488, w);
@@ -62,7 +62,7 @@ pub(super) unsafe fn view_composite(p: &mut Port, this: usize, w: usize, view: u
 /// pass block (+0x2d0), the view's record block (+0x360, 0xe8d8 each, +0xe5e0), the scene block (+0x18 +0x390), the
 /// scene's per-frame block (+0x5a0; the first user each frame fills it with main+0x765148) and the storage block
 /// +0x1c0.
-unsafe fn scene_blocks(p: &mut Port, this: usize, w: usize, view: u32, prog: usize, scene: usize) -> R<()> {
+pub(super) unsafe fn scene_blocks(p: &mut Port, this: usize, w: usize, view: u32, prog: usize, scene: usize) -> R<()> {
     let v = if p.m.r32(this + 0x358) > view { view } else { 0 } as i32 as isize as usize;
     program_texture(p, prog, w, 3, p.m.r64(scene + 0xd0))?;
     program_block(p, prog, w, 1, this + 0x2d0, 0)?;
