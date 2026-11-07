@@ -3,6 +3,7 @@
 // that reach a helper the port does not implement yet are counted by that helper.
 
 mod binds;
+mod buffer_passes;
 mod cave;
 mod cubemap;
 mod cells;
@@ -25,6 +26,7 @@ mod scene_passes;
 mod snapshot;
 mod targets;
 mod terrain;
+mod texture_slots;
 mod vfx;
 mod viewport;
 
@@ -770,6 +772,104 @@ pub unsafe extern "C" fn on_view_fullscreen(this: usize, w: usize, view: u32, sc
 #[no_mangle]
 pub unsafe extern "C" fn on_view_fullscreen_end() -> u32 {
     VIEW_FULLSCREENS.end("view full-screen passes", &VIEW_FULLSCREEN_EXPECTED)
+}
+
+static SCENE_PASSES: Checked = Checked::new();
+static ENTRY_VOLUMES: Checked = Checked::new();
+
+thread_local! {
+    static SCENE_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static ENTRY_VOLUMES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x9618d0(this, w, view, scene, ctx, flags) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_scene_pass(this: usize, w: usize, view: u32, scene: usize, ctx: usize, flags: u32) -> u32 {
+    SCENE_PASSES.run(&SCENE_PASS_EXPECTED, move |p| buffer_passes::scene_pass(p, this, w, view, scene, ctx, flags))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_scene_pass_end() -> u32 {
+    SCENE_PASSES.end("scene buffer passes", &SCENE_PASS_EXPECTED)
+}
+
+/// main+0x95bef4(this, args) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_entry_volumes(this: usize, args: usize) -> u32 {
+    ENTRY_VOLUMES.run(&ENTRY_VOLUMES_EXPECTED, move |p| buffer_passes::entry_volumes(p, this, args))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_entry_volumes_end() -> u32 {
+    ENTRY_VOLUMES.end("entry volumes", &ENTRY_VOLUMES_EXPECTED)
+}
+
+static VIEW_COPIES: Checked = Checked::new();
+
+thread_local! {
+    static VIEW_COPY_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x959a14(this, w, view, tex, desc, ctx) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_view_copy(this: usize, w: usize, view: u32, tex: usize, desc: usize, ctx: usize) -> u32 {
+    VIEW_COPIES.run(&VIEW_COPY_EXPECTED, move |p| buffer_passes::view_copy(p, this, w, view, tex, desc, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_copy_end() -> u32 {
+    VIEW_COPIES.end("view copies", &VIEW_COPY_EXPECTED)
+}
+
+static REPROJECTIONS: Checked = Checked::new();
+
+thread_local! {
+    static REPROJECTION_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x9635b8(this, w, view) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_reprojection(x: usize, w: usize, view: u32) -> u32 {
+    REPROJECTIONS.run(&REPROJECTION_EXPECTED, move |p| buffer_passes::reprojection(p, x, w, view))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_reprojection_end() -> u32 {
+    REPROJECTIONS.end("reprojection passes", &REPROJECTION_EXPECTED)
+}
+
+static VOLUME_MASKS: Checked = Checked::new();
+
+thread_local! {
+    static VOLUME_MASK_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x95ad64(this, args) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_volume_mask(this: usize, args: usize) -> u32 {
+    VOLUME_MASKS.run(&VOLUME_MASK_EXPECTED, move |p| buffer_passes::volume_mask(p, this, args))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_volume_mask_end() -> u32 {
+    VOLUME_MASKS.end("volume masks", &VOLUME_MASK_EXPECTED)
+}
+
+static POST_PASSES: Checked = Checked::new();
+
+thread_local! {
+    static POST_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xc555c4(this, w, index, n) (program_draws.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_post_pass(this: usize, w: usize, index: u32, n: u32) -> u32 {
+    POST_PASSES.run(&POST_PASS_EXPECTED, move |p| program_draws::post_pass(p, this, w, index, n))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_post_pass_end() -> u32 {
+    POST_PASSES.end("post passes", &POST_PASS_EXPECTED)
 }
 
 static EFFECT_LAYERS: Checked = Checked::new();
@@ -1786,6 +1886,24 @@ fn report() {
     if let Some(l) = ATMOSPHERES.summary("atmosphere passes") {
         println!("{l}");
     }
+    if let Some(l) = SCENE_PASSES.summary("scene buffer passes") {
+        println!("{l}");
+    }
+    if let Some(l) = VIEW_COPIES.summary("view copies") {
+        println!("{l}");
+    }
+    if let Some(l) = REPROJECTIONS.summary("reprojection passes") {
+        println!("{l}");
+    }
+    if let Some(l) = VOLUME_MASKS.summary("volume masks") {
+        println!("{l}");
+    }
+    if let Some(l) = POST_PASSES.summary("post passes") {
+        println!("{l}");
+    }
+    if let Some(l) = ENTRY_VOLUMES.summary("entry volumes") {
+        println!("{l}");
+    }
     if let Some(l) = EFFECT_LAYERS.summary("effect layers") {
         println!("{l}");
     }
@@ -2033,6 +2151,24 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_atmosphere(_, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_atmosphere_end())) as usize;
         hook(base, mem_space, 0x21d95d4, 0xd10543ff, pre, post, "Atmosphere passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_scene_pass(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_scene_pass_end())) as usize;
+        hook(base, mem_space, 0x9618d0, 0xa9ba7bfd, pre, post, "Scene buffer passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_entry_volumes(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_entry_volumes_end())) as usize;
+        hook(base, mem_space, 0x95bef4, 0xa9ba7bfd, pre, post, "Entry volumes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_copy(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_copy_end())) as usize;
+        hook(base, mem_space, 0x959a14, 0xa9ba7bfd, pre, post, "View copies");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_reprojection(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_reprojection_end())) as usize;
+        hook(base, mem_space, 0x9635b8, 0xa9ba7bfd, pre, post, "Reprojection passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_end())) as usize;
+        hook(base, mem_space, 0x95ad64, 0xa9ba7bfd, pre, post, "Volume masks");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_post_pass(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_post_pass_end())) as usize;
+        hook(base, mem_space, 0xc555c4, 0xfc180fea, pre, post, "Post passes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
