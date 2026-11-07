@@ -1843,7 +1843,7 @@ unsafe fn npad_states(
         return 0;
     }
     if player == 0 {
-        crate::host::input::apply_script();
+        crate::host::input::before_npad_read();
     }
     // Keyboard / controller state mapped by the user's bindings (host/input.rs).
     let (buttons, sticks) = if connected {
