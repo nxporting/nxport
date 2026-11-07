@@ -713,6 +713,84 @@ pub fn player_pad_value(player: usize, e: PadElem) -> f32 {
 }
 
 /// Folds keyboard and controller state through the bindings into each player's Npad state.
+// ---- mouse look ----
+
+/// Mouse look (settings input.mouse_look): mouse movement becomes the right stick. A stick reports a deflection, not a
+/// movement, so the stick follows the mouse's speed: pixels per second, smoothed over ~30 ms, full deflection at
+/// MOUSE_LOOK_FULL px/s times the speed setting. Small speeds are lifted past the deadzone games keep around the
+/// stick's centre, so slow aiming still moves the camera. The mouse at rest centres the stick within ~50 ms.
+struct MouseLook {
+    pending: (f32, f32),
+    smooth: (f32, f32),
+    last: Option<std::time::Instant>,
+}
+static MOUSE_LOOK: std::sync::Mutex<MouseLook> =
+    std::sync::Mutex::new(MouseLook { pending: (0.0, 0.0), smooth: (0.0, 0.0), last: None });
+/// The right stick from the mouse, as two f32 bit patterns (x right, y up).
+static MOUSE_STICK: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+const MOUSE_LOOK_FULL: f32 = 1500.0;
+const MOUSE_LOOK_DEADZONE: f32 = 0.15;
+
+pub(crate) fn mouse_look_on() -> bool {
+    crate::settings::try_get().is_some_and(|s| s.input.mouse_look && !s.input.direct_mouse)
+}
+
+/// Relative mouse movement while mouse look holds the mouse (window pixels; y down). The SDL host (Windows) holds
+/// the mouse; the macOS host does not have mouse look yet.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn mouse_look_moved(dx: f32, dy: f32) {
+    let mut m = MOUSE_LOOK.lock().unwrap();
+    m.pending.0 += dx;
+    m.pending.1 += dy;
+}
+
+/// The stick for a mouse speed (px/s), deadzone lifted, inside the unit circle.
+fn mouse_look_deflection(vx: f32, vy: f32, speed: f32) -> (f32, f32) {
+    let (x, y) = (vx * speed / MOUSE_LOOK_FULL, -vy * speed / MOUSE_LOOK_FULL);
+    let m = (x * x + y * y).sqrt();
+    if m < 1e-3 {
+        return (0.0, 0.0);
+    }
+    let lifted = (MOUSE_LOOK_DEADZONE + (1.0 - MOUSE_LOOK_DEADZONE) * m).min(1.0);
+    (x / m * lifted, y / m * lifted)
+}
+
+/// Turns the mouse movement since the last read into the right stick. Called as the game reads its controller.
+fn update_mouse_look() {
+    if !mouse_look_on() {
+        return;
+    }
+    let speed = crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
+    let now = std::time::Instant::now();
+    let (x, y) = {
+        let mut m = MOUSE_LOOK.lock().unwrap();
+        let dt = m.last.map_or(0.016, |l| now.duration_since(l).as_secs_f32()).clamp(0.001, 0.1);
+        m.last = Some(now);
+        let v = (m.pending.0 / dt, m.pending.1 / dt);
+        m.pending = (0.0, 0.0);
+        let a = 1.0 - (-dt / 0.03).exp();
+        m.smooth.0 += (v.0 - m.smooth.0) * a;
+        m.smooth.1 += (v.1 - m.smooth.1) * a;
+        // Under a pixel per frame at 60 Hz: at rest.
+        if m.smooth.0.abs() < 60.0 && m.smooth.1.abs() < 60.0 && v == (0.0, 0.0) {
+            m.smooth = (0.0, 0.0);
+        }
+        mouse_look_deflection(m.smooth.0, m.smooth.1, speed)
+    };
+    let (ox, oy) = (f32::from_bits(MOUSE_STICK[0].load(Ordering::Relaxed)), f32::from_bits(MOUSE_STICK[1].load(Ordering::Relaxed)));
+    if (x, y) != (ox, oy) {
+        MOUSE_STICK[0].store(x.to_bits(), Ordering::Relaxed);
+        MOUSE_STICK[1].store(y.to_bits(), Ordering::Relaxed);
+        update_npad();
+    }
+}
+
+/// Before the game reads player 1's controller: the debug input script and mouse look.
+pub fn before_npad_read() {
+    apply_script();
+    update_mouse_look();
+}
+
 pub fn update_npad() {
     if SUSPENDED.load(Ordering::Relaxed) {
         for p in 0..MAX_PLAYERS {
@@ -762,7 +840,11 @@ pub fn update_npad() {
             (x, y)
         };
         let (lx, ly) = stick(LUp, LDown, LLeft, LRight);
-        let (rx, ry) = stick(RUp, RDown, RLeft, RRight);
+        let (mut rx, mut ry) = stick(RUp, RDown, RLeft, RRight);
+        if player == 0 && mouse_look_on() {
+            rx += f32::from_bits(MOUSE_STICK[0].load(Ordering::Relaxed));
+            ry += f32::from_bits(MOUSE_STICK[1].load(Ordering::Relaxed));
+        }
         // The HID service also reports each stick as four direction "buttons" (StickLLeft = bit 16 ... StickRDown = 23);
         // menus navigate with them.
         for (i, (x, y)) in [(lx, ly), (rx, ry)].into_iter().enumerate() {
@@ -1181,6 +1263,23 @@ pub fn modifier_down(code: u16, flags: usize) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_look_deflection_follows_speed() {
+        // At rest: centred.
+        assert_eq!(mouse_look_deflection(0.0, 0.0, 1.0), (0.0, 0.0));
+        // Slow movement still passes the games' deadzone; fast movement saturates; mouse down is stick down.
+        let (x, y) = mouse_look_deflection(30.0, 0.0, 1.0);
+        assert!(x > MOUSE_LOOK_DEADZONE && y == 0.0, "{x}");
+        let (x, y) = mouse_look_deflection(0.0, 10_000.0, 1.0);
+        assert!(x.abs() < 1e-6 && (y + 1.0).abs() < 1e-6, "{x} {y}");
+        // Faster means further, and the speed setting scales it.
+        assert!(mouse_look_deflection(600.0, 0.0, 1.0).0 > mouse_look_deflection(300.0, 0.0, 1.0).0);
+        assert!(mouse_look_deflection(300.0, 0.0, 2.0).0 > mouse_look_deflection(300.0, 0.0, 1.0).0);
+        // Diagonals stay inside the unit circle.
+        let (x, y) = mouse_look_deflection(5000.0, -5000.0, 1.0);
+        assert!((x * x + y * y).sqrt() <= 1.0 + 1e-5);
+    }
 
     #[test]
     fn mouse_state_layout() {

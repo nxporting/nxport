@@ -51,6 +51,9 @@ struct Host {
     pads: Vec<(Gamepad, Rumbler)>,
     /// The size to go back to from full screen.
     windowed_size: (u32, u32),
+    mouse: sdl3::mouse::MouseUtil,
+    /// Mouse look holds the mouse (relative mode); F8 frees it, a click in the window takes it again.
+    mouse_held: bool,
 }
 
 /// Create the window and run SDL's event loop. Must be called on the process main thread.
@@ -99,7 +102,8 @@ pub fn run_main_thread() -> ! {
     let mut window = window;
     let _ = window.set_size(w as u32, h as u32);
     let mut pump = sdl.event_pump().unwrap_or_else(|e| fail("SDL events", &e));
-    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32) };
+    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32), mouse: sdl.mouse(), mouse_held: false };
+    host.hold_mouse(input::mouse_look_on());
 
     WINDOW_UP.store(true, Ordering::Release);
     println!("[+] Display: window up ({w}x{h}); presenting guest frames");
@@ -174,6 +178,7 @@ impl Host {
                     input::clear_keys();
                     input::touch_ended(0);
                 }
+                WindowEvent::FocusGained if self.mouse_held => self.hold_mouse(true),
                 _ => {}
             },
             Event::KeyDown { scancode: Some(sc), keymod, repeat, .. } => {
@@ -189,6 +194,13 @@ impl Host {
                 if sc == Scancode::F10 {
                     if !repeat {
                         crate::host::overlay::toggle_overlay();
+                    }
+                    return;
+                }
+                // F8: mouse look frees the mouse, or takes it again.
+                if sc == Scancode::F8 && input::mouse_look_on() {
+                    if !repeat {
+                        self.hold_mouse(!self.mouse_held);
                     }
                     return;
                 }
@@ -218,6 +230,12 @@ impl Host {
             Event::MouseButtonDown { mouse_btn, .. } if direct_mouse() => mouse_button(mouse_btn, true),
             Event::MouseButtonUp { mouse_btn, .. } if direct_mouse() => mouse_button(mouse_btn, false),
             Event::MouseWheel { y, .. } if direct_mouse() => input::mouse_wheel((y * 120.0) as i32),
+            // Mouse look: the held mouse moves the right stick; a click in the window takes a freed mouse again.
+            Event::MouseMotion { xrel, yrel, .. } if self.mouse_held => input::mouse_look_moved(xrel, yrel),
+            Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } if input::mouse_look_on() && !self.mouse_held => {
+                self.hold_mouse(true)
+            }
+            Event::MouseButtonDown { .. } | Event::MouseButtonUp { .. } if self.mouse_held => {}
             // The mouse (left button) is the touch screen: one finger at the cursor while the button is down.
             Event::MouseButtonDown { mouse_btn: MouseButton::Left, x, y, .. } => self.mouse_touch(x, y),
             Event::MouseMotion { mousestate, x, y, .. } if mousestate.left() => self.mouse_touch(x, y),
@@ -267,6 +285,12 @@ impl Host {
     /// The game's picture is fitted into the window at the shape it renders at (16:9 letterboxed, or the window's own
     /// with the dynamic aspect ratio: vulkan/window.rs), so the panel position is the cursor's fraction of that fitted
     /// rectangle (window coordinates, y grows downwards).
+    /// Mouse look: hold the mouse in the window (hidden, relative movement) or free it.
+    fn hold_mouse(&mut self, hold: bool) {
+        self.mouse.set_relative_mouse_mode(&self.window, hold);
+        self.mouse_held = hold;
+    }
+
     fn mouse_touch(&self, x: f32, y: f32) {
         let (nx, ny) = self.game_position(x, y);
         input::touch_moved(0, nx, ny);
