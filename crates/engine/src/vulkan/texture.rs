@@ -643,11 +643,16 @@ impl Textures {
     unsafe fn take_baseline(d: &Desc, img: &mut Image) {
         use crate::guest::dirty_track;
         let len = layout::compute_layout(&d.params).total as usize;
+        // The interior's generations are read before protecting, as protect reads the whole range's. Read after, a write
+        // in between (TotK's font thread writes glyphs into its atlas all the time) had reopened a page: the token was
+        // None, a later check's None matched it, and the hash below leaves the interior out, so no glyph written inside
+        // the atlas from then on was uploaded (letters missing from menu text, 2026-11-08).
+        let (at, n) = interior_pages(d.storage, len);
+        let interior = if n > 0 { dirty_track::generations(at, n) } else { None };
         // Protect before hashing: writes during the hash change the token.
         img.token = if dirty_track::trackable(d.storage, len) { dirty_track::protect(d.storage, len) } else { None };
         if img.token.is_some() {
-            let (at, n) = interior_pages(d.storage, len);
-            img.interior_token = if n > 0 { dirty_track::generation(at, n) } else { None };
+            img.interior_token = interior;
         }
         img.hash = baseline_hash(d.storage, len, img.token.is_some());
     }
