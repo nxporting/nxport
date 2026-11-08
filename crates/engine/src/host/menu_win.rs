@@ -6,7 +6,7 @@
 //   Display   how frames reach the screen (vi, and the host's window and swapchain): vsync, the frame-rate limit
 //   Graphics  the GPU library the title calls (nvn), done with Vulkan: shader compilation
 //   Audio     audren / audout output on the host's device
-//   Input     hid: the controller layout the title sees, vibration, the touch screen
+//   Input     hid: the controller layout the title sees, vibration, the touch screen, the key and controller bindings
 //   <title>   the running title's own code and data: nxport's patches for it, its mods, its save data
 //   Tools     diagnostics
 //
@@ -18,7 +18,7 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 
-use crate::host::{live, overlay};
+use crate::host::{input, live, overlay};
 use crate::settings::FpsMode;
 
 #[link(name = "user32")]
@@ -76,6 +76,9 @@ mod id {
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
+    /// + the input's index in input::SWITCH_INPUTS.
+    pub const BIND: u16 = 600;
+    pub const RESET_CONTROLS: u16 = 640;
 }
 
 const LIMITS: [u32; 5] = [30, 60, 90, 120, 144];
@@ -203,6 +206,14 @@ pub fn attach(hwnd: usize) {
             });
             separator(m);
             item(m, id::TOUCH, "Touch Screen with Mouse");
+            separator(m);
+            sub(m, "Controls", |l| {
+                for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
+                    item(l, id::BIND + i as u16, &bind_label(*s));
+                }
+                separator(l);
+                item(l, id::RESET_CONTROLS, "Reset to Defaults");
+            });
         });
         sub(bar, &title_label(), |m| {
             if crate::profile::is_totk() {
@@ -290,6 +301,11 @@ fn limit() -> u32 {
     }
 }
 
+/// A Controls entry: the input, then (right-aligned) what it is bound to.
+fn bind_label(s: input::SwitchInput) -> String {
+    format!("{}	{}", s.label(), input::binding_label(input::bindings()[s.index()]))
+}
+
 /// Check marks and greyed items from the current values (as the macOS menu validates its items when it opens).
 unsafe fn refresh(menu: *mut c_void) {
     let check = |id: u16, on: bool| {
@@ -333,6 +349,10 @@ unsafe fn refresh(menu: *mut c_void) {
     check(id::TOUCH, live::touch());
     check(id::REAL_TIME, live::real_time_speed());
     check(id::DYNAMIC_ASPECT, live::dynamic_aspect());
+    for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
+        let id = id::BIND + i as u16;
+        ModifyMenuW(menu, id as u32, 0, id as usize, wide(&bind_label(*s)).as_ptr());
+    }
 }
 
 /// Opens `dir` in Explorer.
@@ -402,6 +422,12 @@ fn command(cmd: u16) -> bool {
             println!("[+] Capture requested: the frame history is written at the next present");
         }
         id::LOG => open(data()),
+        // The next key, mouse button or controller button in the window sets it (host/display_sdl.rs).
+        c if (id::BIND..id::BIND + input::SWITCH_INPUTS.len() as u16).contains(&c) => input::begin_capture((c - id::BIND) as usize),
+        id::RESET_CONTROLS => {
+            input::set_bindings(input::default_bindings());
+            println!("[+] Input: controls reset to the defaults");
+        }
         _ => return false,
     }
     true

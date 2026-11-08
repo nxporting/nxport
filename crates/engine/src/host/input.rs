@@ -88,7 +88,7 @@ impl SwitchInput {
         }
     }
     /// Name shown in the Controls window.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn label(self) -> &'static str {
         use SwitchInput::*;
         match self {
@@ -238,7 +238,7 @@ impl PadElem {
             RightStickRight => "RightStickRight",
         }
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub fn label(self) -> &'static str {
         use PadElem::*;
         match self {
@@ -336,7 +336,7 @@ pub fn bindings() -> Bindings {
 }
 
 /// Replaces the bindings, saves them and refreshes the Npad state.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub fn set_bindings(b: Bindings) {
     *BINDINGS.lock().unwrap() = Some(b);
     if let Err(e) = save(&b) {
@@ -347,6 +347,61 @@ pub fn set_bindings(b: Bindings) {
         );
     }
     update_npad();
+}
+
+/// The input whose binding the next key, mouse button or controller button sets (Input > Controls, Windows), as its
+/// index in SWITCH_INPUTS; -1: none.
+#[cfg(windows)]
+static CAPTURE: AtomicI32 = AtomicI32::new(-1);
+
+/// Starts setting the binding of SWITCH_INPUTS[`i`]: the window's next key, mouse button or controller button.
+#[cfg(windows)]
+pub fn begin_capture(i: usize) {
+    clear_keys();
+    CAPTURE.store(i as i32, Ordering::Relaxed);
+    println!("[+] Input: press a key or controller button for {} (Esc cancels, Delete clears)", SWITCH_INPUTS[i].label());
+}
+
+/// The input being bound, if one is.
+#[cfg(windows)]
+pub fn capturing() -> Option<SwitchInput> {
+    usize::try_from(CAPTURE.load(Ordering::Relaxed)).ok().and_then(|i| SWITCH_INPUTS.get(i).copied())
+}
+
+/// What a capture ends with: a key, a controller element, the binding cleared, or nothing changed.
+#[cfg(windows)]
+pub enum Captured {
+    Key(u16),
+    Pad(PadElem),
+    Clear,
+    Cancel,
+}
+
+/// Ends the capture: sets (and saves) the binding as `c` says.
+#[cfg(windows)]
+pub fn end_capture(c: Captured) {
+    let Some(input) = capturing() else { return };
+    CAPTURE.store(-1, Ordering::Relaxed);
+    let mut b = bindings();
+    let slot = &mut b[input.index()];
+    match c {
+        Captured::Key(k) => slot.key = Some(k),
+        Captured::Pad(p) => slot.pad = Some(p),
+        Captured::Clear => *slot = Binding { key: None, pad: None },
+        Captured::Cancel => return println!("[+] Input: {} unchanged", input.label()),
+    }
+    println!("[+] Input: {} is now {}", input.label(), binding_label(*slot));
+    set_bindings(b);
+}
+
+/// A binding as the Controls menu shows it: "Z / Bottom button (A / ✕)".
+#[cfg(windows)]
+pub fn binding_label(b: Binding) -> String {
+    let key = b.key.map_or("no key", key_name);
+    match b.pad {
+        Some(p) => format!("{key} / {}", p.label()),
+        None => key.to_string(),
+    }
 }
 
 pub fn config_path() -> std::path::PathBuf {
@@ -405,15 +460,15 @@ fn load() -> Bindings {
     b
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn save(b: &Bindings) -> std::io::Result<()> {
     let path = config_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let app_name = crate::profile::app_title();
-    let mut out =
-        format!("# {app_name} (native) controls, edited by the Controls window (Cmd-,).\n");
+    let editor = if cfg!(windows) { "Input > Controls in the menu bar" } else { "the Controls window (Cmd-,)" };
+    let mut out = format!("# {app_name} (native) controls, edited by {editor}.\n");
     out.push_str("# <input> key=<macOS virtual key code | none> pad=<controller element | none>\n");
     for s in SWITCH_INPUTS {
         let bd = b[s.index()];
@@ -726,7 +781,7 @@ pub fn player_pad_value(player: usize, e: PadElem) -> f32 {
 // ---- mouse look ----
 
 /// Mouse look (settings input.mouse_look): mouse movement becomes the right stick. A stick reports a deflection, not a
-/// movement, so the stick follows the mouse's speed: pixels per second, smoothed over ~30 ms, full deflection at
+/// movement, so the stick follows the mouse's speed: pixels per second, smoothed over ~10 ms, full deflection at
 /// MOUSE_LOOK_FULL px/s times the speed setting. Small speeds are lifted past the deadzone games keep around the
 /// stick's centre, so slow aiming still moves the camera. The mouse at rest centres the stick within ~50 ms.
 struct MouseLook {
@@ -817,7 +872,8 @@ fn update_mouse_look() {
         m.last = Some(now);
         let v = (m.pending.0 / dt, m.pending.1 / dt);
         m.pending = (0.0, 0.0);
-        let a = 1.0 - (-dt / 0.03).exp();
+        // 10 ms: enough to even out reads at uneven times, little lag (30 ms was felt as camera latency).
+        let a = 1.0 - (-dt / 0.01).exp();
         m.smooth.0 += (v.0 - m.smooth.0) * a;
         m.smooth.1 += (v.1 - m.smooth.1) * a;
         // Under a pixel per frame at 60 Hz: at rest.
@@ -1178,7 +1234,7 @@ pub fn poll_controllers(_mtm: objc2::MainThreadMarker) {
 // ---- key names ----
 
 /// Display name of a macOS virtual key code (Carbon kVK_* values, US layout).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub fn key_name(code: u16) -> &'static str {
     match code {
         0 => "A",
