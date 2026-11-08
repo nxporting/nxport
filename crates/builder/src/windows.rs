@@ -350,15 +350,29 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Optio
     let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
     let jobs = cpus.saturating_sub(2).max(2);
     let on_file = |done, total| progress(job, "C files".into(), done, total);
+    // zig's objects in a cache of the builder's own, kept within a bound (zig's default one grows forever).
+    let cache_dir = crate::app::data_dir().join("zig-cache");
+    let cache = match nxport_build::zig::bounded_cache(&cache_dir, nxport_build::zig::CACHE_CAP) {
+        Ok(emptied) => {
+            if emptied {
+                println!("  The compiler's cache was over {} GB and is emptied: everything is compiled once", nxport_build::zig::CACHE_CAP >> 30);
+            }
+            Some(cache_dir)
+        }
+        Err(e) => {
+            println!("  {}: {e}; zig keeps its objects in its own cache", cache_dir.display());
+            None
+        }
+    };
     // Also copies modules.txt beside the library.
-    if let Err(e) = nxport_build::lift::compile(c_dir, library, &cc, jobs, profile, &on_file) {
+    if let Err(e) = nxport_build::lift::compile(c_dir, library, &cc, jobs, profile, cache.as_deref(), &on_file) {
         if profile.is_none() {
             return Err(e.to_string());
         }
         println!("  The profile did not work, building without it: {e}");
         // A failed compile records no flags, and what it did compile would be taken as it is.
         let _ = std::fs::remove_dir_all(c_dir.join("obj"));
-        nxport_build::lift::compile(c_dir, library, &cc, jobs, None, &on_file).map_err(|e| e.to_string())?;
+        nxport_build::lift::compile(c_dir, library, &cc, jobs, None, cache.as_deref(), &on_file).map_err(|e| e.to_string())?;
     }
     // The linker's import library (the engine loads the library at run time; the .pdb stays, for crashes).
     let dir = library.parent().unwrap_or(Path::new("."));

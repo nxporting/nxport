@@ -171,17 +171,27 @@ pub const MODULES_FILE: &str = "modules.txt";
 /// Compiles the C files in `c_dir` (lift_game's or lift_nso's) into the guest library `out` (a DLL / shared library),
 /// running `cc` (a C compiler command line: clang, or `zig cc`) on `jobs` files at once. The objects stay in
 /// `c_dir/obj` and are reused while newer than their source. `profile`: an LLVM profile to optimise by; it matches
-/// functions by name and control flow, so one the C has changed, or does not have, is just built without. `on_file(done,
-/// total)` is told as each file is done (compiled or reused), from the compiling threads.
+/// functions by name and control flow, so one the C has changed, or does not have, is just built without. `cache`: the
+/// folder zig keeps its object cache in (zig::bounded_cache; None: zig's default). `on_file(done, total)` is told as
+/// each file is done (compiled or reused), from the compiling threads.
 pub fn compile(
     c_dir: &Path,
     out: &Path,
     cc: &[String],
     jobs: usize,
     profile: Option<&Path>,
+    cache: Option<&Path>,
     on_file: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
+    // zig keeps its objects in `cache` (zig::bounded_cache), not in its own never-trimmed default.
+    let command = |prog: &str| {
+        let mut c = command(prog);
+        if let Some(dir) = cache {
+            c.env("ZIG_GLOBAL_CACHE_DIR", dir).env("ZIG_LOCAL_CACHE_DIR", dir);
+        }
+        c
+    };
     // The x86-64-v3 features, spelled out: above all hardware FMA, which the lifted floating-point code needs to round
     // like the guest's. zig cc builds any of -O1 to -O3 as clang -O2, tunes for generic x86-64 once any -m flag is given,
     // and keeps frame pointers (a register) unless told not to.
