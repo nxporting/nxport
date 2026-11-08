@@ -62,7 +62,8 @@ pub struct GameProfile {
         Option<fn(crate::settings::profiles::Platform) -> crate::settings::SettingsPatch>,
     /// The builder presets (name, preset file) the game's preset list starts with.
     pub presets: &'static [(&'static str, &'static str)],
-    /// Patches of known mods' own bugs in this game, run on every code module as it loads (patch_module).
+    /// Patches of this game's code modules, run on each as it loads (patch_module): fixes for known mods' own bugs,
+    /// and changes to the game that an nxport feature needs (TotK: the right stick past full deflection).
     pub module_patches: &'static [ModulePatch],
 }
 
@@ -71,7 +72,7 @@ pub struct GameProfile {
 /// alone, so every patch can see every module.
 pub type ModulePatch = fn(name: &str, text: &mut [u8]) -> bool;
 
-/// Runs the active game's module patches on a module's text (guest/module_loader.rs).
+/// Runs the active game's module patches on a module's text (guest/loader.rs for main, guest/module_loader.rs).
 pub fn patch_module(name: &str, text: &mut [u8]) {
     for patch in active().module_patches {
         patch(name, text);
