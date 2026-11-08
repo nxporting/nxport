@@ -60,6 +60,17 @@ pub mod overlay {
         !VSYNC.fetch_not(Relaxed)
     }
 
+    static LOW_LATENCY: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(crate::settings::get().display.low_latency));
+
+    /// Whether at most one finished frame may wait for the screen (settings display.low_latency; Vulkan window.rs).
+    pub fn is_low_latency() -> bool {
+        LOW_LATENCY.load(Relaxed)
+    }
+
+    pub fn toggle_low_latency() -> bool {
+        !LOW_LATENCY.fetch_not(Relaxed)
+    }
+
     pub fn is_async_shaders() -> bool {
         ASYNC_SHADERS.load(Relaxed)
     }

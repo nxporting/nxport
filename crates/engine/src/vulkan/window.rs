@@ -24,6 +24,8 @@ pub(super) struct Window {
     extent: vk::Extent2D,
     /// Whether the swapchain waits for vertical blank (FIFO): the VSync setting when it was made.
     vsync: bool,
+    /// The low-latency setting when it was made (fewer images).
+    low_latency: bool,
     slots: Vec<Slot>,
     next: usize,
     /// Signaled when an image's blit is done, waited by its present: one per swapchain image (a semaphore per slot
@@ -88,6 +90,7 @@ impl Window {
             images: Vec::new(),
             extent: vk::Extent2D::default(),
             vsync: true,
+            low_latency: false,
             slots,
             next: 0,
             done: Vec::new(),
@@ -112,7 +115,11 @@ impl Window {
         if extent.width == 0 || extent.height == 0 {
             return None;
         }
-        let count = (caps.min_image_count + 1).max(SLOTS as u32).min(if caps.max_image_count > 0 { caps.max_image_count } else { u32::MAX });
+        // Low latency: as few images as the surface allows (at least 2), so with FIFO at most one finished frame waits
+        // for the screen, against up to two more with the usual count.
+        let low_latency = crate::host::overlay::is_low_latency();
+        let wanted = if low_latency { caps.min_image_count.max(2) } else { (caps.min_image_count + 1).max(SLOTS as u32) };
+        let count = wanted.min(if caps.max_image_count > 0 { caps.max_image_count } else { u32::MAX });
         // VSync off: the newest frame replaces a waiting one (MAILBOX), else frames show at once and may tear
         // (IMMEDIATE). FIFO is the only mode every implementation has.
         let vsync = crate::host::overlay::is_vsync();
@@ -148,6 +155,7 @@ impl Window {
         }
         self.extent = extent;
         self.vsync = vsync;
+        self.low_latency = low_latency;
         Some(())
     }
 
@@ -167,10 +175,11 @@ impl Window {
             let l = &*(self.handle as *const objc2_quartz_core::CAMetalLayer);
             crate::host::display::content_size_changed(l, cw as f64, ch as f64);
         }
-        // The window was resized (or the VSync setting changed).
+        // The window was resized (or the VSync or low-latency setting changed).
         let caps = s.surface.get_physical_device_surface_capabilities(dev.pdev, self.surface);
         let resized = caps.is_ok_and(|c| c.current_extent.width != u32::MAX && c.current_extent != self.extent);
-        if (resized || self.vsync != crate::host::overlay::is_vsync()) && self.recreate(dev).is_none() {
+        let changed = self.vsync != crate::host::overlay::is_vsync() || self.low_latency != crate::host::overlay::is_low_latency();
+        if (resized || changed) && self.recreate(dev).is_none() {
             return;
         }
         let (fence, sem) = (self.slots[self.next].fence, self.slots[self.next].acquired);

@@ -140,11 +140,14 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [no_vsync, frame_limit, perf_overlay, fps_in_title, launch_aspect, stretch] {
+    Window "Display" [no_vsync, low_latency, frame_limit, perf_overlay, fps_in_title, launch_aspect, stretch] {
         /// No window (frame dumps still work)
         headless: bool = false,
         /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
         no_vsync: bool = false,
+        /// With VSync: at most one finished frame waits for the screen (about a frame or two less input lag; a frame
+        /// that misses a refresh waits for the next, so the frame rate drops sooner when the PC can barely keep up)
+        low_latency: bool = false,
         /// Frame-rate limit (fps) where the title may run faster than 30: 60, 90, 120 or 144. With vsync, the display's
         /// refresh rate also limits it
         frame_limit: u32 = 60,

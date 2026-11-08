@@ -56,6 +56,7 @@ mod id {
     pub const FULL_SCREEN: u16 = 21;
     pub const FPS_TITLE: u16 = 22;
     pub const PERF_OVERLAY: u16 = 23;
+    pub const LOW_LATENCY: u16 = 24;
     /// + the limit in fps.
     pub const LIMIT: u16 = 100;
     /// + the window height (720, 1080, 1440).
@@ -76,9 +77,10 @@ mod id {
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
-    /// + the input's index in input::SWITCH_INPUTS.
-    pub const BIND: u16 = 600;
-    pub const RESET_CONTROLS: u16 = 640;
+    /// + the input's index in input::SWITCH_INPUTS. Clear of the ranges above (STRENGTH's covers 500..=700: at 600 these
+    /// were taken for vibration strengths, and no click started a capture).
+    pub const BIND: u16 = 800;
+    pub const RESET_CONTROLS: u16 = 900;
 }
 
 const LIMITS: [u32; 5] = [30, 60, 90, 120, 144];
@@ -165,6 +167,7 @@ pub fn attach(hwnd: usize) {
         });
         sub(bar, "Display", |m| {
             item(m, id::VSYNC, "VSync");
+            item(m, id::LOW_LATENCY, "Low Latency");
             item(m, id::PERF_OVERLAY, "Performance Overlay");
             sub(m, "Frame Rate Limit", |l| {
                 for fps in LIMITS {
@@ -318,6 +321,7 @@ unsafe fn refresh(menu: *mut c_void) {
     check(id::DOCKED, !handheld);
     check(id::HANDHELD, handheld);
     check(id::VSYNC, overlay::is_vsync());
+    check(id::LOW_LATENCY, overlay::is_low_latency());
     check(id::FPS_TITLE, fps_in_title());
     check(id::PERF_OVERLAY, overlay::is_overlay_enabled());
     let current = limit();
@@ -380,6 +384,10 @@ fn command(cmd: u16) -> bool {
         id::VSYNC => {
             let on = overlay::toggle_vsync();
             crate::config::remember(|p| p.display.no_vsync = Some(!on));
+        }
+        id::LOW_LATENCY => {
+            let on = overlay::toggle_low_latency();
+            crate::config::remember(|p| p.display.low_latency = Some(on));
         }
         id::FULL_SCREEN => REQUEST.store(1, Ordering::Relaxed),
         id::PERF_OVERLAY => {
@@ -446,4 +454,32 @@ unsafe extern "system" fn window_proc(hwnd: usize, msg: u32, wparam: usize, lpar
         _ => {}
     }
     CallWindowProcW(PREVIOUS.load(Ordering::Acquire), hwnd, msg, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The id ranges `command` matches never overlap, or a click is taken for another item (the Controls items once
+    /// set vibration strengths).
+    #[test]
+    fn menu_id_ranges_are_apart() {
+        let n = input::SWITCH_INPUTS.len() as u16;
+        let ranges = [
+            ("limit", id::LIMIT, id::LIMIT + 200),
+            ("size", id::SIZE, id::SIZE + 2000),
+            ("volume", id::VOLUME, id::VOLUME + 101),
+            ("strength", id::STRENGTH, id::STRENGTH + 201),
+            ("bind", id::BIND, id::BIND + n),
+            ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),
+        ];
+        for (i, a) in ranges.iter().enumerate() {
+            for b in &ranges[i + 1..] {
+                assert!(a.2 <= b.1 || b.2 <= a.1, "{} and {} overlap", a.0, b.0);
+            }
+            for single in [id::VSYNC, id::LOW_LATENCY, id::PERF_OVERLAY, id::TOUCH, id::VIBRATION, id::LOG, id::CAPTURE] {
+                assert!(!(a.1..a.2).contains(&single), "{} holds {single}", a.0);
+            }
+        }
+    }
 }
