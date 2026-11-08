@@ -1,10 +1,12 @@
-// The camera's yaw and pitch, as the game computes them each frame, for mouse aiming (host/input.rs).
+// Sideways mouse movement into the camera's yaw (mouse look, host/input.rs).
 //
 // The camera keeps its position and the point it looks at; a function turns their difference into a distance, a pitch
 // and a yaw in degrees (1.0.0: main+0xb8a1cc, called from main+0xb8a024 with x0 = where to store them and x1 = the
-// vector), and the camera stores them beside its state. Mouse aiming needs those angles to steer the right stick to an
-// exact turn. The call is redirected to `camera_angles` below, which computes the same three values the same way (the
-// game's two constants are read from its own code) and records yaw and pitch; nothing else of the game's code changes.
+// vector), and the camera stores them (+0x404..0x40c of the object at camera+0x20). The next frame the turn function
+// (main+0x9ab570) loads that yaw first and places the camera from it. The call is redirected to `camera_angles` below,
+// which computes the same three values the same way (the game's two constants are read from its own code) and adds the
+// mouse's sideways movement to the yaw: the game then turns the camera by exactly that, by its own rules (a mode that
+// does not place the camera from the yaw ignores it). Nothing else of the game's code changes.
 //
 // The call is found by the instructions around it, not by address, so other builds compiled the same way get it too.
 // Like aspect.rs, the rewritten call enters an HLE trampoline (no code of our own in guest memory), the same at lift and
@@ -100,7 +102,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     std::ptr::write((base + at) as *mut u32, 0x9400_0000 | ((d >> 2) as u32 & 0x03ff_ffff));
     crate::os::flush_icache(base + at, 4);
-    println!("[+] TotK: the camera's angles reach mouse aiming (main+{at:#x}, profile/totk/camera_angles.rs)");
+    crate::host::input::set_yaw_sink();
+    println!("[+] TotK: sideways mouse movement turns the camera's yaw directly (main+{at:#x}, profile/totk/camera_angles.rs)");
 }
 
 /// To [-180, 180), as the game's code wraps them.
@@ -122,11 +125,12 @@ pub unsafe extern "C" fn camera_angles(out: *mut f32, v: *const f32) -> usize {
     let dist = if all > 0.0 { all.sqrt() as f32 } else { 0.0 };
     let (offset, scale) = (f32::from_bits(OFFSET.load(Ordering::Relaxed)), f32::from_bits(SCALE.load(Ordering::Relaxed)));
     let pitch = wrap((offset - h.atan2(y)) * scale);
-    let yaw = wrap(x.atan2(z) * scale);
+    // The game builds the next frame's camera from this yaw (the turn function main+0x9ab570 loads it first and places
+    // the camera from it): sideways mouse movement is added here.
+    let yaw = wrap(x.atan2(z) * scale + crate::host::input::take_mouse_yaw());
     *out = dist;
     *out.add(1) = pitch;
     *out.add(2) = yaw;
-    crate::host::input::camera_angles_seen(yaw, pitch);
     out as usize
 }
 
