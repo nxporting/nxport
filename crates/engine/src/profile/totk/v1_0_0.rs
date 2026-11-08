@@ -80,4 +80,6 @@ pub unsafe fn install_v1_0_0_hooks(base: usize, mem_space: &mut crate::guest::lo
     // Screen shapes first, whatever the settings (as 1.1.2).
     aspect::install(base, mem_space, &ASPECT_SITES);
     frame_time::install(base, mem_space, &SITES);
+    // Mouse aiming reads the camera's angles (installed whatever the settings: the same trampolines at lift and run time).
+    super::camera_angles::install(base, mem_space);
 }

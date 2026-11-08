@@ -1,6 +1,7 @@
 // Profile definition for The Legend of Zelda: Tears of the Kingdom.
 
 pub mod aspect;
+pub mod camera_angles;
 pub mod camera_ease;
 pub mod camera_stick;
 pub mod frame_time;

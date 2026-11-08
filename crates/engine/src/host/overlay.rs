@@ -93,6 +93,7 @@ pub fn is_low_latency() -> bool {
     LOW_LATENCY.load(Ordering::Relaxed)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn toggle_low_latency() -> bool {
     init();
     !LOW_LATENCY.fetch_xor(true, Ordering::Relaxed)
