@@ -1698,10 +1698,10 @@ unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
     for (i, t) in touches.iter().take(count).enumerate() {
         let p = out.add(16 + i * 0x28);
         let mut attributes = 0u32;
-        if now.duration_since(t.began).as_millis() < 20 {
+        if t.fresh {
             attributes |= 1; // Start
         }
-        if t.ended.is_some() {
+        if t.ended {
             attributes |= 2; // End
         }
         *(p as *mut i64) = 0;
