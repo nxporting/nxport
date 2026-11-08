@@ -1,6 +1,7 @@
 // Profile definition for The Legend of Zelda: Tears of the Kingdom.
 
 pub mod aspect;
+pub mod camera_ease;
 pub mod camera_stick;
 pub mod frame_time;
 pub mod hud;
@@ -31,5 +32,5 @@ pub static PROFILE: GameProfile = GameProfile {
         ("iPhone 16 Pro & Pro Max", include_str!("presets/iPhone 16 Pro & Pro Max.toml")),
         ("iPhone SE", include_str!("presets/iPhone SE.toml")),
     ],
-    module_patches: &[ultracam::patch, camera_stick::patch],
+    module_patches: &[ultracam::patch, camera_stick::patch, camera_ease::patch],
 };
