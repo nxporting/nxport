@@ -564,14 +564,12 @@ pub struct Touch {
     pub finger_id: i32,
     pub x: i32,
     pub y: i32,
-    pub began: std::time::Instant,
-    /// When the contact was lifted: it is still reported (with the End attribute) for a short while so a game polling
-    /// at its frame rate sees the release.
-    pub ended: Option<std::time::Instant>,
+    /// Not yet reported to the game: the next read carries the Start attribute.
+    pub fresh: bool,
+    /// Lifted: the next read carries the End attribute, and the contact is gone after it. Reads, not time, settle both,
+    /// so a game sees each start and release once whatever its frame rate.
+    pub ended: bool,
 }
-
-/// A lifted contact stays visible this long (a 30 fps game polls every ~33 ms).
-pub const TOUCH_END_HOLD: std::time::Duration = std::time::Duration::from_millis(50);
 
 static TOUCHES: std::sync::Mutex<Vec<Touch>> = std::sync::Mutex::new(Vec::new());
 
@@ -586,51 +584,35 @@ pub fn touch_moved(key: usize, nx: f64, ny: f64) {
         (ny.clamp(0.0, 1.0) * 719.0).round() as i32,
     );
     let mut t = TOUCHES.lock().unwrap();
-    let now = std::time::Instant::now();
-    t.retain(|c| {
-        c.ended
-            .is_none_or(|e| now.duration_since(e) < TOUCH_END_HOLD)
-    });
-    if let Some(c) = t.iter_mut().find(|c| c.key == key && c.ended.is_none()) {
+    if let Some(c) = t.iter_mut().find(|c| c.key == key && !c.ended) {
         (c.x, c.y) = (x, y);
     } else if t.len() < 16 {
+        // A lifted contact keeps its finger id until the game has read its release.
         let finger_id = (0..)
             .find(|i| !t.iter().any(|c| c.finger_id == *i))
             .unwrap_or(0);
-        t.push(Touch {
-            key,
-            finger_id,
-            x,
-            y,
-            began: now,
-            ended: None,
-        });
+        t.push(Touch { key, finger_id, x, y, fresh: true, ended: false });
     }
 }
 
 /// Ends contact `key`.
 pub fn touch_ended(key: usize) {
-    if let Some(c) = TOUCHES
-        .lock()
-        .unwrap()
-        .iter_mut()
-        .find(|c| c.key == key && c.ended.is_none())
-    {
-        c.ended = Some(std::time::Instant::now());
+    if let Some(c) = TOUCHES.lock().unwrap().iter_mut().find(|c| c.key == key && !c.ended) {
+        c.ended = true;
     }
 }
 
-/// The contacts to report now, oldest first (the order nn::hid uses).
+/// The contacts to report on this read, oldest first (the order nn::hid uses), with their Start (`fresh`) and End
+/// (`ended`) as of this read. Reading settles them: a reported start is not fresh again, a reported release is gone.
 pub fn touches() -> Vec<Touch> {
-    let now = std::time::Instant::now();
     let mut t = TOUCHES.lock().unwrap();
-    t.retain(|c| {
-        c.ended
-            .is_none_or(|e| now.duration_since(e) < TOUCH_END_HOLD)
-    });
-    t.clone()
+    let now = t.clone();
+    t.retain(|c| !c.ended);
+    for c in t.iter_mut() {
+        c.fresh = false;
+    }
+    now
 }
-
 static MOUSE_XY: [AtomicI32; 2] = [const { AtomicI32::new(0) }; 2];
 static MOUSE_DELTA: [AtomicI32; 2] = [const { AtomicI32::new(0) }; 2];
 static MOUSE_WHEEL: AtomicI32 = AtomicI32::new(0);
@@ -1422,6 +1404,25 @@ pub fn modifier_down(code: u16, flags: usize) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A touch's start and release each reach the game on exactly one read, however long apart the reads are.
+    #[test]
+    fn touch_start_and_end_are_settled_by_reads() {
+        let _ = crate::settings::try_install(crate::settings::resolve([]));
+        const KEY: usize = 0x7e57_7e57;
+        let mine = |v: Vec<Touch>| v.into_iter().find(|c| c.key == KEY);
+        touch_moved(KEY, 0.5, 0.5);
+        touch_moved(KEY, 0.6, 0.5);
+        let first = mine(touches()).expect("reported");
+        assert!(first.fresh && !first.ended);
+        assert_eq!((first.x, first.y), ((0.6f64 * 1279.0).round() as i32, (0.5f64 * 719.0).round() as i32));
+        let second = mine(touches()).expect("still held");
+        assert!(!second.fresh && !second.ended);
+        touch_ended(KEY);
+        let released = mine(touches()).expect("its release is reported");
+        assert!(released.ended && released.finger_id == first.finger_id);
+        assert!(mine(touches()).is_none(), "gone after its release was read");
+    }
 
     #[test]
     fn mouse_buttons_are_keys() {
