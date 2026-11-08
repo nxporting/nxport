@@ -22,6 +22,36 @@ pub fn cc(toolchains: &Path, on_download: &dyn Fn(u64, u64)) -> Result<Vec<Strin
     Ok(vec![zig.display().to_string(), "cc".into()])
 }
 
+/// How large the builder's zig cache (`bounded_cache`) may grow before it is emptied. A game's build adds about 0.4 GB of
+/// objects to it per set of flags (two sets with code mods); unchanged C is then compiled again from it in seconds, so an
+/// engine update costs a lift and a link. Emptied, the next build compiles everything once (TotK: about 15 minutes).
+pub const CACHE_CAP: u64 = 4 << 30;
+
+/// The folder `dir` for zig's object cache (lift::compile sets it for each compiler it runs), emptied first when it holds
+/// more than `cap` bytes. zig's own default (%LOCALAPPDATA%\zig) is never trimmed: it reached 27 GB on one PC. Emptied
+/// whole: zig's manifests name objects by hash, and a cache missing some of them is not one to rely on. Returns whether
+/// it was emptied.
+pub fn bounded_cache(dir: &Path, cap: u64) -> std::io::Result<bool> {
+    fn size(dir: &Path) -> u64 {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| match e.file_type() {
+                Ok(t) if t.is_dir() => size(&e.path()),
+                Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
+                _ => 0,
+            })
+            .sum()
+    }
+    let emptied = dir.is_dir() && size(dir) > cap;
+    if emptied {
+        std::fs::remove_dir_all(dir)?;
+    }
+    std::fs::create_dir_all(dir)?;
+    Ok(emptied)
+}
+
 /// Copies the zig in `toolchains` into the app folder `app`, as `zig`: a plugin mod's code is compiled while the game runs
 /// (engine live_patch.rs), on whichever PC that is. The builder has it by now: it compiled the game with it.
 pub fn copy_into_app(toolchains: &Path, app: &Path) -> Result<(), String> {
@@ -111,4 +141,28 @@ fn unpack(zip: &Path, toolchains: &Path) -> Result<(), String> {
     std::fs::rename(scratch.join(NAME), &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cache_is_emptied_only_past_its_cap() {
+        let dir = std::env::temp_dir().join(format!("nxport-zig-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Made when missing.
+        assert!(!bounded_cache(&dir, 100).unwrap());
+        assert!(dir.is_dir());
+        std::fs::create_dir_all(dir.join("o").join("ab")).unwrap();
+        std::fs::write(dir.join("o").join("ab").join("x.o"), [0u8; 60]).unwrap();
+        // Within the cap (sizes counted through subfolders): kept.
+        assert!(!bounded_cache(&dir, 100).unwrap());
+        assert!(dir.join("o").join("ab").join("x.o").is_file());
+        std::fs::write(dir.join("h"), [0u8; 60]).unwrap();
+        // Past it: emptied, and there again.
+        assert!(bounded_cache(&dir, 100).unwrap());
+        assert!(dir.is_dir() && std::fs::read_dir(&dir).unwrap().next().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -536,7 +536,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::CompileGuest { c_dir, out, cc, j, profile } => {
             let cc: Vec<String> = cc.split_whitespace().map(String::from).collect();
             let jobs = j.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, profile.as_deref(), &|_, _| {})?;
+            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, profile.as_deref(), None, &|_, _| {})?;
             println!("[+] {}", out.display());
         }
     }
