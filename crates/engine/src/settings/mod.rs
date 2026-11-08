@@ -179,8 +179,8 @@ group! {
         direct_keyboard: bool = false,
         /// Direct mouse access: games and mods that read a USB mouse see this one, and the mouse stops being the touch screen
         direct_mouse: bool = false,
-        /// Mouse look: the mouse, captured by the window, moves the right stick (the camera in most games); F8 frees and
-        /// captures it again. Direct mouse access takes precedence
+        /// Mouse look: the mouse, captured by the window, moves the right stick (the camera in most games); F8 frees it
+        /// (it is then the touch screen, for menus) and captures it again. Direct mouse access takes precedence
         mouse_look: bool = false,
         /// How far the right stick moves for a mouse movement in mouse look (1 = default)
         mouse_look_speed: f32 = 1.0,

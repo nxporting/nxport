@@ -52,8 +52,11 @@ struct Host {
     /// The size to go back to from full screen.
     windowed_size: (u32, u32),
     mouse: sdl3::mouse::MouseUtil,
-    /// Mouse look holds the mouse (relative mode); F8 frees it, a click in the window takes it again.
+    /// Mouse look holds the mouse (relative mode); F8 frees it (then it is the touch screen) and holds it again.
     mouse_held: bool,
+    /// While Input > Controls waits for a binding: player 1's controller elements when it started, so only a newly
+    /// pressed button or stick direction counts.
+    capture_base: Option<[f32; 25]>,
 }
 
 /// Create the window and run SDL's event loop. Must be called on the process main thread.
@@ -102,7 +105,7 @@ pub fn run_main_thread() -> ! {
     let mut window = window;
     let _ = window.set_size(w as u32, h as u32);
     let mut pump = sdl.event_pump().unwrap_or_else(|e| fail("SDL events", &e));
-    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32), mouse: sdl.mouse(), mouse_held: false };
+    let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32), mouse: sdl.mouse(), mouse_held: false, capture_base: None };
     host.hold_mouse(input::mouse_look_on());
 
     WINDOW_UP.store(true, Ordering::Release);
@@ -181,6 +184,24 @@ impl Host {
                 WindowEvent::FocusGained if self.mouse_held => self.hold_mouse(true),
                 _ => {}
             },
+            // Input > Controls waits for a binding: the key sets it (Esc cancels, Delete clears), the game does not see it.
+            Event::KeyDown { scancode: Some(sc), repeat, .. } if input::capturing().is_some() => {
+                if !repeat {
+                    input::end_capture(match sc {
+                        Scancode::Escape => input::Captured::Cancel,
+                        Scancode::Delete | Scancode::Backspace => input::Captured::Clear,
+                        _ => match mac_key(sc) {
+                            Some(code) => input::Captured::Key(code),
+                            None => return,
+                        },
+                    });
+                }
+            }
+            Event::MouseButtonDown { mouse_btn, .. } if input::capturing().is_some() => {
+                if let Some(code) = mouse_code(mouse_btn) {
+                    input::end_capture(input::Captured::Key(code));
+                }
+            }
             Event::KeyDown { scancode: Some(sc), keymod, repeat, .. } => {
                 input::set_usb_key(sc.to_i32() as usize, true);
                 let alt = keymod.intersects(Mod::LALTMOD | Mod::RALTMOD);
@@ -230,11 +251,9 @@ impl Host {
             Event::MouseButtonDown { mouse_btn, .. } if direct_mouse() => mouse_button(mouse_btn, true),
             Event::MouseButtonUp { mouse_btn, .. } if direct_mouse() => mouse_button(mouse_btn, false),
             Event::MouseWheel { y, .. } if direct_mouse() => input::mouse_wheel((y * 120.0) as i32),
-            // Mouse look: the held mouse moves the right stick; a click in the window takes a freed mouse again.
+            // Mouse look: the held mouse moves the right stick. A freed mouse (F8) is the touch screen, as without mouse
+            // look, so menus drawn for touch (a mod's, the game's) take its clicks; F8 holds it again.
             Event::MouseMotion { xrel, yrel, .. } if self.mouse_held => input::mouse_look_moved(xrel, yrel),
-            Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } if input::mouse_look_on() && !self.mouse_held => {
-                self.hold_mouse(true)
-            }
             // While held, the buttons are keys that controls.cfg can bind (input::MOUSE_KEYS).
             Event::MouseButtonDown { mouse_btn, .. } if self.mouse_held => mouse_key(mouse_btn, true),
             Event::MouseButtonUp { mouse_btn, .. } if self.mouse_held => mouse_key(mouse_btn, false),
@@ -360,12 +379,31 @@ impl Host {
             rumble.update(pad);
             players.push(v);
         }
+        // Input > Controls waits for a binding: player 1's first newly pressed button or stick direction sets it.
+        match (input::capturing(), players.first()) {
+            (Some(_), Some(v)) => match self.capture_base {
+                None => self.capture_base = Some(*v),
+                Some(base) => {
+                    if let Some(i) = (0..v.len()).find(|&i| v[i] > 0.6 && base[i] < 0.3) {
+                        input::end_capture(input::Captured::Pad(input::PAD_ELEMS[i]));
+                        self.capture_base = None;
+                    }
+                }
+            },
+            _ => self.capture_base = None,
+        }
         input::set_players(&players);
     }
 
     fn update_title(&mut self, base_title: &str) {
         let fps = crate::vulkan::display_fps();
-        let title = if fps > 0.0 && menu::fps_in_title() { format!("{base_title}  |  {:.0} fps", fps) } else { base_title.to_string() };
+        let title = if let Some(s) = input::capturing() {
+            format!("{base_title}  |  Press a key or controller button for {} (Esc cancels, Delete clears)", s.label())
+        } else if fps > 0.0 && menu::fps_in_title() {
+            format!("{base_title}  |  {:.0} fps", fps)
+        } else {
+            base_title.to_string()
+        };
         if self.window.title() != title {
             let _ = self.window.set_title(&title);
         }
@@ -396,16 +434,23 @@ fn direct_mouse() -> bool {
 }
 
 /// A mouse button as a bindable key (input::MOUSE_KEYS).
-fn mouse_key(button: MouseButton, down: bool) {
+/// The key code of a mouse button (input::MOUSE_KEYS).
+fn mouse_code(button: MouseButton) -> Option<u16> {
     let i = match button {
         MouseButton::Left => 0,
         MouseButton::Right => 1,
         MouseButton::Middle => 2,
         MouseButton::X2 => 3,
         MouseButton::X1 => 4,
-        _ => return,
+        _ => return None,
     };
-    input::set_key(input::MOUSE_KEYS[i].0, down);
+    Some(input::MOUSE_KEYS[i].0)
+}
+
+fn mouse_key(button: MouseButton, down: bool) {
+    if let Some(code) = mouse_code(button) {
+        input::set_key(code, down);
+    }
 }
 
 fn mouse_button(button: MouseButton, down: bool) {
