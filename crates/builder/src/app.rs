@@ -1308,6 +1308,7 @@ mod tests {
             ("iPad", "[build]\ntarget = \"ios\"\n\n[system]\nfps = 30\nhandheld = true\n\n[display]\nlaunch-aspect = \"23:16\"\n"),
             ("iPhone SE", "[build]\ntarget = \"ios\"\n\n[display]\nlaunch-aspect = \"16:9\"\n"),
         ],
+        module_patches: &[],
     };
 
     /// A builder with a game loaded (no dump on disk).

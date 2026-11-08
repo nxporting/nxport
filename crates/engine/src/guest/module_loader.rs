@@ -223,6 +223,9 @@ pub unsafe fn load(
     }
     let (text_mo, text_len) = (segs[0].0, segs[0].1.len());
     let (ro_mo, ro_len) = (segs[1].0, segs[1].1.len());
+    // The game's patches of known mods' bugs, before the code is relocated, lifted or run: the build and the game run
+    // the same bytes.
+    crate::profile::patch_module(name, std::slice::from_raw_parts_mut((base + text_mo) as *mut u8, text_len));
     let data_mo = segs[2].0;
 
     // ── dynamic section via MOD0 ──

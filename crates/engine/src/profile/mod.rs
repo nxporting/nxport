@@ -62,6 +62,20 @@ pub struct GameProfile {
         Option<fn(crate::settings::profiles::Platform) -> crate::settings::SettingsPatch>,
     /// The builder presets (name, preset file) the game's preset list starts with.
     pub presets: &'static [(&'static str, &'static str)],
+    /// Patches of known mods' own bugs in this game, run on every code module as it loads (patch_module).
+    pub module_patches: &'static [ModulePatch],
+}
+
+/// A patch of a module's code: given its name and its text as loaded (before it is relocated, lifted or run), it changes
+/// the text where it recognises the code it is for, and returns whether it did. Code it does not recognise is left
+/// alone, so every patch can see every module.
+pub type ModulePatch = fn(name: &str, text: &mut [u8]) -> bool;
+
+/// Runs the active game's module patches on a module's text (guest/module_loader.rs).
+pub fn patch_module(name: &str, text: &mut [u8]) {
+    for patch in active().module_patches {
+        patch(name, text);
+    }
 }
 
 /// The default bundle ID of an app built from a game: com.nxport.<short name>, or com.nxport.t<title id> without a
@@ -187,6 +201,7 @@ static DEFAULT_PROFILE: GameProfile = GameProfile {
     options: None,
     platform_options: None,
     presets: &[],
+    module_patches: &[],
 };
 
 /// Returns the detected GameProfile for the current run (by the title id in main.npdm).
@@ -216,6 +231,7 @@ pub fn active() -> &'static GameProfile {
         options: None,
         platform_options: None,
         presets: &[],
+        module_patches: &[],
     }));
     let _ = ACTIVE.set(prof);
     prof
