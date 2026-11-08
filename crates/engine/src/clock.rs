@@ -171,10 +171,16 @@ mod tests {
     fn ticks_convert_and_sleep_is_precise() {
         assert!(frequency() > 1_000_000);
         assert_eq!(ticks_to_ns(ns_to_ticks(1_000_000_000)), 1_000_000_000);
-        // 2 ms, which a sleep rounded to the 15.6 ms Windows tick would overshoot many times over.
-        let t0 = now_ns();
-        sleep_ns(2_000_000);
-        let took = now_ns() - t0;
-        assert!((2_000_000..10_000_000).contains(&took), "slept {took} ns");
+        // 2 ms, which a sleep rounded to the 15.6 ms Windows tick would overshoot many times over, every time. A busy
+        // machine (CI's macOS runners, other tests in parallel) delays some sleeps too, so the fastest of a few counts.
+        let took: Vec<u64> = (0..5)
+            .map(|_| {
+                let t0 = now_ns();
+                sleep_ns(2_000_000);
+                now_ns() - t0
+            })
+            .collect();
+        assert!(took.iter().all(|&t| t >= 2_000_000), "slept {took:?} ns");
+        assert!(*took.iter().min().unwrap() < 10_000_000, "slept {took:?} ns");
     }
 }
