@@ -11,8 +11,9 @@
 //
 // The patch removes the hook's store (the one instruction), so DisplaySize keeps the size UltraCam sets when its overlay
 // starts (the window's size, at least 1280x720). The hook still calls the real function. Only the plugin's code changes,
-// once, as it loads. The cost: an operation mode change while running would not resize the overlay; nxport does not
-// change the mode while a game runs.
+// once, as it loads. The cost: after a docked/handheld switch while the game runs, the overlay keeps the size it started
+// with. With this UltraCam a switch to handheld crashes the game first (its resolution hook, called every frame from
+// main+0xc5fd5c; the user saw the same crash in Ryujinx), so the cost cannot show until that is fixed.
 //
 // The hook is found by its instructions, not by address, so other builds compiled the same way get the patch too.
 
