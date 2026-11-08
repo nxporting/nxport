@@ -17,6 +17,7 @@ use crate::settings::FpsMode;
 
 static FPS_MODE: AtomicU8 = AtomicU8::new(1); // 0 = Stock30, 1 = Unlocked
 static VSYNC: AtomicBool = AtomicBool::new(true);
+static LOW_LATENCY: AtomicBool = AtomicBool::new(false);
 static ASYNC_SHADERS: AtomicBool = AtomicBool::new(true);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -30,6 +31,7 @@ pub fn init() {
         let fps_val = if s.system.fps == FpsMode::Stock30 { 0 } else { 1 };
         FPS_MODE.store(fps_val, Ordering::Relaxed);
         VSYNC.store(!s.display.no_vsync, Ordering::Relaxed);
+        LOW_LATENCY.store(s.display.low_latency, Ordering::Relaxed);
         ASYNC_SHADERS.store(s.graphics.async_pipelines, Ordering::Relaxed);
     }
 }
@@ -83,6 +85,17 @@ pub fn toggle_fps_mode() -> FpsMode {
 pub fn is_vsync() -> bool {
     init();
     VSYNC.load(Ordering::Relaxed)
+}
+
+/// Whether at most one finished frame may wait for the screen (settings display.low_latency; Vulkan window.rs).
+pub fn is_low_latency() -> bool {
+    init();
+    LOW_LATENCY.load(Ordering::Relaxed)
+}
+
+pub fn toggle_low_latency() -> bool {
+    init();
+    !LOW_LATENCY.fetch_xor(true, Ordering::Relaxed)
 }
 
 pub fn set_vsync(val: bool) {
