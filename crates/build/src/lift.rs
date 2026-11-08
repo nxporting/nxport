@@ -318,8 +318,7 @@ pub fn fetch_gzipped(url: &str, dest: &Path) -> Result<(), String> {
     let gz = dest.with_extension("gz.download");
     let tmp = dest.with_extension("download");
     let result = (|| {
-        // curl ships with Windows (System32) since Windows 10 1803.
-        let got = command("curl.exe")
+        let got = command(CURL)
             .args(["-fsL", "--retry", "2", "--max-time", "300", "-o"])
             .arg(&gz)
             .arg(url)
@@ -357,6 +356,9 @@ pub fn lifted_hash(c_dir: &Path) -> Result<String, String> {
     }
     Ok(hash.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect())
 }
+
+/// The curl program: shipped with Windows (System32) since Windows 10 1803, and with macOS (/usr/bin).
+pub const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
 
 /// A command for a tool run in the background: on Windows without a console window of its own (a builder started
 /// from Explorer has none to share, and compile runs hundreds of compilers).
@@ -608,7 +610,8 @@ mod fetch_tests {
         let mut e = flate2::write::GzEncoder::new(std::fs::File::create(&gz).unwrap(), flate2::Compression::fast());
         e.write_all(b"profile").unwrap();
         e.finish().unwrap();
-        let url = |p: &std::path::Path| format!("file:///{}", p.display().to_string().replace('\\', "/"));
+        // file:///C:/... on Windows, file:///tmp/... elsewhere.
+        let url = |p: &std::path::Path| format!("file:///{}", p.display().to_string().replace('\\', "/").trim_start_matches('/'));
 
         let dest = dir.join("sub").join("p.profdata");
         fetch_gzipped(&url(&gz), &dest).unwrap();
