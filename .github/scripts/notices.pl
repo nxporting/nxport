@@ -37,7 +37,7 @@ sub slurp {
 sub kept_for {
     my ($name) = @_;
     return ('MPL-2.0.txt') if $name =~ /^symphonia/;
-    return ('opus-decoder.txt') if $name eq 'opus-decoder';
+    return ('opus-decoder.txt', 'libopus.txt') if $name eq 'opus-decoder';
     return ('dear-imgui-rs.txt', 'dear-imgui.txt') if $name =~ /^dear-imgui/;
     return ('openh264-rs.txt', 'openh264.txt') if $name =~ /^openh264/;
     return ();
