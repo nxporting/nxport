@@ -231,6 +231,14 @@ impl GuestMemorySpace {
                 seg.data.len()
             );
         }
+        // The game profile's module patches (profile::patch_module), on main as on every other module: before the code
+        // is relocated, lifted or run, so the build and the game run the same bytes.
+        unsafe {
+            crate::profile::patch_module(
+                "main",
+                std::slice::from_raw_parts_mut(self.base_ptr.add(nso.text.mem_off), nso.text.data.len()),
+            )
+        };
         unsafe { ptr::write_bytes(self.base_ptr.add(self.bss_off), 0, self.bss_size) };
         println!(
             "    - .bss     cleared: {:#010x} ({} bytes)",
