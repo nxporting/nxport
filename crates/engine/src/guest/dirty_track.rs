@@ -519,3 +519,33 @@ pub unsafe fn release(addr: usize, len: usize) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The order vulkan/texture.rs take_baseline relies on: generations read before `protect` stop matching once a write
+    /// opens a page; read after that write, they come out None, which a later None would match (the lost writes of
+    /// 2026-11-08: TotK's menu text missing letters).
+    #[test]
+    fn a_write_after_reading_the_generations_is_seen() {
+        let _ = crate::settings::try_install(crate::settings::resolve([]));
+        let _ = std::panic::catch_unwind(|| crate::gpu::install(&crate::gpu::null::NULL));
+        let len = 4 * PAGE;
+        let base = unsafe { crate::os::alloc(len, crate::os::Prot::ReadWrite) }.unwrap() as usize;
+        register_domain(base, len);
+        let (at, n) = (base + PAGE, 2 * PAGE);
+        let before = generations(at, n);
+        assert!(before.is_some());
+        let token = unsafe { protect(base, len) }.unwrap();
+        assert_eq!(generation(at, n), before, "nothing written: the interior matches");
+        assert_eq!(generation(base, len), Some(token));
+        // A write to the interior, as the fault handler answers it.
+        assert!(unsafe { handle_fault(at + PAGE + 8) });
+        unsafe { *((at + PAGE + 8) as *mut u8) = 1 };
+        assert_ne!(generation(at, n), before, "a write after the read is a change");
+        assert_ne!(generation(base, len), Some(token));
+        assert_eq!(generation(at, n), None, "read after the write instead, the token would be None");
+        unsafe { release(base, len) };
+    }
+}
