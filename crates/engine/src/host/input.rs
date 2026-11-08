@@ -865,12 +865,42 @@ struct CameraAngles {
 }
 static CAMERA: std::sync::Mutex<CameraAngles> = std::sync::Mutex::new(CameraAngles { yaw: 0.0, pitch: 0.0, at: None, frame: 1.0 / 60.0 });
 
-/// Where the mouse has put the camera (yaw, pitch; None: following the camera), and the last mouse movement.
-struct Aim {
-    target: Option<(f32, f32)>,
+/// Where the mouse has put one of the camera's angles (None: following the camera), and its last mouse movement.
+struct AimAxis {
+    target: Option<f32>,
     moved: Option<std::time::Instant>,
 }
-static AIM: std::sync::Mutex<Aim> = std::sync::Mutex::new(Aim { target: None, moved: None });
+
+impl AimAxis {
+    const FREE: AimAxis = AimAxis { target: None, moved: None };
+
+    /// Moves the target by `delta` degrees (0: the mouse did not move on this axis) and returns the gap to `actual`
+    /// (0 while following). Lets go once the mouse rests on this axis and the camera has arrived (a small stick turns
+    /// the game slowly, so the last fraction of a degree takes some frames: letting go at once left the turn short),
+    /// after AIM_GIVE_UP regardless (the game may hold the camera: a pitch limit, a mode), or when the camera jumped.
+    fn step(&mut self, delta: f32, actual: f32, now: std::time::Instant, wraps: bool) -> f32 {
+        let gap = |t: f32| if wraps { wrap180(t - actual) } else { t - actual };
+        if delta != 0.0 {
+            self.moved = Some(now);
+            let t = self.target.get_or_insert(actual);
+            *t = if wraps { wrap180(*t + delta) } else { *t + delta };
+        }
+        let Some(t) = self.target else { return 0.0 };
+        let e = gap(t);
+        let rest = self.moved.map_or(std::time::Duration::MAX, |m| now.duration_since(m));
+        if (rest > AIM_HOLD && e.abs() < AIM_ARRIVED) || rest > AIM_GIVE_UP || e.abs() > AIM_JUMP {
+            self.target = None;
+            return 0.0;
+        }
+        e
+    }
+}
+
+struct Aim {
+    yaw: AimAxis,
+    pitch: AimAxis,
+}
+static AIM: std::sync::Mutex<Aim> = std::sync::Mutex::new(Aim { yaw: AimAxis::FREE, pitch: AimAxis::FREE });
 
 /// Degrees a full right stick turns per second (TotK 1.0.0, measured: yaw ~1.42 and pitch ~1.0 degrees a frame at 60).
 const YAW_FULL: f32 = 85.0;
@@ -915,31 +945,24 @@ fn exact_aim(dx: f32, dy: f32, speed: f32, max: f32) -> Option<(f32, f32)> {
     // As a stick: mouse right turns as the stick right (the yaw falls), mouse up as the stick up (the pitch falls).
     let per_px = YAW_FULL / MOUSE_LOOK_FULL * speed;
     let mut a = AIM.lock().unwrap();
-    if dx != 0.0 || dy != 0.0 {
-        a.moved = Some(now);
-        let t = a.target.get_or_insert((yaw, pitch));
-        t.0 = wrap180(t.0 - dx * per_px);
-        t.1 += dy * per_px;
-    }
-    let Some((ty, tp)) = a.target else { return Some((0.0, 0.0)) };
-    let (ey, ep) = (wrap180(ty - yaw), tp - pitch);
-    // Let go once the mouse rests and the camera has arrived (a small stick turns the game slowly, so the last fraction
-    // of a degree takes some frames: letting go at once left the turn short), or after AIM_GIVE_UP regardless (the game
-    // may hold the camera: a pitch limit, a mode), or when the camera jumped.
-    let rest = a.moved.map_or(std::time::Duration::MAX, |m| now.duration_since(m));
-    let arrived = ey.abs() < AIM_ARRIVED && ep.abs() < AIM_ARRIVED;
-    if (rest > AIM_HOLD && arrived) || rest > AIM_GIVE_UP || ey.abs() > AIM_JUMP || ep.abs() > AIM_JUMP {
-        a.target = None;
-        return Some((0.0, 0.0));
-    }
+    // Each axis on its own: one the mouse did not move follows the camera (the game moves the camera's height by itself
+    // while the player walks; a pitch held while the mouse only turned sideways fought it).
+    // Yaw only: the game eases the pitch toward where the stick sends it, so a loop on the pitch chased a lagging angle
+    // (it overshot and crept back, and small corrections fought the ease); the pitch keeps the speed mapping
+    // (update_mouse_look), which the game's own easing suits.
+    let ey = a.yaw.step(-dx * per_px, yaw, now, true);
+    let _ = (dy, pitch, &mut a.pitch, PITCH_FULL);
     // Strength in full sticks for the turn that closes AIM_GAIN of the gap this frame.
-    let (sx, sy) = (-ey * AIM_GAIN / (YAW_FULL * frame), -ep * AIM_GAIN / (PITCH_FULL * frame));
+    let (sx, sy) = (-ey * AIM_GAIN / (YAW_FULL * frame), 0.0f32);
     let m = (sx * sx + sy * sy).sqrt();
     if m < 1e-3 {
         return Some((0.0, 0.0));
     }
-    let scale = m.min(max) / m;
-    Some(right_stick_vector((sx * scale, sy * scale)))
+    // The game ignores a stick inside its dead zone (~15%): every correction smaller than that was lost (up and down
+    // mouse movements are mostly small, so the pitch barely moved). Inside the circle the length is lifted past it, as
+    // mouse_look_deflection does; past 1 the game's response takes over (right_stick_vector).
+    let len = if m <= 1.0 { MOUSE_LOOK_DEADZONE + (1.0 - MOUSE_LOOK_DEADZONE) * m } else { m.min(max) };
+    Some(right_stick_vector((sx / m * len, sy / m * len)))
 }
 
 /// The stick for a mouse speed (px/s), deadzone lifted, no longer than `max` (1: inside the unit circle).
@@ -966,12 +989,10 @@ fn update_mouse_look() {
         m.last = Some(now);
         let moved = m.pending;
         m.pending = (0.0, 0.0);
-        // A game that reports its camera's angles is steered to where the mouse puts them; else by speed.
-        if let Some(stick) = exact_aim(moved.0, moved.1, speed, right_stick_max()) {
-            m.smooth = (0.0, 0.0);
-            stick
-        } else {
-        let v = (moved.0 / dt, moved.1 / dt);
+        // A game that reports its camera's angles is steered sideways to where the mouse puts them (exact_aim);
+        // otherwise, and always for up and down, the mouse's speed is the stick's.
+        let exact = exact_aim(moved.0, moved.1, speed, right_stick_max());
+        let v = (if exact.is_some() { 0.0 } else { moved.0 / dt }, moved.1 / dt);
         // 10 ms: enough to even out reads at uneven times, little lag (30 ms was felt as camera latency).
         let a = 1.0 - (-dt / 0.01).exp();
         m.smooth.0 += (v.0 - m.smooth.0) * a;
@@ -980,7 +1001,10 @@ fn update_mouse_look() {
         if m.smooth.0.abs() < 60.0 && m.smooth.1.abs() < 60.0 && v == (0.0, 0.0) {
             m.smooth = (0.0, 0.0);
         }
-        right_stick_vector(mouse_look_deflection(m.smooth.0, m.smooth.1, speed, right_stick_max()))
+        let by_speed = right_stick_vector(mouse_look_deflection(m.smooth.0, m.smooth.1, speed, right_stick_max()));
+        match exact {
+            Some((x, _)) => (x, by_speed.1),
+            None => by_speed,
         }
     };
     let (ox, oy) = (f32::from_bits(MOUSE_STICK[0].load(Ordering::Relaxed)), f32::from_bits(MOUSE_STICK[1].load(Ordering::Relaxed)));
