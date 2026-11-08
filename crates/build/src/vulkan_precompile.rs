@@ -105,7 +105,7 @@ fn infer_stage_slot(path: &Path) -> usize {
 fn fetch_shared_pipelines(title_id: u64, dest: &Path) -> bool {
     let url = format!("{SHARED_PIPELINES_URL}/{title_id:016x}.txt");
     let tmp = dest.with_extension("download");
-    let ok = crate::lift::command("curl.exe")
+    let ok = crate::lift::command(crate::lift::CURL)
         .args(["-fsSL", "--max-time", "30", "-o"])
         .arg(&tmp)
         .arg(&url)

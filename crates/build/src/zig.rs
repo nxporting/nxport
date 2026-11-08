@@ -55,7 +55,7 @@ fn download(toolchains: &Path, on_download: &dyn Fn(u64, u64)) -> Result<PathBuf
     let zip = toolchains.join(format!("{NAME}.zip.download"));
     println!("  Downloading zig {VERSION} from {URL}");
     // curl ships with Windows (System32) since Windows 10 1803.
-    let mut child = crate::lift::command("curl.exe")
+    let mut child = crate::lift::command(crate::lift::CURL)
         .args(["-fsSL", "--retry", "3", "-o"])
         .arg(&zip)
         .arg(URL)
