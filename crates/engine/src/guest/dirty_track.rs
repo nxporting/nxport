@@ -187,6 +187,13 @@ pub fn trackable(start: usize, len: usize) -> bool {
     len >= PAGE / 2 && locate(start, len).is_some()
 }
 
+/// The sum of the range's write generations, whatever its pages' states. Read before `protect` covers the range, it is
+/// the token `generation` gives back while nothing has written there since (see the comment on `Domain`).
+pub fn generations(start: usize, len: usize) -> Option<u64> {
+    let (g, _, first, last) = locate(start, len)?;
+    Some((first..=last).fold(0u64, |s, p| s.wrapping_add(g[p].load(Ordering::Acquire) as u64)))
+}
+
 /// The range's current write token, if every page of it is still protected by us (None: check it).
 pub fn generation(start: usize, len: usize) -> Option<u64> {
     let (g, f, first, last) = locate(start, len)?;
