@@ -154,7 +154,7 @@ const SHIFTS: [(&str, &str, f32); 34] = [
 /// at the top its distance to the top edge, -540 at the bottom). From the layouts' pane positions (top / bottom edge
 /// elements of the gameplay HUD, the inventory, loading and save screens).
 #[rustfmt::skip]
-const SHIFTS_Y: [(&str, &str, f32); 21] = [
+const SHIFTS_Y: [(&str, &str, f32); 22] = [
     ("AppMap_00", "N_Cut_00", -540.0),
     ("AppMap_00", "N_Cut_01", -540.0),
     ("AppMap_00", "N_Cut_02", -540.0),
@@ -173,6 +173,7 @@ const SHIFTS_Y: [(&str, &str, f32); 21] = [
     ("PlayerStatus_00", "N_HeartPos_00", 540.0),
     ("Pouch_00", "Pa_HeartGauge_00", 540.0),
     ("Pouch_00", "N_Align_01", 540.0),
+    ("SaveLoadIcon_00", "RootPane", -540.0),
     ("SystemLoadList_00", "N_Guide_01", -540.0),
     ("SystemLoadList_00", "N_Header_00", 540.0),
     ("SystemSaveLoad_00", "N_Header_00", 540.0),
