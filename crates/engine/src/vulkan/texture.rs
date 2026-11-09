@@ -413,6 +413,14 @@ impl Textures {
             if first {
                 self.flush_overlaps(dev, d);
                 self.upload(dev, d);
+            } else if self.overwritten_since(d) {
+                // The CPU cannot reach this memory, but the GPU aliases it as on the console: other images' writes over
+                // it since its contents are what it now holds.
+                if self.rebuild_on_gpu(dev, d, true).is_some() {
+                    if let Some(img) = self.images.get_mut(d) {
+                        img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    }
+                }
             }
             return;
         }
@@ -428,8 +436,8 @@ impl Textures {
         }
         // GPU contents of other images over this memory reach it first: on the GPU where their layouts allow, else
         // through guest memory.
-        let rebuilt = self.rebuild_on_gpu(dev, d);
-        if !rebuilt {
+        let rebuilt = self.rebuild_on_gpu(dev, d, false);
+        if rebuilt.is_none() {
             self.flush_overlaps(dev, d);
         }
         let Some(img) = self.images.get_mut(d) else { return };
@@ -437,8 +445,9 @@ impl Textures {
         img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         img.gpu_written = false;
         img.settled = false;
-        img.unflushed = false;
-        if !rebuilt {
+        // Rebuilt from its own GPU contents too: guest memory still lacks them.
+        img.unflushed = rebuilt == Some(true);
+        if rebuilt.is_none() {
             self.upload(dev, d);
         }
     }
@@ -473,27 +482,32 @@ impl Textures {
     /// recorded in a command buffer instead of waiting for read-backs (relayout.rs). `d` is rebuilt from its guest bytes
     /// with those images' rows swizzled over them, oldest write first, and then deswizzled into its levels. Guest memory
     /// is left as it was; those images stay unflushed, as flush_overlaps leaves them, so later uploads still take their
-    /// contents. False, with nothing recorded, when no such image lies over it or a layout is one the shader does not
-    /// move (pitch-linear, 3D, multisampled or depth `d`, decoded ASTC, blocks whose size does not divide 16, levels not
-    /// 16-byte aligned): refresh then takes the CPU route.
-    unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc) -> bool {
+    /// contents. `d`'s own GPU contents not in guest memory are among them, in their place in write order (where no
+    /// later write covers them they are what its memory holds); Some(true) if so. `any_pool`: `d` lies in memory the CPU
+    /// cannot reach (writers there count however the CPU route would treat them). None, with nothing recorded, when no
+    /// such image lies over it or a layout is one the shader does not move (pitch-linear, 3D, multisampled or depth `d`,
+    /// decoded ASTC, blocks whose size does not divide 16, levels not 16-byte aligned): refresh then takes the CPU route.
+    unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc, any_pool: bool) -> Option<bool> {
         if self.relayout_failed || self.unflushed.is_empty() || d.storage <= 0x10000 || !exact_overlaps() {
-            return false;
+            return None;
         }
         let total = layout::compute_layout(&d.params).total as usize;
         let (start, end) = (d.storage, d.storage + total);
-        let mut group: Vec<(u64, Desc)> = self.unflushed_over(start, end).into_iter().filter(|h| h.1 != *d).collect();
-        group.retain(|(_, o)| {
-            let keep = self.guest_can_take(o) && !self.cpu_changed(o);
-            if !keep {
-                self.no_longer_unflushed(o);
-            }
-            keep
-        });
+        let mut group: Vec<(u64, Desc)> = self.unflushed_over(start, end);
+        if !any_pool {
+            group.retain(|(_, o)| {
+                let keep = self.guest_can_take(o) && !self.cpu_changed(o);
+                if !keep {
+                    self.no_longer_unflushed(o);
+                }
+                keep
+            });
+        }
         if group.is_empty() {
-            return false;
+            return None;
         }
         group.sort_by_key(|h| h.0);
+        let has_self = group.iter().any(|h| h.1 == *d);
         // Whether the shader moves this image's levels: block-linear 2D, single-sampled, the guest's own format, block
         // sizes dividing 16 bytes, starting 16-byte aligned.
         let movable = |o: &Desc, img: &Image| -> bool {
@@ -508,9 +522,9 @@ impl Textures {
                 && img.extent.height == o.params.height.max(1) as u32
                 && layout::block_linear_level(&o.params, 0).is_some()
         };
-        let Some(dimg) = self.images.get(d) else { return false };
+        let Some(dimg) = self.images.get(d) else { return None };
         if total % 16 != 0 || format::is_depth(dimg.format) || !movable(d, dimg) {
-            return false;
+            return None;
         }
         // One buffer: the guest bytes, then each level's rows read out of the images over them, then `d`'s levels.
         let g_len = total as u32;
@@ -565,7 +579,7 @@ impl Textures {
                 continue;
             }
             if !movable(o, img) {
-                return false;
+                return None;
             }
             let lay = layout::compute_layout(&o.params);
             for layer in 0..img.layers {
@@ -575,7 +589,7 @@ impl Textures {
                     let (from, to) = (start.saturating_sub(at) as u64, end.saturating_sub(at) as u64);
                     let Some(rect) = layout::rect_of_bytes(&o.params, level as usize, from, to) else { continue };
                     let Some((mut region, width, _, _)) = Self::read_region(img, o.params.format, level, layer) else { continue };
-                    let Some((len, p)) = rows_of(o, level, rect, at, &mut region, width, off) else { return false };
+                    let Some((len, p)) = rows_of(o, level, rect, at, &mut region, width, off) else { return None };
                     reads.push((img.image, region));
                     moves.push(p);
                     off += len;
@@ -583,7 +597,7 @@ impl Textures {
             }
         }
         if moves.is_empty() {
-            return false;
+            return None;
         }
         let mut writes: Vec<vk::BufferImageCopy> = Vec::new();
         let mut unmoves: Vec<super::relayout::Params> = Vec::new();
@@ -591,8 +605,8 @@ impl Textures {
         for layer in 0..dimg.layers {
             for level in 0..dimg.levels {
                 let at = d.storage + layer as usize * lay.layer_stride as usize + lay.level_offsets[level as usize] as usize;
-                let Some((mut region, width, height, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return false };
-                let Some((len, mut p)) = rows_of(d, level, (0, u32::MAX, 0, height), at, &mut region, width, off) else { return false };
+                let Some((mut region, width, height, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return None };
+                let Some((len, mut p)) = rows_of(d, level, (0, u32::MAX, 0, height), at, &mut region, width, off) else { return None };
                 p.to_rows = 1;
                 writes.push(region);
                 unmoves.push(p);
@@ -605,11 +619,11 @@ impl Textures {
             if self.relayout.is_none() {
                 self.relayout_failed = true;
                 println!("[vulkan] the relayout shader could not be made: overlapping images are read back through the CPU");
-                return false;
+                return None;
             }
         }
-        let Some(scratch) = self.relayout_scratch(dev, off) else { return false };
-        let Ok(buf) = self.staging(dev, total) else { return false };
+        let Some(scratch) = self.relayout_scratch(dev, off) else { return None };
+        let Ok(buf) = self.staging(dev, total) else { return None };
         std::ptr::copy_nonoverlapping(d.storage as *const u8, buf.ptr, total);
         let rl = self.relayout.take().unwrap();
         let batched = self.batch.is_some();
@@ -648,7 +662,7 @@ impl Textures {
             // Recorded and run (one_shot waits).
             _ => self.recycle_staging(dev, buf),
         }
-        true
+        Some(has_self)
     }
 
     /// After a submit completed: GPU-written images not yet settled take the hash and write-tracking token of their guest
