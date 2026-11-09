@@ -172,7 +172,9 @@ mod tests {
         assert!(frequency() > 1_000_000);
         assert_eq!(ticks_to_ns(ns_to_ticks(1_000_000_000)), 1_000_000_000);
         // 2 ms, which a sleep rounded to the 15.6 ms Windows tick would overshoot many times over, every time. A busy
-        // machine (CI's macOS runners, other tests in parallel) delays some sleeps too, so the fastest of a few counts.
+        // machine (other tests in parallel) delays some sleeps too, so the fastest of a few counts. That bound is
+        // Windows' concern: on macOS, GitHub's virtual machines coalesce a background process's timers (every one of five
+        // 2 ms sleeps took 16-19 ms in a Release run), which a game in the foreground does not see.
         let took: Vec<u64> = (0..5)
             .map(|_| {
                 let t0 = now_ns();
@@ -181,6 +183,7 @@ mod tests {
             })
             .collect();
         assert!(took.iter().all(|&t| t >= 2_000_000), "slept {took:?} ns");
+        #[cfg(windows)]
         assert!(*took.iter().min().unwrap() < 10_000_000, "slept {took:?} ns");
     }
 }
