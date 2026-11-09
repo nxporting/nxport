@@ -122,7 +122,8 @@ pub struct Textures {
     unflushed: std::collections::BTreeMap<usize, Vec<Desc>>,
     unflushed_span: usize,
     /// Every image by storage address, and the largest one's size: what lies over a range of guest memory.
-    by_storage: std::collections::BTreeMap<usize, Vec<Desc>>,
+    /// Every image by its guest address, with the end of its guest bytes (the scans below ask for it of every neighbour).
+    by_storage: std::collections::BTreeMap<usize, Vec<(Desc, usize)>>,
     by_storage_span: usize,
     /// While a submit is recorded: image creation and uploads go into a command buffer queued ahead of the submit's next
     /// chunk (Ctx::submit_chunk), instead of blocking one-time submits; with the staging memory to free once it ran.
@@ -488,7 +489,7 @@ impl Textures {
     /// such image lies over it or a layout is one the shader does not move (pitch-linear, 3D, multisampled or depth `d`,
     /// decoded ASTC, blocks whose size does not divide 16, levels not 16-byte aligned): refresh then takes the CPU route.
     unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc, any_pool: bool) -> Option<bool> {
-        if self.relayout_failed || self.unflushed.is_empty() || d.storage <= 0x10000 || !exact_overlaps() {
+        if self.relayout_failed || self.unflushed.is_empty() || d.storage <= 0x10000 {
             return None;
         }
         let total = layout::compute_layout(&d.params).total as usize;
@@ -689,7 +690,7 @@ impl Textures {
     /// Whether the CPU changed an image's bytes is decided before any write (it drops that image's GPU contents), and the
     /// images these writes touch take the bytes as their new baseline: a write-back is not a CPU write.
     unsafe fn flush_overlaps(&mut self, dev: &Dev, d: &Desc) {
-        if self.unflushed.is_empty() || d.storage <= 0x10000 || !exact_overlaps() {
+        if self.unflushed.is_empty() || d.storage <= 0x10000 {
             return;
         }
         let (start, end) = (d.storage, d.storage + layout::compute_layout(&d.params).total as usize);
@@ -783,16 +784,17 @@ impl Textures {
     }
 
     fn index_image(&mut self, d: &Desc) {
-        self.by_storage.entry(d.storage).or_default().push(*d);
-        self.by_storage_span = self.by_storage_span.max(layout::compute_layout(&d.params).total as usize);
+        let len = layout::compute_layout(&d.params).total as usize;
+        self.by_storage.entry(d.storage).or_default().push((*d, d.storage + len));
+        self.by_storage_span = self.by_storage_span.max(len);
     }
 
     /// The images over this range of guest memory.
     fn images_over(&self, start: usize, end: usize) -> Vec<Desc> {
         let mut over = Vec::new();
         for (_, v) in self.by_storage.range(start.saturating_sub(self.by_storage_span)..end) {
-            for o in v {
-                if o.storage + layout::compute_layout(&o.params).total as usize > start {
+            for (o, o_end) in v {
+                if *o_end > start {
                     over.push(*o);
                 }
             }
@@ -803,14 +805,11 @@ impl Textures {
     /// Whether GPU work of a completed submit wrote over image `d`'s memory after the contents it holds. Work of the
     /// submit being recorded cannot be read back yet.
     fn overwritten_since(&self, d: &Desc) -> bool {
-        if !exact_overlaps() {
-            return false;
-        }
         let Some(img) = self.images.get(d) else { return false };
         let end = d.storage + layout::compute_layout(&d.params).total as usize;
         for (_, v) in self.by_storage.range(d.storage.saturating_sub(self.by_storage_span)..end) {
-            for o in v {
-                if o == d || o.storage + layout::compute_layout(&o.params).total as usize <= d.storage {
+            for (o, o_end) in v {
+                if *o_end <= d.storage || o == d {
                     continue;
                 }
                 if self.images.get(o).is_some_and(|i| i.gpu_seq > img.content_seq && i.gpu_submit != self.serial) {
@@ -1565,14 +1564,6 @@ impl Textures {
             dev.device.free_memory(m, None);
         }
     }
-}
-
-/// Whether a texture over memory that an image of another shape has written since should see those bytes, as it would on the
-/// console. Rebuilding them is the most expensive thing the cache does. What a game can read there is what another layout
-/// left behind, so a title known not to depend on it can go without (profile::assumes_no_cross_shape_reads).
-fn exact_overlaps() -> bool {
-    static EXACT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *EXACT.get_or_init(|| crate::settings::get().graphics.exact_texture_overlaps || !crate::profile::assumes_no_cross_shape_reads())
 }
 
 /// The whole tracking pages inside [start, start + len): (address, bytes).

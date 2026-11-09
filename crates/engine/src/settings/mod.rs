@@ -306,7 +306,8 @@ group! {
         ubo_zero_copy: bool = false,
         /// Vulkan: graphics stages sample textures through global descriptor arrays indexed by push constants (where the device has descriptor indexing)
         vk_bindless_textures: bool = true,
-        /// Vulkan: textures over memory another image wrote see those bytes in every game, also in titles known not to need it
+        /// No longer has an effect: textures over memory another image wrote always see those bytes (kept so settings files
+        /// and command lines naming it still load)
         exact_texture_overlaps: bool = false,
         /// Which work the GPU executor does
         gfx_mode: GfxMode = GfxMode::All,
