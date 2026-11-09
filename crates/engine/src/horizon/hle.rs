@@ -3451,7 +3451,8 @@ fn light_event_new(initially_signaled: bool, clear_mode: i32) -> Arc<LightEventS
 }
 
 /// Spins up to LIGHT_EVENT_SPIN for a signal before a wait blocks: TotK's job threads wait tens of thousands of times a
-/// second, mostly for tens of microseconds, about what a sleep and a wake-up cost on Windows.
+/// second, mostly for tens of microseconds, about what a sleep and a wake-up cost on Windows. A tuning number: it trades
+/// CPU time spinning against wake-up latency; the game sees the same signal at the same point either way.
 fn light_event_spin(state: &LightEventState) {
     const LIGHT_EVENT_SPIN: std::time::Duration = std::time::Duration::from_micros(30);
     let s0 = state.signals.load(std::sync::atomic::Ordering::Relaxed);
