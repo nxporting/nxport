@@ -788,14 +788,17 @@ pub(crate) fn mouse_look_on() -> bool {
 pub fn mouse_look_moved(dx: f32, dy: f32) {
     // Into the game's camera angles where a profile takes them, as a stick would turn them: mouse right as the stick
     // right (the yaw falls), mouse down as the stick down (the pitch rises).
+    // Only while the camera storing them is the one the profile takes them for (ANGLE_ROUTE): another camera (TotK's
+    // bow aim) gets the movement through the stick.
     let deg = || MOUSE_DEG_PER_PX * crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
-    let dx = if ANGLE_SINK[0].load(Ordering::Relaxed) {
+    let route = ANGLE_ROUTE.load(Ordering::Acquire);
+    let dx = if route && ANGLE_SINK[0].load(Ordering::Relaxed) {
         add_mouse_angle(0, -dx * deg());
         0.0
     } else {
         dx
     };
-    let dy = if ANGLE_SINK[1].load(Ordering::Relaxed) {
+    let dy = if route && ANGLE_SINK[1].load(Ordering::Relaxed) {
         add_mouse_angle(1, dy * deg());
         0.0
     } else {
@@ -831,6 +834,21 @@ pub fn set_angle_sink(pitch: bool) {
 /// pending amount cleared).
 pub fn take_mouse_angle(i: usize) -> f32 {
     f32::from_bits(ANGLE_PENDING[i].swap(0, Ordering::AcqRel))
+}
+
+/// Whether mouse movement goes into the angles (the profile's camera is the one in use) or through the stick.
+static ANGLE_ROUTE: AtomicBool = AtomicBool::new(true);
+
+/// The profile says whether its camera is the one in use. Leaving it, the degrees not taken yet go back to the stick as
+/// the pixels they came from, so no movement is lost or applied later.
+pub fn set_angle_route(on: bool) {
+    if ANGLE_ROUTE.swap(on, Ordering::AcqRel) && !on {
+        let deg = MOUSE_DEG_PER_PX * crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
+        let (yaw, pitch) = (take_mouse_angle(0), take_mouse_angle(1));
+        let mut m = MOUSE_LOOK.lock().unwrap();
+        m.pending.0 += -yaw / deg;
+        m.pending.1 += pitch / deg;
+    }
 }
 
 /// The mouse moved since the game last tested for camera input (the game's test and its storing of the angles come in

@@ -171,12 +171,20 @@ unsafe fn install_decision(base: usize, text: &[u8], mem_space: &mut crate::gues
 pub unsafe extern "C" fn camera_input() -> u64 {
     let cpu = crate::lifted::current();
     let stick = !cpu.is_null() && f32::from_bits((*cpu).v[14] as u32) > 0.0;
+    // The camera this code runs for (x20 of the turn function): the one the mouse's angles are for.
+    if !cpu.is_null() {
+        STEERED.store((*cpu).x[20] as usize, Ordering::Release);
+    }
     let mouse = crate::host::input::take_mouse_input();
     if mouse {
         SEEN.store(true, Ordering::Release);
     }
     (stick || mouse) as u64
 }
+
+/// The camera object the turn function with the input test runs for (0: not seen yet). Other cameras (the bow's aim)
+/// store their angles through the same function but are not placed from them: the mouse goes through the stick then.
+static STEERED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// The game has tested for camera input since mouse movement arrived (its answer is in the camera's mode).
 static SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -202,12 +210,17 @@ pub unsafe extern "C" fn camera_angles(out: *mut f32, v: *const f32) -> usize {
     let pitch = wrap((offset - h.atan2(y)) * scale);
     // The game builds the next frame's camera from this yaw (the turn function main+0x9ab570 loads it first and places
     // the camera from it): sideways mouse movement is added here.
+    // Which camera stores its angles here (x19 of the caller): the mouse's angles are for the steered one only.
+    let cpu = crate::lifted::current();
+    if !cpu.is_null() {
+        let steered = STEERED.load(Ordering::Acquire);
+        crate::host::input::set_angle_route(steered == 0 || (*cpu).x[19] as usize == steered);
+    }
     let yaw = wrap(x.atan2(z) * scale + crate::host::input::take_mouse_angle(0));
     // The pitch state (camera +0x108, the camera in x19 of the caller), in manual mode only.
     // In manual mode added; else kept until the game has tested the input, and dropped if it then stayed out of manual
     // mode (as a stick would turn nothing there).
     let dp = crate::host::input::take_mouse_angle(1);
-    let cpu = crate::lifted::current();
     if dp != 0.0 && !cpu.is_null() {
         let camera = (*cpu).x[19] as usize;
         if std::ptr::read((camera + MODE) as *const u32) == MANUAL {
