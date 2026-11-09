@@ -1083,6 +1083,7 @@ mod imp {
         }
         guest_state(pc);
         eprintln!("[crash] stack:\n{}", std::backtrace::Backtrace::force_capture());
+        crate::config::drain_log();
         EXCEPTION_CONTINUE_SEARCH
     }
 
