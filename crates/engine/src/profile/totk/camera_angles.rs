@@ -18,6 +18,12 @@
 // is installed where guest code is lifted only (Windows; macOS has no mouse look yet). Nothing else of the game's code
 // changes.
 //
+// The bow's aim camera stores its angles through the same function but turns by its own steps (1.0.0 main+0x1cd2d14):
+// it tests for stick input first, then adds the stick's turn in degrees to its aim yaw and pitch, which it clamps and
+// which Link's body follows. Those three instructions are rewritten too (`aim_input`, `aim_yaw`, `aim_pitch`): the
+// test answers as the game would or yes when mouse degrees wait, and the mouse's degrees are added where the stick's
+// turn is. None of them keeps flags across the call (the lifter treats a call as leaving them undefined).
+//
 // The call is found by the instructions around it, not by address, so other builds compiled the same way get it too.
 // Like aspect.rs, the rewritten call enters an HLE trampoline (no code of our own in guest memory), the same at lift and
 // run time.
@@ -39,6 +45,49 @@ const CONSTANTS_AT: usize = 0x88;
 const DECISION: [(u32, u32); 4] = [(0x3945_0768, !0), (0x3728_0008, 0xfff8_001f), (0x1e20_21c8, !0), (0x5400_000c, 0xff00_001f)];
 #[cfg_attr(nx_native, allow(dead_code))]
 const TEST: usize = 2;
+/// The bow's aim camera's turn function (1.0.0 main+0x1cd2d14) starts by testing for turn input: with the stick at
+/// rest (+0x418 and +0x41c of the angles object both 0) it takes another path (+0x1e8 = 1) that does not turn the aim.
+/// ldr s0, [x22, #0x418]; ldr s10, [x20, #8]; ldr x9, [x8]; ldr w8, [x8, #8]; fcmp s0, #0.0; stur x9, [x29, #-0x50];
+/// stur w8, [x29, #-0x48]; b.ne (input). The fcmp is rewritten to ask `aim_input`, the b.ne to a cbnz w0.
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_INPUT: [(u32, u32); 8] = [
+    (0xbd44_1ac0, !0),
+    (0xbd40_0a8a, !0),
+    (0xf940_0109, !0),
+    (0xb940_0908, !0),
+    (0x1e20_2008, !0),
+    (0xf81b_03a9, !0),
+    (0xb81b_83a8, !0),
+    (0x5400_0001, 0xff00_001f),
+];
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_INPUT_AT: usize = 4;
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_INPUT_BNE: usize = 7;
+/// Then it adds the stick's sideways turn, in degrees, to its aim
+/// yaw: ldr s1, [xN, #imm]; fmul s0, s0, s1; ldur s1, [x29, #-0x48]; fadd s0, s1, s0; bl (wrap); ldr x8, [x22, #0x158];
+/// mov w9, #0x2808. The fadd is rewritten to enter `aim_yaw`.
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_YAW: [(u32, u32); 7] = [
+    (0xbd40_0001, 0xffc0_001f),
+    (0x1e21_0800, !0),
+    (0xbc5b_83a1, !0),
+    (0x1e20_2820, !0),
+    (0x9400_0000, 0xfc00_0000),
+    (0xf940_aec8, !0),
+    (0x5285_0109, !0),
+];
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_YAW_AT: usize = 3;
+/// Its pitch: the stick's vertical turn in s0, its sign chosen by s9, goes to a call that adds it to the aim pitch
+/// (+0x15c, written to +0x154): ldr s0, [sp, #0x60]; fcmp s9, #0.0; add x0, x19, #0x15c; fneg s1, s0;
+/// fcsel s0, s0, s1, gt; bl. The fcsel is rewritten to enter `aim_pitch`, which makes the same choice from s9 itself (a call
+/// in between would leave the flags undefined: the lifter does not keep them across calls).
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_PITCH: [(u32, u32); 6] =
+    [(0xbd40_63e0, !0), (0x1e20_2128, !0), (0x9105_7260, !0), (0x1e21_4001, !0), (0x1e21_cc00, !0), (0x9400_0000, 0xfc00_0000)];
+#[cfg_attr(nx_native, allow(dead_code))]
+const AIM_PITCH_AT: usize = 4;
 /// The camera's pitch state and mode.
 const PITCH: usize = 0x108;
 const MODE: usize = 0x180;
@@ -76,19 +125,25 @@ fn find(text: &[u8]) -> Option<usize> {
     (callee + 16 <= text.len() && CALLEE.iter().enumerate().all(|(k, &w)| word(text, callee + 4 * k) == w)).then_some(at)
 }
 
-/// The offset in `text` of the camera-input test's fcmp, if found exactly once.
+/// The offset in `text` of word `at` of `pattern` ((word, mask) pairs), if the pattern is found exactly once.
 #[cfg_attr(nx_native, allow(dead_code))]
-fn find_decision(text: &[u8]) -> Option<usize> {
+fn find_masked(text: &[u8], pattern: &[(u32, u32)], at: usize) -> Option<usize> {
     let mut found = None;
-    for i in 0..(text.len() / 4).saturating_sub(DECISION.len()) {
-        if DECISION.iter().enumerate().all(|(k, &(w, m))| word(text, 4 * (i + k)) & m == w) {
+    for i in 0..(text.len() / 4).saturating_sub(pattern.len()) {
+        if pattern.iter().enumerate().all(|(k, &(w, m))| word(text, 4 * (i + k)) & m == w) {
             if found.is_some() {
                 return None;
             }
-            found = Some(4 * (i + TEST));
+            found = Some(4 * (i + at));
         }
     }
     found
+}
+
+/// The offset in `text` of the camera-input test's fcmp, if found exactly once.
+#[cfg_attr(nx_native, allow(dead_code))]
+fn find_decision(text: &[u8]) -> Option<usize> {
+    find_masked(text, &DECISION, TEST)
 }
 
 /// The target of the bl `w` at `at`.
@@ -139,6 +194,8 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     crate::os::flush_icache(base + at, 4);
     #[cfg(not(nx_native))]
     let pitch = install_decision(base, text, mem_space);
+    #[cfg(not(nx_native))]
+    install_aim(base, text, mem_space);
     #[cfg(nx_native)]
     let pitch = false;
     crate::host::input::set_angle_sink(pitch);
@@ -166,6 +223,79 @@ unsafe fn install_decision(base: usize, text: &[u8], mem_space: &mut crate::gues
     crate::os::flush_icache(base + at, 8);
     true
 }
+
+/// Rewrites one instruction at `at` to bl `tramp`; false if out of range.
+#[cfg(all(nx_runtime, not(nx_native)))]
+unsafe fn branch_to(base: usize, at: usize, tramp: usize) -> bool {
+    let d = tramp as i64 - (base + at) as i64;
+    if d.abs() >= 1 << 27 {
+        return false;
+    }
+    std::ptr::write((base + at) as *mut u32, 0x9400_0000 | ((d >> 2) as u32 & 0x03ff_ffff));
+    crate::os::flush_icache(base + at, 4);
+    true
+}
+
+/// Rewrites the bow aim camera's yaw and pitch steps to add the mouse's degrees where the game adds the stick's turn
+/// (`aim_yaw`, `aim_pitch`). Both or neither: the mouse then goes through the stick while aiming.
+#[cfg(all(nx_runtime, not(nx_native)))]
+unsafe fn install_aim(base: usize, text: &[u8], mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    let (Some(input), Some(yaw), Some(pitch)) = (
+        find_masked(text, &AIM_INPUT, AIM_INPUT_AT),
+        find_masked(text, &AIM_YAW, AIM_YAW_AT),
+        find_masked(text, &AIM_PITCH, AIM_PITCH_AT),
+    ) else {
+        return println!("[!] TotK: the bow's aim steps were not found; mouse aiming with a bow steers by speed");
+    };
+    let bne_at = input + 4 * (AIM_INPUT_BNE - AIM_INPUT_AT);
+    let bne = word(text, bne_at);
+    let ti = mem_space.make_hle_trampoline(crate::hle!(aim_input())) as usize;
+    let ty = mem_space.make_hle_trampoline(crate::hle!(aim_yaw(_, _))) as usize;
+    let tp = mem_space.make_hle_trampoline(crate::hle!(aim_pitch(_, _))) as usize;
+    if !branch_to(base, input, ti) || !branch_to(base, yaw, ty) || !branch_to(base, pitch, tp) {
+        return println!("[!] TotK: the bow aim hooks are out of branch range");
+    }
+    // b.ne and cbnz w0 keep their 19-bit offset in the same bits.
+    std::ptr::write((base + bne_at) as *mut u32, 0x3500_0000 | (bne & 0x00ff_ffe0));
+    crate::os::flush_icache(base + bne_at, 4);
+    AIM_HOOKED.store(true, Ordering::Release);
+    println!("[+] TotK: mouse movement turns the bow's aim directly (main+{yaw:#x}, main+{pitch:#x})");
+}
+
+/// The bow's aim steps enter `aim_yaw` / `aim_pitch`.
+static AIM_HOOKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The aim camera those steps last ran for (x19 of its turn function).
+static AIMED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The aim camera's input test: the game's own (the stick's sideways value, s0, not 0) or mouse degrees waiting. Runs
+/// every frame the aim camera turns, so it also marks the camera running for the pause rule.
+pub unsafe extern "C" fn aim_input() -> u64 {
+    let cpu = crate::lifted::current();
+    if cpu.is_null() {
+        return 0;
+    }
+    AIMED.store((*cpu).x[19] as usize, Ordering::Release);
+    crate::host::input::camera_ran();
+    (f32::from_bits((*cpu).v[0] as u32) != 0.0 || crate::host::input::mouse_angle_pending()) as u64
+}
+
+/// The aim yaw step: what the game computes (`yaw` + `turn`, the stick's turn) plus the mouse's sideways degrees.
+pub unsafe extern "C" fn aim_yaw(turn: f32, yaw: f32) -> f32 {
+    yaw + turn + AIM_YAW_SIGN * crate::host::input::take_mouse_angle(0)
+}
+
+/// The aim pitch step, in place of `fcsel s0, s0, s1, gt` after `fcmp s9, #0.0`: the turn the game picks (`s0` when s9 is
+/// above 0, else `s1`, as gt is false for NaN too) plus the mouse's vertical degrees.
+pub unsafe extern "C" fn aim_pitch(s0: f32, s1: f32) -> f32 {
+    let cpu = crate::lifted::current();
+    let s9 = if cpu.is_null() { 0.0 } else { f32::from_bits((*cpu).v[9] as u32) };
+    let turn = if s9 > 0.0 { s0 } else { s1 };
+    turn + AIM_PITCH_SIGN * crate::host::input::take_mouse_angle(1)
+}
+
+/// How the aim camera's angles turn for the normal camera's: measured against the stick (see the commit adding them).
+const AIM_YAW_SIGN: f32 = 1.0;
+const AIM_PITCH_SIGN: f32 = 1.0;
 
 /// The camera-input test: the game's own (s14, the right stick's strength, above 0) or mouse movement waiting.
 pub unsafe extern "C" fn camera_input() -> u64 {
@@ -212,9 +342,21 @@ pub unsafe extern "C" fn camera_angles(out: *mut f32, v: *const f32) -> usize {
     // the camera from it): sideways mouse movement is added here.
     // Which camera stores its angles here (x19 of the caller): the mouse's angles are for the steered one only.
     let cpu = crate::lifted::current();
+    // Which camera stores its angles: the steered one takes the mouse here; the bow's aim camera takes it in its own
+    // steps (aim_yaw, aim_pitch) when they are hooked; any other turns by the stick.
+    let mut here = true;
     if !cpu.is_null() {
         let steered = STEERED.load(Ordering::Acquire);
-        crate::host::input::set_angle_route(steered == 0 || (*cpu).x[19] as usize == steered);
+        let camera = (*cpu).x[19] as usize;
+        let aim = AIM_HOOKED.load(Ordering::Acquire) && camera == AIMED.load(Ordering::Acquire);
+        here = steered == 0 || camera == steered;
+        crate::host::input::set_angle_route(here || aim);
+    }
+    if !here {
+        *out = dist;
+        *out.add(1) = pitch;
+        *out.add(2) = wrap(x.atan2(z) * scale);
+        return out as usize;
     }
     let yaw = wrap(x.atan2(z) * scale + crate::host::input::take_mouse_angle(0));
     // The pitch state (camera +0x108, the camera in x19 of the caller), in manual mode only.
@@ -286,6 +428,27 @@ mod tests {
         assert_eq!((cbnz >> 5) & 0x7ffff, (words[3] >> 5) & 0x7ffff);
         text[0x18] ^= 1;
         assert_eq!(find_decision(&text), None);
+    }
+
+    #[test]
+    fn finds_the_bow_aim_steps() {
+        // 1.0.0's words at main+0x1cd3168 and main+0x1cd2efc.
+        let yaw = [0xbd4f_66a1u32, 0x1e21_0800, 0xbc5b_83a1, 0x1e20_2820, 0x97ba_dd78, 0xf940_aec8, 0x5285_0109];
+        let pitch = [0xbd40_63e0u32, 0x1e20_2128, 0x9105_7260, 0x1e21_4001, 0x1e21_cc00, 0x97fa_481f];
+        let mut text = vec![0u8; 0x100];
+        for (k, w) in yaw.iter().enumerate() {
+            text[0x20 + 4 * k..0x24 + 4 * k].copy_from_slice(&w.to_le_bytes());
+        }
+        for (k, w) in pitch.iter().enumerate() {
+            text[0x80 + 4 * k..0x84 + 4 * k].copy_from_slice(&w.to_le_bytes());
+        }
+        assert_eq!(find_masked(&text, &AIM_YAW, AIM_YAW_AT), Some(0x2c));
+        assert_eq!(find_masked(&text, &AIM_INPUT, AIM_INPUT_AT), None);
+        assert_eq!(find_masked(&text, &AIM_PITCH, AIM_PITCH_AT), Some(0x90));
+        // Twice: ambiguous.
+        let copy: Vec<u8> = text[0x80..0x98].to_vec();
+        text[0xc0..0xd8].copy_from_slice(&copy);
+        assert_eq!(find_masked(&text, &AIM_PITCH, AIM_PITCH_AT), None);
     }
 
     #[test]

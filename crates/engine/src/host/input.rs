@@ -873,6 +873,17 @@ pub fn take_mouse_input() -> bool {
     MOUSE_INPUT.swap(false, Ordering::AcqRel)
 }
 
+/// The profile's camera code ran this frame without taking angles yet (it takes them later in the frame, or only when
+/// it sees input): movement arriving now is not made while paused.
+pub fn camera_ran() {
+    CAMERA_FRAME.store(crate::gpu::backend().presented_frames() as u64, Ordering::Release);
+}
+
+/// Whether mouse degrees wait to be taken.
+pub fn mouse_angle_pending() -> bool {
+    ANGLE_PENDING.iter().any(|a| a.load(Ordering::Acquire) != 0)
+}
+
 /// Pending degrees of angle `i` put back (the game has not taken them yet: the camera waits for its mode).
 pub fn keep_mouse_angle(i: usize, deg: f32) {
     if deg != 0.0 {
