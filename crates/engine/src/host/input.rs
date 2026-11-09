@@ -790,16 +790,23 @@ pub fn mouse_look_moved(dx: f32, dy: f32) {
     // right (the yaw falls), mouse down as the stick down (the pitch rises).
     // Only while the camera storing them is the one the profile takes them for (ANGLE_ROUTE): another camera (TotK's
     // bow aim) gets the movement through the stick.
+    // While the game is paused its camera stores no angles: movement then is dropped, as a stick moved then would turn
+    // nothing (the user's choice, 2026-11-08). Running means the camera stored its angles this frame or the last.
     let deg = || MOUSE_DEG_PER_PX * crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
     let route = ANGLE_ROUTE.load(Ordering::Acquire);
+    let running = crate::gpu::backend().presented_frames() as u64 <= CAMERA_FRAME.load(Ordering::Acquire) + 1;
     let dx = if route && ANGLE_SINK[0].load(Ordering::Relaxed) {
-        add_mouse_angle(0, -dx * deg());
+        if running {
+            add_mouse_angle(0, -dx * deg());
+        }
         0.0
     } else {
         dx
     };
     let dy = if route && ANGLE_SINK[1].load(Ordering::Relaxed) {
-        add_mouse_angle(1, dy * deg());
+        if running {
+            add_mouse_angle(1, dy * deg());
+        }
         0.0
     } else {
         dy
@@ -815,7 +822,7 @@ pub fn mouse_look_moved(dx: f32, dy: f32) {
 // directly: MOUSE_DEG_PER_PX degrees per pixel times mouse-look-speed, nothing else, and the mouse does not move the
 // stick on that axis. The game's own rules decide what the angles do (a mode that does not take them ignores them, as it
 // would the stick). Every pixel is added once, the next time the game takes the angles; movement made while the game's
-// camera code does not run (paused) is added when it runs again, or dropped where the game would not have turned.
+// camera code does not run (paused) is dropped, as is movement the game would not have turned by.
 
 /// Degrees per pixel of mouse movement at mouse-look-speed 1.
 const MOUSE_DEG_PER_PX: f32 = 0.05;
@@ -833,8 +840,14 @@ pub fn set_angle_sink(pitch: bool) {
 /// Called by the game profile as the game takes its camera's angle `i` (0 yaw, 1 pitch): the degrees to add (the
 /// pending amount cleared).
 pub fn take_mouse_angle(i: usize) -> f32 {
+    if i == 0 {
+        CAMERA_FRAME.store(crate::gpu::backend().presented_frames() as u64, Ordering::Release);
+    }
     f32::from_bits(ANGLE_PENDING[i].swap(0, Ordering::AcqRel))
 }
+
+/// The presented frame in which the game last stored its camera's angles (take_mouse_angle(0) is called then).
+static CAMERA_FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// Whether mouse movement goes into the angles (the profile's camera is the one in use) or through the stick.
 static ANGLE_ROUTE: AtomicBool = AtomicBool::new(true);
