@@ -145,6 +145,34 @@ impl State {
         if pc == nxport_lifter::abi::RETURN_TO_HOST || pc == HLE_POOL.load(Ordering::Relaxed) as u64 {
             return false;
         }
+        // Asked at every call and branch target of interpreted code: with a plugin hooking the game's NVN calls, on the
+        // job threads all the time, and each answer took two locks and a binary search of every function table (TotK
+        // with UltraCam: ~1 ms a frame per job thread). Answers are kept per thread until any of their inputs change
+        // (ANSWERS_GEN, bumped after every change of the tables, the patched set or the hooked trampolines).
+        thread_local! {
+            static ANSWERS: std::cell::RefCell<(u64, rustc_hash::FxHashMap<u64, bool>)> =
+                std::cell::RefCell::new((u64::MAX, rustc_hash::FxHashMap::default()));
+        }
+        let gen = ANSWERS_GEN.load(Ordering::Acquire);
+        if let Some(a) = ANSWERS.with(|m| {
+            let m = m.borrow();
+            if m.0 == gen { m.1.get(&pc).copied() } else { None }
+        }) {
+            return a;
+        }
+        let a = self.interpreted_now(pc);
+        ANSWERS.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.0 != gen {
+                m.1.clear();
+                m.0 = gen;
+            }
+            m.1.insert(pc, a);
+        });
+        a
+    }
+
+    fn interpreted_now(&self, pc: u64) -> bool {
         if self.is_start(pc) {
             return self.patched.read().unwrap().contains(&pc);
         }
@@ -154,6 +182,10 @@ impl State {
         true
     }
 }
+
+/// Bumped after every change of what State::interpreted answers from (the tables, the patched set, the hooked HLE
+/// trampolines): the threads' kept answers are dropped.
+static ANSWERS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The HLE trampolines' pool (its first entry is where they all branch to): (start, length).
 static HLE_POOL: AtomicUsize = AtomicUsize::new(0);
@@ -486,6 +518,7 @@ pub fn code_written(start: usize, len: usize) {
         let mut hooked = HLE_HOOKED.write().unwrap();
         if hooked.get_or_insert_with(HashSet::new).insert(entry) {
             HLE_HOOKED_FILTER.fetch_or(hle_filter_bit(entry), Ordering::Relaxed);
+            ANSWERS_GEN.fetch_add(1, Ordering::AcqRel);
             println!("[+] Live patches: HLE trampoline {entry:#x} hooked");
         }
         return;
@@ -527,6 +560,7 @@ pub fn code_written(start: usize, len: usize) {
             }
         }
     }
+    ANSWERS_GEN.fetch_add(1, Ordering::AcqRel);
     if let Err(e) = redirect(state, &entries) {
         eprintln!("[-] {e}");
         std::process::abort();
@@ -741,6 +775,7 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
             patched.remove(s);
         }
     }
+    ANSWERS_GEN.fetch_add(1, Ordering::AcqRel);
     println!("[+] Live patches: {func:#x} compiled");
     Ok(())
 }
