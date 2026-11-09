@@ -79,6 +79,14 @@ jobs:
           name: windows
           path: dist/*
           if-no-files-found: error
+      # An app's nxport.exe is the builder program, so a player's crash report (nxport.exe+offset) is named from the
+      # builder's symbols. Kept with the run, not in the archive.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-symbols
+          path: target/release/nxport_builder.pdb
+          if-no-files-found: error
+          retention-days: 90
 
   macos:
     runs-on: macos-15
@@ -131,8 +139,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The two archives only (the symbols stay with the run).
       - uses: actions/download-artifact@v8
         with:
+          pattern: '{windows,macos}'
           path: dist
           merge-multiple: true
       - name: Publish
