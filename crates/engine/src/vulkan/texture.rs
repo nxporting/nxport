@@ -86,6 +86,8 @@ pub struct Image {
     gpu_submit: u64,
     /// Bytes of guest memory its description covers; whether that memory's pool is CPU-writable, at a pool generation.
     guest_len: usize,
+    /// Its guest address (for the per-chunk write record, `note_write`).
+    storage: usize,
     cpu_writable: (u64, bool),
     /// Made for a render target and not loaded from guest memory yet (`target_image`).
     never_loaded: bool,
@@ -218,6 +220,26 @@ pub static FLUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 /// entries large images take against the images a query visits; the answers are the same.
 const CHUNK_SHIFT: u32 = 16;
 
+/// The latest GPU write sequence in each chunk of guest memory (CHUNK_SHIFT): an image's memory saw no write newer than its
+/// contents when none of its chunks did, which overwritten_since answers without visiting the images there.
+static CHUNK_WRITES: std::sync::Mutex<Option<rustc_hash::FxHashMap<usize, u64>>> = std::sync::Mutex::new(None);
+
+fn note_write(storage: usize, len: usize, seq: u64) {
+    let mut m = CHUNK_WRITES.lock().unwrap();
+    let m = m.get_or_insert_with(Default::default);
+    for c in storage >> CHUNK_SHIFT..=(storage + len.max(1) - 1) >> CHUNK_SHIFT {
+        let e = m.entry(c).or_insert(0);
+        *e = (*e).max(seq);
+    }
+}
+
+/// The latest write sequence in any chunk of [start, end).
+fn latest_write(start: usize, end: usize) -> u64 {
+    let m = CHUNK_WRITES.lock().unwrap();
+    let Some(m) = m.as_ref() else { return 0 };
+    (start >> CHUNK_SHIFT..=(end.max(start + 1) - 1) >> CHUNK_SHIFT).filter_map(|c| m.get(&c)).copied().max().unwrap_or(0)
+}
+
 /// Images rebuilt from the images over their memory on the GPU (rebuild_on_gpu).
 pub static REBUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -230,6 +252,7 @@ impl Image {
         self.gpu_seq = GPU_SEQ.fetch_add(1, Relaxed) + 1;
         self.content_seq = self.gpu_seq;
         self.gpu_submit = SUBMIT.load(Relaxed);
+        note_write(self.storage, self.guest_len, self.gpu_seq);
     }
 }
 
@@ -895,6 +918,10 @@ impl Textures {
     fn overwritten_since(&self, d: &Desc) -> bool {
         let Some(img) = self.images.get(d) else { return false };
         let end = d.storage + layout::compute_layout(&d.params).total as usize;
+        // No chunk under it was written after its contents (its own writes set its contents' sequence): nothing to find.
+        if latest_write(d.storage, end) <= img.content_seq {
+            return false;
+        }
         let mut found = false;
         self.for_each_over(d.storage, end, |o, _| {
             found = o != d && self.images.get(o).is_some_and(|i| i.gpu_seq > img.content_seq && i.gpu_submit != self.serial);
@@ -1141,6 +1168,7 @@ impl Textures {
             gpu_seq: 0,
             gpu_submit: 0,
             guest_len: layout::compute_layout(&d.params).total as usize,
+            storage: d.storage,
             cpu_writable: (u64::MAX, false),
             never_loaded: false,
             interior_token: None,
