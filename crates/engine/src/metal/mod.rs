@@ -928,7 +928,7 @@ pub(crate) fn layout_of(t: &NvnTexture) -> std::sync::Arc<crate::nvn::layout::Te
         if c.len() > 1 << 14 {
             c.clear();
         }
-        let l = std::sync::Arc::new(crate::nvn::layout::compute_layout(&p));
+        let l = std::sync::Arc::new((*crate::nvn::layout::compute_layout(&p)).clone());
         c.insert(key, l.clone());
         l
     })
