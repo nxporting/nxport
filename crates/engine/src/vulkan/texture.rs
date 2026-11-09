@@ -118,13 +118,11 @@ pub struct Textures {
     /// The texture index change sequence the roots are valid at (begin_submit), and scratch for the changes.
     roots_seq: u64,
     root_changes: Vec<(usize, usize)>,
-    /// Settled images with unflushed GPU contents, by storage address (`flush_overlaps`), and the largest one's size.
-    unflushed: std::collections::BTreeMap<usize, Vec<Desc>>,
-    unflushed_span: usize,
-    /// Every image by storage address, and the largest one's size: what lies over a range of guest memory.
     /// Every image by its guest address, with the end of its guest bytes (the scans below ask for it of every neighbour).
-    by_storage: std::collections::BTreeMap<usize, Vec<(Desc, usize)>>,
-    by_storage_span: usize,
+    /// Each image in every chunk of guest memory its bytes cover (CHUNK_SHIFT), with the end of its bytes. Overlap queries
+    /// visit the chunks of the range asked about only (a scan from the largest image's size before it visited every image
+    /// within that distance, for each texture sampled).
+    by_chunk: rustc_hash::FxHashMap<usize, Vec<(Desc, usize)>>,
     /// While a submit is recorded: image creation and uploads go into a command buffer queued ahead of the submit's next
     /// chunk (Ctx::submit_chunk), instead of blocking one-time submits; with the staging memory to free once it ran.
     batch: Option<Batch>,
@@ -216,6 +214,10 @@ static SUBMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 static GPU_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Images written to guest memory by flush_overlaps (reported with the fps line).
 pub static FLUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The size of the chunks of guest memory the image index is kept by (2^CHUNK_SHIFT bytes). A tuning number: it trades the
+/// entries large images take against the images a query visits; the answers are the same.
+const CHUNK_SHIFT: u32 = 16;
+
 /// Images rebuilt from the images over their memory on the GPU (rebuild_on_gpu).
 pub static REBUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -439,7 +441,10 @@ impl Textures {
         // through guest memory.
         // The CPU did not write it since its contents: they can be the base.
         let rebuilt = self.rebuild_on_gpu(dev, d, false, !first && !changed);
-        if rebuilt.is_none() {
+        // The CPU route ends in an upload, which leaves depth and multisampled images as they are: their read-backs
+        // would change nothing in them.
+        let uploads = self.images.get(d).is_some_and(|i| i.samples == vk::SampleCountFlags::TYPE_1 && !format::is_depth(i.format));
+        if rebuilt.is_none() && uploads {
             self.flush_overlaps(dev, d);
         }
         let Some(img) = self.images.get_mut(d) else { return };
@@ -491,7 +496,7 @@ impl Textures {
     /// such image lies over it or a layout is one the shader does not move (pitch-linear, 3D, multisampled or depth `d`,
     /// decoded ASTC, blocks whose size does not divide 16, levels not 16-byte aligned): refresh then takes the CPU route.
     unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc, any_pool: bool, from_image: bool) -> Option<bool> {
-        if self.relayout_failed || self.unflushed.is_empty() || d.storage <= 0x10000 {
+        if self.relayout_failed || d.storage <= 0x10000 {
             return None;
         }
         let total = layout::compute_layout(&d.params).total as usize;
@@ -499,7 +504,7 @@ impl Textures {
         let mut group: Vec<(u64, Desc)> = self.unflushed_over(start, end);
         if !any_pool {
             group.retain(|(_, o)| {
-                let keep = self.guest_can_take(o) && !self.cpu_changed(o);
+                let keep = self.writer_kept(o);
                 if !keep {
                     self.no_longer_unflushed(o);
                 }
@@ -533,7 +538,10 @@ impl Textures {
                 && layout::block_linear_level(&o.params, 0).is_some()
         };
         let Some(dimg) = self.images.get(d) else { return None };
-        if total % 16 != 0 || format::is_depth(dimg.format) || !movable(d, dimg) {
+        // Depth images in D16 or D32F hold the guest's bytes as they are and copy to and from buffers (the depth aspect);
+        // other depth formats do not.
+        let depth_ok = !format::is_depth(dimg.format) || matches!(dimg.format, vk::Format::D16_UNORM | vk::Format::D32_SFLOAT);
+        if total % 16 != 0 || !depth_ok || !movable(d, dimg) {
             return None;
         }
         // One buffer: the guest bytes, then each level's rows read out of the images over them, then `d`'s levels.
@@ -741,13 +749,6 @@ impl Textures {
             if img.gpu_written && !img.settled {
                 Self::settle_one(d, img);
             }
-            if img.unflushed && img.gpu_submit == self.serial {
-                let v = self.unflushed.entry(d.storage).or_default();
-                if !v.contains(d) {
-                    v.push(*d);
-                }
-                self.unflushed_span = self.unflushed_span.max(layout::compute_layout(&d.params).total as usize);
-            }
         }
     }
 
@@ -758,13 +759,13 @@ impl Textures {
     /// Whether the CPU changed an image's bytes is decided before any write (it drops that image's GPU contents), and the
     /// images these writes touch take the bytes as their new baseline: a write-back is not a CPU write.
     unsafe fn flush_overlaps(&mut self, dev: &Dev, d: &Desc) {
-        if self.unflushed.is_empty() || d.storage <= 0x10000 {
+        if d.storage <= 0x10000 {
             return;
         }
         let (start, end) = (d.storage, d.storage + layout::compute_layout(&d.params).total as usize);
         let mut group: Vec<(u64, Desc)> = self.unflushed_over(start, end).into_iter().filter(|h| h.1 != *d).collect();
         group.retain(|(_, o)| {
-            let keep = self.guest_can_take(o) && !self.cpu_changed(o);
+            let keep = self.writer_kept(o);
             if !keep {
                 self.no_longer_unflushed(o);
             }
@@ -853,20 +854,39 @@ impl Textures {
 
     fn index_image(&mut self, d: &Desc) {
         let len = layout::compute_layout(&d.params).total as usize;
-        self.by_storage.entry(d.storage).or_default().push((*d, d.storage + len));
-        self.by_storage_span = self.by_storage_span.max(len);
+        let end = d.storage + len.max(1);
+        for c in d.storage >> CHUNK_SHIFT..=(end - 1) >> CHUNK_SHIFT {
+            self.by_chunk.entry(c).or_default().push((*d, end));
+        }
+    }
+
+    /// Calls `f` once for each image whose bytes overlap [start, end), with the end of its bytes: from the first chunk
+    /// where the image and the range meet.
+    fn for_each_over(&self, start: usize, end: usize, mut f: impl FnMut(&Desc, usize) -> bool) {
+        if start >= end {
+            return;
+        }
+        let first = start >> CHUNK_SHIFT;
+        for c in first..=(end - 1) >> CHUNK_SHIFT {
+            let Some(v) = self.by_chunk.get(&c) else { continue };
+            for (o, o_end) in v {
+                if *o_end <= start || o.storage >= end || (o.storage >> CHUNK_SHIFT).max(first) != c {
+                    continue;
+                }
+                if !f(o, *o_end) {
+                    return;
+                }
+            }
+        }
     }
 
     /// The images over this range of guest memory.
     fn images_over(&self, start: usize, end: usize) -> Vec<Desc> {
         let mut over = Vec::new();
-        for (_, v) in self.by_storage.range(start.saturating_sub(self.by_storage_span)..end) {
-            for (o, o_end) in v {
-                if *o_end > start {
-                    over.push(*o);
-                }
-            }
-        }
+        self.for_each_over(start, end, |o, _| {
+            over.push(*o);
+            true
+        });
         over
     }
 
@@ -875,47 +895,40 @@ impl Textures {
     fn overwritten_since(&self, d: &Desc) -> bool {
         let Some(img) = self.images.get(d) else { return false };
         let end = d.storage + layout::compute_layout(&d.params).total as usize;
-        for (_, v) in self.by_storage.range(d.storage.saturating_sub(self.by_storage_span)..end) {
-            for (o, o_end) in v {
-                if *o_end <= d.storage || o == d {
-                    continue;
-                }
-                if self.images.get(o).is_some_and(|i| i.gpu_seq > img.content_seq && i.gpu_submit != self.serial) {
-                    return true;
-                }
-            }
-        }
-        false
+        let mut found = false;
+        self.for_each_over(d.storage, end, |o, _| {
+            found = o != d && self.images.get(o).is_some_and(|i| i.gpu_seq > img.content_seq && i.gpu_submit != self.serial);
+            !found
+        });
+        found
     }
 
     /// (write sequence, image) of each image with unflushed GPU contents from completed submits over this memory.
     fn unflushed_over(&self, start: usize, end: usize) -> Vec<(u64, Desc)> {
         let mut hits = Vec::new();
-        for (_, v) in self.unflushed.range(start.saturating_sub(self.unflushed_span)..end) {
-            for o in v {
-                if o.storage + layout::compute_layout(&o.params).total as usize <= start {
-                    continue;
-                }
-                if let Some(img) = self.images.get(o) {
-                    if img.unflushed && img.gpu_submit != self.serial {
-                        hits.push((img.gpu_seq, *o));
-                    }
+        self.for_each_over(start, end, |o, _| {
+            if let Some(img) = self.images.get(o) {
+                if img.unflushed && img.gpu_submit != self.serial {
+                    hits.push((img.gpu_seq, *o));
                 }
             }
-        }
+            true
+        });
         hits
     }
 
     fn no_longer_unflushed(&mut self, d: &Desc) {
-        if let Some(v) = self.unflushed.get_mut(&d.storage) {
-            v.retain(|o| o != d);
-            if v.is_empty() {
-                self.unflushed.remove(&d.storage);
-            }
-        }
         if let Some(img) = self.images.get_mut(d) {
             img.unflushed = false;
         }
+    }
+
+    /// Whether a writer's GPU contents over another image's memory still count: its memory is one the CPU can reach and
+    /// the CPU has not written it since. A writer whose submit has not completed has no baseline yet (settle takes it), so
+    /// the CPU cannot have overwritten what its work writes.
+    unsafe fn writer_kept(&self, o: &Desc) -> bool {
+        let unsettled = self.images.get(o).is_some_and(|i| i.gpu_written && !i.settled);
+        self.guest_can_take(o) && (unsettled || !self.cpu_changed(o))
     }
 
     /// Whether image `d`'s guest memory is in a pool the CPU can reach, so what it holds can matter.
@@ -1671,4 +1684,41 @@ pub(super) fn hash_bytes(b: &[u8]) -> u64 {
         h = (h ^ x as u64).wrapping_mul(0x0100_0000_01b3);
     }
     h
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    /// for_each_over finds exactly the images a scan of all of them finds, each once.
+    #[test]
+    fn chunk_index_finds_every_overlap_once() {
+        let mut t = Textures::default();
+        let mut all = Vec::new();
+        let mut x = 0x1234_5678u64;
+        let mut rnd = |n: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % n
+        };
+        for _ in 0..400 {
+            let w = 1 + rnd(2048) as i32;
+            let h = 1 + rnd(512) as i32;
+            let p = TextureParams { target: layout::NVN_TARGET_2D, width: w, height: h, depth: 1, levels: 1, format: 37, flags: 0, samples: 1, stride: 0 };
+            let d = Desc { storage: 0x1000_0000 + (rnd(1 << 26) as usize & !0xff), params: p };
+            t.index_image(&d);
+            all.push((d, d.storage + layout::compute_layout(&p).total as usize));
+        }
+        for _ in 0..400 {
+            let start = 0x1000_0000 + rnd(1 << 26) as usize;
+            let end = start + 1 + rnd(1 << 22) as usize;
+            let mut got = t.images_over(start, end);
+            let mut want: Vec<Desc> = all.iter().filter(|(d, e)| *e > start && d.storage < end).map(|(d, _)| *d).collect();
+            let key = |d: &Desc| (d.storage, d.params.width, d.params.height);
+            got.sort_by_key(key);
+            want.sort_by_key(key);
+            assert_eq!(got, want, "range {start:#x}..{end:#x}");
+        }
+    }
 }
