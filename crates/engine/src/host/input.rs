@@ -825,52 +825,76 @@ pub(crate) fn mouse_look_on() -> bool {
 /// the mouse; the macOS host does not have mouse look yet.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn mouse_look_moved(dx: f32, dy: f32) {
-    // Sideways into the game's yaw where a profile takes it (mouse right turns as the stick right: the yaw falls).
-    let dx = if YAW_SINK.load(Ordering::Relaxed) {
-        let speed = crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
-        add_mouse_yaw(-dx * MOUSE_YAW_PER_PX * speed);
+    // Into the game's camera angles where a profile takes them, as a stick would turn them: mouse right as the stick
+    // right (the yaw falls), mouse down as the stick down (the pitch rises).
+    let deg = || MOUSE_DEG_PER_PX * crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
+    let dx = if ANGLE_SINK[0].load(Ordering::Relaxed) {
+        add_mouse_angle(0, -dx * deg());
         0.0
     } else {
         dx
+    };
+    let dy = if ANGLE_SINK[1].load(Ordering::Relaxed) {
+        add_mouse_angle(1, dy * deg());
+        0.0
+    } else {
+        dy
     };
     let mut m = MOUSE_LOOK.lock().unwrap();
     m.pending.0 += dx;
     m.pending.1 += dy;
 }
 
-// ---- Exact mouse yaw ---------------------------------------------------------------------------------------------------
+// ---- Exact mouse look -------------------------------------------------------------------------------------------------
 //
-// Where a game profile owns the camera's yaw (profile/totk/camera_angles.rs: TotK stores the yaw it derives from the
-// camera's vectors and builds the next frame's camera from it), sideways mouse movement is added to that yaw directly:
-// MOUSE_YAW_PER_PX degrees per pixel times mouse-look-speed, nothing else. The stick's x is then not fed by the mouse.
-// The game's own rules decide what the yaw does (where a mode ignores it, so does the mouse). Every pixel is added
-// once, the next time the game stores the yaw; movement made while the game's camera code does not run (paused) is
-// added when it runs again. Up and down still go through the stick by speed (a debt: llmtalk/TODO.md).
+// Where a game profile owns the camera's angles (profile/totk/camera_angles.rs), mouse movement is added to them
+// directly: MOUSE_DEG_PER_PX degrees per pixel times mouse-look-speed, nothing else, and the mouse does not move the
+// stick on that axis. The game's own rules decide what the angles do (a mode that does not take them ignores them, as it
+// would the stick). Every pixel is added once, the next time the game takes the angles; movement made while the game's
+// camera code does not run (paused) is added when it runs again, or dropped where the game would not have turned.
 
-/// Degrees of yaw per pixel of mouse movement at mouse-look-speed 1.
-const MOUSE_YAW_PER_PX: f32 = 0.05;
-/// Whether a game profile takes the yaw (set when its hook is installed).
-static YAW_SINK: AtomicBool = AtomicBool::new(false);
-/// Degrees of yaw the game has not taken yet (f32 bits).
-static YAW_PENDING: AtomicU32 = AtomicU32::new(0);
+/// Degrees per pixel of mouse movement at mouse-look-speed 1.
+const MOUSE_DEG_PER_PX: f32 = 0.05;
+/// Whether a game profile takes the yaw (0) and the pitch (1).
+static ANGLE_SINK: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+/// Degrees of yaw and pitch the game has not taken yet (f32 bits).
+static ANGLE_PENDING: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 
-/// A game profile takes the camera's yaw from take_mouse_yaw.
-pub fn set_yaw_sink() {
-    YAW_SINK.store(true, Ordering::Relaxed);
+/// A game profile takes the camera's yaw (`pitch`: and pitch) from take_mouse_angle.
+pub fn set_angle_sink(pitch: bool) {
+    ANGLE_SINK[0].store(true, Ordering::Relaxed);
+    ANGLE_SINK[1].store(pitch, Ordering::Relaxed);
 }
 
-/// Called by the game profile as the game stores its camera's yaw: the degrees to add to it (and the pending amount
-/// cleared).
-pub fn take_mouse_yaw() -> f32 {
-    f32::from_bits(YAW_PENDING.swap(0, Ordering::AcqRel))
+/// Called by the game profile as the game takes its camera's angle `i` (0 yaw, 1 pitch): the degrees to add (the
+/// pending amount cleared).
+pub fn take_mouse_angle(i: usize) -> f32 {
+    f32::from_bits(ANGLE_PENDING[i].swap(0, Ordering::AcqRel))
 }
 
-/// Adds `deg` to the pending yaw (the window's input thread; the game's camera thread takes it).
-fn add_mouse_yaw(deg: f32) {
-    let mut cur = YAW_PENDING.load(Ordering::Acquire);
+/// The mouse moved since the game last tested for camera input (the game's test and its storing of the angles come in
+/// either order in a frame, so the pending degrees cannot stand for it). Taking it clears it.
+static MOUSE_INPUT: AtomicBool = AtomicBool::new(false);
+
+/// For the game's camera-input test: whether the mouse moved since the last test.
+pub fn take_mouse_input() -> bool {
+    MOUSE_INPUT.swap(false, Ordering::AcqRel)
+}
+
+/// Pending degrees of angle `i` put back (the game has not taken them yet: the camera waits for its mode).
+pub fn keep_mouse_angle(i: usize, deg: f32) {
+    if deg != 0.0 {
+        add_mouse_angle(i, deg);
+    }
+}
+
+/// Adds `deg` to pending angle `i` (the window's input thread adds; the game's camera thread takes).
+fn add_mouse_angle(i: usize, deg: f32) {
+    MOUSE_INPUT.store(true, Ordering::Release);
+    let mut cur = ANGLE_PENDING[i].load(Ordering::Acquire);
     loop {
         let next = (f32::from_bits(cur) + deg).to_bits();
-        match YAW_PENDING.compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire) {
+        match ANGLE_PENDING[i].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => return,
             Err(c) => cur = c,
         }
