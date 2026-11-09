@@ -1,4 +1,4 @@
-// Sideways mouse movement into the camera's yaw (mouse look, host/input.rs).
+// Mouse movement into the camera's yaw and pitch (mouse look, host/input.rs).
 //
 // The camera keeps its position and the point it looks at; a function turns their difference into a distance, a pitch
 // and a yaw in degrees (1.0.0: main+0xb8a1cc, called from main+0xb8a024 with x0 = where to store them and x1 = the
@@ -6,7 +6,17 @@
 // (main+0x9ab570) loads that yaw first and places the camera from it. The call is redirected to `camera_angles` below,
 // which computes the same three values the same way (the game's two constants are read from its own code) and adds the
 // mouse's sideways movement to the yaw: the game then turns the camera by exactly that, by its own rules (a mode that
-// does not place the camera from the yaw ignores it). Nothing else of the game's code changes.
+// does not place the camera from the yaw ignores it).
+//
+// The pitch the camera is placed with is rebuilt each frame from the camera's +0x108. In its automatic mode (+0x180 = 3)
+// that is eased toward a default; any right stick input switches it to manual (4), where +0x108 is the pitch the stick
+// adds to and it stays where it is put. The game's test for that input (1.0.0 main+0x9abb28: fcmp s14, #0.0; b.gt) is
+// rewritten to ask `camera_input`, which answers as the game would (s14, the stick's strength, above 0) or yes when the
+// mouse has moved: the game then applies all its own conditions and picks the mode. The mouse's vertical degrees are
+// added to +0x108 when the game stores its angles, if the camera is in manual mode; otherwise dropped, as a stick would
+// turn nothing there. Both read the game's registers from the lifted runtime (the camera in x19, s14), so the pitch part
+// is installed where guest code is lifted only (Windows; macOS has no mouse look yet). Nothing else of the game's code
+// changes.
 //
 // The call is found by the instructions around it, not by address, so other builds compiled the same way get it too.
 // Like aspect.rs, the rewritten call enters an HLE trampoline (no code of our own in guest memory), the same at lift and
@@ -23,6 +33,16 @@ const CALLEE: [u32; 4] = [0xd101_03ff, 0xfd00_0bea, 0xf900_1ff3, 0x6d01_a3e9];
 /// Where in the function its two constants are loaded: adrp x8 then ldr s1 (the pitch offset), adrp x8 then ldr s10
 /// (degrees per radian).
 const CONSTANTS_AT: usize = 0x88;
+
+/// The camera-input test: ldrb w8, [x27, #0x141]; tbnz w8, #5, ...; fcmp s14, #0.0; b.gt (manual mode).
+#[cfg_attr(nx_native, allow(dead_code))]
+const DECISION: [(u32, u32); 4] = [(0x3945_0768, !0), (0x3728_0008, 0xfff8_001f), (0x1e20_21c8, !0), (0x5400_000c, 0xff00_001f)];
+#[cfg_attr(nx_native, allow(dead_code))]
+const TEST: usize = 2;
+/// The camera's pitch state and mode.
+const PITCH: usize = 0x108;
+const MODE: usize = 0x180;
+const MANUAL: u32 = 4;
 
 static OFFSET: AtomicU32 = AtomicU32::new(0);
 static SCALE: AtomicU32 = AtomicU32::new(0);
@@ -54,6 +74,21 @@ fn find(text: &[u8]) -> Option<usize> {
     let at = found?;
     let callee = callee_of(at, word(text, at))?;
     (callee + 16 <= text.len() && CALLEE.iter().enumerate().all(|(k, &w)| word(text, callee + 4 * k) == w)).then_some(at)
+}
+
+/// The offset in `text` of the camera-input test's fcmp, if found exactly once.
+#[cfg_attr(nx_native, allow(dead_code))]
+fn find_decision(text: &[u8]) -> Option<usize> {
+    let mut found = None;
+    for i in 0..(text.len() / 4).saturating_sub(DECISION.len()) {
+        if DECISION.iter().enumerate().all(|(k, &(w, m))| word(text, 4 * (i + k)) & m == w) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(4 * (i + TEST));
+        }
+    }
+    found
 }
 
 /// The target of the bl `w` at `at`.
@@ -102,9 +137,49 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     std::ptr::write((base + at) as *mut u32, 0x9400_0000 | ((d >> 2) as u32 & 0x03ff_ffff));
     crate::os::flush_icache(base + at, 4);
-    crate::host::input::set_yaw_sink();
-    println!("[+] TotK: sideways mouse movement turns the camera's yaw directly (main+{at:#x}, profile/totk/camera_angles.rs)");
+    #[cfg(not(nx_native))]
+    let pitch = install_decision(base, text, mem_space);
+    #[cfg(nx_native)]
+    let pitch = false;
+    crate::host::input::set_angle_sink(pitch);
+    let what = if pitch { "the camera's yaw and pitch" } else { "the camera's yaw" };
+    println!("[+] TotK: mouse movement turns {what} directly (main+{at:#x}, profile/totk/camera_angles.rs)");
 }
+
+/// Rewrites the camera-input test to ask `camera_input`: bl to it, then cbnz w0 to the test's own target.
+#[cfg(all(nx_runtime, not(nx_native)))]
+unsafe fn install_decision(base: usize, text: &[u8], mem_space: &mut crate::guest::loader::GuestMemorySpace) -> bool {
+    let Some(at) = find_decision(text) else {
+        println!("[!] TotK: the camera's input test was not found; mouse pitch steers by speed only");
+        return false;
+    };
+    let bgt = word(text, at + 4);
+    let tramp = mem_space.make_hle_trampoline(crate::hle!(camera_input())) as usize;
+    let d = tramp as i64 - (base + at) as i64;
+    if d.abs() >= 1 << 27 {
+        println!("[!] TotK: the camera input hook is out of branch range");
+        return false;
+    }
+    std::ptr::write((base + at) as *mut u32, 0x9400_0000 | ((d >> 2) as u32 & 0x03ff_ffff));
+    // b.gt and cbnz w0 keep their 19-bit offset in the same bits.
+    std::ptr::write((base + at + 4) as *mut u32, 0x3500_0000 | (bgt & 0x00ff_ffe0));
+    crate::os::flush_icache(base + at, 8);
+    true
+}
+
+/// The camera-input test: the game's own (s14, the right stick's strength, above 0) or mouse movement waiting.
+pub unsafe extern "C" fn camera_input() -> u64 {
+    let cpu = crate::lifted::current();
+    let stick = !cpu.is_null() && f32::from_bits((*cpu).v[14] as u32) > 0.0;
+    let mouse = crate::host::input::take_mouse_input();
+    if mouse {
+        SEEN.store(true, Ordering::Release);
+    }
+    (stick || mouse) as u64
+}
+
+/// The game has tested for camera input since mouse movement arrived (its answer is in the camera's mode).
+static SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// To [-180, 180), as the game's code wraps them.
 fn wrap(a: f32) -> f32 {
@@ -127,7 +202,22 @@ pub unsafe extern "C" fn camera_angles(out: *mut f32, v: *const f32) -> usize {
     let pitch = wrap((offset - h.atan2(y)) * scale);
     // The game builds the next frame's camera from this yaw (the turn function main+0x9ab570 loads it first and places
     // the camera from it): sideways mouse movement is added here.
-    let yaw = wrap(x.atan2(z) * scale + crate::host::input::take_mouse_yaw());
+    let yaw = wrap(x.atan2(z) * scale + crate::host::input::take_mouse_angle(0));
+    // The pitch state (camera +0x108, the camera in x19 of the caller), in manual mode only.
+    // In manual mode added; else kept until the game has tested the input, and dropped if it then stayed out of manual
+    // mode (as a stick would turn nothing there).
+    let dp = crate::host::input::take_mouse_angle(1);
+    let cpu = crate::lifted::current();
+    if dp != 0.0 && !cpu.is_null() {
+        let camera = (*cpu).x[19] as usize;
+        if std::ptr::read((camera + MODE) as *const u32) == MANUAL {
+            let p = (camera + PITCH) as *mut f32;
+            std::ptr::write(p, wrap(std::ptr::read(p) + dp));
+            SEEN.store(false, Ordering::Release);
+        } else if !SEEN.swap(false, Ordering::AcqRel) {
+            crate::host::input::keep_mouse_angle(1, dp);
+        }
+    }
     *out = dist;
     *out.add(1) = pitch;
     *out.add(2) = yaw;
@@ -166,6 +256,23 @@ mod tests {
         let first = text_with(0x40, 0x180);
         twice[0x80 - 12..0x80 + 12].copy_from_slice(&first[0x40 - 12..0x40 + 12]);
         assert_eq!(find(&twice), None);
+    }
+
+    #[test]
+    fn finds_the_camera_input_test() {
+        // 1.0.0's words: ldrb w8, [x27, #0x141]; tbnz w8, #5, +0x1774; fcmp s14, #0.0; b.gt +0x1e48.
+        let words = [0x3945_0768u32, 0x3728_bb88, 0x1e20_21c8, 0x5400_f22c];
+        let mut text = vec![0u8; 0x40];
+        for (k, w) in words.iter().enumerate() {
+            text[0x10 + 4 * k..0x14 + 4 * k].copy_from_slice(&w.to_le_bytes());
+        }
+        assert_eq!(find_decision(&text), Some(0x18));
+        // The cbnz written in place of b.gt branches to the same target: the same 19-bit offset.
+        let cbnz = 0x3500_0000 | (words[3] & 0x00ff_ffe0);
+        assert_eq!(cbnz, 0x3500_f220);
+        assert_eq!((cbnz >> 5) & 0x7ffff, (words[3] >> 5) & 0x7ffff);
+        text[0x18] ^= 1;
+        assert_eq!(find_decision(&text), None);
     }
 
     #[test]
