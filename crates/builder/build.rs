@@ -6,4 +6,7 @@ fn main() {
         println!("cargo::rustc-link-arg-bins=/DELAYLOAD:SDL3.dll");
         println!("cargo::rustc-link-arg-bins=delayimp.lib");
     }
+    windows_version_resource("nxport builder: turns a game dump into a native app");
 }
+
+include!("../windows_version.rs");

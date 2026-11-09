@@ -42,6 +42,8 @@ fn main() {
         }
     }
 
+    windows_version_resource("nxport: runs a game recompiled from its dump");
+
     compile_shader("src/vulkan/astc.comp", naga::ShaderStage::Compute, "astc.spv");
     compile_shader("src/vulkan/overlay.vert", naga::ShaderStage::Vertex, "overlay_vert.spv");
     compile_shader("src/vulkan/overlay.frag", naga::ShaderStage::Fragment, "overlay_frag.spv");
@@ -65,3 +67,5 @@ fn compile_shader(src: &str, stage: naga::ShaderStage, out: &str) {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join(out), bytes).unwrap();
 }
+
+include!("../windows_version.rs");
