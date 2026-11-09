@@ -137,7 +137,8 @@ pub unsafe extern "C" fn hle_nnmusl_init_dso(
         16
     };
     let n = tdata_end.saturating_sub(tdata_start);
-    let template = if n > 0 && n <= 0x1000 && tdata_start >= 0x10000 {
+    // The block holds at most 0x1f0 bytes of it (guest/tls.rs reports a larger segment), so no more is read.
+    let template = if n > 0 && n <= 0x1f0 && tdata_start >= 0x10000 {
         std::slice::from_raw_parts(tdata_start as *const u8, n).to_vec()
     } else {
         Vec::new()
@@ -148,7 +149,7 @@ pub unsafe extern "C" fn hle_nnmusl_init_dso(
         tbss_end.saturating_sub(tbss_start),
         align
     );
-    crate::guest::tls::set_module_tls_template(template, align);
+    crate::guest::tls::set_module_tls_template(template, align, n + tbss_end.saturating_sub(tbss_start));
     1
 }
 
