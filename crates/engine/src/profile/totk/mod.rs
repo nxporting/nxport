@@ -3,7 +3,6 @@
 pub mod aspect;
 pub mod camera_angles;
 pub mod camera_ease;
-pub mod camera_stick;
 pub mod frame_time;
 pub mod hud;
 pub mod options;
@@ -33,5 +32,5 @@ pub static PROFILE: GameProfile = GameProfile {
         ("iPhone 16 Pro & Pro Max", include_str!("presets/iPhone 16 Pro & Pro Max.toml")),
         ("iPhone SE", include_str!("presets/iPhone SE.toml")),
     ],
-    module_patches: &[ultracam::patch, camera_stick::patch, camera_ease::patch],
+    module_patches: &[ultracam::patch, camera_ease::patch],
 };

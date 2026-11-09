@@ -13,7 +13,7 @@
 // Npad state kept in atomics, which nn::hid::GetNpadStates (horizon/hle.rs) reads. On Windows SDL's event loop on the
 // main thread does the same (host/display_sdl.rs).
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// The Switch inputs a binding can drive.
@@ -777,45 +777,6 @@ static MOUSE_LOOK: std::sync::Mutex<MouseLook> =
 static MOUSE_STICK: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 const MOUSE_LOOK_FULL: f32 = 1500.0;
 const MOUSE_LOOK_DEADZONE: f32 = 0.15;
-/// How strongly the game may turn from the right stick, in full deflections (an f32 bit pattern): 1 on a Switch; more
-/// where a game patch lets the stick past its circle (profile/totk/camera_stick.rs), so mouse look can turn faster
-/// than a stick.
-static RIGHT_STICK_MAX: AtomicU32 = AtomicU32::new(0x3f80_0000);
-/// The stick length that gives a turn of a given strength past 1 (the game's response there, inverted), as a fn
-/// pointer; 0: the length itself.
-static RIGHT_STICK_FOR: AtomicUsize = AtomicUsize::new(0);
-
-/// Lets mouse look turn up to `max` times a full stick, for a game patched to take it: `stick_for(t)` is the stick
-/// length past 1 that the game turns `t` times as fast for.
-pub fn set_right_stick_range(max: f32, stick_for: fn(f32) -> f32) {
-    RIGHT_STICK_FOR.store(stick_for as usize, Ordering::Relaxed);
-    RIGHT_STICK_MAX.store(max.max(1.0).to_bits(), Ordering::Relaxed);
-}
-
-fn right_stick_max() -> f32 {
-    f32::from_bits(RIGHT_STICK_MAX.load(Ordering::Relaxed))
-}
-
-/// The stick length for a turn of strength `t` (t > 1 only where a game allows it).
-fn right_stick_for(t: f32) -> f32 {
-    let f = RIGHT_STICK_FOR.load(Ordering::Relaxed);
-    if f == 0 || t <= 1.0 {
-        return t;
-    }
-    // Only set_right_stick_range stores it, from a fn(f32) -> f32.
-    let stick_for: fn(f32) -> f32 = unsafe { std::mem::transmute::<usize, fn(f32) -> f32>(f) };
-    stick_for(t)
-}
-
-/// `(x, y)` with its length past 1 turned into the stick length the game needs for that strength.
-fn right_stick_vector((x, y): (f32, f32)) -> (f32, f32) {
-    let m = (x * x + y * y).sqrt();
-    if m <= 1.0 {
-        return (x, y);
-    }
-    let s = right_stick_for(m) / m;
-    (x * s, y * s)
-}
 
 pub(crate) fn mouse_look_on() -> bool {
     crate::settings::try_get().is_some_and(|s| s.input.mouse_look && !s.input.direct_mouse)
@@ -933,7 +894,7 @@ fn update_mouse_look() {
         if m.smooth.0.abs() < 60.0 && m.smooth.1.abs() < 60.0 && v == (0.0, 0.0) {
             m.smooth = (0.0, 0.0);
         }
-        right_stick_vector(mouse_look_deflection(m.smooth.0, m.smooth.1, speed, right_stick_max()))
+        mouse_look_deflection(m.smooth.0, m.smooth.1, speed, 1.0)
     };
     let (ox, oy) = (f32::from_bits(MOUSE_STICK[0].load(Ordering::Relaxed)), f32::from_bits(MOUSE_STICK[1].load(Ordering::Relaxed)));
     if (x, y) != (ox, oy) {
@@ -1020,11 +981,9 @@ pub fn update_npad() {
                 buttons |= 1 << (base + 3);
             }
         }
-        // HID values are i32: the right stick may pass 32767 for a game that takes it (set_right_stick_max).
-        let unit = |v: f32, max: f32| (v.clamp(-max, max) * 32767.0).round() as i32;
-        let rmax = right_stick_for(right_stick_max());
-        for (slot, (v, max)) in NPAD_STICKS[player].iter().zip([(lx, 1.0), (ly, 1.0), (rx, rmax), (ry, rmax)]) {
-            slot.store(unit(v, max), Ordering::Release);
+        let unit = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i32;
+        for (slot, v) in NPAD_STICKS[player].iter().zip([lx, ly, rx, ry]) {
+            slot.store(unit(v), Ordering::Release);
         }
         NPAD_BUTTONS[player].store(buttons, Ordering::Release);
     }
