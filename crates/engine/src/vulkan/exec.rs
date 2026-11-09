@@ -509,7 +509,8 @@ fn gpu_writes(dirty: &Ranges, inflight: &[(u64, Ranges)], a: usize, b: usize) ->
 const PASS_TIMESTAMPS: u32 = 1000;
 
 /// --split-ms=T (default 1, 0 = one command buffer per submit): the command buffer is handed to the queue between
-/// passes once T ms were spent recording it.
+/// passes once T ms were spent recording it. A tuning number: it trades submit overhead against how early the GPU can
+/// start; the commands, their order and the results are the same either way.
 fn chunk() -> Option<std::time::Duration> {
     static T: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     let ms = *T.get_or_init(|| crate::settings::get().graphics.split_ms);
