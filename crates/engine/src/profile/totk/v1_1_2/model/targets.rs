@@ -19,20 +19,26 @@ const PFN_VIEW_SET_LAYERS: usize = 0x466d9c0;
 pub(super) const CONTEXT_TYPE_GUARD: usize = 0x4634f30;
 pub(super) const CONTEXT_TYPE: usize = 0x4634f38;
 const UNBOUND_NAME: usize = 0x37acc70;
+/// Render buffer virtual +0x28: the wrapper's unbind (`unbind`).
+pub(super) const RENDER_BUFFER_UNBIND: usize = 0xbe19ac;
 
 pub(super) unsafe fn bind(p: &mut Port, rb: usize, w: usize) -> R<()> {
     bind_prefix(p, rb, w)?;
     set_targets(p, rb, w, 0)
 }
 
-/// The previous buffer's unbind check and the context's current buffer and name.
+/// A buffer still bound is unbound (its virtual +0x28) and kept at the context's +0x100; the context's current buffer
+/// and name.
 unsafe fn bind_prefix(p: &mut Port, rb: usize, w: usize) -> R<()> {
     if (p.m.r8(w + 0x108) >> 1) & 1 != 0 {
         let prev = p.m.r64(w + 0xf8);
         if prev != 0 {
-            return Err("render buffer unbind");
+            if p.vfn(prev, 0x28) != RENDER_BUFFER_UNBIND {
+                return Err("render buffer unbind");
+            }
+            unbind(p, w)?;
         }
-        p.m.w::<u64>(w + 0x100, 0);
+        p.m.w::<u64>(w + 0x100, prev as u64);
     }
     let targets: [usize; 9] = std::array::from_fn(|k| p.m.r64(rb + 0x20 + k * 8));
     let target = |k: usize| targets[k];

@@ -4,7 +4,7 @@
 use super::draw::{Port, R};
 use super::lights::{shape_state, stream_draw, stream_draw_n, SHAPES, STREAMS};
 use super::scene_passes::{default_state, fullscreen, scene_blocks};
-use super::texture_slots::{alloc_target, assign, barrier_if_slot, copy_target, level_size, new_buffer, new_target, release, set_extent, Host};
+use super::texture_slots::{acquire, alloc_target, assign, barrier_if_slot, copy_target, level_size, new_buffer, new_target, release, release_sampler, set_extent, Host};
 use super::texture_slots::{BUFFER_BYTES, COLOR_VTABLE, DEPTH_VTABLE, TARGET_BYTES};
 use super::vfx::{draw_pass, program_apply, program_block, program_storage_block, program_texture};
 use super::{cubemap, targets, viewport};
@@ -26,8 +26,12 @@ const REPROJECTION_NAME: usize = 0x3746b91;
 const DEPTH_BUFFER_NAME: usize = 0x36fbafe;
 /// [[[holder]]+0x18]: the default texture.
 const DEFAULT_TEXTURES: usize = 0x4631740;
+/// "CorrectDepth".
+const CORRECT_DEPTH_NAME: usize = 0x374e8ec;
 /// "volume_mask".
 const VOLUME_MASK_NAME: usize = 0x37360cb;
+/// "agl::TextureSampler(from texture)".
+const SAMPLER_NAME: usize = 0x37a908e;
 /// Render buffer virtual +0x28: the wrapper's unbind (targets::unbind).
 const RENDER_BUFFER_UNBIND: usize = 0xbe19ac;
 
@@ -560,4 +564,239 @@ unsafe fn volume_mask_passes(p: &mut Port, this: usize, [w, a, b, c]: [usize; 4]
     assign(p, elem + 8, src)?;
     p.m.fetch_or32(elem + 0xec, 1);
     Ok(())
+}
+
+/// main+0x957820(this, w, view, flags, tex, desc, depth): a pass into a colour target copied from `desc` and a depth
+/// target main+0x9580c4 copies from `depth`: render state (blend and write bits from flags bit 2, colour mask by bit 1,
+/// +0x64 = 8), the buffer bound without clears, the program the flags' variant counts select from [[this+0x28]+8], the
+/// view's record (+0x18, 0x7400 each) as block 0 and storage block 0 (+0x7328), `tex` at slot 0, the full-screen
+/// triangle.
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn view_target_draw(p: &mut Port, this: usize, w: usize, view: u32, flags: u32, tex: usize, desc: usize, depth: usize) -> R<()> {
+    let o = Objects::new(p, &[COLOR_VTABLE, DEPTH_VTABLE]);
+    let r = view_target_pass(p, this, w, view, flags, tex, desc, depth, &o);
+    o.release(p);
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn view_target_pass(p: &mut Port, this: usize, w: usize, view: u32, flags: u32, tex: usize, desc: usize, depth: usize, o: &Objects) -> R<()> {
+    let mut g = default_state(p);
+    let b = g.as_mut_ptr() as *mut u8;
+    *b = ((flags >> 2) & 1) as u8;
+    g[1] = 0;
+    *b.add(1) = 1;
+    *b.add(0x64) = 8;
+    g[7] = if (flags >> 1) & 1 != 0 { 0xf } else { 0 };
+    p.apply_graphics_context(g.as_ptr() as usize, w);
+    let (rb, c, d) = (o.rb(), o.target(0), o.target(1));
+    copy_target(p, c, desc)?;
+    copy_target(p, d, depth)?;
+    let (cw, ch) = level_size(p, c, true);
+    let (fw, fh) = set_extent(p, rb, cw, ch);
+    p.m.w::<u64>(rb + 0x20, c as u64);
+    p.m.w::<u64>(rb + 0x60, d as u64);
+    let vp = viewport::full(p, fw, fh);
+    viewport::apply(p, vp.as_ptr() as usize, w, rb);
+    let cc = p.pfn(CLEAR_COLOR);
+    let (lo, hi) = (p.m.r64(cc) as u64, p.m.r64(cc + 8) as u64);
+    let mut values = [0u64; 0x11];
+    for k in 0..8 {
+        values[k * 2] = lo;
+        values[k * 2 + 1] = hi;
+    }
+    values[0x10] = 1f32.to_bits() as u64;
+    targets::bind_clear(p, rb, w, vp.as_ptr() as usize, 0, values.as_ptr() as usize)?;
+    // The program: the variant counts of the sets the flags select, one-based; none = the first program.
+    let set = p.m.r64(p.m.r64(this + 0x28) + 8);
+    let lv = p.m.r64(set + 0x30);
+    let n = p.m.r32(set + 0x28);
+    let base = if flags & 0x10 == 0 {
+        let x = p.m.r16(lv + 0x20) as u32;
+        if flags & 8 == 0 { x << 1 } else { x }
+    } else {
+        0
+    };
+    let a = if flags & 1 != 0 { 0 } else { p.m.r16(lv + if n > 1 { 0x28 } else { 0 } + 0x20) as u32 };
+    let cnt = if flags & 4 != 0 { p.m.r16(lv + if n < 3 { 0 } else { 0x50 } + 0x20) as u32 } else { 0 };
+    let dd = if flags & 2 != 0 { p.m.r16(lv + if n < 4 { 0 } else { 0x78 } + 0x20) as u32 } else { 0 };
+    let sel = a.wrapping_add(base).wrapping_add(cnt).wrapping_add(dd);
+    let prog = if sel == 0 {
+        p.m.r64(set + 0x10)
+    } else {
+        let i = if p.m.r32(set + 0x18) <= sel - 1 { 0 } else { sel - 1 };
+        p.m.r64(set + 0x20) + i as usize * 0x158
+    };
+    program_apply(p, prog, w)?;
+    let rec = p.m.r64(this + 0x18).wrapping_add(clamp_index(view, p.m.r32(this + 0x10)).wrapping_mul(0x7400));
+    program_block(p, prog, w, 0, rec, 0)?;
+    program_storage_block(p, prog, w, 0, rec + 0x7328, 0)?;
+    program_texture(p, prog, w, 0, tex)?;
+    fullscreen(p, w);
+    targets::unbind(p, w)
+}
+
+/// main+0xe01cb8(this, w, _, ctx), with +0x352 bit 1: the bound render buffer (its virtual +0x28 the known unbind)
+/// unbound; a colour target copied from ctx[1] (layer ctx +0x18) bound alone and cleared to white; with ctx +0x1c,
+/// ctx[0] drawn through [[[this+0x368]+8]+0x20] as a texture with a sampler made from it and the scene block 2 (ctx[2]
+/// +0x18, 0x430 each, +0x390); then the target unbound and the first buffer bound again. Applying only: the stack
+/// texture is finished by the game.
+pub(super) unsafe fn target_blit(p: &mut Port, this: usize, w: usize, ctx: usize) -> R<()> {
+    if (p.m.r8(this + 0x352) >> 1) & 1 == 0 {
+        return Ok(());
+    }
+    let cur = p.m.r64(w + 0xf8);
+    if cur == 0 {
+        return Err("no render buffer bound");
+    }
+    if p.vfn(cur, 0x28) != RENDER_BUFFER_UNBIND {
+        return Err("render buffer virtual +0x28");
+    }
+    let o = Objects::new(p, &[COLOR_VTABLE]);
+    let r = target_blit_pass(p, this, w, ctx, cur, &o);
+    o.release(p);
+    r
+}
+
+unsafe fn target_blit_pass(p: &mut Port, this: usize, w: usize, ctx: usize, cur: usize, o: &Objects) -> R<()> {
+    targets::unbind(p, w)?;
+    let layer = p.m.r32(ctx + 0x18);
+    let (rb, t) = (o.rb(), o.target(0));
+    p.m.w::<u16>(t + 0xcc, layer as u16);
+    copy_target(p, t, p.m.r64(ctx + 8))?;
+    let (tw, th) = level_size(p, t, true);
+    let (fw, fh) = set_extent(p, rb, tw, th);
+    p.m.w::<u64>(rb + 0x20, t as u64);
+    let vp = viewport::full(p, fw, fh);
+    viewport::apply(p, vp.as_ptr() as usize, w, rb);
+    let mut g = default_state(p);
+    g[0] &= 0xffff_0000;
+    g[1] = 0;
+    p.apply_graphics_context(g.as_ptr() as usize, w);
+    // Clear values: every colour 1.0, depth 1.0, stencil 0.
+    let mut values = [0u32; 0x22];
+    values[..0x21].fill(1f32.to_bits());
+    targets::bind_clear(p, rb, w, vp.as_ptr() as usize, 1, values.as_ptr() as usize)?;
+    if p.m.r8(ctx + 0x1c) != 0 {
+        let prog = p.m.r64(p.m.r64(p.m.r64(this + 0x368) + 8) + 0x20);
+        program_apply(p, prog, w)?;
+        let u = Host::new(p, 0x100);
+        let r = sampled_draw(p, w, ctx, layer, prog, u.addr());
+        u.release(p);
+        r?;
+    }
+    targets::unbind(p, w)?;
+    targets::bind(p, cur, w)
+}
+
+/// ctx[0] as a stack texture `u` with a sampler made from it (the game's inline constructor and copy), at slot 0 of
+/// `prog`, the scene block 2 and the full-screen triangle; the sampler and slot references released after.
+unsafe fn sampled_draw(p: &mut Port, w: usize, ctx: usize, layer: u32, prog: usize, u: usize) -> R<()> {
+    let src = p.m.r64(ctx);
+    for o in (0..0x58).step_by(8) {
+        p.m.w::<u64>(u + o, p.m.r64(src + o) as u64);
+    }
+    p.m.w::<u32>(u + 0x58, p.m.r32(src + 0x58));
+    for o in (0x60..0xb0).step_by(8) {
+        p.m.w::<u64>(u + o, p.m.r64(src + o) as u64);
+    }
+    p.m.w::<u64>(u + 0xb0, (p.base + SAMPLER_NAME) as u64);
+    p.m.w::<u64>(u + 0xc0, 0x3f80_0000_0000_0000);
+    p.m.w::<u64>(u + 0xc8, 0x4170_0000_0000_0000);
+    p.m.w::<u64>(u + 0xd4, 0x0101_0707_0700_0000);
+    p.m.w::<u64>(u + 0xe0, 0xff_0504_0302);
+    p.m.w::<u8>(u + 0xe8, 0x20);
+    p.m.w::<u16>(u + 0xea, 0xffff);
+    acquire(p, u)?;
+    program_texture(p, prog, w, 0, u)?;
+    let ctx2 = p.m.r64(ctx + 0x10);
+    let rec = p.m.r64(ctx2 + 0x18).wrapping_add(clamp_index(layer, p.m.r32(ctx2 + 0x10)).wrapping_mul(0x430));
+    p.m.w::<u8>(rec + 0x421, p.m.r8(rec + 0x421) | 1);
+    program_block(p, prog, w, 2, rec + 0x390, 0)?;
+    fullscreen(p, w);
+    release_sampler(p, u + 0xea);
+    release(p, u);
+    Ok(())
+}
+
+/// main+0x9590f8(this, w, view, [scene, grid, storage]), with +0x350 bit 11: a "CorrectDepth" temporary target (format 0x1d,
+/// the view record's (grid +0x10, 0x21b0 each) +0x1670 size, halved with bit 14; +0x7f0's with bit 15) drawn with
+/// program 2 (3 with bit 12) of [+0x368]+8: the scene blocks, storage block 1 ([storage +0x18] +0x7328, 0x7400 each),
+/// textures [+0x2118]+0x208 and the size's source, over the record's grid, after a barrier; cleared with bit 12, which
+/// also opens its colour mask. The target is given back before the unbind. Applying only: the allocation is past the
+/// commit point.
+pub(super) unsafe fn correct_depth(p: &mut Port, this: usize, w: usize, view: u32, ctx: usize) -> R<()> {
+    let flags = p.m.r32(this + 0x350);
+    if (flags >> 11) & 1 == 0 {
+        return Ok(());
+    }
+    let grid = p.m.r64(ctx + 8);
+    let rec = p.m.r64(grid + 0x10).wrapping_add(clamp_index(view, p.m.r32(grid + 8)).wrapping_mul(0x21b0));
+    let cleared = (flags >> 12) & 1;
+    let programs = p.m.r64(p.m.r64(this + 0x368) + 8);
+    let index = if cleared != 0 { 3u32 } else { 2 };
+    let index = if p.m.r32(programs + 0x18) <= index { 0 } else { index };
+    let prog = p.m.r64(programs + 0x20) + index as usize * 0x158;
+    if p.m.r32(prog + 0x10) != 0 || p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let o = Objects::new(p, &[COLOR_VTABLE]);
+    let r = correct_depth_pass(p, this, w, view, ctx, rec, flags, prog, &o);
+    o.release(p);
+    r
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn correct_depth_pass(p: &mut Port, this: usize, w: usize, view: u32, ctx: usize, rec: usize, flags: u32, prog: usize, o: &Objects) -> R<()> {
+    let size = |p: &Port, s: usize| {
+        let h = p.m.r16(s + 0x32) as u32;
+        ((p.m.r16(s + 0x30) as u32).max(1), if p.m.r16(s + 0x3a) != 3 { 1 } else { h }.max(h))
+    };
+    let cleared = (flags >> 12) & 1;
+    let mut g = default_state(p);
+    g[0] &= 0xffff_0000;
+    g[1] = 0;
+    g[7] = if cleared != 0 { 0xf } else { 0 };
+    p.apply_graphics_context(g.as_ptr() as usize, w);
+    let (mut source, (mut tw, mut th)) = (rec + 0x1670, size(p, rec + 0x1670));
+    if (flags >> 14) & 1 != 0 {
+        tw >>= 1;
+        th >>= 1;
+    } else if (flags >> 15) & 1 != 0 {
+        source = rec + 0x7f0;
+        (tw, th) = size(p, source);
+    }
+    program_apply(p, prog, w)?;
+    scene_blocks(p, this, w, view, prog, p.m.r64(ctx))?;
+    let storage = p.m.r64(ctx + 0x10);
+    let s = clamp_index(view, p.m.r32(storage + 0x10)).wrapping_mul(0x7400);
+    program_storage_block(p, prog, w, 1, p.m.r64(storage + 0x18).wrapping_add(s) + 0x7328, 0)?;
+    program_texture(p, prog, w, 0, p.m.r64(rec + 0x2118) + 0x208)?;
+    program_texture(p, prog, w, 1, source)?;
+    p.m.commit();
+    // commit
+    let t = alloc_target(p, w, CORRECT_DEPTH_NAME, 0x1d, tw, th)?;
+    let (rb, c) = (o.rb(), o.target(0));
+    copy_target(p, c, t)?;
+    let (cw, ch) = level_size(p, c, true);
+    let (fw, fh) = set_extent(p, rb, cw, ch);
+    p.m.w::<u64>(rb + 0x20, c as u64);
+    let vp = viewport::full(p, fw, fh);
+    viewport::apply(p, vp.as_ptr() as usize, w, rb);
+    let settings = p.m.r64(p.m.r64(p.base + SETTINGS));
+    let cmd = p.m.r64(w + 0xb8);
+    p.barrier(cmd, if (p.m.r8(settings + 0x50c) >> 1) & 1 == 0 { 0x11 } else { 0x111 });
+    let cc = p.pfn(CLEAR_COLOR);
+    let (lo, hi) = (p.m.r64(cc) as u64, p.m.r64(cc + 8) as u64);
+    let mut values = [0u64; 0x11];
+    for k in 0..8 {
+        values[k * 2] = lo;
+        values[k * 2 + 1] = hi;
+    }
+    values[0x10] = 1f32.to_bits() as u64;
+    targets::bind_clear(p, rb, w, vp.as_ptr() as usize, cleared, values.as_ptr() as usize)?;
+    instanced_quad(p, w, rec);
+    let pool = p.m.r64(p.m.r64(p.base + TARGET_POOL));
+    p.helper("depth of field gather", GATHER, &[pool as u64, t as u64])?;
+    targets::unbind(p, w)
 }

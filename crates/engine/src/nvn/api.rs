@@ -2801,17 +2801,27 @@ enum Capture {
 pub(crate) struct Buffered(Vec<(usize, RecordedNvnCommand)>);
 
 /// Runs `f` with this thread's commands kept instead of recorded.
+/// Nests: inside another capture of this thread, that capture is kept aside for `f` and put back after it (commands
+/// committed then go to it, see commit_buffered).
 pub(crate) fn capture_buffered<R>(f: impl FnOnce() -> R) -> (R, Buffered) {
-    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Buffer(Vec::new())));
+    let outer = CAPTURE.with(|c| c.borrow_mut().replace(Capture::Buffer(Vec::new())));
     let r = f();
-    match CAPTURE.with(|c| c.borrow_mut().take()) {
+    let inner = CAPTURE.with(|c| std::mem::replace(&mut *c.borrow_mut(), outer));
+    match inner {
         Some(Capture::Buffer(v)) => (r, Buffered(v)),
         _ => (r, Buffered(Vec::new())),
     }
 }
 
-/// Records commands kept by capture_buffered, in order.
+/// Records commands kept by capture_buffered, in order: into the enclosing buffered capture when there is one.
 pub(crate) unsafe fn commit_buffered(b: Buffered) {
+    let mut b = Some(b);
+    CAPTURE.with(|c| {
+        if let Some(Capture::Buffer(v)) = c.borrow_mut().as_mut() {
+            v.extend(b.take().unwrap().0);
+        }
+    });
+    let Some(b) = b else { return };
     for (cmd, op) in b.0 {
         let cmd = cmd as *mut NvnCommandBuffer;
         if cmd.is_null() || (*cmd).ops == 0 {
@@ -2845,6 +2855,32 @@ pub fn capture_dry(f: impl FnOnce()) -> Vec<String> {
         Some(Capture::Dry(v)) => v,
         _ => Vec::new(),
     }
+}
+
+/// A note in this thread's dry capture, if any (--compare-port marks the game functions a port calls).
+pub fn capture_note(note: impl FnOnce() -> String) {
+    if !NOTES.with(|n| n.get()) {
+        return;
+    }
+    let note = note();
+    CAPTURE.with(|c| {
+        if let Some(Capture::Dry(v)) = c.borrow_mut().as_mut() {
+            v.push(note);
+        }
+    });
+}
+
+thread_local! {
+    /// capture_note writes notes (only while a port is compared with the game).
+    static NOTES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `capture_dry` with notes of the game functions called (capture_note).
+pub fn capture_dry_noted(f: impl FnOnce()) -> Vec<String> {
+    NOTES.with(|n| n.set(true));
+    let v = capture_dry(f);
+    NOTES.with(|n| n.set(false));
+    v
 }
 
 /// `capture_dry` inside another capture of this thread (which it leaves as it was).
@@ -2920,6 +2956,11 @@ pub fn capture_finish() -> Option<(Vec<String>, Vec<String>)> {
 /// Whether this thread collects its commands (a prediction or a check is under way).
 pub fn capturing() -> bool {
     CAPTURE.with(|c| c.borrow().is_some())
+}
+
+/// This thread captures for a comparison (not a buffered apply run, which nested ports may join).
+pub fn capturing_to_compare() -> bool {
+    CAPTURE.with(|c| matches!(&*c.borrow(), Some(c) if !matches!(c, Capture::Buffer(_))))
 }
 
 /// Collects the command when this thread captures; true when it must not be recorded.

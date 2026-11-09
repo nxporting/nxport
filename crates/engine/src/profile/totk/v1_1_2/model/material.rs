@@ -48,7 +48,7 @@ pub(super) unsafe fn bind(p: &mut Port, d: usize, w: usize, entry: usize, set: u
     // The model's block objects (+0x98, eight, those with material slots at +0x14 of [mat+8]).
     let model = p.m.r64(d + 8);
     if p.m.r16(model + 0xd8) & 0xf != 0 {
-        return Err("material blocks (main+0x766ef4)");
+        super::scene_points::material_blocks(p, model, w, mat, b)?;
     }
     if p.m.r16(model + 0xd8) & 0xff0 != 0 {
         for k in 0..8usize {
@@ -94,16 +94,9 @@ pub(super) unsafe fn bind(p: &mut Port, d: usize, w: usize, entry: usize, set: u
         let addr = p.query(p.pfn(PFN_BUFFER_GET_ADDRESS), &[p.m.r64(e + 8) as u64]);
         bind_slots(p, cmd, p.m.r32(p.m.r64(mat) + 0x24), addr, size as u32 as u64);
     }
-    extra_shapes(p, d)
+    super::scene_points::extra_shapes(p, d, w, mat, a, b)
 }
 
-/// The unit's extra shape list ([d+0x68]+0xb00): not ported.
-unsafe fn extra_shapes(p: &Port, d: usize) -> R<()> {
-    if p.m.r64(p.m.r64(d + 0x68) + 0xb00) != 0 {
-        return Err("material extra shapes");
-    }
-    Ok(())
-}
 
 /// A uniform buffer at the stage slots packed in `slots` (stages 0, 1, 2 and 5).
 unsafe fn bind_slots(p: &mut Port, cmd: usize, slots: u32, addr: u64, size: u64) {

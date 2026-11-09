@@ -57,6 +57,14 @@ unsafe fn draw_list_of(p: &mut Port, list: usize, count: u32, c: usize, mask: u3
             continue;
         }
         entry_state(p, c, e)?;
+        draw_entry(p, c, e, flags)?;
+    }
+    Ok(())
+}
+
+/// The entry's drawable drawn (its virtual +0x60 with the entry's sub-index).
+pub(super) unsafe fn draw_entry(p: &mut Port, c: usize, e: usize, flags: u32) -> R<()> {
+    {
         let d = p.m.r64(e + 0x10);
         let sub = ((p.m.r16(e + 0xe) >> 6) & 7) as u32;
         let f = p.vfn(d, 0x60);
@@ -117,7 +125,7 @@ unsafe fn forwarded(p: &mut Port, f: usize, obj: usize, index: u32, c: usize) ->
 
 /// sub_12de37c(ctx, entry): the entry's render state. The context caches the last entry's state bits; on a change it
 /// derives the cull / depth / stencil settings of its sead::GraphicsContext (ctx+0x128) and applies it.
-unsafe fn entry_state(p: &mut Port, c: usize, e: usize) -> R<()> {
+pub(super) unsafe fn entry_state(p: &mut Port, c: usize, e: usize) -> R<()> {
     let mut u8_ = p.m.r16(e + 0xe) as u32;
     let bit = (u8_ >> 4) & 1;
     let mut u9: u32;
@@ -558,12 +566,12 @@ pub(super) unsafe fn model_pass(p: &mut Port, r: usize, w: usize, a: usize, v: u
     let odd = p.query(p.base + p.vfn(o, 0x10), &[o as u64]) & 1;
     let variant = x23 | x28 | ((p.m.r32(a + 0x10) != 0xffff) as u32) << 2 | odd as u32;
     let count = if count == -1 { p.m.r32(r + 0x2c).wrapping_sub(start) } else { count as u32 };
-    let only = match variant {
-        0 => None,
-        4 => Some(p.m.r32(a + 0x10)),
-        _ => return Err("model list variant"),
+    let list = p.m.r64(r + 0x20) + start as usize * 8;
+    let drawn = match variant {
+        0 => draw_list_of(p, list, count, c, p.m.r32(a), None, lf),
+        4 => draw_list_of(p, list, count, c, p.m.r32(a), Some(p.m.r32(a + 0x10)), lf),
+        _ => super::list_variants::draw_list_variant(p, variant, list, count, c, p.m.r32(a), p.m.r32(a + 0x10), a + 0x50, lf, entry_state, draw_entry),
     };
-    let drawn = draw_list_of(p, p.m.r64(r + 0x20) + start as usize * 8, count, c, p.m.r32(a), only, lf);
     let (count_out, enable) = (p.m.r32(c + 0x34), p.m.r64(c + 0x100));
     p.m.disown(c);
     drop(buf);

@@ -238,3 +238,44 @@ pub(super) unsafe fn alloc_target(p: &mut Port, w: usize, name: usize, format: u
     let args = [pool as u64, w as u64, name.as_ptr() as u64, format as u64, width as u64, height as u64, 1, 0, 0, 1, 0, 0];
     Ok(p.call_stack("temporary target allocation", ALLOC_TARGET, &args)? as usize)
 }
+
+/// The live reference count of texture id `id`'s slot.
+pub(super) unsafe fn slot_count(p: &Port, id: i32) -> i32 {
+    let holder = p.m.r64(p.m.r64(p.base + SLOT_HOLDER));
+    p.m.i32(slot_entry(p, holder, id))
+}
+
+/// A texture's sampler id (the short at `a`) released (main+0x96e5d4): the slot's count (+0x76) down, the table's
+/// in-use count (+0x75c) when it reaches zero (under the table's mutex +0x718); the id is then -1.
+pub(super) unsafe fn release_sampler(p: &mut Port, a: usize) {
+    let s = p.m.r16(a) as i16;
+    if s == -1 {
+        return;
+    }
+    let h = p.m.r64(p.m.r64(p.base + SLOT_HOLDER));
+    if !p.m.predict() {
+        p.query(p.base + LOCK, &[(h + 0x718) as u64]);
+    }
+    let mut i = (s as i32 as u32).wrapping_sub(p.m.r16(h + 0x758) as u32);
+    if p.m.r32(h + 0x738) <= i {
+        i = 0;
+    }
+    let e = p.m.r64(h + 0x740).wrapping_add((i as i32 as isize as usize).wrapping_mul(0x80));
+    let c = p.m.r16(e + 0x76).wrapping_sub(1);
+    p.m.w::<u16>(e + 0x76, c);
+    if c == 0 {
+        p.m.w::<u16>(h + 0x75c, p.m.r16(h + 0x75c).wrapping_sub(1));
+    }
+    if !p.m.predict() {
+        p.query(p.base + UNLOCK, &[(h + 0x718) as u64]);
+    }
+    p.m.w::<u16>(a, 0xffff);
+}
+
+/// The agl::TextureData copy the game inlines: the state assigned, the texture marked as needing its finish (+0xe4
+/// bit 0).
+pub(super) unsafe fn texture_assign(p: &mut Port, dst: usize, src: usize) -> R<()> {
+    assign(p, dst, src)?;
+    p.m.w::<u32>(dst + 0xe4, p.m.r32(dst + 0xe4) | 1);
+    Ok(())
+}
