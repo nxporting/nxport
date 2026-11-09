@@ -210,8 +210,27 @@ fn scan(l: &Lifted, entry: u64, end: u64) -> Scan {
             a += 4;
         }
     }
+    // A function of more than SPLIT_ABOVE instructions is split at the first block end after every SPLIT_EVERY of them:
+    // the C compiler's register allocation grows far faster than a function's size (TotK's largest, a megabyte or two of
+    // C each, took two minutes each to compile). The pieces reach each other as any function start is reached.
+    if (end - entry) / 4 > SPLIT_ABOVE {
+        let (mut a, mut since) = (entry, 0);
+        while a + 4 < end {
+            since += 1;
+            if since >= SPLIT_EVERY && l.at(a).ends_block() {
+                s.external.insert(a + 4);
+                since = 0;
+            }
+            a += 4;
+        }
+    }
     s
 }
+
+/// Function size (instructions) past which a function is split, and the length of its pieces. Tuning numbers: they
+/// trade compile time against what the compiler can optimise across a piece's end; the code does the same either way.
+const SPLIT_ABOVE: u64 = 8192;
+const SPLIT_EVERY: u64 = 2048;
 
 /// How the `br` at `br_pc` is emitted, from what each definition of its register that reaches it is: a recognised
 /// table, a table whose entries are out of sight (`jt::reach`), an `adr` (a computed goto), arithmetic the matcher cannot
