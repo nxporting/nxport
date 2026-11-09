@@ -208,52 +208,20 @@ impl GpuAccessor {
         }
     }
 
-    /// The constant bank's offset in NVN stage data when the control section is not known: the program ends with a
-    /// branch to itself and NOP padding to a 32-byte group; the bank starts at the next 0x100 boundary after a zero
-    /// gap. -1 when that shape is not found.
-    pub fn find_const_bank(stage: &[u8]) -> i32 {
-        const BRA_SELF: u64 = 0xe2400fffff07000f;
-        const NOP: u64 = 0x50b0000000070f00;
-        const CODE_START: usize = 0x80;
-        const MASK: u64 = 0xffffffffff00ffff;
-        let word = |at: usize| u64::from_le_bytes(stage[at..at + 8].try_into().unwrap());
-        let mut q = CODE_START;
-        while q + 8 <= stage.len() {
-            if word(q) & MASK == BRA_SELF & MASK {
-                let mut g = CODE_START + (q + 8 - CODE_START).div_ceil(0x20) * 0x20;
-                while g + 0x20 <= stage.len() {
-                    let w: Vec<u64> = (0..4).map(|i| word(g + i * 8)).collect();
-                    let all_zero = w.iter().all(|&v| v == 0);
-                    let padding = w[1..].iter().all(|&v| v == NOP || v == 0);
-                    if all_zero || !padding {
-                        break;
-                    }
-                    g += 0x20;
-                }
-                let bank = (g + 0xff) & !0xff;
-                let gap_zero = stage[g.min(stage.len())..bank.min(stage.len())].iter().all(|&b| b == 0);
-                if gap_zero && bank < stage.len() {
-                    return bank as i32;
-                }
-            }
-            q += 8;
-        }
-        -1
-    }
-
     /// The code from byte `address` on (GetCode).
     pub fn code(&self, address: u64) -> &[u64] {
         let index = (address / 8) as usize;
         self.code.get(index..).unwrap_or(&[])
     }
 
-    /// Reads constant buffer 1 (indirect-branch jump tables).
-    pub fn constant_buffer1_read(&self, offset: i32) -> u32 {
+    /// Reads constant buffer 1 (indirect-branch jump tables); None when the stage's bank is not known (no control section)
+    /// or the read lies outside it.
+    pub fn constant_buffer1_read(&self, offset: i32) -> Option<u32> {
         let at = self.cb1_offset as i64 + offset as i64;
         if self.cb1_offset < 0 || offset < 0 || at + 4 > self.stage.len() as i64 {
-            return 0;
+            return None;
         }
-        u32::from_le_bytes(self.stage[at as usize..at as usize + 4].try_into().unwrap())
+        Some(u32::from_le_bytes(self.stage[at as usize..at as usize + 4].try_into().unwrap()))
     }
 
     fn next(c: &Cell<i32>, n: i32) -> i32 {

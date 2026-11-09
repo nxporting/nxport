@@ -317,8 +317,8 @@ fn early_tests_flag(code: &Path, ctrl_dir: Option<&Path>) -> bool {
 }
 
 /// Tab-separated extra decompiler inputs from the stage's GLSLC control section: the constant bank (cbuf 1) offset at
-/// +0x700, or -1 to let sass2spv find it heuristically (the decompiler reads indirect-branch jump tables from there; wrong
-/// tables build bogus control flow), then for compute stages the workgroup size (+0x748/+0x74c/+0x750) and shared /
+/// +0x700, or -1 when it is not known (the decompiler reads indirect-branch jump tables from there: a stage needing one then
+/// fails to translate), then for compute stages the workgroup size (+0x748/+0x74c/+0x750) and shared /
 /// local memory sizes. Which of +0x754 / +0x760 / +0x710 is shared and which local memory is not pinned down yet, so
 /// both get the largest (over-allocating is harmless).
 fn ctrl_fields(code: &Path, ctrl_dir: Option<&Path>) -> String {
