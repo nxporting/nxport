@@ -417,7 +417,7 @@ impl Textures {
             } else if self.overwritten_since(d) {
                 // The CPU cannot reach this memory, but the GPU aliases it as on the console: other images' writes over
                 // it since its contents are what it now holds.
-                if self.rebuild_on_gpu(dev, d, true).is_some() {
+                if self.rebuild_on_gpu(dev, d, true, true).is_some() {
                     if let Some(img) = self.images.get_mut(d) {
                         img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                     }
@@ -437,7 +437,8 @@ impl Textures {
         }
         // GPU contents of other images over this memory reach it first: on the GPU where their layouts allow, else
         // through guest memory.
-        let rebuilt = self.rebuild_on_gpu(dev, d, false);
+        // The CPU did not write it since its contents: they can be the base.
+        let rebuilt = self.rebuild_on_gpu(dev, d, false, !first && !changed);
         if rebuilt.is_none() {
             self.flush_overlaps(dev, d);
         }
@@ -485,10 +486,11 @@ impl Textures {
     /// is left as it was; those images stay unflushed, as flush_overlaps leaves them, so later uploads still take their
     /// contents. `d`'s own GPU contents not in guest memory are among them, in their place in write order (where no
     /// later write covers them they are what its memory holds); Some(true) if so. `any_pool`: `d` lies in memory the CPU
-    /// cannot reach (writers there count however the CPU route would treat them). None, with nothing recorded, when no
+    /// cannot reach (writers there count however the CPU route would treat them). `from_image`: the CPU has not written
+    /// `d`'s memory since its contents (see the incremental route below). None, with nothing recorded, when no
     /// such image lies over it or a layout is one the shader does not move (pitch-linear, 3D, multisampled or depth `d`,
     /// decoded ASTC, blocks whose size does not divide 16, levels not 16-byte aligned): refresh then takes the CPU route.
-    unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc, any_pool: bool) -> Option<bool> {
+    unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc, any_pool: bool, from_image: bool) -> Option<bool> {
         if self.relayout_failed || self.unflushed.is_empty() || d.storage <= 0x10000 {
             return None;
         }
@@ -508,7 +510,14 @@ impl Textures {
             return None;
         }
         group.sort_by_key(|h| h.0);
-        let has_self = group.iter().any(|h| h.1 == *d);
+        // From the image itself: its contents are what its memory held when they were made (a rebuild, or GPU work,
+        // which refreshes it first), so the writers before them are in them already. Only the newer ones are applied, over
+        // the image's own blocks under their bytes, and only those blocks are written back. Else from the guest bytes.
+        let content = self.images.get(d)?.content_seq;
+        let newer: Vec<(u64, Desc)> = group.iter().filter(|(s, o)| o != d && *s > content).copied().collect();
+        let incremental = from_image && !newer.is_empty();
+        let has_self = if incremental { self.images.get(d)?.unflushed } else { group.iter().any(|h| h.1 == *d) };
+        let group = if incremental { newer } else { group };
         // Whether the shader moves this image's levels: block-linear 2D, single-sampled, the guest's own format, block
         // sizes dividing 16 bytes, starting 16-byte aligned.
         let movable = |o: &Desc, img: &Image| -> bool {
@@ -573,6 +582,44 @@ impl Textures {
             };
             Some((lin_pitch as u64 * p.rows as u64, p))
         };
+        // Incremental: per level and layer of `d`, the blocks the newer writers' bytes fall in (their bounding rectangle),
+        // read from `d` first as the base the writers go over.
+        let mut own: Vec<(u32, u32, usize, (u32, u32, u32, u32))> = Vec::new();
+        if incremental {
+            let lay = layout::compute_layout(&d.params);
+            for layer in 0..dimg.layers {
+                for level in 0..dimg.levels {
+                    let at = d.storage + layer as usize * lay.layer_stride as usize + lay.level_offsets[level as usize] as usize;
+                    let size = lay.level_sizes[level as usize] as usize;
+                    let mut r: Option<(u32, u32, u32, u32)> = None;
+                    for (_, o) in &group {
+                        let o_end = o.storage + layout::compute_layout(&o.params).total as usize;
+                        let (a, b) = (o.storage.max(at), o_end.min(at + size));
+                        if a >= b {
+                            continue;
+                        }
+                        let Some(q) = layout::rect_of_bytes(&d.params, level as usize, (a - at) as u64, (b - at) as u64) else { continue };
+                        r = Some(match r {
+                            None => q,
+                            Some(p) => {
+                                let (y0, y1) = (p.2.min(q.2), (p.2 + p.3).max(q.2 + q.3));
+                                (p.0.min(q.0), p.1.max(q.1), y0, y1 - y0)
+                            }
+                        });
+                    }
+                    if let Some(r) = r {
+                        own.push((layer, level, at, r));
+                    }
+                }
+            }
+            for &(layer, level, at, rect) in &own {
+                let Some((mut region, width, _, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return None };
+                let Some((len, p)) = rows_of(d, level, rect, at, &mut region, width, off) else { return None };
+                reads.push((dimg.image, region));
+                moves.push(p);
+                off += len;
+            }
+        }
         for (_, o) in &group {
             let Some(img) = self.images.get(o) else { continue };
             // flush_overlaps skips 3D images too.
@@ -603,15 +650,26 @@ impl Textures {
         let mut writes: Vec<vk::BufferImageCopy> = Vec::new();
         let mut unmoves: Vec<super::relayout::Params> = Vec::new();
         let lay = layout::compute_layout(&d.params);
-        for layer in 0..dimg.layers {
-            for level in 0..dimg.levels {
-                let at = d.storage + layer as usize * lay.layer_stride as usize + lay.level_offsets[level as usize] as usize;
-                let Some((mut region, width, height, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return None };
-                let Some((len, mut p)) = rows_of(d, level, (0, u32::MAX, 0, height), at, &mut region, width, off) else { return None };
+        if incremental {
+            for &(layer, level, at, rect) in &own {
+                let Some((mut region, width, _, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return None };
+                let Some((len, mut p)) = rows_of(d, level, rect, at, &mut region, width, off) else { return None };
                 p.to_rows = 1;
                 writes.push(region);
                 unmoves.push(p);
                 off += len;
+            }
+        } else {
+            for layer in 0..dimg.layers {
+                for level in 0..dimg.levels {
+                    let at = d.storage + layer as usize * lay.layer_stride as usize + lay.level_offsets[level as usize] as usize;
+                    let Some((mut region, width, height, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return None };
+                    let Some((len, mut p)) = rows_of(d, level, (0, u32::MAX, 0, height), at, &mut region, width, off) else { return None };
+                    p.to_rows = 1;
+                    writes.push(region);
+                    unmoves.push(p);
+                    off += len;
+                }
             }
         }
         let dimage = dimg.image;
@@ -624,8 +682,14 @@ impl Textures {
             }
         }
         let Some(scratch) = self.relayout_scratch(dev, off) else { return None };
-        let Ok(buf) = self.staging(dev, total) else { return None };
-        std::ptr::copy_nonoverlapping(d.storage as *const u8, buf.ptr, total);
+        // The guest bytes as the base (not needed incrementally).
+        let buf = if incremental {
+            None
+        } else {
+            let Ok(buf) = self.staging(dev, total) else { return None };
+            std::ptr::copy_nonoverlapping(d.storage as *const u8, buf.ptr, total);
+            Some(buf)
+        };
         let rl = self.relayout.take().unwrap();
         let batched = self.batch.is_some();
         self.record(dev, |cb| {
@@ -637,7 +701,9 @@ impl Textures {
                 d.params.format as u64,
                 d.storage as u64,
             ]);
-            dev.device.cmd_copy_buffer(cb, buf.buffer, scratch, &[vk::BufferCopy::default().size(total as u64)]);
+            if let Some(buf) = &buf {
+                dev.device.cmd_copy_buffer(cb, buf.buffer, scratch, &[vk::BufferCopy::default().size(total as u64)]);
+            }
             for (image, region) in &reads {
                 dev.device.cmd_copy_image_to_buffer(cb, *image, vk::ImageLayout::GENERAL, scratch, &[*region]);
             }
@@ -658,10 +724,12 @@ impl Textures {
         self.relayout = Some(rl);
         FLUSHES.fetch_add(moves.len() as u64, std::sync::atomic::Ordering::Relaxed);
         REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        match &mut self.batch {
-            Some(b) if batched => b.staging.push(buf),
-            // Recorded and run (one_shot waits).
-            _ => self.recycle_staging(dev, buf),
+        if let Some(buf) = buf {
+            match &mut self.batch {
+                Some(b) if batched => b.staging.push(buf),
+                // Recorded and run (one_shot waits).
+                _ => self.recycle_staging(dev, buf),
+            }
         }
         Some(has_self)
     }
