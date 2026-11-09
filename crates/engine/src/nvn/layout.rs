@@ -239,7 +239,31 @@ pub fn layer_count(p: &TextureParams) -> u32 {
     }
 }
 
-pub fn compute_layout(p: &TextureParams) -> TextureLayout {
+/// The layout of a texture with parameters `p`: a function of `p` alone, so each thread keeps the layouts it computed
+/// (the texture cache's overlap checks ask for the same ones over and over: with exact overlaps on, computing them was
+/// most of the frame's recording time).
+pub fn compute_layout(p: &TextureParams) -> std::rc::Rc<TextureLayout> {
+    thread_local! {
+        static LAYOUTS: std::cell::RefCell<rustc_hash::FxHashMap<TextureParams, std::rc::Rc<TextureLayout>>> =
+            std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    }
+    if let Some(l) = LAYOUTS.with(|m| m.borrow().get(p).cloned()) {
+        return l;
+    }
+    let l = std::rc::Rc::new(compute_layout_uncached(p));
+    LAYOUTS.with(|m| {
+        let mut m = m.borrow_mut();
+        // Parameters seen in a run are few (each kind of texture the game makes); a bound keeps a pathological run from
+        // growing it without end.
+        if m.len() >= 1 << 16 {
+            m.clear();
+        }
+        m.insert(*p, l.clone());
+    });
+    l
+}
+
+fn compute_layout_uncached(p: &TextureParams) -> TextureLayout {
     let info = format_info(p.format).unwrap_or(FormatInfo {
         block_w: 1,
         block_h: 1,
