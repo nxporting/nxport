@@ -306,12 +306,6 @@ pub fn rendered_aspect() -> Option<f64> {
     }
 }
 
-/// Whether the game is known not to read memory through a texture after an image of another shape wrote over it, so the
-/// texture cache need not rebuild those bytes (vulkan/texture.rs exact_overlaps; graphics.exact_texture_overlaps turns this off).
-pub fn assumes_no_cross_shape_reads() -> bool {
-    matches!(active().kind, GameKind::TotK)
-}
-
 /// Whether the game will render at the screen's shape (known before its code is patched: the window opens at that
 /// shape).
 pub fn renders_screen_shape() -> bool {
