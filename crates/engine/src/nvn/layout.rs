@@ -434,6 +434,41 @@ fn linear_pitch(p: &TextureParams, info: &FormatInfo) -> Option<usize> {
     Some(if p.stride > 0 { p.stride as usize } else { align(wb * info.bytes as u64, 32) as usize })
 }
 
+/// A block-linear level's row pitch in bytes and block height in GOBs, as block_linear_offset takes them (what
+/// read_texels_2d uses); None for pitch-linear textures.
+pub fn block_linear_level(p: &TextureParams, level: usize) -> Option<(usize, usize)> {
+    let info = format_info(p.format)?;
+    if linear_pitch(p, &info).is_some() {
+        return None;
+    }
+    let lw = ((p.width.max(1) as u64) >> level).max(1);
+    let wb = (lw + info.block_w as u64 - 1) / info.block_w as u64;
+    Some((align(wb * info.bytes as u64, 64) as usize, level_bh(p, &info, level)))
+}
+
+/// The rectangle of a block-linear `level` holding bytes [start, end) of it, as (first byte of a row, end byte of a row,
+/// first texel row, texel rows): whole blocks of GOBs, so it may hold more than those bytes. A range within one row of
+/// blocks covers only the GOB columns it lies in (a small image packed inside a large one); a longer one, whole rows.
+/// None for pitch-linear levels, or if no bytes lie in the level.
+pub fn rect_of_bytes(p: &TextureParams, level: usize, start: u64, end: u64) -> Option<(u32, u32, u32, u32)> {
+    let info = format_info(p.format)?;
+    let (pitch, bh) = block_linear_level(p, level)?;
+    let (y, rows) = rows_of_bytes(p, level, start, end)?;
+    let size = *compute_layout(p).level_sizes.get(level)? as u64;
+    let end = end.min(size);
+    let lw = ((p.width.max(1) as u64) >> level).max(1);
+    let row_bytes = (lw + info.block_w as u64 - 1) / info.block_w as u64 * info.bytes as u64;
+    let block_row = pitch as u64 * 8 * bh as u64;
+    let block = 512 * bh as u64;
+    if start / block_row != (end - 1) / block_row {
+        return Some((0, row_bytes as u32, y, rows));
+    }
+    let c0 = start % block_row / block;
+    let c1 = (end - 1) % block_row / block + 1;
+    let (x0, x1) = (c0 * 64, (c1 * 64).min(row_bytes));
+    (x0 < x1).then_some((x0 as u32, x1 as u32, y, rows))
+}
+
 /// The texel rows of `level` holding bytes [start, end) of it, as (first row, rows): whole rows of the layout's blocks, so
 /// they may hold more than those bytes. None if none of them lie in the level.
 pub fn rows_of_bytes(p: &TextureParams, level: usize, start: u64, end: u64) -> Option<(u32, u32)> {
@@ -812,6 +847,55 @@ mod tests {
                     unsafe { write_texels_2d(got.as_mut_ptr(), 0, &p, level, 0, y as i32, w as i32, rows as i32, texels.as_ptr()) };
                     for b in base + start..base + end {
                         assert!(all[b] == 0 || got[b] != 0, "{p:?} level {level}: byte {b} of {start}..{end} not in rows {y}+{rows}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The same for rect_of_bytes, whose rectangles also narrow the columns: a small range inside a large image (TotK
+    /// packs small targets inside large ones) must still be covered byte for byte.
+    #[test]
+    fn rect_of_bytes_covers_the_bytes_asked_for() {
+        let shape = |width, height, format| TextureParams {
+            target: NVN_TARGET_2D,
+            width,
+            height,
+            depth: 1,
+            levels: 3,
+            format,
+            flags: 0,
+            samples: 1,
+            stride: 0,
+        };
+        for p in [shape(1600, 900, 37), shape(720, 450, 37), shape(142, 26, 37), shape(257, 129, 1), shape(300, 200, 0x2a)] {
+            let Some(info) = format_info(p.format) else { continue };
+            let lay = compute_layout(&p);
+            for level in 0..lay.level_offsets.len() {
+                let size = lay.level_sizes[level] as usize;
+                let (w, h) = (((p.width as usize) >> level).max(1), ((p.height as usize) >> level).max(1));
+                let wb = w.div_ceil(info.block_w as usize);
+                let texels = vec![0xABu8; wb * h.div_ceil(info.block_h as usize) * info.bytes as usize];
+                let mut all = vec![0u8; lay.total as usize];
+                unsafe { write_texels_2d(all.as_mut_ptr(), 0, &p, level, 0, 0, w as i32, h as i32, texels.as_ptr()) };
+                let base = lay.level_offsets[level] as usize;
+                for (start, end) in [(0, 512), (4096, 4096 + 16384), (size / 3, size / 3 + 600), (size / 2, size), (0, size), (size - 16, size)] {
+                    let end = end.min(size);
+                    if start >= end {
+                        continue;
+                    }
+                    let Some((x0, x1, y, rows)) = rect_of_bytes(&p, level, start as u64, end as u64) else {
+                        assert!(all[base + start..base + end].iter().all(|b| *b == 0), "{p:?} level {level}: no rect for written bytes");
+                        continue;
+                    };
+                    assert!(x0 % 64 == 0 && x0 < x1 && x1 as usize <= wb * info.bytes as usize, "{p:?} level {level}: columns {x0}..{x1}");
+                    assert!((y + rows) as usize <= h, "{p:?} level {level}: rows past the level");
+                    let tx = (x0 / info.bytes * info.block_w) as i32;
+                    let tw = (((x1 - x0) / info.bytes * info.block_w) as i32).min(w as i32 - tx);
+                    let mut got = vec![0u8; lay.total as usize];
+                    unsafe { write_texels_2d(got.as_mut_ptr(), 0, &p, level, tx, y as i32, tw, rows as i32, texels.as_ptr()) };
+                    for b in base + start..base + end {
+                        assert!(all[b] == 0 || got[b] != 0, "{p:?} level {level}: byte {b} of {start}..{end} not in {x0}..{x1} x {y}+{rows}");
                     }
                 }
             }

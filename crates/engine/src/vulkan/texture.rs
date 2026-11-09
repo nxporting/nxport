@@ -129,6 +129,16 @@ pub struct Textures {
     batch: Option<Batch>,
     /// The ASTC decoder (devices without ASTC), made with the first ASTC upload.
     astc: Option<super::astc::Decoder>,
+    /// Rebuilds images from the other images over their memory on the GPU (relayout.rs), made when first needed;
+    /// `relayout_failed` if it could not be made (the CPU route is taken).
+    relayout: Option<super::relayout::Relayout>,
+    relayout_failed: bool,
+    /// Its working buffer in device memory (the shader's many small accesses to host memory over the bus made each
+    /// rebuild take milliseconds), with its size. Rebuilds of every submit use it in queue order, each behind a full
+    /// barrier. Outgrown ones may still be in use by queued work: they are kept until `destroy` (their sizes double, so
+    /// that is less than the current one).
+    relayout_scratch: Option<(vk::Buffer, vk::DeviceMemory, u64)>,
+    relayout_outgrown: Vec<(vk::Buffer, vk::DeviceMemory)>,
     /// Staging buffers of completed submits, for the next uploads (recycle_staging): making and freeing one for each
     /// upload was a steady part of recording (the driver's allocation calls).
     spare_staging: Vec<super::device::HostBuffer>,
@@ -205,6 +215,8 @@ static SUBMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 static GPU_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Images written to guest memory by flush_overlaps (reported with the fps line).
 pub static FLUSHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Images rebuilt from the images over their memory on the GPU (rebuild_on_gpu).
+pub static REBUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Image {
     /// GPU work of the submit being recorded writes this image.
@@ -414,15 +426,229 @@ impl Textures {
         if !first && !overwritten && !changed {
             return;
         }
-        // GPU contents of other images over this memory reach it first.
-        self.flush_overlaps(dev, d);
+        // GPU contents of other images over this memory reach it first: on the GPU where their layouts allow, else
+        // through guest memory.
+        let rebuilt = self.rebuild_on_gpu(dev, d);
+        if !rebuilt {
+            self.flush_overlaps(dev, d);
+        }
         let Some(img) = self.images.get_mut(d) else { return };
         Self::take_baseline(d, img);
         img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         img.gpu_written = false;
         img.settled = false;
         img.unflushed = false;
-        self.upload(dev, d);
+        if !rebuilt {
+            self.upload(dev, d);
+        }
+    }
+
+    /// The relayout working buffer, at least `len` bytes (made, or replaced by one twice as large, as needed).
+    unsafe fn relayout_scratch(&mut self, dev: &Dev, len: u64) -> Option<vk::Buffer> {
+        if let Some((b, _, size)) = self.relayout_scratch {
+            if size >= len {
+                return Some(b);
+            }
+        }
+        let size = len.max(1 << 20).next_power_of_two();
+        let usage = vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER;
+        let buffer = dev.device.create_buffer(&vk::BufferCreateInfo::default().size(size).usage(usage), None).ok()?;
+        let req = dev.device.get_buffer_memory_requirements(buffer);
+        let Ok(memory) = dev.alloc(req, vk::MemoryPropertyFlags::DEVICE_LOCAL) else {
+            dev.device.destroy_buffer(buffer, None);
+            return None;
+        };
+        if dev.device.bind_buffer_memory(buffer, memory, 0).is_err() {
+            dev.device.destroy_buffer(buffer, None);
+            dev.device.free_memory(memory, None);
+            return None;
+        }
+        if let Some((b, m, _)) = self.relayout_scratch.replace((buffer, memory, size)) {
+            self.relayout_outgrown.push((b, m));
+        }
+        Some(buffer)
+    }
+
+    /// refresh's route when GPU contents of other images lie over `d`'s memory: what flush_overlaps and an upload do,
+    /// recorded in a command buffer instead of waiting for read-backs (relayout.rs). `d` is rebuilt from its guest bytes
+    /// with those images' rows swizzled over them, oldest write first, and then deswizzled into its levels. Guest memory
+    /// is left as it was; those images stay unflushed, as flush_overlaps leaves them, so later uploads still take their
+    /// contents. False, with nothing recorded, when no such image lies over it or a layout is one the shader does not
+    /// move (pitch-linear, 3D, multisampled or depth `d`, decoded ASTC, blocks whose size does not divide 16, levels not
+    /// 16-byte aligned): refresh then takes the CPU route.
+    unsafe fn rebuild_on_gpu(&mut self, dev: &Dev, d: &Desc) -> bool {
+        if self.relayout_failed || self.unflushed.is_empty() || d.storage <= 0x10000 || !exact_overlaps() {
+            return false;
+        }
+        let total = layout::compute_layout(&d.params).total as usize;
+        let (start, end) = (d.storage, d.storage + total);
+        let mut group: Vec<(u64, Desc)> = self.unflushed_over(start, end).into_iter().filter(|h| h.1 != *d).collect();
+        group.retain(|(_, o)| {
+            let keep = self.guest_can_take(o) && !self.cpu_changed(o);
+            if !keep {
+                self.no_longer_unflushed(o);
+            }
+            keep
+        });
+        if group.is_empty() {
+            return false;
+        }
+        group.sort_by_key(|h| h.0);
+        // Whether the shader moves this image's levels: block-linear 2D, single-sampled, the guest's own format, block
+        // sizes dividing 16 bytes, starting 16-byte aligned.
+        let movable = |o: &Desc, img: &Image| -> bool {
+            let Some(info) = layout::format_info(o.params.format) else { return false };
+            o.params.target != layout::NVN_TARGET_3D
+                && img.extent.depth <= 1
+                && img.samples == vk::SampleCountFlags::TYPE_1
+                && 16 % info.bytes == 0
+                && o.storage % 16 == 0
+                && format::texture(o.params.format) == Some(img.format)
+                && img.extent.width == o.params.width.max(1) as u32
+                && img.extent.height == o.params.height.max(1) as u32
+                && layout::block_linear_level(&o.params, 0).is_some()
+        };
+        let Some(dimg) = self.images.get(d) else { return false };
+        if total % 16 != 0 || format::is_depth(dimg.format) || !movable(d, dimg) {
+            return false;
+        }
+        // One buffer: the guest bytes, then each level's rows read out of the images over them, then `d`'s levels.
+        let g_len = total as u32;
+        let mut off = total as u64;
+        let mut reads: Vec<(vk::Image, vk::BufferImageCopy)> = Vec::new();
+        let mut moves: Vec<super::relayout::Params> = Vec::new();
+        // The rows of `level` of an image as the shader moves them: (pitch of the rows in the buffer, Params), with the
+        // copy region set to read or write them there.
+        // `rect`: (first byte of a row, end byte, first texel row, texel rows), the end clamped to the level's rows.
+        let rows_of = |o: &Desc, level: u32, rect: (u32, u32, u32, u32), at: usize, region: &mut vk::BufferImageCopy, width: u32, off: u64| {
+            let info = layout::format_info(o.params.format)?;
+            let (pitch, bh) = layout::block_linear_level(&o.params, level as usize)?;
+            let (x0, x1, y, rows) = rect;
+            let base = at as i64 - d.storage as i64;
+            if base % 16 != 0 || y % info.block_h != 0 || x0 % 64 != 0 || i32::try_from(base).is_err() {
+                return None;
+            }
+            let x1 = x1.min(width.div_ceil(info.block_w) * info.bytes);
+            if x0 >= x1 {
+                return None;
+            }
+            let row_bytes = x1 - x0;
+            let lin_pitch = row_bytes.next_multiple_of(16);
+            let tx = x0 / info.bytes * info.block_w;
+            region.buffer_offset = off;
+            region.buffer_row_length = lin_pitch / info.bytes * info.block_w;
+            region.buffer_image_height = 0;
+            region.image_offset.x = tx as i32;
+            region.image_offset.y = y as i32;
+            region.image_extent.width = (row_bytes / info.bytes * info.block_w).min(width - tx);
+            region.image_extent.height = rows;
+            let p = super::relayout::Params {
+                lin_word: (off / 4) as u32,
+                lin_pitch,
+                row_bytes,
+                rows: rows.div_ceil(info.block_h),
+                y0: y / info.block_h,
+                g_word: 0,
+                g_base: base as i32,
+                g_len,
+                pitch: pitch as u32,
+                bh: bh as u32,
+                to_rows: 0,
+                x0,
+            };
+            Some((lin_pitch as u64 * p.rows as u64, p))
+        };
+        for (_, o) in &group {
+            let Some(img) = self.images.get(o) else { continue };
+            // flush_overlaps skips 3D images too.
+            if o.params.target == layout::NVN_TARGET_3D {
+                continue;
+            }
+            if !movable(o, img) {
+                return false;
+            }
+            let lay = layout::compute_layout(&o.params);
+            for layer in 0..img.layers {
+                let slice = o.storage + layer as usize * lay.layer_stride as usize;
+                for level in 0..img.levels {
+                    let at = slice + lay.level_offsets[level as usize] as usize;
+                    let (from, to) = (start.saturating_sub(at) as u64, end.saturating_sub(at) as u64);
+                    let Some(rect) = layout::rect_of_bytes(&o.params, level as usize, from, to) else { continue };
+                    let Some((mut region, width, _, _)) = Self::read_region(img, o.params.format, level, layer) else { continue };
+                    let Some((len, p)) = rows_of(o, level, rect, at, &mut region, width, off) else { return false };
+                    reads.push((img.image, region));
+                    moves.push(p);
+                    off += len;
+                }
+            }
+        }
+        if moves.is_empty() {
+            return false;
+        }
+        let mut writes: Vec<vk::BufferImageCopy> = Vec::new();
+        let mut unmoves: Vec<super::relayout::Params> = Vec::new();
+        let lay = layout::compute_layout(&d.params);
+        for layer in 0..dimg.layers {
+            for level in 0..dimg.levels {
+                let at = d.storage + layer as usize * lay.layer_stride as usize + lay.level_offsets[level as usize] as usize;
+                let Some((mut region, width, height, _)) = Self::read_region(dimg, d.params.format, level, layer) else { return false };
+                let Some((len, mut p)) = rows_of(d, level, (0, u32::MAX, 0, height), at, &mut region, width, off) else { return false };
+                p.to_rows = 1;
+                writes.push(region);
+                unmoves.push(p);
+                off += len;
+            }
+        }
+        let dimage = dimg.image;
+        if self.relayout.is_none() {
+            self.relayout = super::relayout::Relayout::new(dev);
+            if self.relayout.is_none() {
+                self.relayout_failed = true;
+                println!("[vulkan] the relayout shader could not be made: overlapping images are read back through the CPU");
+                return false;
+            }
+        }
+        let Some(scratch) = self.relayout_scratch(dev, off) else { return false };
+        let Ok(buf) = self.staging(dev, total) else { return false };
+        std::ptr::copy_nonoverlapping(d.storage as *const u8, buf.ptr, total);
+        let rl = self.relayout.take().unwrap();
+        let batched = self.batch.is_some();
+        self.record(dev, |cb| {
+            // Submits still in flight may read the old contents; the images read were written by earlier submits.
+            dev.full_barrier(cb);
+            dev.checkpoint(cb, "texture rebuilt from overlaps (W, H, format, guest address)", [
+                d.params.width as u64,
+                d.params.height as u64,
+                d.params.format as u64,
+                d.storage as u64,
+            ]);
+            dev.device.cmd_copy_buffer(cb, buf.buffer, scratch, &[vk::BufferCopy::default().size(total as u64)]);
+            for (image, region) in &reads {
+                dev.device.cmd_copy_image_to_buffer(cb, *image, vk::ImageLayout::GENERAL, scratch, &[*region]);
+            }
+            dev.full_barrier(cb);
+            rl.bind(dev, cb, scratch);
+            // In write order: a later write's bytes replace an earlier one's.
+            for p in &moves {
+                rl.dispatch(dev, cb, *p);
+                dev.full_barrier(cb);
+            }
+            for p in &unmoves {
+                rl.dispatch(dev, cb, *p);
+            }
+            dev.full_barrier(cb);
+            dev.device.cmd_copy_buffer_to_image(cb, scratch, dimage, vk::ImageLayout::GENERAL, &writes);
+            dev.full_barrier(cb);
+        });
+        self.relayout = Some(rl);
+        FLUSHES.fetch_add(moves.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match &mut self.batch {
+            Some(b) if batched => b.staging.push(buf),
+            // Recorded and run (one_shot waits).
+            _ => self.recycle_staging(dev, buf),
+        }
+        true
     }
 
     /// After a submit completed: GPU-written images not yet settled take the hash and write-tracking token of their guest
@@ -994,7 +1220,10 @@ impl Textures {
             self.spare_bytes -= b.size;
             return Ok(b);
         }
-        dev.host_buffer(len.max(64 << 10).next_power_of_two(), vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::STORAGE_BUFFER)
+        dev.host_buffer(
+            len.max(64 << 10).next_power_of_two(),
+            vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+        )
     }
 
     /// A staging buffer no submit uses any more: kept for later uploads, or freed past SPARE_STAGING_MAX.
@@ -1313,6 +1542,13 @@ impl Textures {
         }
         if let Some(a) = self.astc.take() {
             a.destroy(dev);
+        }
+        if let Some(r) = self.relayout.take() {
+            r.destroy(dev);
+        }
+        for (b, m) in self.relayout_scratch.take().map(|(b, m, _)| (b, m)).into_iter().chain(self.relayout_outgrown.drain(..)) {
+            dev.device.destroy_buffer(b, None);
+            dev.device.free_memory(m, None);
         }
     }
 }
