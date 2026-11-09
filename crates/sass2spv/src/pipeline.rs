@@ -221,7 +221,9 @@ pub fn translate_stage_for(
     } else {
         stage
     };
-    let cb1 = if cb1_hint > 0 { cb1_hint } else { GpuAccessor::find_const_bank(stage) };
+    // The constant bank (jump tables) where the control section gives it; else unknown, and a stage that needs a jump
+    // table fails to translate rather than branch where its code does not.
+    let cb1 = if cb1_hint > 0 { cb1_hint } else { -1 };
     let mut gpu = GpuAccessor::new(sass, compute, stage, cb1);
     gpu.state = state;
     gpu.host = host;
