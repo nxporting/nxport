@@ -38,6 +38,10 @@ crate::settings::group! {
         verify_render_lists: bool = false,
         /// Render lists drawn by the port (model units through the model port)
         native_render_lists: bool = false,
+        /// Port hooks not installed: main+ offsets in hex (the game's own function then runs)
+        no_port_hook: Vec<String> = Vec::new(),
+        /// Apply mode: this port (its summary name) and the game take turns; both command lists are printed ([compare])
+        compare_port: Option<String> = None,
     }
 }
 

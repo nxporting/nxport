@@ -1726,7 +1726,9 @@ pub(super) unsafe fn forward(p: &mut Port, obj: usize, pass: u32, c: usize) -> R
                 let vi = if p.m.r32(views + 8) > bv { bv } else { 0 } as usize;
                 let l12 = p.m.r64(p.m.r64(views + 0x10) + vi * 0x21b0 + 0x2118);
                 if p.m.r8(l12 + 0x4e8) & 0x1f == 0 && p.m.r8(l12 + 0xa60) & 0x1f == 0 {
-                    return Err("vfx shadow systems");
+                    let sys = p.m.r64(obj + 0x198) + 0x1ea8;
+                    super::shadow_systems::shadow_system_a(p, sys, w, o, 1)?;
+                    return super::shadow_systems::shadow_system_b(p, p.m.r64(obj + 0x198) + 0x1ea8, w, o, 1);
                 }
                 let v = p.m.r64(o + 0x18);
                 draw_cascade(p, o, w, 0xc, 3, v, v + 0x160, v + 0x60, u32::MAX)?;
@@ -1781,7 +1783,7 @@ const GRAPHICS_CONTEXT_INIT: usize = 0x688a38;
 /// main+0xa41a38 with the context built from the given view (3x4 rows), projection, the target's size and the
 /// cascade's near / far values (info+0x180..).
 #[allow(clippy::too_many_arguments)]
-unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32, view: usize, proj: usize, info: usize, index: u32) -> R<()> {
+pub(super) unsafe fn draw_cascade(p: &mut Port, obj: usize, w: usize, pass: u32, mode: u32, view: usize, proj: usize, info: usize, index: u32) -> R<()> {
     let fl = p.m.r8(obj + 0x64a) as u32;
     if !fl & 3 != 0 {
         return Ok(());
@@ -2042,7 +2044,7 @@ pub(super) unsafe fn decal_forward(p: &mut Port, obj: usize, pass: u32, c: usize
             if dd != 0 {
                 let g = p.m.r64(obj + 0x1df8);
                 if p.m.r8(g + 0x1458) != 0 && p.m.r8(g + 0x610) != 0 && p.m.r8(dd + 0x1d4) & 2 == 0 {
-                    decal_drawers(p, obj, w, bv)?;
+                    super::list_variants::decal_drawers(p, obj, w, bv)?;
                 }
             }
             let vi = if p.m.r32(obj + 0x1a0) > p.m.r8(c + 0x30) as u32 { p.m.r8(c + 0x30) } else { 0 } as usize;
@@ -2103,7 +2105,7 @@ unsafe fn decal_drawers(p: &mut Port, obj: usize, w: usize, view: u32) -> R<()> 
 /// agl::sdw::ShadowMask::setupOffscrBuffer(mask, src) (main+0xff07a0): copies the offscreen buffer description, moving
 /// the texture descriptor slot references (+0x58) from the old to the new slot. Predicting only copies the bytes; the
 /// references are the game's to move.
-unsafe fn shadow_mask_setup(p: &mut Port, mask: usize, src: usize) -> R<()> {
+pub(super) unsafe fn shadow_mask_setup(p: &mut Port, mask: usize, src: usize) -> R<()> {
     if !p.m.predict() {
         p.call(p.base + 0xff07a0, &[mask as u64, src as u64]);
         return Ok(());
@@ -2193,7 +2195,7 @@ unsafe fn occlusion_queries(p: &mut Port, q: usize, w: usize, view: u32) -> R<()
     gc[0x6e] = 1;
     gc[0x1c..0x20].copy_from_slice(&((0u32.wrapping_sub((f0 >> 5) & 1)) & 0xf).to_le_bytes());
     p.apply_graphics_context(gc.as_ptr() as usize, w);
-    super::occlusion::draw(p, q, w, view, 1)
+    super::list_variants::draw(p, q, w, view, 1)
 }
 
 /// A pass-3 callback of the view pass's effect drawable, (w, views, scene view, view, ctx); empty ones skipped.
@@ -2227,7 +2229,7 @@ unsafe fn screen_effects(p: &mut Port, w: usize, views: usize, o: usize, c: usiz
         screen_pass(p, r, w, view, 2, 0)?;
     }
     if p.m.r8(r + 0x3d0) != 0 {
-        return Err("screen effect image filter");
+        return super::shadow_systems::image_filter(p, r, w, view);
     }
     Ok(())
 }

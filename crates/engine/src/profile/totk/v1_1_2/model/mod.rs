@@ -8,27 +8,40 @@ mod cave;
 mod cubemap;
 mod cells;
 mod dispatch;
+mod deferred_view_pass;
 mod display_lists;
+mod dof_blur_chain;
+mod dof_passes;
 mod draw;
 mod grid;
 mod items;
+mod light_pass;
+mod mask_callees;
+mod lighting;
 mod lights;
+mod list_variants;
 mod gridtile;
 mod material;
 mod occlusion;
 mod mem;
 mod perview;
 mod ping_pong;
+mod post_chain;
 mod program_draws;
 mod render_list;
 mod ring;
 mod scene_passes;
+mod scene_points;
+mod shadow_systems;
 mod snapshot;
 mod targets;
 mod terrain;
 mod texture_slots;
 mod vfx;
+mod view_callees;
+mod view_passes;
 mod viewport;
+mod volume_mask_chain;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -268,7 +281,7 @@ thread_local! {
 /// itself and compared.
 #[no_mangle]
 pub unsafe extern "C" fn on_dispatch(d: usize, c: usize, lod: u32, flags: u32) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     DISPATCH_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -336,7 +349,7 @@ thread_local! {
 /// them (undoably, left to the game where the port stops).
 #[no_mangle]
 pub unsafe extern "C" fn on_lights(obj: usize, w: usize, view: u32, arg: usize) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     LIGHT_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -423,7 +436,7 @@ static PRIMITIVES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 /// A primitive of the game drawn natively (apply mode): undoably, its commands kept; nonzero from `f` = handled (the
 /// game's function is skipped and returns it), else undone and left to the game.
 unsafe fn primitive(f: impl FnOnce(&mut draw::Port) -> draw::R<u32>) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     let mut port = draw::Port::new(mem::Mem::applying_undoably(), crate::guest::loader::main_base(), true);
@@ -872,6 +885,275 @@ pub unsafe extern "C" fn on_post_pass_end() -> u32 {
     POST_PASSES.end("post passes", &POST_PASS_EXPECTED)
 }
 
+static LIGHT_PASSES: Checked = Checked::new();
+
+thread_local! {
+    static LIGHT_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x966f7c(this, w, view, scene, records, tex, shadows, storage) (light_pass.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_light_pass(this: usize, w: usize, view: u32, scene: usize, records: usize, tex: usize, shadows: usize, storage: usize) -> u32 {
+    LIGHT_PASSES.run(&LIGHT_PASS_EXPECTED, move |p| light_pass::light_pass(p, this, w, view, scene, records, tex, shadows, storage))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_light_pass_end() -> u32 {
+    LIGHT_PASSES.end("light passes", &LIGHT_PASS_EXPECTED)
+}
+
+static VIEW_TARGET_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static VIEW_TARGET_DRAW_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x957820(this, w, view, flags, tex, desc, depth) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_view_target_draw(this: usize, w: usize, view: u32, flags: u32, tex: usize, desc: usize, depth: usize) -> u32 {
+    VIEW_TARGET_DRAWS.run(&VIEW_TARGET_DRAW_EXPECTED, move |p| buffer_passes::view_target_draw(p, this, w, view, flags, tex, desc, depth))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_target_draw_end() -> u32 {
+    VIEW_TARGET_DRAWS.end("view target draws", &VIEW_TARGET_DRAW_EXPECTED)
+}
+
+static DOF_COMPOSITES: Checked = Checked::new();
+static EDGE_ADJUSTS: Checked = Checked::new();
+
+thread_local! {
+    static DOF_COMPOSITE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static EDGE_ADJUST_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xa3e79c(this, w, view, k) / main+0xa434a8(this, w, view, arg, flags) (dof_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_dof_composite(this: usize, w: usize, view: i32, k: u32) -> u32 {
+    DOF_COMPOSITES.run(&DOF_COMPOSITE_EXPECTED, move |p| dof_passes::dof_composite(p, this, w, view, k))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_dof_composite_end() -> u32 {
+    DOF_COMPOSITES.end("depth of field composites", &DOF_COMPOSITE_EXPECTED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_edge_adjust(this: usize, w: usize, view: u32, arg: u32, flags: u32) -> u32 {
+    EDGE_ADJUSTS.run(&EDGE_ADJUST_EXPECTED, move |p| dof_passes::edge_adjust(p, this, w, view, arg, flags))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_edge_adjust_end() -> u32 {
+    EDGE_ADJUSTS.end("edge adjusts", &EDGE_ADJUST_EXPECTED)
+}
+
+static VIEW_GATHERS: Checked = Checked::new();
+static VIEW_TARGET_PASSES: Checked = Checked::new();
+static OCCLUSION_BUFFERS: Checked = Checked::new();
+static NOISE_GAUGES: Checked = Checked::new();
+
+thread_local! {
+    static VIEW_GATHER_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static VIEW_TARGET_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static OCCLUSION_BUFFER_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static NOISE_GAUGE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xd4cac4(this, w, view), main+0xbd8c40(this, w, view), main+0xbdad04(this, w, view, flags),
+/// main+0xdb6438(this, w, scale in s0) (view_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_view_gather(this: usize, w: usize, view: u32) -> u32 {
+    VIEW_GATHERS.run(&VIEW_GATHER_EXPECTED, move |p| view_passes::view_gather(p, this, w, view))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_gather_end() -> u32 {
+    VIEW_GATHERS.end("view gathers", &VIEW_GATHER_EXPECTED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_target_passes(this: usize, w: usize, view: u32) -> u32 {
+    VIEW_TARGET_PASSES.run(&VIEW_TARGET_PASS_EXPECTED, move |p| view_passes::view_target_passes(p, this, w, view))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_view_target_passes_end() -> u32 {
+    VIEW_TARGET_PASSES.end("view target passes", &VIEW_TARGET_PASS_EXPECTED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_occlusion_buffers(this: usize, w: usize, view: u32, flags: u32) -> u32 {
+    OCCLUSION_BUFFERS.run(&OCCLUSION_BUFFER_EXPECTED, move |p| view_passes::occlusion_buffers(p, this, w, view, flags))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_occlusion_buffers_end() -> u32 {
+    OCCLUSION_BUFFERS.end("occlusion buffers", &OCCLUSION_BUFFER_EXPECTED)
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_noise_gauge(this: usize, w: usize, _x2: u64, _x3: u64, _x4: u64, _x5: u64, _x6: u64, floats: usize) -> u32 {
+    let scale = (floats as *const f32).read();
+    NOISE_GAUGES.run(&NOISE_GAUGE_EXPECTED, move |p| view_passes::noise_gauge(p, this, w, scale))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_noise_gauge_end() -> u32 {
+    NOISE_GAUGES.end("noise gauges", &NOISE_GAUGE_EXPECTED)
+}
+
+static TARGET_BLITS: Checked = Checked::new();
+
+thread_local! {
+    static TARGET_BLIT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xe01cb8(this, w, _, ctx) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_target_blit(this: usize, w: usize, _x2: usize, ctx: usize) -> u32 {
+    TARGET_BLITS.run(&TARGET_BLIT_EXPECTED, move |p| buffer_passes::target_blit(p, this, w, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_target_blit_end() -> u32 {
+    TARGET_BLITS.end("target blits", &TARGET_BLIT_EXPECTED)
+}
+
+static VOLUME_MASK_CHAINS: Checked = Checked::new();
+
+thread_local! {
+    static VOLUME_MASK_CHAIN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xa4c1ec(this, w, view, src) (volume_mask_chain.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_volume_mask_chain(this: usize, w: usize, view: u32, src: usize) -> u32 {
+    VOLUME_MASK_CHAINS.run(&VOLUME_MASK_CHAIN_EXPECTED, move |p| volume_mask_chain::volume_mask_chain(p, this, w, view, src))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_volume_mask_chain_end() -> u32 {
+    VOLUME_MASK_CHAINS.end("volume mask chains", &VOLUME_MASK_CHAIN_EXPECTED)
+}
+
+static CORRECT_DEPTHS: Checked = Checked::new();
+
+thread_local! {
+    static CORRECT_DEPTH_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x9590f8(this, w, view, ctx) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_correct_depth(this: usize, w: usize, view: u32, ctx: usize) -> u32 {
+    CORRECT_DEPTHS.run(&CORRECT_DEPTH_EXPECTED, move |p| buffer_passes::correct_depth(p, this, w, view, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_correct_depth_end() -> u32 {
+    CORRECT_DEPTHS.end("correct depth passes", &CORRECT_DEPTH_EXPECTED)
+}
+
+static DEFERRED_VIEW_PASSES: Checked = Checked::new();
+
+thread_local! {
+    static DEFERRED_VIEW_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x96e6fc(this, w, view, ctx) (deferred_view_pass.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_deferred_view_pass(this: usize, w: usize, view: u32, ctx: usize) -> u32 {
+    DEFERRED_VIEW_PASSES.run(&DEFERRED_VIEW_PASS_EXPECTED, move |p| deferred_view_pass::deferred_view_pass(p, this, w, view, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_deferred_view_pass_end() -> u32 {
+    DEFERRED_VIEW_PASSES.end("deferred view passes", &DEFERRED_VIEW_PASS_EXPECTED)
+}
+
+static LIGHTING: Checked = Checked::new();
+
+thread_local! {
+    static LIGHTING_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x973b40(this, w, view, args) (lighting.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_lighting(this: usize, w: usize, view: u32, args: usize) -> u32 {
+    LIGHTING.run(&LIGHTING_EXPECTED, move |p| lighting::lighting(p, this, w, view, args))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_lighting_end() -> u32 {
+    LIGHTING.end("lighting", &LIGHTING_EXPECTED)
+}
+
+static DOF_BLUR_CHAINS: Checked = Checked::new();
+
+thread_local! {
+    static DOF_BLUR_CHAIN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x96b618(this, w, view, recs, scene, ctx, s7, s8) (dof_blur_chain.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_dof_blur_chain(this: usize, w: usize, view: u32, recs: usize, scene: usize, ctx: usize, s7: usize, s8: usize) -> u32 {
+    DOF_BLUR_CHAINS.run(&DOF_BLUR_CHAIN_EXPECTED, move |p| dof_blur_chain::blur_chain(p, this, w, view, recs, scene, ctx, s7, s8))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_dof_blur_chain_end() -> u32 {
+    DOF_BLUR_CHAINS.end("dof blur chains", &DOF_BLUR_CHAIN_EXPECTED)
+}
+
+static POST_CHAINS: Checked = Checked::new();
+
+thread_local! {
+    static POST_CHAIN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xc4f7c8(this, w, view, args, n) (post_chain.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_post_chain(this: usize, w: usize, view: u32, args: usize, n: u32) -> u32 {
+    POST_CHAINS.run(&POST_CHAIN_EXPECTED, move |p| post_chain::post_chain(p, this, w, view, args, n))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_post_chain_end() -> u32 {
+    POST_CHAINS.end("post chains", &POST_CHAIN_EXPECTED)
+}
+
+static MASK_POINTS: Checked = Checked::new();
+static STATE_BLITS: Checked = Checked::new();
+
+thread_local! {
+    static MASK_POINTS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static STATE_BLITS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xbde1b8(this, w, ctx, view) / main+0xbde7f0(this, w) (scene_points.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_mask_points(this: usize, w: usize, ctx: usize, view: u32) -> u32 {
+    MASK_POINTS.run(&MASK_POINTS_EXPECTED, move |p| scene_points::mask_points(p, this, w, ctx, view))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_mask_points_end() -> u32 {
+    MASK_POINTS.end("mask points", &MASK_POINTS_EXPECTED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_state_blit(this: usize, w: usize) -> u32 {
+    STATE_BLITS.run(&STATE_BLITS_EXPECTED, move |p| scene_points::target_blit(p, this, w))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_state_blit_end() -> u32 {
+    STATE_BLITS.end("state blits", &STATE_BLITS_EXPECTED)
+}
+
 static EFFECT_LAYERS: Checked = Checked::new();
 
 thread_local! {
@@ -990,7 +1272,7 @@ fn viewport_compared(expected: &[String], got: &[String]) {
 #[no_mangle]
 pub unsafe extern "C" fn on_viewport_apply(vp: usize, w: usize, fb: usize) -> u32 {
     if crate::settings::get().totk.diagnostics.verify_render_lists {
-        if crate::nvn::api::capturing() {
+        if crate::nvn::api::capturing_to_compare() {
             return 0;
         }
         let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
@@ -1017,7 +1299,7 @@ fn targets_compared(expected: &[String], got: &[String]) {
 #[no_mangle]
 pub unsafe extern "C" fn on_render_buffer_bind(rb: usize, w: usize) -> u32 {
     if crate::settings::get().totk.diagnostics.verify_render_lists {
-        if crate::nvn::api::capturing() {
+        if crate::nvn::api::capturing_to_compare() {
             return 0;
         }
         let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
@@ -1182,7 +1464,7 @@ thread_local! {
 /// them (undoably, left to the game where the port stops).
 #[no_mangle]
 pub unsafe extern "C" fn on_occlusion(q: usize, w: usize, view: u32, flags: u64) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     OCCL_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1200,7 +1482,7 @@ pub unsafe extern "C" fn on_occlusion(q: usize, w: usize, view: u32, flags: u64)
         let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
         let mut port = draw::Port::new(mem::Mem::applying_undoably(), base, metal && d.native_model_draws);
         let (r, commands) = crate::nvn::api::capture_buffered(|| {
-            let r = occlusion::draw(&mut port, q, w, view, flags);
+            let r = list_variants::draw(&mut port, q, w, view, flags);
             if r.is_ok() {
                 port.flush();
             }
@@ -1218,7 +1500,7 @@ pub unsafe extern "C" fn on_occlusion(q: usize, w: usize, view: u32, flags: u64)
     }
     let mut port = draw::Port::new(mem::Mem::predicting(), base, false);
     let mut result = Ok(());
-    let expected = crate::nvn::api::capture_dry(|| result = occlusion::draw(&mut port, q, w, view, flags));
+    let expected = crate::nvn::api::capture_dry(|| result = list_variants::draw(&mut port, q, w, view, flags));
     match result {
         Ok(()) => {
             OCCL_EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
@@ -1265,6 +1547,25 @@ pub unsafe extern "C" fn on_occlusion_end() -> u32 {
 
 type CheckFn = Box<dyn Fn(&mut draw::Port) -> draw::R<()>>;
 
+/// --compare-port: the Checked whose calls alternate between the game and the port.
+static COMPARE_KEY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    /// The game's turn of the compared port is collecting its commands.
+    static COMPARE_GAME: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The commands of a compared call (the first eight calls), one per line.
+fn print_compare(who: &str, n: u64, cmds: &[String], stop: Option<&str>) {
+    if n >= 8 {
+        return;
+    }
+    println!("[compare] {who} call {n}: {} commands{}", cmds.len(), stop.map(|s| format!(", stopped: {s}")).unwrap_or_default());
+    for (k, c) in cmds.iter().enumerate() {
+        println!("[compare] {who} {n} {k:4} {c}");
+    }
+}
+
 thread_local! {
     /// Ports to predict after the game's call (keyed by their Checked), innermost last.
     static CHECK_AFTER: std::cell::RefCell<Vec<(usize, CheckFn)>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -1307,12 +1608,26 @@ impl Checked {
 
     /// Apply mode: drawn undoably (1: the game's function is skipped); verify mode: predicted, compared at `end`.
     unsafe fn run(&'static self, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>, f: impl Fn(&mut draw::Port) -> draw::R<()> + 'static) -> u32 {
-        if crate::nvn::api::capturing() {
+        if crate::nvn::api::capturing_to_compare() {
             return 0;
         }
-        self.calls.fetch_add(1, Ordering::Relaxed);
+        let n = self.calls.fetch_add(1, Ordering::Relaxed);
         let base = crate::guest::loader::main_base();
         let d = &crate::settings::get().totk.diagnostics;
+        if d.native_render_lists && COMPARE_KEY.load(Ordering::Relaxed) == self as *const Self as usize {
+            // The game's turn: its commands are collected and printed at the end hook. The port's: run for real but
+            // with NVN commands instead of native items, collected and not recorded (this call draws nothing).
+            if n % 2 == 0 {
+                COMPARE_GAME.with(|g| g.set(self as *const Self as usize));
+                crate::nvn::api::capture_collect();
+                return 0;
+            }
+            let mut port = draw::Port::new(mem::Mem::applying(), base, false);
+            let mut r = Ok(());
+            let got = crate::nvn::api::capture_dry_noted(|| r = f(&mut port));
+            print_compare("port", n, &got, r.err());
+            return 1;
+        }
         if d.native_render_lists {
             static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
             let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
@@ -1370,6 +1685,15 @@ impl Checked {
 
     unsafe fn end(&self, name: &str, expected: &'static std::thread::LocalKey<std::cell::RefCell<Option<Vec<String>>>>) -> u32 {
         let key = self as *const Self as usize;
+        if COMPARE_GAME.with(|g| g.get()) == key {
+            COMPARE_GAME.with(|g| g.set(0));
+            let got = crate::nvn::api::capture_collected();
+            print_compare("game", self.calls.load(Ordering::Relaxed) - 1, &got, None);
+            return 0;
+        }
+        if COMPARE_KEY.load(Ordering::Relaxed) == 0 && crate::settings::get().totk.diagnostics.compare_port.as_deref() == Some(name) {
+            COMPARE_KEY.store(key, Ordering::Relaxed);
+        }
         let after = CHECK_AFTER.with(|r| {
             let mut r = r.borrow_mut();
             if r.last().is_some_and(|x| x.0 == key) { r.pop().map(|x| x.1) } else { None }
@@ -1472,7 +1796,7 @@ thread_local! {
 /// --verify-render-lists: an effect emitter drawn by the game outside a predicted list is predicted by itself.
 #[no_mangle]
 pub unsafe extern "C" fn on_vfx(sys: usize, g: usize, em: usize, a3: usize, dp: usize, cache: usize) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     VFX_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1562,7 +1886,7 @@ thread_local! {
 /// and compared with what the game records.
 #[no_mangle]
 pub unsafe extern "C" fn on_material(d: usize, w: usize, entry: usize, set: usize, a: u32, b: u32) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     MAT_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1610,7 +1934,7 @@ pub unsafe extern "C" fn on_material_end() -> u32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn on_vfx_pass(obj: usize, w: usize, views: usize, pass: u32, path: u32, _x5: usize, over: usize, mode: u32) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     VFXP_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1670,7 +1994,7 @@ pub unsafe extern "C" fn on_vfx_pass_end() -> u32 {
 /// --verify-render-lists: the effect system's draw for a view (main+0xa41a38) predicted by itself.
 #[no_mangle]
 pub unsafe extern "C" fn on_vfx_view(sys0: usize, g: usize, groups: usize, n: u32, mask: u32, a3: usize, flags: u32) -> u32 {
-    if crate::nvn::api::capturing() {
+    if crate::nvn::api::capturing_to_compare() {
         return 0;
     }
     VFXV_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1899,6 +2223,57 @@ fn report() {
         println!("{l}");
     }
     if let Some(l) = POST_PASSES.summary("post passes") {
+        println!("{l}");
+    }
+    if let Some(l) = LIGHT_PASSES.summary("light passes") {
+        println!("{l}");
+    }
+    if let Some(l) = VIEW_TARGET_DRAWS.summary("view target draws") {
+        println!("{l}");
+    }
+    if let Some(l) = DOF_COMPOSITES.summary("depth of field composites") {
+        println!("{l}");
+    }
+    if let Some(l) = EDGE_ADJUSTS.summary("edge adjusts") {
+        println!("{l}");
+    }
+    if let Some(l) = VIEW_GATHERS.summary("view gathers") {
+        println!("{l}");
+    }
+    if let Some(l) = VIEW_TARGET_PASSES.summary("view target passes") {
+        println!("{l}");
+    }
+    if let Some(l) = OCCLUSION_BUFFERS.summary("occlusion buffers") {
+        println!("{l}");
+    }
+    if let Some(l) = NOISE_GAUGES.summary("noise gauges") {
+        println!("{l}");
+    }
+    if let Some(l) = TARGET_BLITS.summary("target blits") {
+        println!("{l}");
+    }
+    if let Some(l) = VOLUME_MASK_CHAINS.summary("volume mask chains") {
+        println!("{l}");
+    }
+    if let Some(l) = CORRECT_DEPTHS.summary("correct depth passes") {
+        println!("{l}");
+    }
+    if let Some(l) = DEFERRED_VIEW_PASSES.summary("deferred view passes") {
+        println!("{l}");
+    }
+    if let Some(l) = LIGHTING.summary("lighting") {
+        println!("{l}");
+    }
+    if let Some(l) = DOF_BLUR_CHAINS.summary("dof blur chains") {
+        println!("{l}");
+    }
+    if let Some(l) = POST_CHAINS.summary("post chains") {
+        println!("{l}");
+    }
+    if let Some(l) = MASK_POINTS.summary("mask points") {
+        println!("{l}");
+    }
+    if let Some(l) = STATE_BLITS.summary("state blits") {
         println!("{l}");
     }
     if let Some(l) = ENTRY_VOLUMES.summary("entry volumes") {
@@ -2169,6 +2544,57 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_post_pass(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_post_pass_end())) as usize;
         hook(base, mem_space, 0xc555c4, 0xfc180fea, pre, post, "Post passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_light_pass(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_light_pass_end())) as usize;
+        hook(base, mem_space, 0x966f7c, 0x6db82beb, pre, post, "Light passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_target_draw(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_target_draw_end())) as usize;
+        hook(base, mem_space, 0x957820, 0xa9ba7bfd, pre, post, "View target draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_dof_composite(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_dof_composite_end())) as usize;
+        hook(base, mem_space, 0xa3e79c, 0xa9ba7bfd, pre, post, "Depth of field composites");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_edge_adjust(_, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_edge_adjust_end())) as usize;
+        hook(base, mem_space, 0xa434a8, 0xa9ba7bfd, pre, post, "Edge adjusts");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_gather(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_gather_end())) as usize;
+        hook(base, mem_space, 0xd4cac4, 0xd10443ff, pre, post, "View gathers");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_target_passes(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_view_target_passes_end())) as usize;
+        hook(base, mem_space, 0xbd8c40, 0xd10443ff, pre, post, "View target passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_occlusion_buffers(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_occlusion_buffers_end())) as usize;
+        hook(base, mem_space, 0xbdad04, 0xd10743ff, pre, post, "Occlusion buffers");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_noise_gauge(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_noise_gauge_end())) as usize;
+        hook_float(base, mem_space, 0xdb6438, 0xd104c3ff, pre, post, "Noise gauges");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_target_blit(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_target_blit_end())) as usize;
+        hook(base, mem_space, 0xe01cb8, 0xa9ba7bfd, pre, post, "Target blits");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain_end())) as usize;
+        hook(base, mem_space, 0xa4c1ec, 0x6db923e9, pre, post, "Volume mask chains");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_correct_depth(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_correct_depth_end())) as usize;
+        hook(base, mem_space, 0x9590f8, 0xa9ba7bfd, pre, post, "Correct depth passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_deferred_view_pass(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_deferred_view_pass_end())) as usize;
+        hook(base, mem_space, 0x96e6fc, 0xfc180fea, pre, post, "Deferred view passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_lighting(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_lighting_end())) as usize;
+        hook(base, mem_space, 0x973b40, 0xfc180fea, pre, post, "Lighting");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_dof_blur_chain(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_dof_blur_chain_end())) as usize;
+        hook(base, mem_space, 0x96b618, 0x6db923e9, pre, post, "Dof blur chains");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_post_chain(_, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_post_chain_end())) as usize;
+        hook(base, mem_space, 0xc4f7c8, 0x6db733ed, pre, post, "Post chains");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_mask_points(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_mask_points_end())) as usize;
+        hook(base, mem_space, 0xbde1b8, 0xa9ba7bfd, pre, post, "Mask points");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_state_blit(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_state_blit_end())) as usize;
+        hook(base, mem_space, 0xbde7f0, 0xd10503ff, pre, post, "State blits");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_item(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_item_end())) as usize;
         hook(base, mem_space, OBJECT_ITEM_SITE, OBJECT_ITEM_SITE_INSTRUCTION, pre, post, "Item objects");
@@ -2227,6 +2653,10 @@ unsafe fn hook_float(
     post: usize,
     what: &str,
 ) {
+    if crate::settings::get().totk.diagnostics.no_port_hook.iter().any(|h| h.trim_start_matches("0x") == format!("{site_off:x}")) {
+        println!("[+] {what} hook left out at main+{site_off:#x}");
+        return;
+    }
     let site = (base + site_off) as *mut u32;
     let actual = std::ptr::read(site);
     if actual != instruction {
@@ -2302,6 +2732,10 @@ unsafe fn hook(
     post: usize,
     what: &str,
 ) {
+    if crate::settings::get().totk.diagnostics.no_port_hook.iter().any(|h| h.trim_start_matches("0x") == format!("{site_off:x}")) {
+        println!("[+] {what} hook left out at main+{site_off:#x}");
+        return;
+    }
     let site = (base + site_off) as *mut u32;
     let actual = std::ptr::read(site);
     if actual != instruction {

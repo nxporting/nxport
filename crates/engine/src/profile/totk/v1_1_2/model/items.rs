@@ -57,9 +57,7 @@ pub(super) unsafe fn query_item(p: &mut Port, item: usize, ctx: usize) -> R<()> 
     if q == 0 {
         return Ok(());
     }
-    if p.vfn(q, 0) != QUERY_TAKE {
-        return Err("query take");
-    }
+    let q = super::list_variants::query_object(p, q);
     let cmd = p.m.r64(w + 0xb8);
     p.point_size(cmd, 1.0);
     p.m.w::<u64>(q + 0x80, p.m.r64(item + 0xe0) as u64);
@@ -210,11 +208,7 @@ unsafe fn object_draw(p: &mut Port, item: usize, ctx: usize) -> R<()> {
     program_block(p, prog, w, 2, p.m.r64(ctx + 0x18), 0)?;
     program_block(p, prog, w, 3, item + 0x60, 0)?;
     if shadowed {
-        let t = p.m.r64(item + 0x128);
-        if t == 0 {
-            return Err("item without its texture");
-        }
-        program_texture(p, prog, w, 6, t + 0x70)?;
+        super::list_variants::item_texture(p, prog, w, item)?;
     }
     let cmd = p.m.r64(w + 0xb8);
     let shapes = p.m.r64(p.m.r64(p.base + SHAPES));

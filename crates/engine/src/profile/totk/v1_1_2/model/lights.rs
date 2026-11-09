@@ -119,6 +119,17 @@ const ENTRY_ID: usize = 0x96a918;
 const ENTRY_SCALE: usize = 0x96aa20;
 const ENTRY_VALUE: usize = 0x96a9c8;
 const ENTRY_TREE: usize = 0x96a970;
+/// main+0x96af6c / main+0x96afc0 / main+0x96b014: further inherited float values of a light entry (+0x34, +0x3c, +0x40
+/// unless set on the entry: bits 0 of +0x4e / +0x4f / +0x52), pointers to the float.
+const ENTRY_F34: usize = 0x96af6c;
+const ENTRY_F3C: usize = 0x96afc0;
+const ENTRY_F40: usize = 0x96b014;
+/// The pure 3x4 inverse (out, in) and product (out, a, b).
+const INVERSE_3X4: usize = 0x93a4c4;
+const MATRIX_MUL_3X4: usize = 0x9f3524;
+/// The type light entries' parents are cast to, and its guard.
+const ENTRY_TYPE_GUARD: usize = 0x4633c58;
+const ENTRY_TYPE: usize = 0x4633c60;
 /// The id remap table (count, values) and its once-initialised guard.
 const ID_TABLE_GUARD: usize = 0x4633c28;
 const ID_TABLE: usize = 0x4633c30;
@@ -130,8 +141,8 @@ const RADIUS_SCALE: usize = 0x380f978;
 
 /// main+0x969d28(ctx, light, view): one light drawn with its own program (main+0x96aa74). The light's entry is the first
 /// in its entry tree (deepest level first) whose remapped id equals the light's (+0x58); its record holds the light's
-/// 0x30 bytes, its position through the view transform (ctx[4] +0x108) and radius, and the entry's values. Only sphere
-/// lights (shape kind 0) are ported.
+/// 0x30 bytes, its position through the view transform (ctx[4] +0x108) and radius, and the entry's values. Shape kinds
+/// 0, 3 and 4 (the others draw nothing).
 pub(super) unsafe fn light_shape(p: &mut Port, ctx: usize, light: usize, view: u32) -> R<()> {
     let obj = p.m.r64(light + 0x50);
     if (p.m.r64(obj + 0x68) >> 10) & 1 == 0 {
@@ -144,8 +155,10 @@ pub(super) unsafe fn light_shape(p: &mut Port, ctx: usize, light: usize, view: u
     let tree = p.query(p.base + ENTRY_TREE, &[p.m.r64(owner + 0x130) as u64]) as usize;
     let entry = find_entry(p, tree, id)?;
     let mut scale = if id == 1 { p.m.f32(owner + 0x13c) } else { 1.0 };
-    if p.query(p.base + p.vfn(shape, 0x10), &[shape as u64]) as u32 != 0 {
-        return Err("light shape kind");
+    match p.query(p.base + p.vfn(shape, 0x10), &[shape as u64]) as u32 {
+        0 => {}
+        kind @ (3 | 4) => return light_volume(p, ctx, light, id, variant, kind, entry, scale),
+        _ => return Ok(()),
     }
     let progs = p.m.r64(p.m.r64(owner + 0x20) + 8);
     let prog = if variant <= 0 {
@@ -193,6 +206,116 @@ pub(super) unsafe fn light_shape(p: &mut Port, ctx: usize, light: usize, view: u
     Ok(())
 }
 
+/// Light shape kinds 3 and 4 of main+0x969d28: the program of variant `variant | 1` (kind 3) or `variant | 2` (kind 4),
+/// the light's 0x30 bytes, the light's inverse times the view's inverse (3x4, main+0x9f3524), the entry's values, in a
+/// 0x70 / 0x80-byte ring block at slot 1; kind 3 draws shapes +8 / stream +0x728, kind 4 shapes +0x5a8 / stream +0x2328.
+#[allow(clippy::too_many_arguments)]
+unsafe fn light_volume(p: &mut Port, ctx: usize, light: usize, id: u32, variant: i32, kind: u32, entry: usize, scale: f32) -> R<()> {
+    let owner = p.m.r64(ctx + 8);
+    let progs = p.m.r64(p.m.r64(owner + 0x20) + 8);
+    let v = variant | (kind - 2) as i32;
+    let prog = if v < 1 {
+        p.m.r64(progs + 0x10)
+    } else {
+        let i = (v - 1) as u32;
+        p.m.r64(progs + 0x20) + if p.m.r32(progs + 0x18) > i { i } else { 0 } as usize * 0x158
+    };
+    light_program(p, p.m.r64(ctx + 0x18), prog)?;
+    // Host copies for the pure matrix functions.
+    let m = p.m.r64(ctx + 0x20);
+    let view: [f32; 12] = std::array::from_fn(|k| p.m.f32(m + 0x108 + k * 4));
+    let own: [f32; 12] = std::array::from_fn(|k| p.m.f32(light + k * 4));
+    let (mut view_inv, mut own_inv, mut prod) = ([0f32; 12], [0f32; 12], [0f32; 12]);
+    p.query(p.base + INVERSE_3X4, &[view_inv.as_mut_ptr() as u64, view.as_ptr() as u64]);
+    p.query(p.base + INVERSE_3X4, &[own_inv.as_mut_ptr() as u64, own.as_ptr() as u64]);
+    p.query(p.base + MATRIX_MUL_3X4, &[prod.as_mut_ptr() as u64, own_inv.as_ptr() as u64, view_inv.as_ptr() as u64]);
+    let mut rec = [0u8; 0x80];
+    for (k, b) in rec[..0x30].iter_mut().enumerate() {
+        *b = p.m.r8(light + k);
+    }
+    for (k, f) in prod.iter().enumerate() {
+        rec[0x30 + k * 4..0x34 + k * 4].copy_from_slice(&f.to_bits().to_le_bytes());
+    }
+    let put = |rec: &mut [u8; 0x80], off: usize, v: u32| rec[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    let tail = p.m.r32(light + 0x60);
+    let size;
+    if kind == 3 {
+        let (a, b) = if entry == 0 {
+            (0, 0)
+        } else {
+            (p.m.r32(p.query(p.base + ENTRY_SCALE, &[entry as u64]) as usize), p.m.r32(p.query(p.base + ENTRY_VALUE, &[entry as u64]) as usize))
+        };
+        put(&mut rec, 0x60, a);
+        put(&mut rec, 0x64, b);
+        put(&mut rec, 0x68, tail);
+        size = 0x70;
+    } else {
+        let one = 1f32.to_bits();
+        if entry == 0 {
+            put(&mut rec, 0x6c, tail);
+            put(&mut rec, 0x70, one);
+            put(&mut rec, 0x74, one);
+        } else if id & !3 != 8 {
+            let s = p.m.f32(p.query(p.base + ENTRY_SCALE, &[entry as u64]) as usize);
+            put(&mut rec, 0x60, (scale * s).to_bits());
+            put(&mut rec, 0x64, (scale * s).to_bits());
+            put(&mut rec, 0x68, p.m.r32(p.query(p.base + ENTRY_VALUE, &[entry as u64]) as usize));
+            put(&mut rec, 0x6c, tail);
+            put(&mut rec, 0x70, one);
+            put(&mut rec, 0x74, one);
+        } else {
+            let a = p.m.f32(p.query(p.base + ENTRY_F34, &[entry as u64]) as usize);
+            let b = p.m.f32(p.query(p.base + ENTRY_F3C, &[entry as u64]) as usize);
+            put(&mut rec, 0x60, (a + -1.0).to_bits());
+            put(&mut rec, 0x64, (b + -1.0).to_bits());
+            put(&mut rec, 0x68, p.m.r32(p.query(p.base + ENTRY_VALUE, &[entry as u64]) as usize));
+            put(&mut rec, 0x6c, tail);
+            // The first ancestor entry (or the entry) with +0x51 bit 0 set gives +0x38.
+            let mut e = entry;
+            if p.m.r8(e + 0x51) & 1 == 0 {
+                if p.m.r8(p.m.r64(p.base + ENTRY_TYPE_GUARD)) & 1 == 0 {
+                    return Err("light entry type not initialised");
+                }
+                let ty = p.m.r64(p.base + ENTRY_TYPE);
+                while p.m.r64(e + 0x10) != 0 {
+                    let h = p.m.r64(e + 0x18);
+                    if h == 0 || p.m.r32(h + 0xc) != p.m.r32(e + 0x20) {
+                        break;
+                    }
+                    let parent = p.m.r64(h);
+                    if parent == 0 {
+                        break;
+                    }
+                    let up = p.query(p.base + p.vfn(parent, 0), &[parent as u64, ty as u64]) as usize;
+                    if up == 0 {
+                        break;
+                    }
+                    e = up;
+                    if p.m.r8(e + 0x51) & 1 != 0 {
+                        break;
+                    }
+                }
+            }
+            put(&mut rec, 0x70, p.m.r32(e + 0x38));
+            put(&mut rec, 0x74, p.m.r32(p.query(p.base + ENTRY_F40, &[entry as u64]) as usize));
+        }
+        size = 0x80;
+    }
+    let w = p.m.r64(p.m.r64(ctx + 0x10));
+    let block = p.ring_block(rec.as_ptr() as usize, size);
+    program_block(p, prog, w, 1, block, 0)?;
+    let shapes = p.m.r64(p.m.r64(p.base + SHAPES));
+    let streams = p.m.r64(p.m.r64(p.base + STREAMS));
+    if kind == 3 {
+        shape_state(p, shapes + 8, w);
+        stream_draw(p, streams + 0x728, w);
+    } else {
+        shape_state(p, shapes + 0x5a8, w);
+        stream_draw(p, streams + 0x2328, w);
+    }
+    Ok(())
+}
+
 /// The first entry, from the tree's deepest level up, whose remapped id equals the remapped `id` (0: none).
 unsafe fn find_entry(p: &mut Port, root: usize, id: u32) -> R<usize> {
     if p.m.r8(p.m.r64(p.base + ID_TABLE_GUARD)) & 1 == 0 {
@@ -232,7 +355,7 @@ unsafe fn find_entry(p: &mut Port, root: usize, id: u32) -> R<usize> {
 
 /// main+0x96aa74(ctx, prog): the light program with its textures (ctx[1], [ctx[2]], three shadow cascades from ctx[3]),
 /// the view's uniforms (ctx[4] +0xc0, 0x1a0 each, index [ctx[5]]), the scene uniforms and the storage block ctx[7] +0x1c0.
-unsafe fn light_program(p: &mut Port, c: usize, prog: usize) -> R<()> {
+pub(super) unsafe fn light_program(p: &mut Port, c: usize, prog: usize) -> R<()> {
     let r: [usize; 8] = std::array::from_fn(|k| p.m.r64(c + k * 8));
     let w = p.m.r64(r[0]);
     program_apply(p, prog, w)?;
