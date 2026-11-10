@@ -1,13 +1,7 @@
 // Profile and hooks for The Legend of Zelda: Tears of the Kingdom v1.1.2.
 // NSO Build ID: 9a10ed9435c06733da597d8094d9000ab5d3ee60
 
-// The hooks patch the game's arm64 code in place: native runtime only.
-#[cfg(nx_native)]
-pub mod aspect;
-#[cfg(nx_native)]
-pub mod dynamic_fps;
-#[cfg(nx_native)]
-pub mod hud;
+// The hook writes code of its own into trampolines: native runtime only.
 #[cfg(nx_native)]
 pub mod font_draw;
 #[cfg(nx_native)]
@@ -15,12 +9,15 @@ pub mod model;
 
 use crate::profile::VersionProfile;
 
+use super::aspect;
+use super::frame_time::{self, Sites};
+
 pub static PROFILE: VersionProfile = VersionProfile {
     version_string: "1.1.2",
     build_id_prefix: "9a10ed9435c06733da597d8094d9000a",
-    #[cfg(nx_native)]
+    #[cfg(nx_runtime)]
     install_hooks: Some(install_v1_1_2_hooks),
-    #[cfg(not(nx_native))]
+    #[cfg(not(nx_runtime))]
     install_hooks: None,
     heap_instance_offset: Some(0x047137d0),
     allocator_pool_offset: Some(0x0466e500),
@@ -28,6 +25,32 @@ pub static PROFILE: VersionProfile = VersionProfile {
     draw_item: Some(draw_item),
     #[cfg(not(nx_native))]
     draw_item: None,
+};
+
+/// Frame pacing and game time (frame_time.rs): the pacer at main+0x8f6670, the time manager's update at main+0x7f7a28.
+pub static SITES: Sites = Sites {
+    lowest: 0xea87e0,
+    veto: 0x8f67f8,
+    step: 0x7f7a38,
+    step_code: frame_time::step_code(0xd001_f1c8),           // adrp x8, main+0x4631000
+    input: 0x8f633c,
+    input_code: frame_time::input_code(0xf001_ea08, 0xf945_cd08), // adrp x8, main+0x4639000; ldr x8, [x8, #0xb98]
+    camera_rate: Some((0x1d3675c, 0xc54)),
+    ground_carry: Some((0xbbb4b4, 0xf940_0348)), // ldr x8, [x26]
+    cloth: None, // 1.1.2 leaves that clock unset
+    short_cut_bg: Some((0x462cb20, 0x19af400, 0xc5a4_9707)),
+};
+
+/// Screen shapes other than 16:9 (aspect.rs, hud.rs).
+pub static ASPECT_SITES: aspect::Sites = aspect::Sites {
+    aspect_const: 0x3813d0c,
+    ratio: [0x19b5480, 0x1ece314],
+    show: [(0x1ae042c, 0x1ae0454), (0x1adf824, 0x1adf868)],
+    moved: 0x1ae4c24,
+    floor: [0x12c2410, 0x12c2828],
+    camera: [0xccbcb8, 0x1255594],
+    fovy: 0x1a61bd4, // in sead::PerspectiveProjection::setFovy_ (main+0x1a61b94)
+    layout: [0x79d818, 0x40e38], // in main+0x79d804 and main+0x40e24
 };
 
 /// --log-draw-items: main+0x763718 takes (renderer, item, ...), keeps the item at [x29 - 0x20] and calls the renderer's
@@ -60,54 +83,24 @@ extern "C" {
     fn sys_icache_invalidate(start: *mut libc::c_void, len: usize);
 }
 
+/// The hooks every runtime takes (they rewrite instructions and call HLE trampolines, so a lifted game has them too),
+/// then natively the ones that write code of their own into trampolines.
+#[cfg(nx_runtime)]
+pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    // 1. Screen shapes, installed whatever the settings: the dynamic aspect ratio is switched while the game runs
+    //    (host/live.rs), and a lifted game keeps the hooks it was lifted with.
+    aspect::install(base, mem_space, &ASPECT_SITES);
+    // 2. Game time from real time, and the pacer unlocked; the frame-rate setting caps it while the game runs.
+    // Installed whatever the setting, as the aspect hooks.
+    frame_time::install(base, mem_space, &SITES);
+    // 3. Mouse aiming reads the camera's angles (installed whatever the settings, as above).
+    super::camera_angles::install(base, mem_space);
+    #[cfg(nx_native)]
+    install_native_hooks(base, mem_space);
+}
+
 #[cfg(nx_native)]
-pub unsafe fn install_v1_1_2_hooks(
-    base: usize,
-    mem_space: &mut crate::guest::loader::GuestMemorySpace,
-) {
-    // 1. Frame rate unlock: patch min vblanks from 2 to 1 (Stock30 keeps 30 fps).
-    {
-        let fps_unlocked = crate::settings::get().system.fps != crate::settings::FpsMode::Stock30;
-        let p = (base + 0xea87e0) as *mut u32;
-        const MOV_X8_2: u32 = 0xd280_0048; // movz x8, #2
-        const MOV_X8_1: u32 = 0xd280_0028; // movz x8, #1
-        if fps_unlocked {
-            if std::ptr::read(p) == MOV_X8_2 {
-                std::ptr::write(p, MOV_X8_1);
-                sys_icache_invalidate(p as *mut libc::c_void, 4);
-                println!("[+] Frame pacer: minimum present interval 1 (up to 60+ fps; --fps=stock for the 30 fps cap)");
-            } else if std::ptr::read(p) == MOV_X8_1 {
-                println!("[+] Frame pacer: minimum present interval already 1 (patched by a mod)");
-            } else {
-                println!("[!] Frame pacer: unexpected instruction {:#010x} at guest+0xea87e0; fps unlock not applied", std::ptr::read(p));
-            }
-        } else {
-            println!("[+] Frame pacer: stock 30 fps cap active (minimum present interval 2)");
-        }
-        if fps_unlocked && crate::settings::get().totk.v1_1_2.dynamic_fps {
-            dynamic_fps::install(base, mem_space);
-        }
-    }
-
-    // 2. Dynamic aspect ratio (unless --dynamic-aspect-ratio=false): the game renders at the screen's shape (aspect.rs,
-    //    hud.rs; narrower than 16:9 it sees more vertically) and follows it when it changes (a resized window); otherwise
-    //    its 16:9 picture is letterboxed. It starts at --launch-aspect, else 16:9.
-    if crate::settings::get().totk.v1_1_2.dynamic_aspect_ratio {
-        let a = crate::settings::get().display.launch_aspect;
-        let ratio = a.map_or(16.0 / 9.0, |a| a.ratio());
-        match aspect::apply(base, ratio) {
-            Ok(()) => {
-                match a {
-                    Some(a) => println!("[+] Aspect: the game renders at the screen's shape, starting at {a}"),
-                    None => println!("[+] Aspect: the game renders at the screen's shape"),
-                }
-                install_hud_hooks(base, mem_space);
-            }
-            Err(e) => println!("[!] Dynamic aspect ratio not applied ({e}); the picture stays 16:9"),
-        }
-        sys_icache_invalidate(base as *mut libc::c_void, 0x0480_0000);
-    }
-
+unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     // 3. --journal-occl-reads (diagnostic): journal every call of the occlusion query read (main+0x10c4d44, which
     // takes its query object in x0) with the state it reads (metal::journal_occl_read). The entry instruction branches
     // to a wrapper in the spare words of an HLE trampoline: the displaced stp, the logger call (x0 saved), back.
@@ -117,7 +110,7 @@ pub unsafe fn install_v1_1_2_hooks(
         let site = (base + SITE) as *mut u32;
         let tramp =
             mem_space.make_hle_trampoline(crate::hle!(crate::metal::journal_occl_read(_))) as usize;
-        let wrap = tramp + 40; // words 10..14 of the 16-word entry (make_hle_trampoline uses 0..9)
+        let wrap = tramp + 12; // words 3..7 of the 8-word entry (make_hle_trampoline uses 0..2)
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
             (d.abs() < 1 << 27).then(
@@ -177,7 +170,7 @@ pub unsafe fn install_v1_1_2_hooks(
                 for (k, c) in pcode.iter().enumerate() {
                     std::ptr::write(pw.add(k), *c);
                 }
-                sys_icache_invalidate(pw as *mut libc::c_void, 64);
+                sys_icache_invalidate(pw as *mut libc::c_void, 32);
                 let w = wrap as *mut u32;
                 let code: [u32; 15] = [
                     0xa9ba07e0, // stp x0, x1, [sp, #-0x60]!
@@ -217,50 +210,5 @@ pub unsafe fn install_v1_1_2_hooks(
     // 6. The model renderer port (main+0x688c68)
     if d.verify_model_draws || d.native_model_draws || d.verify_render_lists || d.native_render_lists {
         model::install(base, mem_space);
-    }
-}
-
-/// Calls hud::calculate(layout) at the entry of each layout calculation: the entry branches to a wrapper (a trampoline
-/// entry's words) that keeps the arguments, makes the call, runs the displaced instruction and returns.
-#[cfg(nx_native)]
-unsafe fn install_hud_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
-    use hud::{CALC_ENTRY, CALC_SITES};
-    let tramp = mem_space.make_hle_trampoline(crate::hle!(hud::calculate(_))) as usize;
-    let b = |from: usize, to: usize, link: bool| -> Option<u32> {
-        let d = to as i64 - from as i64;
-        (d.abs() < 1 << 27)
-            .then(|| if link { 0x9400_0000 } else { 0x1400_0000 } | ((d >> 2) as u32 & 0x03ff_ffff))
-    };
-    for s in CALC_SITES {
-        let site = base + s;
-        let wrap = mem_space.make_hle_trampoline(crate::hle!(hud::calculate(_))) as usize;
-        match (
-            std::ptr::read(site as *const u32),
-            b(site, wrap, false),
-            b(wrap + 8, tramp, true),
-            b(wrap + 28, site + 4, false),
-        ) {
-            (CALC_ENTRY, Some(to_wrap), Some(call), Some(back)) => {
-                let code: [u32; 8] = [
-                    0xa9be07e0, // stp x0, x1, [sp, #-0x20]!
-                    0xa9017be2, // stp x2, x30, [sp, #0x10]
-                    call,       // bl <hud::calculate trampoline>
-                    0xa9417be2, // ldp x2, x30, [sp, #0x10]
-                    0xa8c207e0, // ldp x0, x1, [sp], #0x20
-                    0xd503201f, // nop
-                    CALC_ENTRY, // sub sp, sp, #0x60
-                    back,       // b site+4
-                ];
-                for (k, c) in code.iter().enumerate() {
-                    std::ptr::write((wrap as *mut u32).add(k), *c);
-                }
-                sys_icache_invalidate(wrap as *mut libc::c_void, 64);
-                std::ptr::write(site as *mut u32, to_wrap);
-                sys_icache_invalidate(site as *mut libc::c_void, 4);
-            }
-            (w, ..) => println!(
-                "[!] HUD hook not installed (main+{s:#x} = {w:#010x}, or out of branch range)"
-            ),
-        }
     }
 }

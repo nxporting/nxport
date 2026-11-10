@@ -109,6 +109,8 @@ group! {
         no_mods: bool = false,
         /// Apply no ExeFS code patches (IPS / pchtxt) from mods
         no_exefs_patches: bool = false,
+        /// Leave out mods' code modules (exefs/subsdkN, exlaunch plugins); their other files still apply
+        no_plugin_mods: bool = false,
         /// Save data directory (default: the platform's application data directory)
         save_dir: Option<PathBuf> = None,
         /// Shader cache directory (default: the app's, else the game's data directory's shader_cache/)
@@ -121,11 +123,11 @@ group! {
         /// Render pipelines to compile when the game starts drawing, and where new ones are added (default: the game's
         /// data directory's pipelines.txt)
         pipeline_list: Option<PathBuf> = None,
-        /// libopus, for the hardware Opus decoder
-        libopus: Option<PathBuf> = None,
         /// The game's lifted code, where guest code does not run natively (nxport-cli lift-game, then compile-guest
         /// with the same settings); its modules.txt beside it
         guest_library: Option<PathBuf> = None,
+        /// Code the mods changed, lifted against that library (nxport-cli lift-overlay); its modules.txt beside it
+        guest_overlay: Option<PathBuf> = None,
         /// System data archives from the console's firmware, one directory per archive named by its id (16 hex digits),
         /// for games that mount them (default: the data directory's system_data/)
         system_data_dir: Option<PathBuf> = None,
@@ -138,11 +140,21 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [launch_aspect, stretch] {
+    Window "Display" [no_vsync, low_latency, frame_limit, perf_overlay, fps_in_title, launch_aspect, stretch] {
         /// No window (frame dumps still work)
         headless: bool = false,
-        /// Never wait for vsync (benchmark: the game runs faster than real time)
+        /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
         no_vsync: bool = false,
+        /// With VSync: at most one finished frame waits for the screen (about a frame or two less input lag; a frame
+        /// that misses a refresh waits for the next, so the frame rate drops sooner when the PC can barely keep up)
+        low_latency: bool = false,
+        /// Frame-rate limit (fps) where the title may run faster than 30: 60, 90, 120 or 144. With vsync, the display's
+        /// refresh rate also limits it
+        frame_limit: u32 = 60,
+        /// Show the performance overlay from the start (Windows: F10 toggles it)
+        perf_overlay: bool = false,
+        /// The window's title shows the frame rate
+        fps_in_title: bool = true,
         /// Launch aspect ratio (W:H): initial window aspect ratio when the application launches
         #[arg(alias = "aspect")]
         launch_aspect: Option<Aspect> = None,
@@ -153,7 +165,7 @@ group! {
 
 group! {
     /// Controllers, keyboard, touch and rumble.
-    Input "Input" [swap_ab, swap_xy, no_touch, no_rumble, rumble_scale] {
+    Input "Input" [swap_ab, swap_xy, no_touch, no_rumble, rumble_scale, direct_keyboard, direct_mouse, mouse_look, mouse_look_speed] {
         /// Controls file (default: the application data directory's controls.cfg)
         controls_file: Option<PathBuf> = None,
         /// Physical controllers: A and B by position, as on a Switch controller
@@ -166,6 +178,15 @@ group! {
         no_rumble: bool = false,
         /// Rumble strength factor
         rumble_scale: f32 = 1.0,
+        /// Direct keyboard access: games and mods that read a USB keyboard see this one, as well as its bindings
+        direct_keyboard: bool = false,
+        /// Direct mouse access: games and mods that read a USB mouse see this one, and the mouse stops being the touch screen
+        direct_mouse: bool = false,
+        /// Mouse look: the mouse, captured by the window, moves the right stick (the camera in most games); F8 frees it
+        /// (it is then the touch screen, for menus) and captures it again. Direct mouse access takes precedence
+        mouse_look: bool = false,
+        /// How far the right stick moves for a mouse movement in mouse look (1 = default)
+        mouse_look_speed: f32 = 1.0,
         /// Text the software keyboard returns (default: the game's initial text, else "Player"; "<cancel>" cancels)
         keyboard_text: Option<String> = None,
     }
@@ -173,9 +194,11 @@ group! {
 
 group! {
     /// Audio output and its diagnostics.
-    Audio "Audio" [audio] {
+    Audio "Audio" [audio, volume] {
         /// Audio output
         audio: bool = true,
+        /// Output volume, percent
+        volume: u32 = 100,
         /// Write the output as a stereo WAV file
         audio_wav: Option<PathBuf> = None,
     }
@@ -190,6 +213,8 @@ group! {
         aot_dump: Option<PathBuf> = None,
         /// Presented frame at which the image is written (with mods that patch code at run time)
         aot_dump_frame: u64 = 300,
+        /// Where guest code is lifted: code mods patch while the game runs is interpreted and compiled as they patch it (on for an app built with code mods)
+        live_patches: bool = false,
         /// Check that no anonymous executable memory exists
         aot_audit: bool = false,
         /// Rewrite x18 uses into stubs (default: when the OS does not preserve x18)
@@ -281,6 +306,11 @@ group! {
         view_cache_cap: usize = 4096,
         /// Bind uniform buffers zero-copy where no update of the submit writes them
         ubo_zero_copy: bool = false,
+        /// Vulkan: graphics stages sample textures through global descriptor arrays indexed by push constants (where the device has descriptor indexing)
+        vk_bindless_textures: bool = true,
+        /// No longer has an effect: textures over memory another image wrote always see those bytes (kept so settings files
+        /// and command lines naming it still load)
+        exact_texture_overlaps: bool = false,
         /// Which work the GPU executor does
         gfx_mode: GfxMode = GfxMode::All,
         /// The GPU backend
@@ -436,6 +466,8 @@ group! {
         log_shader_draws: Vec<String> = Vec::new(),
         log_alias: bool = false,
         log_alias_new: bool = false,
+        /// Recorded NVN commands by name, every 600 frames
+        log_cmd_histogram: bool = false,
         log_batchable: bool = false,
         log_bind_miss: bool = false,
         log_dirty_track: bool = false,

@@ -17,7 +17,7 @@ pub(super) enum Occl {
     Report(u64),
 }
 
-/// What the watcher does once a submit completed.
+/// What the watcher does once a submit completed, or (serial 0) a chunk with occlusion reports.
 pub(super) struct Done {
     pub serial: u64,
     /// Null for a submit that queued nothing.
@@ -57,7 +57,7 @@ pub(super) fn start(device: ash::Device, timestamp_period: f32) {
     std::thread::Builder::new()
         .name("vk-fence-watch".into())
         .spawn(move || {
-            super::guard::engine_thread();
+            super::guard::watcher_thread();
             let mut carried = 0u64;
             let mut results: Vec<u64> = Vec::new();
             while let Ok(d) = rx.recv() {
@@ -100,12 +100,13 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
     }
     for &(addr, src, len) in &d.writebacks {
         super::guard::write_back(addr, src as *const u8, len);
-        super::texture::note_wb_landed(addr);
     }
     if ok {
         for (t, level, src, len) in &d.rt_writebacks {
-            crate::nvn::api::guest_write_level(t, *level as usize, std::slice::from_raw_parts(*src as *const u8, *len));
-            super::texture::note_wb_landed(t.storage);
+            let total = crate::nvn::layout::compute_layout(&super::texture::Desc::of(t).params).total as usize;
+            crate::guest::dirty_track::write_unseen(t.storage, total, || {
+                crate::nvn::api::guest_write_level(t, *level as usize, std::slice::from_raw_parts(*src as *const u8, *len));
+            });
         }
     }
     if ok && d.timestamps != vk::QueryPool::null() {

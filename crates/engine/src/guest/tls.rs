@@ -4,7 +4,12 @@
 
 use std::cell::Cell;
 
-const TLS_BLOCK_SIZE: usize = 0x4000; // empirically observed max offset 0x1000, generous margin
+/// A thread's block (TPIDR_EL0) is laid out as Horizon's thread-local region: the 16-byte TCB, the module's TLS segment,
+/// the thread pointers at +0x1f0 / +0x1f8 (setup_horizon_tpidrro), then this engine's slot for the fake region's address
+/// at its end (FAKE_TLR_SLOT), which sets its size.
+const TLS_BLOCK_SIZE: usize = 0x4000;
+/// Where the thread pointers start: the module's TLS segment must end before it.
+const THREAD_POINTERS: usize = 0x1f0;
 /// Offset in the guest TLS block of the pointer to the thread's fake Horizon thread-local region.
 pub const FAKE_TLR_SLOT: usize = 0x3ff8;
 
@@ -27,8 +32,18 @@ pub fn current_fake_tlr() -> usize {
 /// 16-byte TCB, rounded up to the segment's alignment), set by __nnmusl_init_dso (horizon/hle.rs).
 static TLS_TEMPLATE: std::sync::Mutex<(Vec<u8>, usize)> = std::sync::Mutex::new((Vec::new(), 16));
 
-pub fn set_module_tls_template(image: Vec<u8>, align: usize) {
+/// `image`: the segment's initialized part; `size`: the whole segment (.tdata and .tbss), which must fit below the thread
+/// pointers. A segment that does not is reported and left out (nothing in the block would be its own).
+pub fn set_module_tls_template(image: Vec<u8>, align: usize, size: usize) {
     let off = (16 + align.max(1) - 1) / align.max(1) * align.max(1);
+    let image = if off + size.max(image.len()) <= THREAD_POINTERS {
+        image
+    } else {
+        println!(
+            "[!] the module's thread-local data ({size} bytes at +{off:#x}) does not fit below the thread pointers (+{THREAD_POINTERS:#x}): not supported, left out"
+        );
+        Vec::new()
+    };
     let mut t = TLS_TEMPLATE.lock().unwrap();
     *t = (image, off);
     // Blocks made before the module registered (the loader thread's) get it too.
@@ -39,7 +54,7 @@ pub fn set_module_tls_template(image: Vec<u8>, align: usize) {
 }
 
 unsafe fn apply_template(block: usize, t: &(Vec<u8>, usize)) {
-    if !t.0.is_empty() && t.1 + t.0.len() <= 0x1f0 {
+    if !t.0.is_empty() && t.1 + t.0.len() <= THREAD_POINTERS {
         std::ptr::copy_nonoverlapping(t.0.as_ptr(), (block + t.1) as *mut u8, t.0.len());
     }
 }
@@ -54,7 +69,7 @@ pub fn thread_block() -> usize {
     unsafe {
         let layout = std::alloc::Layout::from_size_align(TLS_BLOCK_SIZE, 0x1000).unwrap();
         let ptr = std::alloc::alloc_zeroed(layout);
-        *(ptr.add(0x1f0) as *mut usize) = ptr as usize;
+        *(ptr.add(THREAD_POINTERS) as *mut usize) = ptr as usize;
         // A Horizon thread-local region (0x200 bytes, IPC message buffer at +0) for modules that read tpidrro_el0
         // themselves (exlaunch mods; see guest/module_loader.rs): on macOS tpidrro_el0 is Darwin's TSD, which must not be
         // written. Those reads are rewritten to load this pointer.
@@ -69,6 +84,9 @@ pub fn thread_block() -> usize {
 /// Called first on every thread that runs guest code (guest-main and the threads the guest creates).
 pub fn mark_guest_thread() {
     GUEST_THREAD.with(|g| g.set(true));
+    if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
+        unsafe { crate::vulkan::pin_current_thread(crate::vulkan::guest_affinity()) };
+    }
 }
 
 /// Whether this thread runs guest code. Signal-safe.

@@ -5,11 +5,11 @@
 pub mod aot;
 #[cfg(nx_native)]
 pub mod crash_handler;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 pub mod exclusive_rewrite;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 pub mod tls;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 pub mod tpidr_rewrite;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 pub mod trampoline;

@@ -22,6 +22,8 @@ pub fn platform(p: Platform) -> SettingsPatch {
     let mut s = SettingsPatch::default();
     s.graphics.translated_shaders = Some(true);
     if p == Platform::IOS {
+        // A plugin mod patches code as it runs, and iOS runs only signed code: not supported there for now.
+        s.files.no_plugin_mods = Some(true);
         s.system.fps = Some(crate::settings::FpsMode::Unlocked);
         // TIMESTAMP reports carry the GPU's times: the game's dynamic resolution then sees what the GPU takes.
         s.graphics.gpu_timestamps = Some(true);

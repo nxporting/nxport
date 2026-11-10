@@ -102,17 +102,11 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
                 || mods.join("RomFS").is_dir();
 
             let matches_game = |p: &Path| -> bool {
-                let npdm = [p.join("exefs/main.npdm"), p.join("ExeFS/main.npdm")]
-                    .into_iter()
-                    .find(|f| f.is_file());
-                let target_tid = npdm.as_deref().and_then(nxport::game::npdm_program_id);
-                match target_tid {
-                    Some(t) if t != tid => {
-                        println!("  [!] Skipping mod '{}': for program {t:016X}, not this game ({tid:016X})", p.display());
-                        false
-                    }
-                    _ => true,
+                let other = nxport::game::is_other_title_dir(p, tid);
+                if other {
+                    println!("  [!] Skipping mod '{}': for another program than {tid:016X}", p.display());
                 }
+                !other
             };
 
             if is_single_mod {

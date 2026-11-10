@@ -1,8 +1,8 @@
 // A Windows app: a folder that runs the game when nxport.exe in it is started without arguments. The engine finds what
 // the folder carries itself (nxport::config::app_bundle_layer, as a macOS app finds its Contents/Resources):
 //
-//   nxport.exe                 the engine, built from the same source as the builder (the lifted code must match the
-//                              code that source patches), marked a GUI program: no console window opens with it
+//   nxport.exe                 the engine: the builder itself, which runs the game by that name (the lifted code must
+//                              match the code its engine patches), marked a GUI program: no console window opens with it
 //   SDL3.dll                   the window, input and audio layer the engine links against (opus.dll too, when one
 //                              ships with the builder)
 //   settings.toml              the settings it was built with; it marks the folder as an app
@@ -31,18 +31,11 @@ pub struct Options<'a> {
     pub shader_cache: Option<&'a Path>,
 }
 
-/// The engine the app runs: built beside this program (cargo builds both into target/<profile>, a release ships both).
+/// The engine the app runs: this program, which links the engine and starts it when it is named nxport.exe
+/// (nxport-builder's main). The code it lifts calls into the engine it was built with (HLE trampolines, hooks), so the
+/// app carries that one.
 pub fn engine() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut candidates = vec![
-        exe.with_file_name("nxport.exe"),
-    ];
-    for ancestor in exe.ancestors() {
-        candidates.push(ancestor.join("nxport.exe"));
-        candidates.push(ancestor.join("release").join("nxport.exe"));
-        candidates.push(ancestor.join("debug").join("nxport.exe"));
-    }
-    candidates.into_iter().find(|p| p.is_file()).ok_or_else(|| "nxport.exe is missing beside the builder (cargo build --release -p nxport)".into())
+    std::env::current_exe().map_err(|e| e.to_string())
 }
 
 /// Lays out the app folder, all but the guest library: the engine, the settings, mods, the game files and the pipeline
@@ -52,23 +45,26 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     mkdir(o.app)?;
     println!("  Copying the engine");
     let engine = engine()?;
-    let exe = o.app.join("nxport.exe");
+    // Made in the temporary directory and copied in finished: Explorer holds an app's nxport.exe open while it reads
+    // its icon, and the icon's update needs it to itself.
+    let exe = std::env::temp_dir().join(format!("nxport-app-{}.exe", std::process::id()));
     copy(&engine, &exe)?;
     gui_subsystem(&exe)?;
-    // Windows looks for a program's DLLs in its own directory first. libopus is optional: the engine loads opus.dll
-    // when there is one (Opus streams are silent without it).
-    // Beside the engine, or a directory up from it (cargo's deps/ for tests), or beside this program.
-    let beside = |lib: &str| {
-        let dirs = engine.ancestors().skip(1).take(2).map(Path::to_path_buf);
-        dirs.chain(std::env::current_exe().ok().and_then(|e| Some(e.parent()?.to_path_buf()))).map(|d| d.join(lib)).find(|l| l.is_file())
-    };
-    let sdl = beside("SDL3.dll").ok_or_else(|| format!("SDL3.dll is missing beside {}", engine.display()))?;
-    copy(&sdl, &o.app.join("SDL3.dll"))?;
-    for lib in ["opus.dll", "libopus-0.dll"] {
-        if let Some(l) = beside(lib) {
-            copy(&l, &o.app.join(lib))?;
+    // The title's icon (the console's, from the dump's control data), for Explorer, the taskbar and the window.
+    match crate::app_icon::source(o.dump, tid) {
+        Some(src) => {
+            let ico = crate::app_icon::ico(&src)?;
+            crate::app_icon::set_exe_icon(&exe, &ico)?;
+            println!("  Icon from {}", src.display());
         }
+        None => println!("  [!] No icon in the dump (control/icon_*.dat or Logo/{tid:016x}.png): the app keeps the default"),
     }
+    let copied = copy(&exe, &o.app.join("nxport.exe"));
+    let _ = std::fs::remove_file(&exe);
+    copied?;
+    // Windows looks for a program's DLLs in its own directory first: SDL3.dll from the copy the engine carries.
+    let sdl = o.app.join("SDL3.dll");
+    std::fs::write(&sdl, nxport::sdl_library::DLL).map_err(|e| format!("{}: {e}", sdl.display()))?;
 
     let mods = o.app.join("Mods");
     let _ = std::fs::remove_dir_all(&mods);
@@ -84,6 +80,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
         for (src, dest) in candidates {
             if for_program(&src, tid) {
                 println!("  Copying mod {}", src.display());
+                crate::mod_check::report(&src, tid, o.dump);
                 copy_tree(&src, &dest)?;
                 any_mods = true;
             } else {
@@ -104,7 +101,10 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
             }
         }
     } else {
-        let dump = std::fs::canonicalize(o.dump).map_err(|e| format!("{}: {e}", o.dump.display()))?;
+        // Some mounted file systems cannot give a final path (ERROR_UNRECOGNIZED_VOLUME), though they read as any other.
+        let dump = std::fs::canonicalize(o.dump)
+            .or_else(|_| std::path::absolute(o.dump))
+            .map_err(|e| format!("{}: {e}", o.dump.display()))?;
         settings.files.game_dir = Some(plain(dump));
     }
     nxport::settings::save_preset(&o.app.join("settings.toml"), &settings)?;
@@ -126,10 +126,9 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     Ok(any_mods.then_some(mods))
 }
 
-/// Whether a mod is for program `tid` (one that names no program is taken for any).
+/// Whether a mod is for program `tid` (one whose folder names no program is taken for any).
 fn for_program(m: &Path, tid: u64) -> bool {
-    let npdm = [m.join("exefs/main.npdm"), m.join("ExeFS/main.npdm")].into_iter().find(|f| f.is_file());
-    npdm.as_deref().and_then(nxport::game::npdm_program_id).is_none_or(|t| t == tid)
+    !nxport::game::is_other_title_dir(m, tid)
 }
 
 /// Marks the program at `exe` a GUI program (the PE optional header's subsystem field): started from Explorer, a

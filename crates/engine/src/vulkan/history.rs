@@ -148,15 +148,22 @@ impl History {
     pub(super) unsafe fn write(&self, dev: &Dev, pn: u64) {
         self.wait_all(dev);
         let dir = crate::gpu::history::dir(pn);
+        // Copied out here (the buffers are reused, the journal moves on); converted and written on a thread of their
+        // own, so the game goes on while hundreds of frames are written.
         let mut frames = Vec::new();
         for s in &self.slots {
             let Some(b) = s.buf.as_ref().filter(|_| s.frame > 0) else { continue };
             let (w, h) = (s.size.0 as usize, s.size.1 as usize);
-            let rgba = std::slice::from_raw_parts(b.ptr, w * h * 4);
-            let rgb: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-            frames.push((s.frame, w, h, rgb));
+            frames.push((s.frame, w, h, std::slice::from_raw_parts(b.ptr, w * h * 4).to_vec()));
         }
-        crate::gpu::history::write_frames(&dir, &mut frames);
-        crate::gpu::history::write_journal(&dir);
+        let journal = crate::gpu::history::journal_text();
+        let _ = std::thread::Builder::new().name("history-write".into()).spawn(move || {
+            let mut frames: Vec<(u64, usize, usize, Vec<u8>)> = frames
+                .into_iter()
+                .map(|(f, w, h, rgba)| (f, w, h, rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect()))
+                .collect();
+            crate::gpu::history::write_frames(&dir, &mut frames);
+            let _ = std::fs::write(format!("{dir}/journal.txt"), journal);
+        });
     }
 }

@@ -114,6 +114,8 @@ pub(crate) struct State {
     images_bound: BindTable<u64>,
     /// Queue render enable (nvnCommandBufferSetRenderEnable): when false, draws and clears are discarded.
     render_enabled: bool,
+    /// nvnCommandBufferSetRasterizerDiscard: draws make no fragments, so they are skipped.
+    rasterizer_discard: bool,
     /// SAMPLES_PASSED occlusion queries (nvnCommandBufferResetCounter / ReportCounter counter 1).
     occl: Occlusion,
     /// TIMESTAMP reports recorded into the command buffer being built: (address, before any GPU work in it); see
@@ -549,6 +551,7 @@ impl Default for State {
             writeback: Default::default(),
             rt_history: HashMap::default(),
             render_enabled: true,
+            rasterizer_discard: false,
             occl: Occlusion::default(),
             point_size: 1.0,
             blend_states: [0; 8],
@@ -935,7 +938,7 @@ pub(crate) fn layout_of(t: &NvnTexture) -> std::sync::Arc<crate::nvn::layout::Te
         if c.len() > 1 << 14 {
             c.clear();
         }
-        let l = std::sync::Arc::new(crate::nvn::layout::compute_layout(&p));
+        let l = std::sync::Arc::new((*crate::nvn::layout::compute_layout(&p)).clone());
         c.insert(key, l.clone());
         l
     })
@@ -2679,7 +2682,7 @@ impl Gfx {
                     Some(Cmd::SetRenderTargets { colors, depth }) => println!(
                         "[cmdtrace] SetRenderTargets {:x?} depth={:x?}",
                         colors.iter().map(|c| c.texture).collect::<Vec<_>>(),
-                        depth.map(|d| d.texture)
+                        depth.as_ref().map(|d| d.texture)
                     ),
                     Some(_) => println!("[cmdtrace] {}", op.name),
                     None => println!(
@@ -2763,6 +2766,15 @@ impl Gfx {
                     _ => {}
                 }
             }
+            if st.rasterizer_discard
+                && matches!(
+                    cmd,
+                    Cmd::DrawArrays { .. } | Cmd::DrawArraysInstanced { .. } | Cmd::DrawElements { .. } | Cmd::DrawElementsInstanced { .. }
+                )
+            {
+                journal(|| format!("  discard-skip program {:#x}", st.program.unwrap_or(0)));
+                continue;
+            }
             if !st.render_enabled
                 && matches!(
                     cmd,
@@ -2812,7 +2824,7 @@ impl Gfx {
                     count,
                     handles,
                 } => apply_textures_deferred(st, *stage, *first, *count, *handles),
-                Cmd::SetRenderTargets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
+                Cmd::SetRenderTargets { colors, depth } => self.set_render_targets(st, colors, depth.as_deref()),
                 Cmd::ClearColor { index, rgba, mask } => {
                     st.stats.clears += 1;
                     let index = match st.color_dups.get(*index as usize) {
@@ -2968,6 +2980,17 @@ impl Gfx {
                 Cmd::SetScissor { x, y, w, h } => {
                     st.scissor = Some((*x, *y, *w, *h));
                 }
+                // Bindings and sampler states are memoized by handle: a pool change invalidates them.
+                Cmd::SetTexturePool(pool) => {
+                    if crate::nvn::api::set_active_texture_pool(*pool) {
+                        crate::nvn::api::active_pools_changed();
+                    }
+                }
+                Cmd::SetSamplerPool(pool) => {
+                    if crate::nvn::api::set_active_sampler_pool(*pool) {
+                        crate::nvn::api::active_pools_changed();
+                    }
+                }
                 Cmd::BindVertexBuffer { index, addr, size } => {
                     st.vertex_buffers.insert(*index, (*addr, *size));
                 }
@@ -2991,7 +3014,7 @@ impl Gfx {
                 }
                 Cmd::UpdateUniformBuffer { addr, offset, data } => update_uniform(st, *addr, *offset, data),
                 Cmd::BindVertexAttribState(attribs) => {
-                    st.vertex_attribs = *attribs;
+                    st.vertex_attribs = **attribs;
                 }
                 Cmd::BindVertexStreamState(streams) => {
                     st.vertex_streams.clone_from(streams);
@@ -3120,6 +3143,9 @@ impl Gfx {
                 }
                 Cmd::SetDepthClamp(on) => {
                     st.depth_clamp = *on;
+                }
+                Cmd::SetRasterizerDiscard(on) => {
+                    st.rasterizer_discard = *on;
                 }
                 Cmd::SetPrimitiveRestart { enable, index } => {
                     st.prim_restart = enable.then_some(*index);

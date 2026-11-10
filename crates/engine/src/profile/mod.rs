@@ -62,6 +62,21 @@ pub struct GameProfile {
         Option<fn(crate::settings::profiles::Platform) -> crate::settings::SettingsPatch>,
     /// The builder presets (name, preset file) the game's preset list starts with.
     pub presets: &'static [(&'static str, &'static str)],
+    /// Patches of this game's code modules, run on each as it loads (patch_module): fixes for known mods' own bugs,
+    /// and changes to the game that an nxport feature needs (TotK: the right stick past full deflection).
+    pub module_patches: &'static [ModulePatch],
+}
+
+/// A patch of a module's code: given its name and its text as loaded (before it is relocated, lifted or run), it changes
+/// the text where it recognises the code it is for, and returns whether it did. Code it does not recognise is left
+/// alone, so every patch can see every module.
+pub type ModulePatch = fn(name: &str, text: &mut [u8]) -> bool;
+
+/// Runs the active game's module patches on a module's text (guest/loader.rs for main, guest/module_loader.rs).
+pub fn patch_module(name: &str, text: &mut [u8]) {
+    for patch in active().module_patches {
+        patch(name, text);
+    }
 }
 
 /// The default bundle ID of an app built from a game: com.nxport.<short name>, or com.nxport.t<title id> without a
@@ -118,8 +133,7 @@ pub struct Identified {
 pub fn identify(dump: &std::path::Path) -> Identified {
     let title_id = crate::game::title_id_of(dump);
     let profile = title_id.and_then(for_title);
-    let build_id =
-        crate::guest::nso::nso_build_id(&dump.join("ExeFS/main").display().to_string());
+    let build_id = main_build_id_of(dump);
     let version = profile
         .zip(build_id)
         .and_then(|(p, id)| p.match_version(&id));
@@ -133,6 +147,11 @@ pub fn identify(dump: &std::path::Path) -> Identified {
         version,
         name,
     }
+}
+
+/// The build id of the main module in `dump`, which names the game's version.
+pub fn main_build_id_of(dump: &std::path::Path) -> Option<String> {
+    crate::guest::nso::nso_build_id(&dump.join("ExeFS/main").display().to_string())
 }
 
 /// The profile of a title id, if there is one.
@@ -183,6 +202,7 @@ static DEFAULT_PROFILE: GameProfile = GameProfile {
     options: None,
     platform_options: None,
     presets: &[],
+    module_patches: &[],
 };
 
 /// Returns the detected GameProfile for the current run (by the title id in main.npdm).
@@ -212,6 +232,7 @@ pub fn active() -> &'static GameProfile {
         options: None,
         platform_options: None,
         presets: &[],
+        module_patches: &[],
     }));
     let _ = ACTIVE.set(prof);
     prof
@@ -268,29 +289,36 @@ pub fn app_title() -> &'static str {
     "Nintendo Switch"
 }
 
+/// Whether the running game's time follows real time (a profile patch), so it may run at any frame rate.
+#[cfg(nx_runtime)]
+pub fn real_time() -> bool {
+    match active().kind {
+        GameKind::TotK => totk::frame_time::real_time(),
+        _ => false,
+    }
+}
+
 /// The aspect the game renders at when a profile patch changed it from the game's own (the screen shape asked for).
-#[cfg(nx_native)]
 pub fn rendered_aspect() -> Option<f64> {
     match active().kind {
-        GameKind::TotK => totk::v1_1_2::aspect::rendered_aspect(),
+        GameKind::TotK => totk::aspect::rendered_aspect(),
         _ => None,
     }
 }
 
-/// Whether the game will render at a screen shape wider than 16:9 (known before its code is patched: the window
-/// opens at that shape).
+/// Whether the game will render at the screen's shape (known before its code is patched: the window opens at that
+/// shape).
 pub fn renders_screen_shape() -> bool {
     match active().kind {
-        GameKind::TotK => crate::settings::get().totk.v1_1_2.dynamic_aspect_ratio,
+        GameKind::TotK => crate::settings::get().totk.enhancements.dynamic_aspect_ratio,
         _ => false,
     }
 }
 
 /// The screen's shape changed (the window was resized): a game rendering at another shape follows it.
-#[cfg(nx_native)]
 pub fn screen_aspect_changed(aspect: f64) {
     if active().kind == GameKind::TotK {
-        totk::v1_1_2::aspect::set_aspect(aspect);
+        totk::aspect::set_aspect(aspect);
     }
 }
 

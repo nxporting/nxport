@@ -929,6 +929,26 @@ fn sampled_image_load(c: &mut CodeGenContext, tex: &AstTexture, declaration: &su
         image = c.m.access_chain(&declaration.sampled_image_pointer_type, &image, &[texture_index]);
         mark_non_uniform(c, &image);
     }
+    if let Some(word) = declaration.bindless {
+        // The host's packed word: the image's index in the array of its view type (low 20 bits), the sampler's (high
+        // 12). Push constants are the same for the whole draw: no NonUniform.
+        let (words, word_pointer, samplers, sampler_type, sampler_pointer) = c.bindless.clone().ok_or("bindless")?;
+        let u = c.type_u32();
+        let s = c.type_s32();
+        let member = c.m.constant(&s, Lit::i32(0));
+        let at = c.m.constant(&s, Lit::i32(word));
+        let p = c.m.access_chain(&word_pointer, &words, &[member, at]);
+        let packed = c.m.load(&u, &p, None);
+        let mask = c.const_u32_i(0xFFFFF);
+        let twenty = c.const_u32_i(20);
+        let ti = c.m.bitwise_and(&u, &packed, &mask);
+        let si = c.m.shift_right_logical(&u, &packed, &twenty);
+        let ip = c.m.access_chain(&declaration.sampled_image_pointer_type, &image, &[ti]);
+        let img = c.m.load(&declaration.image_type, &ip, None);
+        let sp = c.m.access_chain(&sampler_pointer, &samplers, &[si]);
+        let sampler = c.m.load(&sampler_type, &sp, None);
+        return Ok(c.m.sampled_image(&declaration.sampled_image_type, &img, &sampler));
+    }
     if let Some(first_slot) = declaration.table_slot {
         // Separate image, sampler from the table at the index the host wrote for this texture slot.
         image = c.m.load(&declaration.image_type, &image, None);

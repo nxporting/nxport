@@ -87,6 +87,13 @@ pub fn is_32bit_of(dir: &Path) -> bool {
         .is_some_and(|flags| flags & 1 == 0)
 }
 
+/// Whether a mod's folder is named for another program. Its main.npdm cannot say: Atmosphere overwrites the program ids
+/// in it with the running program's, and exlaunch's template names a fixed one.
+pub fn is_other_title_dir(dir: &Path, tid: u64) -> bool {
+    let name = dir.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    name.len() == 16 && u64::from_str_radix(&name, 16).is_ok_and(|t| t != tid)
+}
+
 /// The program id in an npdm file (its ACI0 section).
 pub fn npdm_program_id(path: &Path) -> Option<u64> {
     let d = std::fs::read(path).ok()?;

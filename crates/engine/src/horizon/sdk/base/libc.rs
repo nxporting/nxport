@@ -27,7 +27,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("memcpy", func!(crate::horizon::hle::hle_memcpy(_, _, _))),
     Entry("memmove", func!(crate::horizon::hle::hle_memmove(_, _, _))),
     Entry("memset", func!(crate::horizon::hle::hle_memset(_, _, _))),
-    Entry("printf", Bind::Raw(super::super::Fp(libc::printf as *const ()))),
+    Entry("printf", func!(crate::horizon::hle::hle_printf(_, _, _, _, _, _, _, _))),
     // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and nn::gfx's GlslcDll::Initialize()
     // fails exactly as on hardware. Binding HLE stubs here made the game believe the shader compiler existed.
     Entry("stdout", Bind::Data(super::super::stdout_variable)),

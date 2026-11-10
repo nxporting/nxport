@@ -11,7 +11,7 @@
 // Stubs live in the module's own mapping (after its image), so every site is within branch range. The caller runs
 // the module's DT_INIT (exlaunch's module entry) before the game's nnMain.
 
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 use crate::cpu::aot::encode_b;
 use crate::horizon::svc::{self, Region};
 use std::ptr;
@@ -30,11 +30,11 @@ pub struct LoadedModule {
 
 const STUB_AREA: usize = 0x2_0000;
 // System register reads native_rewrites redirects.
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 const MRS_TPIDR: u32 = 0xD53B_D040;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 const MRS_TPIDRRO: u32 = 0xD53B_D060;
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 const MRS_CTR: u32 = 0xD53B_0020;
 
 fn r_u32(d: &[u8], off: usize) -> u32 {
@@ -45,7 +45,7 @@ fn r_u32(d: &[u8], off: usize) -> u32 {
 /// The rewrites guest code needs to run natively (docs/windows-port.md): x18 uses (cpu::trampoline), svc into
 /// calls of horizon::svc, reads of TPIDR_EL0 / TPIDRRO_EL0 / CTR_EL0 into stubs (in `stubs`, STUB_AREA bytes), and
 /// load-exclusives into acquire forms. Returns what was rewritten, for the log.
-#[cfg(nx_native)]
+#[cfg(any(nx_native, windows))]
 unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
     if crate::cpu::trampoline::x18_trampolines() {
         crate::cpu::trampoline::rewrite_module(name, text, text_len).map_err(|e| e.to_string())?;
@@ -223,6 +223,9 @@ pub unsafe fn load(
     }
     let (text_mo, text_len) = (segs[0].0, segs[0].1.len());
     let (ro_mo, ro_len) = (segs[1].0, segs[1].1.len());
+    // The game's patches of known mods' bugs, before the code is relocated, lifted or run: the build and the game run
+    // the same bytes.
+    crate::profile::patch_module(name, std::slice::from_raw_parts_mut((base + text_mo) as *mut u8, text_len));
     let data_mo = segs[2].0;
 
     // ── dynamic section via MOD0 ──
@@ -332,10 +335,14 @@ pub unsafe fn load(
     }
 
     // ── make the code runnable here ──
-    #[cfg(nx_native)]
-    let rewritten = native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?;
-    // Lifted code handles svc, the system registers and exclusives itself.
-    #[cfg(not(nx_native))]
+    #[cfg(any(nx_native, windows))]
+    let rewritten = if crate::cpu::aot::native_rewrites() {
+        native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?
+    } else {
+        // Lifted code handles svc, the system registers and exclusives itself.
+        "no sites".to_string()
+    };
+    #[cfg(not(any(nx_native, windows)))]
     let rewritten = {
         let _ = svc_entry;
         "no sites"
@@ -641,11 +648,26 @@ pub unsafe extern "C" fn fs_mount_sdcard(name: *const libc::c_char) -> u32 {
     0
 }
 
-/// nn::oe::GetDisplayVersion(DisplayVersion*): the game's version string (char[16]); our dump is 1.1.2.
+/// nn::oe::EnableGamePlayRecording(void*, size_t): memory for the system's video capture, which there is none of here. The game
+/// keeps the memory.
+pub unsafe extern "C" fn oe_enable_game_play_recording(_memory: *mut u8, _size: usize) {}
+
+/// nn::oe::GetDisplayVersion(DisplayVersion*): the game's version string (char[16], always terminated), from its
+/// control data, else the version its main build id matched. Plugin mods choose their addresses by this.
 pub unsafe extern "C" fn oe_get_display_version(out: *mut u8) {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let version = VERSION.get_or_init(|| {
+        crate::game::control_of(crate::game::dir())
+            .and_then(|c| c.version)
+            .or_else(|| {
+                let build_id = crate::profile::main_build_id()?;
+                Some(crate::profile::active().match_version(build_id)?.version_string.to_string())
+            })
+            .unwrap_or_default()
+    });
     if !out.is_null() {
         std::ptr::write_bytes(out, 0, 16);
-        std::ptr::copy_nonoverlapping(b"1.1.2".as_ptr(), out, 5);
+        std::ptr::copy_nonoverlapping(version.as_ptr(), out, version.len().min(15));
     }
 }
 

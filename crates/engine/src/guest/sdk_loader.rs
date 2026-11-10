@@ -664,8 +664,8 @@ fn apply_relocations_from_mod0(
                     let name = unsafe { std::ffi::CStr::from_ptr(name_ptr) }.to_string_lossy();
 
                     let hle_override: Option<usize> = match crate::horizon::sdk::lookup(&name) {
-                        Some(crate::horizon::sdk::Target::Func(f)) => {
-                            Some(mem_space.shared_hle_trampoline(f as *const ()) as usize)
+                        Some(crate::horizon::sdk::Target::Func(f, id)) => {
+                            Some(mem_space.shared_hle_trampoline(f as *const (), id) as usize)
                         }
                         // Data symbols are for the game's imports; the sdk module keeps its own (its stdout, ...).
                         Some(crate::horizon::sdk::Target::Data(_)) | None => None,

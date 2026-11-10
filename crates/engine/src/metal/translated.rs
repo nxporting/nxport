@@ -3197,8 +3197,12 @@ impl Gfx {
             return;
         }
 
-        // Driver cbuf contents.
+        // Driver cbuf contents: the dispatch's thread group counts (TotK's depth-cell passes index cells by them), then the
+        // uniform and storage buffers' descriptors.
         let mut c0 = vec![0u8; 0x1000];
+        for (k, n) in [x, y, z].iter().enumerate() {
+            c0[0x200 + 4 * k..0x204 + 4 * k].copy_from_slice(&n.to_le_bytes());
+        }
         for i in 0..18 {
             if let Some(&(a, sz)) = st.uniform_buffers.get(&(STAGE_COMPUTE, i)) {
                 let o = 0x210 + 0x10 * i as usize;

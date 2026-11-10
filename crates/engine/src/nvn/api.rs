@@ -1106,15 +1106,11 @@ pub fn resolve_proc(func_name: &str) -> *const () {
         "nvnCommandBufferSetProvokingVertexMode" => {
             crate::hle!(hle_nvnCommandBufferSetProvokingVertexMode(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetRasterizerDiscard" => {
-            crate::hle!(hle_nvnCommandBufferSetRasterizerDiscard(_, _, _, _, _, _))
-        }
         "nvnCommandBufferSetRenderEnable" => crate::hle!(hle_nvnCommandBufferSetRenderEnable(_, _, _, _, _, _)),
         "nvnCommandBufferSetRenderEnableConditional" => {
             crate::hle!(hle_nvnCommandBufferSetRenderEnableConditional(_, _, _, _, _, _))
         }
         "nvnCommandBufferSetSampleMask" => crate::hle!(hle_nvnCommandBufferSetSampleMask(_, _, _, _, _, _)),
-        "nvnCommandBufferSetSamplerPool" => crate::hle!(hle_nvnCommandBufferSetSamplerPool(_, _, _, _, _, _)),
         "nvnCommandBufferSetScissors" => {
             crate::hle!(crate::nvn::cmd::hle_nvnCommandBufferSetScissors(_, _, _, _))
         }
@@ -1132,7 +1128,6 @@ pub fn resolve_proc(func_name: &str) -> *const () {
         "nvnCommandBufferSetSubpixelPrecisionBias" => {
             crate::hle!(hle_nvnCommandBufferSetSubpixelPrecisionBias(_, _, _, _, _, _))
         }
-        "nvnCommandBufferSetTexturePool" => crate::hle!(hle_nvnCommandBufferSetTexturePool(_, _, _, _, _, _)),
         "nvnCommandBufferSetTiledCacheAction" => {
             crate::hle!(hle_nvnCommandBufferSetTiledCacheAction(_, _, _, _, _, _))
         }
@@ -2086,6 +2081,7 @@ pub(crate) struct RecordedNvnCommand {
     pub(crate) args: Option<Box<[u64; 5]>>,
 }
 
+
 pub(crate) struct RecordedCommandList {
     pub(crate) ops: Vec<RecordedNvnCommand>,
     /// (ranges written by UpdateUniformBuffer, handles called), computed on first use (see metal::ubo_updated_ranges).
@@ -2097,8 +2093,6 @@ pub(crate) struct RecordedCommandList {
     pub(crate) recorder: Option<Box<Vec<(u32, [u32; 16])>>>,
     /// Frames presented when it was recorded (diagnostics: replayed lists vs. lists recorded this frame).
     pub(crate) recorded_frame: u64,
-    /// Stamp of the last walk_command_lists that visited it.
-    visit: std::sync::atomic::AtomicU64,
 }
 
 impl RecordedCommandList {
@@ -2150,6 +2144,20 @@ impl RecordedCommandList {
             (ranges, calls, samples)
         })
     }
+
+}
+
+/// Drops `l` on a thread of its own (nvn-free): the last reference to a replaced list frees all its commands.
+fn free_later(l: std::sync::Arc<RecordedCommandList>) {
+    static TX: std::sync::OnceLock<Option<StdMutex<std::sync::mpsc::Sender<std::sync::Arc<RecordedCommandList>>>>> = std::sync::OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<std::sync::Arc<RecordedCommandList>>();
+        std::thread::Builder::new().name("nvn-free".into()).spawn(move || while rx.recv().is_ok() {}).ok().map(|_| StdMutex::new(tx))
+    });
+    if let Some(tx) = tx {
+        // Sent back (and dropped here) only if the thread is gone.
+        let _ = tx.lock().unwrap().send(l);
+    }
 }
 
 /// What a command list does that decides how its draws can share render passes, in order: render-target binds, draws
@@ -2172,7 +2180,7 @@ impl RecordedCommandList {
             let mut ev = Vec::new();
             for (index, op) in self.ops.iter().enumerate() {
                 let e = match &op.typed {
-                    Some(Cmd::SetRenderTargets { colors, depth }) => PassEvent::Targets(colors.clone(), *depth, index as u32),
+                    Some(Cmd::SetRenderTargets { colors, depth }) => PassEvent::Targets(colors.clone(), depth.as_deref().copied(), index as u32),
                     Some(
                         Cmd::DrawArrays { .. }
                         | Cmd::DrawElements { .. }
@@ -2217,37 +2225,89 @@ impl RecordedCommandList {
 }
 
 /// The recorded list for `handle` without touching its eviction bookkeeping.
-/// Visits every list reachable from `handles` through CallCommands once (under one lock: a submit reaches ~3,000 lists),
+/// Visits every list reachable from `handles` through CallCommands once (under one lock: a submit reaches ~4,500 lists),
 /// returning the number of distinct lists.
+///
+/// The walk is on the Presentation Thread before recording starts, and the lists were made on the game's threads (another
+/// L3 cache on Zen 2): it is cache misses, a few per list. So it touches the map entry and the list's reference count
+/// only: the entry's last use (unique to this walk, written under the lock) says it was visited, and the entry carries
+/// the handles the list calls. A visit stamp in the list and its summary read there were two lines more per list:
+/// TotK on Great Sky Island 1.03 -> 0.62 ms a frame for 4,460 lists (Ryzen 7 3700X).
 pub(crate) fn walk_command_lists(
+    handles: &[u64],
+    stack: &mut Vec<u64>,
+    cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>,
+    f: impl FnMut(&RecordedCommandList),
+) -> usize {
+    walk_command_lists_at(list_walk_clock(), handles, stack, cache, f)
+}
+
+/// The submitted lists `handles` into `cache`, marked as walk_command_lists marks them, without following their calls
+/// (Vulkan's vk-decode fetches those, walk_command_lists_at): held from the submit on.
+pub(crate) fn pin_command_lists(handles: &[u64], cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>) {
+    let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut map = COMMAND_LISTS.lock().unwrap();
+    for h in handles {
+        let Some(e) = map.get_mut(h) else { continue };
+        e.1 = now;
+        if e.2 == LIST_NEW {
+            e.2 = LIST_CALLED;
+        }
+        cache.insert(*h, e.0.clone());
+    }
+}
+
+/// A tick for walk_command_lists_at: walks with the same one visit each list once between them.
+pub(crate) fn list_walk_clock() -> u64 {
+    COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// walk_command_lists with the visit tick `now` (list_walk_clock): a submit's roots walked one at a time (one lock
+/// each, Vulkan's vk-decode) visit each list once.
+pub(crate) fn walk_command_lists_at(
+    now: u64,
     handles: &[u64],
     stack: &mut Vec<u64>,
     cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>,
     mut f: impl FnMut(&RecordedCommandList),
 ) -> usize {
-    static STAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let stamp = STAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut map = COMMAND_LISTS.lock().unwrap();
     stack.clear();
     stack.extend_from_slice(handles);
     let mut n = 0;
     while let Some(h) = stack.pop() {
         let Some(e) = map.get_mut(&h) else { continue };
+        // Lists called again (a mesh's list, once per pass drawing it) are in `cache` already.
+        if e.1 == now {
+            continue;
+        }
         e.1 = now;
         if e.2 == LIST_NEW {
             e.2 = LIST_CALLED;
         }
-        let l = e.0.clone();
-        cache.insert(h, l.clone());
-        if l.visit.swap(stamp, std::sync::atomic::Ordering::Relaxed) == stamp {
-            continue;
-        }
+        cache.insert(h, e.0.clone());
         n += 1;
-        f(&l);
-        stack.extend_from_slice(&l.summary().1);
+        f(&e.0);
+        stack.extend_from_slice(&e.4);
     }
     n
+}
+
+/// The lists `handles` into `cache`, marked as walk_command_lists_at marks them with the tick `now`, without following
+/// their calls: vk-decode fetches each CallCommands' lists as its walk reaches it (decode.rs).
+pub(crate) fn fetch_command_lists_at(now: u64, handles: &[u64], cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>) {
+    let mut map = COMMAND_LISTS.lock().unwrap();
+    for h in handles {
+        let Some(e) = map.get_mut(h) else { continue };
+        if e.1 == now {
+            continue;
+        }
+        e.1 = now;
+        if e.2 == LIST_NEW {
+            e.2 = LIST_CALLED;
+        }
+        cache.insert(*h, e.0.clone());
+    }
 }
 
 // EndRecording handles -> finalized recorded-command snapshots. A command
@@ -2256,7 +2316,7 @@ pub(crate) fn walk_command_lists(
 // into the live, mutable buffer.
 // Handle -> list, bounded: handles can be re-submitted or CallCommands'd several times, so lists are
 // not removed on use; the oldest are evicted instead of leaking forever.
-/// Recorded command lists by handle. Value: (list, last use, eviction class, estimated bytes). Bounded by memory: past
+/// Recorded command lists by handle. Value: (list, last use, eviction class, estimated bytes, handles it calls). Bounded by memory: past
 /// the budget, lists are evicted by class, then least-recently-used:
 ///   LIST_DEAD       its command memory was handed out again (invalid in NVN too),
 ///   LIST_SUBMITTED  submitted to a queue and never called: the per-frame lists, one-shot in practice,
@@ -2266,7 +2326,7 @@ pub(crate) fn walk_command_lists(
 /// Plain LRU evicted the per-mesh lists of everything out of view; looking back drew those meshes with the previous
 /// draw's vertex buffers (geometry streaks that accumulated while moving the camera).
 static COMMAND_LISTS: std::sync::LazyLock<
-    StdMutex<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize)>>,
+    StdMutex<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize, Box<[u64]>)>>,
 > = std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
 static COMMAND_LIST_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 const COMMAND_LIST_BUDGET: usize = 512 << 20;
@@ -2460,7 +2520,11 @@ fn kill_overlapping_lists(m: &mut CommandMemory, pool: usize, start: i64, len: u
         ev.insert(h, LIST_DEAD);
     }
     drop(ev);
-    drop(freed);
+    // Off the game's thread, as a replaced list: EndRecording made about 1,400 frees a frame in TotK, and here they were
+    // under the COMMAND_MEMORY lock.
+    for l in freed {
+        free_later(l);
+    }
 }
 
 /// Handles by command memory location (pool, offset) of the command set (see EndRecording).
@@ -2536,8 +2600,9 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
     }
     (*cmd).recording = 0;
     let ops_vec = &mut *((*cmd).ops as *mut Vec<RecordedNvnCommand>);
-    {
-        // Debug aid: per-name command counts, dumped periodically by the present path.
+    // Debug aid (--log-cmd-histogram): per-name command counts, dumped periodically by the present path. A map update per
+    // command under one lock for every list, on the game's threads.
+    if crate::settings::get().log.log_cmd_histogram {
         let mut h = CMD_HISTOGRAM.lock().unwrap();
         for op in ops_vec.iter() {
             *h.entry(op.name).or_insert(0) += 1;
@@ -2552,9 +2617,8 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         pass_events: std::sync::OnceLock::new(),
         recorder: super::frame_map::take_recorder(cmd as usize),
         recorded_frame: crate::gpu::backend().presented_frames(),
-        visit: std::sync::atomic::AtomicU64::new(0),
     });
-    // Here on the recording thread rather than on the Presentation Thread at submit (it scans every op).
+    // Here on the recording thread rather than on the Presentation Thread at submit (they scan every op).
     snapshot.summary();
     // An NVN command handle is the GPU address of the command set: recording again at the same place in command memory
     // yields the same handle, and the game may keep calling the one it stored first. Same location, same handle here.
@@ -2571,15 +2635,18 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
     {
         let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bytes = recorded_list_bytes(&snapshot);
+        let calls = snapshot.summary().1.clone().into_boxed_slice();
         let mut g = COMMAND_LISTS.lock().unwrap();
         let old = g.insert(
             handle,
-            (std::sync::Arc::from(snapshot), now, LIST_NEW, bytes),
+            (std::sync::Arc::from(snapshot), now, LIST_NEW, bytes, calls),
         );
         drop(g);
         if let Some(old) = old {
             COMMAND_LIST_BYTES.fetch_sub(old.3, std::sync::atomic::Ordering::Relaxed);
-            drop(old); // the replaced list is freed outside the lock
+            // The replaced list is freed outside the lock, and off the game's thread (its commands' memory, freed one
+            // allocation at a time, was ~2% of guest-main).
+            free_later(old.0);
         }
         command_list_recorded(cmd as usize, handle, (*cmd).command_used);
         let mut g = COMMAND_LISTS.lock().unwrap();
@@ -3146,18 +3213,15 @@ nvn_command_recorders! {
     hle_nvnCommandBufferSetPolygonOffsetClamp => "nvnCommandBufferSetPolygonOffsetClamp",
     hle_nvnCommandBufferSetProgramSubroutines => "nvnCommandBufferSetProgramSubroutines",
     hle_nvnCommandBufferSetProvokingVertexMode => "nvnCommandBufferSetProvokingVertexMode",
-    hle_nvnCommandBufferSetRasterizerDiscard => "nvnCommandBufferSetRasterizerDiscard",
     hle_nvnCommandBufferSetRenderEnable => "nvnCommandBufferSetRenderEnable",
     hle_nvnCommandBufferSetRenderEnableConditional => "nvnCommandBufferSetRenderEnableConditional",
     hle_nvnCommandBufferSetSampleMask => "nvnCommandBufferSetSampleMask",
-    hle_nvnCommandBufferSetSamplerPool => "nvnCommandBufferSetSamplerPool",
     hle_nvnCommandBufferSetShaderScratchMemory => "nvnCommandBufferSetShaderScratchMemory",
     hle_nvnCommandBufferSetStencilCullCriteria => "nvnCommandBufferSetStencilCullCriteria",
     hle_nvnCommandBufferSetStencilMask => "nvnCommandBufferSetStencilMask",
     hle_nvnCommandBufferSetStencilRef => "nvnCommandBufferSetStencilRef",
     hle_nvnCommandBufferSetStencilValueMask => "nvnCommandBufferSetStencilValueMask",
     hle_nvnCommandBufferSetSubpixelPrecisionBias => "nvnCommandBufferSetSubpixelPrecisionBias",
-    hle_nvnCommandBufferSetTexturePool => "nvnCommandBufferSetTexturePool",
     hle_nvnCommandBufferSetTiledCacheAction => "nvnCommandBufferSetTiledCacheAction",
     hle_nvnCommandBufferSetTiledCacheTileSize => "nvnCommandBufferSetTiledCacheTileSize",
     hle_nvnCommandBufferSetViewportSwizzles => "nvnCommandBufferSetViewportSwizzles",
@@ -5227,13 +5291,23 @@ pub unsafe extern "C" fn hle_nvnDeviceSetDepthMode(_device: usize, mode: i32) {
     );
     DEPTH_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
 }
-/// Vblanks each presented frame stays on screen (nvnWindowSetPresentInterval; 1 = 60 Hz, 2 = 30 Hz, 0 = no wait).
+/// Vblanks each presented frame stays on screen as the game asked (nvnWindowSetPresentInterval; 1 = 60 Hz, 2 = 30 Hz,
+/// 0 = no wait).
 static PRESENT_INTERVAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
+/// The interval presents follow: the game's, at least 2 at the 30 fps setting. Read each frame, so changing the setting
+/// while the game runs takes effect at once (the games' frame-rate hooks unlock their pacer whatever the setting).
 pub fn present_interval() -> i32 {
-    PRESENT_INTERVAL.load(std::sync::atomic::Ordering::Relaxed)
+    let asked = PRESENT_INTERVAL.load(std::sync::atomic::Ordering::Relaxed);
+    if crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30 {
+        asked.max(2)
+    } else {
+        asked
+    }
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interval: i32) {
+    #[cfg(all(nx_runtime, windows))]
+    crate::live_patch::present_interval_set(interval);
     // Debug: --log-pacing prints the inputs of TotK's frame-pacing decision (guest+0x8f6670): the measured frame
     // duration in ticks at obj+0x118, the tick frequency it divides by, and the state at obj+0x248 (max, min, bias,
     // current interval). obj is the caller's saved x19 (stored at its frame pointer + 0x38).
@@ -5295,11 +5369,6 @@ pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interva
                 n, interval, ticks, freq, ticks as f64 / freq as f64 * 60.0, bias, mx, mn, cur, *((st + 0x18) as *const i32), *((st + 0x20) as *const i32), cbs);
         }
     }
-    let interval = if crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30 {
-        interval.max(2)
-    } else {
-        interval
-    };
     if PRESENT_INTERVAL.swap(interval, std::sync::atomic::Ordering::Relaxed) != interval {
         let fp = crate::guest_reg!(x29);
         println!(
@@ -5990,10 +6059,70 @@ struct PoolSlot {
     copy: Option<Box<NvnTexture>>,
 }
 
+/// Each texture or sampler pool is its own namespace of ids: a game's and a mod's may both use id 0x101. A pool is known
+/// by its descriptor memory, as on the console, and numbered as first seen, so with one pool slots keep their plain ids.
+/// A slot's key is the pool's number above the id's 20 bits (the id bits of a texture handle).
+static TEXTURE_POOLS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+static SAMPLER_POOLS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+/// The pools commands executed last bound (nvnCommandBufferSetTexturePool, SetSamplerPool); handles resolve in them.
+static ACTIVE_TEXTURE_POOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static ACTIVE_SAMPLER_POOL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn pool_number(pools: &std::sync::Mutex<Vec<(usize, usize)>>, memory: (usize, usize)) -> u32 {
+    let mut pools = pools.lock().unwrap();
+    if let Some(i) = pools.iter().position(|p| *p == memory) {
+        return i as u32;
+    }
+    pools.push(memory);
+    pools.len() as u32 - 1
+}
+
+const fn pool_slot_key(pool: u32, id: i32) -> i32 {
+    ((pool << 20) as i32) | id
+}
+
+/// The number of a texture pool object, for Cmd::SetTexturePool.
+pub unsafe fn texture_pool_number(pool: *const NvnTexturePool) -> u32 {
+    if pool.is_null() {
+        return 0;
+    }
+    pool_number(&TEXTURE_POOLS, ((*pool).memory_pool, (*pool).memory_offset))
+}
+
+/// The number of a sampler pool object, for Cmd::SetSamplerPool.
+pub unsafe fn sampler_pool_number(pool: *const NvnSamplerPool) -> u32 {
+    if pool.is_null() {
+        return 0;
+    }
+    pool_number(&SAMPLER_POOLS, ((*pool).memory_pool, (*pool).memory_offset))
+}
+
+/// Cmd::SetTexturePool ran. Whether that changed the pool handles resolve in.
+pub fn set_active_texture_pool(pool: u32) -> bool {
+    ACTIVE_TEXTURE_POOL.swap(pool, std::sync::atomic::Ordering::Relaxed) != pool
+}
+
+/// Cmd::SetSamplerPool ran. Whether that changed the pool handles resolve in.
+pub fn set_active_sampler_pool(pool: u32) -> bool {
+    ACTIVE_SAMPLER_POOL.swap(pool, std::sync::atomic::Ordering::Relaxed) != pool
+}
+
+/// Bits above a texture handle's 32 that name the pools it resolves in now, for caches keyed by handle.
+pub fn active_pools_bits() -> u64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    (ACTIVE_TEXTURE_POOL.load(Relaxed) as u64) << 32 | (ACTIVE_SAMPLER_POOL.load(Relaxed) as u64) << 48
+}
+
+/// The key of texture slot `id` in the active pool: what pool_changes_since reports.
+pub fn active_texture_slot(id: i32) -> i32 {
+    pool_slot_key(ACTIVE_TEXTURE_POOL.load(std::sync::atomic::Ordering::Relaxed), id)
+}
+
 static POOL_TEXTURES: std::sync::Mutex<Option<rustc_hash::FxHashMap<i32, PoolSlot>>> =
     std::sync::Mutex::new(None);
 
 pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
+    let id = active_texture_slot(id);
     let mut map = POOL_TEXTURES.lock().unwrap();
     let slot = map.as_mut()?.get_mut(&id)?;
     let live_gen = texture_snapshot(slot.obj).map_or(0, |(g, _)| g);
@@ -6056,7 +6185,34 @@ unsafe fn register_pool_slot(id: i32, texture: *const NvnTexture, view: Option<N
             copy: None,
         },
     );
+    log_pool_change(id);
     bump_tex_table_epoch();
+}
+
+/// Recent texture pool registrations that changed a slot: (sequence, id; -1: every slot). A slot resolves to the state
+/// it was registered with until then (PoolSlot), so backends keeping resolutions across submits drop only the ones these
+/// name (pool_changes_since), where tex_table_epoch changes with every texture initialized anywhere (most frames).
+static POOL_CHANGES: std::sync::Mutex<(u64, std::collections::VecDeque<(u64, i32)>)> =
+    std::sync::Mutex::new((0, std::collections::VecDeque::new()));
+const POOL_CHANGES_KEPT: usize = 1 << 14;
+
+fn log_pool_change(id: i32) {
+    let mut g = POOL_CHANGES.lock().unwrap();
+    g.0 += 1;
+    let seq = g.0;
+    if g.1.len() == POOL_CHANGES_KEPT {
+        g.1.pop_front();
+    }
+    g.1.push_back((seq, id));
+}
+
+/// The texture pool slots registered again after sequence `since` (-1: all of them), and the current sequence; false
+/// when some changes are no longer kept (every slot must be considered changed).
+pub fn pool_changes_since(since: u64, out: &mut Vec<i32>) -> (u64, bool) {
+    let g = POOL_CHANGES.lock().unwrap();
+    let complete = g.1.front().is_none_or(|f| f.0 <= since + 1) || g.0 == since;
+    out.extend(g.1.iter().filter(|c| c.0 > since).map(|c| c.1));
+    (g.0, complete)
 }
 
 fn view_bytes(v: NvnTextureView) -> [u8; std::mem::size_of::<NvnTextureView>()] {
@@ -6065,26 +6221,26 @@ fn view_bytes(v: NvnTextureView) -> [u8; std::mem::size_of::<NvnTextureView>()] 
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTexturePoolRegisterTexture(
-    _pool: *const NvnTexturePool,
+    pool: *const NvnTexturePool,
     id: i32,
     texture: *const NvnTexture,
     view: *const (),
 ) {
     record_hle_call("hle_nvnTexturePoolRegisterTexture");
     let view = (!view.is_null()).then(|| *(view as *const NvnTextureView));
-    register_pool_slot(id, texture, view);
+    register_pool_slot(pool_slot_key(texture_pool_number(pool), id), texture, view);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTexturePoolRegisterImage(
-    _pool: *const NvnTexturePool,
+    pool: *const NvnTexturePool,
     id: i32,
     texture: *const NvnTexture,
     view: *const (),
 ) {
     record_hle_call("hle_nvnTexturePoolRegisterImage");
     let view = (!view.is_null()).then(|| *(view as *const NvnTextureView));
-    register_pool_slot(id, texture, view);
+    register_pool_slot(pool_slot_key(texture_pool_number(pool), id), texture, view);
 }
 
 #[repr(C)]
@@ -6184,6 +6340,7 @@ static POOL_SAMPLERS: std::sync::OnceLock<
 
 /// Sampler registered under `id` (handle bits 20.. of an NVNtextureHandle).
 pub fn lookup_pool_sampler(id: i32) -> Option<SamplerDesc> {
+    let id = pool_slot_key(ACTIVE_SAMPLER_POOL.load(std::sync::atomic::Ordering::Relaxed), id);
     POOL_SAMPLERS.get()?.lock().unwrap().get(&id).copied()
 }
 
@@ -6192,6 +6349,12 @@ static SAMPLERS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 pub fn samplers_gen() -> u64 {
     SAMPLERS_GEN.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// The active pools changed, for backends memoizing resolutions by handle alone.
+pub fn active_pools_changed() {
+    SAMPLERS_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
+    bump_tex_table_epoch();
 }
 
 fn register_pool_sampler(id: i32, d: SamplerDesc) {
@@ -6212,7 +6375,7 @@ fn register_pool_sampler(id: i32, d: SamplerDesc) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSampler(
-    _pool: *const NvnSamplerPool,
+    pool: *const NvnSamplerPool,
     id: i32,
     sampler: *const NvnSampler,
 ) {
@@ -6222,7 +6385,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSampler(
     }
     let s = &*sampler;
     register_pool_sampler(
-        id,
+        pool_slot_key(sampler_pool_number(pool), id),
         SamplerDesc {
             min_filter: s.min_filter,
             mag_filter: s.mag_filter,
@@ -6242,7 +6405,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSampler(
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSamplerBuilder(
-    _pool: *const NvnSamplerPool,
+    pool: *const NvnSamplerPool,
     id: i32,
     builder: *const NvnSamplerBuilder,
 ) {
@@ -6252,7 +6415,7 @@ pub unsafe extern "C" fn hle_nvnSamplerPoolRegisterSamplerBuilder(
     }
     let b = &*builder;
     register_pool_sampler(
-        id,
+        pool_slot_key(sampler_pool_number(pool), id),
         SamplerDesc {
             min_filter: b.min_filter,
             mag_filter: b.mag_filter,
@@ -6511,7 +6674,38 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         let interval = present_interval();
         let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
         let vsync = crate::host::overlay::is_vsync();
-        let frame = if is_stock30 {
+        // Windows: the frame-rate limit paces (vsync only chooses how the swapchain presents). A title whose game time
+        // does not follow real time is also held to its interval: running faster would run it fast.
+        #[cfg(not(nx_native))]
+        let limited = Some({
+            let mut fps = crate::host::live::frame_limit().clamp(30, UNPACED_MAX_FPS as u32);
+            if is_stock30 {
+                fps = 30;
+            } else if !crate::profile::real_time() && interval > 0 {
+                fps = fps.min(60 / interval as u32);
+            }
+            // A mod's own interval, which vsync holds a Switch to. The game goes on seeing the one it asked for.
+            #[cfg(all(nx_runtime, windows))]
+            if let Some(forced) = crate::live_patch::forced_interval() {
+                if !is_stock30 {
+                    fps = fps.min(60 / forced as u32);
+                }
+            }
+            // With vsync at or above the display's refresh, the swapchain's wait for the vblank paces: a limiter above it
+            // let frames out faster than the display takes them, and the swapchain then held the game back unevenly
+            // (microstutter: game time follows those uneven frames); at it, two clocks of the same rate drift apart.
+            let refresh = crate::host::live::refresh_rate();
+            if vsync && refresh != 0 && fps + 1 >= refresh {
+                std::time::Duration::ZERO
+            } else {
+                std::time::Duration::from_nanos(1_000_000_000 / fps.max(1) as u64)
+            }
+        });
+        #[cfg(nx_native)]
+        let limited: Option<std::time::Duration> = None;
+        let frame = if let Some(f) = limited {
+            f
+        } else if is_stock30 {
             std::time::Duration::from_nanos(1_000_000_000 / 30)
         } else if !vsync {
             // VSync off still stops at UNPACED_MAX_FPS: above the audio renderer's 200 frames a second TotK starts no sounds at
@@ -6826,7 +7020,7 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
         if f == 1 || f % 600 == 0 {
             println!("[+] NVN present: frame {} (buffer index {})", f, index);
         }
-        if f % 600 == 0 {
+        if f % 600 == 0 && crate::settings::get().log.log_cmd_histogram {
             dump_command_histogram(f);
         }
         // A dump run with plugin mods (lifted hosts; natively the Metal backend does this): the image of the code as the
@@ -6853,6 +7047,8 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
             crate::gpu::backend().present((*_window).textures[index as usize], (*_window).crop);
         }
     }
+    #[cfg(all(nx_runtime, windows))]
+    crate::live_patch::presented();
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnQueueWaitSync(_queue: *mut NvnQueue, _sync: usize) -> u8 {
@@ -6908,6 +7104,11 @@ static GUEST_ENTRIES: std::sync::OnceLock<std::collections::HashMap<usize, usize
 /// the AOT image), and without one an NVN call would run on the game's stack buffer (horizon/thread_stack.rs).
 pub fn set_guest_entries(images: &[(usize, usize)], make: &mut dyn FnMut(*const ()) -> usize) {
     let mut map = std::collections::HashMap::new();
+    // A trampoline per name, not per function address: linkers fold identical functions on some hosts and not on others,
+    // and the trampolines must come out the same on every host (the iOS guest image). Only the names no function
+    // implements share one, the generic stub's.
+    let stub = crate::hle!(hle_nvn_generic_stub());
+    let mut seen = std::collections::HashSet::new();
     for &(start, len) in images {
         let bytes = unsafe { std::slice::from_raw_parts(start as *const u8, len) };
         let mut i = 0;
@@ -6919,13 +7120,20 @@ pub fn set_guest_entries(images: &[(usize, usize)], make: &mut dyn FnMut(*const 
                 continue;
             }
             let name = std::str::from_utf8(&bytes[at..end]).unwrap_or("");
-            for f in [Some(resolve_proc(name)), bootstrap_fn(name)].into_iter().flatten() {
-                map.entry(f as usize).or_insert_with(|| make(f));
+            if !seen.insert(name.to_string()) {
+                continue;
+            }
+            let (proc, boot) = (resolve_proc(name), bootstrap_fn(name));
+            for f in [Some(proc), boot.filter(|&b| b != proc)].into_iter().flatten() {
+                if f == stub {
+                    map.entry(f as usize).or_insert_with(|| make(f));
+                } else {
+                    map.insert(f as usize, make(f));
+                }
             }
         }
     }
-    let f = crate::hle!(hle_nvn_generic_stub());
-    map.entry(f as usize).or_insert_with(|| make(f));
+    map.entry(stub as usize).or_insert_with(|| make(stub));
     println!("[+] NVN: {} functions behind HLE trampolines", map.len());
     let _ = GUEST_ENTRIES.set(map);
 }
@@ -7166,6 +7374,7 @@ pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
             })
             .collect(),
     );
+    log_pool_change(-1);
     bump_tex_table_epoch();
     for &(id, d) in &f.pool_samplers {
         register_pool_sampler(id, d);
@@ -7224,10 +7433,46 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
         pass_events: std::sync::OnceLock::new(),
         recorder: None,
         recorded_frame: 0,
-        visit: std::sync::atomic::AtomicU64::new(0),
     });
     let bytes = recorded_list_bytes(&list);
-    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes));
+    let calls = list.summary().1.clone().into_boxed_slice();
+    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes, calls));
     COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
     NEXT_COMMAND_HANDLE.fetch_max(handle + 1, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod pool_namespace_tests {
+    use super::*;
+
+    #[test]
+    fn pool_slot_keys_keep_plain_ids_in_the_first_pool_and_differ_between_pools() {
+        assert_eq!(pool_slot_key(0, 0x101), 0x101);
+        assert_ne!(pool_slot_key(1, 0x101), 0x101);
+        assert_ne!(pool_slot_key(1, 0x101), pool_slot_key(2, 0x101));
+        assert_eq!(pool_slot_key(1, 0x101) & 0xFFFFF, 0x101);
+    }
+
+    #[test]
+    fn a_pool_is_its_descriptor_memory() {
+        let pools = std::sync::Mutex::new(Vec::new());
+        assert_eq!(pool_number(&pools, (0x1000, 0x20)), 0);
+        assert_eq!(pool_number(&pools, (0x2000, 0)), 1);
+        // Another object over the same memory is the same pool.
+        assert_eq!(pool_number(&pools, (0x1000, 0x20)), 0);
+    }
+
+    #[test]
+    fn samplers_of_two_pools_do_not_replace_each_other() {
+        let mut a: SamplerDesc = unsafe { std::mem::zeroed() };
+        let mut b: SamplerDesc = unsafe { std::mem::zeroed() };
+        a.max_anisotropy = 1.0;
+        b.max_anisotropy = 2.0;
+        register_pool_sampler(pool_slot_key(0, 0x101), a);
+        register_pool_sampler(pool_slot_key(1, 0x101), b);
+        set_active_sampler_pool(1);
+        assert_eq!(lookup_pool_sampler(0x101).unwrap().max_anisotropy, 2.0);
+        set_active_sampler_pool(0);
+        assert_eq!(lookup_pool_sampler(0x101).unwrap().max_anisotropy, 1.0);
+    }
 }

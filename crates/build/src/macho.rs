@@ -205,6 +205,9 @@ pub fn write_guest_dylib(image: &[u8], out: &Path, platform: Platform, install_n
 
 /// Ad-hoc code signature (macOS's codesign), optionally with entitlements.
 pub fn sign(path: &Path, entitlements: Option<&Path>) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return crate::adhoc_sign::sign_path(path, entitlements);
+    }
     let mut cmd = std::process::Command::new("/usr/bin/codesign");
     cmd.args(["-f", "-s", "-"]);
     if let Some(e) = entitlements {

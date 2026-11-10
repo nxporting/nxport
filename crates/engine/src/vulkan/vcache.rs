@@ -22,9 +22,13 @@ const MAX_UPLOADS: u32 = 4;
 const TRACKED: usize = 0x2000;
 /// Frames a range may go undrawn before its block is freed.
 const IDLE_FRAMES: u64 = 600;
+/// Ranges drawn from unchecked that go to a hashing thread at a time, as recording finds them (verify collects the hashes).
+const HASH_BATCH: usize = 128;
 
 struct Chunk {
     buffer: vk::Buffer,
+    /// Bound to `buffer`: held with it (chunks last as long as the device).
+    #[allow(dead_code)]
     memory: vk::DeviceMemory,
     /// Free blocks by offset: length.
     free: BTreeMap<u64, u64>,
@@ -41,6 +45,8 @@ struct Entry {
     used: u64,
     checked: u64,
     used_frame: u64,
+    /// The epoch (get) it was last found up to date and not written by GPU work in.
+    epoch: u64,
     uploads: u32,
     dynamic: bool,
 }
@@ -54,6 +60,10 @@ pub(crate) struct VCache {
     swept_frame: u64,
     /// Small ranges drawn from this submit before their hash was checked (verify).
     unverified: Vec<(usize, usize)>,
+    /// Batches of them handed to the hashing threads while recording goes on: (ranges, thread), in the order sent.
+    hashing: Vec<(Vec<(usize, usize)>, usize)>,
+    /// The hashing thread the next batch goes to.
+    next_worker: usize,
 }
 
 impl VCache {
@@ -111,7 +121,10 @@ impl VCache {
     }
 
     /// The device copy of guest memory [a, a + len), made now if it has none or is out of date; None where it is not
-    /// cached (read it in place). `upload(dst, dst_offset, src, len)` records the copy of the contents into the block.
+    /// cached (read it in place) or GPU work writes it (`gpu_writes`). `upload(dst, dst_offset, src, len)` records the
+    /// copy of the contents into the block. A range found in `epoch` (the caller's: a new one for each submit and each
+    /// range its commands start writing) is returned as it was, unchecked: most draws of a submit bind ranges an earlier
+    /// one did.
     #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn get(
         &mut self,
@@ -120,14 +133,22 @@ impl VCache {
         len: usize,
         serial: u64,
         frame: u64,
+        epoch: u64,
+        gpu_writes: &dyn Fn(usize, usize) -> bool,
         upload: &mut dyn FnMut(vk::Buffer, u64, *const u8, usize) -> bool,
     ) -> Option<(vk::Buffer, u64)> {
-        if len == 0 || len as u64 > CHUNK {
+        let entry = self.entries.get_mut(&(a, len));
+        if let Some(e) = &entry {
+            if e.epoch == epoch {
+                return Some((self.chunks[e.chunk].buffer, e.off));
+            }
+        }
+        if len == 0 || len as u64 > CHUNK || gpu_writes(a, a + len) {
             return None;
         }
         let tracked = len >= TRACKED && crate::guest::dirty_track::trackable(a, len);
         let mut uploads = 0;
-        if let Some(e) = self.entries.get_mut(&(a, len)) {
+        if let Some(e) = entry {
             if e.dynamic {
                 return None;
             }
@@ -145,7 +166,12 @@ impl VCache {
                 e.checked = serial;
                 e.used = serial;
                 e.used_frame = frame;
-                return Some((self.chunks[e.chunk].buffer, e.off));
+                e.epoch = epoch;
+                let r = Some((self.chunks[e.chunk].buffer, e.off));
+                if self.unverified.len() >= HASH_BATCH {
+                    self.send_unverified();
+                }
+                return r;
             }
             // Written since it was copied: its block goes once the submits drawing from it completed.
             let e = self.entries.remove(&(a, len)).unwrap();
@@ -167,7 +193,7 @@ impl VCache {
         }
         self.entries.insert(
             (a, len),
-            Entry { chunk, off, size: len as u64, token, hash, used: serial, checked: serial, used_frame: frame, uploads, dynamic: false },
+            Entry { chunk, off, size: len as u64, token, hash, used: serial, checked: serial, used_frame: frame, epoch, uploads, dynamic: false },
         );
         Some((self.chunks[chunk].buffer, off))
     }
@@ -176,8 +202,21 @@ impl VCache {
     /// `upload` ahead of the draws (the uploads run first in the queue, after what earlier submits read there). Before
     /// anything recorded since the last call is submitted.
     pub(super) unsafe fn verify(&mut self, serial: u64, upload: &mut dyn FnMut(vk::Buffer, u64, *const u8, usize) -> bool) {
-        if self.unverified.is_empty() {
+        if self.unverified.is_empty() && self.hashing.is_empty() {
             return;
+        }
+        // The batches the hashing threads took while recording went on first (each thread answers in the order it was
+        // sent them): waiting for all of them here, at every chunk, was ~8% of the Presentation Thread.
+        let (mut done, mut done_hashes): (Vec<(usize, usize)>, Vec<u64>) = (Vec::new(), Vec::new());
+        if !self.hashing.is_empty() {
+            let pool = hash_pool().lock().ok();
+            for (batch, w) in self.hashing.drain(..) {
+                match pool.as_ref().and_then(|p| p.get(w)).and_then(|(_, rx)| rx.recv().ok()) {
+                    Some(h) if h.len() == batch.len() => done_hashes.extend(h),
+                    _ => done_hashes.extend(batch.iter().map(|r| hash_range(r))),
+                }
+                done.extend(batch);
+            }
         }
         let ranges = std::mem::take(&mut self.unverified);
         let bytes: usize = ranges.iter().map(|r| r.1).sum();
@@ -201,7 +240,7 @@ impl VCache {
                 hashes
             }
         };
-        for (&(a, len), h) in ranges.iter().zip(hashes) {
+        for (&(a, len), h) in done.iter().chain(&ranges).zip(done_hashes.into_iter().chain(hashes)) {
             let Some(e) = self.entries.get_mut(&(a, len)) else { continue };
             if e.hash == h || e.dynamic {
                 continue;
@@ -218,6 +257,23 @@ impl VCache {
                 let (chunk, off, size) = (e.chunk, e.off, e.size);
                 self.retired.push((serial, chunk, off, size));
             }
+        }
+    }
+
+    /// Hands the ranges drawn from unchecked so far to a hashing thread (verify collects the hashes).
+    fn send_unverified(&mut self) {
+        let Ok(pool) = hash_pool().lock() else { return };
+        if pool.is_empty() {
+            return;
+        }
+        let w = self.next_worker % pool.len();
+        self.next_worker = self.next_worker.wrapping_add(1);
+        let batch = std::mem::take(&mut self.unverified);
+        // The batch stays in `hashing` (unmoved, its memory in place) until verify has the hashes.
+        if pool[w].0.send(HashJob(batch.as_ptr(), batch.len())).is_ok() {
+            self.hashing.push((batch, w));
+        } else {
+            self.unverified = batch;
         }
     }
 

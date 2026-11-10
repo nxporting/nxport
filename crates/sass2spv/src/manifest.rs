@@ -67,6 +67,9 @@ pub struct ManifestTextureOrImage {
     /// Its first slot in the sampler table (ShaderManifest::sampler_table), or -1.
     #[serde(default = "no_slot")]
     pub sampler_slot: i32,
+    /// Host::bindless_textures: its push constant word (ShaderProgramInfo::bindless), or -1 (a binding of its own).
+    #[serde(default = "no_slot")]
+    pub push_word: i32,
 }
 
 fn no_slot() -> i32 {
@@ -136,6 +139,7 @@ impl ShaderProgram {
                         .as_ref()
                         .and_then(|(_, b)| b.iter().find(|b| b.0 == t.binding))
                         .map_or(-1, |b| b.1),
+                    push_word: i.bindless.iter().find(|b| b.0 == t.binding).map_or(-1, |b| b.1),
                 })
                 .collect(),
             images: i
@@ -148,6 +152,7 @@ impl ShaderProgram {
                     texture_type: t.ty.to_string(),
                     array_length: 0,
                     sampler_slot: -1,
+                    push_word: -1,
                 })
                 .collect(),
             sampler_table: i.sampler_table.as_ref().map_or(0, |t| t.0),

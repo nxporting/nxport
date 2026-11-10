@@ -41,16 +41,29 @@ pub struct Output {
 pub struct Options {
     /// Approximate instructions per C file (compile parallelism and memory).
     pub chunk_instructions: usize,
+    /// Lift only what differs from a library already lifted (see Overlay).
+    pub overlay: Option<Overlay>,
+}
+
+/// A module lifted against a base library that holds an older version of its code: only the base's functions that
+/// changed are emitted, and a branch to anything else goes through the dispatcher, so it reaches the base library.
+pub struct Overlay {
+    /// The base's function starts, which must also be in the module's seeds.
+    pub base_starts: BTreeSet<u64>,
+    /// Addresses of the instructions that differ from the base's.
+    pub changed: Vec<u64>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { chunk_instructions: 40_000 }
+        Options { chunk_instructions: 40_000, overlay: None }
     }
 }
 
 struct Lifted<'m, 'a> {
     m: &'m Module<'a>,
+    /// An overlay's functions (Options::overlay); others are not in this module's library.
+    emit: Option<BTreeSet<u64>>,
     insns: Vec<Insn>,
     unsupported: BTreeMap<String, usize>,
 }
@@ -85,7 +98,7 @@ impl<'m, 'a> Lifted<'m, 'a> {
             });
             a += 4;
         }
-        Lifted { m, insns, unsupported }
+        Lifted { m, emit: None, insns, unsupported }
     }
 
     fn at(&self, a: u64) -> &Insn {
@@ -94,6 +107,11 @@ impl<'m, 'a> Lifted<'m, 'a> {
 
     fn in_text(&self, a: u64) -> bool {
         self.m.text.contains(&a) && a % 4 == 0
+    }
+
+    /// Whether code at `a` is a C function this module's library defines, to branch to directly.
+    fn direct(&self, a: u64) -> bool {
+        self.in_text(a) && self.emit.as_ref().is_none_or(|e| e.contains(&a))
     }
 }
 
@@ -192,8 +210,27 @@ fn scan(l: &Lifted, entry: u64, end: u64) -> Scan {
             a += 4;
         }
     }
+    // A function of more than SPLIT_ABOVE instructions is split at the first block end after every SPLIT_EVERY of them:
+    // the C compiler's register allocation grows far faster than a function's size (TotK's largest, a megabyte or two of
+    // C each, took two minutes each to compile). The pieces reach each other as any function start is reached.
+    if (end - entry) / 4 > SPLIT_ABOVE {
+        let (mut a, mut since) = (entry, 0);
+        while a + 4 < end {
+            since += 1;
+            if since >= SPLIT_EVERY && l.at(a).ends_block() {
+                s.external.insert(a + 4);
+                since = 0;
+            }
+            a += 4;
+        }
+    }
     s
 }
+
+/// Function size (instructions) past which a function is split, and the length of its pieces. Tuning numbers: they
+/// trade compile time against what the compiler can optimise across a piece's end; the code does the same either way.
+const SPLIT_ABOVE: u64 = 8192;
+const SPLIT_EVERY: u64 = 2048;
 
 /// How the `br` at `br_pc` is emitted, from what each definition of its register that reaches it is: a recognised
 /// table, a table whose entries are out of sight (`jt::reach`), an `adr` (a computed goto), arithmetic the matcher cannot
@@ -351,38 +388,733 @@ fn fname(a: u64) -> String {
     format!("f_{a:x}")
 }
 
-const TAIL_DISPATCH: &str = "__attribute__((musttail)) return rt_dispatch(c);";
+/// Leaves the function: the registers it keeps in locals go to the Cpu first (a `SPILL` marker: keep_registers).
+/// Each dispatch probes the dispatcher's cache first (cpu.h, rt_hit), so the branch to a cached function is at this site.
+const TAIL_DISPATCH: &str =
+    "SPILL { GuestFn rt_f = rt_hit(c->pc); if (rt_f) { __attribute__((musttail)) return rt_f(c); } } __attribute__((musttail)) return rt_dispatch(c);";
+
+/// One instruction's C. `next`: execution can go on at the next line.
+struct Line {
+    label: Option<u64>,
+    code: String,
+    next: bool,
+}
+
+/// The flag-setting helpers (runtime/cpu.h) and their variants that leave NZCV alone.
+const FLAG_HELPERS: [(&str, &str); 6] = [
+    ("subs32(c, ", "sub32_nf("),
+    ("subs64(c, ", "sub64_nf("),
+    ("adds32(c, ", "add32_nf("),
+    ("adds64(c, ", "add64_nf("),
+    ("logic32(c, ", "logic32_nf("),
+    ("logic64(c, ", "logic64_nf("),
+];
+
+/// Whether a line's C reads NZCV: a condition, a carry-in (adc, sbc), or the register itself (mrs). Leaving the function
+/// through a tail jump or the dispatcher counts as a read: the lifter splits functions at call targets, and code can
+/// branch into the next one with flags set.
+fn reads_flags(code: &str) -> bool {
+    code.contains("COND_")
+        || code.contains("FLAG_")
+        || code.contains("adc")
+        || code.contains("sbc")
+        || code.contains("musttail")
+        || code.match_indices("c->nzcv").any(|(i, _)| !code[i + 7..].starts_with(" ="))
+}
+
+/// Whether a line sets NZCV on every path: a flag-setting helper or an assignment, and calls (AAPCS64: the callee
+/// leaves the flags undefined, and no caller reads them after a call).
+fn writes_flags(code: &str) -> bool {
+    FLAG_HELPERS.iter().any(|(h, _)| code.contains(h)) || code.contains("c->nzcv =") || code.contains("RT_RETURNED")
+}
+
+/// The arguments of the call whose argument list starts `s` ("(a, b)..." -> ["a", "b"]), split at top-level commas,
+/// and the text after its closing parenthesis.
+fn call_args(s: &str) -> Option<(Vec<&str>, &str)> {
+    let rest = s.strip_prefix('(')?;
+    let (mut depth, mut start, mut args) = (0, 0, Vec::new());
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' if depth == 0 => {
+                args.push(rest[start..i].trim());
+                return Some((args, &rest[i + 1..]));
+            }
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                args.push(rest[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The C condition `cond` (an A64 condition name) reads from the flags of `cmp a, b` (`sub`) or `tst r` (logic) of
+/// `bits` width, computed from the operands; None for the overflow conditions of a compare, left to the flags.
+fn fused_cond(cond: &str, sub: bool, bits: u32, args: &[&str]) -> Option<String> {
+    let (u, s) = (format!("uint{bits}_t"), format!("int{bits}_t"));
+    if sub {
+        let (a, b) = (format!("(({u})({}))", args[0]), format!("(({u})({}))", args[1]));
+        let (sa, sb) = (format!("(({s}){a})"), format!("(({s}){b})"));
+        Some(match cond {
+            "EQ" => format!("{a} == {b}"),
+            "NE" => format!("{a} != {b}"),
+            "CS" => format!("{a} >= {b}"),
+            "CC" => format!("{a} < {b}"),
+            "MI" => format!("({s})({u})({a} - {b}) < 0"),
+            "PL" => format!("({s})({u})({a} - {b}) >= 0"),
+            "HI" => format!("{a} > {b}"),
+            "LS" => format!("{a} <= {b}"),
+            "GE" => format!("{sa} >= {sb}"),
+            "LT" => format!("{sa} < {sb}"),
+            "GT" => format!("{sa} > {sb}"),
+            "LE" => format!("{sa} <= {sb}"),
+            _ => return None,
+        })
+    } else {
+        // N and Z from the result, C and V clear.
+        let r = format!("(({s})({u})({}))", args[0]);
+        Some(match cond {
+            "EQ" => format!("{r} == 0"),
+            "NE" => format!("{r} != 0"),
+            "MI" | "LT" => format!("{r} < 0"),
+            "PL" | "GE" => format!("{r} >= 0"),
+            "GT" => format!("{r} > 0"),
+            "LE" => format!("{r} <= 0"),
+            "CS" | "VS" | "HI" => "0".into(),
+            "CC" | "VC" | "LS" => "1".into(),
+            _ => return None,
+        })
+    }
+}
+
+/// The next line's code with its one flag condition replaced by the condition over the operands of the compare or test
+/// in `code`, when that is all that reads the flags `code` sets.
+fn fuse(code: &str, next: &str) -> Option<String> {
+    let code = code.trim();
+    // FCMP: the condition is cc_s / cc_d over the operands (unordered as FCMP's flags give it).
+    if let Some((f, rest)) = ["s", "d"].iter().find_map(|f| code.strip_prefix(&format!("c->nzcv = cmp_{f}(c, ")).map(|r| (*f, r))) {
+        let call = format!("({rest}");
+        let (args, tail) = call_args(&call)?;
+        let uses: Vec<_> = next.match_indices("COND_").collect();
+        if tail != ";" || args.len() != 2 || uses.len() != 1 || next.contains("FLAG_") || next.contains("c->nzcv") {
+            return None;
+        }
+        let j = uses[0].0;
+        let name = next.get(j + 5..j + 7)?;
+        if !next[j + 7..].starts_with("(c)") || name == "AL" || name == "NV" {
+            return None;
+        }
+        return Some(format!("{}cc_{f}(c, {}, {}, FCC_{name}){}", &next[..j], args[0], args[1], &next[j + 10..]));
+    }
+    let forms = [(true, 32, "(void)(subs32(c, "), (true, 64, "(void)(subs64(c, "), (false, 32, "(void)(logic32(c, "), (false, 64, "(void)(logic64(c, ")];
+    let (sub, bits, f) = forms.into_iter().find(|(_, _, f)| code.starts_with(f))?;
+    // "(void)(subs32(c, A, B));": the arguments after `c`.
+    let (args, tail) = call_args(&format!("({}", &code[f.len()..]))
+        .map(|(a, t)| (a.into_iter().map(str::to_string).collect::<Vec<_>>(), t.to_string()))?;
+    if tail != ");" || args.len() != if sub { 2 } else { 1 } {
+        return None;
+    }
+    let uses: Vec<_> = next.match_indices("COND_").collect();
+    if uses.len() != 1 || next.contains("FLAG_") || next.contains("adc") || next.contains("sbc") || next.contains("c->nzcv") {
+        return None;
+    }
+    let j = uses[0].0;
+    let name = next.get(j + 5..j + 7)?;
+    if !next[j + 7..].starts_with("(c)") {
+        return None;
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let cond = fused_cond(name, sub, bits, &args)?;
+    Some(format!("{}({cond}){}", &next[..j], &next[j + 10..]))
+}
+
+/// NZCV is computed only where something reads it: flag-setting instructions whose flags are never read compute just
+/// their result, and a compare or test whose flags only the next instruction's condition reads becomes that condition
+/// over its operands (cmp + b.lt: one x86 compare and branch). Flags are dead across calls and returns (AAPCS64).
+fn optimize_flags(lines: &mut [Line]) {
+    let n = lines.len();
+    let at: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for (i, l) in lines.iter().enumerate() {
+        let mut s = Vec::new();
+        let mut rest = l.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            let hex: String = rest[j + 7..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Some(&t) = u64::from_str_radix(&hex, 16).ok().and_then(|a| at.get(&a)) {
+                s.push(t);
+            }
+            rest = &rest[j + 7..];
+        }
+        if l.next && i + 1 < n {
+            s.push(i + 1);
+        }
+        succ.push(s);
+    }
+    let reads: Vec<bool> = lines.iter().map(|l| reads_flags(&l.code)).collect();
+    let writes: Vec<bool> = lines.iter().map(|l| writes_flags(&l.code)).collect();
+    // Flags live after each line (backward, any path).
+    let mut live_out = vec![false; n];
+    let mut live_in = vec![false; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in (0..n).rev() {
+            let out = succ[i].iter().any(|&t| live_in[t]);
+            let inn = reads[i] || (out && !writes[i]);
+            if out != live_out[i] || inn != live_in[i] {
+                live_out[i] = out;
+                live_in[i] = inn;
+                changed = true;
+            }
+        }
+    }
+    for i in 0..n {
+        if !writes[i] {
+            continue;
+        }
+        // Read by the next line alone, and dead after it.
+        let next_ok = i + 1 < n && lines[i].next && lines[i + 1].label.is_none() && !live_out[i + 1] && !writes[i + 1];
+        if next_ok {
+            if let Some(next) = fuse(&lines[i].code, &lines[i + 1].code) {
+                lines[i].code = String::new();
+                lines[i + 1].code = next;
+                continue;
+            }
+        }
+        // Flags never read: the result alone.
+        if !live_out[i] && !reads[i] {
+            // An FCMP or flag constant has nothing else to compute.
+            let code = lines[i].code.trim();
+            if (code.starts_with("c->nzcv = cmp_s(c, ") || code.starts_with("c->nzcv = cmp_d(c, ") || code.starts_with("c->nzcv = 0x"))
+                && code.ends_with(';')
+                && code.matches(';').count() == 1
+            {
+                lines[i].code = String::new();
+                continue;
+            }
+            for (h, nf) in FLAG_HELPERS {
+                if lines[i].code.contains(h) {
+                    lines[i].code = lines[i].code.replace(h, nf);
+                }
+            }
+        }
+    }
+}
+
+/// Guest integer registers x0..x30 (bits 0..30) and sp (bit 31).
+type Regs = u32;
+
+/// Registers a function keeps in locals: its most referenced ones. More cost more than they save (clang spills them
+/// to the stack, and every call stores and loads them); valentderah's TotK recompilation measured the fewest
+/// instructions and memory operands at 4 to 6.
+const KEPT: usize = 6;
+
+/// x19..x29 and sp: a callee preserves them (AAPCS64), so they are not loaded again after a call.
+const CALLEE_SAVED: Regs = (0x7ff << 19) | (1 << 31);
+
+/// The guest register a "c->x[N]" or "c->sp" at the start of `s` names, and its length.
+fn reg_at(s: &str) -> Option<(u32, usize)> {
+    let after = s.strip_prefix("c->")?;
+    if let Some(num) = after.strip_prefix("x[") {
+        let digits = num.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && num.as_bytes().get(digits) == Some(&b']') {
+            return Some((num[..digits].parse().ok()?, 3 + 2 + digits + 1));
+        }
+    } else if let Some(tail) = after.strip_prefix("sp") {
+        if !tail.starts_with(|ch: char| ch.is_ascii_alphanumeric() || ch == '_') {
+            return Some((31, 5));
+        }
+    }
+    None
+}
+
+/// `code` with the registers in `kept` renamed to their locals (gx0..gx30, gsp).
+fn localize(code: &str, kept: Regs) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(i) = rest.find("c->") {
+        out.push_str(&rest[..i]);
+        match reg_at(&rest[i..]) {
+            Some((r, len)) if kept & (1 << r) != 0 => {
+                if r == 31 {
+                    out.push_str("gsp");
+                } else {
+                    let _ = write!(out, "gx{r}");
+                }
+                rest = &rest[i + len..];
+            }
+            _ => {
+                out.push_str("c->");
+                rest = &rest[i + 3..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The locals C code reads and writes (any use counts as a read; `r = ...` and `r op= ...` as writes).
+fn uses(code: &str) -> (Regs, Regs) {
+    let (mut reads, mut writes) = (0, 0);
+    let b = code.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let ident = |j: usize| j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_');
+        if b[i] == b'g' && (i == 0 || !ident(i - 1)) {
+            let (r, len) = if code[i..].starts_with("gsp") {
+                (Some(31), 3)
+            } else if code[i..].starts_with("gx") {
+                let d = b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
+                (if d > 0 { code[i + 2..i + 2 + d].parse::<u32>().ok() } else { None }, 2 + d)
+            } else {
+                (None, 1)
+            };
+            if let Some(r) = r.filter(|_| !ident(i + len)) {
+                let rest = code[i + len..].trim_start();
+                let compound = ["+=", "-=", "|=", "&=", "^=", "<<=", ">>=", "*="].iter().any(|op| rest.starts_with(op));
+                if compound {
+                    reads |= 1 << r;
+                    writes |= 1 << r;
+                } else if rest.starts_with('=') && !rest.starts_with("==") {
+                    writes |= 1 << r;
+                } else {
+                    reads |= 1 << r;
+                }
+            }
+            i += len;
+            continue;
+        }
+        i += 1;
+    }
+    (reads, writes)
+}
+
+/// The vector-register macros of runtime/simd.h, as the preprocessor would expand them with literal register numbers
+/// ($1.. for the arguments): spelled out, their registers appear as c->v[N] and can be kept in locals (keep_vregs).
+const VMACROS: [(&str, &str); 14] = [
+    ("VREG", "(*($1 *)&c->v[$2])"),
+    ("VQ", "(($1)(($2) ? c->v[$3] : (u128)(uint64_t)c->v[$3]))"),
+    ("VW", "do { $1 _w = ($4); c->v[$3] = ($2) ? (u128)_w : (u128)(uint64_t)(u128)_w; } while (0)"),
+    ("VS8", "(*(uint8_t *)&c->v[$1])"),
+    ("VS16", "(*(sa16 *)&c->v[$1])"),
+    ("VS32", "(*(sa32 *)&c->v[$1])"),
+    ("VS64", "(*(sa64 *)&c->v[$1])"),
+    ("VSF32", "(*(saf32 *)&c->v[$1])"),
+    ("VSF64", "(*(saf64 *)&c->v[$1])"),
+    ("VHI64", "(((sa64 *)&c->v[$1])[1])"),
+    ("FP_SETS", "(c->v[$1] = fb_s($2))"),
+    ("FP_SETD", "(c->v[$1] = fb_d($2))"),
+    ("SV_FOP_S", "VW(vf32, $2, $3, vop_s(c, $1, $4, $5, $6))"),
+    ("SV_FOP_D", "VW(vf64, $2, $3, vop_d(c, $1, $4, $5, $6))"),
+];
+
+/// Helpers of runtime/simd.h that take vector registers by number and read or write c->v themselves: the registers a
+/// function keeps in locals go to the Cpu before a call to one and are loaded again after it.
+const V_HELPERS: [&str; 19] = [
+    "fp_fma_d", "fp_fma_s", "sl_across", "sl_addlp", "sl_gen", "sl_ldm", "sl_ldr", "sl_lds", "sl_pmull64", "sl_stm",
+    "sl_sts", "sv_aes", "sv_fcvtl", "sv_fcvtn", "sv_fred_s", "sv_sha1hash", "sv_sha256hash", "sv_sha_misc", "sv_tbl",
+];
+
+/// `code` with VMACROS uses expanded (arguments first).
+fn expand_vmacros(code: &str) -> String {
+    let b = code.as_bytes();
+    let mut out = String::with_capacity(code.len() + code.len() / 2);
+    let mut i = 0;
+    'scan: while i < b.len() {
+        let boundary = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+        if boundary && b[i].is_ascii_uppercase() {
+            for (name, body) in VMACROS {
+                if code[i..].starts_with(name) && code[i + name.len()..].starts_with('(') {
+                    if let Some((args, rest)) = call_args(&code[i + name.len()..]) {
+                        let mut e = body.to_string();
+                        for (k, a) in args.iter().enumerate().rev() {
+                            e = e.replace(&format!("${}", k + 1), &expand_vmacros(a));
+                        }
+                        out.push_str(&expand_vmacros(&e));
+                        i = code.len() - rest.len();
+                        continue 'scan;
+                    }
+                }
+            }
+        }
+        let ch = code[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// The vector register a "c->v[N]" at the start of `s` names, and its length.
+fn vreg_at(s: &str) -> Option<(u32, usize)> {
+    let num = s.strip_prefix("c->v[")?;
+    let digits = num.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || num.as_bytes().get(digits) != Some(&b']') {
+        return None;
+    }
+    Some((num[..digits].parse().ok()?, 5 + digits + 1))
+}
+
+/// The vector registers `code` names as c->v[N].
+fn vregs_named(code: &str) -> Regs {
+    let mut set = 0;
+    let mut rest = code;
+    while let Some(i) = rest.find("c->v[") {
+        if let Some((r, _)) = vreg_at(&rest[i..]) {
+            set |= 1 << r;
+        }
+        rest = &rest[i + 5..];
+    }
+    set
+}
+
+/// The vector-register locals C code reads and writes: `gvN = ...` writes, a pointer to one (a lane or view of it)
+/// reads and writes, any other use reads.
+fn vuses(code: &str) -> (Regs, Regs) {
+    let (mut reads, mut writes) = (0, 0);
+    let b = code.as_bytes();
+    let mut i = 0;
+    while let Some(j) = code[i..].find("gv").map(|j| i + j) {
+        let ident = |k: usize| k < b.len() && (b[k].is_ascii_alphanumeric() || b[k] == b'_');
+        let d = b[j + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if (j > 0 && ident(j - 1)) || d == 0 || ident(j + 2 + d) {
+            i = j + 2;
+            continue;
+        }
+        let r: u32 = code[j + 2..j + 2 + d].parse().unwrap();
+        let rest = code[j + 2 + d..].trim_start();
+        if j > 0 && b[j - 1] == b'&' {
+            // A view of it (a lane, a narrower type): written when assigned to, keeping its other bytes.
+            reads |= 1 << r;
+            let mut view = rest.trim_start_matches(')').trim_start();
+            // A lane: "[N]".
+            if let Some(lane) = view.strip_prefix('[') {
+                view = lane.split_once(']').map_or("", |(_, v)| v).trim_start_matches(')').trim_start();
+            }
+            let compound = ["+=", "-=", "|=", "&=", "^=", "<<=", ">>=", "*="].iter().any(|op| view.starts_with(op));
+            if compound || (view.starts_with('=') && !view.starts_with("==")) {
+                writes |= 1 << r;
+            }
+        } else if rest.starts_with('=') && !rest.starts_with("==") {
+            writes |= 1 << r;
+        } else {
+            reads |= 1 << r;
+        }
+        i = j + 2 + d;
+    }
+    (reads, writes)
+}
+
+/// Vector registers a function keeps in locals: its most referenced ones (x86 has 16 vector registers).
+const KEPT_V: usize = 8;
+
+/// keep_registers for the vector registers (u128 locals gv0..gv31), run first: it stores and loads around the SPILL and
+/// RELOAD markers (leaving them to keep_registers) and around each line calling a V_HELPERS helper, and never keeps a
+/// register such a line names itself. Returns the registers kept and those to load at entry.
+fn keep_vregs(lines: &mut [Line]) -> (Regs, Regs) {
+    for l in lines.iter_mut() {
+        if l.code.contains('V') || l.code.contains("FP_SET") {
+            l.code = expand_vmacros(&l.code);
+        }
+    }
+    let sync: Vec<bool> = lines
+        .iter()
+        .map(|l| V_HELPERS.iter().any(|h| l.code.match_indices(h).any(|(i, _)| l.code[i + h.len()..].starts_with("(c")))
+            || VMACROS.iter().any(|(m, _)| l.code.contains(&format!("{m}("))))
+        .collect();
+    let mut count = [0usize; 32];
+    let mut banned: Regs = 0;
+    for (l, &s) in lines.iter().zip(&sync) {
+        let mut rest = l.code.as_str();
+        while let Some(i) = rest.find("c->v[") {
+            if let Some((r, _)) = vreg_at(&rest[i..]) {
+                count[r as usize] += 1;
+            }
+            rest = &rest[i + 5..];
+        }
+        if s {
+            banned |= vregs_named(&l.code);
+        }
+    }
+    let mut order: Vec<u32> = (0..32).filter(|&r| count[r as usize] > 0 && banned & (1 << r) == 0).collect();
+    order.sort_by_key(|&r| (std::cmp::Reverse(count[r as usize]), r));
+    let kept: Regs = order.iter().take(KEPT_V).fold(0, |acc, &r| acc | 1 << r);
+    if kept == 0 {
+        return (0, 0);
+    }
+    for l in lines.iter_mut() {
+        let mut out = String::with_capacity(l.code.len());
+        let mut rest = l.code.as_str();
+        while let Some(i) = rest.find("c->v[") {
+            out.push_str(&rest[..i]);
+            match vreg_at(&rest[i..]) {
+                Some((r, len)) if kept & (1 << r) != 0 => {
+                    let _ = write!(out, "gv{r}");
+                    rest = &rest[i + len..];
+                }
+                _ => {
+                    out.push_str("c->v[");
+                    rest = &rest[i + 5..];
+                }
+            }
+        }
+        out.push_str(rest);
+        l.code = out;
+    }
+    let n = lines.len();
+    let at: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut pre: Vec<(Regs, Regs)> = Vec::with_capacity(n);
+    for (i, l) in lines.iter().enumerate() {
+        let mut s = Vec::new();
+        let mut rest = l.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            let hex: String = rest[j + 7..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Some(&t) = u64::from_str_radix(&hex, 16).ok().and_then(|a| at.get(&a)) {
+                s.push(t);
+            }
+            rest = &rest[j + 7..];
+        }
+        if l.next && i + 1 < n {
+            s.push(i + 1);
+        }
+        succ.push(s);
+        // A helper line names no kept register: its stores come before it.
+        let head = if sync[i] { "" } else { l.code.find("SPILL").map_or(l.code.as_str(), |j| &l.code[..j]) };
+        pre.push(vuses(head));
+    }
+    let spills: Vec<bool> = lines.iter().zip(&sync).map(|(l, &s)| s || l.code.contains("SPILL")).collect();
+    let reloads: Vec<bool> = lines.iter().zip(&sync).map(|(l, &s)| s || l.code.contains("RELOAD")).collect();
+    let mut dirty_in = vec![0 as Regs; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            let out = if reloads[i] { 0 } else { dirty_in[i] | pre[i].1 };
+            for &t in &succ[i] {
+                if dirty_in[t] | out != dirty_in[t] {
+                    dirty_in[t] |= out;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let mut live_in = vec![0 as Regs; n];
+    let mut live_out = vec![0 as Regs; n];
+    changed = true;
+    while changed {
+        changed = false;
+        for i in (0..n).rev() {
+            let out = succ[i].iter().fold(0, |acc, &t| acc | live_in[t]);
+            let (r, w) = pre[i];
+            let spilled = if spills[i] { dirty_in[i] & !w } else { 0 };
+            let after = if reloads[i] { 0 } else { out & !w };
+            let inn = r | spilled | after;
+            if inn != live_in[i] || out != live_out[i] {
+                live_in[i] = inn;
+                live_out[i] = out;
+                changed = true;
+            }
+        }
+    }
+    let regs = |set: Regs| (0..32).filter(move |r| set & (1 << r) != 0);
+    for (i, l) in lines.iter_mut().enumerate() {
+        let mut st = String::new();
+        if spills[i] {
+            for r in regs(dirty_in[i] | pre[i].1) {
+                let _ = write!(st, "c->v[{r}] = gv{r}; ");
+            }
+        }
+        let mut ld = String::new();
+        if reloads[i] {
+            for r in regs(live_out[i]) {
+                let _ = write!(ld, "gv{r} = c->v[{r}]; ");
+            }
+        }
+        if sync[i] {
+            l.code = format!("{st}{} {ld}", l.code);
+        } else {
+            if !st.is_empty() {
+                l.code = l.code.replace("SPILL ", &format!("{st}SPILL "));
+            }
+            if !ld.is_empty() {
+                l.code = l.code.replace("RELOAD ", &format!("RELOAD {ld}"));
+            }
+        }
+    }
+    (kept, live_in.first().copied().unwrap_or(0))
+}
+
+/// Keeps the function's most referenced registers in locals, and returns them and those to load at entry. Guest memory
+/// is accessed through may_alias pointers, so clang must assume every guest store may change a register in the Cpu and
+/// load it again before its next use; locals stay in host registers. The Cpu holds them where code outside the function
+/// sees them: `SPILL` (before calls, tail calls, dispatches, returns and runtime entries) stores those written since the
+/// Cpu last held them on some path to it (dirty), `RELOAD` (after calls and svc) loads those read again before being
+/// written (live), except callee-saved ones after a call. Elsewhere the Cpu holds a register's value and its local is not
+/// read again. No runtime helper reads integer registers or sp from the Cpu (vector registers stay there).
+fn keep_registers(lines: &mut [Line]) -> (Regs, Regs) {
+    let mut count = [0usize; 32];
+    for l in lines.iter() {
+        let mut rest = l.code.as_str();
+        while let Some(i) = rest.find("c->") {
+            if let Some((r, _)) = reg_at(&rest[i..]) {
+                count[r as usize] += 1;
+            }
+            rest = &rest[i + 3..];
+        }
+    }
+    let mut order: Vec<u32> = (0..32).filter(|&r| count[r as usize] > 0).collect();
+    order.sort_by_key(|&r| (std::cmp::Reverse(count[r as usize]), r));
+    let kept = order.iter().take(KEPT).fold(0, |acc, &r| acc | 1 << r);
+    for l in lines.iter_mut() {
+        l.code = localize(&l.code, kept);
+    }
+    let n = lines.len();
+    let at: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    // Per line: successors, and the reads and writes before its first marker (what follows a SPILL leaves or calls).
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut pre: Vec<(Regs, Regs)> = Vec::with_capacity(n);
+    for (i, l) in lines.iter().enumerate() {
+        let mut s = Vec::new();
+        let mut rest = l.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            let hex: String = rest[j + 7..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+            if let Some(&t) = u64::from_str_radix(&hex, 16).ok().and_then(|a| at.get(&a)) {
+                s.push(t);
+            }
+            rest = &rest[j + 7..];
+        }
+        if l.next && i + 1 < n {
+            s.push(i + 1);
+        }
+        succ.push(s);
+        let head = l.code.find("SPILL").map_or(l.code.as_str(), |j| &l.code[..j]);
+        pre.push(uses(head));
+    }
+    let spills: Vec<bool> = lines.iter().map(|l| l.code.contains("SPILL")).collect();
+    // Registers a RELOAD leaves to the locals: callee-saved ones after a call, none after svc.
+    let trusted: Vec<Option<Regs>> = lines
+        .iter()
+        .map(|l| l.code.contains("RELOAD").then(|| if l.code.contains("RT_RETURNED") { CALLEE_SAVED } else { 0 }))
+        .collect();
+    // Dirty registers on entry to each line (forward, any path).
+    let mut dirty_in = vec![0 as Regs; n];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..n {
+            let out = if trusted[i].is_some() { 0 } else { dirty_in[i] | pre[i].1 };
+            for &t in &succ[i] {
+                if dirty_in[t] | out != dirty_in[t] {
+                    dirty_in[t] |= out;
+                    changed = true;
+                }
+            }
+        }
+    }
+    // Live registers on entry to each line (backward): a SPILL reads what it stores, a RELOAD writes what it loads.
+    let mut live_in = vec![0 as Regs; n];
+    let mut live_out = vec![0 as Regs; n];
+    changed = true;
+    while changed {
+        changed = false;
+        for i in (0..n).rev() {
+            let out = succ[i].iter().fold(0, |acc, &t| acc | live_in[t]);
+            let (r, w) = pre[i];
+            let spilled = if spills[i] { dirty_in[i] & !w } else { 0 };
+            let after = match trusted[i] {
+                Some(keep) => out & keep & !w,
+                None => out & !w,
+            };
+            let inn = r | spilled | after;
+            if inn != live_in[i] || out != live_out[i] {
+                live_in[i] = inn;
+                live_out[i] = out;
+                changed = true;
+            }
+        }
+    }
+    let field = |r: u32| if r == 31 { "c->sp".to_string() } else { format!("c->x[{r}]") };
+    let local = |r: u32| if r == 31 { "gsp".to_string() } else { format!("gx{r}") };
+    let regs = |set: Regs| (0..32).filter(move |r| set & (1 << r) != 0);
+    for (i, l) in lines.iter_mut().enumerate() {
+        if spills[i] {
+            let mut st = String::new();
+            for r in regs(dirty_in[i] | pre[i].1) {
+                let _ = write!(st, "{} = {}; ", field(r), local(r));
+            }
+            l.code = l.code.replace("SPILL ", &st);
+        }
+        if let Some(keep) = trusted[i] {
+            let mut ld = String::new();
+            for r in regs(live_out[i] & !keep) {
+                let _ = write!(ld, "{} = {}; ", local(r), field(r));
+            }
+            l.code = l.code.replace("RELOAD ", &ld);
+        }
+    }
+    (kept, live_in.first().copied().unwrap_or(0))
+}
+
+/// Loads inside a loop read memory every time round. Other threads may change it, which C does not know: from a plain load
+/// the compiler made `read once; if (held) for (;;);` of spinlocks' `ldr; cmp; b.eq` loops (203 such jumps to themselves in
+/// TotK), and a thread that found the lock held spun forever, however soon it was released.
+fn reload_in_loops(lines: &mut [Line]) {
+    let labels: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
+    let mut in_loop = vec![false; lines.len()];
+    for (i, line) in lines.iter().enumerate() {
+        let mut rest = line.code.as_str();
+        while let Some(j) = rest.find("goto L_") {
+            rest = &rest[j + 7..];
+            let hex = rest.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(rest.len());
+            let target = u64::from_str_radix(&rest[..hex], 16).ok().and_then(|t| labels.get(&t));
+            if let Some(&first) = target.filter(|&&first| first <= i) {
+                in_loop[first..=i].fill(true);
+            }
+        }
+    }
+    for (line, _) in lines.iter_mut().zip(in_loop).filter(|(_, looped)| *looped) {
+        for width in ["8", "16", "32", "64"] {
+            let (plain, reloaded) = (format!("LD{width}("), format!("LDV{width}("));
+            line.code = line.code.replace(&plain, &reloaded);
+        }
+    }
+}
 
 fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut BTreeSet<u64>) {
     let s = scan(l, entry, end);
     let jump = |t: u64, refs: &mut BTreeSet<u64>| -> String {
         if (entry..end).contains(&t) {
             format!("goto L_{t:x};")
-        } else if l.in_text(t) {
+        } else if l.direct(t) {
             refs.insert(t);
-            format!("__attribute__((musttail)) return {}(c);", fname(t))
+            format!("SPILL __attribute__((musttail)) return {}(c);", fname(t))
         } else {
             format!("c->pc = {}; {TAIL_DISPATCH}", hx(t))
         }
     };
-    let _ = writeln!(out, "RT_FN void {}(Cpu *c) {{", fname(entry));
+    let mut lines = Vec::new();
     let mut a = entry;
     let mut last_ends = false;
     while a < end {
-        if s.labels.contains(&a) {
-            let _ = writeln!(out, "L_{a:x}:;");
-        }
         let ra = hx(a + 4);
-        let line = match l.at(a) {
-            Insn::Op(code) | Insn::Trap(code) => code.clone(),
+        let code = match l.at(a) {
+            // Runtime entries see the registers: svc returns, brk and udf do not.
+            Insn::Op(code) if code.contains("rt_svc(c") => format!("SPILL {code} RELOAD "),
+            Insn::Trap(code) => format!("SPILL {code}"),
+            Insn::Op(code) => code.clone(),
             Insn::B(t) => jump(*t, refs),
             Insn::BCond(cond, t) => format!("if ({cond}) {{ {} }}", jump(*t, refs)),
-            Insn::Bl(t) if l.in_text(*t) => {
+            Insn::Bl(t) if l.direct(*t) => {
                 refs.insert(*t);
-                format!("c->x[30] = {ra}; {}(c); RT_RETURNED(c, {ra})", fname(*t))
+                format!("c->x[30] = {ra}; SPILL {}(c); RELOAD RT_RETURNED(c, {ra})", fname(*t))
             }
-            Insn::Bl(t) => format!("c->x[30] = {ra}; c->pc = {}; rt_dispatch(c); RT_RETURNED(c, {ra})", hx(*t)),
-            Insn::Blr(target) => format!("c->pc = {target}; c->x[30] = {ra}; rt_dispatch(c); RT_RETURNED(c, {ra})"),
+            Insn::Bl(t) => format!("c->x[30] = {ra}; c->pc = {}; SPILL rt_dispatch(c); RELOAD RT_RETURNED(c, {ra})", hx(*t)),
+            Insn::Blr(target) => format!(
+                "c->pc = {target}; c->x[30] = {ra}; SPILL {{ GuestFn rt_f = rt_hit(c->pc); if (rt_f) rt_f(c); else rt_dispatch(c); }} RELOAD RT_RETURNED(c, {ra})"
+            ),
             Insn::Br(target) => match s.tables.get(&a) {
                 Some(Table::Cases(targets)) => {
                     let mut cases = String::new();
@@ -393,24 +1125,66 @@ fn emit_function(l: &Lifted, entry: u64, end: u64, out: &mut String, refs: &mut 
                 }
                 Some(Table::All { .. }) | None => format!("c->pc = {target}; {TAIL_DISPATCH}"),
             },
-            Insn::Ret(target) => format!("c->pc = {target}; return;"),
+            Insn::Ret(target) => format!("c->pc = {target}; SPILL return;"),
         };
-        let _ = writeln!(out, "    {line}");
         last_ends = l.at(a).ends_block();
+        lines.push(Line { label: s.labels.contains(&a).then_some(a), code, next: !last_ends });
         a += 4;
     }
     if !last_ends {
         // falls through into the next function
-        let line = if end < l.m.text.end { jump(end, refs) } else { format!("rt_udf(c, {});", hx(end)) };
-        let _ = writeln!(out, "    {line}");
+        let code = if end < l.m.text.end { jump(end, refs) } else { format!("SPILL rt_udf(c, {});", hx(end)) };
+        lines.push(Line { label: None, code, next: false });
+    }
+    optimize_flags(&mut lines);
+    let (vkept, ventry_live) = keep_vregs(&mut lines);
+    let (kept, entry_live) = keep_registers(&mut lines);
+    reload_in_loops(&mut lines);
+    let _ = write!(out, "RT_FN void {}(Cpu *c) {{\n   ", fname(entry));
+    for r in (0..32).filter(|r| vkept & (1 << r) != 0) {
+        if ventry_live & (1 << r) != 0 {
+            let _ = write!(out, " u128 gv{r} = c->v[{r}];");
+        } else {
+            let _ = write!(out, " u128 gv{r};");
+        }
+    }
+    for r in (0..32).filter(|r| kept & (1 << r) != 0) {
+        let (name, field) = if r == 31 { ("gsp".to_string(), "c->sp".to_string()) } else { (format!("gx{r}"), format!("c->x[{r}]")) };
+        if entry_live & (1 << r) != 0 {
+            let _ = write!(out, " uint64_t {name} = {field};");
+        } else {
+            let _ = write!(out, " uint64_t {name};");
+        }
+    }
+    out.push('\n');
+    for l in &lines {
+        if let Some(a) = l.label {
+            let _ = writeln!(out, "L_{a:x}:;");
+        }
+        if !l.code.is_empty() {
+            let _ = writeln!(out, "    {}", l.code);
+        }
     }
     out.push_str("}\n\n");
 }
 
 /// Lifts a module to C. The files include runtime/cpu.h (`CPU_H`), which the caller writes next to them.
+/// The functions an overlay must hold: all those in a base function that changed, or that something now branches into
+/// the middle of (a start the base does not have), and those outside any base function.
+fn overlay_functions(o: &Overlay, starts: &BTreeSet<u64>) -> BTreeSet<u64> {
+    let base_of = |a: u64| o.base_starts.range(..=a).next_back().copied();
+    let mut touched: BTreeSet<Option<u64>> = o.changed.iter().map(|&a| base_of(a)).collect();
+    touched.extend(starts.iter().filter(|a| !o.base_starts.contains(a)).map(|&a| base_of(a)));
+    starts.iter().copied().filter(|&a| touched.contains(&base_of(a))).collect()
+}
+
 pub fn lift_module(m: &Module, opts: &Options) -> Output {
-    let l = Lifted::new(m);
-    let starts: Vec<u64> = discover(&l).into_iter().collect();
+    let mut l = Lifted::new(m);
+    let found = discover(&l);
+    l.emit = opts.overlay.as_ref().map(|o| overlay_functions(o, &found));
+    let l = l;
+    let starts: Vec<u64> = found.into_iter().collect();
+    let emitted: Vec<u64> = starts.iter().copied().filter(|a| l.emit.as_ref().is_none_or(|e| e.contains(a))).collect();
     let mut files = Vec::new();
     let mut body = String::new();
     let mut refs = BTreeSet::new();
@@ -430,6 +1204,9 @@ pub fn lift_module(m: &Module, opts: &Options) -> Output {
         defined.clear();
     };
     for (i, &entry) in starts.iter().enumerate() {
+        if l.emit.as_ref().is_some_and(|e| !e.contains(&entry)) {
+            continue;
+        }
         let end = starts.get(i + 1).copied().unwrap_or(m.text.end);
         let s = scan(&l, entry, end);
         jump_tables += s.tables.values().filter(|t| matches!(t, Table::Cases(_))).count();
@@ -446,23 +1223,23 @@ pub fn lift_module(m: &Module, opts: &Options) -> Output {
         flush(&mut body, &mut refs, &mut defined, &mut files);
     }
     let mut table = String::from("// Generated by nxport-lifter. Do not edit.\n#include \"cpu.h\"\n\n");
-    for &a in &starts {
+    for &a in &emitted {
         let _ = writeln!(table, "RT_FN void {}(Cpu *c);", fname(a));
     }
-    let _ = writeln!(table, "\nRT_EXPORT const uint64_t {}_fn_count = {};", m.name, starts.len());
+    let _ = writeln!(table, "\nRT_EXPORT const uint64_t {}_fn_count = {};", m.name, emitted.len());
     let _ = writeln!(table, "RT_EXPORT const uint64_t {}_fn_addrs[] = {{", m.name);
-    for &a in &starts {
+    for &a in &emitted {
         let _ = writeln!(table, "    {},", hx(a));
     }
     let _ = writeln!(table, "}};\nRT_EXPORT const GuestFn {}_fn_ptrs[] = {{", m.name);
-    for &a in &starts {
+    for &a in &emitted {
         let _ = writeln!(table, "    {},", fname(a));
     }
     table.push_str("};\n");
     files.push((format!("{}_table.c", m.name), table));
     Output {
         files,
-        functions: starts.len(),
+        functions: emitted.len(),
         instructions: l.insns.len(),
         unsupported: l.unsupported,
         jump_tables,
@@ -504,6 +1281,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_overlay_holds_only_what_changed() {
+        let o = Overlay { base_starts: [0x100, 0x200, 0x300].into(), changed: vec![0x204] };
+        let starts: BTreeSet<u64> = [0x100, 0x200, 0x280, 0x300, 0x310, 0x400].into();
+        // 0x200 changed, with the new piece 0x280; 0x310 is new, so all of the base function 0x300 is replaced, and 0x400
+        // lies in it too as far as the base knows.
+        let got: Vec<u64> = overlay_functions(&o, &starts).into_iter().collect();
+        assert_eq!(got, [0x200, 0x280, 0x300, 0x310, 0x400]);
+    }
+
+    #[test]
     fn sample_module() {
         let (base, img, text) = sample_image();
         let m = Module { name: "t".into(), base, image: &img, text, seeds: BTreeSet::from([base]) };
@@ -512,9 +1299,150 @@ mod tests {
         assert_eq!(out.jump_tables, 1);
         assert_eq!(out.unresolved_computed, 0);
         let body = &out.files[0].1;
-        assert!(body.contains("c->x[30] = 0x100010ull; f_100100(c); RT_RETURNED(c, 0x100010ull)"));
+        // Six registers in locals: a call stores those written since the Cpu last held them and loads those read again
+        // after it, but not callee-saved ones (x19, sp).
+        assert!(body.contains("gx30 = 0x10001cull; c->x[0] = gx0; c->x[19] = gx19; c->x[30] = gx30; f_100200(c); gx0 = c->x[0]; RT_RETURNED(c, 0x10001cull)"));
+        assert!(body.contains("uint64_t gx0; uint64_t gx19; uint64_t gx29 = c->x[29];"));
         assert!(body.contains("case 0x100238ull: goto L_100238;"));
         assert!(body.contains("goto L_100104;")); // the loop's back edge
+    }
+
+    /// `body` with each identifier in `params` replaced by $1..
+    fn subst_params(body: &str, params: &[&str]) -> String {
+        let mut out = String::new();
+        let mut word = String::new();
+        for ch in body.chars().chain(std::iter::once(' ')) {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                word.push(ch);
+                continue;
+            }
+            match params.iter().position(|p| *p == word) {
+                Some(k) => out.push_str(&format!("${}", k + 1)),
+                None => out.push_str(&word),
+            }
+            word.clear();
+            out.push(ch);
+        }
+        out.pop();
+        out
+    }
+
+    #[test]
+    fn vector_macros_and_helpers_match_simd_h() {
+        let h = include_str!("../runtime/simd.h");
+        // Every macro of the runtime naming a vector register (itself or through another) is in VMACROS.
+        let mut names: BTreeSet<&str> = BTreeSet::new();
+        let defs: Vec<&str> = [h, include_str!("../runtime/simd_fp.h"), include_str!("../runtime/cpu.h")]
+            .iter()
+            .flat_map(|f| f.lines())
+            .filter(|l| l.starts_with("#define "))
+            .collect();
+        loop {
+            let before = names.len();
+            for d in &defs {
+                let name = d[8..].split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap();
+                if d.contains("c->v[") || names.iter().any(|n| d[8 + name.len()..].contains(&format!("{n}("))) {
+                    names.insert(name);
+                }
+            }
+            if names.len() == before {
+                break;
+            }
+        }
+        assert_eq!(names, VMACROS.iter().map(|(n, _)| *n).collect::<BTreeSet<_>>());
+        // VMACROS: each as simd.h defines it, its parameters as $1..
+        for (name, body) in VMACROS {
+            let def = h.lines().find(|l| l.starts_with(&format!("#define {name}("))).unwrap_or_else(|| panic!("{name}"));
+            let (params, rest) = def[8 + name.len() + 1..].split_once(')').unwrap();
+            let mut want = rest.trim().to_string();
+            want = subst_params(&want, &params.split(',').map(str::trim).collect::<Vec<_>>());
+            assert_eq!(want, body, "{name}");
+        }
+        // V_HELPERS: the functions taking the Cpu that read or write c->v (fp_op_s / fp_op_d are not emitted).
+        let mut touch = BTreeSet::new();
+        let mut cur: Option<(String, bool)> = None;
+        for l in h.lines() {
+            if (l.starts_with("SI ") || l.starts_with("SN ")) && l.contains("(Cpu *c") {
+                let name = l[..l.find('(').unwrap()].rsplit(' ').next().unwrap().trim_start_matches('*').to_string();
+                cur = Some((name, false));
+            }
+            if let Some((_, uses)) = cur.as_mut() {
+                *uses |= ["c->v[", "VSF", "VS8(", "VS16(", "VS32(", "VS64(", "VREG(", "VQ(", "VW(", "FP_SET", "VHI64("].iter().any(|m| l.contains(m));
+            }
+            if l == "}" || (l.ends_with('}') && cur.is_some() && !l.starts_with(' ')) {
+                if let Some((name, true)) = cur.take() {
+                    touch.insert(name);
+                }
+                cur = None;
+            }
+        }
+        touch.remove("fp_op_s");
+        touch.remove("fp_op_d");
+        assert_eq!(touch, V_HELPERS.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
+    }
+
+    #[test]
+    fn fcmp_fused() {
+        // 0x1000: fcmp s0, s1; b.gt 0x100c; ret; 0x100c: ret
+        let mut img = Vec::new();
+        for w in [0x1e212000u32, 0x5400004c, 0xd65f03c0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1010, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert!(body.contains("if (cc_s(c, (*(saf32 *)&gv0), (*(saf32 *)&gv1), FCC_GT))"), "{body}");
+        assert!(!body.contains("nzcv"), "{body}");
+    }
+
+    #[test]
+    fn vector_lane_writes() {
+        assert_eq!(vuses("((sa32 *)&gv7)[2] = x;"), (1 << 7, 1 << 7));
+        assert_eq!(vuses("((sa32 *)&gv7)[0] |= x;"), (1 << 7, 1 << 7));
+        assert_eq!(vuses("(*(saf32 *)&gv7) = x;"), (1 << 7, 1 << 7));
+        assert_eq!(vuses("y = ((sa32 *)&gv7)[3] == x;"), (1 << 7, 0));
+        assert_eq!(vuses("y = (*(saf32 *)&gv7);"), (1 << 7, 0));
+        assert_eq!(vuses("gv7 = gv8;"), (1 << 8, 1 << 7));
+    }
+
+    #[test]
+    fn vector_registers_in_locals() {
+        // 0x1000: fmul s0, s1, s2; fadd s0, s0, s3; ret
+        let mut img = Vec::new();
+        for w in [0x1e220820u32, 0x1e232800, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x100c, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert!(body.contains("u128 gv0; u128 gv1 = c->v[1]; u128 gv2 = c->v[2]; u128 gv3 = c->v[3];"), "{body}");
+        assert!(body.contains("(gv0 = fb_s(op_s(c, FOP_ADD, (*(saf32 *)&gv0), (*(saf32 *)&gv3), 0)))"), "{body}");
+        assert!(body.contains("c->v[0] = gv0; return;"), "{body}");
+    }
+
+    #[test]
+    fn loads_in_loops_are_reloaded() {
+        // 0x1000: ldr w1, [x0], not in a loop; 0x1004: ldr w8, [x0]; cmp w8, #1; b.eq 0x1004; ret
+        let mut img = Vec::new();
+        for w in [0xb9400001u32, 0xb9400008, 0x7100051f, 0x54ffffc0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert_eq!(body.matches("LDV32(").count(), 1, "{body}");
+        assert_eq!(body.matches(" LD32(").count() + body.matches("(LD32(").count(), 1, "{body}");
+    }
+
+    #[test]
+    fn flags_fused_and_dead() {
+        // 0x1000: cmp w0, #1; b.lt 0x1010; adds x1, x1, #1 (flags never read); ret; 0x1010: ret
+        let mut img = Vec::new();
+        for w in [0x7100041fu32, 0x5400006b, 0xb1000421, 0xd65f03c0, 0xd65f03c0] {
+            img.extend_from_slice(&w.to_le_bytes());
+        }
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
+        let body = &lift_module(&m, &Options::default()).files[0].1;
+        assert!(body.contains("if ((((int32_t)((uint32_t)((uint32_t)gx0))) < ((int32_t)((uint32_t)(0x1ull))))) { goto L_1010; }"), "{body}");
+        assert!(!body.contains("subs32(c,") && !body.contains("COND_"));
+        assert!(body.contains("add64_nf("));
     }
 
     #[test]

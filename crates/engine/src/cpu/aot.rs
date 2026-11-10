@@ -47,6 +47,19 @@ pub enum DumpTo {
 static MODE: std::sync::OnceLock<Mode> = std::sync::OnceLock::new();
 static CAPTURED: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
+/// This process patches guest code to run natively even though it does not run it: a host making an image for iOS.
+static FOR_NATIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+pub fn patch_for_native() {
+    FOR_NATIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether guest code gets the rewrites native execution needs (x18, tpidr_el0, svc, exclusives).
+pub fn native_rewrites() -> bool {
+    cfg!(nx_native) || FOR_NATIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Makes this process build an image in memory instead of what the settings say; before anything asks for the mode.
 pub fn capture_image() -> Result<(), String> {
     MODE.set(Mode::Dump(DumpTo::Memory))

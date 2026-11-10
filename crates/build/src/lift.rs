@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use nxport_lifter::{ehframe, lift_module, Module, Options};
+use nxport_lifter::{ehframe, lift_module, Module, Options, Overlay};
 pub use nxport_lifter::Output;
 
 const R_AARCH64_RELATIVE: u64 = 1027;
@@ -22,7 +22,7 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
         img[s.mem_off..s.mem_off + s.data.len()].copy_from_slice(&s.data);
     }
     let text = base + n.text.mem_off as u64..base + (n.text.mem_off + n.text.data.len()) as u64;
-    let out = lift_image(name, base, &img, text, n.dynamic().ok(), BTreeSet::new());
+    let out = lift_image(name, base, &img, text, n.dynamic().ok(), BTreeSet::new(), None);
     write_files(out_dir, &[&out])?;
     Ok(out)
 }
@@ -46,8 +46,99 @@ pub fn lift_game(
     for ((i, m), seeds) in modules.into_iter().enumerate().zip(seeds) {
         on_module(i, n, &m.name);
         let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
-        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds);
+        let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
         lifted.push((m.name, out));
+    }
+    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
+    let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
+    std::fs::write(out_dir.join(MODULES_FILE), names)?;
+    Ok(lifted)
+}
+
+/// The code a guest library was lifted from, beside it: what lift_overlay compares against.
+pub const BASE_CODE_FILE: &str = "base_code.bin";
+
+/// Writes the code of the game loaded with `s`, as lift_game would lift it, for lift_overlay.
+#[cfg(any(target_vendor = "apple", windows))]
+pub fn write_base_code(s: nxport::settings::Settings, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut f = Vec::new();
+    for m in nxport::guest_modules(s, None)? {
+        let code = &m.image[(m.text.start - m.base) as usize..(m.text.end - m.base) as usize];
+        f.extend_from_slice(&(m.name.len() as u64).to_le_bytes());
+        f.extend_from_slice(m.name.as_bytes());
+        f.extend_from_slice(&m.text.start.to_le_bytes());
+        f.extend_from_slice(&(code.len() as u64).to_le_bytes());
+        f.extend_from_slice(code);
+    }
+    std::fs::write(out, f)?;
+    Ok(())
+}
+
+/// (module, code start, code) of a base_code.bin.
+#[cfg(windows)]
+fn read_base_code(path: &Path) -> Result<Vec<(String, u64, Vec<u8>)>, Box<dyn std::error::Error>> {
+    let d = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (mut p, mut out) = (0, Vec::new());
+    let u64_at = |o: usize| u64::from_le_bytes(d[o..o + 8].try_into().unwrap());
+    while p < d.len() {
+        let n = u64_at(p) as usize;
+        let name = String::from_utf8_lossy(&d[p + 8..p + 8 + n]).into_owned();
+        p += 8 + n;
+        let (start, len) = (u64_at(p), u64_at(p + 8) as usize);
+        out.push((name, start, d[p + 16..p + 16 + len].to_vec()));
+        p += 16 + len;
+    }
+    Ok(out)
+}
+
+/// Lifts what mods change against `base_library` (a guest library of the game without them, its base_code.bin beside
+/// it), into `out_dir`: the modules the base does not have, whole, and of those it has only the functions that differ
+/// (as `ov_<module>`). The engine points the base's functions at these (--guest-overlay). `patched` as lift_game's.
+#[cfg(windows)]
+pub fn lift_overlay(
+    s: nxport::settings::Settings,
+    patched: Option<&Path>,
+    base_library: &Path,
+    out_dir: &Path,
+) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
+    let run_game_subsdk = s.guest.run_game_subsdk;
+    let base = read_base_code(&base_library.with_file_name(BASE_CODE_FILE))?;
+    let library = nxport::os::Library::open(base_library)?;
+    let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
+    let modules = nxport::guest_modules(s, image.as_deref())?;
+    let seeds = cross_module_seeds(&modules);
+    let mut lifted = Vec::new();
+    for (m, mut seeds) in modules.into_iter().zip(seeds) {
+        // The game's own subsdk modules are in the map only for the module indices mods count by; nothing runs them.
+        if m.name.starts_with("game_subsdk") && !run_game_subsdk {
+            continue;
+        }
+        let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
+        let Some((_, start, code)) = base.iter().find(|(n, ..)| *n == m.name) else {
+            let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
+            lifted.push((m.name, out));
+            continue;
+        };
+        let now = &m.image[(m.text.start - m.base) as usize..(m.text.end - m.base) as usize];
+        if *start != m.text.start || code.len() != now.len() {
+            return Err(format!("{}: the base library holds other code ({start:#x}+{:#x}, now {:#x}+{:#x})", m.name, code.len(), m.text.start, now.len()).into());
+        }
+        let changed: Vec<u64> = now.chunks(4).zip(code.chunks(4)).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| *start + i as u64 * 4).collect();
+        let count = library.symbol(&format!("{}_fn_count", m.name));
+        let addrs = library.symbol(&format!("{}_fn_addrs", m.name));
+        if count.is_null() || addrs.is_null() {
+            return Err(format!("{}: {} has no table for it", m.name, base_library.display()).into());
+        }
+        let base_starts: BTreeSet<u64> = unsafe { std::slice::from_raw_parts(addrs as *const u64, *(count as *const u64) as usize) }.iter().copied().collect();
+        if changed.is_empty() && seeds.iter().all(|a| !m.text.contains(a) || base_starts.contains(a)) {
+            println!("[+] {}: same as the base", m.name);
+            continue;
+        }
+        println!("[+] {}: {} instructions differ from the base", m.name, changed.len());
+        seeds.extend(base_starts.iter().copied());
+        let name = format!("ov_{}", m.name);
+        let out = lift_image(&name, m.base, &m.image, m.text, dynamic, seeds, Some(Overlay { base_starts, changed }));
+        lifted.push((name, out));
     }
     write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
     let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
@@ -79,22 +170,50 @@ pub const MODULES_FILE: &str = "modules.txt";
 
 /// Compiles the C files in `c_dir` (lift_game's or lift_nso's) into the guest library `out` (a DLL / shared library),
 /// running `cc` (a C compiler command line: clang, or `zig cc`) on `jobs` files at once. The objects stay in
-/// `c_dir/obj` and are reused while newer than their source. `on_file(done, total)` is told as each file is done
-/// (compiled or reused), from the compiling threads.
+/// `c_dir/obj` and are reused while newer than their source. `profile`: an LLVM profile to optimise by; it matches
+/// functions by name and control flow, so one the C has changed, or does not have, is just built without. `cache`: the
+/// folder zig keeps its object cache in (zig::bounded_cache; None: zig's default). `on_file(done, total)` is told as
+/// each file is done (compiled or reused), from the compiling threads.
 pub fn compile(
     c_dir: &Path,
     out: &Path,
     cc: &[String],
     jobs: usize,
+    profile: Option<&Path>,
+    cache: Option<&Path>,
     on_file: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (prog, pre) = cc.split_first().ok_or("no C compiler")?;
-    // The x86-64-v3 features, spelled out (zig cc 0.13 misreads -march=x86-64-v3): above all hardware FMA, which the
-    // lifted floating-point code needs to round like the guest's. zig cc builds any of -O1 to -O3 as clang -O2.
+    // zig keeps its objects in `cache` (zig::bounded_cache), not in its own never-trimmed default.
+    let command = |prog: &str| {
+        let mut c = command(prog);
+        if let Some(dir) = cache {
+            c.env("ZIG_GLOBAL_CACHE_DIR", dir).env("ZIG_LOCAL_CACHE_DIR", dir);
+        }
+        c
+    };
+    // The x86-64-v3 features, spelled out: above all hardware FMA, which the lifted floating-point code needs to round
+    // like the guest's. zig cc builds any of -O1 to -O3 as clang -O2, tunes for generic x86-64 once any -m flag is given,
+    // and keeps frame pointers (a register) unless told not to.
+    // -grow-region-complexity-budget: a few lifted functions of megabytes of C spent most of a build in the register
+    // allocator's region splitting (TotK main_033: 923 s against 411 s with the budget at 100; the whole build about 19
+    // minutes against 13.4). The same scene ran at the same speed (99.4 and 99.3 fps against 100.1 and 100.2).
     let flags = [
-        "-O1", "-g0", "-fno-strict-aliasing", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt", "-mmovbe", "-mf16c",
-        "-mpopcnt", "-msse4.2", "-mcx16",
+        "-O1", "-g0", "-fno-strict-aliasing", "-fomit-frame-pointer", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt",
+        "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-mllvm", "-grow-region-complexity-budget=100",
     ];
+    // The profile's hash is a flag too: zig's cache of objects need not look inside a file the flags name.
+    let profile = profile.map(std::path::absolute).transpose()?;
+    let profile_flags: Vec<String> = match &profile {
+        Some(p) => {
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?);
+            let hash: String = hash.iter().take(8).map(|b| format!("{b:02x}")).collect();
+            vec![format!("-fprofile-use={}", p.display()), format!("-DNX_PROFILE=0x{hash}")]
+        }
+        None => Vec::new(),
+    };
+    let c_dir_full = std::path::absolute(c_dir)?;
     outside_git(c_dir)?;
     outside_git(out.parent().unwrap_or(Path::new(".")))?;
     let obj_dir = c_dir.join("obj");
@@ -114,10 +233,16 @@ pub fn compile(
         .filter(|e| e.path().extension().is_some_and(|x| x == "h"))
         .filter_map(|e| e.metadata().and_then(|m| m.modified()).ok())
         .max();
+    // Objects compiled with other flags (and the compiler they came from) are compiled again: flags.txt holds them
+    // (none: objects from before it, taken as they are).
+    let stamp = obj_dir.join("flags.txt");
+    let stamp_text = format!("{}\n{}\n{}\n", cc.join(" "), flags.join(" "), profile_flags.join(" "));
+    let flags_changed = std::fs::read_to_string(&stamp).is_ok_and(|t| t != stamp_text);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
     let finished = || on_file(done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1, sources.len());
     let failed = std::sync::Mutex::new(Vec::new());
+    let unmatched = std::sync::atomic::AtomicUsize::new(0);
     std::thread::scope(|scope| {
         for _ in 0..jobs.max(1) {
             scope.spawn(|| loop {
@@ -133,20 +258,29 @@ pub fn compile(
                     (Some(h), Ok(o)) => h > o,
                     _ => false,
                 };
-                if obj.is_file() && !newer(src, obj) && !stale_headers {
+                if obj.is_file() && !newer(src, obj) && !stale_headers && !flags_changed {
                     finished();
                     continue;
                 }
-                let r = command(prog)
-                    .args(pre)
-                    .args(flags)
-                    .arg("-c")
-                    .arg(src)
-                    .arg("-o")
-                    .arg(obj)
-                    .output();
+                // In the C directory, by the file's bare name: a profile names static functions by the path they were
+                // compiled from, and one made on another machine must find them.
+                let r = std::path::absolute(obj).and_then(|obj| {
+                    command(prog)
+                        .current_dir(&c_dir_full)
+                        .args(pre)
+                        .args(flags)
+                        .args(&profile_flags)
+                        .arg("-c")
+                        .arg(src.file_name().unwrap())
+                        .arg("-o")
+                        .arg(obj)
+                        .output()
+                });
                 match r {
-                    Ok(o) if o.status.success() => {}
+                    Ok(o) if o.status.success() => {
+                        let warnings = String::from_utf8_lossy(&o.stderr);
+                        unmatched.fetch_add(warnings.matches("(hash mismatch)").count(), std::sync::atomic::Ordering::Relaxed);
+                    }
                     Ok(o) => failed.lock().unwrap().push(format!("{}: {}", src.display(), String::from_utf8_lossy(&o.stderr))),
                     Err(e) => failed.lock().unwrap().push(format!("{}: {e}", src.display())),
                 }
@@ -158,6 +292,10 @@ pub fn compile(
     if let Some(f) = failed.first() {
         return Err(format!("{} of {} C files failed to compile; the first: {f}", failed.len(), sources.len()).into());
     }
+    if let Some(p) = &profile {
+        println!("  Optimised by {}: {} functions changed since it was made, built without it", p.display(), unmatched.into_inner());
+    }
+    std::fs::write(&stamp, &stamp_text)?;
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -182,6 +320,55 @@ pub fn compile(
     }
     Ok(())
 }
+
+/// Downloads the gzipped file at `url` to `dest`, unpacked. A failure leaves nothing at `dest`.
+pub fn fetch_gzipped(url: &str, dest: &Path) -> Result<(), String> {
+    let dir = dest.parent().ok_or("no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let gz = dest.with_extension("gz.download");
+    let tmp = dest.with_extension("download");
+    let result = (|| {
+        let got = command(CURL)
+            .args(["-fsL", "--retry", "2", "--max-time", "300", "-o"])
+            .arg(&gz)
+            .arg(url)
+            .status()
+            .map_err(|e| format!("curl: {e}"))?;
+        if !got.success() {
+            return Err(format!("{url}: not available"));
+        }
+        let file = std::fs::File::open(&gz).map_err(|e| e.to_string())?;
+        let mut unpacked = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        std::io::copy(&mut flate2::read::GzDecoder::new(file), &mut unpacked).map_err(|e| format!("{url}: {e}"))?;
+        drop(unpacked);
+        std::fs::rename(&tmp, dest).map_err(|e| e.to_string())
+    })();
+    let _ = std::fs::remove_file(&gz);
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+/// What identifies the lifted C in `c_dir`, which is what a profile is made for: the names and contents of its C files
+/// and headers, hashed.
+pub fn lifted_hash(c_dir: &Path) -> Result<String, String> {
+    use sha2::Digest;
+    let mut files: Vec<_> = std::fs::read_dir(c_dir)
+        .map_err(|e| format!("{}: {e}", c_dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "c" || e == "h"))
+        .collect();
+    files.sort();
+    let mut hash = sha2::Sha256::new();
+    for f in files {
+        hash.update(f.file_name().unwrap_or_default().as_encoded_bytes());
+        hash.update(std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?);
+    }
+    Ok(hash.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect())
+}
+
+/// The curl program: shipped with Windows (System32) since Windows 10 1803, and with macOS (/usr/bin).
+pub const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
 
 /// A command for a tool run in the background: on Windows without a console window of its own (a builder started
 /// from Explorer has none to share, and compile runs hundreds of compilers).
@@ -224,7 +411,8 @@ fn outside_git(dir: &Path) -> std::io::Result<()> {
     let mut at = std::path::absolute(dir)?;
     // The nearest existing ancestor: the directory may not be created yet.
     while !at.exists() && at.pop() {}
-    let at = std::fs::canonicalize(&at)?;
+    // Some mounted file systems cannot give a final path; `at` is absolute already.
+    let at = std::fs::canonicalize(&at).unwrap_or(at);
     if let Some(repo) = at.ancestors().find(|a| a.join(".git").exists()) {
         return Err(std::io::Error::other(format!(
             "{} is inside the git work tree {}: game code must not be written there",
@@ -338,6 +526,7 @@ fn lift_image(
     text: std::ops::Range<u64>,
     dynamic: Option<nxport::nso::Dynamic>,
     extra_seeds: BTreeSet<u64>,
+    overlay: Option<Overlay>,
 ) -> Output {
     let mut seeds = BTreeSet::from([text.start]);
     seeds.extend(extra_seeds);
@@ -383,7 +572,7 @@ fn lift_image(
         }
     }
     let m = Module { name: name.to_string(), base, image: img, text, seeds };
-    lift_module(&m, &Options::default())
+    lift_module(&m, &Options { overlay, ..Options::default() })
 }
 
 #[cfg(test)]
@@ -414,5 +603,40 @@ mod tests {
         assert_eq!((out.functions, out.jump_tables), (3, 1));
         assert!(dir.join("c/cpu.h").is_file() && dir.join("c/main_table.c").is_file());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::fetch_gzipped;
+    use std::io::Write;
+
+    #[test]
+    fn a_gzipped_file_arrives_unpacked_and_a_missing_one_leaves_nothing() {
+        let dir = std::env::temp_dir().join(format!("nx_fetch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let gz = dir.join("p.profdata.gz");
+        let mut e = flate2::write::GzEncoder::new(std::fs::File::create(&gz).unwrap(), flate2::Compression::fast());
+        e.write_all(b"profile").unwrap();
+        e.finish().unwrap();
+        // file:///C:/... on Windows, file:///tmp/... elsewhere.
+        let url = |p: &std::path::Path| format!("file:///{}", p.display().to_string().replace('\\', "/").trim_start_matches('/'));
+
+        let dest = dir.join("sub").join("p.profdata");
+        fetch_gzipped(&url(&gz), &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"profile");
+
+        let none = dir.join("none.profdata");
+        assert!(fetch_gzipped(&url(&dir.join("missing.gz")), &none).is_err());
+        assert!(!none.exists());
+
+        // Not gzip: a failure, nothing left behind.
+        let bad = dir.join("bad.gz");
+        std::fs::write(&bad, b"not gzip").unwrap();
+        let out = dir.join("bad.profdata");
+        assert!(fetch_gzipped(&url(&bad), &out).is_err());
+        assert!(!out.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

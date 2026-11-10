@@ -194,6 +194,33 @@ pub fn sampler_table_plan(textures: &[(i32, i32, TextureKind)], slots: u32) -> O
     (next <= SUPPORT_SAMPLER_SLOTS_COUNT).then_some((slots - sampler_only, bases))
 }
 
+/// Host::bindless_textures: the textures sampled through the global arrays, (binding, push constant word), from the
+/// stage's textures (binding, array length, type, separate) and its words (accessor::bindless_words). Single combined
+/// textures that are not buffers or multisampled, by binding, while words last; the others keep their bindings.
+pub fn bindless_plan(textures: &[(i32, i32, SamplerType, bool)], words: Option<(u32, u32)>) -> Vec<(i32, i32)> {
+    let Some((first, count)) = words else { return Vec::new() };
+    let mut eligible: Vec<i32> = textures
+        .iter()
+        .filter(|t| {
+            t.1 == 1 && !t.3 && t.2 != SamplerType::NONE && t.2.base() != SamplerType::TEXTURE_BUFFER && !t.2.has(SamplerType::MULTISAMPLE)
+        })
+        .map(|t| t.0)
+        .collect();
+    eligible.sort();
+    eligible.into_iter().take(count as usize).enumerate().map(|(i, b)| (b, (first as usize + i) as i32)).collect()
+}
+
+/// Host::bindless_textures: the global array binding of a texture type (its VkImageViewType's value).
+pub fn bindless_binding(ty: SamplerType) -> i32 {
+    let array = ty.has(SamplerType::ARRAY);
+    match ty.base() {
+        SamplerType::TEXTURE_1D => if array { 4 } else { 0 },
+        SamplerType::TEXTURE_3D => 2,
+        SamplerType::TEXTURE_CUBE => if array { 6 } else { 3 },
+        _ => if array { 5 } else { 1 },
+    }
+}
+
 impl TextureKind {
     pub fn of(ty: crate::types::SamplerType, separate: bool) -> TextureKind {
         use crate::types::SamplerType;

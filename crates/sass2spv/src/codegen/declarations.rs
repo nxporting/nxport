@@ -147,6 +147,11 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
         let one = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &st, false);
         c.sampler_table = Some((var, st, one));
     }
+    // Host::bindless_textures: one array per image type, at its view type's binding (variables of one view type alias).
+    let mut bindless_arrays: std::collections::HashMap<u32, Inst> = std::collections::HashMap::new();
+    if !c.host.bindless.is_empty() {
+        declare_bindless(c);
+    }
     for sampler in samplers {
         let table_slot = plan
             .as_ref()
@@ -173,6 +178,23 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
             let s = c.m.type_sampler(false);
             (s.clone(), s)
         };
+        if let Some(word) = c.host.bindless.iter().find(|b| b.0 == sampler.binding).map(|b| b.1) {
+            let image = bindless_array(c, &mut bindless_arrays, &image_type, sampler.ty);
+            let one = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &image_type, false);
+            let key = SetBindingPair::new(sampler.set, sampler.binding);
+            let d = SamplerDeclaration {
+                image_type,
+                sampled_image_type,
+                sampled_image_pointer_type: one,
+                image,
+                is_indexed: false,
+                table_slot: None,
+                bindless: Some(word),
+            };
+            c.samplers.insert(key, d);
+            c.samplers_types.insert(key, sampler.ty);
+            continue;
+        }
         let sampled_or_separate_image_type =
             if sampler.separate || table_slot.is_some() { image_type.clone() } else { sampled_image_type.clone() };
         let sampled_image_pointer_type = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &sampled_or_separate_image_type, false);
@@ -196,6 +218,7 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
                 image: sampled_image_variable.clone(),
                 is_indexed: sampler.array_length != 1,
                 table_slot,
+                bindless: None,
             },
         );
         c.samplers_types.insert(key, sampler.ty);
@@ -205,6 +228,53 @@ fn declare_samplers(c: &mut CodeGenContext, samplers: &[&TextureDefinition]) -> 
         c.m.add_global_variable(&sampled_image_variable);
     }
     Ok(())
+}
+
+/// Host::bindless_textures: the push constant words and the global sampler array (CodeGenContext::bindless).
+fn declare_bindless(c: &mut CodeGenContext) {
+    use crate::accessor::{BINDLESS_PUSH_WORDS, BINDLESS_SAMPLERS, BINDLESS_SET};
+    c.m.add_extension("SPV_EXT_descriptor_indexing");
+    c.m.add_capability(Capability::RUNTIME_DESCRIPTOR_ARRAY);
+    c.m.add_capability(Capability::SAMPLED_IMAGE_ARRAY_DYNAMIC_INDEXING);
+    let u = c.type_u32();
+    let len = c.const_u32_i(BINDLESS_PUSH_WORDS as i32);
+    // Types of their own: an equal u32 array elsewhere (std140) has another stride.
+    let at = c.m.type_array(&u, &len, true);
+    c.m.decorate(&at, Decoration::ARRAY_STRIDE, &[Lit::i32(4).into()]);
+    let st = c.m.type_struct(true, &[at]);
+    c.m.decorate(&st, Decoration::BLOCK, &[]);
+    c.m.member_decorate(&st, Lit::i32(0), Decoration::OFFSET, &[Lit::i32(0).into()]);
+    let pt = c.m.type_pointer(StorageClass::PUSH_CONSTANT, &st, false);
+    let words = c.m.variable(&pt, StorageClass::PUSH_CONSTANT, None);
+    c.m.name(&words, "bindless_words");
+    c.m.add_global_variable(&words);
+    let word = c.m.type_pointer(StorageClass::PUSH_CONSTANT, &u, false);
+    let s = c.m.type_sampler(false);
+    let ra = c.m.type_runtime_array(&s, false);
+    let rp = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &ra, false);
+    let samplers = c.m.variable(&rp, StorageClass::UNIFORM_CONSTANT, None);
+    c.m.name(&samplers, "bindless_samplers");
+    c.m.decorate(&samplers, Decoration::DESCRIPTOR_SET, &[Lit::i32(BINDLESS_SET).into()]);
+    c.m.decorate(&samplers, Decoration::BINDING, &[Lit::i32(BINDLESS_SAMPLERS).into()]);
+    c.m.add_global_variable(&samplers);
+    let one = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &s, false);
+    c.bindless = Some((words, word, samplers, s, one));
+}
+
+/// Host::bindless_textures: the global array of `image_type` (declared once per type).
+fn bindless_array(c: &mut CodeGenContext, arrays: &mut std::collections::HashMap<u32, Inst>, image_type: &Inst, ty: SamplerType) -> Inst {
+    if let Some(v) = arrays.get(&image_type.id()) {
+        return v.clone();
+    }
+    let ra = c.m.type_runtime_array(image_type, false);
+    let rp = c.m.type_pointer(StorageClass::UNIFORM_CONSTANT, &ra, false);
+    let v = c.m.variable(&rp, StorageClass::UNIFORM_CONSTANT, None);
+    c.m.name(&v, "bindless_textures");
+    c.m.decorate(&v, Decoration::DESCRIPTOR_SET, &[Lit::i32(crate::accessor::BINDLESS_SET).into()]);
+    c.m.decorate(&v, Decoration::BINDING, &[Lit::i32(crate::translation::properties::bindless_binding(ty)).into()]);
+    c.m.add_global_variable(&v);
+    arrays.insert(image_type.id(), v.clone());
+    v
 }
 
 fn declare_images(c: &mut CodeGenContext, images: &[&TextureDefinition]) -> R<()> {

@@ -76,7 +76,7 @@ impl std::fmt::Debug for AttribState {
 pub enum Cmd {
     SetRenderTargets {
         colors: Vec<RtRef>,
-        depth: Option<RtRef>,
+        depth: Option<Box<RtRef>>,
     },
     ClearColor {
         index: i32,
@@ -119,6 +119,8 @@ pub enum Cmd {
     },
     /// Clamp depth instead of clipping at the near/far planes (shadow passes keep casters in front of the near plane).
     SetDepthClamp(bool),
+    /// Draws make no fragments: only their vertex work runs (nvnCommandBufferSetRasterizerDiscard).
+    SetRasterizerDiscard(bool),
     /// nvnCommandBufferSetPrimitiveRestart(enable, index).
     SetPrimitiveRestart {
         enable: bool,
@@ -140,7 +142,7 @@ pub enum Cmd {
         addr: u64,
         size: usize,
     },
-    BindVertexAttribState(AttribState),
+    BindVertexAttribState(Box<AttribState>),
     BindVertexStreamState(Vec<u64>),
     BindBlendState(u64),
     BindColorState(u32),
@@ -253,14 +255,14 @@ pub enum Cmd {
     },
     CopyBufferToTexture {
         src: u64,
-        dst: TexRef,
-        region: Region,
+        dst: Box<TexRef>,
+        region: Box<Region>,
         row_stride: isize,
         image_stride: isize,
     },
     CopyTextureToBuffer {
-        src: TexRef,
-        region: Region,
+        src: Box<TexRef>,
+        region: Box<Region>,
         dst: u64,
         row_stride: isize,
         image_stride: isize,
@@ -286,6 +288,10 @@ pub enum Cmd {
     RenderState(Box<RenderState>),
     /// A TotK model's vertex input (the port, --native-model-draws): attribute and stream states and vertex buffers.
     VertexInput(Box<VertexInput>),
+    /// nvnCommandBufferSetTexturePool: handles resolve in this pool (nvn::api::texture_pool_number) from here on.
+    SetTexturePool(u32),
+    /// nvnCommandBufferSetSamplerPool: likewise.
+    SetSamplerPool(u32),
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -365,7 +371,7 @@ impl ModelItem {
                 ModelBindKind::Texture(handle) => Cmd::BindTexture { stage, index, handle },
                 ModelBindKind::Vertex { addr, size } => Cmd::BindVertexBuffer { index, addr, size },
             },
-            ModelItem::VertexAttribs(a) => Cmd::BindVertexAttribState(a),
+            ModelItem::VertexAttribs(a) => Cmd::BindVertexAttribState(Box::new(a)),
             ModelItem::VertexStreams(ref v) => Cmd::BindVertexStreamState(v.clone()),
             ModelItem::Program { program, stages } => Cmd::BindProgram { program, stages },
             ModelItem::Fixed(f) => f.cmd(),
@@ -666,7 +672,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
         }
     }
     let (colors, depth) = render_targets(num, colors, color_views, depth, depth_view);
-    rec!("nvnCommandBufferSetRenderTargets", cmd, Cmd::SetRenderTargets { colors, depth });
+    rec!("nvnCommandBufferSetRenderTargets", cmd, Cmd::SetRenderTargets { colors, depth: depth.map(Box::new) });
 }
 
 /// The references SetRenderTargets records: `num` colour textures with their views, the depth texture and view.
@@ -886,6 +892,14 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetPrimitiveRestart(
     );
 }
 #[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetRasterizerDiscard(cmd: usize, discard: u8) {
+    rec!(
+        "nvnCommandBufferSetRasterizerDiscard",
+        cmd,
+        Cmd::SetRasterizerDiscard(discard != 0)
+    );
+}
+#[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferSetDepthClamp(cmd: usize, enable: u8) {
     rec!(
         "nvnCommandBufferSetDepthClamp",
@@ -965,7 +979,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindVertexAttribState(
     rec!(
         "nvnCommandBufferBindVertexAttribState",
         cmd,
-        Cmd::BindVertexAttribState(v)
+        Cmd::BindVertexAttribState(Box::new(v))
     );
 }
 #[no_mangle]
@@ -1061,6 +1075,14 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindPolygonState(cmd: usize, s: *co
             std::ptr::read_unaligned(s) & 0xFF
         })
     );
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetTexturePool(cmd: usize, pool: *const crate::nvn::api::NvnTexturePool) {
+    rec!("nvnCommandBufferSetTexturePool", cmd, Cmd::SetTexturePool(crate::nvn::api::texture_pool_number(pool)));
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_nvnCommandBufferSetSamplerPool(cmd: usize, pool: *const crate::nvn::api::NvnSamplerPool) {
+    rec!("nvnCommandBufferSetSamplerPool", cmd, Cmd::SetSamplerPool(crate::nvn::api::sampler_pool_number(pool)));
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferBindTexture(
@@ -1411,11 +1433,6 @@ unsafe fn note_draw_caller(count: c_int) -> u32 {
 }
 
 unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
-    static TRACE_VTABLES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *TRACE_VTABLES.get_or_init(|| crate::settings::get().log.trace_vtable_callers) {
-        let fp = crate::guest_reg!(x29);
-        crate::guest::tracer::on_draw_record(count, index_addr, fp);
-    }
     static DRAWABLES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *DRAWABLES.get_or_init(|| crate::settings::get().totk.diagnostics.log_drawables) {
         let (obj, func, nth) = next_drawable_draw();
@@ -1880,8 +1897,8 @@ pub unsafe extern "C" fn hle_typed_cb_CopyBufferToTexture(
         cmd,
         Cmd::CopyBufferToTexture {
             src,
-            dst: tex_ref(dst, dst_view),
-            region: region(dst_region),
+            dst: Box::new(tex_ref(dst, dst_view)),
+            region: Box::new(region(dst_region)),
             row_stride,
             image_stride,
         }
@@ -1901,8 +1918,8 @@ pub unsafe extern "C" fn hle_typed_cb_CopyTextureToBuffer(
         "nvnCommandBufferCopyTextureToBuffer",
         cmd,
         Cmd::CopyTextureToBuffer {
-            src: tex_ref(src, src_view),
-            region: region(src_region),
+            src: Box::new(tex_ref(src, src_view)),
+            region: Box::new(region(src_region)),
             dst,
             row_stride,
             image_stride,
@@ -2050,6 +2067,8 @@ pub fn lookup(name: &str) -> Option<usize> {
         "nvnCommandBufferSetViewport" => f!(hle_nvnCommandBufferSetViewport(_, _, _, _, _)),
         "nvnCommandBufferSetViewports" => f!(hle_nvnCommandBufferSetViewports(_, _, _, _)),
         "nvnCommandBufferSetScissor" => f!(hle_nvnCommandBufferSetScissor(_, _, _, _, _)),
+        "nvnCommandBufferSetTexturePool" => f!(hle_nvnCommandBufferSetTexturePool(_, _)),
+        "nvnCommandBufferSetSamplerPool" => f!(hle_nvnCommandBufferSetSamplerPool(_, _)),
         "nvnCommandBufferSetScissors" => f!(hle_nvnCommandBufferSetScissors(_, _, _, _)),
         "nvnCommandBufferSetDepthRange" => f!(hle_nvnCommandBufferSetDepthRange(_, _, _)),
         "nvnCommandBufferSetDepthRanges" => f!(hle_nvnCommandBufferSetDepthRanges(_, _, _, _)),
@@ -2060,6 +2079,7 @@ pub fn lookup(name: &str) -> Option<usize> {
         "nvnCommandBufferBindImage" => f!(hle_typed_cb_BindImage(_, _, _, _)),
         "nvnCommandBufferBindImages" => f!(hle_typed_cb_BindImages(_, _, _, _, _)),
         "nvnCommandBufferSetDepthClamp" => f!(hle_nvnCommandBufferSetDepthClamp(_, _)),
+        "nvnCommandBufferSetRasterizerDiscard" => f!(hle_nvnCommandBufferSetRasterizerDiscard(_, _)),
         "nvnCommandBufferSetPrimitiveRestart" => f!(hle_nvnCommandBufferSetPrimitiveRestart(_, _, _)),
         "nvnCommandBufferSetPolygonOffsetClamp" => f!(hle_typed_cb_SetPolygonOffsetClamp(_, _, _, _)),
         "nvnCommandBufferSetBlendColor" => f!(hle_nvnCommandBufferSetBlendColor(_, _)),
@@ -2110,6 +2130,6 @@ pub fn lookup(name: &str) -> Option<usize> {
 }
 
 const _: () = assert!(
-    std::mem::size_of::<Cmd>() <= 72,
+    std::mem::size_of::<Cmd>() <= 48,
     "Cmd grew: keep large payloads out of line"
 );

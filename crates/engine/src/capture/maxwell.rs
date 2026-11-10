@@ -30,18 +30,15 @@ pub fn ipa(rd: u64, offset: u64) -> u64 {
 }
 
 /// MOV32I Rd, imm.
+#[cfg(test)]
 pub fn mov32i(rd: u64, imm: u32) -> u64 {
     (0x010 << 52) | ((imm as u64) << 20) | (0xF << 12) | PT | rd
 }
 
 /// MOV32I Rd, f: a float constant.
+#[cfg(test)]
 pub fn movf(rd: u64, f: f32) -> u64 {
     mov32i(rd, f.to_bits())
-}
-
-/// FADD32I Rd, Ra, imm.
-pub fn fadd32i(rd: u64, ra: u64, f: f32) -> u64 {
-    (0x02 << 58) | ((f.to_bits() as u64) << 20) | PT | (ra << 8) | rd
 }
 
 /// TEXS Rd, Ra, Rb, tex[handle]: a 2D sample at (Ra, Rb), RGBA into Rd, Rd+1 and Rd2, Rd2+1. `handle` is the texture

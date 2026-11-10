@@ -143,6 +143,27 @@ impl Ret for () {
     fn put(self, _cpu: &mut Cpu) {}
 }
 
+/// Two floats returned in s0 and s1 (AAPCS64 returns a homogeneous float aggregate in v registers).
+#[repr(C)]
+pub struct F32Pair(pub f32, pub f32);
+impl Ret for F32Pair {
+    fn put(self, cpu: &mut Cpu) {
+        cpu.v[0] = self.0.to_bits() as u128;
+        cpu.v[1] = self.1.to_bits() as u128;
+    }
+}
+
+/// Two integers returned in x0 and x1 (AAPCS64 returns a 16-byte composite in x0, x1): lets a hook hand a register back
+/// that a native call would clobber.
+#[repr(C)]
+pub struct U64Pair(pub u64, pub u64);
+impl Ret for U64Pair {
+    fn put(self, cpu: &mut Cpu) {
+        cpu.x[0] = self.0;
+        cpu.x[1] = self.1;
+    }
+}
+
 // Guest function pointers (callbacks) are guest addresses: the HLE function gets the address, as on arm64 hosts where
 // it calls it directly. A runtime running lifted code calls such pointers through guest::call (docs/windows-port.md).
 macro_rules! guest_fn_arg {
@@ -234,6 +255,10 @@ hle_fn!(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9);
 pub struct Hle {
     addr: *const (),
     adapter: unsafe fn(*const (), &mut Cpu),
+    /// Which function this is in a table, as written in the source (of_const). Not its address: a linker may fold
+    /// identical functions into one on one host and not on another, and trampolines made per function must come out
+    /// the same on every host (the iOS guest image, cpu/aot.rs).
+    id: &'static str,
 }
 
 // Function addresses and adapters are plain code pointers.
@@ -246,13 +271,18 @@ unsafe fn call_through<F: HleFn>(p: *const (), cpu: &mut Cpu) {
 
 impl Hle {
     pub fn of<F: HleFn>(f: F) -> Hle {
-        Hle { addr: f.addr(), adapter: call_through::<F> }
+        Hle { addr: f.addr(), adapter: call_through::<F>, id: "" }
     }
 
     /// `of` for static tables: `addr` is `f`'s address, taken by the caller (`HleFn::addr` cannot run at compile
     /// time). `func!` in horizon::sdk passes both from the same path.
-    pub const fn of_const<F: HleFn>(_f: F, addr: *const ()) -> Hle {
-        Hle { addr, adapter: call_through::<F> }
+    pub const fn of_const<F: HleFn>(_f: F, addr: *const (), id: &'static str) -> Hle {
+        Hle { addr, adapter: call_through::<F>, id }
+    }
+
+    /// Which function this is in a table.
+    pub fn id(self) -> &'static str {
+        self.id
     }
 
     /// The function's address.
@@ -309,17 +339,26 @@ pub fn bind_entry(entry: u64, f: *const ()) {
 /// The HLE function guest code reaches by branching to `addr`: through a trampoline (`bind_entry`), or the function's
 /// own address.
 pub fn entry(addr: u64) -> Option<Hle> {
-    // Lifted code asks on every HLE call, from every guest thread at once: each thread keeps what it found, so the
-    // shared tables (two locks) are consulted once per thread and address. A binding never changes once guest code
-    // can reach it; an address without one stops the run (lifted::Handlers::unknown), so misses are not kept.
+    entry_ref(addr).copied()
+}
+
+/// `entry`, as a reference that stays valid (lifted code's dispatcher keeps it).
+pub fn entry_ref(addr: u64) -> Option<&'static Hle> {
+    // Each thread keeps what it found, so the shared tables (three locks) are consulted once per thread and address.
+    // A binding never changes once guest code can reach it; an address without one stops the run
+    // (lifted::Handlers::unknown), so misses are not kept.
     thread_local! {
-        static FOUND: std::cell::RefCell<rustc_hash::FxHashMap<u64, Hle>> = Default::default();
+        static FOUND: std::cell::RefCell<rustc_hash::FxHashMap<u64, &'static Hle>> = Default::default();
     }
+    static KEPT: OnceLock<Mutex<HashMap<u64, &'static Hle>>> = OnceLock::new();
     if let Some(h) = FOUND.with(|f| f.borrow().get(&addr).copied()) {
         return Some(h);
     }
     let f = entries().lock().unwrap().get(&addr).copied().unwrap_or(addr as usize);
     let h = adapter(f as *const ())?;
+    let mut kept = KEPT.get_or_init(Default::default).lock().unwrap();
+    let h: &'static Hle = *kept.entry(addr).or_insert_with(|| Box::leak(Box::new(h)));
+    drop(kept);
     FOUND.with(|found| found.borrow_mut().insert(addr, h));
     Some(h)
 }
@@ -420,7 +459,7 @@ mod tests {
 
     #[test]
     fn adapters_built_at_compile_time() {
-        static ADD3: Hle = Hle::of_const(add3 as unsafe extern "C" fn(_, _, _) -> _, add3 as *const ());
+        static ADD3: Hle = Hle::of_const(add3 as unsafe extern "C" fn(_, _, _) -> _, add3 as *const (), "test");
         assert_eq!(record(ADD3), add3 as *const ());
         let mut c = cpu();
         c.x[0] = 1;

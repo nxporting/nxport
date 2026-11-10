@@ -1,0 +1,63 @@
+# Pushes and pull requests to main: builds and tests in debug, with cargo's output cached. No game files are involved:
+# the tests make their own data, and those needing a dump or a capture are macOS's nxport-cli GPU tests, left out.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["llmtalk/**", "**.md"]
+  pull_request:
+    branches: [main]
+    paths-ignore: ["llmtalk/**", "**.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      # The sources as committed: some are hashed or embedded, so a checkout with CRLF would differ from macOS's.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Test programs link SDL3.dll at start. The engine's build script copies it to target/debug, but the cache keeps
+      # only deps/, and a build script that does not rerun does not copy it again.
+      - run: Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\vendor\SDL3\lib"
+      - name: Build
+        run: cargo build --workspace --locked
+      - name: Test
+        run: cargo test --workspace --locked --lib --bins
+
+  # The engine and the crates without Apple engines of their own. nxport-build's build script compiles the macOS and iOS
+  # engines in release with LTO, so nxport-build, nxport-builder and nxport-cli build only in the release workflow.
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: cargo build --locked -p nxport
+      - name: Test
+        run: cargo test --locked -p nxport -p nxport-lifter -p nxport-pipelines -p sass2spv --lib --bins

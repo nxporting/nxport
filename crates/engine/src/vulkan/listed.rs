@@ -152,9 +152,15 @@ unsafe fn targets(dev: &Dev, n: &nxport_pipelines::Nvn) -> (Vec<vk::Format>, Vec
     (colors, rendered, depth)
 }
 
-/// The vertex stage's translation state for an entry (`inputs`: the stage's input locations).
+/// The vertex stage's translation state for an entry (`inputs`: the stage's input locations), with the point size of a
+/// draw of points as a draw gives it (draw.rs vertex_state).
 pub fn vertex_state(e: &Entry, inputs: &[u32]) -> GraphicsState {
-    vertex_graphics_state(inputs.iter().zip(&e.attr_bits).filter_map(|(&l, b)| b.map(|b| (l as usize, b))), e.depth_gl)
+    let mut s = vertex_graphics_state(inputs.iter().zip(&e.attr_bits).filter_map(|(&l, b)| b.map(|b| (l as usize, b))), e.depth_gl);
+    let size = f32::from_bits(e.point_size);
+    if e.nvn.as_ref().is_some_and(|n| n.mode == 0) && size != 1.0 {
+        s.point_size = size;
+    }
+    s
 }
 
 /// The fragment stage's translation state for an entry and whether its discarding fragments write depth.
@@ -169,8 +175,8 @@ pub unsafe fn fragment_state(dev: &Dev, e: &Entry) -> Option<(GraphicsState, boo
 pub unsafe fn desc(dev: &Dev, e: &Entry, v: &Stage, f: Option<&Stage>) -> Option<pipelines::Desc> {
     let e = ensure_nvn(e.clone());
     let n = e.nvn.as_ref()?;
-    let mode = if n.mode == 0 { 4 } else { n.mode };
-    let topology = state::topology(mode as i32)?;
+    // The draw's NVN mode as recorded (0: points); entries from lists without one take triangles (ensure_nvn).
+    let topology = state::topology(n.mode as i32)?;
     let restart = n.restart && matches!(topology, vk::PrimitiveTopology::LINE_STRIP | vk::PrimitiveTopology::TRIANGLE_STRIP | vk::PrimitiveTopology::TRIANGLE_FAN);
     let attribs = v.known.inputs.iter().zip(&e.attr_bits).filter_map(|(&l, b)| b.map(|b| (l, b)));
     let vl = vertex_streams(dev, attribs, &e.streams);
