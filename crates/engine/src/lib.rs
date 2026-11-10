@@ -876,6 +876,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 "main",
                 mem_space.base_ptr as usize,
                 mem_space.text_size,
+                mem_space.base_ptr as usize + mem_space.ro_off + mem_space.rodata_size,
             )
         }
         .map_err(|e| format!("x18: {e}"))?;
@@ -884,7 +885,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             let pages = (sdk_mod.text_size + 0x3fff) & !0x3fff;
             let _ = unsafe { os::protect(sdk_mod.text_start, pages, os::Prot::ReadWrite) };
             unsafe {
-                cpu::trampoline::rewrite_module("sdk", sdk_mod.text_start, sdk_mod.text_size)
+                cpu::trampoline::rewrite_module("sdk", sdk_mod.text_start, sdk_mod.text_size, sdk_mod.base + sdk_mod.image_size)
             }
             .map_err(|e| format!("x18: {e}"))?;
             unsafe { cpu::aot::make_exec("sdk.text", sdk_mod.text_start, pages) };
