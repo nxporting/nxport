@@ -8,6 +8,12 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **macOS parity, open (2026-11-09, Mac session):** (1) TotK 1.1.2 logs "the camera's angle code was not found":
+  camera_angles.rs's AROUND pattern does not match 1.1.2, so Exact Mouse Aim does nothing there on any platform (found
+  on the Mac's 1.1.2 dump; the Windows work used 1.0.0). (2) Natively the camera pitch and bow-aim hooks
+  (install_decision / install_aim) stay lifted-only: they rewrite instructions mid-function and read x19 / x20 / s14,
+  which natively needs a wrapper that saves every caller-saved register; only the yaw call is hooked on macOS. (3) The
+  Mac menus and mouse look are built but not yet tried in a window.
 - MetalFX upscaling (render below output resolution, upscale) as a future opt-in setting, off by default: it changes
   the image, so it is not part of the exact performance work (user decision 2026-10-28).
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
@@ -412,6 +418,19 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **macOS brought level with Windows (2026-11-09, Mac session, after merging origin/main into the Mac's main).**
+  Menus: one definition, host/menu.rs (items, check marks, availability, commands); menu_win.rs only draws it, the Mac
+  draws the same items with AppKit. Mouse: mouse look, F8, buttons as keys, direct mouse and keyboard
+  (input::usage_of_mac_key, the SDL table moved to input.rs). The frame-rate limit now paces natively too (it was
+  lifted-only: no 90 / 120 / 144 on the Mac; headless Mac benchmarks now need a raised limit, as on Windows); the
+  Mac window reports the refresh rate; the Metal layer follows VSync (displaySyncEnabled was never set) and Low
+  Latency; rumble follows the live switches; a Finder-started app shows startup errors / svcBreak in an alert.
+  Fixed for Windows: nvn/frame_map.rs used pthread_mach_thread_np (main's native-command work broke the Windows
+  build). Windows type-checks from the Mac: cargo check --target x86_64-pc-windows-msvc with CC/CXX/AR for that
+  target pointed at a script that only creates the output files. Checked on the Mac: release builder and both
+  engines build, release test set passes; the builder with an empty HOME built TotK 1.1.2 (25218 of 25220 stages,
+  ~21 min Metal compile, 2357 pipelines precompiled) and that app reached Hateno gameplay, picture right; a 4000-frame
+  glitch scan had 0 flashes / sky dips and the report guard 0 timeouts / repairs / late retries (its retry fix, run).
 - **Lifted code's CPU target measured, left native** (S41L0R Windows Machine): `zig cc -target x86_64-windows-gnu`
   (the x86-64-v3 flags, generic tuning) ran TotK 11% slower than the default `-mcpu=native` (shrine, headless,
   uncapped: 147 -> 131 fps steady), so apps stay built for the building machine. Objects now recompile when the
