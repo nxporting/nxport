@@ -202,7 +202,14 @@ pub fn bindless_plan(textures: &[(i32, i32, SamplerType, bool)], words: Option<(
     let mut eligible: Vec<i32> = textures
         .iter()
         .filter(|t| {
-            t.1 == 1 && !t.3 && t.2 != SamplerType::NONE && t.2.base() != SamplerType::TEXTURE_BUFFER && !t.2.has(SamplerType::MULTISAMPLE)
+            // Not depth-compare samplers: the host checks their texture is a depth format (a colour one binds nothing),
+            // which a global array's index cannot carry.
+            t.1 == 1
+                && !t.3
+                && t.2 != SamplerType::NONE
+                && t.2.base() != SamplerType::TEXTURE_BUFFER
+                && !t.2.has(SamplerType::MULTISAMPLE)
+                && !t.2.has(SamplerType::SHADOW)
         })
         .map(|t| t.0)
         .collect();
