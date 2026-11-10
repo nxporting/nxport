@@ -157,19 +157,6 @@ fn has_icon_resource() -> bool {
     unsafe { !FindResourceW(GetModuleHandleW(std::ptr::null()), 1 as *const u16, RT_GROUP_ICON as *const u16).is_null() }
 }
 
-/// Starts this program again with the same arguments, then leaves (the guest has no clean shutdown).
-pub fn restart() -> ! {
-    match std::env::current_exe() {
-        Ok(exe) => {
-            if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
-                println!("[!] Restart: {e}");
-            }
-        }
-        Err(e) => println!("[!] Restart: {e}"),
-    }
-    std::process::exit(0)
-}
-
 /// Closing the window quits: the guest has no clean shutdown path, so leave immediately.
 fn quit() -> ! {
     println!("[+] Display: quit requested; exiting");

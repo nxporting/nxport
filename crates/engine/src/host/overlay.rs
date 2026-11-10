@@ -36,28 +36,6 @@ pub fn init() {
     }
 }
 
-/// The live switch (host/live.rs), kept in the game's settings file.
-pub fn is_dynamic_aspect() -> bool {
-    crate::host::live::dynamic_aspect()
-}
-
-pub fn set_dynamic_aspect(val: bool) {
-    // Off: back to 16:9 at once (live::set_dynamic_aspect). On: the window's shape now.
-    crate::host::live::set_dynamic_aspect(val);
-    if val {
-        #[cfg(target_os = "macos")]
-        if let Some(aspect) = crate::host::display::current_window_aspect() {
-            crate::profile::screen_aspect_changed(aspect);
-        }
-    }
-}
-
-pub fn toggle_dynamic_aspect() -> bool {
-    let next = !is_dynamic_aspect();
-    set_dynamic_aspect(next);
-    next
-}
-
 pub fn fps_mode() -> FpsMode {
     init();
     if FPS_MODE.load(Ordering::Relaxed) == 0 {
@@ -72,16 +50,6 @@ pub fn set_fps_mode(mode: FpsMode) {
     FPS_MODE.store(if mode == FpsMode::Stock30 { 0 } else { 1 }, Ordering::Relaxed);
 }
 
-pub fn toggle_fps_mode() -> FpsMode {
-    let next = if fps_mode() == FpsMode::Stock30 {
-        FpsMode::Unlocked
-    } else {
-        FpsMode::Stock30
-    };
-    set_fps_mode(next);
-    next
-}
-
 pub fn is_vsync() -> bool {
     init();
     VSYNC.load(Ordering::Relaxed)
@@ -93,7 +61,6 @@ pub fn is_low_latency() -> bool {
     LOW_LATENCY.load(Ordering::Relaxed)
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn toggle_low_latency() -> bool {
     init();
     !LOW_LATENCY.fetch_xor(true, Ordering::Relaxed)

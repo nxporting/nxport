@@ -33,14 +33,13 @@ extern "C" {
 static LEVEL: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 static SHARP: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 
+/// The Input menu's switches (host/live.rs): they change while the game runs.
 fn enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| !crate::settings::get().input.no_rumble)
+    crate::host::live::rumble()
 }
 
 fn scale() -> f32 {
-    static S: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *S.get_or_init(|| crate::settings::get().input.rumble_scale)
+    crate::host::live::rumble_scale()
 }
 
 /// nn::hid::SendVibrationValue: `handle` as GetVibrationDeviceHandles returned it, `v` = amplitudeLow, frequencyLow,
