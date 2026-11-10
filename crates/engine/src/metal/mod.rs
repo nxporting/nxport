@@ -280,6 +280,9 @@ pub(super) struct TexCache {
     /// Frame each `tex_by_desc` entry was last resolved through (creation, alias view, by-description lookup), for
     /// `sweep_shared_storage`.
     pub(super) desc_used: HashMap<TexDesc, u64>,
+    /// Depth twins of colour textures sampled with depth comparison (translated.rs depth_twin), by the colour texture's
+    /// storage id: (twin, the colour object's generation it was filled at).
+    pub(super) depth_twins: HashMap<u64, (Tex, u64)>,
     /// Frame each texture description was last checked for CPU-side changes (see `refresh_cpu_written`).
     pub(super) tex_checked: HashMap<TexDesc, u64>,
     /// Sparse content samples of compressed textures as of their last full check (see `refresh_cpu_written`).
@@ -315,6 +318,7 @@ impl Default for TexCache {
             alias_of: HashMap::default(),
             tex_by_desc: HashMap::default(),
             desc_used: HashMap::default(),
+            depth_twins: HashMap::default(),
             tex_checked: HashMap::default(),
             tex_sparse: HashMap::default(),
             view_cache: HashMap::default(),
@@ -2345,7 +2349,7 @@ impl Gfx {
     }
 
     /// Fills every level / layer of `tex` from the guest's block-linear (or pitch-linear) storage.
-    unsafe fn upload_texture(&self, tex: &Tex, t: &NvnTexture) {
+    pub(super) unsafe fn upload_texture(&self, tex: &Tex, t: &NvnTexture) {
         TEXSTAT[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         journal(|| {
             format!(

@@ -1207,7 +1207,16 @@ impl Ctx {
         let mut image = vk::Image::null();
         let mut feedback = false;
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
-            let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
+            let (_, mut t) = crate::nvn::api::texture_snapshot(obj)?;
+            // Depth comparison of a colour texture: its memory read as depth (layout::depth_twin), which is what the
+            // console compares; a depth texture over the same memory is that image.
+            if shadow {
+                if let Some(f) = crate::nvn::layout::depth_twin(t.format) {
+                    t.format = f;
+                    let (d, _, _) = self.tex.locate(&t);
+                    self.tex.depth_twins.insert(d);
+                }
+            }
             let img = &self.tex.get(&self.dev, &t)?.0;
             if shadow && !super::format::aspects(img.format).contains(vk::ImageAspectFlags::DEPTH) {
                 return None;

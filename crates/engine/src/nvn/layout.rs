@@ -53,6 +53,17 @@ const fn fi(block_w: u32, block_h: u32, bytes: u32) -> Option<FormatInfo> {
 }
 
 /// Block size and bytes per block for an NVNformat value.
+/// The depth format with `fmt`'s memory layout, for a colour format read with depth comparison: R32F as DEPTH32F, R16 as
+/// DEPTH16. The console compares the colour texture's first component; GPUs where comparison needs a depth format read the
+/// same bytes as depth (Ryujinx aliases these pairs: TextureCompatibility IsValidColorAsDepthAlias).
+pub fn depth_twin(fmt: i32) -> Option<i32> {
+    match fmt {
+        10 => Some(52),
+        6 => Some(50),
+        _ => None,
+    }
+}
+
 pub fn format_info(fmt: i32) -> Option<FormatInfo> {
     match fmt {
         1..=4 | 49 | 81 | 82 => fi(1, 1, 1),
