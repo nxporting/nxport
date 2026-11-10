@@ -76,11 +76,11 @@ pub fn set_thread_x18(val: usize) {
 pub static ISLAND: std::sync::Mutex<Option<TrampolineIsland>> = std::sync::Mutex::new(None);
 
 /// Rewrites the x18 uses of a module's text (writable at this point) into the shared island.
-pub unsafe fn rewrite_module(name: &str, text: usize, len: usize) -> Result<usize, String> {
+pub unsafe fn rewrite_module(name: &str, text: usize, len: usize, image_end: usize) -> Result<usize, String> {
     let mut g = ISLAND.lock().unwrap();
     let island = g.as_mut().ok_or("x18 island not set up")?;
     let n = island
-        .patch_text(text as *mut u32, len)
+        .patch_text(text as *mut u32, len, image_end)
         .map_err(|e| format!("{}: {}", name, e))?;
     println!(
         "[+] x18: {} rewrote {} instructions (island {} KB used)",
@@ -157,6 +157,7 @@ impl TrampolineIsland {
         &mut self,
         text_ptr: *mut u32,
         text_size: usize,
+        image_end: usize,
     ) -> Result<usize, Box<dyn std::error::Error>> {
         let cs = Capstone::new()
             .arm64()
@@ -392,7 +393,7 @@ impl TrampolineIsland {
         unsafe {
             for i in 0..num_instructions {
                 if ptr::read(text_ptr.add(i)) == 0xD61F_0240 {
-                    match jump_table_of(text_ptr, i) {
+                    match jump_table_of(text_ptr, i, text_size, image_end) {
                         Some(jt) => {
                             if crate::settings::get().log.log_x18_jt {
                                 println!("[x18-jt] br x18 at +{:#x}: base +{:#x}, {} offsets", i * 4, jt.0 - text_ptr as usize, jt.1);
@@ -1684,7 +1685,7 @@ fn adjust_sp_offset(fw: u32) -> u32 {
 /// The jump table a `br x18` at instruction `i` dispatches through: (BASE, number of possible offsets). Scans the
 /// original instructions before it for `add x18, x18, xO, lsl #2`, the byte / halfword load into wO before that, and
 /// `adr x18, BASE`. None for anything else.
-unsafe fn jump_table_of(text: *const u32, i: usize) -> Option<(usize, usize)> {
+unsafe fn jump_table_of(text: *const u32, i: usize, text_size: usize, image_end: usize) -> Option<(usize, usize)> {
     let (mut off_reg, mut width, mut base) = (None, None, None);
     for k in 1..=i.min(128) {
         let w = ptr::read(text.add(i - k));
@@ -1709,12 +1710,54 @@ unsafe fn jump_table_of(text: *const u32, i: usize) -> Option<(usize, usize)> {
             break;
         }
     }
-    Some((base?, width?))
+    let (base, width) = (base?, width?);
+    // Landings for the offsets the table holds (its entries, read through its bounds check), not all its entry size
+    // allows: 65536 per halfword table filled the island on the iPhone.
+    let mem = ImageMemory { text: text as usize, text_end: text as usize + text_size, end: image_end };
+    let pc = text.add(i) as u64;
+    let landings = nxport_lifter::jt::resolve(&mem, text as u64, pc, 18)
+        .and_then(|targets| targets.iter().map(|&t| t.checked_sub(base as u64).map(|d| d / 4 + 1)).max().flatten())
+        .map_or(width, |n| (n as usize).min(width));
+    Some((base, landings))
+}
+
+/// A module image as the jump table reader sees it: instructions in its text, table bytes anywhere in its image.
+struct ImageMemory {
+    text: usize,
+    text_end: usize,
+    end: usize,
+}
+
+impl nxport_lifter::jt::Memory for ImageMemory {
+    fn word(&self, addr: u64) -> Option<u32> {
+        let a = addr as usize;
+        (a >= self.text && a + 4 <= self.text_end && a % 4 == 0).then(|| unsafe { ptr::read(a as *const u32) })
+    }
+    fn bytes(&self, addr: u64, len: usize) -> Option<&[u8]> {
+        let a = addr as usize;
+        (a >= self.text && a.checked_add(len)? <= self.end).then(|| unsafe { std::slice::from_raw_parts(a as *const u8, len) })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_table_landings_from_entries() {
+        // cmp w8, #2; b.hi; adr x18, BASE; adr x9, table; ldrh w8, [x9, x8, lsl #1]; add x18, x18, x8, lsl #2; br x18
+        let mut words = vec![0x7100_091fu32, 0x5400_0148, 0x1000_00b2, 0x1000_01a9, 0x7868_7928, 0x8b08_0a52, 0xd61f_0240];
+        words.resize(16, 0xd503_201f);
+        // The halfword table (entries 0, 3, 1) after the text.
+        words.extend([0x0003_0000u32, 0x0000_0001]);
+        let text = words.as_ptr();
+        let (base, landings) = unsafe { jump_table_of(text, 6, 16 * 4, text as usize + words.len() * 4) }.unwrap();
+        assert_eq!(base, text as usize + 7 * 4);
+        assert_eq!(landings, 4);
+        // Without the table in sight: every offset a halfword holds.
+        let (_, all) = unsafe { jump_table_of(text, 6, 16 * 4, text as usize + 16 * 4) }.unwrap();
+        assert_eq!(all, 65536);
+    }
 
     #[test]
     fn test_detect_sp_writeback_pre_index_pair() {
