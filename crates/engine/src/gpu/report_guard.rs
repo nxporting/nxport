@@ -36,8 +36,8 @@ const REPORTS: usize = 4096;
 thread_local! {
     /// Inside engine work on a game thread (the Presentation Thread's submit encodes the very reports it would wait for).
     static IN_ENGINE: Cell<bool> = const { Cell::new(false) };
-    /// Address of the last fault answered with a plain retry (see `fault`).
-    static LAST_RETRY: Cell<usize> = const { Cell::new(0) };
+    /// The last fault answered with a plain retry and when (see `repeated`).
+    static LAST_RETRY: Cell<(usize, Option<std::time::Instant>)> = const { Cell::new((0, None)) };
 }
 
 /// Marks the current thread as running engine work until the returned guard is dropped.
@@ -396,6 +396,11 @@ pub(crate) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
     }
 }
 
+/// The engine writes guest memory at host address `a` (a report), through the alias while its page is guarded.
+pub(crate) unsafe fn engine_write(a: usize, src: &[u8]) {
+    std::ptr::copy_nonoverlapping(src.as_ptr(), engine_ptr(a) as *mut u8, src.len());
+}
+
 /// The report at host address `a` was written (or will never be): one less pending on its page; the last one opens it.
 pub(crate) fn close(a: usize) {
     if mode() == crate::settings::ReportGuard::Off || HIGH.load(Ordering::Acquire) == 0 {
@@ -476,6 +481,14 @@ unsafe fn record_hit(pc: usize, lr: usize, addr: usize, guest: bool, write: bool
     );
 }
 
+/// Whether this fault is the retry of the one just answered at `addr`, rather than a new access: the game touches the
+/// same report slot every frame, and taking a retry that had worked frames ago for this one crashed on writes.
+fn repeated(addr: usize) -> bool {
+    let now = std::time::Instant::now();
+    let (last, at) = LAST_RETRY.with(|r| r.replace((addr, Some(now))));
+    last == addr && at.is_some_and(|t| now.duration_since(t).as_micros() < 1000)
+}
+
 /// Signal-handler hook: true if `addr` is on a page held here (the access is then retried).
 pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bool {
     if mode() == crate::settings::ReportGuard::Off {
@@ -493,13 +506,13 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
         // Freed between the fault and here (its opening raced with this access): retry; a repeated read fault on it
         // means it was left inaccessible: open it (no other module removes read access).
         if freed_recently(page) {
-            if LAST_RETRY.with(|r| r.replace(addr)) != addr {
+            if !repeated(addr) {
                 return true;
             }
             if !write {
                 REPAIRS.fetch_add(1, Ordering::Relaxed);
                 libc::mprotect(page as *mut libc::c_void, PAGE, open_prot(page));
-                LAST_RETRY.with(|r| r.set(0));
+                LAST_RETRY.with(|r| r.set((0, None)));
                 return true;
             }
         }
@@ -514,7 +527,7 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
         // module's protection (dirty_track write tracking, the write guard: read-only pages): not ours to answer. A
         // second read fault can only be an inaccessible page marked open here (no other module removes read access):
         // open it again.
-        if LAST_RETRY.with(|r| r.replace(addr)) != addr {
+        if !repeated(addr) {
             return true;
         }
         if write {
@@ -522,10 +535,10 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
         }
         REPAIRS.fetch_add(1, Ordering::Relaxed);
         libc::mprotect(page as *mut libc::c_void, PAGE, open_prot(page));
-        LAST_RETRY.with(|r| r.set(0));
+        LAST_RETRY.with(|r| r.set((0, None)));
         return true;
     }
-    LAST_RETRY.with(|r| r.set(0));
+    LAST_RETRY.with(|r| r.set((0, None)));
     let guest = may_wait(pc, lr);
     if mode() == crate::settings::ReportGuard::Log || !guest {
         record_hit(pc, lr, addr, guest, write);

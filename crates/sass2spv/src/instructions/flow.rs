@@ -115,20 +115,28 @@ pub fn exit(c: &mut Ctx) {
         return;
     }
     if op.ccc() == Ccc::T {
-        if c.prepare_for_return() {
-            c.ret();
-        }
+        exit_thread(c);
     } else {
         let cond = get_condition(c, op.ccc(), ir_consts::FALSE);
         // Nothing to do when the condition is always false.
         if c.ir.ty(cond) != OperandType::Constant || c.ir.value(cond) != ir_consts::FALSE {
             let skip = c.label();
             c.branch_if_false(skip, cond);
-            if c.prepare_for_return() {
-                c.ret();
-            }
+            exit_thread(c);
             c.mark_label(skip);
         }
+    }
+}
+
+/// Returns, or before a barrier, jumps to it as an exited thread (EmitterContext::barrier_after).
+fn exit_thread(c: &mut Ctx) {
+    if let Some(bar) = c.barrier_after(c.curr_op.address) {
+        let (flag, t) = (c.exited_flag(), c.const_i(ir_consts::TRUE));
+        c.copy_to(flag, t);
+        let label = c.get_label(bar);
+        c.branch(label);
+    } else if c.prepare_for_return() {
+        c.ret();
     }
 }
 

@@ -7,7 +7,7 @@
 // host posix_memalign / malloc_size.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
 
 const NSLOT: usize = 32;
 
@@ -129,7 +129,6 @@ const TARGETS: &[UeTarget] = &[
 static mut HOST_VTABLE: [*const c_void; NSLOT] = [std::ptr::null(); NSLOT];
 static USED_BYTES: AtomicI64 = AtomicI64::new(0);
 static PEAK_BYTES: AtomicI64 = AtomicI64::new(0);
-static IS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 fn track_alloc(size: usize) {
     let s = size as i64;
@@ -158,9 +157,9 @@ fn align_up(a: u32) -> usize {
 unsafe fn host_alloc(n: usize, alignment: u32) -> *mut c_void {
     let n = if n == 0 { 1 } else { n };
     let align = align_up(alignment);
-    let mut ptr: *mut c_void = std::ptr::null_mut();
     #[cfg(unix)]
-    {
+    let ptr = {
+        let mut ptr: *mut c_void = std::ptr::null_mut();
         let ret = libc::posix_memalign(&mut ptr, align, n);
         if ret != 0 || ptr.is_null() {
             return std::ptr::null_mut();
@@ -169,17 +168,19 @@ unsafe fn host_alloc(n: usize, alignment: u32) -> *mut c_void {
         track_alloc(libc::malloc_size(ptr));
         #[cfg(not(target_os = "macos"))]
         track_alloc(n);
-    }
+        ptr
+    };
     #[cfg(windows)]
-    {
+    let ptr = {
         extern "C" {
             fn _aligned_malloc(size: usize, alignment: usize) -> *mut c_void;
         }
-        ptr = _aligned_malloc(n, align);
+        let ptr = _aligned_malloc(n, align);
         if !ptr.is_null() {
             track_alloc(n);
         }
-    }
+        ptr
+    };
     ptr
 }
 
@@ -345,13 +346,7 @@ pub unsafe fn install(main_base: usize, main_build_id: &str) {
                 );
             }
 
-            IS_ACTIVE.store(1, Ordering::Release);
             return;
         }
     }
-}
-
-/// Returns true if Unreal Engine host malloc has been installed.
-pub fn is_active() -> bool {
-    IS_ACTIVE.load(Ordering::Acquire) != 0
 }

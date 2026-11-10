@@ -105,7 +105,7 @@ fn infer_stage_slot(path: &Path) -> usize {
 fn fetch_shared_pipelines(title_id: u64, dest: &Path) -> bool {
     let url = format!("{SHARED_PIPELINES_URL}/{title_id:016x}.txt");
     let tmp = dest.with_extension("download");
-    let ok = std::process::Command::new("curl.exe")
+    let ok = crate::lift::command(crate::lift::CURL)
         .args(["-fsSL", "--max-time", "30", "-o"])
         .arg(&tmp)
         .arg(&url)
@@ -158,7 +158,8 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
         })
     });
 
-    let extracted_dir = cache_dir.join("extracted_stages");
+    // Outside the cache, which the builder copies into the app whole (1.8 GB of raw stages for TotK); removed when done.
+    let extracted_dir = std::env::temp_dir().join(format!("nxport-stages-{}", std::process::id()));
     if has_existing_stages {
         let dir = stages_src.unwrap();
         if let Ok(entries) = std::fs::read_dir(dir) {
@@ -271,18 +272,13 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                             return Err("empty SPIR-V".into());
                         }
 
+                        // Only the stage is remembered (its code, length and inputs): what lets the engine and the
+                        // pipeline phase below know it. This translation has no draw state, and the engine looks
+                        // translations up by the state of a draw (draw.rs's stage, listed::stages), so storing it would
+                        // only take disk space (1.3 GB for TotK's 26k stages); the pipeline phase stores the ones used.
                         let named_len = nxport::vulkan::shader::named_len(&code, p.size);
                         let inputs = nxport::vulkan::shader::spirv_inputs(&p.binary_code);
-                        let k = nxport::vulkan::stage_cache::remember(&code, named_len, prep, inputs);
-                        let m = p.manifest();
-
-                        let key = nxport::vulkan::shader::translation_key(
-                            &dev, &prep, k.full, &None, 0, 0, None, false,
-                        );
-                        nxport::vulkan::stage_cache::store(key, &p.binary_code, &m);
-
-
-
+                        nxport::vulkan::stage_cache::remember(&code, named_len, prep, inputs);
                         Ok(())
                     })();
 
@@ -308,6 +304,8 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
 
     stats.stages_translated = stages_translated.load(Ordering::Relaxed);
     stats.stages_failed = stages_failed.load(Ordering::Relaxed);
+    // The stage cache now holds the stages' code.
+    let _ = std::fs::remove_dir_all(&extracted_dir);
 
     // 6. Phase 3: Compile graphics pipelines from pipeline list
     let mut pipeline_list_text = None;
@@ -410,10 +408,8 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                                     dev.device.destroy_descriptor_set_layout(lay.0, None);
                                 }
                             }
-                            dev.device.destroy_shader_module(v.module, None);
                             dev.device.destroy_descriptor_set_layout(v.set_layout, None);
                             if let Some(f) = f {
-                                dev.device.destroy_shader_module(f.module, None);
                                 dev.device.destroy_descriptor_set_layout(f.set_layout, None);
                             }
                         }

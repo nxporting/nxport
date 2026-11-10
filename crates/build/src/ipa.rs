@@ -29,7 +29,7 @@ pub fn app_settings(dump: &Path, mods: Option<&Path>, edits: SettingsPatch) -> S
             return false;
         }
         let Some(tid) = dump_id.title_id else { return true };
-        let is_single = m.join("romfs").is_dir() || m.join("exefs").is_dir() || m.join("ExeFS").is_dir() || m.join("RomFS").is_dir();
+        let is_single = nxport::mods::is_mod_dir(m);
         if is_single {
             mod_matches_tid(m, tid)
         } else {
@@ -118,7 +118,11 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 
     log(IpaBuildPhase::PatchingCode);
     let s = app_settings(o.dump, o.mods, o.edits.clone());
+    #[cfg(target_os = "macos")]
     let image = nxport::guest_image(s.clone())?;
+    // guest_image elsewhere is what the lifter takes, without the rewrites native code needs.
+    #[cfg(windows)]
+    let image = nxport::guest_image_for_native(s.clone())?;
 
     let work = o.out_dir.join(format!(".{}.ipa.work", sanitize(&name)));
     let _ = fs::remove_dir_all(&work);
@@ -138,10 +142,11 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     if let Some(m) = o.mods {
         if m.is_dir() {
             let dest_mods = app.join("mods");
-            let is_single = m.join("romfs").is_dir() || m.join("exefs").is_dir() || m.join("ExeFS").is_dir() || m.join("RomFS").is_dir();
+            let is_single = nxport::mods::is_mod_dir(m);
             if is_single {
                 if mod_matches_tid(m, tid) {
                     packaged_any_mods = true;
+                    crate::mod_check::report(m, tid, o.dump);
                     copy_tree(m, &dest_mods)?;
                 } else {
                     println!("  [!] Skipping mod '{}': target program does not match {tid:016X}", m.display());
@@ -151,6 +156,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
                     let path = entry.path();
                     if path.is_dir() && mod_matches_tid(&path, tid) {
                         packaged_any_mods = true;
+                        crate::mod_check::report(&path, tid, o.dump);
                         copy_tree(&path, &dest_mods.join(entry.file_name()))?;
                     } else if path.is_dir() {
                         println!("  [!] Skipping mod '{}': target program does not match {tid:016X}", entry.file_name().to_string_lossy());
@@ -265,6 +271,8 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
         }
     }
     let mut edits = o.edits.clone();
+    // The app reads this file, not the platform profile the image was made with: it must leave out what the image did.
+    edits.files.no_plugin_mods = Some(true);
     if !packaged_any_mods {
         edits.files.no_mods = Some(true);
     }
@@ -305,6 +313,10 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 /// to this program (a release).
 fn ios_artifact(name: &str) -> Option<PathBuf> {
     let built = Path::new(env!("NXPORT_ENGINE_IOS")).with_file_name(name);
+    #[cfg(windows)]
+    if let Some(p) = crate::ios_engine::built_engine().map(|e| e.with_file_name(name)).filter(|p| p.is_file()) {
+        return Some(p);
+    }
     let mut candidates = vec![
         built,
         PathBuf::from("target/engines/aarch64-apple-ios/release").join(name),
@@ -322,6 +334,11 @@ fn ios_artifact(name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// The .ipa `build` writes for game `name` in `out_dir`.
+pub fn path_for(out_dir: &Path, name: &str) -> PathBuf {
+    out_dir.join(format!("{}.ipa", sanitize(name)))
+}
+
 fn sanitize(name: &str) -> String {
     name.replace([':', '/'], " -")
 }
@@ -336,11 +353,14 @@ fn write(p: &Path, s: &str) -> Result<(), String> {
 
 /// A copy-on-write clone (APFS), else a copy.
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
     let _ = fs::remove_file(to);
-    if unsafe { libc::clonefile(c(from).as_ptr(), c(to).as_ptr(), 0) } == 0 {
-        return Ok(());
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+        if unsafe { libc::clonefile(c(from).as_ptr(), c(to).as_ptr(), 0) } == 0 {
+            return Ok(());
+        }
     }
     fs::copy(from, to).map(|_| ()).map_err(|e| format!("{} -> {}: {e}", from.display(), to.display()))
 }
@@ -362,8 +382,32 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 fn set_executable(p: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(p, fs::Permissions::from_mode(0o755)).map_err(|e| format!("{}: {e}", p.display()))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(p, fs::Permissions::from_mode(0o755)).map_err(|e| format!("{}: {e}", p.display()))
+    }
+    // No modes here: zip_mode gives Mach-O files theirs.
+    #[cfg(not(unix))]
+    {
+        let _ = p;
+        Ok(())
+    }
+}
+
+/// A file's mode in the zip. Hosts without modes: Mach-O files are executable.
+fn zip_mode(p: &Path) -> std::io::Result<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(p).map(|m| m.permissions().mode())
+    }
+    #[cfg(not(unix))]
+    {
+        let mut magic = [0u8; 4];
+        let is_macho = std::io::Read::read_exact(&mut fs::File::open(p)?, &mut magic).is_ok() && u32::from_le_bytes(magic) == 0xfeed_facf;
+        Ok(if is_macho { 0o755 } else { 0o644 })
+    }
 }
 
 /// App icons from the game's logo in the dump; the plist entries, or none without one.
@@ -455,7 +499,7 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
     let base = payload.parent().unwrap();
     let mut stack = vec![payload.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let rel = dir.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+        let rel = dir.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
         z.add_directory(format!("{rel}/"), SimpleFileOptions::default()).map_err(|e| err(&e))?;
         let mut entries: Vec<_> = fs::read_dir(&dir).map_err(|e| err(&e))?.flatten().map(|e| e.path()).collect();
         entries.sort();
@@ -464,10 +508,9 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
                 stack.push(p);
                 continue;
             }
-            use std::os::unix::fs::PermissionsExt;
-            let rel = p.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+            let rel = p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
             let stored = rel.contains(".app/Game/");
-            let mode = fs::metadata(&p).map_err(|e| err(&e))?.permissions().mode();
+            let mode = zip_mode(&p).map_err(|e| err(&e))?;
             let opts = SimpleFileOptions::default()
                 .compression_method(if stored { zip::CompressionMethod::Stored } else { zip::CompressionMethod::Deflated })
                 .unix_permissions(mode & 0o777)
@@ -482,12 +525,5 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
 }
 
 fn mod_matches_tid(p: &Path, tid: u64) -> bool {
-    let npdm = [p.join("exefs/main.npdm"), p.join("ExeFS/main.npdm")]
-        .into_iter()
-        .find(|f| f.is_file());
-    let target_tid = npdm.as_deref().and_then(nxport::game::npdm_program_id);
-    match target_tid {
-        Some(t) if t != tid => false,
-        _ => true,
-    }
+    !nxport::game::is_other_title_dir(p, tid)
 }

@@ -21,7 +21,40 @@ mod copy;
 mod draw;
 #[path = "record.rs"]
 mod record;
+#[path = "decode.rs"]
+mod decode;
 pub(super) use draw::{desc_streams, fragment_graphics_state, vertex_graphics_state, vertex_streams};
+
+/// Bindings by (NVN stage, index): the six stages' first N indices in place (the commands set and the draws read them
+/// several times per draw), others in a map.
+struct Slots<T: Copy, const N: usize> {
+    fixed: [[Option<T>; N]; 6],
+    rest: HashMap<(i32, i32), T>,
+}
+
+impl<T: Copy, const N: usize> Default for Slots<T, N> {
+    fn default() -> Self {
+        Slots { fixed: [[None; N]; 6], rest: HashMap::default() }
+    }
+}
+
+impl<T: Copy, const N: usize> Slots<T, N> {
+    fn get(&self, stage: i32, index: i32) -> Option<T> {
+        match self.fixed.get(stage as usize).and_then(|s| s.get(index as usize)) {
+            Some(v) => *v,
+            None => self.rest.get(&(stage, index)).copied(),
+        }
+    }
+
+    fn set(&mut self, stage: i32, index: i32, v: T) {
+        match self.fixed.get_mut(stage as usize).and_then(|s| s.get_mut(index as usize)) {
+            Some(x) => *x = Some(v),
+            None => {
+                self.rest.insert((stage, index), v);
+            }
+        }
+    }
+}
 
 /// NVN state the commands set (it persists across submits, as the queue's does).
 #[derive(Default)]
@@ -45,13 +78,15 @@ struct Nvn {
     vertex_buffers: [(u64, usize); 16],
     attribs: AttribState,
     streams: Vec<u64>,
-    uniforms: HashMap<(i32, i32), (u64, usize)>,
-    storage: HashMap<(i32, i32), (u64, usize)>,
-    textures: HashMap<(i32, i32), u64>,
-    images: HashMap<(i32, i32), u64>,
+    uniforms: Slots<(u64, usize), 16>,
+    storage: Slots<(u64, usize), 16>,
+    textures: Slots<u64, 48>,
+    images: Slots<u64, 16>,
     render_disabled: bool,
     prim_restart: Option<u32>,
     depth_clamp: bool,
+    /// nvnCommandBufferSetRasterizerDiscard: draws are skipped (their vertex stages write nothing the engine keeps).
+    rasterizer_discard: bool,
     polygon_offset: (f32, f32, f32),
     point_size: f32,
 }
@@ -74,6 +109,9 @@ struct Pass {
     begun: bool,
     color_clears: Vec<Option<vk::ClearColorValue>>,
     depth_clear: Option<(vk::ImageAspectFlags, vk::ClearDepthStencilValue)>,
+    /// The targets to load or replace when rendering begins: each attachment's image, if the attachment is all of it.
+    color_targets: Vec<Option<(texture::Desc, bool)>>,
+    depth_target: Option<(texture::Desc, bool)>,
     pub(super) draws: u32,
 }
 
@@ -96,7 +134,6 @@ pub struct Ctx {
     /// Vertex / geometry / fragment stage combinations: (set layout, pipeline layout, descriptors pushed).
     graphics_layouts: HashMap<((u64, u64), Option<(u64, u64)>, Option<(u64, u64)>), (vk::DescriptorSetLayout, vk::PipelineLayout, bool)>,
     empty_layout: vk::DescriptorSetLayout,
-    desc_pools: Vec<vk::DescriptorPool>,
     st: Nvn,
     /// The command buffer being recorded (on vk-record, from `rec_pool`).
     cb: vk::CommandBuffer,
@@ -109,7 +146,7 @@ pub struct Ctx {
     /// Allocated from `rec_pool` for vk-record to record into next.
     spare_cbs: Vec<vk::CommandBuffer>,
     /// Chunks handed to vk-record to end, with their uploads, to queue once it has (submit_chunk).
-    unqueued: std::collections::VecDeque<smallvec::SmallVec<[vk::CommandBuffer; 2]>>,
+    unqueued: std::collections::VecDeque<(smallvec::SmallVec<[vk::CommandBuffer; 2]>, Option<EarlyReports>)>,
     pass: Option<Pass>,
     /// The device was lost: nothing more is submitted.
     lost: bool,
@@ -125,11 +162,20 @@ pub struct Ctx {
     gpu_dirty: Ranges,
     /// What earlier submits' GPU work writes, until they complete.
     inflight_dirty: Vec<(u64, Ranges)>,
-    /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it taken at the first such
-    /// draw after the last barrier that invalidates textures (NVN: it sees the writes from before the barrier; sampling
-    /// an attachment inside a Vulkan render pass is undefined). Copies by texture description, with their epoch.
+    /// Render-target feedback: a draw sampling an attachment of its own pass reads a copy of it, taken at the first such
+    /// draw of a feedback epoch (sampling an attachment inside a Vulkan render pass is undefined). An epoch ends at a
+    /// barrier that invalidates textures and at a draw of another program after one that rendered to an attachment
+    /// copied in it: games read what the draws before rendered without a barrier between (TotK's shrine floors blend
+    /// into the ground drawn just before them, and blended into black). Copies by texture description, with their epoch.
     fb_snaps: rustc_hash::FxHashMap<texture::Desc, (u64, texture::Image)>,
     fb_epoch: u64,
+    /// The attachments copied in this feedback epoch.
+    fb_taken: Vec<vk::Image>,
+    /// The program (vertex, fragment code) of the draw that rendered to one of them.
+    fb_dirty: Option<(u64, u64)>,
+    /// The attachments of the pass a feedback copy ended, until the draw resumes it: the textures the draw binds after
+    /// the copy are attachments too (they were bound live, read while being rendered to).
+    fb_paused: Vec<vk::Image>,
     /// GPU texture compression: the game renders compressed blocks through an integer view of a block-compressed texture
     /// (one texel per block). Those passes render into an uncompressed proxy, copied into the texture's level when the
     /// pass ends. Proxies by (texture, level, view format); the ones the current pass renders.
@@ -156,6 +202,24 @@ pub struct Ctx {
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
     pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
+    /// Advanced when `bindings` is emptied; the bound texture slots' last resolutions (draw.rs texture_binding) are valid
+    /// at the generation they were made in.
+    bindings_gen: u64,
+    /// What `target` last resolved: image, whether the attachment is all of it, its size.
+    last_target: Option<(texture::Desc, bool, (u32, u32))>,
+    tex_memo: Box<[[draw::TexMemo; draw::TEX_MEMO]; 6]>,
+    /// Bindless textures (vulkan/bindless.rs): the indices given out (made with the first draw), what handles resolved
+    /// to across submits (draw.rs bindless_word; slots registered again are dropped when a submit begins: pools change
+    /// between submits only), the pool change sequence and samplers generation they are valid at, and the push constant
+    /// words of the draw being worked out.
+    pub(super) bl: Option<super::bindless::Slots>,
+    pub(super) bl_cache: rustc_hash::FxHashMap<(u64, vk::ImageViewType), draw::BlEntry>,
+    /// The bl_cache keys of each texture pool slot (bindless_submit drops a re-registered slot's).
+    pub(super) bl_by_slot: rustc_hash::FxHashMap<i32, smallvec::SmallVec<[(u64, vk::ImageViewType); 2]>>,
+    pub(super) bl_pool_seq: u64,
+    pub(super) bl_epoch: u64,
+    pub(super) bl_words: [u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
+    pub(super) bl_memo: Box<[draw::BlMemo; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize]>,
     /// Repacked vertex streams kept across submits (draw.rs cached_repack), by (memory, layout).
     pub(super) repack_cache: rustc_hash::FxHashMap<u64, draw::RepackedStream>,
     repack_swept: u64,
@@ -165,28 +229,57 @@ pub struct Ctx {
     pub(super) vb_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
     /// Scratch for the driver constant buffer of a draw (draw.rs driver_cbuf).
     pub(super) driver_scratch: Vec<u8>,
-    /// Descriptor sets written in this submit, by contents.
-    pub(super) set_memo: rustc_hash::FxHashMap<u64, vk::DescriptorSet>,
+    /// What driver_scratch was built for: (stage, base vertex, base instance, storage_gen, uniform_gen and dispatch size
+    /// for compute); and the hash of its first n bytes (n, hash) once taken.
+    pub(super) driver_key: Option<(i32, i32, i32, u64, u64, [i32; 3])>,
+    /// The dispatch being recorded: its thread group counts (the compute driver constant buffer holds them).
+    pub(super) dispatch_size: [i32; 3],
+    pub(super) driver_hash: Option<(usize, u64)>,
+    /// Advanced at every storage / uniform buffer binding.
+    pub(super) storage_gen: u64,
+    pub(super) uniform_gen: u64,
     /// What the command buffer being recorded has bound (draw.rs), so binding the same again is left out.
     pub(super) bound: Bound,
     /// The dynamic state set in the current pass (draw.rs dynamic_state).
     pub(super) dynamic_memo: Option<u64>,
+    /// Bumped by commands setting dynamic state; with Ctx::pass_gen and the origin mode, the generation dynamic_state
+    /// last set it at.
+    dynamic_gen: u64,
+    dynamic_seen: Option<(u64, u64, i32)>,
     /// The vertex layout of the bound attribute and stream state, and its hash (draw.rs vertex_layout).
     pub(super) vl_cache: Option<(std::sync::Arc<[draw::VStream]>, u64, u64)>,
     /// Bumped by commands changing the state pipelines are made from, and by each new pass (draw::DrawMemo).
     pipe_gen: u64,
     pass_gen: u64,
     draw_memo: Option<draw::DrawMemo>,
+    /// Draw states by (mode, bound state hash, pass formats hash, origin and depth modes), until a program's stages
+    /// change (set_program); and the hashes with the generations they were worked out at: (pipe_gen, hash, pass_gen,
+    /// hash).
+    draw_memos: HashMap<(i32, u64, u64, i32, i32), draw::DrawMemo>,
+    memo_hashes: (u64, u64, u64, u64),
     /// Support buffers of this submit, by contents (viewport, bound sizes).
     pub(super) supports: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Restart rewrites of this submit (gpu::restart), by (mode, index type, indices, count, restart, base vertex).
     pub(super) restart_memo: rustc_hash::FxHashMap<(i32, i32, usize, i32, u32, i32), Option<(vk::Buffer, u64, u32)>>,
-    /// Uniform buffer copies of this submit by (host address, length, epoch); the epoch advances at every write of guest
-    /// memory by this submit's commands (inline uniform updates, reports).
-    pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize, u64), (vk::Buffer, u64)>,
-    /// Vertex and index data found in the device copies (vcache.rs) in this submit, by (address, length); cleared when
-    /// the submit's commands add a range they write.
-    pub(super) cached_memo: rustc_hash::FxHashMap<(usize, usize), (vk::Buffer, u64)>,
+    /// Uniform buffer copies of this submit by (host address, length): (epoch made, buffer, offset). Good while no write
+    /// of this submit's commands since overlapped them (ubo_unchanged).
+    pub(super) ubo_copies: rustc_hash::FxHashMap<(usize, usize), (u64, vk::Buffer, u64)>,
+    /// Uniform buffer bindings this submit copied, by (guest address, bound size, extent read): (epoch made, host
+    /// address, length, (buffer, offset, range, bound size)), good as ubo_copies. Cleared when the submit's commands add
+    /// a range they write (it may then be bound in place).
+    pub(super) ubo_memo: rustc_hash::FxHashMap<(u64, usize, i32), UboMemo>,
+    /// Advanced when `ubo_memo` is emptied; per uniform buffer slot, its last entry (generation, key, value).
+    ubo_memo_gen: u64,
+    #[allow(clippy::type_complexity)]
+    ubo_slot_memo: Box<[[(u64, (u64, usize, i32), UboMemo); draw::UBO_MEMO]; 6]>,
+    /// The epoch of the last write by this submit's commands to each 4 KiB block of guest memory (inline uniform
+    /// updates, reports), and of the last write at all. The epoch used to key the copies: every inline update (TotK
+    /// interleaves them with its draws) made every draw copy its uniform buffers again, ~2.4 ms a frame.
+    ubo_writes: rustc_hash::FxHashMap<usize, u64>,
+    ubo_last_write: u64,
+    /// Vertex and index data found in the device copies (vcache.rs) in this epoch is used again unchecked; a new one
+    /// begins with each submit and when the submit's commands add a range they write.
+    pub(super) cached_epoch: u64,
     /// Driver constant buffer copies of this submit, by (contents hash, length).
     pub(super) driver_copies: rustc_hash::FxHashMap<(u64, usize), (vk::Buffer, u64)>,
     pub(super) ubo_epoch: u64,
@@ -201,15 +294,13 @@ pub struct Ctx {
     /// idle GPU runs at a fraction of its speed), and when the current one began.
     chunks: Vec<vk::CommandBuffer>,
     chunk_start: std::time::Instant,
-    /// Index of the command being executed in this submit (in run_list order).
+    /// Index of the command being executed in this submit (in the order they run).
     op_index: u64,
-    /// Guest memory this submit's commands write while it is recorded (inline uniform updates, reports): uniform
-    /// buffers there are copied when bound (draws before the write must not see it), others are read in place.
-    pub(super) cmd_writes: Ranges,
-    /// The submit's command lists by handle (fetched once by the pre-scan).
+    /// The submit's command lists by handle (nvn::api::walk_command_lists).
     lists: rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
-    /// Pre-scans of lists without calls, by list.
-    scan_cache: rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan, u64)>,
+    /// Walks them, publishing their commands in the order they run and where the occlusion counters are reset and
+    /// reported (decode.rs).
+    decoder: decode::Decoder,
     inflight: std::collections::VecDeque<InFlight>,
     /// The command pool of the submit being recorded (one per submit in flight); retired pools' command buffers are freed
     /// on a helper thread (vk-pool-free), which then returns the pools for reuse.
@@ -219,7 +310,6 @@ pub struct Ctx {
     /// Query and descriptor pools of retired submits, for reuse.
     free_occl: Vec<vk::QueryPool>,
     free_timestamps: Vec<vk::QueryPool>,
-    free_desc_pools: Vec<vk::DescriptorPool>,
     warned: HashSet<String>,
     /// The pipeline cache (stage_cache.rs; made at the first pipeline), and pipelines created since it was last saved.
     pipeline_cache: Option<vk::PipelineCache>,
@@ -231,6 +321,10 @@ pub struct Ctx {
     window_tried: bool,
     /// --frame-history: the kept presented frames.
     history: Option<super::history::History>,
+    /// Frames still to record for a capture asked without --frame-history (keep_history).
+    history_ahead: usize,
+    /// The frame after a capture's request, pass by pass (vulkan/pass_dump.rs).
+    pass_dump: Option<super::pass_dump::PassDump>,
     /// Commands warned about as not implemented (by name, by kind).
     unimplemented: HashSet<&'static str>,
     unimplemented_kinds: HashSet<std::mem::Discriminant<Cmd>>,
@@ -249,18 +343,39 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
         return;
     }
     super::guard::note_write(a, 16);
-    let p = crate::gpu::report_guard::engine_ptr(a);
-    std::ptr::write_unaligned(p as *mut u64, value);
-    std::ptr::write_unaligned((p + 8) as *mut u64, if timestamp { crate::clock::now_ns() } else { 0 });
+    let time = if timestamp { crate::clock::now_ns() } else { 0 };
+    let mut report = [0u8; 16];
+    report[..8].copy_from_slice(&value.to_le_bytes());
+    report[8..].copy_from_slice(&time.to_le_bytes());
+    crate::gpu::report_guard::engine_write(a, &report);
 }
 
-/// What a command buffer has bound: the graphics pipeline, and per bind point (graphics, compute) the descriptor set with
-/// its pipeline layout and dynamic offsets. The driver charges as much for binding the same again as for a change, and
-/// consecutive draws mostly use the same pipeline and set.
+/// A report at guest `addr` is about to be written, beginning uniform epoch `epoch` (record::overwriting).
+/// The host address a report at `addr` writes (16 bytes; 0 if none).
+unsafe fn report_overwriting(epoch: u64, addr: u64) -> usize {
+    let a = crate::nvn::api::translate_virtual(addr as usize);
+    if a >= 0x10000 {
+        record::overwriting(epoch, a, crate::gpu::report_guard::engine_ptr(a) as *const u8, 16);
+        return a;
+    }
+    0
+}
+
+/// A uniform buffer memo entry (Ctx::ubo_memo): epoch made, host address, length, binding.
+pub(super) type UboMemo = (u64, usize, usize, Option<(vk::Buffer, u64, u64, usize)>);
+
+/// What a command buffer has bound: the graphics pipeline, the vertex buffers (NVN's 16 streams and
+/// pipelines::ZERO_STREAM) and the index buffer (descriptor sets: vk-record, record::Sets). The driver charges as much
+/// for binding the same again as for a change, and consecutive draws mostly use the same pipeline and many the same
+/// buffers.
 #[derive(Default)]
 pub(super) struct Bound {
     pub(super) pipeline: vk::Pipeline,
-    pub(super) sets: [Option<(vk::PipelineLayout, vk::DescriptorSet, smallvec::SmallVec<[u32; 32]>)>; 2],
+    pub(super) vertex: [(vk::Buffer, u64); pipelines::ZERO_STREAM as usize + 1],
+    pub(super) index: Option<(vk::Buffer, u64, vk::IndexType)>,
+    /// Bindless textures: the global set, and the push constant words.
+    pub(super) global: bool,
+    pub(super) words: Option<[u32; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize]>,
 }
 
 /// Disjoint address ranges [start, end), merged as they are added.
@@ -293,22 +408,27 @@ impl Ranges {
     }
 
     pub(super) fn overlaps(&self, a: usize, b: usize) -> bool {
+        if self.0.is_empty() {
+            return false;
+        }
         self.0.range(..b).next_back().is_some_and(|(_, &e)| e > a)
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.0.clear();
     }
 }
 
 impl Ctx {
+    /// Program `program`'s stages: (code, control section, content hash). Draw states worked out with other stages for
+    /// it are dropped.
+    pub(super) fn set_program(&mut self, program: usize, stages: Vec<(u64, u64, u64)>) {
+        if self.programs.get(&program) != Some(&stages) {
+            self.programs.insert(program, stages);
+            self.draw_memo = None;
+            self.draw_memos.clear();
+        }
+    }
+
     /// Whether GPU work of this submit, or of earlier ones still running, writes guest memory [a, b).
     pub(super) fn gpu_writes(&self, a: usize, b: usize) -> bool {
-        if self.gpu_dirty.overlaps(a, b) {
-            return true;
-        }
-        let done = super::inflight::completed();
-        self.inflight_dirty.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
+        gpu_writes(&self.gpu_dirty, &self.inflight_dirty, a, b)
     }
 
     /// The shadow of guest memory [a, a + len) (shadow.rs) for GPU work that writes it (`write`) or reads what GPU work
@@ -328,24 +448,37 @@ impl Ctx {
     /// The device copy of vertex or index data at guest [a, a + len) (vcache.rs); None for memory GPU work writes (its
     /// shadow or guest memory is bound) or where it is not cached.
     pub(super) unsafe fn cached(&mut self, a: usize, len: usize) -> Option<(vk::Buffer, u64)> {
-        // Checked once per submit while nothing this submit's commands write is added (cached_memo).
-        if let Some(&b) = self.cached_memo.get(&(a, len)) {
-            return Some(b);
-        }
-        if self.gpu_writes(a, a + len) {
-            return None;
-        }
         let serial = super::guard::RECORDING.load(std::sync::atomic::Ordering::Relaxed);
         let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         let (dev, tex, arena) = (&self.dev, &mut self.tex, &mut self.arena);
-        let b = self.vcache.get(dev, a, len, serial, frame, &mut |dst, dst_off, src, n| {
+        let (dirty, inflight) = (&self.gpu_dirty, &self.inflight_dirty);
+        // Checked once per submit while nothing this submit's commands write is added (cached_epoch).
+        self.vcache.get(dev, a, len, serial, frame, self.cached_epoch, &|a, b| gpu_writes(dirty, inflight, a, b), &mut |dst, dst_off, src, n| {
             let Some((b, o, p)) = arena.alloc(dev, n) else { return false };
             std::ptr::copy_nonoverlapping(src, p, n);
             tex.record_copy(dev, b, o, dst, dst_off, n as u64);
             true
-        })?;
-        self.cached_memo.insert((a, len), b);
-        Some(b)
+        })
+    }
+
+    /// This submit's commands wrote host memory [a, a+len) at the current uniform epoch.
+    pub(super) fn ubo_wrote(&mut self, a: usize, len: usize) {
+        if a == 0 || len == 0 {
+            return;
+        }
+        for block in a >> 12..=(a + len - 1) >> 12 {
+            self.ubo_writes.insert(block, self.ubo_epoch);
+        }
+        self.ubo_last_write = self.ubo_epoch;
+    }
+
+    /// Whether no write of this submit's commands touched host memory [a, a+len) since uniform epoch `made` (a copy made
+    /// then holds what a copy now would).
+    pub(super) fn ubo_unchanged(&self, a: usize, len: usize, made: u64) -> bool {
+        if made >= self.ubo_last_write || len == 0 {
+            return true;
+        }
+        (a >> 12..=(a + len - 1) >> 12).all(|block| self.ubo_writes.get(&block).is_none_or(|&e| e <= made))
     }
 
     /// Guest memory [a, b) is written by this submit's commands: what was checked against it is checked again.
@@ -353,16 +486,31 @@ impl Ctx {
         // Draws binding the same storage buffer add it again and again: only new ranges change anything.
         if !self.gpu_dirty.covers(a, b) {
             self.gpu_dirty.add(a, b);
-            self.cached_memo.clear();
+            self.ubo_memo.clear();
+            self.ubo_memo_gen += 1;
+            self.cached_epoch += 1;
         }
     }
+}
+
+/// Whether GPU work of this submit (`dirty`), or of earlier ones still running (`inflight`), writes guest memory [a, b).
+fn gpu_writes(dirty: &Ranges, inflight: &[(u64, Ranges)], a: usize, b: usize) -> bool {
+    if dirty.overlaps(a, b) {
+        return true;
+    }
+    if inflight.iter().all(|(_, r)| r.0.is_empty()) {
+        return false;
+    }
+    let done = super::inflight::completed();
+    inflight.iter().any(|(s, r)| *s > done && r.overlaps(a, b))
 }
 
 /// Pass-end timestamps per submit when profiling passes.
 const PASS_TIMESTAMPS: u32 = 1000;
 
 /// --split-ms=T (default 1, 0 = one command buffer per submit): the command buffer is handed to the queue between
-/// passes once T ms were spent recording it.
+/// passes once T ms were spent recording it. A tuning number: it trades submit overhead against how early the GPU can
+/// start; the commands, their order and the results are the same either way.
 fn chunk() -> Option<std::time::Duration> {
     static T: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     let ms = *T.get_or_init(|| crate::settings::get().graphics.split_ms);
@@ -386,9 +534,6 @@ pub(super) struct Occlusion {
     events: Vec<super::inflight::Occl>,
     reports: Vec<u64>,
     precise: bool,
-    /// The submit's counter resets (false) and reports (true) by command index (Ctx::op_index), and the next one.
-    upcoming: Vec<(u64, bool)>,
-    cursor: usize,
 }
 
 impl Occlusion {
@@ -403,8 +548,6 @@ impl Occlusion {
             events: Vec::new(),
             reports: Vec::new(),
             precise: dev.precise_occlusion,
-            upcoming: Vec::new(),
-            cursor: 0,
         }
     }
 
@@ -415,6 +558,15 @@ impl Occlusion {
                 .unwrap_or(vk::QueryPool::null())
         }
     }
+}
+
+/// Reports written when the chunk holding them completed, not the whole submit: the page guard (gpu::report_guard) holds
+/// the game's reader until they are written, and the Switch's GPU has run the culling pass by the time it reads.
+struct EarlyReports {
+    pool: vk::QueryPool,
+    /// Queries below this have ended by the end of the chunk.
+    queries: u32,
+    events: Vec<super::inflight::Occl>,
 }
 
 /// A submit the GPU may still be running, with what it uses: freed once its serial completed (inflight.rs).
@@ -429,7 +581,7 @@ struct InFlight {
     readback_chunks: Vec<super::device::HostBuffer>,
     occl_pool: vk::QueryPool,
     timestamps: vk::QueryPool,
-    imports: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    imports: Vec<(vk::Buffer, vk::DeviceMemory, usize, usize)>,
     /// Occlusion report addresses, written by the watcher.
     reports: Vec<u64>,
     /// Images whose guest bytes the watcher rewrote (render-target write-back).
@@ -522,7 +674,6 @@ impl Ctx {
             layouts: Default::default(),
             graphics_layouts: Default::default(),
             empty_layout,
-            desc_pools: Vec::new(),
             st: Nvn {
                 depth_range: (0.0, 1.0),
                 stencil: [[0, 0], [0xFF, 0xFF], [0xFF, 0xFF]],
@@ -542,6 +693,9 @@ impl Ctx {
             gpu_dirty: Ranges::default(),
             inflight_dirty: Vec::new(),
             fb_snaps: Default::default(),
+            fb_taken: Vec::new(),
+            fb_dirty: None,
+            fb_paused: Vec::new(),
             bc_proxies: Default::default(),
             bc_pending: Vec::new(),
             rt_history: Default::default(),
@@ -555,23 +709,46 @@ impl Ctx {
             zeros,
             repacked: Default::default(),
             bindings: Default::default(),
+            bindings_gen: 1,
+            last_target: None,
+            ubo_memo_gen: 1,
+            ubo_slot_memo: Box::new([[(0, (0, 0, 0), (0, 0, 0, None)); draw::UBO_MEMO]; 6]),
+            tex_memo: Box::new([[Default::default(); draw::TEX_MEMO]; 6]),
+            bl: None,
+            bl_cache: Default::default(),
+            bl_by_slot: Default::default(),
+            bl_pool_seq: 0,
+            bl_epoch: 0,
+            bl_words: [0; sass2spv::accessor::BINDLESS_PUSH_WORDS as usize],
+            bl_memo: Box::new([Default::default(); sass2spv::accessor::BINDLESS_PUSH_WORDS as usize]),
             max_indices: Default::default(),
             vb_memo: Default::default(),
             driver_scratch: Vec::new(),
-            set_memo: Default::default(),
+            driver_key: None,
+            dispatch_size: [0; 3],
+            driver_hash: None,
+            storage_gen: 0,
+            uniform_gen: 0,
             bound: Bound::default(),
             dynamic_memo: None,
+            dynamic_gen: 0,
+            dynamic_seen: None,
             vl_cache: None,
             pipe_gen: 0,
             pass_gen: 0,
             draw_memo: None,
+            draw_memos: HashMap::default(),
+            memo_hashes: (u64::MAX, 0, u64::MAX, 0),
             repack_cache: Default::default(),
             repack_swept: 0,
             supports: Default::default(),
             restart_memo: Default::default(),
             ubo_copies: Default::default(),
+            ubo_memo: Default::default(),
+            ubo_writes: Default::default(),
+            ubo_last_write: 0,
             driver_copies: Default::default(),
-            cached_memo: Default::default(),
+            cached_epoch: 1,
             ubo_epoch: 0,
             timestamps,
             timestamps_supported,
@@ -581,16 +758,14 @@ impl Ctx {
             chunks: Vec::new(),
             chunk_start: std::time::Instant::now(),
             op_index: 0,
-            cmd_writes: Ranges::default(),
-            scan_cache: Default::default(),
             lists: Default::default(),
+            decoder: decode::Decoder::new()?,
             inflight: Default::default(),
             pool: vk::CommandPool::null(),
             pool_tx,
             free_pools,
             free_occl: Vec::new(),
             free_timestamps: Vec::new(),
-            free_desc_pools: Vec::new(),
             warned: Default::default(),
             unimplemented: Default::default(),
             pipeline_cache: None,
@@ -599,6 +774,8 @@ impl Ctx {
             window: None,
             window_tried: false,
             history: None,
+            history_ahead: 0,
+            pass_dump: None,
             unimplemented_kinds: Default::default(),
         })
     }
@@ -610,9 +787,15 @@ impl Ctx {
         }
     }
 
-    /// Records and queues a submit with `serial` (inflight.rs completes it).
-    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64) {
+    /// Records and queues a submit with `serial` (inflight.rs completes it). `fetched`: the lists it reaches, by handle
+    /// (nvn::api::walk_command_lists), taken; with `resolve`, the roots only (vk-decode fetches the rest).
+    pub unsafe fn submit(&mut self, lists: &[u64], serial: u64, fetched: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>, resolve: bool) {
         crate::gpu::history::journal(|| format!("submit {} lists serial {serial}", lists.len()));
+        // Emptied when the previous submit ended.
+        std::mem::swap(&mut self.lists, fetched);
+        // vk-decode walks the lists while the submit is set up here: fetching what the roots call (~3,000 lists in TotK,
+        // under the list lock) took it ~1 ms before it published the first command, and this thread waited all of it.
+        self.decoder.start(lists, &self.lists, resolve);
         let empty = |serial| super::inflight::Done {
             serial,
             fence: vk::Fence::null(),
@@ -627,6 +810,7 @@ impl Ctx {
         self.retire();
         if self.lost || super::inflight::LOST.load(std::sync::atomic::Ordering::Acquire) {
             self.lost = true;
+            self.decoder.finish();
             super::inflight::watch(empty(serial));
             return;
         }
@@ -637,6 +821,7 @@ impl Ctx {
             self.retire();
         }
         let (Some(pool), Some(rec_pool)) = (self.command_pool(), self.command_pool()) else {
+            self.decoder.finish();
             super::inflight::watch(empty(serial));
             return;
         };
@@ -644,15 +829,17 @@ impl Ctx {
         self.spare_cbs.clear();
         self.alloc_cbs();
         let Some(cb) = self.next_cb() else {
+            self.decoder.finish();
             super::inflight::watch(empty(serial));
             return;
         };
-        // Programs may have been registered again since.
-        self.draw_memo = None;
         self.bound = Bound::default();
+        self.rec.op(record::Op::Submit);
         self.tex.begin_batch(self.pool);
         super::guard::RECORDING.store(serial, std::sync::atomic::Ordering::Relaxed);
+        record::clear_overwritten();
         self.tex.begin_submit();
+        self.bindless_submit();
         self.occl.pool = self.free_occl.pop().unwrap_or_else(|| Occlusion::new_pool(&self.dev));
         if self.timestamps_supported {
             self.timestamps = self.free_timestamps.pop().unwrap_or_else(|| new_timestamp_pool(&self.dev, true));
@@ -673,41 +860,25 @@ impl Ctx {
         self.record_rt_reads();
         let t0 = std::time::Instant::now();
         self.chunk_start = t0;
-        let mut upcoming = std::mem::take(&mut self.occl.upcoming);
-        upcoming.clear();
-        let mut n = 0;
-        let mut writes = std::mem::take(&mut self.cmd_writes);
-        writes.clear();
-        for &h in lists {
-            Self::scan_counters(h, serial, 0, &mut n, &mut upcoming, &mut writes, &mut self.scan_cache, &mut self.lists);
-        }
-        self.cmd_writes = writes;
-        // Lists not reached lately may be gone: forget those now and then (not all of them: scanning a whole frame's lists
-        // again took ~80 ms, a hitch every few seconds on TotK's title).
-        if self.scan_cache.len() > 1 << 15 {
-            // Freed on another thread: they hold the last references to tens of thousands of recorded lists, whose
-            // freeing took ~80 ms here.
-            let (keep, old): (rustc_hash::FxHashMap<_, _>, Vec<_>) = {
-                let mut keep = rustc_hash::FxHashMap::default();
-                let mut old = Vec::new();
-                for (k, e) in std::mem::take(&mut self.scan_cache) {
-                    if e.2 + 8 >= serial {
-                        keep.insert(k, e);
-                    } else {
-                        old.push(e);
+        self.op_index = 0;
+        // The lists are walked on vk-decode (decode.rs) while their commands run here.
+        while let Some(e) = self.decoder.next() {
+            let op = &*e.op;
+            match &op.typed {
+                Some(c) => {
+                    self.checkpoint_each(op.name, [self.op_index, e.list, 0, 0]);
+                    self.exec(c)
+                }
+                None => {
+                    let name = op.name;
+                    if self.unimplemented.insert(name) {
+                        self.warn(format!("{name} is not implemented"));
                     }
                 }
-                (keep, old)
-            };
-            self.scan_cache = keep;
-            let _ = std::thread::Builder::new().name("vk-list-free".into()).spawn(move || drop(old));
+            }
+            self.op_index += 1;
         }
-        self.occl.upcoming = upcoming;
-        self.occl.cursor = 0;
-        self.op_index = 0;
-        for &h in lists {
-            self.run_list(h, 0);
-        }
+        self.decoder.finish();
         self.end_pass();
         if let Some(q) = self.occl.active.take() {
             let pool = self.occl.pool;
@@ -747,6 +918,9 @@ impl Ctx {
         let fence = d.create_fence(&vk::FenceCreateInfo::default(), None).unwrap_or(vk::Fence::null());
         let cbs = self.with_uploads(self.cb);
         self.tex.end_batch();
+        if let Some(s) = self.bl.as_mut() {
+            s.flush(&self.dev);
+        }
         let d = &self.dev.device;
         if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
             let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
@@ -755,6 +929,7 @@ impl Ctx {
             self.lost = true;
         }
         super::SUBMITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        super::count_for_overlay(&super::OVERLAY_SUBMITS);
         let record = t0.elapsed().as_nanos() as u64;
         super::RECORD_NS.fetch_add(record, std::sync::atomic::Ordering::Relaxed);
         super::LAST_RECORD_NS.store(record, std::sync::atomic::Ordering::Relaxed);
@@ -793,7 +968,7 @@ impl Ctx {
             cbs,
             rec_pool: self.rec_pool,
             rec_cbs,
-            desc_pools: std::mem::take(&mut self.desc_pools),
+            desc_pools: self.rec.used_pools(),
             chunks: self.arena.take_used(),
             readback_chunks: self.readback.take_used(),
             occl_pool,
@@ -810,15 +985,19 @@ impl Ctx {
         self.tex.settle();
         self.repacked.clear();
         self.bindings.clear();
+        self.bindings_gen += 1;
         self.max_indices.clear();
         self.lists.clear();
         self.vb_memo.clear();
-        self.set_memo.clear();
         self.supports.clear();
         self.restart_memo.clear();
         self.ubo_copies.clear();
+        self.ubo_writes.clear();
+        self.ubo_last_write = 0;
+        self.ubo_memo.clear();
+        self.ubo_memo_gen += 1;
         self.driver_copies.clear();
-        self.cached_memo.clear();
+        self.cached_epoch += 1;
     }
 
     /// The pipeline cache.
@@ -862,7 +1041,7 @@ impl Ctx {
             let _ = self.pool_tx.send((f.rec_pool, f.rec_cbs));
             for p in f.desc_pools {
                 if d.reset_descriptor_pool(p, vk::DescriptorPoolResetFlags::empty()).is_ok() {
-                    self.free_desc_pools.push(p);
+                    self.rec.give_pool(p);
                 } else {
                     d.destroy_descriptor_pool(p, None);
                 }
@@ -882,9 +1061,10 @@ impl Ctx {
             for b in f.staging {
                 self.tex.recycle_staging(&self.dev, b);
             }
-            for (b, m) in f.imports {
+            for (b, m, start, size) in f.imports {
                 d.destroy_buffer(b, None);
                 d.free_memory(m, None);
+                crate::guest::dirty_track::imported_remove(start, size);
             }
         }
     }
@@ -956,10 +1136,36 @@ impl Ctx {
     }
 
     /// Keeps presented frame `frame` for the frame history (gpu::history) and writes the history when a capture is due.
+    /// Without --frame-history nothing is kept: a capture then records the HISTORY_AHEAD frames that follow it.
     pub unsafe fn keep_history(&mut self, texture: usize, crop: [i32; 4], frame: u64) {
+        const HISTORY_AHEAD: usize = 60;
         let n = crate::gpu::history::len();
-        if n == 0 || self.lost {
+        if self.lost {
             return;
+        }
+        // The pass dump of the frame after a capture's request: written once that frame is presented and done.
+        match self.pass_dump.as_mut() {
+            Some(d) if d.recording() => d.presented(frame),
+            Some(_) => {
+                let _ = self.dev.device.device_wait_idle();
+                if let Some(d) = self.pass_dump.take() {
+                    d.write(&self.dev);
+                }
+            }
+            None => {}
+        }
+        if n == 0 && self.history_ahead == 0 {
+            if !crate::gpu::history::due(frame) {
+                return;
+            }
+            self.pass_dump.get_or_insert_with(|| super::pass_dump::PassDump::new(frame + 1));
+            // Kept for the next capture, which overwrites all of it.
+            if self.history.is_none() {
+                self.history = super::history::History::new(&self.dev, HISTORY_AHEAD);
+            }
+            self.history_ahead = HISTORY_AHEAD;
+            crate::gpu::history::record_ahead(HISTORY_AHEAD);
+            println!("[+] Frame history: recording the next {HISTORY_AHEAD} frames");
         }
         if self.history.is_none() {
             self.history = super::history::History::new(&self.dev, n);
@@ -974,11 +1180,23 @@ impl Ctx {
                 }
             }
         }
+        if n == 0 {
+            crate::gpu::history::rotate(frame);
+            self.history_ahead -= 1;
+            if self.history_ahead == 0 {
+                if let Some(h) = self.history.as_ref() {
+                    h.write(&self.dev, frame);
+                }
+                crate::gpu::history::record_ahead(0);
+            }
+            return;
+        }
         crate::gpu::history::rotate(frame);
         if crate::gpu::history::due(frame) {
             if let Some(h) = self.history.as_ref() {
                 h.write(&self.dev, frame);
             }
+            self.pass_dump.get_or_insert_with(|| super::pass_dump::PassDump::new(frame + 1));
         }
     }
 
@@ -1008,98 +1226,17 @@ impl Ctx {
         let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
         let (image, size) = (img.image, ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1)));
         if let Some(w) = self.window.as_mut() {
+            {
+                // What the game presents, and at what size: a change is rare, and the first thing to check against a console.
+                static LAST: std::sync::Mutex<(u32, u32, i32, i32)> = std::sync::Mutex::new((0, 0, 0, 0));
+                let now = (size.0, size.1, crop[2], crop[3]);
+                let mut last = LAST.lock().unwrap();
+                if *last != now {
+                    *last = now;
+                    println!("[+] Vulkan: presenting {}x{}, showing {}x{} of it", size.0, size.1, crop[2], crop[3]);
+                }
+            }
             w.present(&self.dev, image, level, layer, size, crop);
-        }
-    }
-
-    /// The occlusion counter resets and reports of the lists, by command index (as run_list counts them), and the guest
-    /// memory their commands write (inline uniform updates, reports).
-    unsafe fn scan_counters(
-        handle: u64,
-        serial: u64,
-        depth: u32,
-        index: &mut u64,
-        out: &mut Vec<(u64, bool)>,
-        writes: &mut Ranges,
-        cache: &mut rustc_hash::FxHashMap<usize, (std::sync::Arc<crate::nvn::api::RecordedCommandList>, ListScan, u64)>,
-        lists: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>,
-    ) {
-        let list = match lists.get(&handle) {
-            Some(l) => l.clone(),
-            None => {
-                let Some(l) = crate::nvn::api::command_list(handle, depth > 0) else { return };
-                lists.insert(handle, l.clone());
-                l
-            }
-        };
-        // Lists without calls (most: TotK records each mesh's list once) are scanned once.
-        if list.summary().1.is_empty() {
-            let key = std::sync::Arc::as_ptr(&list) as usize;
-            let e = cache.entry(key).or_insert_with(|| (list.clone(), ListScan::of(&list), serial));
-            e.2 = serial;
-            let scan = &e.1;
-            out.extend(scan.events.iter().map(|&(i, report)| (*index + i, report)));
-            for &(addr, len) in &scan.writes {
-                let a = crate::nvn::api::translate_virtual(addr as usize);
-                writes.add(a, a + len);
-            }
-            *index += scan.ops;
-            return;
-        }
-        for op in &list.ops {
-            match &op.typed {
-                Some(Cmd::CallCommands(hs)) if depth < 16 => {
-                    for &h in hs.iter() {
-                        Self::scan_counters(h, serial, depth + 1, index, out, writes, cache, lists);
-                    }
-                    continue;
-                }
-                Some(c) => {
-                    if let Some((report, write)) = ListScan::classify(c) {
-                        if let Some(r) = report {
-                            out.push((*index, r));
-                        }
-                        if let Some((addr, len)) = write {
-                            let a = crate::nvn::api::translate_virtual(addr as usize);
-                            writes.add(a, a + len);
-                        }
-                    }
-                }
-                None => {}
-            }
-            *index += 1;
-        }
-    }
-
-    unsafe fn run_list(&mut self, handle: u64, depth: u32) {
-        // Fetched by the pre-scan.
-        let list = match self.lists.get(&handle) {
-            Some(l) => l.clone(),
-            None => match crate::nvn::api::command_list(handle, depth > 0) {
-                Some(l) => l,
-                None => return,
-            },
-        };
-        for op in &list.ops {
-            match &op.typed {
-                Some(Cmd::CallCommands(hs)) if depth < 16 => {
-                    for &h in hs.iter() {
-                        self.run_list(h, depth + 1);
-                    }
-                    continue;
-                }
-                Some(c) => {
-                    self.checkpoint_each(op.name, [self.op_index, handle, 0, 0]);
-                    self.exec(c)
-                }
-                None => {
-                    let name = op.name;
-                    if self.unimplemented.insert(name) {
-                        self.warn(format!("{name} is not implemented"));
-                    }
-                }
-            }
-            self.op_index += 1;
         }
     }
 
@@ -1111,7 +1248,7 @@ impl Ctx {
             Cmd::SetDepthClamp(e) => st.depth_clamp != *e,
             Cmd::SetPrimitiveRestart { enable, index } => st.prim_restart != enable.then_some(*index),
             Cmd::BindProgram { program, stages } => (stages & 0x1F != 0 || *stages == 0) && st.program != *program,
-            Cmd::BindVertexAttribState(a) => st.attribs != *a,
+            Cmd::BindVertexAttribState(a) => st.attribs != **a,
             Cmd::BindVertexStreamState(s) => st.streams != *s,
             Cmd::BindBlendState(b) => st.blend.get((b & 0xF) as usize).is_some_and(|o| o != b),
             Cmd::BindColorState(v) => st.color_state != *v,
@@ -1119,19 +1256,37 @@ impl Ctx {
             Cmd::BindDepthStencilState(d) => st.depth_stencil != Some(*d),
             Cmd::BindPolygonState(p) => st.polygon != *p,
             Cmd::BindMultisampleState(m) => st.multisample != *m,
+            Cmd::SetPointSize(s) => st.point_size != *s,
             _ => false,
         };
         if changed {
             self.pipe_gen += 1;
+        } else if matches!(
+            c,
+            Cmd::SetViewport { .. }
+                | Cmd::SetScissor { .. }
+                | Cmd::SetDepthRange { .. }
+                | Cmd::SetStencilValue { .. }
+                | Cmd::SetBlendColor(_)
+                | Cmd::SetPolygonOffset { .. }
+        ) {
+            self.dynamic_gen += 1;
         } else if matches!(c, Cmd::BindVertexAttribState(_) | Cmd::BindVertexStreamState(_)) {
             // The same as bound: nothing to set (the vertex layout stays).
             return;
         }
         match c {
+            // Handles resolve when draws are recorded, in order; caches keyed by handle hold the pools in the key.
+            Cmd::SetTexturePool(pool) => {
+                crate::nvn::api::set_active_texture_pool(*pool);
+            }
+            Cmd::SetSamplerPool(pool) => {
+                crate::nvn::api::set_active_sampler_pool(*pool);
+            }
             Cmd::SetRenderTargets { colors, depth } => {
                 self.end_pass();
                 self.st.colors = colors.clone();
-                self.st.depth = *depth;
+                self.st.depth = depth.as_deref().copied();
             }
             Cmd::ClearColor { index, rgba, mask } => self.clear_color(*index, *rgba, *mask),
             Cmd::ClearDepthStencil { depth, depth_mask, stencil, stencil_mask } => {
@@ -1148,6 +1303,7 @@ impl Ctx {
                 }
             }
             Cmd::SetDepthClamp(e) => self.st.depth_clamp = *e,
+            Cmd::SetRasterizerDiscard(e) => self.st.rasterizer_discard = *e,
             Cmd::SetPrimitiveRestart { enable, index } => self.st.prim_restart = enable.then_some(*index),
             Cmd::SetPolygonOffset { factor, units, clamp } => self.st.polygon_offset = (*factor, *units, *clamp),
             Cmd::SetBlendColor(c) => self.st.blend_color = *c,
@@ -1173,7 +1329,7 @@ impl Ctx {
                 }
             }
             Cmd::BindVertexAttribState(a) => {
-                self.st.attribs = *a;
+                self.st.attribs = **a;
                 self.vl_cache = None;
             }
             Cmd::BindVertexStreamState(s) => {
@@ -1193,24 +1349,27 @@ impl Ctx {
             Cmd::BindPolygonState(p) => self.st.polygon = *p,
             Cmd::BindMultisampleState(m) => self.st.multisample = *m,
             Cmd::Barrier(bits) => {
+                crate::gpu::history::journal(|| format!("barrier {bits:#x}"));
                 self.end_pass();
                 self.barrier();
                 // INVALIDATE_TEXTURE: textures read after it see what was rendered before it.
                 if bits & 0x10 != 0 {
                     self.fb_epoch += 1;
+                    self.fb_taken.clear();
+                    self.fb_dirty = None;
                 }
             }
             Cmd::BindTexture { stage, index, handle } => {
-                self.st.textures.insert((*stage, *index), *handle);
+                self.st.textures.set(*stage, *index, *handle);
             }
             Cmd::BindImage { stage, index, handle } => {
-                self.st.images.insert((*stage, *index), *handle);
+                self.st.images.set(*stage, *index, *handle);
             }
             Cmd::BindTexturesDeferred { stage, first, count, handles } => {
                 let a = crate::nvn::api::translate_virtual(*handles as usize);
                 for i in 0..(*count).clamp(0, 32) {
                     let h = if a > 0x10000 { std::ptr::read_unaligned((a as *const u64).add(i as usize)) } else { 0 };
-                    self.st.textures.insert((*stage, *first + i), h);
+                    self.st.textures.set(*stage, *first + i, h);
                 }
             }
             Cmd::SetRenderEnable(e) => self.st.render_disabled = !*e,
@@ -1221,7 +1380,9 @@ impl Ctx {
                 if pending {
                     self.st.render_disabled = false;
                 } else if a > 0x10000 {
-                    let (x, y) = (std::ptr::read_unaligned(a as *const u64), std::ptr::read_unaligned((a + 16) as *const u64));
+                    // Report pages the guard holds are read through it (the engine never waits for them).
+                    let read = |at: usize| std::ptr::read_unaligned(crate::gpu::report_guard::engine_ptr(at) as *const u64);
+                    let (x, y) = (read(a), read(a + 16));
                     values = (x, y);
                     self.st.render_disabled = if *mode == 0 { x != y } else { x == y };
                 }
@@ -1231,16 +1392,20 @@ impl Ctx {
                 });
             }
             Cmd::BindUniformBuffer { stage, index, addr, size } => {
-                self.st.uniforms.insert((*stage, *index), (*addr, *size));
+                self.st.uniforms.set(*stage, *index, (*addr, *size));
+                self.uniform_gen += 1;
             }
             Cmd::BindStorageBuffer { stage, index, addr, size } => {
-                self.st.storage.insert((*stage, *index), (*addr, *size));
+                self.st.storage.set(*stage, *index, (*addr, *size));
+                self.storage_gen += 1;
             }
             Cmd::UpdateUniformBuffer { addr, offset, data } => {
                 // In stream order: draws recorded before it took their copies already.
                 let a = crate::nvn::api::translate_virtual((*addr as i64 + *offset as i64) as usize);
                 self.ubo_epoch += 1;
                 if a > 0x10000 {
+                    record::overwriting(self.ubo_epoch, a, a as *const u8, data.len());
+                    self.ubo_wrote(a, data.len());
                     std::ptr::copy_nonoverlapping(data.as_ptr(), a as *mut u8, data.len());
                 }
             }
@@ -1264,6 +1429,8 @@ impl Ctx {
             }
             Cmd::ReportValue { value, addr } => {
                 self.ubo_epoch += 1;
+                let a = report_overwriting(self.ubo_epoch, *addr);
+                self.ubo_wrote(a, 16);
                 write_report(*addr, *value as u64, true)
             }
             Cmd::ReportCounter { counter, addr } => {
@@ -1274,6 +1441,8 @@ impl Ctx {
                 } else {
                     let v = if *counter == 0 { crate::clock::now_ns() } else { 0 };
                     self.ubo_epoch += 1;
+                    let a = report_overwriting(self.ubo_epoch, *addr);
+                    self.ubo_wrote(a, 16);
                     write_report(*addr, v, *counter != 0xF);
                 }
             }
@@ -1295,19 +1464,20 @@ impl Ctx {
     unsafe fn target(&mut self, r: &RtRef) -> Option<(NvnTexture, vk::ImageView, vk::Format, (u32, u32), vk::SampleCountFlags, vk::Image)> {
         let addr = crate::nvn::api::resolve_texture_ref(r.texture, r.gen);
         let (_, t) = crate::nvn::api::texture_snapshot(addr)?;
+        self.last_target = None;
         if r.view_format != 0 {
             if let Some(p) = self.bc_proxy(&t, r) {
                 return Some(p);
             }
         }
-        let (img, at_level, at_layer) = self.tex.get(&self.dev, &t)?;
-        img.mark_gpu_write();
+        let (desc, img, at_level, at_layer) = self.tex.target_image(&self.dev, &t)?;
         let fmt = if r.view_format != 0 && format::view_compatible(t.format, r.view_format as i32) {
             texture::device_format(&self.dev, r.view_format as i32)
                 .filter(|f| format::aspects(*f) == format::aspects(img.format))
                 .unwrap_or(img.format)
         } else {
-            img.format
+            // The image may be shared with another format over the same memory (format::alias_compatible).
+            texture::device_format(&self.dev, t.format).filter(|f| format::aspects(*f) == format::aspects(img.format)).unwrap_or(img.format)
         };
         // A 3D texture renders into one depth slice (the reference's layer) through a 2D view of its 2D_ARRAY_COMPATIBLE
         // image; the slice counts as the view's layer.
@@ -1315,7 +1485,10 @@ impl Ctx {
         let extent = ((img.extent.width >> level).max(1), (img.extent.height >> level).max(1));
         let samples = img.samples;
         let image = img.image;
+        let all_of_it = img.levels == 1 && img.layers == 1 && img.extent.depth == 1;
+        let target = (desc, all_of_it, extent);
         let view = Textures::view(&self.dev, img, ty, fmt, level, 1, layer, 1, [2, 3, 4, 5], false)?;
+        self.last_target = Some(target);
         Some((t, view, fmt, extent, samples, image))
     }
 
@@ -1323,15 +1496,18 @@ impl Ctx {
         if self.pass.is_some() {
             return true;
         }
+        self.fb_paused.clear();
         let mut colors = Vec::new();
         let mut nvn_colors = [(0u32, 0u32); 8];
         let mut nvn_depth = (0u32, 0u32);
         let mut images = Vec::new();
         let mut extent = (u32::MAX, u32::MAX);
+        let mut color_targets: Vec<Option<(texture::Desc, bool, (u32, u32))>> = Vec::new();
         let mut samples = vk::SampleCountFlags::TYPE_1;
         for r in self.st.colors.clone() {
             if r.texture == 0 {
                 colors.push(None);
+                color_targets.push(None);
                 continue;
             }
             match self.target(&r) {
@@ -1350,13 +1526,19 @@ impl Ctx {
                     if colors.len() < 8 {
                         nvn_colors[colors.len()] = (t.format as u32, r.view_format as u32);
                     }
+                    color_targets.push(self.last_target.take());
                     colors.push(Some((view, fmt, rendered)));
                 }
-                None => colors.push(None),
+                None => {
+                    color_targets.push(None);
+                    colors.push(None);
+                }
             }
         }
+        let mut depth_target = None;
         let depth = match self.st.depth {
             Some(r) if r.texture != 0 => self.target(&r).map(|(t, view, fmt, e, s, image)| {
+                depth_target = self.last_target.take();
                 nvn_depth = (t.format as u32, r.view_format as u32);
                 extent = (extent.0.min(e.0), extent.1.min(e.1));
                 samples = s;
@@ -1379,8 +1561,10 @@ impl Ctx {
         let n = colors.len();
         if crate::gpu::history::journal_on() {
             let mut l = format!("pass {}x{}", extent.0, extent.1);
-            for (i, (c, img)) in self.st.colors.iter().zip(&images).enumerate() {
-                if c.texture != 0 {
+            // images holds the bound slots' images only, in slot order.
+            let mut bound = images.iter();
+            for (i, c) in colors.iter().enumerate() {
+                if let (Some(_), Some(img)) = (c, bound.next()) {
                     l += &format!(" c{i} {:x}:{}", vk::Handle::as_raw(*img), nvn_colors.get(i).map_or(0, |f| f.0));
                 }
             }
@@ -1389,8 +1573,13 @@ impl Ctx {
             }
             crate::gpu::history::journal(|| l);
         }
+        let whole = |t: (texture::Desc, bool, (u32, u32))| (t.0, t.1 && t.2 == extent);
+        let color_targets: Vec<_> = color_targets.into_iter().take(n).map(|t| t.map(whole)).collect();
+        let depth_target = depth_target.map(whole);
         self.pass_gen += 1;
         self.pass = Some(Pass {
+            color_targets,
+            depth_target,
             images,
             colors,
             depth,
@@ -1413,12 +1602,13 @@ impl Ctx {
             return;
         }
         // Samples count only toward a report: none are needed when the counter is reset before the next report.
-        while o.cursor < o.upcoming.len() && o.upcoming[o.cursor].0 <= self.op_index {
-            o.cursor += 1;
-        }
-        if o.upcoming.get(o.cursor).is_some_and(|&(_, report)| !report) {
+        // Without waiting for vk-decode's walk to find out: a pass begun before the walk reaches the next counter event
+        // counts its samples anyway (waiting held the Presentation Thread at pass starts until the walk got there: about 5%
+        // of its time once bindless textures made binding cheaper).
+        if self.decoder.peek_counter(self.op_index) == Some(Some(false)) {
             return;
         }
+        let o = &mut self.occl;
         if o.next >= Occlusion::QUERIES {
             if self.warned.insert("occlusion queries".into()) {
                 println!("[vulkan] more than {} render passes in one submit: later ones are not counted", Occlusion::QUERIES);
@@ -1466,8 +1656,29 @@ impl Ctx {
         if p.begun {
             return;
         }
+        // Before rendering begins, so an upload goes ahead of it. A target a clear replaces loads nothing.
+        let (colors, depth) = (std::mem::take(&mut p.color_targets), p.depth_target.take());
+        let depth_replaced = p.depth.zip(p.depth_clear).is_some_and(|((_, f), (mask, _))| mask.contains(format::aspects(f)));
+        let cleared: Vec<bool> = p.color_clears.iter().map(|c| c.is_some()).collect();
+        for (i, t) in colors.iter().enumerate() {
+            let Some((d, all_of_it)) = t else { continue };
+            if *all_of_it && cleared.get(i).copied().unwrap_or(false) {
+                self.tex.target_replaced(d);
+            } else {
+                self.tex.load_target(&self.dev, d);
+            }
+        }
+        if let Some((d, all_of_it)) = &depth {
+            if *all_of_it && depth_replaced {
+                self.tex.target_replaced(d);
+            } else {
+                self.tex.load_target(&self.dev, d);
+            }
+        }
+        let Some(p) = self.pass.as_mut() else { return };
         p.begun = true;
         self.dynamic_memo = None;
+        self.dynamic_seen = None;
         let ca: Vec<vk::RenderingAttachmentInfo> = p
             .colors
             .iter()
@@ -1522,6 +1733,7 @@ impl Ctx {
                     info = info.stencil_attachment(d);
                 }
             }
+            super::count_for_overlay(&super::OVERLAY_PASSES);
             d.device.cmd_begin_rendering(cb, &info);
         });
         self.begin_query();
@@ -1531,6 +1743,7 @@ impl Ctx {
         // A pass with only clears still performs them.
         self.ensure_begun();
         self.end_query();
+        self.fb_paused.clear();
         if let Some(p) = self.pass.take() {
             self.rec.cmd(|d, cb| d.device.cmd_end_rendering(cb));
             self.checkpoint("end pass (W, H, color targets)", [p.extent.0 as u64, p.extent.1 as u64, p.colors.len() as u64, 0]);
@@ -1553,8 +1766,41 @@ impl Ctx {
                 self.pass_labels.push(format!("{}x{} {target}, {} draws", p.extent.0, p.extent.1, p.draws));
             }
             self.barrier();
+            if self.pass_dump.as_ref().is_some_and(|d| d.recording()) && p.samples == vk::SampleCountFlags::TYPE_1 {
+                // The colour targets a blit can scale (float formats), with their slots; images lists them first.
+                let mut images = p.images.iter();
+                let mut targets = Vec::new();
+                for (slot, c) in p.colors.iter().enumerate() {
+                    let Some((_, fmt, rendered)) = c else { continue };
+                    let Some(&image) = images.next() else { break };
+                    if format::kind(*rendered) == format::Kind::Float {
+                        targets.push((image, *fmt, slot));
+                    }
+                }
+                let mut pairs = p.pairs.clone();
+                pairs.sort_unstable();
+                let pairs: Vec<String> = pairs.iter().map(|(v, f, n)| format!("s_{v:016x}/s_{f:016x} x{n}")).collect();
+                let label = format!(
+                    "{}x{} {} draws, targets {:?}{}: {}",
+                    p.extent.0,
+                    p.extent.1,
+                    p.draws,
+                    p.colors.iter().map(|c| c.map(|c| c.1)).collect::<Vec<_>>(),
+                    p.depth.map_or(String::new(), |d| format!(", depth {:?}", d.1)),
+                    pairs.join(", ")
+                );
+                if let Some(d) = self.pass_dump.as_mut() {
+                    // The depth target is attached last.
+                    let depth = p.depth.zip(p.images.last()).map(|((_, f), &image)| (image, f));
+                    for c in d.pass(&self.dev, p.extent, &targets, depth, label) {
+                        self.rec.cmd(c);
+                    }
+                }
+            }
             self.resolve_bc_proxies();
-            if chunk().is_some_and(|c| self.chunk_start.elapsed() > c) {
+            // Reports wait for nothing else in the frame: the game reads them soon after the submit starts (EarlyReports).
+            let reports = self.occl.events.iter().any(|e| matches!(e, super::inflight::Occl::Report(_)));
+            if chunk().is_some_and(|c| reports || self.chunk_start.elapsed() > c) {
                 self.submit_chunk();
             }
         }
@@ -1576,19 +1822,34 @@ impl Ctx {
         upload.into_iter().chain(std::iter::once(cb)).collect()
     }
 
+    /// The occlusion work recorded so far, if it holds a report: it goes with the chunk ending now.
+    fn early_reports(&mut self) -> Option<EarlyReports> {
+        use super::inflight::Occl;
+        if !self.occl.events.iter().any(|e| matches!(e, Occl::Report(_))) {
+            return None;
+        }
+        let events = std::mem::take(&mut self.occl.events);
+        let queries = events.iter().map(|e| if let Occl::Query(q) = e { *q + 1 } else { 0 }).max().unwrap_or(0);
+        Some(EarlyReports { pool: self.occl.pool, queries, events })
+    }
+
     /// The command buffer ends on vk-record and is queued once it has (at a later chunk or the submit's end): waiting for
     /// vk-record at every chunk (one a millisecond) was a fifth of the recording.
     unsafe fn submit_chunk(&mut self) {
         self.rec.end_async();
         let cbs = self.with_uploads(self.cb);
-        self.unqueued.push_back(cbs);
+        let early = self.early_reports();
+        // The game may be waiting for these reports (gpu::report_guard): queued now, not at the next chunk's end.
+        let reports = early.is_some();
+        self.unqueued.push_back((cbs, early));
         if self.spare_cbs.is_empty() {
             // vk-record is done with the pool once it ended them all.
             self.queue_chunks(true);
             self.alloc_cbs();
         }
-        self.queue_chunks(false);
+        self.queue_chunks(reports);
         self.bound = Bound::default();
+        self.rec.op(record::Op::Unbound);
         match self.next_cb() {
             Some(cb) => self.rec.op(record::Op::Begin(cb)),
             None => self.lost = true,
@@ -1604,14 +1865,39 @@ impl Ctx {
             } else if !self.rec.try_ended() {
                 break;
             }
-            let cbs = self.unqueued.pop_front().unwrap();
+            let (cbs, early) = self.unqueued.pop_front().unwrap();
+            // Bindless texture entries its commands name are written first.
+            if let Some(s) = self.bl.as_mut() {
+                s.flush(&self.dev);
+            }
             let d = &self.dev.device;
-            if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], vk::Fence::null()) {
+            let mut fence = match early {
+                Some(_) => d.create_fence(&vk::FenceCreateInfo::default(), None).unwrap_or(vk::Fence::null()),
+                None => vk::Fence::null(),
+            };
+            if let Err(e) = d.queue_submit(self.dev.queue, &[vk::SubmitInfo::default().command_buffers(&cbs)], fence) {
                 println!("[vulkan] vkQueueSubmit: {e}");
                 if e == vk::Result::ERROR_DEVICE_LOST {
                     super::device::report_lost("vkQueueSubmit of a chunk");
                 }
                 self.lost = true;
+            }
+            if self.lost && fence != vk::Fence::null() {
+                d.destroy_fence(fence, None);
+                fence = vk::Fence::null();
+            }
+            if let Some(e) = early {
+                super::inflight::watch(super::inflight::Done {
+                    serial: 0,
+                    fence,
+                    occl_pool: e.pool,
+                    queries: e.queries,
+                    occl: e.events,
+                    writebacks: Vec::new(),
+                    timestamps: vk::QueryPool::null(),
+                    pass_labels: Vec::new(),
+                    rt_writebacks: Vec::new(),
+                });
             }
             self.chunks.extend_from_slice(&cbs);
         }
@@ -1871,38 +2157,3 @@ unsafe fn new_timestamp_pool(dev: &Dev, supported: bool) -> vk::QueryPool {
         .unwrap_or(vk::QueryPool::null())
 }
 
-/// What a list without calls contributes to a submit's pre-scan (Ctx::scan_counters): its command count, its counter
-/// resets (false) and reports (true) by command index in the list, and the guest memory its commands write.
-pub(super) struct ListScan {
-    ops: u64,
-    events: Vec<(u64, bool)>,
-    writes: Vec<(u64, usize)>,
-}
-
-impl ListScan {
-    fn of(list: &crate::nvn::api::RecordedCommandList) -> ListScan {
-        let mut s = ListScan { ops: list.ops.len() as u64, events: Vec::new(), writes: Vec::new() };
-        for (i, op) in list.ops.iter().enumerate() {
-            if let Some((report, write)) = op.typed.as_ref().and_then(Self::classify) {
-                if let Some(r) = report {
-                    s.events.push((i as u64, r));
-                }
-                if let Some(w) = write {
-                    s.writes.push(w);
-                }
-            }
-        }
-        s
-    }
-
-    /// A command's occlusion counter event and the guest memory it writes (untranslated address, length).
-    fn classify(c: &Cmd) -> Option<(Option<bool>, Option<(u64, usize)>)> {
-        match c {
-            Cmd::ResetCounter { counter: 1 } => Some((Some(false), None)),
-            Cmd::ReportCounter { counter, addr } => Some(((*counter == 1).then_some(true), Some((*addr, 16)))),
-            Cmd::ReportValue { addr, .. } => Some((None, Some((*addr, 16)))),
-            Cmd::UpdateUniformBuffer { addr, offset, data } => Some((None, Some(((*addr as i64 + *offset as i64) as u64, data.len())))),
-            _ => None,
-        }
-    }
-}

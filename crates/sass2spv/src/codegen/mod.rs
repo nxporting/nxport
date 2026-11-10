@@ -34,6 +34,8 @@ pub struct HostCapabilities {
     pub fragment_inputs: Option<u32>,
     pub sampler_slots: u32,
     pub texture_heap: bool,
+    /// Textures sampled through the global arrays (Host::bindless_textures): (binding, push constant word).
+    pub bindless: Vec<(i32, i32)>,
 }
 
 #[derive(Clone)]
@@ -46,6 +48,9 @@ pub struct SamplerDeclaration {
     /// Sampled through the sampler table (HostCapabilities::sampler_slots): its first texture slot. `image` is then a
     /// separate image and `sampled_image_pointer_type` points to `image_type`.
     pub table_slot: Option<i32>,
+    /// Sampled through the global arrays (Host::bindless_textures): its push constant word. `image` is then the array
+    /// of its view type and `sampled_image_pointer_type` points to one `image_type` in it.
+    pub bindless: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -77,6 +82,9 @@ pub struct CodeGenContext<'a> {
     pub samplers: HashMap<SetBindingPair, SamplerDeclaration>,
     /// The sampler table (HostCapabilities::sampler_slots): its variable, the sampler type and a pointer to one sampler.
     pub sampler_table: Option<(Inst, Inst, Inst)>,
+    /// Host::bindless_textures: the push constant block (u32 words), a pointer to one word, the sampler array, the
+    /// sampler type and a pointer to one sampler.
+    pub bindless: Option<(Inst, Inst, Inst, Inst, Inst)>,
     /// Bytes of each constant buffer binding the stage reads (literal offsets), -1 when it indexes one at run time.
     pub cbuf_extents: std::collections::BTreeMap<i32, i32>,
     pub images: HashMap<SetBindingPair, ImageDeclaration>,
@@ -502,6 +510,7 @@ pub fn generate(
         samplers_types: HashMap::new(),
         samplers: HashMap::new(),
         sampler_table: None,
+        bindless: None,
         cbuf_extents: Default::default(),
         images: HashMap::new(),
         inputs: NetMap::new(),

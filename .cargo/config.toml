@@ -3,3 +3,7 @@
 # trampoline.rs rewrites guest uses of x18.
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-Wl,-platform_version,macos,11.0,12.0"]
+
+# The C runtime linked into the programs (Windows): they run without the Visual C++ Redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

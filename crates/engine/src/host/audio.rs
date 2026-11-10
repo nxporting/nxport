@@ -86,9 +86,8 @@ static WAV: OnceLock<Option<Mutex<Wav>>> = OnceLock::new();
 
 fn playback_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        !crate::settings::get().display.headless && crate::settings::get().audio.audio
-    })
+    // Whatever the mute setting: it can be turned off while the game runs, and live::gain silences the output meanwhile.
+    *ON.get_or_init(|| !crate::settings::get().display.headless)
 }
 
 /// Appends interleaved stereo frames (float, ±1.0 full scale).
@@ -145,6 +144,11 @@ fn fill(out: &mut [f32]) {
             *o = (*o + s).clamp(-1.0, 1.0);
         }
     }
+    // The volume and mute the window's menu sets (host/live.rs), applied to everything the device plays.
+    let gain = crate::host::live::gain();
+    if gain != 1.0 {
+        out.iter_mut().for_each(|o| *o *= gain);
+    }
 }
 
 fn open_wav() -> Option<Mutex<Wav>> {
@@ -179,6 +183,11 @@ fn finish_wav(w: &mut Wav) {
         .seek(SeekFrom::Start(0))
         .and_then(|_| w.file.write_all(&h))
         .and_then(|_| w.file.seek(SeekFrom::End(0)));
+}
+
+/// How much sound waits in the ring now, in ms: what the player hears it late by, before the device's buffers.
+pub fn queued_ms() -> usize {
+    RING.lock().unwrap().samples.len() / (48 * 2)
 }
 
 /// (trims of an overfull ring, underruns) since start, for logs.

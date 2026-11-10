@@ -2,7 +2,7 @@
 
 use crate::collections::NetMap;
 use crate::decoders::register::RegisterType;
-use crate::decoders::{BlockIdx, DecodedProgram, InstOp};
+use crate::decoders::{BlockIdx, DecodedProgram, InstName, InstOp};
 use crate::ir::{Instruction as I, IoVariable, Ir, NodeId, OperandId, StorageKind, TextureFlags};
 use crate::translation::resource_manager::ResourceManager;
 use crate::translation::TranslatorContext;
@@ -30,6 +30,8 @@ pub struct EmitterContext<'a> {
     pub curr_op: InstOp,
     operations: Vec<NodeId>,
     labels: NetMap<u64, BlockLabel>,
+    /// Compute stages: the main function's BAR addresses, in order (exits before one become jumps to it).
+    barriers: Vec<u64>,
     /// Set where the original throws: the stage fails to translate.
     pub error: Option<String>,
 }
@@ -60,8 +62,15 @@ impl<'a> EmitterContext<'a> {
             curr_op: InstOp::default(),
             operations: Vec::new(),
             labels: NetMap::new(),
+            barriers: Vec::new(),
             error: None,
         };
+        if tc.definitions.stage == ShaderStage::Compute && !is_non_main {
+            let main = program.function_by_id(0);
+            let ops = program.function(main).blocks.iter().flat_map(|&b| program.block(b).op_codes.iter());
+            c.barriers = ops.filter(|op| op.name == InstName::Bar).map(|op| op.address).collect();
+            c.barriers.sort_unstable();
+        }
         c.emit_start();
         c
     }
@@ -102,6 +111,24 @@ impl<'a> EmitterContext<'a> {
 
     pub fn get_label(&mut self, address: u64) -> OperandId {
         self.ensure_block_label(address)
+    }
+
+    /// A barrier waits for every thread of the workgroup, and on Maxwell threads that exited count as arrived. Here a
+    /// thread exiting before a barrier sets the exited flag (flag register 4) and jumps to the barrier, and after it
+    /// threads with the flag set return: every thread reaches the barrier in uniform control flow. (A barrier only some
+    /// threads reach is undefined: TotK's 8x8 tile depth reduction read shared memory the other warp had not written.)
+    /// The next barrier after `address` in the main function.
+    pub fn barrier_after(&self, address: u64) -> Option<u64> {
+        self.barriers.iter().copied().find(|&b| b > address)
+    }
+
+    /// Whether the main function has barriers (and so the exited flag).
+    pub fn has_barriers(&self) -> bool {
+        !self.barriers.is_empty()
+    }
+
+    pub fn exited_flag(&mut self) -> OperandId {
+        self.reg(4, RegisterType::Flag)
     }
 
     pub fn set_brx_target(&mut self, address: u64, selector: OperandId, target_value: i32, next_target_address: u64) {

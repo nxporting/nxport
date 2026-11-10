@@ -83,7 +83,7 @@ pub unsafe fn layout(
 ) -> Option<Layout> {
     let mut lb: Vec<vk::DescriptorSetLayoutBinding> = Vec::new();
     for st in std::iter::once(vstage).chain(gstage).chain(fstage) {
-        lb.extend(st.bindings.iter().map(|b| {
+        lb.extend(st.bindings.iter().filter(|b| !matches!(b.feed, super::shader::Feed::Bindless { .. })).map(|b| {
             vk::DescriptorSetLayoutBinding::default().binding(b.binding).descriptor_type(b.ty).descriptor_count(b.count).stage_flags(st.stage_flags)
         }));
     }
@@ -98,8 +98,22 @@ pub unsafe fn layout(
     });
     let flags = if push { vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR } else { vk::DescriptorSetLayoutCreateFlags::empty() };
     let dsl = dev.device.create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().flags(flags).bindings(&lb), None).ok()?;
-    let sl = [dsl];
-    let layout = dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl), None).ok()?;
+    // Bindless textures: the global set first (the same in every graphics layout, so it stays bound across them),
+    // then the stages' own; the textures' words in the push constants.
+    let layout = match &dev.bindless {
+        Some(g) => {
+            let sl = [g.set_layout, dsl];
+            let pr = [vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::ALL_GRAPHICS)
+                .offset(0)
+                .size(4 * sass2spv::accessor::BINDLESS_PUSH_WORDS)];
+            dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl).push_constant_ranges(&pr), None).ok()?
+        }
+        None => {
+            let sl = [dsl];
+            dev.device.create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default().set_layouts(&sl), None).ok()?
+        }
+    };
     Some((dsl, layout, push))
 }
 
@@ -114,11 +128,15 @@ pub unsafe fn create(
     cache: vk::PipelineCache,
 ) -> Result<vk::Pipeline, vk::Result> {
     let entry = c"main";
-    let mut stages = vec![vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vstage.module).name(entry)];
-    if let Some(g) = gstage {
+    // Held until the pipeline is made, when these go (Module's Drop).
+    let vmodule = vstage.module(dev)?;
+    let gmodule = gstage.map(|g| g.module(dev)).transpose()?;
+    let fmodule = fstage.map(|f| f.module(dev)).transpose()?;
+    let mut stages = vec![vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vmodule.module).name(entry)];
+    if let Some(g) = &gmodule {
         stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::GEOMETRY).module(g.module).name(entry));
     }
-    if let Some(f) = fstage {
+    if let Some(f) = &fmodule {
         stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(f.module).name(entry));
     }
     let mut vb: Vec<vk::VertexInputBindingDescription> = d

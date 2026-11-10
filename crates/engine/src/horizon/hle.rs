@@ -137,7 +137,8 @@ pub unsafe extern "C" fn hle_nnmusl_init_dso(
         16
     };
     let n = tdata_end.saturating_sub(tdata_start);
-    let template = if n > 0 && n <= 0x1000 && tdata_start >= 0x10000 {
+    // The block holds at most 0x1f0 bytes of it (guest/tls.rs reports a larger segment), so no more is read.
+    let template = if n > 0 && n <= 0x1f0 && tdata_start >= 0x10000 {
         std::slice::from_raw_parts(tdata_start as *const u8, n).to_vec()
     } else {
         Vec::new()
@@ -148,7 +149,7 @@ pub unsafe extern "C" fn hle_nnmusl_init_dso(
         tbss_end.saturating_sub(tbss_start),
         align
     );
-    crate::guest::tls::set_module_tls_template(template, align);
+    crate::guest::tls::set_module_tls_template(template, align, n + tbss_end.saturating_sub(tbss_start));
     1
 }
 
@@ -193,7 +194,7 @@ pub unsafe extern "C" fn hle_strlen(s: *const c_char) -> usize {
 
 // 4. Horizon OS Thread & Mutex implementation (backed by thread-aware recursive lock)
 use std::cell::RefCell;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // Layout of nn::os::ThreadType (0x1B8 bytes in current titles; no `_lockHistory` field).
 //
@@ -432,7 +433,46 @@ unsafe fn mutex_lock_word<'a>(mutex: *mut NnMutex) -> &'a std::sync::atomic::Ato
     &*(&raw mut (*mutex).lock as *const std::sync::atomic::AtomicU32)
 }
 fn mutex_token(cur: *mut NnThreadType) -> u32 {
-    (cur as usize as u32) | 1
+    (cur as usize as u32 & !MUTEX_WAITERS) | 1
+}
+/// Set in a held lock word while a thread is (or may be) parked on it: the unlock then wakes one.
+const MUTEX_WAITERS: u32 = 2;
+
+/// Blocks while `word` still holds `held` (or returns early: callers re-check). Windows parks the thread on the
+/// address; elsewhere a short sleep stands in for it.
+fn mutex_park(word: &std::sync::atomic::AtomicU32, held: u32) {
+    #[cfg(windows)]
+    {
+        #[link(name = "synchronization")]
+        extern "system" {
+            fn WaitOnAddress(addr: *const std::ffi::c_void, cmp: *const std::ffi::c_void, size: usize, ms: u32) -> i32;
+        }
+        unsafe {
+            WaitOnAddress(
+                word as *const _ as *const std::ffi::c_void,
+                &held as *const u32 as *const std::ffi::c_void,
+                4,
+                u32::MAX,
+            )
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (word, held);
+        hle_sleep_ns(5_000);
+    }
+}
+fn mutex_unpark(word: &std::sync::atomic::AtomicU32) {
+    #[cfg(windows)]
+    {
+        #[link(name = "synchronization")]
+        extern "system" {
+            fn WakeByAddressSingle(addr: *const std::ffi::c_void);
+        }
+        unsafe { WakeByAddressSingle(word as *const _ as *const std::ffi::c_void) };
+    }
+    #[cfg(not(windows))]
+    let _ = word;
 }
 
 #[no_mangle]
@@ -457,19 +497,8 @@ pub unsafe extern "C" fn hle_nn_os_LockMutex(mutex: *mut NnMutex) {
     }
     let word = mutex_lock_word(mutex);
     let tok = mutex_token(cur);
-    let mut spins = 0u32;
-    while word
-        .compare_exchange(0, tok, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
-        spins += 1;
-        if spins < 1000 {
-            std::hint::spin_loop();
-        } else if spins < 1050 {
-            std::thread::yield_now();
-        } else {
-            hle_sleep_ns(5_000);
-        }
+    if word.compare_exchange(0, tok, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        mutex_lock_contended(word, tok);
     }
     (*mutex).owner_thread = cur;
     (*mutex).nest_count = 1;
@@ -487,7 +516,48 @@ pub unsafe extern "C" fn hle_nn_os_UnlockMutex(mutex: *mut NnMutex) {
     (*mutex).nest_count -= 1;
     if (*mutex).nest_count == 0 {
         (*mutex).owner_thread = std::ptr::null_mut();
-        mutex_lock_word(mutex).store(0, std::sync::atomic::Ordering::Release);
+        let word = mutex_lock_word(mutex);
+        if word.swap(0, std::sync::atomic::Ordering::Release) & MUTEX_WAITERS != 0 {
+            mutex_unpark(word);
+        }
+    }
+}
+
+/// LockMutex once the first compare-and-swap failed. TotK's waits for a held mutex are a couple of microseconds, so a
+/// short spin takes most; then the thread parks on the lock word. It used to spin, yield and sleep-spin instead, which
+/// with every processor busy kept a core while the owner sat preempted in the ready queue behind it.
+#[cold]
+fn mutex_lock_contended(word: &std::sync::atomic::AtomicU32, tok: u32) {
+    use std::sync::atomic::Ordering;
+    for _ in 0..1000 {
+        std::hint::spin_loop();
+        if word.load(Ordering::Relaxed) == 0
+            && word.compare_exchange(0, tok, Ordering::Acquire, Ordering::Relaxed).is_ok()
+        {
+            return;
+        }
+    }
+    // A thread that parked once takes the lock with MUTEX_WAITERS set: others may still be parked behind it.
+    let mut w = word.load(Ordering::Relaxed);
+    loop {
+        if w == 0 {
+            match word.compare_exchange(0, tok | MUTEX_WAITERS, Ordering::Acquire, Ordering::Relaxed) {
+                Ok(_) => return,
+                Err(x) => {
+                    w = x;
+                    continue;
+                }
+            }
+        }
+        if w & MUTEX_WAITERS == 0 {
+            if let Err(x) = word.compare_exchange(w, w | MUTEX_WAITERS, Ordering::Relaxed, Ordering::Relaxed) {
+                w = x;
+                continue;
+            }
+            w |= MUTEX_WAITERS;
+        }
+        mutex_park(word, w);
+        w = word.load(Ordering::Relaxed);
     }
 }
 
@@ -687,39 +757,93 @@ pub unsafe extern "C" fn hle_nn_vi_GetNativeWindow(
 // and the "we don't have call-time visibility" gap were really the same
 // problem, just found from two different angles this session.
 const HLE_CALL_HISTORY_SIZE: usize = 4096;
-// Names are mostly literals: Cow keeps recording allocation-free (a String per call was ~9% of guest-main).
-type HleCallRing = StdMutex<std::collections::VecDeque<(u64, std::borrow::Cow<'static, str>)>>;
-// Each thread records into a ring of its own, whose lock only readers share: one ring for all threads had its lock
-// contended by every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime).
-// Readers merge the rings by sequence number.
-static HLE_CALL_RINGS: StdMutex<Vec<Arc<HleCallRing>>> = StdMutex::new(Vec::new());
-static HLE_CALL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Each thread records into a ring of its own, with plain stores: one ring for all threads had its lock contended by
+// every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime), and a lock per
+// thread (and a shared sequence counter) still cost 4-5% of the busy time of guest-main and the module workers.
+// Readers merge the rings by sequence number (on x86-64 the time stamp counter, synchronized across cores) and skip a
+// slot written while they read it. Names are 'static (literals,
+// and the rare formatted name interned once), so a slot is a sequence number and a str's pointer and length.
+const HLE_CALL_RING_SIZE: usize = 1024;
+struct HleCallSlot {
+    seq: AtomicU64, // 0: empty or being written
+    ptr: AtomicUsize,
+    len: AtomicUsize,
+}
+struct HleCallRing {
+    next: AtomicUsize,
+    slots: [HleCallSlot; HLE_CALL_RING_SIZE],
+}
+static HLE_CALL_RINGS: StdMutex<Vec<&'static HleCallRing>> = StdMutex::new(Vec::new());
+#[cfg(not(target_arch = "x86_64"))]
+static HLE_CALL_SEQ: AtomicU64 = AtomicU64::new(1);
 thread_local! {
-    static HLE_CALL_RING: Arc<HleCallRing> = {
-        let ring = Arc::new(HleCallRing::default());
-        HLE_CALL_RINGS.lock().unwrap().push(ring.clone());
-        ring
-    };
+    // Rings outlive their threads (HLE calls from TLS destructors still record), so the slot needs no destructor.
+    static HLE_CALL_RING: std::cell::Cell<Option<&'static HleCallRing>> = const { std::cell::Cell::new(None) };
+}
+
+fn intern_hle_call_name(name: String) -> &'static str {
+    static NAMES: StdMutex<Option<std::collections::HashSet<&'static str>>> = StdMutex::new(None);
+    let mut names = NAMES.lock().unwrap();
+    let names = names.get_or_insert_with(Default::default);
+    match names.get(name.as_str()) {
+        Some(&n) => n,
+        None => {
+            let n: &'static str = Box::leak(name.into_boxed_str());
+            names.insert(n);
+            n
+        }
+    }
 }
 
 pub fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
-    let seq = HLE_CALL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let name = name.into();
-    // Not once the thread's locals are gone (an HLE call from a TLS destructor).
-    let _ = HLE_CALL_RING.try_with(|ring| {
-        let mut hist = ring.lock().unwrap();
-        if hist.len() >= HLE_CALL_HISTORY_SIZE {
-            hist.pop_front();
-        }
-        hist.push_back((seq, name));
+    let name: &'static str = match name.into() {
+        std::borrow::Cow::Borrowed(n) => n,
+        std::borrow::Cow::Owned(n) => intern_hle_call_name(n),
+    };
+    let ring = HLE_CALL_RING.with(|r| {
+        r.get().unwrap_or_else(|| {
+            let ring: &'static HleCallRing = Box::leak(Box::new(HleCallRing {
+                next: AtomicUsize::new(0),
+                slots: std::array::from_fn(|_| HleCallSlot {
+                    seq: AtomicU64::new(0),
+                    ptr: AtomicUsize::new(0),
+                    len: AtomicUsize::new(0),
+                }),
+            }));
+            HLE_CALL_RINGS.lock().unwrap().push(ring);
+            r.set(Some(ring));
+            ring
+        })
     });
+    #[cfg(target_arch = "x86_64")]
+    let seq = unsafe { core::arch::x86_64::_rdtsc() };
+    #[cfg(not(target_arch = "x86_64"))]
+    let seq = HLE_CALL_SEQ.fetch_add(1, Ordering::Relaxed);
+    let i = ring.next.load(Ordering::Relaxed);
+    ring.next.store((i + 1) % HLE_CALL_RING_SIZE, Ordering::Relaxed);
+    let slot = &ring.slots[i];
+    slot.seq.store(0, Ordering::Relaxed);
+    std::sync::atomic::fence(Ordering::Release);
+    slot.ptr.store(name.as_ptr() as usize, Ordering::Relaxed);
+    slot.len.store(name.len(), Ordering::Relaxed);
+    slot.seq.store(seq, Ordering::Release);
 }
 
 /// The last HLE_CALL_HISTORY_SIZE recorded calls of all threads, oldest first.
 fn hle_call_history() -> Vec<(u64, std::borrow::Cow<'static, str>)> {
     let mut all = Vec::new();
     for ring in HLE_CALL_RINGS.lock().unwrap().iter() {
-        all.extend(ring.lock().unwrap().iter().cloned());
+        for slot in &ring.slots {
+            let seq = slot.seq.load(Ordering::Acquire);
+            let (ptr, len) = (slot.ptr.load(Ordering::Relaxed), slot.len.load(Ordering::Relaxed));
+            std::sync::atomic::fence(Ordering::Acquire);
+            if seq != 0 && slot.seq.load(Ordering::Relaxed) == seq {
+                // The pointer and length of a 'static str, stored together under `seq`.
+                let name: &'static str =
+                    unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr as *const u8, len)) };
+                all.push((seq, std::borrow::Cow::Borrowed(name)));
+            }
+        }
     }
     all.sort_unstable_by_key(|e| e.0);
     all.drain(..all.len().saturating_sub(HLE_CALL_HISTORY_SIZE));
@@ -899,7 +1023,7 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, size: usize) -> i32 {
-    let Ok(ptr) = crate::os::alloc(size, crate::os::Prot::ReadWrite) else {
+    let Ok(ptr) = crate::os::alloc_on_demand(size) else {
         eprintln!(
             "[-] HLE: AllocateMemoryBlock failed for {} bytes",
             size
@@ -1463,7 +1587,14 @@ pub unsafe extern "C" fn hle_nn_os_SleepThread(nano: i64) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_YieldThread() {
-    std::thread::yield_now();
+    // A few pauses, not SwitchToThread. The console yields to the game's own ready threads on that core, and TotK's job
+    // threads poll with yields hundreds of thousands of times a second. Windows yields to whatever is ready on the
+    // processor: with all of them busy that is another process, for its whole quantum (~10 ms a yield, ~1 fps). The
+    // game's threads that are ready get a processor from the scheduler anyway; an idle machine's SwitchToThread
+    // returned at once (0.1-0.2 us), about what these pauses take.
+    for _ in 0..8 {
+        std::hint::spin_loop();
+    }
 }
 
 #[no_mangle]
@@ -1568,10 +1699,10 @@ unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
     for (i, t) in touches.iter().take(count).enumerate() {
         let p = out.add(16 + i * 0x28);
         let mut attributes = 0u32;
-        if now.duration_since(t.began).as_millis() < 20 {
+        if t.fresh {
             attributes |= 1; // Start
         }
-        if t.ended.is_some() {
+        if t.ended {
             attributes |= 2; // End
         }
         *(p as *mut i64) = 0;
@@ -1713,7 +1844,7 @@ unsafe fn npad_states(
         return 0;
     }
     if player == 0 {
-        crate::host::input::apply_script();
+        crate::host::input::before_npad_read();
     }
     // Keyboard / controller state mapped by the user's bindings (host/input.rs).
     let (buttons, sticks) = if connected {
@@ -1964,31 +2095,57 @@ pub unsafe extern "C" fn hle_nn_hid_InitializeTouchScreen() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetMouseState(state: *mut u8) {
     if !state.is_null() {
-        std::ptr::write_bytes(state, 0, 64);
+        let bytes = crate::host::input::next_mouse_state();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), state, bytes.len());
     }
 }
 
+/// The newest state only, as for the keyboard.
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetMouseStates(states: *mut u8, count: i32) -> i32 {
-    if !states.is_null() && count > 0 {
-        std::ptr::write_bytes(states, 0, (count as usize) * 64);
+    if states.is_null() || count <= 0 {
+        return 0;
     }
-    count
+    hle_nn_hid_GetMouseState(states);
+    1
+}
+
+/// nn::hid::detail::GetMouseStates(int* written, MouseState*, int): takes the count's address and returns a Result.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_detail_GetMouseStates(written: *mut i32, states: *mut u8, count: i32) -> u32 {
+    let n = hle_nn_hid_GetMouseStates(states, count);
+    if !written.is_null() {
+        *written = n;
+    }
+    0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetKeyboardState(state: *mut u8) {
     if !state.is_null() {
-        std::ptr::write_bytes(state, 0, 64);
+        let bytes = crate::host::input::next_keyboard_state();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), state, bytes.len());
     }
 }
 
+/// The newest state only, as there is no history to give: a caller gets one state however many it asks for.
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetKeyboardStates(states: *mut u8, count: i32) -> i32 {
-    if !states.is_null() && count > 0 {
-        std::ptr::write_bytes(states, 0, (count as usize) * 64);
+    if states.is_null() || count <= 0 {
+        return 0;
     }
-    count
+    hle_nn_hid_GetKeyboardState(states);
+    1
+}
+
+/// nn::hid::detail::GetKeyboardStates(int* written, KeyboardState*, int): takes the count's address and returns a Result.
+#[no_mangle]
+pub unsafe extern "C" fn hle_nn_hid_detail_GetKeyboardStates(written: *mut i32, states: *mut u8, count: i32) -> u32 {
+    let n = hle_nn_hid_GetKeyboardStates(states, count);
+    if !written.is_null() {
+        *written = n;
+    }
+    0
 }
 
 #[no_mangle]
@@ -2734,6 +2891,75 @@ pub unsafe extern "C" fn hle_strcmp(s1: *const c_char, s2: *const c_char) -> i32
     libc::strcmp(s1, s2)
 }
 
+/// printf, formatted here: the guest passes variadic arguments in registers (AAPCS64), where neither the host's C
+/// library on Apple (variadics on the stack) nor a call through an adapter (hle_abi) would find them. Integer, string
+/// and pointer conversions take x1..x7 in turn; floating-point ones (passed in v registers) print as "?".
+#[no_mangle]
+pub unsafe extern "C" fn hle_printf(fmt: *const c_char, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64, a7: u64) -> i32 {
+    if fmt.is_null() {
+        return 0;
+    }
+    let out = format_printf(std::ffi::CStr::from_ptr(fmt).to_bytes(), &[a1, a2, a3, a4, a5, a6, a7]);
+    print!("{}", String::from_utf8_lossy(&out));
+    out.len() as i32
+}
+
+fn format_printf(fmt: &[u8], args: &[u64]) -> Vec<u8> {
+    let mut args = args.iter().copied();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < fmt.len() {
+        if fmt[i] != b'%' {
+            out.push(fmt[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        // Flags, width, precision and length are skipped (a '*' takes an argument).
+        let mut long = false;
+        while i < fmt.len() && b"-+ #0123456789.*hlLqjzt".contains(&fmt[i]) {
+            match fmt[i] {
+                b'*' => drop(args.next()),
+                b'l' | b'L' | b'q' | b'j' | b'z' | b't' => long = true,
+                _ => {}
+            }
+            i += 1;
+        }
+        let Some(&c) = fmt.get(i) else { break };
+        i += 1;
+        let v = |a: Option<u64>| a.unwrap_or(0);
+        let s = match c {
+            b'%' => "%".to_string(),
+            b'd' | b'i' => if long { (v(args.next()) as i64).to_string() } else { (v(args.next()) as i32).to_string() },
+            b'u' => if long { v(args.next()).to_string() } else { (v(args.next()) as u32).to_string() },
+            b'x' => if long { format!("{:x}", v(args.next())) } else { format!("{:x}", v(args.next()) as u32) },
+            b'X' => if long { format!("{:X}", v(args.next())) } else { format!("{:X}", v(args.next()) as u32) },
+            b'o' => if long { format!("{:o}", v(args.next())) } else { format!("{:o}", v(args.next()) as u32) },
+            b'p' => format!("{:#x}", v(args.next())),
+            b'c' => char::from(v(args.next()) as u8).to_string(),
+            b's' => match v(args.next()) {
+                0 => "(null)".to_string(),
+                p => String::from_utf8_lossy(unsafe { std::ffi::CStr::from_ptr(p as *const c_char) }.to_bytes()).into_owned(),
+            },
+            b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => "?".to_string(),
+            _ => String::from_utf8_lossy(&fmt[start..i]).into_owned(),
+        };
+        out.extend_from_slice(s.as_bytes());
+    }
+    out
+}
+
+#[cfg(test)]
+mod printf_tests {
+    #[test]
+    fn formats_integers_strings_and_unknowns() {
+        let s = b"str\0";
+        let out = super::format_printf(b"%d %5u %lx %s %c %% %f %y", &[(-3i32) as u32 as u64, 7, 0xabc, s.as_ptr() as u64, b'z' as u64]);
+        assert_eq!(String::from_utf8(out).unwrap(), "-3 7 abc str z % ? %y");
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_GetSystemTickFrequency() -> u64 {
     crate::clock::frequency()
@@ -3225,6 +3451,26 @@ fn light_event_new(initially_signaled: bool, clear_mode: i32) -> Arc<LightEventS
     })
 }
 
+/// Spins up to LIGHT_EVENT_SPIN for a signal before a wait blocks: TotK's job threads wait tens of thousands of times a
+/// second, mostly for tens of microseconds, about what a sleep and a wake-up cost on Windows. A tuning number: it trades
+/// CPU time spinning against wake-up latency; the game sees the same signal at the same point either way.
+fn light_event_spin(state: &LightEventState) {
+    const LIGHT_EVENT_SPIN: std::time::Duration = std::time::Duration::from_micros(30);
+    let s0 = state.signals.load(std::sync::atomic::Ordering::Relaxed);
+    if state.signaled.try_lock().map_or(true, |g| *g) {
+        return;
+    }
+    let t0 = std::time::Instant::now();
+    while state.signals.load(std::sync::atomic::Ordering::Relaxed) == s0 {
+        for _ in 0..32 {
+            std::hint::spin_loop();
+        }
+        if t0.elapsed() >= LIGHT_EVENT_SPIN {
+            return;
+        }
+    }
+}
+
 unsafe fn light_event_get(ev: *mut ()) -> Arc<LightEventState> {
     let key = ev as usize;
     let mut table = light_event_table().lock().unwrap();
@@ -3350,6 +3596,7 @@ pub fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Du
 pub unsafe extern "C" fn hle_nn_os_WaitLightEvent(ev: *mut ()) {
     let fp = crate::guest_reg!(x29);
     let state = light_event_get(ev);
+    light_event_spin(&state);
     let mut guard = state.signaled.lock().unwrap();
     let _blocked = if *guard {
         None
@@ -4459,7 +4706,7 @@ pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
     if bytes > out_buf_size {
         return 0x4E;
     }
-    // Real decoding through libopus (horizon/audio/opus.rs); silence with the same accounting when it is unavailable or fails.
+    // Real decoding (horizon/audio/opus.rs); silence with the same accounting for what it cannot decode.
     match (!out_buf.is_null())
         .then(|| {
             crate::horizon::audio::opus::decode(

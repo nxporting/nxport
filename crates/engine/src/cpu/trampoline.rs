@@ -28,12 +28,17 @@ pub fn x18_trampolines() -> bool {
         if cfg!(target_os = "ios") {
             return true;
         }
+        #[cfg(nx_native)]
         let preserved = matches!(own_build_version(), Some((1, sdk)) if (sdk >> 16) < 13);
+        // Making an image elsewhere: the settings say.
+        #[cfg(not(nx_native))]
+        let preserved = true;
         !preserved
     })
 }
 
 /// (platform, sdk) from the executable's LC_BUILD_VERSION (platform 1 = macOS; sdk = major << 16 | minor << 8).
+#[cfg(nx_native)]
 fn own_build_version() -> Option<(u32, u32)> {
     extern "C" {
         fn _dyld_get_image_header(index: u32) -> *const u8;
@@ -57,6 +62,9 @@ fn own_build_version() -> Option<(u32, u32)> {
 }
 
 pub fn set_thread_x18(val: usize) {
+    #[cfg(not(nx_native))]
+    let _ = val;
+    #[cfg(nx_native)]
     if x18_trampolines() {
         unsafe {
             libc::pthread_setspecific(crate::cpu::tls::x18_key(), val as *mut libc::c_void);

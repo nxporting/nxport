@@ -11,6 +11,38 @@ pub fn support_dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/nxport"))
 }
 
+/// The game's own settings: what was changed while it ran (host/live.rs), in its data directory. A layer above the app's
+/// settings (the builder's) and below the command line.
+pub fn game_settings_file(title_id: u64) -> Option<PathBuf> {
+    Some(support_dir()?.join("games").join(format!("{title_id:016x}")).join("settings.toml"))
+}
+
+pub fn game_settings(title_id: u64) -> Option<crate::settings::SettingsPatch> {
+    let file = game_settings_file(title_id)?;
+    if !file.is_file() {
+        return None;
+    }
+    match crate::settings::load_preset(&file) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            eprintln!("[!] {}: {e}", file.display());
+            None
+        }
+    }
+}
+
+/// Keeps a change made while the game runs in the game's settings file (the running game's; nothing without one).
+#[cfg(nx_runtime)]
+pub fn remember(change: impl FnOnce(&mut crate::settings::SettingsPatch)) {
+    let Some(tid) = crate::game::title_id() else { return };
+    let Some(file) = game_settings_file(tid) else { return };
+    let mut p = game_settings(tid).unwrap_or_default();
+    change(&mut p);
+    if let Err(e) = std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string()).and_then(|_| crate::settings::save_preset(&file, &p)) {
+        eprintln!("[!] settings: {e}");
+    }
+}
+
 /// The settings file an app carries (the builder writes it): in a Windows app folder, beside the program.
 #[cfg(windows)]
 const APP_SETTINGS: &str = "settings.toml";
@@ -47,6 +79,11 @@ pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
     #[cfg(windows)]
     {
         p.files.guest_library = Some(resources.join("guest.dll")).filter(|l| l.is_file());
+        // What the app's mods change (nxport_build::lift::lift_overlay).
+        p.files.guest_overlay = Some(resources.join("overlay").join("guest_overlay.dll")).filter(|l| l.is_file());
+        if p.files.guest_overlay.is_some() {
+            p.guest.live_patches = Some(true);
+        }
     }
     p
 }
@@ -101,6 +138,11 @@ fn app_without_output() -> bool {
 pub fn app_log() {
     use std::os::windows::io::IntoRawHandle;
     if !app_without_output() {
+        // An app started with a console window (nxport.exe is a console program): the window goes when the game ends or
+        // crashes, so what it shows is copied to the log too.
+        if app_resources().is_some() {
+            unsafe { tee_console_to_log() };
+        }
         return;
     }
     let Some(dir) = crate::profile::data_dir() else { return };
@@ -113,6 +155,87 @@ pub fn app_log() {
         unsafe {
             SetStdHandle(STD_OUTPUT_HANDLE, h);
             SetStdHandle(STD_ERROR_HANDLE, h);
+        }
+    }
+}
+
+#[cfg(windows)]
+extern "system" {
+    fn GetFileType(handle: *mut std::ffi::c_void) -> u32;
+    fn CreatePipe(read: *mut *mut std::ffi::c_void, write: *mut *mut std::ffi::c_void, attrs: *const std::ffi::c_void, size: u32) -> i32;
+    fn ReadFile(h: *mut std::ffi::c_void, buf: *mut u8, n: u32, read: *mut u32, ov: *mut std::ffi::c_void) -> i32;
+    fn WriteFile(h: *mut std::ffi::c_void, buf: *const u8, n: u32, written: *mut u32, ov: *mut std::ffi::c_void) -> i32;
+    fn PeekNamedPipe(
+        h: *mut std::ffi::c_void,
+        buf: *mut u8,
+        n: u32,
+        read: *mut u32,
+        avail: *mut u32,
+        left: *mut u32,
+    ) -> i32;
+}
+
+/// The pipe the console's output goes through while it is copied to the log (read end), and whether the copying thread is
+/// writing a chunk out.
+#[cfg(windows)]
+static TEE: std::sync::OnceLock<(usize, std::sync::atomic::AtomicBool)> = std::sync::OnceLock::new();
+
+/// Standard output and error go into a pipe; a thread writes what comes out of it both to the console and to log.txt in
+/// the game's data directory (the previous session's kept as log.prev.txt). Only for a real console (a pipe or file the
+/// caller gave keeps it alone).
+#[cfg(windows)]
+unsafe fn tee_console_to_log() {
+    use std::os::windows::io::IntoRawHandle;
+    const FILE_TYPE_CHAR: u32 = 2;
+    let console = GetStdHandle(STD_OUTPUT_HANDLE);
+    if console.is_null() || GetFileType(console) != FILE_TYPE_CHAR {
+        return;
+    }
+    let Some(dir) = crate::profile::data_dir() else { return };
+    let _ = std::fs::create_dir_all(dir);
+    let log = dir.join("log.txt");
+    let _ = std::fs::rename(&log, dir.join("log.prev.txt"));
+    let Ok(file) = std::fs::File::create(&log) else { return };
+    let file = file.into_raw_handle() as usize;
+    let (mut r, mut w) = (std::ptr::null_mut(), std::ptr::null_mut());
+    if CreatePipe(&mut r, &mut w, std::ptr::null(), 1 << 16) == 0 {
+        return;
+    }
+    let tee = TEE.get_or_init(|| (r as usize, std::sync::atomic::AtomicBool::new(false)));
+    let console = console as usize;
+    let _ = std::thread::Builder::new().name("log copy".into()).spawn(move || {
+        let busy = &tee.1;
+        let mut buf = vec![0u8; 1 << 16];
+        loop {
+            let mut n = 0u32;
+            if ReadFile(tee.0 as *mut _, buf.as_mut_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) == 0 || n == 0 {
+                return;
+            }
+            busy.store(true, std::sync::atomic::Ordering::Release);
+            let mut done = 0u32;
+            WriteFile(console as *mut _, buf.as_ptr(), n, &mut done, std::ptr::null_mut());
+            WriteFile(file as *mut _, buf.as_ptr(), n, &mut done, std::ptr::null_mut());
+            busy.store(false, std::sync::atomic::Ordering::Release);
+        }
+    });
+    SetStdHandle(STD_OUTPUT_HANDLE, w);
+    SetStdHandle(STD_ERROR_HANDLE, w);
+}
+
+/// Before the process ends (a crash report written): waits until the copying thread has written out everything sent to
+/// the console. A safety net of two seconds keeps a stuck write from holding the process.
+pub fn drain_log() {
+    #[cfg(windows)]
+    unsafe {
+        let Some(tee) = TEE.get() else { return };
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < end {
+            let mut avail = 0u32;
+            let ok = PeekNamedPipe(tee.0 as *mut _, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut());
+            if ok == 0 || (avail == 0 && !tee.1.load(std::sync::atomic::Ordering::Acquire)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 }

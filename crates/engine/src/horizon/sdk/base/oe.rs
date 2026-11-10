@@ -9,6 +9,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2oe16GetOperationModeEv", func!(crate::horizon::hle::hle_nn_oe_GetOperationMode())),
     Entry("_ZN2nn2oe17FinishStartupLogoEv", func!(crate::horizon::nn::oe_finish_startup_logo())),
     Entry("_ZN2nn2oe17GetDisplayVersionEPNS0_14DisplayVersionE", func!(crate::guest::module_loader::oe_get_display_version(_))),
+    Entry("_ZN2nn2oe23EnableGamePlayRecordingEPvm", func!(crate::guest::module_loader::oe_enable_game_play_recording(_, _))),
     Entry("_ZN2nn2oe17GetPseudoDeviceIdEPNS_4util4UuidE", func!(crate::horizon::nn::oe_get_pseudo_device_id(_))),
     Entry("_ZN2nn2oe18GetDesiredLanguageEv", func!(crate::horizon::hle::hle_nn_oe_GetDesiredLanguage())),
     Entry("_ZN2nn2oe18GetPerformanceModeEv", func!(crate::horizon::hle::hle_nn_oe_GetPerformanceMode())),

@@ -37,26 +37,66 @@ _Static_assert(offsetof(Cpu, excl_val_hi) == 336, "excl_val_hi");
 _Static_assert(offsetof(Cpu, v) == 512, "v");
 _Static_assert(sizeof(Cpu) == 1024, "size");
 
-typedef void (*GuestFn)(Cpu *);
+// Lifted functions and the dispatcher are called only by each other (the host enters through nx_rt_enter): on x86-64
+// they use the System V convention, whose callee saves six integer registers and no vector registers (Windows x64: eight
+// and xmm6-xmm15, saved and restored by every lifted function that touched them, and 32 bytes of stack per call).
+#if defined(__x86_64__)
+#define RT_CC __attribute__((sysv_abi))
+#else
+#define RT_CC
+#endif
+
+typedef void (RT_CC *GuestFn)(Cpu *);
+
+// Builds for games with code mods: a mod patches a function at its entry, and a caller holding an inlined copy would never
+// see it. Without mods the compiler is free to inline.
+#ifdef NX_NO_INLINE
+#define RT_NOINLINE __attribute__((noinline))
+#else
+#define RT_NOINLINE
+#endif
 
 // The guest library exports only its function tables: a game has more functions than a PE export table holds (64K),
 // and an explicit export turns off the MinGW linker's export-everything default.
 #ifdef _WIN32
 #define RT_EXPORT __declspec(dllexport)
-#define RT_FN
+#define RT_FN RT_NOINLINE RT_CC
 #else
 #define RT_EXPORT __attribute__((visibility("default")))
-#define RT_FN __attribute__((visibility("hidden")))
+#define RT_FN RT_NOINLINE __attribute__((visibility("hidden"))) RT_CC
 #endif
 
 #define RT_RETURN_TO_HOST 0ull
 
 // ---- provided by the runtime
-void rt_dispatch(Cpu *c);  // continue at c->pc
+RT_CC void rt_dispatch(Cpu *c);  // continue at c->pc
+
+// The dispatcher's per-thread cache of lifted functions by address (rt.c), probed at each indirect call and jump: the
+// host branch to the function is then at that site, which the CPU predicts per site (all of them through rt_dispatch's
+// one branch mispredicted constantly). An entry of an HLE target is kept as pc | 1 and so never hits here.
+#define RT_CACHE_SIZE 4096
+typedef struct { uint64_t pc; GuestFn fn; } RtCacheEntry;
+extern __thread RtCacheEntry rt_cache[RT_CACHE_SIZE];
+static inline GuestFn rt_hit(uint64_t pc) {
+    const RtCacheEntry *e = &rt_cache[(pc >> 2) & (RT_CACHE_SIZE - 1)];
+    return e->pc == pc ? e->fn : 0; // fn is null in an unused entry (pc 0)
+}
 void rt_svc(Cpu *c, uint32_t imm, uint64_t pc);
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) __attribute__((noreturn));
 void rt_udf(Cpu *c, uint64_t pc) __attribute__((noreturn));
 uint64_t rt_ticks(void);
+void rt_code_changed(uint64_t addr);
+
+// msr fpcr. The thread's MXCSR follows FPCR.FZ: DAZ and FTZ flush denormal operands and tiny results as FZ does, so
+// FP instructions under FZ (how games run) are host instructions (simd_fp.h, FN(op)). Each host thread runs one Cpu.
+static inline void rt_fpcr(Cpu *c, uint64_t v) {
+    c->fpcr = v;
+#if defined(__x86_64__)
+    unsigned m = __builtin_ia32_stmxcsr();
+    unsigned want = (v & (1u << 24)) ? (m | 0x8040u) : (m & ~0x8040u);
+    if (want != m) __builtin_ia32_ldmxcsr(want);
+#endif
+}
 
 // After a call: continue here only if the callee returned to `ra`.
 #define RT_RETURNED(c, ra)                                   \
@@ -74,6 +114,11 @@ typedef uint8_t __attribute__((may_alias)) u8a;
 #define LD16(a) (*(const u16u *)(uintptr_t)(a))
 #define LD32(a) (*(const u32u *)(uintptr_t)(a))
 #define LD64(a) (*(const u64u *)(uintptr_t)(a))
+// Loads in loops (module.rs reload_in_loops): the same instruction, but read every time.
+#define LDV8(a) (*(const volatile u8a *)(uintptr_t)(a))
+#define LDV16(a) (*(const volatile u16u *)(uintptr_t)(a))
+#define LDV32(a) (*(const volatile u32u *)(uintptr_t)(a))
+#define LDV64(a) (*(const volatile u64u *)(uintptr_t)(a))
 #define ST8(a, v) (*(u8a *)(uintptr_t)(a) = (uint8_t)(v))
 #define ST16(a, v) (*(u16u *)(uintptr_t)(a) = (uint16_t)(v))
 #define ST32(a, v) (*(u32u *)(uintptr_t)(a) = (uint32_t)(v))
@@ -98,8 +143,10 @@ typedef uint8_t __attribute__((may_alias)) u8a;
     static inline uint64_t lda##N(uint64_t a) {                                            \
         return __atomic_load_n((T *)(uintptr_t)a, __ATOMIC_ACQUIRE);                       \
     }                                                                                      \
+    /* STLR is not reordered with a later LDAR on ARM; a release store and an acquire load */ \
+    /* are on x86, and "store mine, then read yours" on both sides then misses both. */    \
     static inline void stl##N(uint64_t a, uint64_t v) {                                    \
-        __atomic_store_n((T *)(uintptr_t)a, (T)v, __ATOMIC_RELEASE);                       \
+        __atomic_store_n((T *)(uintptr_t)a, (T)v, __ATOMIC_SEQ_CST);                       \
     }
 EXCL(8, uint8_t)
 EXCL(16, uint16_t)
@@ -168,6 +215,14 @@ static inline uint32_t subs32(Cpu *c, uint32_t a, uint32_t b) {
 }
 static inline uint64_t logic64(Cpu *c, uint64_t r) { c->nzcv = MKFLAGS(r >> 63, r == 0, 0, 0); return r; }
 static inline uint32_t logic32(Cpu *c, uint32_t r) { c->nzcv = MKFLAGS(r >> 31, r == 0, 0, 0); return r; }
+
+// The helpers above where no instruction reads the flags they would set (the lifter's flag liveness).
+static inline uint64_t add64_nf(uint64_t a, uint64_t b) { return a + b; }
+static inline uint64_t sub64_nf(uint64_t a, uint64_t b) { return a - b; }
+static inline uint32_t add32_nf(uint32_t a, uint32_t b) { return a + b; }
+static inline uint32_t sub32_nf(uint32_t a, uint32_t b) { return a - b; }
+static inline uint64_t logic64_nf(uint64_t r) { return r; }
+static inline uint32_t logic32_nf(uint32_t r) { return r; }
 
 #define ADC_IMPL(N)                                                                        \
     static inline uint##N##_t adc##N(Cpu *c, uint##N##_t a, uint##N##_t b) {               \

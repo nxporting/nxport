@@ -56,6 +56,8 @@ typedef u128 __attribute__((aligned(1), may_alias)) u128u;
 
 enum { FOP_ADD, FOP_SUB, FOP_MUL, FOP_MULX, FOP_NMUL, FOP_DIV, FOP_ABD, FOP_SQRT, FOP_MADD, FOP_RECPS, FOP_RSQRTS,
        FOP_MAX, FOP_MIN, FOP_MAXNM, FOP_MINNM };
+// A64 conditions, for cc_s / cc_d (an FCMP fused with the one condition that reads it).
+enum { FCC_EQ, FCC_NE, FCC_CS, FCC_CC, FCC_MI, FCC_PL, FCC_VS, FCC_VC, FCC_HI, FCC_LS, FCC_GE, FCC_LT, FCC_GT, FCC_LE };
 
 static const uint8_t simd_recip_tab[256] = {
     255, 253, 251, 249, 247, 245, 243, 241, 240, 238, 236, 234, 232, 230, 229, 227,
@@ -211,6 +213,18 @@ SI int simd_fe_mode(uint64_t fpcr) {
     return m[(fpcr >> 22) & 3];
 }
 
+// The floating-point environment around a rounding-mode switch (fesetround), put back as it was: on x86 the thread's MXCSR,
+// which follows the FPCR (cpu.h, rt_fpcr); the C library's fegetround reads the x87 control word there, which does not.
+#if defined(__x86_64__)
+typedef unsigned simd_fe;
+SI simd_fe simd_fe_save(void) { return __builtin_ia32_stmxcsr(); }
+SI void simd_fe_restore(simd_fe m) { __builtin_ia32_ldmxcsr(m); }
+#else
+typedef int simd_fe;
+SI simd_fe simd_fe_save(void) { return fegetround(); }
+SI void simd_fe_restore(simd_fe m) { fesetround(m); }
+#endif
+
 #define F s
 #define T float
 #define U uint32_t
@@ -265,11 +279,11 @@ SI double simd_s2d(Cpu *c, float x) {
 }
 SN float simd_d2s_slow(Cpu *c, double x) {
 #pragma STDC FENV_ACCESS ON
-    int old = fegetround();
+    simd_fe old = simd_fe_save();
     fesetround(simd_fe_mode(c->fpcr));
     volatile double vx = x;
     volatile float r = (float)vx;
-    fesetround(old);
+    simd_fe_restore(old);
     return r;
 }
 SI float simd_d2s(Cpu *c, double x) {
@@ -281,7 +295,7 @@ SI float simd_d2s(Cpu *c, double x) {
     x = fv_d(u);
     if (__builtin_expect(c->fpcr & FPCR_SLOW, 0)) {
         if ((c->fpcr & FPCR_FZ) && __builtin_fabs(x) < 0x1p-126 && x != 0) return fv_s((uint32_t)(u >> 63) << 31);
-        // FZ alone rounds as the host does (simd_fp.h, FN(fzop)).
+        // FZ alone rounds as the host does (simd_fp.h, FN(op)).
         if (c->fpcr & FPCR_RM) return simd_d2s_slow(c, x);
     }
     return (float)x;

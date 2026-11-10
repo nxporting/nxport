@@ -1,0 +1,67 @@
+#version 450
+// Moves one level's rows of texel blocks between a buffer of tightly laid rows (what image <-> buffer copies use) and a
+// buffer holding guest memory in the Tegra block-linear layout (nvn::layout::block_linear_offset). Used to rebuild an
+// image from the GPU contents of the other images over its guest memory without a CPU round trip (vulkan/relayout.rs).
+//
+// One invocation per aligned 16-byte run of a row: block-linear keeps every such run contiguous, so a run moves as up to
+// four words. A row's last run may end inside a word (formats of 1 or 2 bytes per block); its other bytes are kept.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) buffer Data {
+    uint words[];
+};
+
+layout(push_constant) uniform Params {
+    uint lin_word;  // the rows' first word
+    uint lin_pitch; // bytes from one row to the next (a multiple of 16)
+    uint row_bytes; // bytes of blocks in a row
+    uint rows;      // block rows moved
+    uint y0;        // the level's block row of the first one
+    uint g_word;    // the guest bytes' first word
+    int g_base;     // where the level starts in the guest bytes (bytes; may be before them)
+    uint g_len;     // guest bytes held (a multiple of 16): runs outside them are skipped
+    uint pitch;     // the level's block-linear row pitch (bytes, a multiple of 64)
+    uint bh;        // the level's block height in GOBs
+    uint to_rows;   // 0: rows -> guest bytes, 1: guest bytes -> rows
+    uint x0;        // the level's byte in a row of the rows' first byte (a multiple of 64)
+};
+
+uint block_linear_offset(uint xb, uint y) {
+    uint gob_y = y / 8u;
+    uint gob_index = ((gob_y / bh) * (pitch / 64u) + xb / 64u) * bh + gob_y % bh;
+    uint xx = xb % 64u;
+    uint yy = y % 8u;
+    return gob_index * 512u + (xx / 32u) * 256u + (yy / 2u) * 64u + ((xx % 32u) / 16u) * 32u + (yy % 2u) * 16u + xx % 16u;
+}
+
+void main() {
+    uint x = gl_GlobalInvocationID.x * 16u;
+    uint r = gl_GlobalInvocationID.y;
+    if (x >= row_bytes || r >= rows) {
+        return;
+    }
+    int at = g_base + int(block_linear_offset(x0 + x, y0 + r));
+    if (at < 0 || uint(at) >= g_len) {
+        return;
+    }
+    uint n = min(16u, row_bytes - x);
+    uint g = g_word + uint(at) / 4u;
+    uint l = lin_word + (r * lin_pitch + x) / 4u;
+    for (uint i = 0u; i < 4u; i++) {
+        uint b = i * 4u;
+        if (b >= n) {
+            break;
+        }
+        // Bits of the destination word that stay (past the row's last byte).
+        uint keep = 0u;
+        if (n - b < 4u) {
+            keep = 0xffffffffu << ((n - b) * 8u);
+        }
+        if (to_rows == 0u) {
+            words[g + i] = (words[g + i] & keep) | (words[l + i] & ~keep);
+        } else {
+            words[l + i] = (words[l + i] & keep) | (words[g + i] & ~keep);
+        }
+    }
+}

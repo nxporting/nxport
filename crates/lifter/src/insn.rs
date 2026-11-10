@@ -372,6 +372,10 @@ fn system(wd: u32) -> R {
         if !l && op1 == 3 && crn == 7 && crm == 4 && op2 == 1 {
             return op(format!("memset((void *)(uintptr_t)({} & ~63ull), 0, 64);", x(rt))); // dc zva
         }
+        if !l && op1 == 3 && crn == 7 && crm == 5 && op2 == 1 {
+            // ic ivau: code written through a mapping is due to take effect.
+            return op(format!("rt_code_changed({});", x(rt)));
+        }
         if !l && crn == 7 {
             return op("/* cache maintenance */".into());
         }
@@ -397,7 +401,7 @@ fn system(wd: u32) -> R {
     match key {
         (3, 3, 13, 0, 2) => op(format!("c->tpidr = {v};")),
         (3, 3, 4, 2, 0) => op(format!("c->nzcv = {v} & 0xf0000000ull;")),
-        (3, 3, 4, 4, 0) => op(format!("c->fpcr = {v} & 0x7c00000ull;")),
+        (3, 3, 4, 4, 0) => op(format!("rt_fpcr(c, {v} & 0x7c00000ull);")),
         (3, 3, 4, 4, 1) => op(format!("c->fpsr = {v} & 0xf800009full;")),
         _ => unsupported(format!("msr {key:?}")),
     }

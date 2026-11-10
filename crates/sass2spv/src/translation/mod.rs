@@ -114,6 +114,10 @@ impl Decoded {
             let mut c = EmitterContext::new(&mut self.ir, &self.tc, &self.program, rm, index != 0);
             if index == 0 {
                 emit_outputs_initialization(&mut c);
+                if c.has_barriers() {
+                    let (flag, f) = (c.exited_flag(), c.const_i(crate::ir::ir_consts::FALSE));
+                    c.copy_to(flag, f);
+                }
             }
             let function = self.program.function_by_id(index as i32);
             for &block in &self.program.function(function).blocks {
@@ -155,6 +159,12 @@ fn emit_ops(c: &mut EmitterContext, block: BlockIdx) {
     let program = c.program;
     let b = program.block(block);
     for (op_index, &op) in b.op_codes.iter().enumerate() {
+        // A barrier exiting threads jump to (EmitterContext::barrier_after); at a block's start enter_block marked it.
+        let exit_barrier = op.name == InstName::Bar && c.has_barriers();
+        if exit_barrier && op.address != b.address {
+            let label = c.get_label(op.address);
+            c.mark_label(label);
+        }
         let cond = InstConditional(op.raw_op_code);
         let mut no_pred = op.props.has(InstProps::NO_PRED);
         if !no_pred && cond.pred() == PREDICATE_TRUE_INDEX && cond.pred_inv() {
@@ -188,6 +198,15 @@ fn emit_ops(c: &mut EmitterContext, block: BlockIdx) {
         }
         if let Some(l) = pred_skip_lbl {
             c.mark_label(l);
+        }
+        if exit_barrier {
+            // Threads that exited before the barrier: return now.
+            let (skip, flag) = (c.label(), c.exited_flag());
+            c.branch_if_false(skip, flag);
+            if c.prepare_for_return() {
+                c.ret();
+            }
+            c.mark_label(skip);
         }
     }
 }

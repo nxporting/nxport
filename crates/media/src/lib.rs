@@ -108,11 +108,12 @@ impl Source {
     }
 }
 
-/// What a decoder hands out (movie::DecoderOutputFormat): 16-bit PCM, RGBA bytes, or NV12.
+/// What a decoder hands out (movie::DecoderOutputFormat): 16-bit PCM, RGBA or ARGB bytes, or NV12.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Format {
     Pcm16,
     Rgba,
+    Argb,
     Nv12,
 }
 
@@ -186,12 +187,15 @@ impl Decoder {
                 let (w, h) = (*width as usize, *height as usize);
                 let (cw, ch) = ((w + 1) / 2, (h + 1) / 2);
                 match self.format {
-                    Format::Rgba => {
+                    Format::Rgba | Format::Argb => {
                         let size = w * h * 4;
                         if out.len() < size {
                             return Output::TooSmall(size);
                         }
                         video::yuv420_to_rgba(&mut out[..size], w, h, y, u, v);
+                        if self.format == Format::Argb {
+                            video::rgba_to_argb(&mut out[..size]);
+                        }
                         Output::Picture { pts_us: *pts_us, width: *width, height: *height, stride: (w * 4) as u32, size }
                     }
                     _ => {

@@ -148,6 +148,8 @@ enum Handle {
     Process,
     EventWritable(Arc<EventObj>),
     EventReadable(Arc<EventObj>),
+    /// svcCreateTransferMemory: services here share the process's memory, so a handle is all it takes.
+    TransferMemory,
 }
 
 static LOCK_WAITERS: Mutex<Option<HashMap<u64, Vec<LockWaiter>>>> = Mutex::new(None);
@@ -242,6 +244,11 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         }
         0x11 => signal_event(r),
         0x12 => clear_event(r),
+        0x15 => {
+            // svcCreateTransferMemory(out handle, addr, size, perm).
+            r[1] = new_handle(Handle::TransferMemory) as u64;
+            RESULT_OK
+        }
         0x16 => {
             let removed = HANDLES
                 .lock()
@@ -262,6 +269,19 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         0x1E => {
             r[0] = crate::horizon::hle::hle_nn_os_GetSystemTick();
             return;
+        }
+        0x26 => {
+            // svcBreak(reason, info, size). The game has given up: it would otherwise spin where it called this. Bit 31 only
+            // tells a debugger, and the game goes on.
+            const NOTIFICATION_ONLY: u64 = 0x8000_0000;
+            println!("[!] svcBreak: reason {:#x}, info {:#x}, size {:#x}", r[0], r[1], r[2]);
+            if r[0] & NOTIFICATION_ONLY == 0 {
+                let message = format!("The game stopped itself (svcBreak, reason {:#x}): it met something this engine does not do yet.", r[0]);
+                eprintln!("[-] {message}");
+                crate::config::app_error(&message);
+                std::process::exit(1);
+            }
+            RESULT_OK
         }
         0x21 => send_sync_request(r),
         0x34 => wait_for_address(r),
@@ -669,11 +689,37 @@ pub unsafe fn flush_code_views() -> usize {
     shadows.iter_mut().map(|v| flush_one(v)).sum()
 }
 
+/// flush_code_views for the page holding `addr`, in a view or in the code it views: a cache flush names its address, and
+/// comparing whole views at each line of one is slow.
+#[cfg(windows)]
+pub unsafe fn flush_code_view_at(addr: usize) -> usize {
+    let mut shadows = SHADOWS.lock().unwrap();
+    let mut written = 0;
+    for v in shadows.iter_mut() {
+        let off = if (v.src..v.src + v.size).contains(&addr) {
+            addr - v.src
+        } else if (v.dst..v.dst + v.size).contains(&addr) {
+            addr - v.dst
+        } else {
+            continue;
+        };
+        let page_off = ((v.src + off) & !0xfff).saturating_sub(v.src);
+        written += flush_range(v, page_off, off + 1);
+    }
+    written
+}
+
 unsafe fn flush_one(v: &mut Shadow) -> usize {
+    let size = v.size;
+    flush_range(v, 0, size)
+}
+
+/// Copies what changed in the 4 KiB pages of [start, end) of a view into the code it views. `start` begins a page, or the view.
+unsafe fn flush_range(v: &mut Shadow, start: usize, end: usize) -> usize {
     let mut written = 0;
     let mut touched: Vec<usize> = Vec::new();
-    let mut off = 0;
-    while off < v.size {
+    let mut off = start;
+    while off < end {
         let n = (0x1000 - (v.src + off) % 0x1000).min(v.size - off);
         let view = std::slice::from_raw_parts((v.dst + off) as *const u8, n);
         if view != &v.baseline[off..off + n] {
@@ -699,8 +745,18 @@ unsafe fn flush_one(v: &mut Shadow) -> usize {
                 IMAGE_MISMATCH.fetch_add(differ, std::sync::atomic::Ordering::Relaxed);
             } else {
                 let span = ((v.src + off + n + 0x3fff) & !0x3fff) - page;
+                // Only the words that really change: a page is copied whole.
+                #[cfg(windows)]
+                let changed: Vec<usize> = {
+                    let code = std::slice::from_raw_parts((v.src + off) as *const u8, n);
+                    (0..n).step_by(4).filter(|&i| view.get(i..(i + 4).min(n)) != code.get(i..(i + 4).min(n))).map(|i| v.src + off + i).collect()
+                };
                 let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
                 std::ptr::copy_nonoverlapping(view.as_ptr(), (v.src + off) as *mut u8, n);
+                #[cfg(windows)]
+                for a in changed {
+                    crate::live_patch::code_written(a, 4);
+                }
                 let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadExec);
                 crate::os::flush_icache(((v.src + off)) as usize, n);
                 if !touched.contains(&page) {

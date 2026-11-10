@@ -19,6 +19,11 @@ use super::shader::Prep;
 /// Bytes of a stage's start that select its candidates (the Metal shader cache's weak hash).
 pub const WEAK_LEN: usize = 0x130;
 
+/// The translator's source hash: translations made by another translator are not reused.
+pub fn translator() -> &'static str {
+    sass2spv::SOURCE_HASH
+}
+
 pub fn fnv1a64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {
@@ -158,6 +163,18 @@ pub fn remember(code: &[u8], size: usize, prep: Prep, inputs: Vec<u32>) -> Arc<K
 /// The code kept for a known stage.
 pub fn code(full: u64) -> Option<Vec<u8>> {
     std::fs::read(dir()?.join("code").join(format!("{full:016x}.bin"))).ok()
+}
+
+/// Whether a translation is stored.
+pub fn has(key: u64) -> bool {
+    dir().is_some_and(|d| d.join("t").join(format!("{key:016x}.bin")).is_file())
+}
+
+/// A translation's SPIR-V alone.
+pub fn load_spirv(key: u64) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;
+    let n = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap()) as usize;
+    Some(bytes.get(4..4 + n)?.to_vec())
 }
 
 /// A translation: SPIR-V and its manifest.

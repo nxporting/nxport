@@ -5,14 +5,18 @@
 #[cfg(target_os = "macos")]
 mod arg_kernels;
 mod batch_kernels;
+/// The app icon from the dump, as a Windows .ico written into the app's program.
+pub mod app_icon;
 pub mod extract_shaders;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod icon;
 // The Apple packaging (app bundles, signed Mach-O images, Metal shader caches through xcrun) runs on macOS hosts.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub mod ipa;
+pub mod adhoc_sign;
 pub mod lift;
 pub mod macho;
+pub mod mod_check;
 pub use nxport::metal::msl_specialize;
 #[cfg(target_os = "macos")]
 pub mod pack;
@@ -27,6 +31,8 @@ pub mod translation;
 #[cfg(nx_runtime)]
 pub mod vulkan_precompile;
 // The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts.
+#[cfg(windows)]
+pub mod ios_engine;
 #[cfg(windows)]
 pub mod winapp;
 #[cfg(windows)]

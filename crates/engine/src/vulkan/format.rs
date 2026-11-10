@@ -59,6 +59,8 @@ pub fn texture(fmt: i32) -> Option<vk::Format> {
         55 | 56 => F::R8G8B8A8_SRGB,
         // Packed 16-bit formats name their channels from the low bits (red lowest).
         57 => F::A4B4G4R4_UNORM_PACK16,
+        // Blue lowest: views swap red and blue (packed_swizzle). Vulkan 1.3 has no core format with red lowest here.
+        58 | 59 => F::A1R5G5B5_UNORM_PACK16,
         60 => F::B5G6R5_UNORM_PACK16,
         61 => F::A2B10G10R10_UNORM_PACK32,
         62 => F::A2B10G10R10_UINT_PACK32,
@@ -248,6 +250,20 @@ pub fn vertex(fmt: u32) -> Option<(vk::Format, sass2spv::types::AttributeType)> 
 
 /// Whether an image of NVN format `image` can be viewed as NVN format `view`: same texel block (size and dimensions), as
 /// Vulkan's format compatibility classes require. A compressed texture's one-block-per-texel views are not.
+/// A sampling swizzle (0 zero, 1 one, 2..5 red..alpha) on NVN format `fmt`, as codes for the Vulkan format it is stored
+/// in: RGB5 and RGB5A1 keep red in the low bits, where A1R5G5B5 has blue, and RGB5 has no alpha.
+pub fn packed_swizzle(fmt: i32, swizzle: [u8; 4]) -> [u8; 4] {
+    if !matches!(fmt, 58 | 59) {
+        return swizzle;
+    }
+    swizzle.map(|s| match s {
+        2 => 4,
+        4 => 2,
+        5 if fmt == 58 => 1,
+        s => s,
+    })
+}
+
 pub fn view_compatible(image: i32, view: i32) -> bool {
     match (crate::nvn::layout::format_info(image), crate::nvn::layout::format_info(view)) {
         (Some(a), Some(b)) => a.bytes == b.bytes && a.block_w == b.block_w && a.block_h == b.block_h,
@@ -255,8 +271,15 @@ pub fn view_compatible(image: i32, view: i32) -> bool {
     }
 }
 
-/// Whether textures of NVN formats `a` and `b` over the same memory share one image: the same format, or its sRGB /
-/// linear twin (what the Metal backend aliases; other reinterpretations stay separate images).
+/// An uncompressed colour format of 4 bytes a texel. All are view-compatible in Vulkan, and RGBA8 supports every usage.
+pub fn is_four_byte_color(f: i32) -> bool {
+    let Some(i) = crate::nvn::layout::format_info(f) else { return false };
+    i.bytes == 4 && i.block_w == 1 && i.block_h == 1 && texture(f).is_some_and(|v| aspects(v) == vk::ImageAspectFlags::COLOR)
+}
+
+/// Whether textures of NVN formats `a` and `b` over the same memory share one image: the same format, its linear twin,
+/// or another 4-byte colour format. Those are the same bytes read differently, on the console as through a Vulkan format
+/// view, and separate images would have to pass their contents through guest memory.
 pub fn alias_compatible(a: i32, b: i32) -> bool {
     use vk::Format as F;
     let base = |f: i32| match texture(f) {
@@ -268,5 +291,5 @@ pub fn alias_compatible(a: i32, b: i32) -> bool {
         Some(F::BC7_SRGB_BLOCK) => Some(F::BC7_UNORM_BLOCK),
         f => f,
     };
-    a == b || (base(a).is_some() && base(a) == base(b))
+    a == b || (base(a).is_some() && base(a) == base(b)) || (is_four_byte_color(a) && is_four_byte_color(b))
 }

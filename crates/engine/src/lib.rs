@@ -15,6 +15,8 @@ mod cpu;
 pub mod game;
 pub mod hle_abi;
 pub mod lifted;
+#[cfg(all(nx_runtime, windows))]
+mod live_patch;
 pub mod os;
 #[cfg(nx_runtime)]
 mod gpu;
@@ -28,6 +30,14 @@ mod guest {
 pub use guest::nso;
 #[cfg(nx_runtime)]
 mod horizon;
+/// How mods are found, for the tools that package them.
+#[cfg(nx_runtime)]
+pub mod mods {
+    pub use crate::horizon::fs::{discover_mods, has_exefs_nsp, is_mod_dir, mod_subdir, patch_sets};
+    pub use crate::guest::mod_patches::for_other_build;
+}
+#[path = "host/perf_stats.rs"]
+pub mod perf_stats;
 #[cfg(nx_native)]
 mod host;
 #[cfg(all(nx_runtime, not(nx_native)))]
@@ -48,6 +58,12 @@ mod nvn;
 pub mod vulkan;
 pub mod profile;
 pub mod settings;
+/// Dear ImGui windows over SDL3 on Windows: the builder's and the game's settings window.
+#[cfg(windows)]
+pub mod ui_sdl;
+/// SDL3.dll carried in the program, for the builder (a single file).
+#[cfg(windows)]
+pub mod sdl_library;
 
 #[cfg(nx_native)]
 use std::thread;
@@ -69,6 +85,13 @@ pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
     }
     unsafe { cpu::aot::finalize() }?;
     cpu::aot::take_image().ok_or_else(|| "no image was built".to_string())
+}
+
+/// guest_image for a host that runs guest code natively (iOS), made on one that does not.
+#[cfg(all(nx_runtime, windows))]
+pub fn guest_image_for_native(s: settings::Settings) -> Result<Vec<u8>, String> {
+    cpu::aot::patch_for_native();
+    guest_image(s)
 }
 
 /// Guest code as the lifter takes it (nxport-build's lift): a module's memory from `base`, with its executable range.
@@ -111,7 +134,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
     settings::try_install(s)?;
     let l = load().map_err(|e| e.to_string())?;
     if let (Some((label, _)), None) = (l.mod_inits.first(), patched) {
-        println!("[!] {label} is a plugin mod: lifted without its patches (they need a run: --aot-dump, then a lift with that image)");
+        println!("[+] {label} is a plugin mod: its code is lifted, and what it patches is handled when it runs");
     }
     let copy = |start: usize, len: usize| unsafe { std::slice::from_raw_parts(start as *const u8, len) }.to_vec();
     let main = l.mem_space.base_ptr as usize;
@@ -201,7 +224,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut s = resolve_settings(layers);
+    let s = resolve_settings(layers);
     if s.graphics.gpu == settings::GpuBackend::Null {
         return Err("--gpu=null: only where guest code is lifted".into());
     }
@@ -464,6 +487,11 @@ fn guest_chain(
     if dump_after_mods {
         cpu::aot::snapshot_premod();
     }
+    #[cfg(all(nx_runtime, windows))]
+    if !mod_inits.is_empty() {
+        live_patch::empty_present_layer();
+    }
+    horizon::fs::seed_sd_card();
     for (label, init) in &mod_inits {
         println!("[+] Mods: running {} init at {:#x}", label, init);
         unsafe { guest::call(*init, &[0, 0]) };
@@ -620,18 +648,18 @@ fn resolve_settings(layers: Vec<settings::SettingsPatch>) -> settings::Settings 
             .chain(user.iter().cloned())
             .chain(layers.iter().cloned()),
     );
-    let game_layers = provisional
-        .files
-        .game_dir
-        .as_deref()
-        .and_then(game::title_id_of)
+    let title_id = provisional.files.game_dir.as_deref().and_then(game::title_id_of);
+    let game_layers = title_id
         .and_then(profile::for_title)
         .map(|p| profile::layers(p, PLATFORM))
         .unwrap_or_default();
+    // What was changed while the game last ran (host/live.rs), above the app's settings.
+    let changed = title_id.and_then(config::game_settings);
     settings::resolve(
         base.into_iter()
             .chain(game_layers)
             .chain(user)
+            .chain(changed)
             .chain(layers),
     )
 }
@@ -701,9 +729,14 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //     symbols in the main binary that are defined in the SDK (sead, nn::gfx,
     //     libc++ internals, etc.) resolve to live SDK addresses rather than 0.
     //     Also binds SDK's external relocations (malloc, free, etc.) via mem_space trampolines.
-    let sdk_path_buf = game::exefs_file("sdk");
+    let sdk_path_buf = horizon::fs::exefs_code_file("sdk").unwrap_or_default();
     let sdk_path = sdk_path_buf.to_str().unwrap();
-    let sdk = match guest::sdk_loader::load_sdk(sdk_path, &mut mem_space) {
+    let loaded = if sdk_path.is_empty() {
+        Err("a mod removes it".into())
+    } else {
+        guest::sdk_loader::load_sdk(sdk_path, &mut mem_space)
+    };
+    let sdk = match loaded {
         Ok(m) => {
             println!("[+] SDK loaded successfully ({} symbols)", m.symbols.len());
             Some(m)
@@ -746,6 +779,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     unsafe {
         let exefs_buf = game::exefs();
         let exefs = exefs_buf.to_str().unwrap();
+        let main_id = guest::mod_patches::nso_build_id(&format!("{}/main", exefs));
+        let sdk_id = guest::mod_patches::nso_build_id(sdk_path);
+        let loaded: Vec<&str> = [&main_id, &sdk_id].into_iter().flatten().map(String::as_str).collect();
+        guest::mod_patches::report_other_builds(&loaded);
         if let Some(id) = guest::mod_patches::nso_build_id(&format!("{}/main", exefs)) {
             profile::set_main_build_id(&id);
             profile::log_version(&id);
@@ -823,8 +860,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //    where the kernel does not (iOS, the simulator, a macOS build without that link flag) every x18 use of main
     //    and the SDK is rewritten into an island of stubs that keep the value in a TSD slot. Before the SDK
     //    interposition and the tpidr rewrite, so `mrs x18, tpidr_el0` sites are handled by the x18 stubs.
-    #[cfg(nx_native)]
-    if cpu::trampoline::x18_trampolines() {
+    #[cfg(any(nx_native, windows))]
+    if !cpu::aot::native_rewrites() {
+        // Lifted code keeps x18 in its Cpu.
+    } else if cpu::trampoline::x18_trampolines() {
         let island = cpu::trampoline::TrampolineIsland::new(
             guest::loader::x18_island_area(),
             guest::loader::X18_ISLAND_SIZE,
@@ -860,6 +899,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //     instructions Darwin traps (FlushDataCache).
     if let Some(sdk_mod) = sdk.as_ref() {
         let default_stub = mem_space.default_stub_ptr;
+        #[cfg(all(nx_runtime, windows))]
+        live_patch::set_sdk(
+            sdk_mod.base + sdk_mod.ro_off,
+            sdk_mod.base + sdk_mod.image_size,
+            sdk_mod.text_start,
+            sdk_mod.text_start + sdk_mod.text_size,
+        );
         // --list-hle-imports: report every game import not bound to the SDK's own definition.
         if crate::settings::get().log.list_hle_imports {
             for (off, name) in mem_space.imports() {
@@ -880,8 +926,8 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         names.sort();
         let mut interposed = 0usize;
         for name in names {
-            if let Some(horizon::sdk::Target::Func(f)) = horizon::sdk::lookup(name) {
-                let tramp = mem_space.shared_hle_trampoline(f as *const ()) as usize;
+            if let Some(horizon::sdk::Target::Func(f, id)) = horizon::sdk::lookup(name) {
+                let tramp = mem_space.shared_hle_trampoline(f as *const (), id) as usize;
                 if sdk_mod.interpose(name, tramp) {
                     interposed += 1;
                 }
@@ -917,7 +963,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     if run_game_subsdk
         || crate::horizon::fs::mods()
             .iter()
-            .any(|(_, d)| (0..10).any(|i| d.join("exefs").join(format!("subsdk{}", i)).is_file()))
+            .any(|(_, d)| crate::horizon::fs::mod_has_plugin(d))
     {
         use horizon::svc::{
             add_region, Region, MEM_CODE_MUTABLE, MEM_CODE_STATIC, PERM_R, PERM_RW, PERM_RX,
@@ -1018,8 +1064,8 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         // Everything horizon::sdk binds, as the game's imports get it.
         for name in horizon::sdk::names() {
             match horizon::sdk::lookup(name) {
-                Some(horizon::sdk::Target::Func(f)) => {
-                    syms.insert(name.to_string(), mem_space.shared_hle_trampoline(f as *const ()) as usize);
+                Some(horizon::sdk::Target::Func(f, id)) => {
+                    syms.insert(name.to_string(), mem_space.shared_hle_trampoline(f as *const (), id) as usize);
                 }
                 Some(horizon::sdk::Target::Data(a)) => {
                     syms.insert(name.to_string(), a);
@@ -1064,6 +1110,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         for i in 0..10 {
             let path = game::exefs_file(&format!("subsdk{}", i));
             if !path.is_file() {
+                continue;
+            }
+            if horizon::fs::game_module_removed(&format!("subsdk{}", i)) {
+                println!("[+] Mods: the game's subsdk{i} is removed");
                 continue;
             }
             let label = format!("game/subsdk{}", i);
@@ -1113,11 +1163,14 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
         for (mod_name, dir) in crate::horizon::fs::mods() {
             for i in 0..10 {
-                let path = dir.join("exefs").join(format!("subsdk{}", i));
-                if !path.is_file() {
+                let Some(path) = crate::horizon::fs::mod_exefs_file(dir, &format!("subsdk{}", i)) else {
+                    continue;
+                };
+                let label = format!("{}/subsdk{}", mod_name, i);
+                if crate::settings::get().files.no_plugin_mods {
+                    println!("[!] Mods: {label} left out: plugin mods are not supported on this platform");
                     continue;
                 }
-                let label = format!("{}/subsdk{}", mod_name, i);
                 // Imports that land in raw SDK code (not an HLE the game's imports use) may reach kernel services the
                 // engine does not emulate: list them.
                 let sdk_range = sdk
@@ -1153,10 +1206,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         guest::module_loader::set_symbols(syms);
     }
 
-    #[cfg(nx_native)]
     // 4a'. Guest reads of tpidr_el0 get XNU's per-CPU value after a reschedule; point them at the stable
     //      copy of the guest TLS pointer (cpu/tpidr_rewrite.rs). Main text is still writable here; the SDK's is R-X.
-    {
+    #[cfg(any(nx_native, windows))]
+    if cpu::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
         if let Some(sdk_mod) = sdk.as_ref() {
             ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
@@ -1174,9 +1227,9 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
-    #[cfg(nx_native)]
     // Plain load-exclusives become acquire loads (cpu/exclusive_rewrite.rs).
-    {
+    #[cfg(any(nx_native, windows))]
+    if cpu::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
         if let Some(sdk_mod) = sdk.as_ref() {
             ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
@@ -1219,7 +1272,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 4c. Finalize trampolines (W^X + icache flush) before marking .text exec.
     mem_space.finalize_trampoline_pool();
-    #[cfg(nx_native)]
+    #[cfg(any(nx_native, windows))]
     if let Some(island) = cpu::trampoline::ISLAND.lock().unwrap().as_ref() {
         island.finalize().map_err(|e| format!("x18 island: {e}"))?;
     }
@@ -1233,6 +1286,23 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         mod_modules,
         game_subsdk_inits,
     })
+}
+
+/// The engine's program: a game, by the command line's settings. nxport's own main, and a Windows app's (the builder
+/// copies itself in as the app's nxport.exe and starts here by that name).
+pub fn main() -> std::process::ExitCode {
+    let layers = match settings::from_args(std::env::args_os()) {
+        Ok(l) => l,
+        Err(e) => e.exit(),
+    };
+    match run(layers) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            config::app_error(&e.to_string());
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
 
 /// Runs a game. This host has no runtime (docs/windows-port.md).
@@ -1283,17 +1353,41 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         game_subsdk_inits,
     } = load()?;
     let modules: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
+    // The overlay holds the code of the mods, and calls trampolines only a run with them makes.
+    let overlay = s.files.guest_overlay.clone().filter(|_| !s.files.no_mods);
+    let overlay_names = match &overlay {
+        Some(o) => {
+            let list = o.with_file_name("modules.txt");
+            std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?
+        }
+        None => String::new(),
+    };
+    let overlay_modules: Vec<&str> = overlay_names.lines().filter(|l| !l.is_empty()).collect();
     // A plugin mod's code runs only if the library was lifted with it (and with its patches: nxport-cli lift-game
     // --patched-image, or the builder).
-    if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.contains(&mod_module_name(label).as_str())) {
+    if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.iter().chain(&overlay_modules).any(|m| *m == mod_module_name(label).as_str())) {
         return Err(format!(
             "{label} is a plugin mod, and {} was lifted without it: lift and compile the game again with its mods (the builder does)",
             lib.display()
         )
         .into());
     }
-    lifted::install(&lib, &modules, lifted_handlers())?;
+    lifted::install(&lib, &modules, overlay.as_deref().map(|o| (o, overlay_modules.as_slice())), lifted_handlers())?;
+    #[cfg(windows)]
+    {
+        let (start, len) = mem_space.trampoline_range();
+        live_patch::set_hle_pool(start, len);
+    }
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
+    // --report-guard waits only for faults from guest code.
+    #[cfg(windows)]
+    if let Some((start, end)) = os::image_range(lifted::library().entry()) {
+        gpu::report_guard::set_guest_code_range(start, end);
+    }
+    #[cfg(windows)]
+    if let Some((start, end)) = lifted::overlay_code().and_then(os::image_range) {
+        gpu::report_guard::set_overlay_code_range(start, end);
+    }
     // --aot-dump: the code as plugin mods patch it, for the lift that holds their patches (guest_modules). Their
     // initialisers and early hooks write it while the game runs; the image is written at --aot-dump-frame.
     let dump_after_mods = matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !mod_inits.is_empty();
@@ -1370,6 +1464,10 @@ fn lifted_handlers() -> lifted::Handlers {
         stop(cpu, &if kind == 0 { format!("brk #{imm:#x}") } else { "an instruction that was not lifted".to_string() })
     }
     fn unknown(cpu: &mut nxport_lifter::abi::Cpu) {
+        #[cfg(windows)]
+        if live_patch::run_unknown(cpu) {
+            return;
+        }
         stop(cpu, "a branch to code that was not lifted")
     }
     lifted::Handlers { svc, trap, unknown, ticks: guest::regs::lifted_ticks }

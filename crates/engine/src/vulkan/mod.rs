@@ -8,6 +8,8 @@
 // with frame captures (crate::capture).
 
 mod astc;
+mod relayout;
+mod bindless;
 mod async_pipe;
 pub mod device;
 mod exec;
@@ -23,7 +25,10 @@ mod vcache;
 pub mod stage_cache;
 pub mod state;
 pub mod texture;
+mod pass_dump;
 mod window;
+#[cfg(windows)]
+mod overlay;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,6 +40,8 @@ use crate::gpu::{Backend, GpuOnlyTexture, ShaderStage, Texels};
 
 pub struct Vulkan {
     ctx: Mutex<Option<exec::Ctx>>,
+    /// Programs set (set_program) and not yet taken into the context: (program, stages as Ctx::set_program takes them).
+    programs: Mutex<Vec<(usize, Vec<(u64, u64, u64)>)>>,
     serial: AtomicU64,
     frames: AtomicU64,
     /// Start of the current 50-frame interval of the fps line.
@@ -53,10 +60,46 @@ static LAST_RECORD_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_WAIT_NS: AtomicU64 = AtomicU64::new(0);
 /// Submits, and blocking one-time submits (texture creation and uploads, reads) with their wait time.
 static SUBMITS: AtomicU64 = AtomicU64::new(0);
+/// This frame's draws, render passes and submits, counted while the performance overlay is on.
+static OVERLAY_DRAWS: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_PASSES: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_SUBMITS: AtomicU64 = AtomicU64::new(0);
+
+fn count_for_overlay(counter: &AtomicU64) {
+    if crate::host::overlay::is_overlay_enabled() {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
 static ONE_SHOTS: AtomicU64 = AtomicU64::new(0);
 static ONE_SHOT_NS: AtomicU64 = AtomicU64::new(0);
 /// Frames per second over the last fps line (the window title shows it).
 static DISPLAY_FPS: AtomicU64 = AtomicU64::new(0);
+
+/// The process's physical memory in use, for the performance overlay.
+#[cfg(windows)]
+fn working_set_bytes() -> u64 {
+    #[repr(C)]
+    #[derive(Default)]
+    struct Counters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set: usize,
+        working_set: usize,
+        quota: [usize; 4],
+        pagefile: usize,
+        peak_pagefile: usize,
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn K32GetProcessMemoryInfo(process: *mut std::ffi::c_void, counters: *mut Counters, size: u32) -> i32;
+    }
+    let mut c = Counters { cb: std::mem::size_of::<Counters>() as u32, ..Default::default() };
+    if unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) } != 0 {
+        c.working_set as u64
+    } else {
+        0
+    }
+}
 
 pub fn display_fps() -> f32 {
     f64::from_bits(DISPLAY_FPS.load(Ordering::Relaxed)) as f32
@@ -93,6 +136,7 @@ pub fn timing() -> (f64, f64, f64, u64) {
 
 pub static VULKAN: Vulkan = Vulkan {
     ctx: Mutex::new(None),
+    programs: Mutex::new(Vec::new()),
     serial: AtomicU64::new(0),
     frames: AtomicU64::new(0),
     interval: Mutex::new(None),
@@ -106,34 +150,71 @@ pub fn init(validation: bool) -> Result<(), String> {
     Ok(())
 }
 
+impl Vulkan {
+    /// The programs set since the context last took them, in the order they were set (under the context's lock).
+    fn take_programs(&self, c: &mut exec::Ctx) {
+        let set = std::mem::take(&mut *self.programs.lock().unwrap());
+        for (program, stages) in set {
+            c.set_program(program, stages);
+        }
+    }
+}
+
 impl Backend for Vulkan {
     fn set_program(&self, program: usize, stages: &[ShaderStage]) {
-        if let Some(c) = self.ctx.lock().unwrap().as_mut() {
-            c.programs.insert(program, stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect());
+        // Queued, and taken in by the next submit, which is when it took effect anyway: the game's threads set programs
+        // in gameplay too (TotK on Great Sky Island, now and then on a ModuleSystemWorker), and waiting for the context
+        // waited out the whole recording of a submit (~5 ms).
+        let stages = stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect();
+        self.programs.lock().unwrap().push((program, stages));
+        if let Ok(mut g) = self.ctx.try_lock() {
+            if let Some(c) = g.as_mut() {
+                self.take_programs(c);
+            }
         }
     }
 
     fn submit(&self, lists: &[u64]) {
+        // The thread submitting (the game's Presentation Thread) and vk-record share one L3 cache from the first submit.
+        static PINNED: std::sync::Once = std::sync::Once::new();
+        PINNED.call_once(|| {
+            let mask = unsafe { recording_affinity() };
+            if mask != 0 {
+                println!("[vulkan] recording threads on processors {mask:#x} (one L3 cache)");
+            }
+            REC_AFFINITY.store(mask, Ordering::Release);
+            unsafe { pin_current_thread(mask) };
+        });
         let guard_on = crate::gpu::report_guard::mode() != crate::settings::ReportGuard::Off;
+        // Every list the submit reaches, fetched under one lock (a submit reaches ~3,000; one lock each was ~5% of
+        // recording) for the executor too.
+        // The map and stack of the submit before, kept (growing a fresh map to ~3,000 entries for every submit was ~1% of
+        // recording).
+        thread_local! {
+            static SCRATCH: std::cell::RefCell<(Vec<u64>, rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>)> =
+                std::cell::RefCell::new(Default::default());
+        }
+        let (mut stack, mut submit_lists) = SCRATCH.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        submit_lists.clear();
+        let mut samples: Vec<usize> = Vec::new();
+        // The report guard needs every list's report addresses before the submit; otherwise vk-decode fetches the lists the
+        // roots call while their commands run (decode.rs), and only the roots are taken here.
         if guard_on {
-            let mut stack = Vec::new();
-            let mut submit_lists = rustc_hash::FxHashMap::default();
-            let mut samples: Vec<usize> = Vec::new();
             crate::nvn::api::walk_command_lists(lists, &mut stack, &mut submit_lists, |l| {
                 let s = l.summary();
-                samples.extend(
-                    s.2.iter()
-                        .map(|&a| crate::nvn::api::translate_virtual(a as usize)),
-                );
+                samples.extend(s.2.iter().map(|&a| crate::nvn::api::translate_virtual(a as usize)));
             });
             crate::gpu::report_guard::begin_submit(&samples);
+        } else {
+            crate::nvn::api::pin_command_lists(lists, &mut submit_lists);
         }
         let mut g = self.ctx.lock().unwrap();
         let serial = self.serial.load(Ordering::Acquire) + 1;
         match g.as_mut() {
             Some(c) => unsafe {
+                self.take_programs(c);
                 guard::hold_hot();
-                c.submit(lists, serial);
+                c.submit(lists, serial, &mut submit_lists, !guard_on);
                 guard::release_hot();
             },
             None => inflight::watch(inflight::Done {
@@ -148,6 +229,9 @@ impl Backend for Vulkan {
                 rt_writebacks: Vec::new(),
             }),
         }
+        // Ctx::submit handed back the map it emptied.
+        submit_lists.clear();
+        SCRATCH.with(|s| *s.borrow_mut() = (stack, submit_lists));
         self.serial.store(serial, Ordering::Release);
     }
 
@@ -161,6 +245,25 @@ impl Backend for Vulkan {
             }
         }
         self.frames.fetch_add(1, Ordering::AcqRel);
+        #[cfg(windows)]
+        if n == 1 && crate::settings::get().display.perf_overlay {
+            crate::host::overlay::set_overlay_enabled(true);
+        }
+        #[cfg(windows)]
+        if crate::host::overlay::is_overlay_enabled() {
+            static LAST_SLEEP_US: AtomicU64 = AtomicU64::new(0);
+            let sleep = crate::nvn::api::ACQUIRE_SLEEP_US.load(Ordering::Relaxed);
+            let ms = |ns: &AtomicU64| ns.load(Ordering::Relaxed) as f32 / 1e6;
+            crate::host::overlay::record_present(
+                ms(&LAST_GPU_NS),
+                ms(&LAST_WAIT_NS),
+                sleep.saturating_sub(LAST_SLEEP_US.swap(sleep, Ordering::Relaxed)) as f32 / 1000.0,
+                OVERLAY_SUBMITS.swap(0, Ordering::Relaxed),
+                OVERLAY_DRAWS.swap(0, Ordering::Relaxed),
+                OVERLAY_PASSES.swap(0, Ordering::Relaxed),
+                working_set_bytes(),
+            );
+        }
         crate::gpu::report_guard::frame_end(n);
         async_pipe::ASYNC_WAITED_US.store(0, Ordering::Relaxed);
         log_hitch(n);
@@ -269,7 +372,11 @@ impl Backend for Vulkan {
     }
 
     fn before_host_write(&self, addr: usize, len: usize) {
-        unsafe { guard::before_host_write(addr, len) }
+        unsafe {
+            #[cfg(not(nx_native))]
+            crate::gpu::report_guard::before_host_write(addr, len);
+            guard::before_host_write(addr, len)
+        }
     }
 
     fn presented_frames(&self) -> u64 {
@@ -302,6 +409,91 @@ impl Backend for Vulkan {
         let Some(c) = g.as_mut() else { return 0 };
         unsafe { c.gpu_only_textures(f) }
     }
+}
+
+/// The processors (mask) the recording threads run on, 0 until the first submit chose them, or for none in particular.
+/// Recording hands most of what it works out to vk-record (record.rs): batches of commands, descriptors, uniform copies.
+/// On a CPU with several L3 caches (Zen 2's core complexes) the two threads landed on different ones much of the time and
+/// every handover was a cross-complex cache miss. On the first complex TotK on Great Sky Island went 56.7-61.9 -> 66.5-70.5
+/// fps (Ryzen 7 3700X); on the second, 62.8-64.9 (the first L3 is taken, whatever the thread ran on before).
+static REC_AFFINITY: AtomicU64 = AtomicU64::new(0);
+
+/// The processors of each L3 cache of processor group 0, the first L3's (the lowest-numbered processor's) first (none:
+/// unknown).
+#[cfg(windows)]
+unsafe fn l3_masks() -> Vec<u64> {
+    extern "system" {
+        fn GetLogicalProcessorInformationEx(relation: u32, buf: *mut u8, len: *mut u32) -> i32;
+    }
+    let mut len = 0u32;
+    GetLogicalProcessorInformationEx(2, std::ptr::null_mut(), &mut len);
+    let mut buf = vec![0u8; len as usize];
+    // RelationCache: SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX records with a CACHE_RELATIONSHIP each.
+    if len == 0 || GetLogicalProcessorInformationEx(2, buf.as_mut_ptr(), &mut len) == 0 {
+        return Vec::new();
+    }
+    let (mut at, mut masks) = (0usize, Vec::new());
+    while at + 56 <= len as usize {
+        let r = &buf[at..];
+        let size = u32::from_le_bytes(r[4..8].try_into().unwrap()) as usize;
+        // Level, then the first GROUP_AFFINITY (mask, group) at 40.
+        let (level, mask, group) = (r[8], u64::from_le_bytes(r[40..48].try_into().unwrap()), u16::from_le_bytes(r[48..50].try_into().unwrap()));
+        if level == 3 && group == 0 && mask != 0 {
+            masks.push(mask);
+        }
+        if size == 0 {
+            break;
+        }
+        at += size;
+    }
+    masks.sort_by_key(|m| m.trailing_zeros());
+    masks
+}
+
+#[cfg(not(windows))]
+unsafe fn l3_masks() -> Vec<u64> {
+    Vec::new()
+}
+
+/// The processors sharing the first L3 cache (0: one L3 for all of them, or unknown).
+unsafe fn recording_affinity() -> u64 {
+    match l3_masks()[..] {
+        [first, _, ..] => first,
+        _ => 0,
+    }
+}
+
+/// The processors of the other L3 caches, where the game's threads run when Vulkan records on the first (0: anywhere).
+/// They no longer take the recording threads' cores and cache, and the game's job threads (which hand work to each other
+/// tens of thousands of times a second) share one: TotK on Great Sky Island 69.5-70.1 -> 72.0-73.3 fps, recording
+/// 12.6-13.0 -> 12.0-12.3 ms a frame (Ryzen 7 3700X).
+pub(crate) fn guest_affinity() -> u64 {
+    static MASK: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MASK.get_or_init(|| match unsafe { l3_masks() }[..] {
+        [_, ref rest @ ..] if !rest.is_empty() => rest.iter().fold(0, |a, m| a | m),
+        _ => 0,
+    })
+}
+
+/// Keeps the calling thread on processors `mask` (0: leaves it as it is).
+pub(crate) unsafe fn pin_current_thread(mask: u64) {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadAffinityMask(thread: *mut std::ffi::c_void, mask: usize) -> usize;
+        }
+        if mask != 0 {
+            SetThreadAffinityMask(GetCurrentThread(), mask as usize);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = mask;
+}
+
+/// The recording threads' processors, once chosen (vk-record follows them).
+pub(crate) fn rec_affinity() -> u64 {
+    REC_AFFINITY.load(Ordering::Acquire)
 }
 
 fn on_guest_main() -> bool {
@@ -435,6 +627,12 @@ impl Arena {
         Some((b, off))
     }
 
+    /// Room for a copy of `len` bytes that vk-record makes (exec::record::Op::Fill).
+    unsafe fn reserve(&mut self, dev: &device::Dev, len: usize) -> Option<(vk::Buffer, u64, *mut u8)> {
+        ARENA_BYTES.fetch_add(len as u64, Ordering::Relaxed);
+        self.alloc(dev, len)
+    }
+
     /// The chunks this submit used (they stay allocated until it completed: making and zeroing 64 MB chunks for every
     /// submit was a visible part of recording).
     fn take_used(&mut self) -> Vec<device::HostBuffer> {
@@ -462,7 +660,7 @@ pub(crate) struct Imports {
     failed: std::collections::HashSet<(usize, usize)>,
     gen: u64,
     /// Imports dropped while a submit was being recorded: its command buffers may still use them.
-    pub(super) retired: Vec<(vk::Buffer, vk::DeviceMemory)>,
+    pub(super) retired: Vec<(vk::Buffer, vk::DeviceMemory, usize, usize)>,
 }
 
 impl Imports {
@@ -476,8 +674,8 @@ impl Imports {
             for (a, s, _) in crate::nvn::api::take_released_ranges() {
                 let gone: Vec<usize> = self.by_start.range(..a + s).filter(|(&st, v)| st + v.0 > a).map(|(&st, _)| st).collect();
                 for st in gone {
-                    let (_, b, m) = self.by_start.remove(&st).unwrap();
-                    self.retired.push((b, m));
+                    let (size, b, m) = self.by_start.remove(&st).unwrap();
+                    self.retired.push((b, m, st, size));
                 }
             }
             self.failed.clear();
@@ -495,12 +693,16 @@ impl Imports {
         if self.failed.contains(&(start, end)) {
             return None;
         }
+        // Before the pages are made writable, so that nothing protects them again in between.
+        crate::guest::dirty_track::imported_add(start, end - start);
         // The driver maps imported pages with the protection they have now (NVIDIA on Windows): pages the write guard or
         // the write tracking hold read-only would stay read-only for the GPU, and its first write there loses the device.
         // They are made writable first, as a host write would: the guard waits for the GPU work reading them, and the
         // tracking counts its pages as written (their textures are checked again).
         #[cfg(windows)]
         {
+            // The driver takes only committed pages, and a page it imports stays mapped: commit it before the import.
+            unsafe { crate::os::ensure_committed(start, end - start) };
             let read_only = crate::os::read_only_ranges(start, end - start);
             if !read_only.is_empty() {
                 guard::before_host_write(start, end - start);
@@ -511,6 +713,7 @@ impl Imports {
                 }
                 // Still read-only (protected by something else): copies until the pools change, then tried again.
                 if !crate::os::read_only_ranges(start, end - start).is_empty() {
+                    crate::guest::dirty_track::imported_remove(start, end - start);
                     self.failed.insert((start, end));
                     return None;
                 }
@@ -522,6 +725,7 @@ impl Imports {
                 Some((b, (addr - start) as u64))
             }
             None => {
+                crate::guest::dirty_track::imported_remove(start, end - start);
                 self.failed.insert((start, end));
                 None
             }

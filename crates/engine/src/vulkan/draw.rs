@@ -7,8 +7,8 @@ const DRIVER_CBUF_SIZE: usize = 0x1000;
 /// One draw's or dispatch's descriptors: (binding, type, buffer) and (binding, type, images).
 #[derive(Default, Clone)]
 pub(super) struct DescWrites {
-    buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 24]>,
-    images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
+    pub(super) buffers: smallvec::SmallVec<[(u32, vk::DescriptorType, vk::DescriptorBufferInfo); 24]>,
+    pub(super) images: smallvec::SmallVec<[(u32, vk::DescriptorType, smallvec::SmallVec<[vk::DescriptorImageInfo; 1]>); 24]>,
 }
 
 /// Writes `w` into `set`, or pushes it into `cb` for `push` (bind point, layout). Dynamic uniform buffers are written at
@@ -61,7 +61,7 @@ const REPACK_CACHE_MAX: usize = 8 << 20;
 
 /// A vertex stream repacked for all its elements, with the hash of its guest bytes then and the last frame a draw
 /// used it.
-pub(super) struct RepackedStream {
+pub(in crate::vulkan) struct RepackedStream {
     pub(super) buf: crate::vulkan::device::HostBuffer,
     elems: usize,
     token: u64,
@@ -111,6 +111,55 @@ pub(super) struct DrawMemo {
     push: bool,
 }
 
+/// Uniform buffer slots per stage with a memo of their last binding (Ctx::ubo_slot_memo).
+pub(super) const UBO_MEMO: usize = 16;
+
+/// Bound texture slots per stage with a memo of their last resolution (Ctx::tex_memo).
+pub(super) const TEX_MEMO: usize = 48;
+
+/// Bindless textures: what a (handle, view type) resolved to (bindless_word): the packed word, the image (render-target
+/// feedback is checked against the pass), the texture's description and where it lives (Textures::locate), checked once
+/// per submit (`serial`: Textures::serial then).
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct BlEntry {
+    word: u32,
+    image: vk::Image,
+    place: Option<(super::texture::Desc, (super::texture::Desc, u32, u32))>,
+    serial: u64,
+    /// Resolved to a view: unresolved ones are tried again in the next submit (as texture_binding does), a texture whose
+    /// memory or image is not there yet not kept as nothing until the pools change.
+    resolved: bool,
+    /// Sampled while the current pass renders to it: (barrier epoch, the word of its feedback copy then).
+    fb: (u64, u32),
+}
+
+/// Bindless textures: a push constant word's last resolution (Ctx::bl_memo), good within the submit (`serial`) while
+/// the image is not rendered to (`fb` 0) or, while it is, for the feedback copy of barrier epoch `fb`.
+#[derive(Clone, Copy, Default)]
+pub(in crate::vulkan) struct BlMemo {
+    pub(super) handle: u64,
+    pub(super) declared: vk::ImageViewType,
+    pub(super) serial: u64,
+    pub(super) fb: u64,
+    pub(super) image: vk::Image,
+    pub(super) word: u32,
+}
+
+/// What the handle bound at a texture slot resolved to (texture_binding), while Ctx::bindings holds it (`gen`:
+/// Ctx::bindings_gen then).
+#[derive(Clone, Copy, Default)]
+pub(super) struct TexMemo {
+    pub(super) gen: u64,
+    pub(super) handle: u64,
+    pub(super) declared: vk::ImageViewType,
+    pub(super) image: vk::Image,
+    pub(super) view: vk::ImageView,
+    pub(super) sampler: vk::Sampler,
+}
+
+/// Draw states kept (Ctx::draw_memos) before they are dropped and worked out again.
+const DRAW_MEMOS: usize = 8192;
+
 /// The vertex binding that feeds unbound attributes (above NVN's 16 streams).
 
 impl Ctx {
@@ -135,12 +184,18 @@ impl Ctx {
         Some((vs?, gs, fs))
     }
 
-    /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions.
-    fn vertex_state(&self) -> (GraphicsState, u64) {
-        let s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
+    /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions, and for a
+    /// draw of points the point size the game set (Vulkan takes it from the stage, which writes it in every vertex stage:
+    /// left at 1, a pass the game splats with large points kept single pixels).
+    fn vertex_state(&self, points: bool) -> (GraphicsState, u64) {
+        let mut s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
         // An array hashes as the slice a Vec would (length included): the same keys, without an allocation per draw.
         let codes: [u8; 32] = s.attribute_types.map(attr_type_code);
         let key = hash(&(codes, s.depth_mode));
+        if points && self.st.point_size != 1.0 {
+            s.point_size = self.st.point_size;
+            return (s, hash(&(key, self.st.point_size.to_bits())));
+        }
         (s, key)
     }
 
@@ -221,7 +276,7 @@ impl Ctx {
             self.warn(format!("program {:#x} has no vertex stage", self.st.program));
             return None;
         };
-        let (vstate, vkey) = self.vertex_state();
+        let (vstate, vkey) = self.vertex_state(topology == vk::PrimitiveTopology::POINT_LIST);
         let vkey = hash(&(vkey, vh));
         if !self.stage(vd, vc, 0, vstate, vkey, 0, None, true) {
             return None;
@@ -281,34 +336,87 @@ impl Ctx {
         })
     }
 
+    /// A hash of the bound state draw_state depends on (what Ctx::pipe_gen tracks), worked out once per generation.
+    fn pipe_state_hash(&mut self) -> u64 {
+        if self.memo_hashes.0 != self.pipe_gen {
+            let st = &self.st;
+            let h = hash(&(
+                (st.program, st.attribs, &st.streams, st.blend),
+                (st.color_state, st.channel_mask, st.depth_stencil, st.polygon, st.multisample, st.depth_clamp, st.prim_restart),
+            ));
+            self.memo_hashes.0 = self.pipe_gen;
+            self.memo_hashes.1 = h;
+        }
+        self.memo_hashes.1
+    }
+
+    /// A hash of the current pass's target formats (what draw_state reads of it), worked out once per pass.
+    fn pass_state_hash(&mut self) -> u64 {
+        if self.memo_hashes.2 != self.pass_gen {
+            let h = self.pass.as_ref().map(|p| {
+                let colors: smallvec::SmallVec<[Option<(i32, i32)>; 8]> = p.colors.iter().map(|c| c.map(|c| (c.1.as_raw(), c.2))).collect();
+                hash(&(colors, p.depth.map(|d| d.1.as_raw()), p.samples.as_raw()))
+            });
+            self.memo_hashes.2 = self.pass_gen;
+            self.memo_hashes.3 = h.unwrap_or(0);
+        }
+        self.memo_hashes.3
+    }
+
     pub(super) unsafe fn draw(&mut self, mode: i32, call: Draw, base_instance: i32, instances: i32) {
         // Pipelines listed by earlier sessions, made on worker threads from the first draw.
         if self.pipeline_cache.is_none() {
             let cache = self.pipeline_cache();
             crate::vulkan::listed::start(self.dev.clone(), cache);
         }
-        if self.st.render_disabled || instances <= 0 || !self.begin_pass() {
+        if self.st.render_disabled || self.st.rasterizer_discard || instances <= 0 || !self.begin_pass() {
             return;
         }
         let memo_key = (mode, self.pipe_gen, self.pass_gen, crate::nvn::api::window_origin_mode(), crate::nvn::api::depth_mode());
         let m = match &self.draw_memo {
             Some(m) if m.key == memo_key => m.clone(),
             _ => {
-                let Some(m) = self.draw_state(mode) else { return };
+                // Games switch back and forth between a few programs and state blocks, and passes follow each other with
+                // the same targets: earlier draws with the same state, by its contents, in this submit or earlier ones
+                // (sky2203: a fifth of the draws changed the generations, into some 600 states a frame).
+                let content_key = (mode, self.pipe_state_hash(), self.pass_state_hash(), memo_key.3, memo_key.4);
+                let m = match self.draw_memos.get(&content_key) {
+                    Some(m) => m.clone(),
+                    None => {
+                        let Some(m) = self.draw_state(mode) else { return };
+                        if self.draw_memos.len() >= DRAW_MEMOS {
+                            self.draw_memos.clear();
+                        }
+                        self.draw_memos.insert(content_key, m.clone());
+                        m
+                    }
+                };
                 self.draw_memo = Some(DrawMemo { key: memo_key, ..m.clone() });
                 m
             }
         };
         let DrawMemo { vs: (vd, vc, vkey), gs, fs, vl, pipe, layout, set_layout, push, .. } = m;
         let fkey = fs.map(|(fd, _, k)| (fd, k));
-        let mut w = DescWrites::default();
-        self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut w);
+        // Another program after a draw that rendered to an attachment copied in this feedback epoch: the epoch ends, so
+        // what it samples of that attachment is copied again. Draws of one program in a row share the copy (deferred
+        // decals: dozens a frame, each sampling the targets it renders to).
+        let program = (vd, fs.map_or(0, |f| f.0));
+        if self.fb_dirty.is_some_and(|w| w != program) {
+            self.fb_epoch += 1;
+            let epoch = self.fb_epoch;
+            crate::gpu::history::journal(|| format!("  feedback epoch {epoch}: another program after a write"));
+            self.fb_taken.clear();
+            self.fb_dirty = None;
+        }
+        let mut j = self.rec.job();
+        self.stage_writes((vd, vkey), vd, vc, 0, &call, base_instance, &mut j.w);
         if let Some((gd, gc, k)) = gs {
-            self.stage_writes((gd, k), gd, gc, 4, &call, base_instance, &mut w);
+            self.stage_writes((gd, k), gd, gc, 4, &call, base_instance, &mut j.w);
         }
         if let Some((fd, fc, k)) = fs {
-            self.stage_writes((fd, k), fd, fc, 1, &call, base_instance, &mut w);
+            self.stage_writes((fd, k), fd, fc, 1, &call, base_instance, &mut j.w);
         }
+        let storage = j.w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::STORAGE_BUFFER).count() as u64;
         // A feedback copy ended the pass: it resumes (loading what was rendered).
         if self.pass.is_none() && !self.begin_pass() {
             return;
@@ -318,9 +426,23 @@ impl Ctx {
             self.rec.op(record::Op::Pipeline(vk::PipelineBindPoint::GRAPHICS, pipe));
             self.bound.pipeline = pipe;
         }
-        self.bind_writes(&w, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
+        self.bind_writes(j, vk::PipelineBindPoint::GRAPHICS, layout, set_layout, push);
+        self.bind_bindless(layout);
         self.bind_vertex_buffers(&vl, &call, base_instance, instances);
         self.dynamic_state();
+        // Rendering to an attachment copied in this feedback epoch.
+        if !self.fb_taken.is_empty() && self.fb_dirty.is_none() {
+            if let Some(p) = self.pass.as_ref() {
+                let bits = self.st.depth_stencil.unwrap_or_else(state::default_depth_stencil);
+                // Depth or stencil writes (state::depth_stencil); the depth target is attached last.
+                let depth_written = bits & 0b10 != 0 || bits & 1 << 6 != 0;
+                let colors = p.images.len() - p.depth.is_some() as usize;
+                let written = |i: &vk::Image| p.images[..colors].contains(i) || (depth_written && p.depth.is_some() && p.images.last() == Some(i));
+                if self.fb_taken.iter().any(written) {
+                    self.fb_dirty = Some(program);
+                }
+            }
+        }
         if let Some(p) = self.pass.as_mut() {
             p.draws += 1;
             if crate::gpu::history::journal_on() {
@@ -332,7 +454,6 @@ impl Ctx {
             }
         }
         // The stages, the target size and how many storage buffers it binds (writes there are what lost devices so far).
-        let storage = w.buffers.iter().filter(|b| b.1 == vk::DescriptorType::STORAGE_BUFFER).count() as u64;
         let extent = self.pass.as_ref().map_or(0, |p| (p.extent.0 as u64) << 32 | p.extent.1 as u64);
         self.checkpoint_each("draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
         match call {
@@ -357,13 +478,13 @@ impl Ctx {
                         }
                     };
                     if let Some((buf, off, n)) = rewritten {
-                        self.rec.op(record::Op::IndexBuffer(buf, off, vk::IndexType::UINT32));
+                        self.index_buffer_bind(buf, off, vk::IndexType::UINT32);
                         self.rec.op(record::Op::DrawIndexed(n, instances as u32, 0, 0, base_instance.max(0) as u32));
                         return;
                     }
                 }
                 let Some((buf, off, ty)) = self.index_buffer(index_type, count, addr) else { return };
-                self.rec.op(record::Op::IndexBuffer(buf, off, ty));
+                self.index_buffer_bind(buf, off, ty);
                 self.rec.op(record::Op::DrawIndexed(count.max(0) as u32, instances as u32, 0, base_vertex, base_instance.max(0) as u32));
             }
         }
@@ -400,8 +521,16 @@ impl Ctx {
                         l
                     }
                 };
+                let dev = self.dev.clone();
+                let module = match s.module(&dev) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        self.warn(format!("compute shader module for {data:#x}: {e}"));
+                        return;
+                    }
+                };
                 let info = vk::ComputePipelineCreateInfo::default()
-                    .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(s.module).name(c"main"))
+                    .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(module.module).name(c"main"))
                     .layout(layout);
                 let cache = self.pipeline_cache();
                 crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -417,12 +546,13 @@ impl Ctx {
                 (pipe, layout)
             }
         };
-        let mut w = DescWrites::default();
-        self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut w);
+        let mut j = self.rec.job();
+        self.dispatch_size = [x, y, z];
+        self.stage_writes((data, content), data, control, 5, &Draw::Arrays { first: 0, count: 0 }, 0, &mut j.w);
         let s = &self.stages[&(data, content)];
         let (set_layout, full) = (s.set_layout, s.known.full);
         self.rec.op(record::Op::Pipeline(vk::PipelineBindPoint::COMPUTE, pipe));
-        self.bind_writes(&w, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
+        self.bind_writes(j, vk::PipelineBindPoint::COMPUTE, layout, set_layout, false);
         // Always marked, not only with --gpu-checkpoints-each: dispatches run between passes, where the coarse checkpoints
         // (pass begin and end) cannot tell a compute shader that never finishes from idle.
         self.checkpoint("dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
@@ -588,18 +718,22 @@ impl Ctx {
             3 => 0x210,
             _ => 0x310,
         };
-        // Compute stages also find their uniform buffers' descriptors here.
+        // Compute stages also find the dispatch's thread group counts here (TotK's depth-cell passes index cells by them) and
+        // their uniform buffers' descriptors.
         if stage == 5 {
-            for (&(s, i), &(addr, size)) in &self.st.uniforms {
-                if s == 5 && (0..14).contains(&i) {
+            for (k, n) in self.dispatch_size.iter().enumerate() {
+                c[0x200 + 4 * k..0x204 + 4 * k].copy_from_slice(&n.to_le_bytes());
+            }
+            for i in 0..14 {
+                if let Some((addr, size)) = self.st.uniforms.get(5, i) {
                     let o = 0x210 + 0x10 * i as usize;
                     c[o..o + 8].copy_from_slice(&addr.to_le_bytes());
                     c[o + 8..o + 12].copy_from_slice(&(size as u32).to_le_bytes());
                 }
             }
         }
-        for (&(s, i), &(addr, size)) in &self.st.storage {
-            if s == stage && (0..16).contains(&i) {
+        for i in 0..16 {
+            if let Some((addr, size)) = self.st.storage.get(stage, i) {
                 let o = base + 0x10 * i as usize;
                 c[o..o + 8].copy_from_slice(&addr.to_le_bytes());
                 c[o + 8..o + 12].copy_from_slice(&(size as u32).to_le_bytes());
@@ -623,7 +757,7 @@ impl Ctx {
                 (size > 0).then(|| ((data + off) as *const u8, size))
             }
             n if n >= 3 => {
-                let &(addr, size) = self.st.uniforms.get(&(stage, n - 3))?;
+                let (addr, size) = self.st.uniforms.get(stage, n - 3)?;
                 let a = crate::nvn::api::translate_virtual(addr as usize);
                 (a > 0x10000 && size > 0).then(|| (a as *const u8, size.min(0x10000)))
             }
@@ -633,18 +767,30 @@ impl Ctx {
 
     /// The descriptors of stage `key`'s bindings for this draw, added to `out`.
     unsafe fn stage_writes(&mut self, key: (u64, u64), data: u64, control: u64, stage: i32, call: &Draw, base_instance: i32, out: &mut DescWrites) {
-        let Some((bindings, base)) = self.stages.get(&key).map(|s| (s.bindings.clone(), s.base)) else { return };
+        let Some((bindings, base, reads_driver)) = self.stages.get(&key).map(|s| (s.bindings.clone(), s.base, s.reads_driver)) else { return };
         if bindings.is_empty() {
             return;
         }
-        // Only for stages that read it (most do not).
+        // Only for stages that read it (most do not), and again only when what it holds changed.
         let mut driver = std::mem::take(&mut self.driver_scratch);
-        if bindings.iter().any(|b| {
-            matches!(b.feed, Feed::Cbuf(0) | Feed::Sbuf { cb_slot: 0, .. } | Feed::Texture { cbuf_slot: 0, .. } | Feed::Image { cbuf_slot: 0, .. })
-        }) {
-            self.driver_cbuf(stage, call, base_instance, &mut driver);
-        } else {
-            driver.clear();
+        if reads_driver {
+            let base_vertex = match call {
+                Draw::Arrays { first, .. } => *first,
+                Draw::Elements { base_vertex, .. } => *base_vertex,
+            };
+            let k = (
+                stage,
+                base_vertex,
+                base_instance,
+                self.storage_gen,
+                if stage == 5 { self.uniform_gen } else { 0 },
+                if stage == 5 { self.dispatch_size } else { [0; 3] },
+            );
+            if self.driver_key != Some(k) {
+                self.driver_cbuf(stage, call, base_instance, &mut driver);
+                self.driver_key = Some(k);
+                self.driver_hash = None;
+            }
         }
         let (vw, vh) = (self.st.viewport.2.max(1) as f32, self.st.viewport.3.max(1) as f32);
         let DescWrites { buffers, images } = out;
@@ -664,16 +810,12 @@ impl Ctx {
         // Constant buffers first: the support buffer records their bound sizes.
         let mut limits: smallvec::SmallVec<[(u32, usize); 16]> = Default::default();
         // Then the sampler table (filled by the textures), then the support buffer (holding the bound sizes and the
-        // textures' table indices).
-        let mut ordered: smallvec::SmallVec<[&shader::Binding; 32]> =
-            bindings.iter().filter(|b| !matches!(b.feed, Feed::Support | Feed::SamplerTable)).collect();
-        ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::SamplerTable)));
-        ordered.extend(bindings.iter().filter(|b| matches!(b.feed, Feed::Support)));
+        // textures' table indices): the stage's bindings are in that order (shader.rs).
         // Sampler table: the distinct samplers, and each texture slot's index in it.
         let mut table: smallvec::SmallVec<[vk::Sampler; 16]> = Default::default();
         let mut slots: smallvec::SmallVec<[(u32, u32); 32]> = Default::default();
-        let table_size = bindings.iter().find(|b| matches!(b.feed, Feed::SamplerTable)).map_or(0, |b| b.count as usize);
-        for b in ordered {
+        let table_size = bindings.iter().rev().find(|b| matches!(b.feed, Feed::SamplerTable)).map_or(0, |b| b.count as usize);
+        for b in bindings.iter() {
             match &b.feed {
                 Feed::Support => {
                     // Its contents depend on the viewport and the bound sizes only: one copy per submit each.
@@ -711,10 +853,36 @@ impl Ctx {
                 Feed::Cbuf(slot) => {
                     // Written by GPU work earlier in this submit or by earlier submits still running: in place (the
                     // GPU reads it after those writes, in queue order; a copy now could catch them half done).
+                    let mut memo_key = None;
                     if *slot >= 3 {
-                        if let Some(&(addr, size)) = self.st.uniforms.get(&(stage, slot - 3)) {
+                        if let Some((addr, size)) = self.st.uniforms.get(stage, slot - 3) {
+                            // Good until this submit's commands write its range (Ctx::ubo_unchanged).
+                            let k = (addr, size, b.extent);
+                            // The slot's last binding first (most draws read a buffer an earlier draw bound there).
+                            let at = usize::try_from(stage).ok().filter(|&s| s < 6).zip(usize::try_from(slot - 3).ok().filter(|&i| i < UBO_MEMO));
+                            let memo = at
+                                .map(|(s, i)| self.ubo_slot_memo[s][i])
+                                .filter(|m| m.0 == self.ubo_memo_gen && m.1 == k && self.ubo_unchanged(m.2 .1, m.2 .2, m.2 .0));
+                            if let Some(m) = memo {
+                                if let Some((buf, off, len, bound)) = m.2 .3 {
+                                    limits.push((b.binding - base, bound));
+                                    buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
+                                }
+                                continue;
+                            }
+                            if let Some(x) = self.ubo_memo.get(&k).copied().filter(|x| self.ubo_unchanged(x.1, x.2, x.0)) {
+                                if let Some((s, i)) = at {
+                                    self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, x);
+                                }
+                                if let Some((buf, off, len, bound)) = x.3 {
+                                    limits.push((b.binding - base, bound));
+                                    buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
+                                }
+                                continue;
+                            }
                             let a = crate::nvn::api::translate_virtual(addr as usize);
                             let len = size.min(0x10000);
+                            memo_key = Some((k, a, len));
                             if a > 0x10000 && self.gpu_writes(a, a + len) {
                                 let x = match self.shadow(a, len, false) {
                                     Some(x) => Some(x),
@@ -729,6 +897,26 @@ impl Ctx {
                                 }
                                 self.warn("a uniform buffer the GPU writes in the same submit could not be bound in place");
                             }
+                            // A binding not seen before in this submit (most misses: TotK's per-object constants, ~5,500
+                            // a frame): copied straight from the address found here, without the content memo (it
+                            // missed for these too, and its lookups and inserts were most of the cost).
+                            if a > 0x10000 && len > 0 {
+                                let n = if b.extent >= 0 { (b.extent as usize).max(16).min(len) } else { len };
+                                let x = self.arena.reserve(&self.dev, n).map(|(buf, off, p)| {
+                                    self.rec.fill(a, p, n, self.ubo_epoch);
+                                    (buf, off, n as u64, len)
+                                });
+                                let m = (self.ubo_epoch, a, len, x);
+                                self.ubo_memo.insert(k, m);
+                                if let Some((s, i)) = at {
+                                    self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, m);
+                                }
+                                if let Some((buf, off, len, bound)) = x {
+                                    limits.push((b.binding - base, bound));
+                                    buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
+                                }
+                                continue;
+                            }
                         }
                     }
                     // Others are copied (only the extent the stage reads), as on Metal: in place, the game's writes to their
@@ -741,13 +929,17 @@ impl Ctx {
                         // size still goes to the shader's check.
                         Some(v) if *slot != 0 => {
                             let n = if b.extent >= 0 { (b.extent as usize).max(16).min(v.len()) } else { v.len() };
-                            let key = (v.as_ptr() as usize, n, self.ubo_epoch);
-                            match self.ubo_copies.get(&key) {
-                                Some(&(b, o)) => Some((b, o, n as u64, v.len())),
+                            let key = (v.as_ptr() as usize, n);
+                            match self.ubo_copies.get(&key).copied().filter(|c| self.ubo_unchanged(key.0, n, c.0)) {
+                                Some((_, b, o)) => Some((b, o, n as u64, v.len())),
+                                // Copied on vk-record, before the commands after this one.
                                 None => {
-                                    let c = self.arena.copy(&self.dev, &v[..n]);
-                                    if let Some(c) = c {
-                                        self.ubo_copies.insert(key, c);
+                                    let c = self.arena.reserve(&self.dev, n).map(|(b, o, p)| {
+                                        self.rec.fill(v.as_ptr() as usize, p, n, self.ubo_epoch);
+                                        (b, o)
+                                    });
+                                    if let Some((b, o)) = c {
+                                        self.ubo_copies.insert(key, (self.ubo_epoch, b, o));
                                     }
                                     c.map(|(b, o)| (b, o, n as u64, v.len()))
                                 }
@@ -757,7 +949,12 @@ impl Ctx {
                         // a submit (most draws differ in nothing it holds, and the same copy lets their sets be shared).
                         Some(v) => {
                             let n = if b.extent >= 0 { (b.extent as usize).max(16).min(v.len()) } else { v.len() };
-                            let key = (super::texture::hash_bytes(&v[..n]), n);
+                            let h = match self.driver_hash {
+                                Some((m, h)) if m == n => h,
+                                _ => super::texture::hash_bytes(&v[..n]),
+                            };
+                            self.driver_hash = Some((n, h));
+                            let key = (h, n);
                             match self.driver_copies.get(&key) {
                                 Some(&(b, o)) => Some((b, o, n as u64, v.len())),
                                 None => {
@@ -771,6 +968,15 @@ impl Ctx {
                         }
                         None => zero.map(|(b, o)| (b, o, 256, 256)),
                     };
+                    if let Some((k, a, len)) = memo_key {
+                        let m = (self.ubo_epoch, a, len, x);
+                        self.ubo_memo.insert(k, m);
+                        if let (Ok(s), Ok(i)) = (usize::try_from(stage), usize::try_from(slot - 3)) {
+                            if s < 6 && i < UBO_MEMO {
+                                self.ubo_slot_memo[s][i] = (self.ubo_memo_gen, k, m);
+                            }
+                        }
+                    }
                     if let Some((buf, off, len, bound)) = x {
                         limits.push((b.binding - base, bound));
                         buffers.push((b.binding, b.ty, vk::DescriptorBufferInfo { buffer: buf, offset: off, range: len.max(1) }));
@@ -808,9 +1014,11 @@ impl Ctx {
                 Feed::Texture { cbuf_slot, handle_index, view, count, buffer, slot } => {
                     let mut infos: smallvec::SmallVec<[vk::DescriptorImageInfo; 1]> = Default::default();
                     for j in 0..*count {
+                        let mut at = None;
                         let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                             let k = (handle_index - 8) / 2 + j as i32;
-                            self.st.textures.get(&(stage, k)).copied()
+                            at = Some((stage, k));
+                            self.st.textures.get(stage, k)
                         } else {
                             cbuf(self, *cbuf_slot).and_then(|c| {
                                 let o = (*handle_index as usize + j as usize) * 4;
@@ -821,8 +1029,11 @@ impl Ctx {
                             self.warn("buffer textures are not implemented");
                             (vk::ImageView::null(), self.default_sampler)
                         } else {
-                            self.texture_binding(handle, *view)
+                            self.texture_binding(handle, *view, at)
                         };
+                        if crate::gpu::history::journal_on() {
+                            self.journal_texture(handle);
+                        }
                         let s = match slot {
                             Some(first) => {
                                 let index = match table.iter().position(|&t| t == s) {
@@ -845,6 +1056,36 @@ impl Ctx {
                     }
                     images.push((b.binding, b.ty, infos));
                 }
+                Feed::Bindless { cbuf_slot, handle_index, view, word } => {
+                    let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
+                        self.st.textures.get(stage, (handle_index - 8) / 2)
+                    } else {
+                        cbuf(self, *cbuf_slot).and_then(|c| {
+                            let o = *handle_index as usize * 4;
+                            (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
+                        })
+                    };
+                    if crate::gpu::history::journal_on() {
+                        self.journal_texture(handle);
+                    }
+                    let i = (*word as usize).min(self.bl_memo.len() - 1);
+                    // The word's last resolution in this submit first (most draws bind what the draw before bound).
+                    let m = self.bl_memo[i];
+                    let hit = handle.is_some_and(|h| {
+                        m.handle == h && m.declared == *view && m.serial == self.tex.serial && {
+                            let in_pass = self.renders_to(&m.image);
+                            if in_pass { m.fb == self.fb_epoch } else { m.fb == 0 }
+                        }
+                    });
+                    self.bl_words[i] = if hit {
+                        m.word
+                    } else {
+                        let (w, image, fb) = self.bindless_word(handle, *view);
+                        let (handle, serial) = (handle.unwrap_or(u64::MAX), self.tex.serial);
+                        self.bl_memo[i] = BlMemo { handle, declared: *view, serial, fb, image, word: w };
+                        w
+                    };
+                }
                 Feed::SamplerTable => {
                     let infos = (0..b.count)
                         .map(|i| vk::DescriptorImageInfo {
@@ -858,7 +1099,7 @@ impl Ctx {
                 Feed::Image { cbuf_slot, handle_index, view, buffer } => {
                     let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
                         let k = (handle_index - 8) / 2;
-                        self.st.images.get(&(stage, k)).copied()
+                        self.st.images.get(stage, k)
                     } else {
                         None
                     };
@@ -870,103 +1111,30 @@ impl Ctx {
         self.driver_scratch = driver;
     }
 
-    /// Binds `w` for the next draw or dispatch: pushed into the command buffer, or written into a new set of `set_layout`.
-    unsafe fn bind_writes(&mut self, w: &DescWrites, bind_point: vk::PipelineBindPoint, layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout, push: bool) {
-        if w.buffers.is_empty() && w.images.is_empty() {
+    /// Binds `j`'s descriptors for the next draw or dispatch, on vk-record (record::bind): pushed into the command buffer,
+    /// or in a set of `set_layout`.
+    unsafe fn bind_writes(&mut self, mut j: Box<record::BindJob>, point: vk::PipelineBindPoint, layout: vk::PipelineLayout, set_layout: vk::DescriptorSetLayout, push: bool) {
+        if j.w.buffers.is_empty() && j.w.images.is_empty() {
             return;
         }
-        // A set with the same contents written earlier in this submit is bound again (draws of one mesh or material).
-        let key = (!push).then(|| {
-            use std::hash::Hasher;
-            let mut h = rustc_hash::FxHasher::default();
-            h.write_u64(vk::Handle::as_raw(set_layout));
-            for (binding, ty, info) in &w.buffers {
-                h.write_u32(*binding);
-                h.write_i32(ty.as_raw());
-                h.write_u64(vk::Handle::as_raw(info.buffer));
-                if *ty != vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC {
-                    h.write_u64(info.offset);
-                }
-                h.write_u64(info.range);
-            }
-            for (binding, ty, infos) in &w.images {
-                h.write_u32(*binding);
-                h.write_i32(ty.as_raw());
-                for i in infos {
-                    h.write_u64(vk::Handle::as_raw(i.sampler));
-                    h.write_u64(vk::Handle::as_raw(i.image_view));
-                }
-            }
-            h.finish()
-        });
-        // Dynamic offsets in binding order.
-        let mut dynamic: smallvec::SmallVec<[(u32, u32); 32]> = w
-            .buffers
-            .iter()
-            .filter(|b| b.1 == vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
-            .map(|b| (b.0, b.2.offset as u32))
-            .collect();
-        dynamic.sort_unstable_by_key(|d| d.0);
-        let offsets: smallvec::SmallVec<[u32; 32]> = dynamic.iter().map(|d| d.1).collect();
-        let point = (bind_point == vk::PipelineBindPoint::COMPUTE) as usize;
-        if let Some(&s) = key.and_then(|k| self.set_memo.get(&k)) {
-            // The same set, layout and offsets bound last stay bound across pipeline changes (same layout).
-            if self.bound.sets[point].as_ref().is_some_and(|(l, b, o)| *l == layout && *b == s && *o == offsets) {
-                return;
-            }
-            self.rec.sets(bind_point, layout, s, &offsets);
-            self.bound.sets[point] = Some((layout, s, offsets));
-            return;
-        }
-        let set = if push {
-            vk::DescriptorSet::null()
-        } else {
-            match self.alloc_set(set_layout) {
-                Some(s) => s,
-                None => return,
-            }
-        };
-        if let Some(k) = key {
-            self.set_memo.insert(k, set);
-        }
-        // Written on vk-record (the set is not used before the command binding it).
-        if push {
-            self.rec.op(record::Op::Push(bind_point, layout, Box::new(w.clone())));
-            self.bound.sets[point] = None;
-        } else {
-            self.rec.op(record::Op::Write(set, Box::new(w.clone())));
-            self.rec.sets(bind_point, layout, set, &offsets);
-            self.bound.sets[point] = Some((layout, set, offsets));
-        }
+        (j.point, j.layout, j.set_layout, j.push) = (point, layout, set_layout, push);
+        j.first_set = (point == vk::PipelineBindPoint::GRAPHICS && self.dev.bindless.is_some()) as u32;
+        self.rec.op(record::Op::Bind(j));
     }
 
-    unsafe fn alloc_set(&mut self, layout: vk::DescriptorSetLayout) -> Option<vk::DescriptorSet> {
-        let layouts = [layout];
-        if let Some(&p) = self.desc_pools.last() {
-            if let Ok(s) = self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)) {
-                return Some(s[0]);
-            }
+    /// Bindless textures: the global set (once per command buffer: every graphics layout has it first, with the same
+    /// push constant range, so it stays bound) and the draw's words where they differ from the last pushed.
+    unsafe fn bind_bindless(&mut self, layout: vk::PipelineLayout) {
+        let Some(g) = &self.dev.bindless else { return };
+        if !self.bound.global {
+            let set = g.set;
+            self.rec.cmd(move |d, cb| d.device.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::GRAPHICS, layout, 0, &[set], &[]));
+            self.bound.global = true;
         }
-        if let Some(p) = self.free_desc_pools.pop() {
-            self.desc_pools.push(p);
-            if let Ok(s) = self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)) {
-                return Some(s[0]);
-            }
+        if self.bound.words != Some(self.bl_words) {
+            self.rec.words(layout, &self.bl_words);
+            self.bound.words = Some(self.bl_words);
         }
-        let sizes = [
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1024 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC, descriptor_count: 16384 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_BUFFER, descriptor_count: 8192 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER, descriptor_count: 16384 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_IMAGE, descriptor_count: 2048 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER, descriptor_count: 1024 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::STORAGE_TEXEL_BUFFER, descriptor_count: 1024 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLED_IMAGE, descriptor_count: 4096 },
-            vk::DescriptorPoolSize { ty: vk::DescriptorType::SAMPLER, descriptor_count: 4096 },
-        ];
-        let p = self.dev.device.create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(2048).pool_sizes(&sizes), None).ok()?;
-        self.desc_pools.push(p);
-        self.dev.device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo::default().descriptor_pool(p).set_layouts(&layouts)).ok().map(|s| s[0])
     }
 
     /// A storage buffer over guest memory: in place when its pool is imported and the offset aligned, else a copy that is
@@ -985,18 +1153,22 @@ impl Ctx {
         // 1 MiB for bindings from the game's own buffers), and holding all of it made the game fault on every
         // neighbouring write (walking in Hateno: 49 -> 29 fps).
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
+        let rw = if write { "write" } else { "read" };
         if let Some((buf, off)) = self.shadow(a, size, write).filter(|(_, o)| o % align == 0) {
+            crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} shadow"));
             return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
         }
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
+                crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} imported"));
                 return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
             }
         }
+        crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} copy"));
         // Ones the stage writes are read back by the watcher: on discrete GPUs host-cached memory (the other arena is
         // write-combined, slow to read).
         let (buf, off, p) = if write && self.dev.discrete { self.readback.alloc(&self.dev, size)? } else { self.arena.alloc(&self.dev, size)? };
-        std::ptr::copy_nonoverlapping(a as *const u8, p, size);
+        crate::gpu::report_guard::engine_copy(std::slice::from_raw_parts_mut(p, size), a as *const u8);
         crate::vulkan::guard::patch(a, p, size);
         if write {
             self.writebacks.push((a, p, size));
@@ -1004,13 +1176,27 @@ impl Ctx {
         Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 })
     }
 
-    unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (vk::ImageView, vk::Sampler) {
+    /// `at`: the bound texture slot (stage, index) it was read from, whose last resolution (Ctx::tex_memo) is tried first.
+    unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
+        // The handle with the pools it resolves in: the same handle in another pool is another texture.
+        let hq = h | crate::nvn::api::active_pools_bits();
+        let in_pass = |me: &Self, img: vk::Image| me.renders_to(&img);
+        let memo = at.and_then(|(s, k)| Some((usize::try_from(s).ok().filter(|&s| s < 6)?, usize::try_from(k).ok().filter(|&k| k < TEX_MEMO)?)));
+        if let Some((s, k)) = memo {
+            let m = self.tex_memo[s][k];
+            if m.gen == self.bindings_gen && m.handle == hq && m.declared == declared && !in_pass(self, m.image) {
+                return (m.view, m.sampler);
+            }
+        }
         // Pools change between submits only (registration is CPU work): a handle resolves the same way within one,
         // except where its image is an attachment of the current pass (render-target feedback).
-        let key = (h, declared);
+        let key = (hq, declared);
         if let Some(&(img, v, s)) = self.bindings.get(&key) {
-            if !self.pass.as_ref().is_some_and(|p| p.images.contains(&img)) {
+            if !in_pass(self, img) {
+                if let Some((ms, mk)) = memo {
+                    self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, image: img, view: v, sampler: s };
+                }
                 return (v, s);
             }
         }
@@ -1021,7 +1207,7 @@ impl Ctx {
             let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
             image = self.tex.get(&self.dev, &t)?.0.image;
             // Every barrier ends the pass, so the current pass began after the last one.
-            if self.pass.as_ref().is_some_and(|p| p.images.contains(&image)) {
+            if self.renders_to(&image) {
                 feedback = true;
                 if !self.dev.feedback_in_place {
                     return self.feedback_view(&t, view.as_ref(), declared);
@@ -1033,8 +1219,128 @@ impl Ctx {
         let r = (view.unwrap_or(vk::ImageView::null()), sampler.unwrap_or(self.default_sampler));
         if !feedback {
             self.bindings.insert(key, (image, r.0, r.1));
+            if let Some((ms, mk)) = memo {
+                self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, image, view: r.0, sampler: r.1 };
+            }
         }
         r
+    }
+
+    /// Bindless textures, when a submit begins: drops the resolutions of pool slots registered again since the last
+    /// (all of them when the samplers changed or the change log lost some).
+    pub(super) fn bindless_submit(&mut self) {
+        if self.dev.bindless.is_none() {
+            return;
+        }
+        let mut changed = Vec::new();
+        let (seq, complete) = crate::nvn::api::pool_changes_since(self.bl_pool_seq, &mut changed);
+        self.bl_pool_seq = seq;
+        let samplers = crate::nvn::api::samplers_gen();
+        if !complete || samplers != self.bl_epoch || changed.contains(&-1) {
+            self.bl_cache.clear();
+            self.bl_by_slot.clear();
+            self.bl_epoch = samplers;
+        } else {
+            // By the slots' own resolutions (bl_by_slot): a pass over the whole cache, every submit, was ~1 ms a frame
+            // of the Presentation Thread on Great Sky Island.
+            for id in changed {
+                for k in self.bl_by_slot.remove(&id).unwrap_or_default() {
+                    self.bl_cache.remove(&k);
+                }
+            }
+        }
+    }
+
+    /// Bindless textures: the packed word (bindless::Slots::word) for sampling handle `handle` as `declared`. Resolved
+    /// once and kept across submits (texture_binding resolves every handle again in each) until the game registers the
+    /// pool slot again (bindless_submit): a slot resolves to the state it was registered with (nvn::api::PoolSlot). Once
+    /// per submit the texture's place (alias roots change as textures come and go) is checked and its image against guest
+    /// memory. A texture the current pass renders to is sampled through its feedback copy (feedback_view), whose word is
+    /// kept while the copy is that barrier epoch's (the depth buffer many passes read while testing against it).
+    /// Returns the word, the image and the barrier epoch of the feedback copy the word names (0: none).
+    unsafe fn bindless_word(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> (u32, vk::Image, u64) {
+        let Some(h) = handle else { return (0, vk::Image::null(), 0) };
+        let in_pass = |me: &Self, img: vk::Image| me.renders_to(&img);
+        let key = (h | crate::nvn::api::active_pools_bits(), declared);
+        let serial = self.tex.serial;
+        if let Some(e) = self.bl_cache.get(&key).copied().filter(|e| e.resolved || e.serial == serial) {
+            if in_pass(self, e.image) {
+                if e.fb.0 == self.fb_epoch && e.serial == serial {
+                    return (e.fb.1, e.image, e.fb.0);
+                }
+            } else {
+                let mut ok = true;
+                if e.serial != serial {
+                    if let Some((own, root)) = e.place {
+                        ok = self.tex.locate_desc(&own) == root;
+                        if ok {
+                            self.tex.get_desc(&self.dev, &root.0);
+                        }
+                    }
+                    if let Some(e) = self.bl_cache.get_mut(&key).filter(|_| ok) {
+                        e.serial = serial;
+                    }
+                }
+                if ok {
+                    return (e.word, e.image, 0);
+                }
+            }
+        }
+        let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
+        let mut image = vk::Image::null();
+        let mut place = None;
+        let mut fb_view = None;
+        let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
+            let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
+            let own = super::texture::Desc::of(&t);
+            place = Some((own, self.tex.locate_desc(&own)));
+            image = self.tex.get(&self.dev, &t)?.0.image;
+            if in_pass(self, image) && !self.dev.feedback_in_place {
+                fb_view = Some(self.feedback_view(&t, view.as_ref(), declared));
+            }
+            self.tex.sampled_view(&self.dev, &t, view.as_ref(), declared)
+        });
+        let sampler = crate::nvn::api::lookup_pool_sampler(sampler_id).and_then(|d| self.tex.sampler(&self.dev, &d)).unwrap_or(self.default_sampler);
+        let mut slots = match self.bl.take() {
+            Some(s) => s,
+            None => crate::vulkan::bindless::Slots::new(&self.dev, self.default_sampler),
+        };
+        let word = slots.word(&self.dev, view.unwrap_or(vk::ImageView::null()), declared, sampler);
+        // The feedback copy is current for this barrier epoch (feedback_view took it if it was not).
+        let fb = fb_view.map(|v| (self.fb_epoch, slots.word(&self.dev, v.unwrap_or(vk::ImageView::null()), declared, sampler)));
+        if std::mem::take(&mut slots.warned) {
+            self.warn("bindless textures: more views or samplers than the global arrays hold");
+        }
+        self.bl = Some(slots);
+        let resolved = view.is_some();
+        if self.bl_cache.insert(key, BlEntry { word, image, place, serial, resolved, fb: fb.unwrap_or((0, 0)) }).is_none() {
+            self.bl_by_slot.entry(crate::nvn::api::active_texture_slot(tex_id)).or_default().push(key);
+        }
+        fb.map_or((word, image, 0), |f| (f.1, image, f.0))
+    }
+
+    /// The frame history's journal: the image a draw samples through texture handle `handle`, its NVN format and size,
+    /// and whether the current pass renders to it (sampled through its feedback copy).
+    unsafe fn journal_texture(&mut self, handle: Option<u64>) {
+        let Some(h) = handle else { return };
+        let Some((obj, _)) = crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32) else { return };
+        let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return };
+        let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
+        let image = img.image;
+        let fb = self.renders_to(&image);
+        let (w, hgt, fmt) = (t.width, t.height, t.format);
+        crate::gpu::history::journal(|| {
+            format!("    sample {:x}:{fmt} {w}x{hgt} at {level}/{layer}{}", vk::Handle::as_raw(image), if fb { " feedback" } else { "" })
+        });
+    }
+
+    /// Whether the draw being prepared renders to `image`: an attachment of the current pass, or of the pass a feedback
+    /// copy ended (the draw resumes it).
+    fn renders_to(&self, image: &vk::Image) -> bool {
+        match &self.pass {
+            Some(p) => p.images.contains(image),
+            None => self.fb_paused.contains(image),
+        }
     }
 
     /// A view of the feedback copy of texture `t` (an attachment of the current pass), taken now if this barrier epoch
@@ -1047,7 +1353,9 @@ impl Ctx {
                 let snap = self.tex.create(&self.dev, &d)?;
                 self.fb_snaps.insert(d, (0, snap));
             }
+            let paused = self.pass.as_ref().map_or_else(|| std::mem::take(&mut self.fb_paused), |p| p.images.clone());
             self.end_pass();
+            self.fb_paused = paused;
             let src = self.tex.images.get(&d)?;
             let (_, snap) = self.fb_snaps.get(&d)?;
             let aspect = format::aspects(src.format);
@@ -1064,6 +1372,9 @@ impl Ctx {
             let args = [src.extent.width as u64, src.extent.height as u64, src.levels as u64, src.layers as u64];
             let (si, di) = (src.image, snap.image);
             self.checkpoint("feedback snapshot (W, H, levels, layers)", args);
+            let epoch = self.fb_epoch;
+            crate::gpu::history::journal(|| format!("  snapshot {:x} {}x{} epoch {epoch}", vk::Handle::as_raw(si), args[0], args[1]));
+            self.fb_taken.push(si);
             self.rec.cmd(move |d, cb| d.device.cmd_copy_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &regions));
             self.barrier();
             self.fb_snaps.get_mut(&d)?.0 = self.fb_epoch;
@@ -1216,8 +1527,29 @@ impl Ctx {
         crate::gpu::pipeline_list::record(e);
     }
 
+    /// Binds vertex buffer `binding` unless the command buffer has it bound already (Bound).
+    fn vertex_buffer(&mut self, binding: u32, buf: vk::Buffer, off: u64) {
+        match self.bound.vertex.get_mut(binding as usize) {
+            Some(b) if *b == (buf, off) => {}
+            b => {
+                if let Some(b) = b {
+                    *b = (buf, off);
+                }
+                self.rec.op(record::Op::VertexBuffer(binding, buf, off));
+            }
+        }
+    }
+
+    /// Binds the index buffer unless the command buffer has it bound already (Bound).
+    fn index_buffer_bind(&mut self, buf: vk::Buffer, off: u64, ty: vk::IndexType) {
+        if self.bound.index != Some((buf, off, ty)) {
+            self.bound.index = Some((buf, off, ty));
+            self.rec.op(record::Op::IndexBuffer(buf, off, ty));
+        }
+    }
+
     unsafe fn bind_vertex_buffers(&mut self, vl: &[VStream], call: &Draw, base_instance: i32, instances: i32) {
-        self.rec.op(record::Op::VertexBuffer(pipelines::ZERO_STREAM, self.zeros.buffer, 0));
+        self.vertex_buffer(pipelines::ZERO_STREAM, self.zeros.buffer, 0);
         for v in vl {
             let (addr, size) = self.st.vertex_buffers.get(v.stream as usize).copied().unwrap_or((0, 0));
             let a = crate::nvn::api::translate_virtual(addr as usize);
@@ -1225,16 +1557,16 @@ impl Ctx {
                 Some((self.zeros.buffer, 0))
             } else if !v.repack {
                 if let Some(&b) = self.vb_memo.get(&(a, size)) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 // What GPU work wrote: its shadow.
                 if let Some(b) = self.shadow(a, size, false) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 if let Some(b) = self.cached(a, size) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 // A copy, once per submit; never the imported pool in place. Vertex data read in place lost the device on
@@ -1273,12 +1605,12 @@ impl Ctx {
                     // Checked once per submit (guest memory does not change during one).
                     let skey = super::hash_of(&(a, size, v, n, u32::MAX - 1));
                     if let Some(&b) = self.repacked.get(&skey) {
-                        self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                        self.vertex_buffer(v.stream, b.0, b.1);
                         continue;
                     }
                     if let Some(b) = self.cached_repack(a, size, v, n) {
                         self.repacked.insert(skey, (b, 0));
-                        self.rec.op(record::Op::VertexBuffer(v.stream, b, 0));
+                        self.vertex_buffer(v.stream, b, 0);
                         continue;
                     }
                 }
@@ -1286,7 +1618,7 @@ impl Ctx {
                 // one).
                 let key = super::hash_of(&(a, size, v, n, base_instance));
                 if let Some(&b) = self.repacked.get(&key) {
-                    self.rec.op(record::Op::VertexBuffer(v.stream, b.0, b.1));
+                    self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
                 let src = std::slice::from_raw_parts(a as *const u8, size);
@@ -1314,7 +1646,7 @@ impl Ctx {
                 b
             };
             if let Some((buf, off)) = bound {
-                self.rec.op(record::Op::VertexBuffer(v.stream, buf, off));
+                self.vertex_buffer(v.stream, buf, off);
             }
         }
     }
@@ -1453,6 +1785,12 @@ impl Ctx {
 
     unsafe fn dynamic_state(&mut self) {
         let Some(p) = &self.pass else { return };
+        // No command setting it since the previous draw of this pass.
+        let gen = (self.dynamic_gen, self.pass_gen, crate::nvn::api::window_origin_mode());
+        if self.dynamic_seen == Some(gen) {
+            return;
+        }
+        self.dynamic_seen = Some(gen);
         let (pw, ph) = p.extent;
         let (x, y, mut w, mut h) = self.st.viewport;
         if w <= 0 || h <= 0 {

@@ -3,7 +3,9 @@
 use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
 #[cfg(target_os = "macos")]
-use nxport_build::{ipa, macho, msl_specialize, pack, shader_cache_build, translation};
+use nxport_build::{msl_specialize, pack, shader_cache_build, translation};
+#[cfg(any(target_os = "macos", windows))]
+use nxport_build::{ipa, macho};
 
 use std::path::PathBuf;
 
@@ -24,7 +26,10 @@ enum Command {
     /// Shader stages and caches
     #[command(subcommand)]
     Shaders(Shaders),
-    #[cfg(target_os = "macos")]
+    /// Build the engine for iOS from this checkout, without Apple's tools (needs LLVM and the Rust target)
+    #[cfg(windows)]
+    IosEngine,
+    #[cfg(any(target_os = "macos", windows))]
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
         /// Game dump (ExeFS/ and RomFS/)
@@ -52,7 +57,7 @@ enum Command {
         #[arg(long)]
         bundle_id: Option<String>,
     },
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     /// The signed guest code image an iOS app runs: the game's code patched as the app patches it at startup
     GuestImage {
         /// Game dump (ExeFS/ and RomFS/)
@@ -158,6 +163,33 @@ enum Command {
         #[arg(long)]
         patched_image: Option<PathBuf>,
     },
+    /// Write the game's code as lift-game would lift it without mods, for lift-overlay (base_code.bin beside the library)
+    #[cfg(windows)]
+    BaseCode {
+        /// Game dump (ExeFS/ and RomFS/)
+        dump: PathBuf,
+        /// The file to write
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    /// Lift only what mods change against a guest library of the game without them
+    #[cfg(windows)]
+    LiftOverlay {
+        /// Game dump (ExeFS/ and RomFS/)
+        dump: PathBuf,
+        /// The base guest library (its base_code.bin beside it)
+        #[arg(long)]
+        base: PathBuf,
+        /// Output directory for the C files
+        #[arg(long, short)]
+        out: PathBuf,
+        /// Mods directory
+        #[arg(long)]
+        mods: PathBuf,
+        /// The image a run with a first overlay dumped (nxport --aot-dump)
+        #[arg(long)]
+        patched_image: Option<PathBuf>,
+    },
     /// Compile lifted C (lift / lift-game) into the guest library
     CompileGuest {
         /// The directory of the C files
@@ -171,6 +203,9 @@ enum Command {
         /// Files compiled at once (default: the CPU count)
         #[arg(short)]
         j: Option<usize>,
+        /// An LLVM profile to optimise by (made by llvm-profdata merge of this compiler's LLVM or older)
+        #[arg(long)]
+        profile: Option<PathBuf>,
     },
 }
 
@@ -418,7 +453,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    Pipeline cache: {} bytes", stats.vkcache_bytes);
             println!("    Output cache directory: {}", stats.cache_dir.display());
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(windows)]
+        Command::IosEngine => {
+            let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
+            println!("[+] {}", nxport_build::ios_engine::build(&toolchains)?.display());
+        }
+        #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
             let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
             std::fs::create_dir_all(&out)?;
@@ -437,10 +477,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("[+] Wrote {}", ipa.display());
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         Command::GuestImage { dump, mods, settings, out, macos } => {
             let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
-            let img = nxport::guest_image(ipa::app_settings(&dump, mods.as_deref(), edits))?;
+            let s = ipa::app_settings(&dump, mods.as_deref(), edits);
+            #[cfg(target_os = "macos")]
+            let img = nxport::guest_image(s)?;
+            #[cfg(windows)]
+            let img = nxport::guest_image_for_native(s)?;
             let (platform, name) = if macos {
                 (macho::Platform::MacOS, "@rpath/libnxport_guest.dylib")
             } else {
@@ -476,10 +520,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nxport_build::lift::report(&name, &r);
             }
         }
-        Command::CompileGuest { c_dir, out, cc, j } => {
+        #[cfg(windows)]
+        Command::BaseCode { dump, out } => {
+            let s = nxport_build::lift::game_settings(&dump, Default::default(), None);
+            nxport_build::lift::write_base_code(s, &out)?;
+            println!("[+] {}", out.display());
+        }
+        #[cfg(windows)]
+        Command::LiftOverlay { dump, base, out, mods, patched_image } => {
+            let s = nxport_build::lift::game_settings(&dump, Default::default(), Some(&mods));
+            for (name, r) in nxport_build::lift::lift_overlay(s, patched_image.as_deref(), &base, &out)? {
+                nxport_build::lift::report(&name, &r);
+            }
+        }
+        Command::CompileGuest { c_dir, out, cc, j, profile } => {
             let cc: Vec<String> = cc.split_whitespace().map(String::from).collect();
             let jobs = j.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, &|_, _| {})?;
+            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, profile.as_deref(), None, &|_, _| {})?;
             println!("[+] {}", out.display());
         }
     }

@@ -19,7 +19,7 @@ struct Context {
 }
 
 impl Context {
-    fn constant_buffer1_read(&mut self, gpu: &GpuAccessor, offset: i32) -> u32 {
+    fn constant_buffer1_read(&mut self, gpu: &GpuAccessor, offset: i32) -> Option<u32> {
         if self.cb1_data_size < offset + 4 {
             self.cb1_data_size = offset + 4;
         }
@@ -239,7 +239,7 @@ pub fn decode(definitions: &mut ShaderDefinitions, gpu: &GpuAccessor, ir: &mut I
             }
 
             // Targets of indirect branches: new targets need another round of decoding.
-            let has_new_target = find_brx_targets(gpu, &mut context, &mut st, &blocks, &mut visited, &mut work_queue, &get_block);
+            let has_new_target = find_brx_targets(gpu, &mut context, &mut st, &blocks, &mut visited, &mut work_queue, &get_block)?;
             if !has_new_target {
                 break;
             }
@@ -477,7 +477,7 @@ fn find_brx_targets(
     visited_blocks: &mut NetMap<u64, BlockIdx>,
     work_queue: &mut VecDeque<BlockIdx>,
     get_block: &GetBlock,
-) -> bool {
+) -> Result<bool, String> {
     let mut has_new_target = false;
     for &block in blocks {
         let last_op = st.b(block).last_op();
@@ -493,7 +493,13 @@ fn find_brx_targets(
                 has_new_target = true;
             }
             for i in 0..cb_offsets_count {
-                let target_offset = context.constant_buffer1_read(gpu, cb_base_offset + i * 4);
+                // Without the table the targets are unknown: making some up builds control flow the shader does not have.
+                let Some(target_offset) = context.constant_buffer1_read(gpu, cb_base_offset + i * 4) else {
+                    return Err(format!(
+                        "indirect branch at 0x{base_offset:x}: its jump table (constant buffer 1 + 0x{:x}) is not available",
+                        cb_base_offset + i * 4
+                    ));
+                };
                 let target_address = base_offset.wrapping_add(target_offset as u64);
                 if visited.insert(target_address) {
                     let target = get_block(st, visited_blocks, work_queue, target_address);
@@ -503,7 +509,7 @@ fn find_brx_targets(
             }
         }
     }
-    has_new_target
+    Ok(has_new_target)
 }
 
 /// The jump table of a BRX: matches the pattern compilers emit before it,

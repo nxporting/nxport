@@ -11,19 +11,9 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// A function pointer in a static table.
-#[derive(Clone, Copy)]
-pub struct Fp(pub *const ());
-// SAFETY: the pointers are function addresses, never written.
-unsafe impl Sync for Fp {}
-unsafe impl Send for Fp {}
-
 pub enum Bind {
     /// An extern "C" function, called through an HLE trampoline (or its adapter: crate::hle_abi).
     Func(crate::hle_abi::Hle),
-    /// A host function bound as it is, with no adapter (a variadic one: its arguments cannot be typed); native
-    /// trampolines warn about it, and a lifted runtime cannot call it.
-    Raw(Fp),
     /// The address of a data symbol.
     Data(fn() -> usize),
 }
@@ -34,7 +24,8 @@ pub struct Entry(pub &'static str, pub Bind);
 /// What a name resolves to.
 #[derive(Clone, Copy, Debug)]
 pub enum Target {
-    Func(usize),
+    /// Its address, and which function it is (crate::hle_abi::Hle::id).
+    Func(usize, &'static str),
     Data(usize),
 }
 
@@ -44,6 +35,7 @@ macro_rules! func {
         $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
             $($f)::+ as unsafe extern "C" fn($($a),*) -> _,
             $($f)::+ as *const (),
+            stringify!($($f)::+),
         ))
     };
 }
@@ -56,6 +48,7 @@ macro_rules! adapt {
         $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
             adapter as unsafe extern "C" fn($($t),*) $(-> $r)?,
             adapter as *const (),
+            concat!(file!(), ":", line!(), ":", column!()),
         ))
     }};
 }
@@ -173,8 +166,7 @@ fn chain() -> &'static Chain {
 
 fn target(b: &Bind) -> Target {
     match b {
-        Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize),
-        Bind::Raw(f) => Target::Func(f.0 as usize),
+        Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize, h.id()),
         Bind::Data(d) => Target::Data(d()),
     }
 }
@@ -193,7 +185,7 @@ pub fn lookup(name: &str) -> Option<Target> {
     // Libraries kept as tables of their own (the movie library ships in its own module).
     crate::horizon::movie::lookup(name)
         .or_else(|| crate::horizon::audio::out::lookup(name))
-        .map(Target::Func)
+        .map(|f| Target::Func(f, Box::leak(name.to_string().into_boxed_str())))
 }
 
 /// Every name the layers bind.

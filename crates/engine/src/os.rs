@@ -63,6 +63,23 @@ pub unsafe fn commit(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
     imp::commit(addr, size, prot)
 }
 
+/// As alloc, for the guest's large memory block (TotK's heap, 2.9 GB, about half of it ever touched), released with free.
+/// Windows charges commit for a page from its commit on, touched or not, so there this block's pages are committed a
+/// chunk at a time, by the first access to each: see imp::heap. Elsewhere pages have no such charge.
+/// # Safety
+/// As for alloc.
+pub unsafe fn alloc_on_demand(size: usize) -> io::Result<*mut u8> {
+    imp::alloc_on_demand(size)
+}
+
+/// Commits now what alloc_on_demand left for its first access, in [addr, addr + len). For the accesses no fault can serve:
+/// a buffer the kernel fills (it fails with no exception), memory handed to a driver to import. Nothing elsewhere.
+/// # Safety
+/// As for touching the range.
+pub unsafe fn ensure_committed(addr: usize, len: usize) {
+    imp::ensure_committed(addr, len)
+}
+
 /// Returns committed pages [addr, addr + size) of a reservation to the reserved state: inaccessible, their memory given
 /// back, committable again.
 /// # Safety
@@ -153,6 +170,12 @@ pub fn exit_thread() -> ! {
 /// Windows names only the library.
 pub fn address_owner(addr: usize) -> (Option<String>, Option<String>) {
     imp::address_owner(addr)
+}
+
+/// The image of the loaded module containing `addr`: (start, end).
+#[cfg(windows)]
+pub fn image_range(addr: usize) -> Option<(usize, usize)> {
+    imp::image_range(addr)
 }
 
 /// Local time on the host: `t` (seconds since 1970) broken down, the time zone's abbreviation, whether daylight saving
@@ -273,6 +296,12 @@ mod imp {
         }
         Ok(p as usize)
     }
+
+    pub unsafe fn alloc_on_demand(size: usize) -> io::Result<*mut u8> {
+        alloc(size, Prot::ReadWrite)
+    }
+
+    pub unsafe fn ensure_committed(_addr: usize, _len: usize) {}
 
     pub unsafe fn commit(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
         // Fresh anonymous pages over the reserved ones.
@@ -503,6 +532,7 @@ mod imp {
     }
 
     pub unsafe fn free(p: *mut u8, _size: usize) {
+        heap::forget(p as usize);
         VirtualFree(p as *mut c_void, 0, MEM_RELEASE);
     }
 
@@ -529,6 +559,124 @@ mod imp {
         } else {
             Ok(p)
         }
+    }
+
+    /// The guest heap's pages, committed by chunk at the first access, from the fault handler.
+    ///
+    /// A committed page costs nothing until touched but counts against the system's commit limit, so a whole heap
+    /// committed at once can exhaust it with plenty of RAM free. Nothing changes for code that touches a committed page.
+    ///
+    /// VirtualAlloc(MEM_COMMIT) over a committed page sets that page's protection: over a page the report guard or the
+    /// write tracking holds, it would silently lift the guard. So a chunk is committed once only, under the lock, and
+    /// protect commits a range's chunks before it can hold any page in them.
+    mod heap {
+        use super::*;
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use std::sync::{Mutex, MutexGuard};
+
+        const CHUNK: usize = 1 << 20;
+        const CHUNKS: usize = (1 << 32) / CHUNK;
+        static BASE: AtomicUsize = AtomicUsize::new(0);
+        static LEN: AtomicUsize = AtomicUsize::new(0);
+        static DONE: [AtomicU64; CHUNKS / 64] = [const { AtomicU64::new(0) }; CHUNKS / 64];
+        static LOCK: Mutex<()> = Mutex::new(());
+
+        fn lock() -> MutexGuard<'static, ()> {
+            LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        fn done(c: usize) -> bool {
+            DONE[c / 64].load(Ordering::Acquire) & 1 << (c % 64) != 0
+        }
+
+        /// The offset of `addr` in the heap, if it is in it.
+        pub fn offset(addr: usize) -> Option<usize> {
+            let at = addr.wrapping_sub(BASE.load(Ordering::Acquire));
+            (at < LEN.load(Ordering::Acquire)).then_some(at)
+        }
+
+        /// Where the heap ends, if `addr` is in it.
+        pub fn end(addr: usize) -> Option<usize> {
+            offset(addr).map(|_| BASE.load(Ordering::Acquire) + LEN.load(Ordering::Acquire))
+        }
+
+        unsafe fn commit_chunk(c: usize) -> bool {
+            let _g = lock();
+            if done(c) {
+                return true;
+            }
+            let (base, len, at) = (BASE.load(Ordering::Acquire), LEN.load(Ordering::Acquire), c * CHUNK);
+            if at >= len {
+                return false;
+            }
+            // The system can refuse while it grows the page file, so a refusal is tried again before it counts.
+            for _ in 0..10 {
+                if !VirtualAlloc((base + at) as *mut c_void, CHUNK.min(len - at), MEM_COMMIT, flags(Prot::ReadWrite)).is_null() {
+                    DONE[c / 64].fetch_or(1 << (c % 64), Ordering::AcqRel);
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            eprintln!("[-] Guest heap: no commit for 1 MiB at offset {at:#x}: {}", io::Error::last_os_error());
+            false
+        }
+
+        /// An access fault at `addr`: true if it was for a chunk not committed yet, which now is.
+        pub unsafe fn fault(addr: usize) -> bool {
+            match offset(addr) {
+                Some(at) if !done(at / CHUNK) => commit_chunk(at / CHUNK),
+                _ => false,
+            }
+        }
+
+        pub unsafe fn ensure(addr: usize, len: usize) {
+            let (first, heap_len) = (addr.wrapping_sub(BASE.load(Ordering::Acquire)), LEN.load(Ordering::Acquire));
+            if first < heap_len {
+                for c in first / CHUNK..=(first + len.max(1) - 1).min(heap_len - 1) / CHUNK {
+                    if !done(c) {
+                        commit_chunk(c);
+                    }
+                }
+            }
+        }
+
+        /// Reserves `size` as the block committed on demand. None if it is small or there is one already: those commit
+        /// whole, as before.
+        pub unsafe fn adopt(size: usize) -> io::Result<Option<usize>> {
+            let _g = lock();
+            if LEN.load(Ordering::Acquire) != 0 || size < 256 << 20 || size > CHUNKS * CHUNK {
+                return Ok(None);
+            }
+            let base = VirtualAlloc(std::ptr::null_mut(), size, MEM_RESERVE, flags(Prot::None)) as usize;
+            if base == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            BASE.store(base, Ordering::Release);
+            LEN.store(size, Ordering::Release);
+            Ok(Some(base))
+        }
+
+        pub unsafe fn forget(base: usize) {
+            let _g = lock();
+            if base == BASE.load(Ordering::Acquire) {
+                LEN.store(0, Ordering::Release);
+                BASE.store(0, Ordering::Release);
+                for w in &DONE {
+                    w.store(0, Ordering::Release);
+                }
+            }
+        }
+    }
+
+    pub unsafe fn alloc_on_demand(size: usize) -> io::Result<*mut u8> {
+        match heap::adopt(size)? {
+            Some(p) => Ok(p as *mut u8),
+            None => alloc(size, Prot::ReadWrite),
+        }
+    }
+
+    pub unsafe fn ensure_committed(addr: usize, len: usize) {
+        heap::ensure(addr, len)
     }
 
     pub unsafe fn commit(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
@@ -590,6 +738,25 @@ mod imp {
         let mut name = [0u16; 512];
         let n = unsafe { GetModuleFileNameW(m, name.as_mut_ptr(), name.len() as u32) } as usize;
         ((n > 0).then(|| String::from_utf16_lossy(&name[..n])), None)
+    }
+
+    pub fn image_range(addr: usize) -> Option<(usize, usize)> {
+        const FROM_ADDRESS: u32 = 0x4; // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+        const UNCHANGED_REFCOUNT: u32 = 0x2;
+        extern "system" {
+            fn GetModuleHandleExW(flags: u32, name: *const c_void, module: *mut *mut c_void) -> i32;
+        }
+        let mut m = std::ptr::null_mut();
+        if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, addr as *const c_void, &mut m) } == 0 {
+            return None;
+        }
+        // A module handle is its image's base: the PE header's offset at 0x3c, SizeOfImage at 0x50 in the header.
+        let base = m as usize;
+        let size = unsafe {
+            let pe = base + (((base + 0x3c) as *const u32).read_unaligned() as usize);
+            ((pe + 0x50) as *const u32).read_unaligned() as usize
+        };
+        Some((base, base + size))
     }
 
     extern "C" {
@@ -685,10 +852,17 @@ mod imp {
     pub unsafe fn protect(addr: usize, size: usize, prot: Prot) -> io::Result<()> {
         let mut old = 0;
         if VirtualProtect(addr as *mut c_void, size, flags(prot), &mut old) != 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
+            return Ok(());
         }
+        let e = io::Error::last_os_error();
+        // A range with heap chunks not committed yet (it changes nothing then): the guards hold what they asked to hold.
+        if heap::offset(addr).is_some() || heap::offset(addr + size - 1).is_some() {
+            heap::ensure(addr, size);
+            if VirtualProtect(addr as *mut c_void, size, flags(prot), &mut old) != 0 {
+                return Ok(());
+            }
+        }
+        Err(e)
     }
 
     pub fn flush_icache(addr: usize, len: usize) {
@@ -730,12 +904,29 @@ mod imp {
         if r.code != EXCEPTION_ACCESS_VIOLATION || r.parameters < 2 || h == 0 {
             return EXCEPTION_CONTINUE_SEARCH;
         }
+        if heap::fault(r.information[1]) {
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
         let h: FaultHandler = std::mem::transmute(h);
-        if h(r.information[1], r.information[0] == 1, r.address as usize) {
+        if h(r.information[1], r.information[0] == 1, r.address as usize) || heap_chunk_arrived(r.information[1], r.information[0]) {
             EXCEPTION_CONTINUE_EXECUTION
         } else {
             EXCEPTION_CONTINUE_SEARCH
         }
+    }
+
+    /// A fault on a heap chunk that another thread committed between the fault and heap::fault: the access can go ahead.
+    unsafe fn heap_chunk_arrived(addr: usize, access: usize) -> bool {
+        const PAGE_NOACCESS: u32 = 0x01;
+        const WRITABLE: u32 = 0x04 | 0x08 | 0x40 | 0x80;
+        if access > 1 || heap::offset(addr).is_none() {
+            return false;
+        }
+        let mut info: MemoryBasicInformation = std::mem::zeroed();
+        VirtualQuery(addr as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) != 0
+            && info.state == MEM_COMMIT
+            && info.protect & PAGE_NOACCESS == 0
+            && (access == 0 || info.protect & WRITABLE != 0)
     }
 
     #[repr(C)]
@@ -762,12 +953,23 @@ mod imp {
         while at < end {
             let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
             let n = unsafe { VirtualQuery(at as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
+            if let (true, Some(heap_end)) = (n != 0 && info.state != MEM_COMMIT, heap::end(at)) {
+                at = (info.base_address as usize + info.region_size).min(heap_end); // a read commits it
+                continue;
+            }
             if n == 0 || info.state != MEM_COMMIT || info.protect == 0 || info.protect & (PAGE_NOACCESS | PAGE_GUARD) != 0 {
                 break;
             }
             at = info.base_address as usize + info.region_size;
         }
         at.min(end) - addr
+    }
+
+    #[cfg(test)]
+    pub fn committed(addr: usize) -> bool {
+        let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
+        unsafe { VirtualQuery(addr as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
+        info.state == MEM_COMMIT
     }
 
     pub fn read_only_ranges(addr: usize, len: usize) -> Vec<(usize, usize)> {
@@ -796,6 +998,10 @@ mod imp {
         while at < end {
             let mut info: MemoryBasicInformation = unsafe { std::mem::zeroed() };
             let n = unsafe { VirtualQuery(at as *const c_void, &mut info, std::mem::size_of::<MemoryBasicInformation>()) };
+            if let (true, Some(heap_end)) = (n != 0 && info.state != MEM_COMMIT, heap::end(at)) {
+                at = (info.base_address as usize + info.region_size).min(heap_end); // a write commits it
+                continue;
+            }
             if n == 0 || info.state != MEM_COMMIT || info.protect & WRITABLE == 0 {
                 break;
             }
@@ -807,6 +1013,45 @@ mod imp {
     extern "system" {
         fn SetUnhandledExceptionFilter(filter: Option<VectoredHandler>) -> Option<VectoredHandler>;
         fn GetModuleHandleExW(flags: u32, addr: *const c_void, module: *mut *mut c_void) -> i32;
+        fn IsBadReadPtr(addr: *const c_void, len: usize) -> i32;
+    }
+
+    /// The crashing thread's guest registers as of its last call between lifted functions, and what looks like guest
+    /// code on its guest stack, newest first. An exlaunch plugin that gives up writes its result to 0x6969696969696969.
+    unsafe fn guest_state(pc: usize) {
+        let cpu = crate::lifted::existing_thread_cpu();
+        if cpu.is_null() {
+            return;
+        }
+        let cpu = &*cpu;
+        let readable = |addr: u64, len: usize| IsBadReadPtr(addr as *const c_void, len) == 0;
+        let code = pc.wrapping_sub(8) as u64;
+        if readable(code, 8) && std::ptr::read_unaligned(code as *const u64) == 0x6969_6969_6969_6969 {
+            let result = cpu.x[0];
+            let value = if readable(result, 4) {
+                format!("{:#x}", std::ptr::read_unaligned(result as *const u32))
+            } else {
+                "unreadable".to_string()
+            };
+            eprintln!("[crash] a plugin mod aborted itself (exlaunch), result {value}");
+        }
+        for (i, row) in cpu.x.chunks(4).enumerate() {
+            let values: Vec<String> = row.iter().map(|v| format!("{v:#018x}")).collect();
+            eprintln!("[crash] x{:<2} {}", i * 4, values.join(" "));
+        }
+        eprintln!("[crash] sp {:#x}", cpu.sp);
+        let mut found = Vec::new();
+        for i in 0..512u64 {
+            let at = cpu.sp.wrapping_add(i * 8);
+            if !readable(at, 8) {
+                break;
+            }
+            let v = std::ptr::read_unaligned(at as *const u64);
+            if (0x70_0000_0000..0x71_0000_0000).contains(&v) && v & 3 == 0 && found.len() < 32 {
+                found.push(format!("sp+{:#x}: {v:#x}", i * 8));
+            }
+        }
+        eprintln!("[crash] guest addresses on the stack: {}", found.join(", "));
     }
 
     // An exception nothing handled (the process ends after this): what and where, the module and offset of the faulting
@@ -836,7 +1081,9 @@ mod imp {
             };
             eprintln!("[crash] {what} of {:#x}", r.information[1]);
         }
+        guest_state(pc);
         eprintln!("[crash] stack:\n{}", std::backtrace::Backtrace::force_capture());
+        crate::config::drain_log();
         EXCEPTION_CONTINUE_SEARCH
     }
 
@@ -894,6 +1141,57 @@ mod tests {
         assert_eq!(tls_get(k) as usize, 7);
         tls_set(k, std::ptr::null_mut()).unwrap();
         unsafe { tls_delete(k) };
+    }
+
+    /// The heap committed by first access: faults serve reads and writes, a guard over chunks not committed yet holds, and
+    /// committing a neighbouring chunk does not lift it.
+    #[cfg(windows)]
+    #[test]
+    fn heap_committed_on_first_access() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static GUARD_FAULTS: AtomicUsize = AtomicUsize::new(0);
+        unsafe fn guard(addr: usize, _write: bool, _pc: usize) -> bool {
+            GUARD_FAULTS.fetch_add(1, Ordering::SeqCst);
+            protect(addr & !0xfff, 0x1000, Prot::ReadWrite).is_ok()
+        }
+        const MB: usize = 1 << 20;
+        unsafe {
+            on_access_fault(guard);
+            let size = 300 * MB + 0x4000;
+            let base = alloc_on_demand(size).unwrap() as usize;
+            // First access, a read and a write, in chunks not committed.
+            assert_eq!(*((base + 5 * MB) as *const u8), 0);
+            *((base + 3 * MB + 8) as *mut u8) = 1;
+            assert_eq!(GUARD_FAULTS.load(Ordering::SeqCst), 0);
+            assert_eq!(readable_len(base, size), size, "not committed counts as readable");
+            assert_eq!(writable_len(base + 0x1000, 8 * MB), 8 * MB);
+            // A protection over chunks committed and not: the whole range holds, and its contents survive.
+            protect(base + 3 * MB, 2 * MB + 0x1000, Prot::Read).unwrap();
+            assert_eq!(*((base + 3 * MB + 8) as *const u8), 1);
+            *((base + 6 * MB) as *mut u8) = 2; // another chunk's first access
+            *((base + 4 * MB) as *mut u8) = 3;
+            assert_eq!(GUARD_FAULTS.load(Ordering::SeqCst), 1, "a chunk's commit lifted a guard in it");
+            *((base + 3 * MB + 8) as *mut u8) = 4;
+            assert_eq!(GUARD_FAULTS.load(Ordering::SeqCst), 2);
+            // Committed ahead for the kernel: a read of the file fills a chunk no one has touched.
+            ensure_committed(base + 7 * MB, MB);
+            assert_eq!(read_only_ranges(base + 7 * MB, MB), vec![]);
+            assert!(imp::committed(base + 7 * MB + 0x1000));
+            assert!(!imp::committed(base + 2 * MB), "a chunk nothing touched is not committed");
+            // The partial last chunk, then past the end: not the block's.
+            *((base + 300 * MB) as *mut u8) = 5;
+            assert_eq!(readable_len(base + size, 0x1000), 0);
+            // Freed and allocated again: fresh zeros, chunks commit afresh. A second block commits whole.
+            free(base as *mut u8, size);
+            assert_eq!(readable_len(base, 0x1000), 0);
+            let again = alloc_on_demand(size).unwrap() as usize;
+            assert_eq!(*((again + 4 * MB) as *const u8), 0);
+            let other = alloc_on_demand(size).unwrap() as usize;
+            assert!(imp::committed(other + 7 * MB));
+            free(other as *mut u8, size);
+            free(again as *mut u8, size);
+            assert_eq!(GUARD_FAULTS.load(Ordering::SeqCst), 2);
+        }
     }
 
     #[test]

@@ -160,8 +160,38 @@ pub fn tracking(addr: usize) -> bool {
 }
 
 /// Whether [start, start+len) can be tracked.
+/// Guest memory imported as GPU buffers (VK_EXT_external_memory_host), from before the import until its GPU memory is
+/// freed. Its pages must stay writable: on an RTX 4080, read-only pages under a live import lose the device, even with
+/// nothing using the import (a fresh 64 MB import with some pages made read-only: lost one frame later; the same import
+/// left alone: fine). TotK's 252 MB pool holds textures this tracking protected, and importing it lost the device on
+/// entering the Depths. Textures there are checked by hash instead.
+static IMPORTED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn imported_add(start: usize, len: usize) {
+    IMPORTED.lock().unwrap().push((start, start + len));
+}
+
+pub fn imported_remove(start: usize, len: usize) {
+    let mut l = IMPORTED.lock().unwrap();
+    if let Some(i) = l.iter().position(|&r| r == (start, start + len)) {
+        l.swap_remove(i);
+    }
+}
+
+/// Whether any of [start, start + len) is under a live import: nothing may remove write access from it.
+pub fn imported(start: usize, len: usize) -> bool {
+    IMPORTED.lock().unwrap().iter().any(|&(a, b)| a < start + len && start < b)
+}
+
 pub fn trackable(start: usize, len: usize) -> bool {
     len >= PAGE / 2 && locate(start, len).is_some()
+}
+
+/// The sum of the range's write generations, whatever its pages' states. Read before `protect` covers the range, it is
+/// the token `generation` gives back while nothing has written there since (see the comment on `Domain`).
+pub fn generations(start: usize, len: usize) -> Option<u64> {
+    let (g, _, first, last) = locate(start, len)?;
+    Some((first..=last).fold(0u64, |s, p| s.wrapping_add(g[p].load(Ordering::Acquire) as u64)))
 }
 
 /// The range's current write token, if every page of it is still protected by us (None: check it).
@@ -181,6 +211,9 @@ pub fn generation(start: usize, len: usize) -> Option<u64> {
 /// (Re)protects the pages of [start, start+len) and returns the token to remember for this check. Call before reading
 /// the contents, so writes made during the check change it. None if the range cannot be tracked now.
 pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
+    if imported(start, len) {
+        return None;
+    }
     let (g, f, first, last) = locate(start, len)?;
     if (first..=last).any(|p| f[p].load(Ordering::Acquire) & GPU != 0) {
         return None;
@@ -208,16 +241,16 @@ pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
                 return None;
             }
             let st = cur & STATE_MASK;
-            if st == PG_PROT {
-                break;
-            }
             if st == PG_BUSY {
                 if !busy_wait(&f[p]) {
                     return None;
                 }
                 continue;
             }
-            // PG_NONE -> PG_BUSY
+            // PG_NONE (or PG_PROT) -> PG_BUSY. Protected pages are claimed too: the mprotect below covers them, and a
+            // fault that opened one between a look at it and the mprotect (PG_NONE) was left read-only as PG_NONE, which
+            // the fault handler takes for already opened: every later write to the page faulted forever (the Vulkan
+            // watcher's write-back copy spun, 2026-10-31).
             let next = (cur & !STATE_MASK) | PG_BUSY | EVER;
             if f[p].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                 if cur & EVER == 0 {
@@ -387,6 +420,49 @@ unsafe fn unprotect_pages(
     }
 }
 
+/// Runs `write`, the engine storing GPU contents into [start, start+len), so that it does not count as a CPU write: the
+/// pages' generations stay and protected pages are protected again after. A CPU write to one of those pages in that moment
+/// goes unseen, which only matters for other data sharing a page, as the GPU's and the CPU's writes to the same bytes
+/// have no order anyway.
+pub unsafe fn write_unseen(start: usize, len: usize, write: impl FnOnce()) {
+    let Some((_, f, first, last)) = locate(start, len) else {
+        write();
+        return;
+    };
+    let page0 = start & !(PAGE - 1);
+    let mut claimed: Vec<usize> = Vec::new();
+    for p in first..=last {
+        loop {
+            let cur = f[p].load(Ordering::Acquire);
+            match cur & STATE_MASK {
+                PG_PROT => {
+                    if f[p].compare_exchange_weak(cur, (cur & !STATE_MASK) | PG_BUSY, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                        let at = page0 + (p - first) * PAGE;
+                        let _ = crate::os::protect(at, PAGE, crate::os::Prot::ReadWrite);
+                        crate::gpu::backend().pages_reprotected(at, PAGE);
+                        claimed.push(p);
+                        break;
+                    }
+                }
+                PG_BUSY => {
+                    if !busy_wait(&f[p]) {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+    write();
+    for p in claimed {
+        let at = page0 + (p - first) * PAGE;
+        let _ = crate::os::protect(at, PAGE, crate::os::Prot::Read);
+        crate::gpu::backend().pages_reprotected(at, PAGE);
+        let cur = f[p].load(Ordering::Acquire);
+        f[p].store((cur & !STATE_MASK) | PG_PROT, Ordering::Release);
+    }
+}
+
 /// Before the host kernel writes [addr, addr+len) (e.g. read() into a guest buffer): unprotect its pages and mark
 /// them written.
 pub unsafe fn before_host_write(addr: usize, len: usize) {
@@ -442,4 +518,34 @@ pub unsafe fn release(addr: usize, len: usize) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The order vulkan/texture.rs take_baseline relies on: generations read before `protect` stop matching once a write
+    /// opens a page; read after that write, they come out None, which a later None would match (the lost writes of
+    /// 2026-11-08: TotK's menu text missing letters).
+    #[test]
+    fn a_write_after_reading_the_generations_is_seen() {
+        let _ = crate::settings::try_install(crate::settings::resolve([]));
+        let _ = std::panic::catch_unwind(|| crate::gpu::install(&crate::gpu::null::NULL));
+        let len = 4 * PAGE;
+        let base = unsafe { crate::os::alloc(len, crate::os::Prot::ReadWrite) }.unwrap() as usize;
+        register_domain(base, len);
+        let (at, n) = (base + PAGE, 2 * PAGE);
+        let before = generations(at, n);
+        assert!(before.is_some());
+        let token = unsafe { protect(base, len) }.unwrap();
+        assert_eq!(generation(at, n), before, "nothing written: the interior matches");
+        assert_eq!(generation(base, len), Some(token));
+        // A write to the interior, as the fault handler answers it.
+        assert!(unsafe { handle_fault(at + PAGE + 8) });
+        unsafe { *((at + PAGE + 8) as *mut u8) = 1 };
+        assert_ne!(generation(at, n), before, "a write after the read is a change");
+        assert_ne!(generation(base, len), Some(token));
+        assert_eq!(generation(at, n), None, "read after the write instead, the token would be None");
+        unsafe { release(base, len) };
+    }
 }

@@ -23,4 +23,5 @@ pub static PROFILE: GameProfile = GameProfile {
     options: None,
     platform_options: None,
     presets: &[],
+    module_patches: &[],
 };
