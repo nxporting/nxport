@@ -674,19 +674,27 @@ fn library_path(name: &str, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
     Ok(cache_root()?.join(name).join(format!("f_{h:016x}.dll")))
 }
 
-/// Lifts and compiles [func, end) as it is now, unless an earlier run did: the library's path.
-fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
+/// Lifts and compiles [func, end) as it is now, unless an earlier run did: the library's path, and the module name its
+/// symbols carry (another entry's when an earlier run compiled the same C under another name, see `by_source`).
+fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64>) -> Result<(PathBuf, String), String> {
     let dir = cache_root()?.join(name);
     let dll = library_path(name, seeds)?;
     let lock = state.compiling.lock().unwrap().entry(name.to_string()).or_default().clone();
     let _guard = lock.lock().unwrap();
     if dll.is_file() {
-        return Ok(dll);
+        return Ok((dll, name.to_string()));
     }
     // Jump tables lie in the module's rodata: the image reaches past the code. Only what the lifter asks for is read.
     let image = unsafe { std::slice::from_raw_parts(func as *const u8, IMAGE_SPAN) };
     let module = nxport_lifter::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone() };
     let out = nxport_lifter::lift_module(&module, &Default::default());
+    // The cache name hashes the function's bytes, and some differ from run to run without changing the lifted code (a
+    // plugin's trampoline area holds this run's pointers, read at run time): 6 of a start's compiles with UltraCam were
+    // of C an earlier run had compiled. The same C compiles to the same library.
+    let source_key = by_source_key(state, name, &out.files);
+    if let Some(found) = by_source(source_key) {
+        return Ok(found);
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for (file, body) in nxport_lifter::RUNTIME_FILES {
         std::fs::write(dir.join(file), body).map_err(|e| e.to_string())?;
@@ -711,14 +719,51 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
     std::fs::rename(&tmp, &dll).map_err(|e| e.to_string())?;
     let list: String = seeds.iter().map(|a| format!("{a:x}\n")).collect();
     std::fs::write(dir.join("entries.txt"), list).map_err(|e| e.to_string())?;
-    Ok(dll)
+    remember_source(source_key, name, &dll);
+    Ok((dll, name.to_string()))
+}
+
+/// The index of libraries by the C they were compiled from: by_source/<key>.txt holds the entry's name and its library.
+const BY_SOURCE: &str = "by_source";
+
+/// A hash of the lifted C with its module name masked (the same code lifted under another cache name gives the same
+/// key), the runtime it compiles with, and the engine build.
+fn by_source_key(state: &State, name: &str, files: &[(String, String)]) -> u64 {
+    let mut text = Vec::new();
+    for (file, body) in files {
+        text.extend_from_slice(file.replace(name, "\u{1}").as_bytes());
+        text.extend_from_slice(body.replace(name, "\u{1}").as_bytes());
+    }
+    for (file, body) in nxport_lifter::RUNTIME_FILES {
+        text.extend_from_slice(file.as_bytes());
+        text.extend_from_slice(body.as_bytes());
+    }
+    fnv(&text) ^ state.version
+}
+
+/// A library compiled from the same C by an earlier run, with the module name its symbols carry.
+fn by_source(key: u64) -> Option<(PathBuf, String)> {
+    let root = cache_root().ok()?;
+    let text = std::fs::read_to_string(root.join(BY_SOURCE).join(format!("{key:016x}.txt"))).ok()?;
+    let mut lines = text.lines();
+    let (name, file) = (lines.next()?, lines.next()?);
+    let dll = root.join(name).join(file);
+    dll.is_file().then(|| (dll, name.to_string()))
+}
+
+fn remember_source(key: u64, name: &str, dll: &std::path::Path) {
+    let Ok(root) = cache_root() else { return };
+    let Some(file) = dll.file_name() else { return };
+    let dir = root.join(BY_SOURCE);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{key:016x}.txt")), format!("{name}\n{}\n", file.to_string_lossy()));
 }
 
 /// The function [func, end) compiled as its code stands, and its entries pointed there.
 fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> Result<(), String> {
     let name = cache_name(state, func, end);
     let seeds = entry_points(state, &name, func, end, extra)?;
-    let dll = compiled(state, &name, func, end, &seeds)?;
+    let (dll, lib_name) = compiled(state, &name, func, end, &seeds)?;
     // A write meanwhile queued this function again: that compile applies.
     if cache_name(state, func, end) != name {
         return Ok(());
@@ -739,9 +784,9 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
         };
         let init: unsafe extern "C" fn(usize) = std::mem::transmute(sym("nx_rt_init")?);
         let add: AddModule = std::mem::transmute(sym("nx_rt_add_module")?);
-        let count = *(sym(&format!("{name}_fn_count"))? as *const u64) as usize;
-        let addrs = std::slice::from_raw_parts(sym(&format!("{name}_fn_addrs"))? as *const u64, count);
-        let fns = std::slice::from_raw_parts(sym(&format!("{name}_fn_ptrs"))? as *const usize, count);
+        let count = *(sym(&format!("{lib_name}_fn_count"))? as *const u64) as usize;
+        let addrs = std::slice::from_raw_parts(sym(&format!("{lib_name}_fn_addrs"))? as *const u64, count);
+        let fns = std::slice::from_raw_parts(sym(&format!("{lib_name}_fn_ptrs"))? as *const usize, count);
         init(state.host);
         add(addrs.as_ptr(), fns.as_ptr() as *const c_void, count as u64);
         if let Some((lo, hi)) = fns.first().and_then(|&f| crate::os::image_range(f)) {
