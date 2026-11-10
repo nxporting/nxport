@@ -778,6 +778,23 @@ impl Textures {
         }
     }
 
+    /// --verify-tex: images bound this submit whose guest bytes the CPU changed after the submit's check (the GPU reads
+    /// the bytes the console's would have found at execution): journaled and logged.
+    pub unsafe fn verify(&self) {
+        let serial = self.serial;
+        for (d, img) in self.images.iter() {
+            if img.checked != serial || img.gpu_written || !img.cpu_writable.1 || img.guest_len == 0 {
+                continue;
+            }
+            if Self::cpu_changed_of(d, img) {
+                let p = &d.params;
+                let line = format!("tex stale {:x}: {}x{} fmt {} storage {:#x}", ash::vk::Handle::as_raw(img.image), p.width, p.height, p.format, d.storage);
+                crate::gpu::history::journal(|| line.clone());
+                println!("[verify-tex] submit {serial}: {line}");
+            }
+        }
+    }
+
     /// Before guest memory under `d` is read for an upload: GPU contents of other images over those bytes reach it, oldest
     /// write first, so the bytes are what the GPU's writes in their order left there. Only the rows holding those bytes are
     /// read back, in one wait; the images stay unflushed, as the rest of their memory is not written.

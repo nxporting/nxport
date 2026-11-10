@@ -986,6 +986,9 @@ impl Ctx {
         self.inflight_dirty.push((serial, std::mem::take(&mut self.gpu_dirty)));
         // Guest memory under GPU-written images is CPU memory: what it holds now is what later CPU writes change.
         self.tex.settle();
+        if crate::settings::get().log.verify_tex {
+            self.tex.verify();
+        }
         self.repacked.clear();
         self.bindings.clear();
         self.bindings_gen += 1;
