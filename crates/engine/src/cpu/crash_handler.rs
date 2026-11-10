@@ -400,6 +400,19 @@ unsafe extern "C" fn handle_signal(
     if sig == libc::SIGTRAP && !ucontext.is_null() {
         let uc = ucontext as *mut libc::ucontext_t;
         let mc = (*uc).uc_mcontext;
+        // An x18 jump table stub's slow path (an offset past its landings): continue at the target as its `br` would.
+        if !mc.is_null() {
+            let ss = &mut (*mc).__ss;
+            if let Some((target, x16, x17, sp)) =
+                crate::cpu::trampoline::jump_table_trap(ss.__pc as usize, ss.__x[17], ss.__sp)
+            {
+                ss.__x[16] = x16;
+                ss.__x[17] = x17;
+                ss.__sp = sp;
+                ss.__pc = target;
+                return;
+            }
+        }
         if !mc.is_null() {
             let pending = PENDING_TRACE.load(Ordering::SeqCst);
             if pending != 0 {

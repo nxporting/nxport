@@ -75,6 +75,25 @@ pub fn set_thread_x18(val: usize) {
 /// The island all modules' x18 stubs go to (set by main.rs, used again by module_loader for mods).
 pub static ISLAND: std::sync::Mutex<Option<TrampolineIsland>> = std::sync::Mutex::new(None);
 
+/// Landings a jump table stub holds at most (8 bytes each). TotK's main has ~50 halfword tables whose entries are out of
+/// sight of jump_table_of (bases loaded before a loop): 65536 landings each was 25 MB, three times the island.
+pub const JT_LANDINGS: usize = 4096;
+/// The slow path of a jump table stub past its landings: `brk #0x7a2`, followed by BASE (two words).
+pub const BRK_JT: u32 = 0xD420_F440;
+
+/// The signal handler's half of a jump table stub's slow path, at its `brk` (`pc`): x17 holds 4 * offset and the stub's
+/// stack slot the guest's x16 / x17. The target, and the registers and stack as the guest's `br` would leave them.
+/// None if `pc` is not such a brk.
+pub unsafe fn jump_table_trap(pc: usize, x17: u64, sp: u64) -> Option<(u64, u64, u64, u64)> {
+    if ptr::read(pc as *const u32) != BRK_JT {
+        return None;
+    }
+    let base = ptr::read_unaligned((pc + 4) as *const u64);
+    let saved16 = ptr::read(sp as *const u64);
+    let saved17 = ptr::read((sp + 8) as *const u64);
+    Some((base.wrapping_add(x17), saved16, saved17, sp + 16))
+}
+
 /// Rewrites the x18 uses of a module's text (writable at this point) into the shared island.
 pub unsafe fn rewrite_module(name: &str, text: usize, len: usize, image_end: usize) -> Result<usize, String> {
     let mut g = ISLAND.lock().unwrap();
@@ -688,11 +707,14 @@ impl TrampolineIsland {
         // x17 inside a function (TotK 1.1.2 main+0x1415a18 kept a 12-byte stride in w17 across a switch; the old stub's
         // `br x17` replaced it with the target, and the loop computed a pointer far outside its array: SIGBUS on the
         // iPhone, 2026-10-16). x16 / x17 are saved on the stack, the target's offset from BASE picks a landing that
-        // restores them and branches on. Offsets come from a byte or halfword table: 256 or 65536 landings. No flags
-        // are changed (sub / add, no compare).
-        if let (true, Some((base, landings))) = (is_br, jump_table) {
-            const DISPATCH: usize = 10; // instructions before L0
-            let need = (DISPATCH + 2 * landings) * 4;
+        // restores them and branches on. Offsets come from a byte or halfword table: landings for the offsets it holds
+        // (jump_table_of), at most JT_LANDINGS; a larger offset takes the slow path, a brk the signal handler continues
+        // from (jump_table_trap). No flags are changed (sub / add / lsr / cbnz, no compare).
+        if let (true, Some((base, held))) = (is_br, jump_table) {
+            let capped = held > JT_LANDINGS;
+            let landings = held.min(JT_LANDINGS);
+            let dispatch: usize = if capped { 12 } else { 10 }; // instructions before L0
+            let need = (dispatch + 2 * landings + if capped { 3 } else { 0 }) * 4;
             if self.next_offset + need > self.capacity_bytes {
                 return Err("x18 island full (jump table landings)".into());
             }
@@ -712,17 +734,25 @@ impl TrampolineIsland {
             words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (17 << 5) | 17); // ldr x17, [x17, #x18 slot]
             adrp_add(&mut words, 16, base); // x16 = BASE
             words.push(0xCB10_0231); // sub x17, x17, x16      (4 * offset)
-            let l0 = stub_addr + DISPATCH * 4;
+            let slow = stub_addr + (dispatch + 2 * landings) * 4;
+            if capped {
+                // lsr x16, x17, #(2 + log2 JT_LANDINGS): nonzero for an offset past the landings.
+                let sh = 2 + JT_LANDINGS.trailing_zeros();
+                words.push(0xD340_FC00u32 | (sh << 16) | (17 << 5) | 16);
+                let here = stub_addr + words.len() * 4;
+                words.push(0xB500_0000u32 | ((((slow - here) >> 2) as u32 & 0x7_FFFF) << 5) | 16); // cbnz x16, SLOW
+            }
+            let l0 = stub_addr + dispatch * 4;
             adrp_add(&mut words, 16, l0); // x16 = L0
             words.push(0x8B11_0611); // add x17, x16, x17, lsl #1  (L0 + 8 * offset)
             words.push(0xD61F_0220); // br x17
                                      // L0 must follow the dispatch exactly (a miscount by one landed every jump on a landing's branch, skipping
                                      // the restore: SP off by 16, a null pointer in the SDK's CFF interpreter at startup).
-            if words.len() != DISPATCH {
+            if words.len() != dispatch {
                 return Err(format!(
                     "jump table dispatch is {} instructions, expected {}",
                     words.len(),
-                    DISPATCH
+                    dispatch
                 )
                 .into());
             }
@@ -735,6 +765,12 @@ impl TrampolineIsland {
                 }
                 words.push(0x1400_0000u32 | (((diff >> 2) as u32) & 0x03FF_FFFF));
                 // b BASE + 4j
+            }
+            if capped {
+                // SLOW: brk, then BASE for the handler (jump_table_trap).
+                words.push(BRK_JT);
+                words.push(base as u32);
+                words.push((base as u64 >> 32) as u32);
             }
             for (i, &w) in words.iter().enumerate() {
                 ptr::write(stub_ptr.add(i), w);
@@ -1742,6 +1778,35 @@ impl nxport_lifter::jt::Memory for ImageMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_table_stub_past_its_landings_traps() {
+        // A halfword table out of sight: JT_LANDINGS landings, then lsr / cbnz to a brk that carries BASE.
+        let _ = crate::settings::try_install(Default::default());
+        let mut words = vec![0x7100_091fu32, 0x5400_0148, 0x1000_00b2, 0x1000_01a9, 0x7868_7928, 0x8b08_0a52, 0xd61f_0240];
+        words.resize(16, 0xd503_201f);
+        let island_words = 64 * 1024;
+        words.resize(16 + island_words, 0);
+        let text = words.as_mut_ptr();
+        let island_at = unsafe { text.add(16) } as usize;
+        let mut island = TrampolineIsland::new(island_at, island_words * 4).unwrap();
+        unsafe { island.patch_text(text, 16 * 4, text as usize + 16 * 4) }.unwrap();
+        let used = island.next_offset / 4;
+        let stub = &words[16..16 + used];
+        let brk = stub.iter().position(|&w| w == BRK_JT).expect("no slow path");
+        let base = text as u64 + 7 * 4;
+        assert_eq!(stub[brk + 1] as u64 | (stub[brk + 2] as u64) << 32, base);
+        let lsr = stub.iter().position(|&w| w == 0xD34E_FE30).expect("no lsr x16, x17, #14");
+        let cbnz = stub[lsr + 1];
+        assert_eq!(cbnz & 0xFF00_001F, 0xB500_0010, "cbnz x16");
+        assert_eq!(lsr + 1 + ((cbnz >> 5) & 0x7_FFFF) as usize, brk, "cbnz goes to the brk");
+        assert_eq!(brk - (lsr + 2 + 4), 2 * JT_LANDINGS, "landings between the dispatch and the brk");
+        // The handler's half: offset 5000 continues at BASE + 4 * 5000 with the saved registers and the stack popped.
+        let slot = [0x1616u64, 0x1717];
+        let pc = unsafe { text.add(16 + brk) } as usize;
+        let r = unsafe { jump_table_trap(pc, 4 * 5000, slot.as_ptr() as u64) }.unwrap();
+        assert_eq!(r, (base + 4 * 5000, 0x1616, 0x1717, slot.as_ptr() as u64 + 16));
+    }
 
     #[test]
     fn jump_table_landings_from_entries() {
