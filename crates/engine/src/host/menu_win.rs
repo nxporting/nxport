@@ -1,25 +1,14 @@
-// The game window's menu bar (Win32's: SDL has none). Its menus follow the layers of a Switch title running here, so
-// where an option is says what it changes:
-//
-//   nxport    the app: folders, restart, quit
-//   System    what Horizon tells the title about the console (am: docked or handheld)
-//   Display   how frames reach the screen (vi, and the host's window and swapchain): vsync, the frame-rate limit
-//   Graphics  the GPU library the title calls (nvn), done with Vulkan: shader compilation
-//   Audio     audren / audout output on the host's device
-//   Input     hid: the controller layout the title sees, vibration, the touch screen, the key and controller bindings
-//   <title>   the running title's own code and data: nxport's patches for it, its mods, its save data
-//   Tools     diagnostics
-//
-// Switches apply at once and are kept in the game's settings file (host/live.rs, config::remember). Its commands reach
-// the window procedure while SDL pumps messages, on the main thread: the procedure is wrapped to see them, and what needs
-// the SDL window is handed to the main loop (take_request). SDL swallows the Alt and F10 menu activation, so game keys
-// never open the menu.
+// The game window's menu bar (Win32's: SDL has none), drawn from the menus every desktop host shares (host/menu.rs).
+// Its commands reach the window procedure while SDL pumps messages, on the main thread: the procedure is wrapped to see
+// them, and what needs the SDL window is handed to the main loop (take_request). SDL swallows the Alt and F10 menu
+// activation, so game keys never open the menu.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 
-use crate::host::{input, live, overlay};
-use crate::settings::FpsMode;
+use crate::host::input;
+use crate::host::live;
+use crate::host::menu::{self, id, LIMITS, SIZES, STRENGTHS, VOLUMES};
 
 #[link(name = "user32")]
 extern "system" {
@@ -44,51 +33,6 @@ const MF_SEPARATOR: u32 = 0x800;
 const MF_CHECKED: u32 = 8;
 const MF_GRAYED: u32 = 1;
 const MFT_RADIOCHECK: u32 = 0x200;
-
-/// Menu command ids. Choices of one value are a base plus the value (frame-rate limit + fps, volume + percent, ...).
-mod id {
-    pub const DATA_FOLDER: u16 = 1;
-    pub const RESTART: u16 = 2;
-    pub const QUIT: u16 = 3;
-    pub const DOCKED: u16 = 10;
-    pub const HANDHELD: u16 = 11;
-    pub const VSYNC: u16 = 20;
-    pub const FULL_SCREEN: u16 = 21;
-    pub const FPS_TITLE: u16 = 22;
-    pub const PERF_OVERLAY: u16 = 23;
-    pub const LOW_LATENCY: u16 = 24;
-    /// + the limit in fps.
-    pub const LIMIT: u16 = 100;
-    /// + the window height (720, 1080, 1440).
-    pub const SIZE: u16 = 1000;
-    pub const ASYNC_SHADERS: u16 = 30;
-    pub const SHADER_CACHE: u16 = 31;
-    pub const MUTE: u16 = 40;
-    /// + the volume in percent.
-    pub const VOLUME: u16 = 300;
-    pub const BY_LABEL: u16 = 50;
-    pub const BY_POSITION: u16 = 51;
-    pub const VIBRATION: u16 = 52;
-    pub const TOUCH: u16 = 53;
-    pub const MOUSE_LOOK: u16 = 54;
-    /// + the strength in percent.
-    pub const STRENGTH: u16 = 500;
-    pub const REAL_TIME: u16 = 60;
-    pub const DYNAMIC_ASPECT: u16 = 62;
-    pub const EXACT_MOUSE_AIM: u16 = 63;
-    pub const SAVE_FOLDER: u16 = 61;
-    pub const CAPTURE: u16 = 70;
-    pub const LOG: u16 = 71;
-    /// + the input's index in input::SWITCH_INPUTS. Clear of the ranges above (STRENGTH's covers 500..=700: at 600 these
-    /// were taken for vibration strengths, and no click started a capture).
-    pub const BIND: u16 = 800;
-    pub const RESET_CONTROLS: u16 = 900;
-}
-
-const LIMITS: [u32; 5] = [30, 60, 90, 120, 144];
-const SIZES: [u32; 3] = [720, 1080, 1440];
-const VOLUMES: [u32; 4] = [25, 50, 75, 100];
-const STRENGTHS: [u32; 3] = [50, 100, 150];
 
 static PREVIOUS: AtomicIsize = AtomicIsize::new(0);
 static BAR: AtomicUsize = AtomicUsize::new(0);
@@ -123,37 +67,6 @@ unsafe fn sub(parent: *mut c_void, text: &str, fill: impl FnOnce(*mut c_void)) {
     AppendMenuW(parent, MF_POPUP, m as usize, wide(text).as_ptr());
 }
 
-/// The running title as the menu names it: its name and version ("Tears of the Kingdom 1.1.2").
-fn title_label() -> String {
-    let p = crate::profile::active();
-    let name = p.name.strip_prefix("The Legend of Zelda: ").unwrap_or(p.name);
-    match crate::profile::active_version() {
-        Some(v) => format!("{name} {}", v.version_string),
-        None => name.to_string(),
-    }
-}
-
-/// The app's mods (one folder each, or one mod's romfs/exefs at the top), and whether each has code (ExeFS: lifted into
-/// the app when it was built, so it changes only with a new build).
-fn mods() -> Vec<(String, bool)> {
-    let s = crate::settings::get();
-    let Some(dir) = s.files.mods_dir.as_ref().filter(|_| !s.files.no_mods) else { return Vec::new() };
-    let has_code = |d: &std::path::Path| ["exefs", "ExeFS"].iter().any(|e| d.join(e).is_dir()) || crate::mods::has_exefs_nsp(d);
-    if crate::mods::is_mod_dir(dir) {
-        let name = dir.file_name().map_or_else(|| "Mod".to_string(), |n| n.to_string_lossy().into_owned());
-        return vec![(name, has_code(dir))];
-    }
-    let mut list: Vec<(String, bool)> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), has_code(&e.path())))
-        .collect();
-    list.sort();
-    list
-}
-
 pub fn attach(hwnd: usize) {
     unsafe {
         let bar = CreateMenu();
@@ -173,7 +86,7 @@ pub fn attach(hwnd: usize) {
             item(m, id::PERF_OVERLAY, "Performance Overlay");
             sub(m, "Frame Rate Limit", |l| {
                 for fps in LIMITS {
-                    radio(l, id::LIMIT + fps as u16, &limit_label(fps));
+                    radio(l, id::LIMIT + fps as u16, &menu::limit_label(fps));
                 }
             });
             separator(m);
@@ -215,13 +128,13 @@ pub fn attach(hwnd: usize) {
             separator(m);
             sub(m, "Controls", |l| {
                 for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
-                    item(l, id::BIND + i as u16, &bind_label(*s));
+                    item(l, id::BIND + i as u16, &menu::bind_label(*s));
                 }
                 separator(l);
                 item(l, id::RESET_CONTROLS, "Reset to Defaults");
             });
         });
-        sub(bar, &title_label(), |m| {
+        sub(bar, &menu::title_label(), |m| {
             if crate::profile::is_totk() {
                 item(m, id::REAL_TIME, "Variable Frame Rate");
                 item(m, id::DYNAMIC_ASPECT, "Dynamic Aspect Ratio");
@@ -229,13 +142,12 @@ pub fn attach(hwnd: usize) {
                 separator(m);
             }
             sub(m, "Mods", |l| {
-                let list = mods();
+                let list = menu::mods();
                 if list.is_empty() {
                     AppendMenuW(l, MF_GRAYED, 0, wide("None").as_ptr());
                 }
                 for (name, code) in list {
-                    let text = if code { format!("{name} (code: set when the app was built)") } else { name };
-                    AppendMenuW(l, MF_GRAYED, 0, wide(&text).as_ptr());
+                    AppendMenuW(l, MF_GRAYED, 0, wide(&menu::mod_label(&name, code)).as_ptr());
                 }
             });
             item(m, id::SAVE_FOLDER, "Open Save Data Folder");
@@ -274,181 +186,56 @@ pub fn take_request() -> Option<Request> {
     }
 }
 
-/// Why the limit `fps` cannot be reached, if it cannot: above the title's own rate only where its game time follows real
-/// time (otherwise it would run fast), and with vsync not above the display's refresh.
-fn unreachable(fps: u32) -> Option<&'static str> {
-    let refresh = live::refresh_rate();
-    if fps > 60 && !crate::profile::real_time() {
-        Some("needs Variable Frame Rate")
-    } else if overlay::is_vsync() && refresh != 0 && fps > refresh + 1 {
-        Some("above the display's refresh rate: VSync is on")
-    } else {
-        None
-    }
-}
-
-fn limit_label(fps: u32) -> String {
-    if fps == 30 {
-        "30 fps (stock)".to_string()
-    } else {
-        format!("{fps} fps")
-    }
-}
-
-/// The limit the menu shows: the one in effect (30 at the stock setting; with vsync, no more than the display's refresh).
-fn limit() -> u32 {
-    if overlay::fps_mode() == FpsMode::Stock30 {
-        return 30;
-    }
-    let (fps, refresh) = (live::frame_limit(), live::refresh_rate());
-    if overlay::is_vsync() && refresh != 0 && fps > refresh + 1 {
-        LIMITS.iter().copied().filter(|&l| l <= refresh + 1).max().unwrap_or(30)
-    } else {
-        fps
-    }
-}
-
-/// A Controls entry: the input, then (right-aligned) what it is bound to.
-fn bind_label(s: input::SwitchInput) -> String {
-    format!("{}	{}", s.label(), input::binding_label(input::bindings()[s.index()]))
-}
-
-/// Check marks and greyed items from the current values (as the macOS menu validates its items when it opens).
-unsafe fn refresh(menu: *mut c_void) {
-    let check = |id: u16, on: bool| {
-        CheckMenuItem(menu, id as u32, if on { MF_CHECKED } else { 0 });
+/// Check marks, greyed items and labels from the current values (as the macOS menu validates its items when it opens).
+unsafe fn refresh(m: *mut c_void) {
+    let check = |id: u16| {
+        if let Some(on) = menu::checked(id) {
+            CheckMenuItem(m, id as u32, if on { MF_CHECKED } else { 0 });
+        }
+        EnableMenuItem(m, id as u32, if menu::enabled(id) { 0 } else { MF_GRAYED });
     };
-    let enable = |id: u16, on: bool| {
-        EnableMenuItem(menu, id as u32, if on { 0 } else { MF_GRAYED });
-    };
-    let handheld = crate::horizon::hle::is_handheld();
-    check(id::DOCKED, !handheld);
-    check(id::HANDHELD, handheld);
-    check(id::VSYNC, overlay::is_vsync());
-    check(id::LOW_LATENCY, overlay::is_low_latency());
-    check(id::FPS_TITLE, fps_in_title());
-    check(id::PERF_OVERLAY, overlay::is_overlay_enabled());
-    let current = limit();
+    for id in [
+        id::DOCKED, id::HANDHELD, id::VSYNC, id::LOW_LATENCY, id::FPS_TITLE, id::PERF_OVERLAY, id::ASYNC_SHADERS, id::MUTE,
+        id::BY_LABEL, id::BY_POSITION, id::VIBRATION, id::TOUCH, id::REAL_TIME, id::DYNAMIC_ASPECT, id::MOUSE_LOOK,
+        id::EXACT_MOUSE_AIM,
+    ] {
+        check(id);
+    }
     for fps in LIMITS {
-        let why = unreachable(fps);
-        // The label says why a limit is greyed (menus have no tooltips).
-        let text = match why {
-            Some(w) => format!("{} ({w})", limit_label(fps)),
-            None => limit_label(fps),
-        };
-        const MF_BYCOMMAND_STRING_RADIO: u32 = MFT_RADIOCHECK;
-        ModifyMenuW(menu, (id::LIMIT + fps as u16) as u32, MF_BYCOMMAND_STRING_RADIO, (id::LIMIT + fps as u16) as usize, wide(&text).as_ptr());
-        check(id::LIMIT + fps as u16, fps == current);
-        enable(id::LIMIT + fps as u16, why.is_none());
+        let id = id::LIMIT + fps as u16;
+        ModifyMenuW(m, id as u32, MFT_RADIOCHECK, id as usize, wide(&menu::limit_item_label(fps)).as_ptr());
+        check(id);
     }
-    check(id::ASYNC_SHADERS, overlay::is_async_shaders());
-    check(id::MUTE, live::muted());
     for v in VOLUMES {
-        check(id::VOLUME + v as u16, v == live::volume());
+        check(id::VOLUME + v as u16);
     }
-    let (ab, _) = live::swaps();
-    check(id::BY_LABEL, !ab);
-    check(id::BY_POSITION, ab);
-    check(id::VIBRATION, live::rumble());
     for v in STRENGTHS {
-        check(id::STRENGTH + v as u16, v == live::rumble_percent());
-        enable(id::STRENGTH + v as u16, live::rumble());
+        check(id::STRENGTH + v as u16);
     }
-    check(id::TOUCH, live::touch());
-    check(id::REAL_TIME, live::real_time_speed());
-    check(id::DYNAMIC_ASPECT, live::dynamic_aspect());
-    check(id::MOUSE_LOOK, live::mouse_look());
-    check(id::EXACT_MOUSE_AIM, live::exact_mouse_aim());
-    // Exact aim works through mouse look.
-    enable(id::EXACT_MOUSE_AIM, live::mouse_look());
     for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
         let id = id::BIND + i as u16;
-        ModifyMenuW(menu, id as u32, 0, id as usize, wide(&bind_label(*s)).as_ptr());
-    }
-}
-
-/// Opens `dir` in Explorer.
-fn open(dir: Option<std::path::PathBuf>) {
-    match dir {
-        Some(d) => {
-            let _ = std::fs::create_dir_all(&d);
-            let _ = std::process::Command::new("explorer.exe").arg(&d).spawn();
-        }
-        None => println!("[!] Menu: no such folder for this game"),
+        ModifyMenuW(m, id as u32, 0, id as usize, wide(&menu::bind_label(*s)).as_ptr());
     }
 }
 
 fn command(cmd: u16) -> bool {
-    let data = || crate::profile::data_dir().map(|d| d.to_path_buf());
-    match cmd {
-        id::DATA_FOLDER => open(data()),
-        id::RESTART => super::restart(),
-        id::QUIT => std::process::exit(0),
-        id::DOCKED | id::HANDHELD => {
-            let handheld = cmd == id::HANDHELD;
-            crate::horizon::hle::set_handheld(handheld);
-            crate::config::remember(|p| p.system.handheld = Some(handheld));
+    match menu::command(cmd) {
+        Ok(handled) => handled,
+        Err(menu::Action::FullScreen) => {
+            REQUEST.store(1, Ordering::Relaxed);
+            true
         }
-        id::VSYNC => {
-            let on = overlay::toggle_vsync();
-            crate::config::remember(|p| p.display.no_vsync = Some(!on));
+        Err(menu::Action::Size(h)) => {
+            REQUEST.store(h, Ordering::Relaxed);
+            true
         }
-        id::LOW_LATENCY => {
-            let on = overlay::toggle_low_latency();
-            crate::config::remember(|p| p.display.low_latency = Some(on));
-        }
-        id::FULL_SCREEN => REQUEST.store(1, Ordering::Relaxed),
-        id::PERF_OVERLAY => {
-            let on = overlay::toggle_overlay();
-            crate::config::remember(|p| p.display.perf_overlay = Some(on));
-        }
-        id::FPS_TITLE => {
-            live::set_fps_in_title(!live::fps_in_title());
-        }
-        c if (id::LIMIT..id::LIMIT + 200).contains(&c) => {
-            let fps = (c - id::LIMIT) as u32;
-            let mode = if fps == 30 { FpsMode::Stock30 } else { FpsMode::Unlocked };
-            overlay::set_fps_mode(mode);
-            crate::config::remember(|p| p.system.fps = Some(mode));
-            if fps != 30 {
-                live::set_frame_limit(fps);
-            }
-            println!("[+] Display: frame-rate limit {fps} fps");
-        }
-        c if (id::SIZE..id::SIZE + 2000).contains(&c) => REQUEST.store((c - id::SIZE) as u32, Ordering::Relaxed),
-        id::ASYNC_SHADERS => {
-            let on = overlay::toggle_async_shaders();
-            crate::config::remember(|p| p.graphics.async_pipelines = Some(on));
-        }
-        id::SHADER_CACHE => open(crate::settings::get().files.shader_cache.clone().or_else(|| crate::profile::data_subdir("vulkan_stages"))),
-        id::MUTE => live::set_muted(!live::muted()),
-        c if (id::VOLUME..id::VOLUME + 101).contains(&c) => live::set_volume((c - id::VOLUME) as u32),
-        id::BY_LABEL | id::BY_POSITION => {
-            let p = cmd == id::BY_POSITION;
-            live::set_swaps(p, p);
-        }
-        id::VIBRATION => live::set_rumble(!live::rumble()),
-        c if (id::STRENGTH..id::STRENGTH + 201).contains(&c) => live::set_rumble_percent((c - id::STRENGTH) as u32),
-        id::TOUCH => live::set_touch(!live::touch()),
-        id::REAL_TIME => live::set_real_time_speed(!live::real_time_speed()),
-        id::DYNAMIC_ASPECT => live::set_dynamic_aspect(!live::dynamic_aspect()),
-        id::MOUSE_LOOK => live::set_mouse_look(!live::mouse_look()),
-        id::EXACT_MOUSE_AIM => live::set_exact_mouse_aim(!live::exact_mouse_aim()),
-        id::SAVE_FOLDER => open(crate::settings::get().files.save_dir.clone().or_else(|| crate::profile::data_subdir("save"))),
-        id::CAPTURE => {
-            crate::gpu::history::request();
-            println!("[+] Capture requested: the frame history is written at the next present");
-        }
-        id::LOG => open(data()),
         // The next key, mouse button or controller button in the window sets it (host/display_sdl.rs).
-        c if (id::BIND..id::BIND + input::SWITCH_INPUTS.len() as u16).contains(&c) => input::begin_capture((c - id::BIND) as usize),
-        id::RESET_CONTROLS => {
-            input::set_bindings(input::default_bindings());
-            println!("[+] Input: controls reset to the defaults");
+        Err(menu::Action::Bind(i)) => {
+            input::begin_capture(i);
+            true
         }
-        _ => return false,
+        Err(menu::Action::Controls) => false,
     }
-    true
 }
 
 unsafe extern "system" fn window_proc(hwnd: usize, msg: u32, wparam: usize, lparam: isize) -> isize {
@@ -464,32 +251,4 @@ unsafe extern "system" fn window_proc(hwnd: usize, msg: u32, wparam: usize, lpar
         _ => {}
     }
     CallWindowProcW(PREVIOUS.load(Ordering::Acquire), hwnd, msg, wparam, lparam)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The id ranges `command` matches never overlap, or a click is taken for another item (the Controls items once
-    /// set vibration strengths).
-    #[test]
-    fn menu_id_ranges_are_apart() {
-        let n = input::SWITCH_INPUTS.len() as u16;
-        let ranges = [
-            ("limit", id::LIMIT, id::LIMIT + 200),
-            ("size", id::SIZE, id::SIZE + 2000),
-            ("volume", id::VOLUME, id::VOLUME + 101),
-            ("strength", id::STRENGTH, id::STRENGTH + 201),
-            ("bind", id::BIND, id::BIND + n),
-            ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),
-        ];
-        for (i, a) in ranges.iter().enumerate() {
-            for b in &ranges[i + 1..] {
-                assert!(a.2 <= b.1 || b.2 <= a.1, "{} and {} overlap", a.0, b.0);
-            }
-            for single in [id::VSYNC, id::LOW_LATENCY, id::PERF_OVERLAY, id::TOUCH, id::MOUSE_LOOK, id::EXACT_MOUSE_AIM, id::VIBRATION, id::LOG, id::CAPTURE] {
-                assert!(!(a.1..a.2).contains(&single), "{} holds {single}", a.0);
-            }
-        }
-    }
 }

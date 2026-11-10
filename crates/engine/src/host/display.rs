@@ -42,7 +42,8 @@ define_class!(
     unsafe impl NSObjectProtocol for AppDelegate {}
 
     impl AppDelegate {
-        // Timer (twice a second): show the presented frame rate in the window title.
+        // Timer (twice a second): the window title (with the presented frame rate if asked for), the display's refresh
+        // rate, and the layer's presentation (vsync, low latency) from the Display menu.
         #[unsafe(method(updateTitle:))]
         fn update_title(&self, _timer: &objc2::runtime::AnyObject) {
             let mtm = MainThreadMarker::from(self);
@@ -52,7 +53,7 @@ define_class!(
                 crate::metal::display_fps()
             };
             let app_name = crate::profile::app_title();
-            let title = if fps > 0.0 {
+            let title = if fps > 0.0 && crate::host::live::fps_in_title() {
                 format!("{app_name}  |  {:.0} fps", fps)
             } else {
                 app_name.to_string()
@@ -60,94 +61,43 @@ define_class!(
             for w in NSApplication::sharedApplication(mtm).windows().iter() {
                 if w.title().to_string().starts_with(app_name) {
                     w.setTitle(&NSString::from_str(&title));
+                    // The display the window is on (it may have moved): with vsync the display paces at its rate.
+                    if let Some(screen) = w.screen() {
+                        crate::host::live::set_refresh_rate(screen.maximumFramesPerSecond() as f32);
+                    }
                 }
             }
+            update_layer();
             static LOGGED: AtomicBool = AtomicBool::new(false);
             if fps > 0.0 && !LOGGED.swap(true, Ordering::Relaxed) {
                 println!("[+] Display: window title now \"{}\"", title);
             }
         }
 
-        // App menu > Controls… (Cmd-,).
-        #[unsafe(method(openControls:))]
-        fn open_controls(&self, _sender: &objc2::runtime::AnyObject) {
-            crate::host::controls_ui::open(MainThreadMarker::from(self));
-        }
-
-        #[unsafe(method(toggleOverlay:))]
-        fn toggle_overlay(&self, _sender: &objc2::runtime::AnyObject) {
-            crate::host::overlay::toggle_overlay();
-        }
-
-        #[unsafe(method(toggleDynamicAspect:))]
-        fn toggle_dynamic_aspect(&self, _sender: &objc2::runtime::AnyObject) {
-            crate::host::overlay::toggle_dynamic_aspect();
-        }
-
-        #[unsafe(method(toggleUnlockedFps:))]
-        fn toggle_unlocked_fps(&self, _sender: &objc2::runtime::AnyObject) {
-            crate::host::overlay::toggle_fps_mode();
-        }
-
-        #[unsafe(method(toggleHandheldMode:))]
-        fn toggle_handheld_mode(&self, _sender: &objc2::runtime::AnyObject) {
-            let next = !crate::horizon::hle::is_handheld();
-            crate::horizon::hle::set_handheld(next);
-        }
-
-        #[unsafe(method(toggleVsync:))]
-        fn toggle_vsync(&self, _sender: &objc2::runtime::AnyObject) {
-            crate::host::overlay::toggle_vsync();
-        }
-
-        #[unsafe(method(toggleAsyncShaders:))]
-        fn toggle_async_shaders(&self, _sender: &objc2::runtime::AnyObject) {
-            crate::host::overlay::toggle_async_shaders();
+        // Every menu item (host/menu.rs) by its tag.
+        #[unsafe(method(menuCommand:))]
+        fn menu_command(&self, sender: &NSMenuItem) {
+            let mtm = MainThreadMarker::from(self);
+            match crate::host::menu::command(sender.tag() as u16) {
+                Ok(_) => {}
+                Err(crate::host::menu::Action::FullScreen) => {
+                    if let Some(w) = game_window(mtm) {
+                        w.toggleFullScreen(None);
+                    }
+                }
+                Err(crate::host::menu::Action::Size(h)) => set_window_height(mtm, h as f64),
+                Err(crate::host::menu::Action::Controls) | Err(crate::host::menu::Action::Bind(_)) => {
+                    crate::host::controls_ui::open(mtm)
+                }
+            }
         }
     }
 
     unsafe impl NSMenuItemValidation for AppDelegate {
+        // Check marks, availability and the frame-rate limits' labels from the current values, as the menu opens.
         #[unsafe(method(validateMenuItem:))]
         fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
-            let action = item.action();
-            if action == Some(sel!(toggleOverlay:)) {
-                item.setState(if crate::host::overlay::is_overlay_enabled() {
-                    NSControlStateValueOn
-                } else {
-                    NSControlStateValueOff
-                });
-            } else if action == Some(sel!(toggleDynamicAspect:)) {
-                item.setState(if crate::host::overlay::is_dynamic_aspect() {
-                    NSControlStateValueOn
-                } else {
-                    NSControlStateValueOff
-                });
-            } else if action == Some(sel!(toggleUnlockedFps:)) {
-                item.setState(if crate::host::overlay::fps_mode() == crate::settings::FpsMode::Unlocked {
-                    NSControlStateValueOn
-                } else {
-                    NSControlStateValueOff
-                });
-            } else if action == Some(sel!(toggleHandheldMode:)) {
-                item.setState(if crate::horizon::hle::is_handheld() {
-                    NSControlStateValueOn
-                } else {
-                    NSControlStateValueOff
-                });
-            } else if action == Some(sel!(toggleVsync:)) {
-                item.setState(if crate::host::overlay::is_vsync() {
-                    NSControlStateValueOn
-                } else {
-                    NSControlStateValueOff
-                });
-            } else if action == Some(sel!(toggleAsyncShaders:)) {
-                item.setState(if crate::host::overlay::is_async_shaders() {
-                    NSControlStateValueOn
-                } else {
-                    NSControlStateValueOff
-                });
-            }
-            true
+            validate(item)
         }
     }
 
@@ -174,97 +124,177 @@ impl AppDelegate {
     }
 }
 
-/// The application menu with Controls… (Cmd-,) and Quit (Cmd-Q), plus Settings menu.
+/// Check marks, availability and the frame-rate limits' labels of a menu item (host/menu.rs) from the current values.
+fn validate(item: &NSMenuItem) -> bool {
+    use crate::host::menu::{self, id};
+    if item.action() != Some(sel!(menuCommand:)) {
+        return true;
+    }
+    let cmd = item.tag() as u16;
+    if let Some(on) = menu::checked(cmd) {
+        item.setState(if on { NSControlStateValueOn } else { NSControlStateValueOff });
+    }
+    if (id::LIMIT..id::LIMIT + 200).contains(&cmd) {
+        item.setTitle(&NSString::from_str(&menu::limit_item_label((cmd - id::LIMIT) as u32)));
+    }
+    menu::enabled(cmd)
+}
+
+/// The game's window (its title starts with the app's name; the Controls window is the other).
+fn game_window(mtm: MainThreadMarker) -> Option<objc2::rc::Retained<NSWindow>> {
+    let app_name = crate::profile::app_title();
+    NSApplication::sharedApplication(mtm).windows().iter().find(|w| w.title().to_string().starts_with(app_name))
+}
+
+/// A window of `height` points at the window's current shape (16:9 at first), leaving full screen first.
+fn set_window_height(mtm: MainThreadMarker, height: f64) {
+    let Some(w) = game_window(mtm) else { return };
+    if w.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        w.toggleFullScreen(None);
+    }
+    let size = w.contentView().map_or(NSSize::new(16.0, 9.0), |v| v.bounds().size);
+    let width = if size.height > 0.0 { (height * size.width / size.height).round() } else { (height * 16.0 / 9.0).round() };
+    w.setContentSize(NSSize::new(width, height));
+}
+
+/// The layer presents as the Display menu says: with vsync at the display's refresh, and with low latency at most one
+/// finished frame waiting for the screen (two drawables instead of three).
+fn update_layer() {
+    let ptr = LAYER_PTR.load(Ordering::Acquire);
+    if ptr == 0 {
+        return;
+    }
+    let layer = unsafe { &*(ptr as *const CAMetalLayer) };
+    let vsync = crate::host::overlay::is_vsync();
+    let drawables = if crate::host::overlay::is_low_latency() { 2 } else { 3 };
+    if layer.displaySyncEnabled() != vsync {
+        layer.setDisplaySyncEnabled(vsync);
+    }
+    if layer.maximumDrawableCount() != drawables {
+        layer.setMaximumDrawableCount(drawables);
+    }
+}
+
+/// The menu bar: the app menu, then the menus every desktop host shares (host/menu.rs), each item sending menuCommand:
+/// with its id as the tag.
 fn install_menu(app: &NSApplication, mtm: MainThreadMarker) {
+    use crate::host::menu::{self, id, LIMITS, SIZES, STRENGTHS, VOLUMES};
+    let new_item = |title: &str, cmd: u16, key: &str| {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                mtm.alloc(),
+                &NSString::from_str(title),
+                Some(sel!(menuCommand:)),
+                &NSString::from_str(key),
+            )
+        };
+        item.setTag(cmd as isize);
+        item
+    };
+    let item = |m: &NSMenu, title: &str, cmd: u16| m.addItem(&new_item(title, cmd, ""));
+    let keyed = |m: &NSMenu, title: &str, cmd: u16, key: &str| m.addItem(&new_item(title, cmd, key));
+    let separator = |m: &NSMenu| m.addItem(&NSMenuItem::separatorItem(mtm));
+    let label = |m: &NSMenu, title: &str| {
+        let i = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str(title), None, &NSString::from_str("")) };
+        i.setEnabled(false);
+        m.addItem(&i);
+    };
+    let sub = |parent: &NSMenu, title: &str, fill: &dyn Fn(&NSMenu)| {
+        let m = NSMenu::new(mtm);
+        m.setTitle(&NSString::from_str(title));
+        fill(&m);
+        let i = NSMenuItem::new(mtm);
+        i.setTitle(&NSString::from_str(title));
+        i.setSubmenu(Some(&m));
+        parent.addItem(&i);
+    };
+
     let bar = NSMenu::new(mtm);
-    let app_item = NSMenuItem::new(mtm);
-    let app_menu = NSMenu::new(mtm);
-    let controls = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Controls…"),
-            Some(sel!(openControls:)),
-            &NSString::from_str(","),
-        )
-    };
-    app_menu.addItem(&controls);
-    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-    let overlay_item = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Performance Overlay"),
-            Some(sel!(toggleOverlay:)),
-            &NSString::from_str("o"),
-        )
-    };
-    app_menu.addItem(&overlay_item);
-    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-    let dynamic_aspect = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Dynamic Aspect Ratio"),
-            Some(sel!(toggleDynamicAspect:)),
-            &NSString::from_str(""),
-        )
-    };
-    app_menu.addItem(&dynamic_aspect);
-
-    let unlocked_fps = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Unlocked Framerate"),
-            Some(sel!(toggleUnlockedFps:)),
-            &NSString::from_str(""),
-        )
-    };
-    app_menu.addItem(&unlocked_fps);
-
-    let handheld = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Handheld Mode (720p)"),
-            Some(sel!(toggleHandheldMode:)),
-            &NSString::from_str(""),
-        )
-    };
-    app_menu.addItem(&handheld);
-    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-    let vsync = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("VSync"),
-            Some(sel!(toggleVsync:)),
-            &NSString::from_str(""),
-        )
-    };
-    app_menu.addItem(&vsync);
-
-    let async_shaders = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Asynchronous Shaders"),
-            Some(sel!(toggleAsyncShaders:)),
-            &NSString::from_str(""),
-        )
-    };
-    app_menu.addItem(&async_shaders);
-    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-    let quit = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            mtm.alloc(),
-            &NSString::from_str("Quit"),
-            Some(sel!(terminate:)),
-            &NSString::from_str("q"),
-        )
-    };
-    app_menu.addItem(&quit);
-    app_item.setSubmenu(Some(&app_menu));
-    bar.addItem(&app_item);
-
+    sub(&bar, "nxport", &|m| {
+        keyed(m, "Controls…", id::CONTROLS, ",");
+        separator(m);
+        item(m, "Open Game Data Folder", id::DATA_FOLDER);
+        separator(m);
+        item(m, "Restart", id::RESTART);
+        keyed(m, "Quit", id::QUIT, "q");
+    });
+    sub(&bar, "System", &|m| {
+        item(m, "Docked (1080p)", id::DOCKED);
+        item(m, "Handheld (720p)", id::HANDHELD);
+    });
+    sub(&bar, "Display", &|m| {
+        item(m, "VSync", id::VSYNC);
+        item(m, "Low Latency", id::LOW_LATENCY);
+        keyed(m, "Performance Overlay", id::PERF_OVERLAY, "o");
+        sub(m, "Frame Rate Limit", &|l| {
+            for fps in LIMITS {
+                item(l, &menu::limit_label(fps), id::LIMIT + fps as u16);
+            }
+        });
+        separator(m);
+        let full = new_item("Full Screen", id::FULL_SCREEN, "f");
+        full.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Control);
+        m.addItem(&full);
+        sub(m, "Window Size", &|l| {
+            for h in SIZES {
+                item(l, &format!("{h}p"), id::SIZE + h as u16);
+            }
+        });
+        item(m, "Frame Rate in Title Bar", id::FPS_TITLE);
+    });
+    sub(&bar, "Graphics", &|m| {
+        item(m, "Asynchronous Shader Compilation", id::ASYNC_SHADERS);
+        separator(m);
+        item(m, "Open Shader Cache Folder", id::SHADER_CACHE);
+    });
+    sub(&bar, "Audio", &|m| {
+        item(m, "Mute", id::MUTE);
+        sub(m, "Volume", &|l| {
+            for v in VOLUMES {
+                item(l, &format!("{v}%"), id::VOLUME + v as u16);
+            }
+        });
+    });
+    sub(&bar, "Input", &|m| {
+        sub(m, "Button Layout", &|l| {
+            item(l, "By Label (A is the button marked A)", id::BY_LABEL);
+            item(l, "By Position (as on a Switch controller)", id::BY_POSITION);
+        });
+        item(m, "Vibration", id::VIBRATION);
+        sub(m, "Vibration Strength", &|l| {
+            for v in STRENGTHS {
+                item(l, &format!("{v}%"), id::STRENGTH + v as u16);
+            }
+        });
+        separator(m);
+        item(m, "Touch Screen with Mouse", id::TOUCH);
+        item(m, "Mouse Look (F8 frees the mouse)", id::MOUSE_LOOK);
+        separator(m);
+        item(m, "Controls…", id::CONTROLS);
+        item(m, "Reset Controls to Defaults", id::RESET_CONTROLS);
+    });
+    sub(&bar, &menu::title_label(), &|m| {
+        if crate::profile::is_totk() {
+            item(m, "Variable Frame Rate", id::REAL_TIME);
+            item(m, "Dynamic Aspect Ratio", id::DYNAMIC_ASPECT);
+            item(m, "Exact Mouse Aim (Experimental)", id::EXACT_MOUSE_AIM);
+            separator(m);
+        }
+        sub(m, "Mods", &|l| {
+            let list = menu::mods();
+            if list.is_empty() {
+                label(l, "None");
+            }
+            for (name, code) in list {
+                label(l, &menu::mod_label(&name, code));
+            }
+        });
+        item(m, "Open Save Data Folder", id::SAVE_FOLDER);
+    });
+    sub(&bar, "Tools", &|m| {
+        item(m, "Capture Frame History (F9)", id::CAPTURE);
+        item(m, "Open Log", id::LOG);
+    });
     app.setMainMenu(Some(&bar));
 }
 
@@ -387,10 +417,12 @@ pub fn follow_window_shape(layer: &CAMetalLayer) -> bool {
     }
     let a = b.width / b.height;
     WINDOW_ASPECT.store(a.to_bits(), Ordering::Relaxed);
-    if !crate::host::overlay::is_dynamic_aspect() {
+    static LAST_REPORTED: AtomicU64 = AtomicU64::new(0);
+    // Off, the game is back at 16:9 (live::set_dynamic_aspect): switched on again, the shape is reported again.
+    if !crate::host::live::dynamic_aspect() {
+        LAST_REPORTED.store(0, Ordering::Relaxed);
         return false;
     }
-    static LAST_REPORTED: AtomicU64 = AtomicU64::new(0);
     let prev = f64::from_bits(LAST_REPORTED.load(Ordering::Relaxed));
     if (a - prev).abs() < 0.002 * a {
         return false;

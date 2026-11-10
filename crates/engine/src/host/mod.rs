@@ -9,6 +9,8 @@ pub mod display;
 #[path = "display_ios.rs"]
 pub mod display;
 pub mod input;
+#[cfg(target_os = "macos")]
+pub mod menu;
 #[cfg(target_os = "ios")]
 pub mod ios_env;
 pub mod rumble;

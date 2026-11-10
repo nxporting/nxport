@@ -1,8 +1,8 @@
 // Settings that change while the game runs: each starts from the resolved settings, the window's menu changes it, and
 // the change is kept in the game's own settings file (config::remember), a layer above the app's, so the next run
 // starts with it. The engine reads these here, not settings::get(), wherever it reads them per frame or per sample.
-// The switches are the Windows menu bar's; Apple apps change settings through their own menus (overlay.rs).
-#![cfg_attr(target_vendor = "apple", allow(dead_code))]
+// The switches are the desktop menus' (host/menu.rs); iOS sets some at launch.
+#![cfg_attr(target_os = "ios", allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::LazyLock;

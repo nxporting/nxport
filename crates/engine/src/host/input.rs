@@ -395,7 +395,8 @@ pub fn end_capture(c: Captured) {
 }
 
 /// A binding as the Controls menu shows it: "Z / Bottom button (A / ✕)".
-#[cfg(windows)]
+#[cfg(not(target_os = "ios"))]
+#[cfg_attr(not(windows), allow(dead_code))] // the Windows menu lists the bindings; macOS has the Controls window
 pub fn binding_label(b: Binding) -> String {
     let key = b.key.map_or("no key", key_name);
     match b.pad {
