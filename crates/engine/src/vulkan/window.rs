@@ -115,10 +115,14 @@ impl Window {
         if extent.width == 0 || extent.height == 0 {
             return None;
         }
-        // Low latency: as few images as the surface allows (at least 2), so with FIFO at most one finished frame waits
-        // for the screen, against up to two more with the usual count.
+        // Low latency: as few images as the surface allows (at least 2; 3 on MoltenVK: Dev::min_swapchain_images), so with
+        // FIFO at most one finished frame waits for the screen, against up to two more with the usual count.
         let low_latency = crate::host::overlay::is_low_latency();
-        let wanted = if low_latency { caps.min_image_count.max(2) } else { (caps.min_image_count + 1).max(SLOTS as u32) };
+        let wanted = if low_latency {
+            caps.min_image_count.max(dev.min_swapchain_images)
+        } else {
+            (caps.min_image_count + 1).max(SLOTS as u32).max(dev.min_swapchain_images)
+        };
         let count = wanted.min(if caps.max_image_count > 0 { caps.max_image_count } else { u32::MAX });
         // VSync off: the newest frame replaces a waiting one (MAILBOX), else frames show at once and may tear
         // (IMMEDIATE). FIFO is the only mode every implementation has.

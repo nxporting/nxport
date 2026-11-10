@@ -41,6 +41,12 @@ pub struct Dev {
     pub link_varyings: bool,
     /// Primitive restart follows Metal's rules (MoltenVK): strips only, compared after adding the base vertex.
     pub metal_restart: bool,
+    /// Fewest swapchain images: 3 on MoltenVK, whose image is acquirable again once its present's command buffer completes
+    /// but whose drawable is let go only once on screen: with 2 images and its own submit thread an image came back
+    /// still holding a presented drawable ("addPresentedHandler cannot be called after drawable has been presented"),
+    /// then a crash in its present handler (2026-11-09: 1055 such warnings in 150 s with 2 images, none with 3 or with
+    /// synchronous submits). Elsewhere 2.
+    pub min_swapchain_images: u32,
     /// Occlusion queries count samples exactly (else only zero / nonzero).
     pub precise_occlusion: bool,
     /// What shader translation may use on this device.
@@ -244,6 +250,7 @@ impl Dev {
             // (Hateno: ~17% of the frame); stages needing more than Metal's 16 samplers then use a sampler table
             // (Host::sampler_slots).
             let off: i32 = 0;
+            let sync_submits = crate::settings::get().debug.mvk_sync_submits;
             let settings: Vec<vk::LayerSettingEXT> = [
                 c"MVK_CONFIG_FAST_MATH_ENABLED",
                 c"FAST_MATH_ENABLED",
@@ -253,6 +260,7 @@ impl Dev {
                 c"USE_METAL_ARGUMENT_BUFFERS",
             ]
             .iter()
+            .filter(|name| !(sync_submits && name.to_bytes().ends_with(b"SYNCHRONOUS_QUEUE_SUBMITS")))
             .map(|name| vk::LayerSettingEXT {
                 p_layer_name: c"MoltenVK".as_ptr(),
                 p_setting_name: name.as_ptr(),
@@ -601,6 +609,7 @@ impl Dev {
                 feedback_in_place: has_portability,
                 link_varyings: true,
                 metal_restart: has_portability,
+                min_swapchain_images: if has_portability { 3 } else { 2 },
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
                 push,

@@ -527,6 +527,9 @@ group! {
         /// Vulkan backend: also a checkpoint before every command and draw (costs GPU time: the driver orders work
         /// around each)
         gpu_checkpoints_each: bool = false,
+        /// Vulkan on MoltenVK: its queue submits and presents on the calling thread (MoltenVK's default) instead of its
+        /// own (A/B for presentation races)
+        mvk_sync_submits: bool = false,
         /// Vulkan backend: no guest memory imported as GPU buffers (VK_EXT_external_memory_host); everything the GPU
         /// reads or writes of guest memory is a copy (bisection aid)
         no_host_import: bool = false,
