@@ -64,11 +64,11 @@ jobs:
           7z x -bd -o"$RUNNER_TEMP/zig-unpacked" "$RUNNER_TEMP/zig.zip" > /dev/null
           mv "$RUNNER_TEMP/zig-unpacked/$ZIG_NAME" "$stage/zig"
           cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
-          cp README.md LICENSE "$stage/"
-          cp crates/sass2spv/LICENSE "$stage/LICENSE-sass2spv"
-          cp crates/lifter/LICENSE-LASRecomp "$stage/LICENSE-LASRecomp"
+          # The project's licence, and one file of every other notice: the crates', then the two projects these crates derive from.
+          cp LICENSE "$stage/"
           perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" x86_64-pc-windows-msvc
-          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-sass2spv README.md THIRD_PARTY_LICENSES.txt ios/nxport nxport-builder.exe \
+          .github/scripts/fold-licences.sh "$stage/THIRD_PARTY_LICENSES.txt"
+          printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt ios/nxport nxport-builder.exe \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"
           (cd "$stage" && find . -type f -not -path './zig/*' | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
           test -f "$stage/zig/zig.exe"
@@ -115,11 +115,10 @@ jobs:
           cp target/release/nxport-builder "$stage/"
           cp target/engines/aarch64-apple-darwin/release/nxport "$stage/nxport"
           cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
-          cp README.md LICENSE "$stage/"
-          cp crates/sass2spv/LICENSE "$stage/LICENSE-sass2spv"
-          cp crates/lifter/LICENSE-LASRecomp "$stage/LICENSE-LASRecomp"
+          cp LICENSE "$stage/"
           perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" aarch64-apple-darwin
-          printf '%s\n' LICENSE LICENSE-LASRecomp LICENSE-sass2spv README.md THIRD_PARTY_LICENSES.txt ios/nxport nxport nxport-builder \
+          .github/scripts/fold-licences.sh "$stage/THIRD_PARTY_LICENSES.txt"
+          printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt ios/nxport nxport nxport-builder \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"
           (cd "$stage" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
           "$stage/nxport-builder" --help
