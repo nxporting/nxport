@@ -117,6 +117,9 @@ pub struct Textures {
     pub serial: u64,
     /// Alias roots found (see `locate`), kept while no texture over their memory changes (`begin_submit`).
     roots: FxHashMap<Desc, (Desc, u32, u32)>,
+    /// Depth images read from guest memory: colour textures sampled with depth comparison, as their depth twin
+    /// (layout::depth_twin). Other depth images live on the GPU only.
+    pub depth_twins: rustc_hash::FxHashSet<Desc>,
     /// The texture index change sequence the roots are valid at (begin_submit), and scratch for the changes.
     roots_seq: u64,
     root_changes: Vec<(usize, usize)>,
@@ -1187,9 +1190,10 @@ impl Textures {
         crate::gpu::history::journal(|| {
             format!("upload {:x}: {}x{} fmt {} storage {:#x}", ash::vk::Handle::as_raw(img.image), p.width, p.height, p.format, d.storage)
         });
-        if d.storage <= 0x10000 || img.samples != vk::SampleCountFlags::TYPE_1 || format::is_depth(img.format) {
+        if d.storage <= 0x10000 || img.samples != vk::SampleCountFlags::TYPE_1 || (format::is_depth(img.format) && !self.depth_twins.contains(d)) {
             return;
         }
+        let aspect = format::aspects(img.format);
         let Some(info) = layout::format_info(p.format) else { return };
         let lay = layout::compute_layout(p);
         let linear = p.flags & 0x10 != 0 || p.flags & 0x40 != 0;
@@ -1242,7 +1246,7 @@ impl Textures {
                         .buffer_offset(off as u64)
                         .image_subresource(
                             vk::ImageSubresourceLayers::default()
-                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .aspect_mask(aspect)
                                 .mip_level(level)
                                 .base_array_layer(layer)
                                 .layer_count(1),

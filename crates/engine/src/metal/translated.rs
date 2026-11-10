@@ -2787,6 +2787,54 @@ impl Gfx {
         Some(d)
     }
 
+    /// The depth twin of colour texture `t` for a binding that samples `v` (a view of `t`) with depth comparison: its
+    /// memory read as R32F -> Depth32Float, R16 -> Depth16Unorm (layout::depth_twin), what the console compares. Filled
+    /// from guest memory (shared storage, as a CPU-written texture is), again when the object's generation changes. None
+    /// for other formats, or a colour texture the GPU wrote (guest memory does not hold its contents: the caller binds
+    /// a dummy, as before).
+    unsafe fn depth_twin(&self, tc: &mut TexCache, t: &Tex, v: &Tex, gen: u64, snap: &crate::nvn::api::NvnTexture) -> Option<Tex> {
+        let pf = match crate::nvn::layout::depth_twin(snap.format) {
+            Some(52) => MTLPixelFormat::Depth32Float,
+            Some(50) => MTLPixelFormat::Depth16Unorm,
+            _ => return None,
+        };
+        if tc.gpu_written.contains(&super::storage_id(t)) {
+            return None;
+        }
+        let key = super::storage_id(t);
+        let twin = match tc.depth_twins.get(&key) {
+            Some((tw, g)) if *g == gen => tw.clone(),
+            _ => {
+                let desc = MTLTextureDescriptor::new();
+                desc.setTextureType(t.textureType());
+                desc.setPixelFormat(pf);
+                desc.setWidth(t.width());
+                desc.setHeight(t.height());
+                desc.setDepth(t.depth());
+                desc.setArrayLength(t.arrayLength());
+                desc.setMipmapLevelCount(t.mipmapLevelCount());
+                desc.setUsage(MTLTextureUsage::ShaderRead);
+                desc.setStorageMode(MTLStorageMode::Shared);
+                let tw = self.device.newTextureWithDescriptor(&desc)?;
+                self.upload_texture(&tw, snap);
+                tc.depth_twins.insert(key, (tw.clone(), gen));
+                tw
+            }
+        };
+        // The binding's levels and layers of the twin.
+        if v.mipmapLevelCount() == twin.mipmapLevelCount() && v.arrayLength() == twin.arrayLength() && v.textureType() == twin.textureType() {
+            return Some(twin);
+        }
+        let (level, slice) = if v.parentTexture().is_some() { (v.parentRelativeLevel(), v.parentRelativeSlice()) } else { (0, 0) };
+        let slices = if matches!(v.textureType(), MTLTextureType::TypeCube | MTLTextureType::TypeCubeArray) { v.arrayLength() * 6 } else { v.arrayLength() };
+        twin.newTextureViewWithPixelFormat_textureType_levels_slices(
+            pf,
+            v.textureType(),
+            objc2_foundation::NSRange::new(level, v.mipmapLevelCount()),
+            objc2_foundation::NSRange::new(slice, slices),
+        )
+    }
+
     /// A 1x1 texture of `ty` to bind when the game's texture can't be expressed (yet).
     unsafe fn dummy_texture(&self, tc: &mut TexCache, ty: &str) -> Option<Tex> {
         if let Some(t) = tc.dummy_textures.get(ty) {
@@ -3046,7 +3094,12 @@ impl Gfx {
                     tc.refresh_memo.insert(tex_addr, memo);
                 }
                 let tex_swizzle = info.map_or([2, 3, 4, 5], |(_, snap)| snap.swizzle);
-                texture_for_binding(&mut tc.view_cache, &t, view.as_ref(), want, tex_swizzle)
+                let v = texture_for_binding(&mut tc.view_cache, &t, view.as_ref(), want, tex_swizzle);
+                // Depth comparison of a colour texture: its memory read as depth (layout::depth_twin).
+                match (tb.shadow, v, info) {
+                    (true, Some(v), Some((gen, snap))) => self.depth_twin(tc, &t, &v, gen, &snap).or(Some(v)),
+                    (_, v, _) => v,
+                }
             });
             let alias_root = pool.and_then(|(a, _)| tc.alias_of.get(&a).copied());
             (resolved, alias_root)
