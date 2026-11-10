@@ -1,6 +1,7 @@
 // Passes of the scene renderer that draw into a render buffer the game builds on its stack from texture states of its
 // records (texture_slots.rs): the objects are host buffers here, filled as the game's constructors and copies fill them.
 
+use super::callees_misc::{half_res_pass, half_res_pass_check};
 use super::draw::{Port, R};
 use super::lights::{shape_state, stream_draw, stream_draw_n, SHAPES, STREAMS};
 use super::scene_passes::{default_state, fullscreen, scene_blocks};
@@ -13,7 +14,6 @@ use super::{cubemap, targets, viewport};
 const SETTINGS: usize = 0x462bbf0;
 /// [var]: the 16-byte clear colour of main+0x9618d0's targets.
 const CLEAR_COLOR: usize = 0x4634ea0;
-const PASS_HELPER: usize = 0xa548e0;
 /// The pure 3x4 inverse (out, in).
 const INVERSE_3X4: usize = 0x93a4c4;
 /// The program set holder: [[[[holder]+0x10]+0x1b0]+8]+0x10 is the program of main+0x959a14's first pass.
@@ -103,9 +103,15 @@ unsafe fn scene_stages(p: &mut Port, this: usize, w: usize, view: u32, scene: us
     g[1] = 0;
     g[0x19] = (g[0x19] & 0xffff_ff00) | 8;
     let enabled = (p.m.r8(this + 0x352) >> 2) & 1 != 0;
+    if !enabled || flags & 1 != 0 {
+        half_res_pass_check(p, ctx, w, view, 8, 0, 0, 0)?;
+    }
+    if !enabled {
+        half_res_pass_check(p, ctx, w, view, 0x14, 0, 1, 1)?;
+    }
     let programs = p.m.r64(p.m.r64(this + 0x368) + 8);
     if !enabled || flags & 1 != 0 {
-        p.helper("scene pass main+0xa548e0", PASS_HELPER, &[ctx as u64, w as u64, view as u64, 8, 0, 0, 0])?;
+        half_res_pass(p, ctx, w, view, 8, 0, 0, 0)?;
     } else {
         let settings = p.m.r64(p.m.r64(p.base + SETTINGS));
         let cmd = p.m.r64(w + 0xb8);
@@ -122,7 +128,7 @@ unsafe fn scene_stages(p: &mut Port, this: usize, w: usize, view: u32, scene: us
         targets::unbind(p, w)?;
     }
     if !enabled {
-        p.helper("scene pass main+0xa548e0", PASS_HELPER, &[ctx as u64, w as u64, view as u64, 0x14, 0, 1, 1])?;
+        half_res_pass(p, ctx, w, view, 0x14, 0, 1, 1)?;
         return Ok(());
     }
     let prog = p.m.r64(programs + 0x20) + if p.m.r32(programs + 0x18) < 0xb { 0 } else { 0xd70 };

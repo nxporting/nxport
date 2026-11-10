@@ -414,6 +414,9 @@ pub enum FixedState {
     PolygonOffset { factor: f32, units: f32, clamp: f32 },
     Multisample(u64),
     DepthClamp(bool),
+    Scissor { x: i32, y: i32, w: i32, h: i32 },
+    Viewport { x: i32, y: i32, w: i32, h: i32 },
+    DepthRange { near: f32, far: f32 },
 }
 
 impl FixedState {
@@ -430,6 +433,9 @@ impl FixedState {
             FixedState::PolygonOffset { factor, units, clamp } => Cmd::SetPolygonOffset { factor, units, clamp },
             FixedState::Multisample(v) => Cmd::BindMultisampleState(v),
             FixedState::DepthClamp(v) => Cmd::SetDepthClamp(v),
+            FixedState::Scissor { x, y, w, h } => Cmd::SetScissor { x, y, w, h },
+            FixedState::Viewport { x, y, w, h } => Cmd::SetViewport { x, y, w, h },
+            FixedState::DepthRange { near, far } => Cmd::SetDepthRange { near, far },
         }
     }
 }
