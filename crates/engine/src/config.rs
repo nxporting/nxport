@@ -92,11 +92,7 @@ pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
 /// session's kept as log.prev.txt), so a frame captured in play keeps its trace.
 #[cfg(target_os = "macos")]
 pub fn app_log() {
-    let in_bundle = std::env::current_exe()
-        .ok()
-        .and_then(|e| Some(e.parent()?.file_name()? == "MacOS"))
-        .unwrap_or(false);
-    if !in_bundle || unsafe { libc::isatty(1) } != 0 {
+    if !app_without_terminal() {
         return;
     }
     let Some(dir) = crate::profile::data_dir() else { return };
@@ -110,6 +106,52 @@ pub fn app_log() {
             libc::dup2(f.as_raw_fd(), 2);
         }
         std::mem::forget(f);
+    }
+}
+
+/// Inside a macOS .app started from Finder: no terminal shows its output. Decided on the first call, before app_log
+/// sends the output to a file.
+#[cfg(target_os = "macos")]
+fn app_without_terminal() -> bool {
+    static NONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NONE.get_or_init(|| {
+        let in_bundle = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.file_name()? == "MacOS")).unwrap_or(false);
+        in_bundle && unsafe { libc::isatty(1) } == 0
+    })
+}
+
+/// An alert any thread can show (CoreFoundation's user notification: no NSApplication needed), waiting until it is closed.
+#[cfg(target_os = "macos")]
+fn alert(title: &str, message: &str) {
+    type CFStringRef = *const std::ffi::c_void;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateWithBytes(alloc: *const std::ffi::c_void, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFStringRef;
+        fn CFRelease(cf: *const std::ffi::c_void);
+        fn CFUserNotificationDisplayAlert(
+            timeout: f64,
+            flags: usize,
+            icon: *const std::ffi::c_void,
+            sound: *const std::ffi::c_void,
+            localization: *const std::ffi::c_void,
+            header: CFStringRef,
+            message: CFStringRef,
+            default_button: CFStringRef,
+            alternate_button: CFStringRef,
+            other_button: CFStringRef,
+            response: *mut usize,
+        ) -> i32;
+    }
+    const UTF8: u32 = 0x0800_0100;
+    const STOP_ALERT_LEVEL: usize = 0;
+    unsafe {
+        let cf = |t: &str| CFStringCreateWithBytes(std::ptr::null(), t.as_ptr(), t.len() as isize, UTF8, 0);
+        let (h, m) = (cf(title), cf(message));
+        let mut response = 0usize;
+        let n = std::ptr::null();
+        CFUserNotificationDisplayAlert(0.0, STOP_ALERT_LEVEL, n, n, n, h, m, n, n, n, &mut response);
+        CFRelease(h);
+        CFRelease(m);
     }
 }
 
@@ -240,14 +282,18 @@ pub fn drain_log() {
     }
 }
 
-/// Why the game could not start, shown in a message box by a Windows app started from Explorer (nothing shows its
-/// output). Elsewhere nothing more: the error is printed.
+/// Why the game could not start or stopped, shown in a message box by an app started from Explorer or Finder (nothing
+/// shows its output). Elsewhere nothing more: the error is printed.
 pub fn app_error(message: &str) {
     #[cfg(windows)]
     if app_without_output() {
         let _ = sdl3::messagebox::show_simple_message_box(sdl3::messagebox::MessageBoxFlag::ERROR, "nxport", message, None);
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    if app_without_terminal() {
+        alert(crate::profile::app_title(), message);
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = message;
 }
 
