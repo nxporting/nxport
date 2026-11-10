@@ -201,7 +201,7 @@ pub struct Ctx {
     /// Repacked vertex streams of this submit, by (guest range, layout, elements).
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
-    pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
+    pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType, bool), (vk::Image, vk::ImageView, vk::Sampler)>,
     /// Advanced when `bindings` is emptied; the bound texture slots' last resolutions (draw.rs texture_binding) are valid
     /// at the generation they were made in.
     bindings_gen: u64,

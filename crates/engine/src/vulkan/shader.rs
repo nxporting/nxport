@@ -19,7 +19,8 @@ pub enum Feed {
     /// Texture: handle at word `handle_index` of the bound texture table (cbuf_slot -1) or of constant buffer
     /// `cbuf_slot`; declared view type.
     /// `slot`: its first texture slot when sampled through the sampler table (a separate image).
-    Texture { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, count: u32, buffer: bool, slot: Option<u32> },
+    /// `shadow`: sampled with depth comparison.
+    Texture { cbuf_slot: i32, handle_index: i32, view: vk::ImageViewType, count: u32, buffer: bool, slot: Option<u32>, shadow: bool },
     /// The sampler table (sass2spv properties::sampler_table_plan): the textures' samplers, deduplicated.
     SamplerTable,
     /// A texture sampled through the global arrays (vulkan/bindless.rs): no descriptor of its own; its handle (read as
@@ -377,7 +378,8 @@ unsafe fn build_stage(
             } else {
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER
             };
-            Some((ty, count, Feed::Texture { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, count, buffer, slot }))
+            let shadow = t.texture_type.contains("Shadow");
+            Some((ty, count, Feed::Texture { cbuf_slot: t.cbuf_slot, handle_index: t.handle_index, view, count, buffer, slot, shadow }))
         } else {
             m.images.iter().find(|t| t.binding == mb).map(|t| {
                 let (view, buffer) = view_type(&t.texture_type);
