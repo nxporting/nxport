@@ -323,6 +323,8 @@ pub fn run_main_thread() -> ! {
     view.setLayer(Some(&layer));
     window.setContentView(Some(&view));
     window.makeFirstResponder(Some(&view));
+    // Mouse look and the game's own mouse read movement without a button down.
+    window.setAcceptsMouseMovedEvents(true);
     window.makeKeyAndOrderFront(None);
     app.activate();
     crate::host::controls_ui::install(mtm, Some(&window));

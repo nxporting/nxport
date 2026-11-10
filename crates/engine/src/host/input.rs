@@ -510,7 +510,6 @@ static SUSPENDED: AtomicBool = AtomicBool::new(false);
 static SWAP_AB: AtomicBool = AtomicBool::new(false);
 static SWAP_XY: AtomicBool = AtomicBool::new(false);
 
-#[cfg_attr(target_os = "macos", allow(dead_code))] // the Windows menu bar and the iOS settings change them
 pub fn set_controller_swaps(ab: bool, xy: bool) {
     SWAP_AB.store(ab, Ordering::Relaxed);
     SWAP_XY.store(xy, Ordering::Relaxed);
@@ -619,8 +618,8 @@ static MOUSE_WHEEL: AtomicI32 = AtomicI32::new(0);
 static MOUSE_BUTTONS: AtomicU32 = AtomicU32::new(0);
 static MOUSE_SAMPLE: AtomicU64 = AtomicU64::new(0);
 
-/// The cursor moved, in the game's 1280x720 screen. Only the SDL hosts have this so far.
-#[cfg(not(target_vendor = "apple"))]
+/// The cursor moved, in the game's 1280x720 screen.
+#[cfg(not(target_os = "ios"))]
 pub fn mouse_moved(x: i32, y: i32, dx: i32, dy: i32) {
     MOUSE_XY[0].store(x, Ordering::Relaxed);
     MOUSE_XY[1].store(y, Ordering::Relaxed);
@@ -629,7 +628,7 @@ pub fn mouse_moved(x: i32, y: i32, dx: i32, dy: i32) {
 }
 
 /// A mouse button went down or up: its bit of nn::hid::MouseButtonSet (left 0, right 1, middle 2, forward 3, back 4).
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(not(target_os = "ios"))]
 pub fn mouse_button(bit: u32, down: bool) {
     if down {
         MOUSE_BUTTONS.fetch_or(1 << bit, Ordering::Relaxed);
@@ -638,7 +637,7 @@ pub fn mouse_button(bit: u32, down: bool) {
     }
 }
 
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(not(target_os = "ios"))]
 pub fn mouse_wheel(delta: i32) {
     MOUSE_WHEEL.fetch_add(delta, Ordering::Relaxed);
 }
@@ -680,9 +679,9 @@ pub fn next_mouse_state() -> [u8; 0x28] {
 static USB_KEYS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 static KEYBOARD_SAMPLE: AtomicU64 = AtomicU64::new(0);
 
-/// A key of the host keyboard went down or up, by USB HID usage (what SDL scancodes are). Only the SDL hosts have this
-/// so far: on Apple devices a game still sees a keyboard with nothing pressed.
-#[cfg(not(target_vendor = "apple"))]
+/// A key of the host keyboard went down or up, by USB HID usage (what SDL scancodes are; macOS: usage_of_mac_key). On
+/// iOS a game still sees a keyboard with nothing pressed.
+#[cfg(not(target_os = "ios"))]
 pub fn set_usb_key(usage: usize, down: bool) {
     if let Some(word) = USB_KEYS.get(usage / 64) {
         let bit = 1u64 << (usage % 64);
@@ -782,9 +781,9 @@ pub(crate) fn mouse_look_on() -> bool {
     crate::host::live::mouse_look() && crate::settings::try_get().is_some_and(|s| !s.input.direct_mouse)
 }
 
-/// Relative mouse movement while mouse look holds the mouse (window pixels; y down). The SDL host (Windows) holds
-/// the mouse; the macOS host does not have mouse look yet.
-#[cfg_attr(not(windows), allow(dead_code))]
+/// Relative mouse movement while mouse look holds the mouse (window pixels; y down). The Windows and macOS windows
+/// hold the mouse.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 pub fn mouse_look_moved(dx: f32, dy: f32) {
     // Into the game's camera angles where a profile takes them, as a stick would turn them: mouse right as the stick
     // right (the yaw falls), mouse down as the stick down (the pitch rises).
@@ -1287,6 +1286,84 @@ pub fn poll_controllers(_mtm: objc2::MainThreadMarker) {
 }
 
 // ---- key names ----
+
+/// The macOS virtual key code (Carbon kVK_*, what controls.cfg stores) of the key at USB HID usage `usage` (what SDL scancodes are):
+/// the key in the same place on a US keyboard. PC keys without a Mac counterpart take the Mac key in their place (Alt is
+/// Option, the Windows key Command, Insert is Help, Num Lock the keypad's Clear).
+pub fn mac_key_of_usage(sc: i32) -> Option<u16> {
+    Some(match sc {
+        // Letters A..Z (4..29).
+        4..=29 => [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6][(sc - 4) as usize],
+        // Digits 1..9, 0 (30..39).
+        30..=39 => [18, 19, 20, 21, 23, 22, 26, 28, 25, 29][(sc - 30) as usize],
+        40 => 36, // Return
+        41 => 53, // Escape
+        42 => 51, // Backspace (Delete)
+        43 => 48, // Tab
+        44 => 49, // Space
+        45 => 27, // -
+        46 => 24, // =
+        47 => 33, // [
+        48 => 30, // ]
+        49 | 50 => 42, // \ (and the ISO key beside Return)
+        51 => 41,  // ;
+        52 => 39,  // '
+        53 => 50,  // `
+        54 => 43,  // ,
+        55 => 47,  // .
+        56 => 44,  // /
+        57 => 57,  // Caps Lock
+        // F1..F12 (58..69).
+        58..=69 => [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111][(sc - 58) as usize],
+        73 => 114, // Insert (Help)
+        74 => 115, // Home
+        75 => 116, // Page Up
+        76 => 117, // Delete (Forward Delete)
+        77 => 119, // End
+        78 => 121, // Page Down
+        79 => 124, // →
+        80 => 123, // ←
+        81 => 125, // ↓
+        82 => 126, // ↑
+        83 => 71,  // Num Lock (Keypad Clear)
+        84 => 75,  // Keypad /
+        85 => 67,  // Keypad *
+        86 => 78,  // Keypad -
+        87 => 69,  // Keypad +
+        88 => 76,  // Keypad Enter
+        // Keypad 1..9, 0 (89..98).
+        89..=98 => [83, 84, 85, 86, 87, 88, 89, 91, 92, 82][(sc - 89) as usize],
+        99 => 65,  // Keypad .
+        100 => 10, // the ISO key beside left Shift (kVK_ISO_Section)
+        103 => 81, // Keypad =
+        // F13..F20 (104..111).
+        104..=111 => [105, 107, 113, 106, 64, 79, 80, 90][(sc - 104) as usize],
+        224 => 59, // left Control
+        225 => 56, // left Shift
+        226 => 58, // left Alt (Option)
+        227 => 55, // left Windows (Command)
+        228 => 62, // right Control
+        229 => 60, // right Shift
+        230 => 61, // right Alt (Option)
+        231 => 54, // right Windows (Command)
+        _ => return None,
+    })
+}
+
+/// The USB HID usage of macOS virtual key code `code` (the inverse of mac_key_of_usage), for nn::hid's keyboard state.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn usage_of_mac_key(code: u16) -> Option<usize> {
+    static TABLE: std::sync::LazyLock<[u8; 128]> = std::sync::LazyLock::new(|| {
+        let mut t = [0u8; 128];
+        for usage in (4..=231).rev() {
+            if let Some(c) = mac_key_of_usage(usage).filter(|&c| (c as usize) < t.len()) {
+                t[c as usize] = usage as u8;
+            }
+        }
+        t
+    });
+    TABLE.get(code as usize).copied().filter(|&u| u != 0).map(usize::from)
+}
 
 /// Display name of a macOS virtual key code (Carbon kVK_* values, US layout).
 #[cfg(any(target_os = "macos", windows))]
