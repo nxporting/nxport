@@ -4,6 +4,7 @@
 
 mod binds;
 mod buffer_passes;
+mod callees_misc;
 mod cave;
 mod cubemap;
 mod cells;
@@ -13,6 +14,8 @@ mod display_lists;
 mod dof_blur_chain;
 mod dof_passes;
 mod draw;
+mod bloom_expand;
+mod dof_buffers;
 mod grid;
 mod items;
 mod light_pass;
@@ -41,6 +44,11 @@ mod vfx;
 mod view_callees;
 mod view_passes;
 mod viewport;
+mod ui_callees;
+mod ui_passes;
+mod mip_copy;
+mod filter_draws;
+mod gather_callback;
 mod volume_mask_chain;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1154,6 +1162,294 @@ pub unsafe extern "C" fn on_state_blit_end() -> u32 {
     STATE_BLITS.end("state blits", &STATE_BLITS_EXPECTED)
 }
 
+static FOOTPRINT_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static FOOTPRINT_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x18986f8 (filter_draws.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_footprint_draw(this: usize, w: usize, ctx: usize) -> u32 {
+    FOOTPRINT_DRAWS.run(&FOOTPRINT_DRAWS_EXPECTED, move |p| filter_draws::footprint_draw(p, this, w, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_footprint_draw_end() -> u32 {
+    FOOTPRINT_DRAWS.end("footprint draws", &FOOTPRINT_DRAWS_EXPECTED)
+}
+
+static BLUR_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static BLUR_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x7ef8e0 (filter_draws.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_blur_draw(this: usize, w: usize, ctx: usize, ty: u32, kernel: u32) -> u32 {
+    BLUR_DRAWS.run(&BLUR_DRAWS_EXPECTED, move |p| filter_draws::blur_draw(p, this, w, ctx, ty, kernel))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_blur_draw_end() -> u32 {
+    BLUR_DRAWS.end("blur draws", &BLUR_DRAWS_EXPECTED)
+}
+
+static REDUCE_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static REDUCE_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xd5d44c (filter_draws.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_reduce_draw(this: usize, w: usize, ctx: usize, scale: u32) -> u32 {
+    REDUCE_DRAWS.run(&REDUCE_DRAWS_EXPECTED, move |p| filter_draws::reduce_draw(p, this, w, ctx, scale))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_reduce_draw_end() -> u32 {
+    REDUCE_DRAWS.end("reduce draws", &REDUCE_DRAWS_EXPECTED)
+}
+
+static MIP_COPIES: Checked = Checked::new();
+
+thread_local! {
+    static MIP_COPIES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xbd99e0 (mip_copy.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_mip_copy(this: usize, w: usize) -> u32 {
+    MIP_COPIES.run(&MIP_COPIES_EXPECTED, move |p| mip_copy::mip_copy_pass(p, this, w))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_mip_copy_end() -> u32 {
+    MIP_COPIES.end("mip copies", &MIP_COPIES_EXPECTED)
+}
+
+static CAPTURE_PANES: Checked = Checked::new();
+
+thread_local! {
+    static CAPTURE_PANES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x98897c (ui_passes.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_capture_pane(this: usize, ctx: usize, flags: usize) -> u32 {
+    CAPTURE_PANES.run(&CAPTURE_PANES_EXPECTED, move |p| ui_passes::capture_pane(p, this, ctx, flags))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_capture_pane_end() -> u32 {
+    CAPTURE_PANES.end("capture panes", &CAPTURE_PANES_EXPECTED)
+}
+
+static PANE_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static PANE_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x85dae4 (ui_passes.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_pane_draw(this: usize, a1: usize, a2: usize) -> u32 {
+    PANE_DRAWS.run(&PANE_DRAWS_EXPECTED, move |p| ui_passes::pane_draw(p, this, a1, a2))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_pane_draw_end() -> u32 {
+    PANE_DRAWS.end("pane draws", &PANE_DRAWS_EXPECTED)
+}
+
+static DOF_BUFFERS: Checked = Checked::new();
+
+thread_local! {
+    static DOF_BUFFERS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xc4b934 (dof_buffers.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_dof_buffers(this: usize, w: usize, ctx: usize) -> u32 {
+    DOF_BUFFERS.run(&DOF_BUFFERS_EXPECTED, move |p| dof_buffers::buffers(p, this, w, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_dof_buffers_end() -> u32 {
+    DOF_BUFFERS.end("depth of field buffers", &DOF_BUFFERS_EXPECTED)
+}
+
+static BLOOM_BODIES: Checked = Checked::new();
+
+thread_local! {
+    static BLOOM_BODIES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x21eb800 (bloom_expand.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_bloom_body(w: usize, rb: usize, n: u64, fl: usize, table: usize, _x5: u64, _x6: u64, floats: usize) -> u32 {
+    BLOOM_BODIES.run(&BLOOM_BODIES_EXPECTED, move |p| { let s0 = f32::from_bits((floats as *const u32).read()); let s1 = f32::from_bits(((floats + 8) as *const u32).read()); bloom_expand::bloom_body(p, w, rb, n as u32, fl, table, s0, s1) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_bloom_body_end() -> u32 {
+    BLOOM_BODIES.end("bloom bodies", &BLOOM_BODIES_EXPECTED)
+}
+
+static EXPAND_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static EXPAND_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x2213440 (bloom_expand.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_expand_draw(this: usize, w: usize, ctx: usize) -> u32 {
+    EXPAND_DRAWS.run(&EXPAND_DRAWS_EXPECTED, move |p| bloom_expand::expand_draw(p, this, w, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_expand_draw_end() -> u32 {
+    EXPAND_DRAWS.end("expand draws", &EXPAND_DRAWS_EXPECTED)
+}
+
+static BLUR_TYPE1S: Checked = Checked::new();
+
+thread_local! {
+    static BLUR_TYPE1S_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x7f2d48 (bloom_expand.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_blur_type1(w: usize, tex: usize, vp: usize, index: u64, offset: usize, scale: usize, offset2: usize) -> u32 {
+    BLUR_TYPE1S.run(&BLUR_TYPE1S_EXPECTED, move |p| bloom_expand::blur_type1(p, w, tex, vp, index as i32, offset, scale, offset2))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_blur_type1_end() -> u32 {
+    BLUR_TYPE1S.end("blur type 1", &BLUR_TYPE1S_EXPECTED)
+}
+
+static BLUR_TYPE2S: Checked = Checked::new();
+
+thread_local! {
+    static BLUR_TYPE2S_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xbe1a74 (bloom_expand.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_blur_type2(w: usize, tex: usize, vp: usize, kernel: u64, a: u64, b: u64, offset: usize) -> u32 {
+    BLUR_TYPE2S.run(&BLUR_TYPE2S_EXPECTED, move |p| bloom_expand::blur_type2(p, w, tex, vp, kernel as u32, a as u32, b as u32, offset))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_blur_type2_end() -> u32 {
+    BLUR_TYPE2S.end("blur type 2", &BLUR_TYPE2S_EXPECTED)
+}
+
+static GAUSSIANS: Checked = Checked::new();
+
+thread_local! {
+    static GAUSSIANS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x21f6568 (bloom_expand.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_gaussian(w: usize, obj: usize, tex: usize, vp: usize, offset: usize, scale: usize, offset2: usize) -> u32 {
+    GAUSSIANS.run(&GAUSSIANS_EXPECTED, move |p| bloom_expand::gaussian(p, w, obj, tex, vp, offset, scale, offset2))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gaussian_end() -> u32 {
+    GAUSSIANS.end("gaussian blurs", &GAUSSIANS_EXPECTED)
+}
+
+static GAUSSIAN_OTHERS: Checked = Checked::new();
+
+thread_local! {
+    static GAUSSIAN_OTHERS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x21f65f4 (bloom_expand.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_gaussian_other(w: usize, obj: usize, tex: usize, vp: usize, offset: usize) -> u32 {
+    GAUSSIAN_OTHERS.run(&GAUSSIAN_OTHERS_EXPECTED, move |p| bloom_expand::gaussian_other(p, w, obj, tex, vp, offset))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_gaussian_other_end() -> u32 {
+    GAUSSIAN_OTHERS.end("other blurs", &GAUSSIAN_OTHERS_EXPECTED)
+}
+
+static TEXTURE_DRAWS: Checked = Checked::new();
+
+thread_local! {
+    static TEXTURE_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xc58404 (ui_callees.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_texture_draw(w: usize, prog: usize, tex: usize) -> u32 {
+    TEXTURE_DRAWS.run(&TEXTURE_DRAWS_EXPECTED, move |p| ui_callees::draw_texture(p, w, prog, tex))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_texture_draw_end() -> u32 {
+    TEXTURE_DRAWS.end("texture draws", &TEXTURE_DRAWS_EXPECTED)
+}
+
+static VIEWPORT_SETS: Checked = Checked::new();
+
+thread_local! {
+    static VIEWPORT_SETS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xa81ec8 (ui_callees.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_viewport_set(vp: usize, w: usize, fb: usize) -> u32 {
+    VIEWPORT_SETS.run(&VIEWPORT_SETS_EXPECTED, move |p| { ui_callees::viewport_set(p, vp, w, fb); Ok(()) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_viewport_set_end() -> u32 {
+    VIEWPORT_SETS.end("viewport sets", &VIEWPORT_SETS_EXPECTED)
+}
+
+static SCISSOR_SETS: Checked = Checked::new();
+
+thread_local! {
+    static SCISSOR_SETS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x85dbe0 (ui_callees.rs).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_scissor_set(vp: usize, w: usize, fb: usize) -> u32 {
+    SCISSOR_SETS.run(&SCISSOR_SETS_EXPECTED, move |p| { ui_callees::scissor_set(p, vp, w, fb); Ok(()) })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_scissor_set_end() -> u32 {
+    SCISSOR_SETS.end("scissor sets", &SCISSOR_SETS_EXPECTED)
+}
+
 static EFFECT_LAYERS: Checked = Checked::new();
 
 thread_local! {
@@ -1873,63 +2169,23 @@ thread_local! {
 }
 
 /// --verify-render-lists: an effect pass of a scene view (main+0xa414ac) predicted by itself.
-static MAT_CALLS: AtomicU64 = AtomicU64::new(0);
-static MAT_SAME: AtomicU64 = AtomicU64::new(0);
-static MAT_DIFFERENT: AtomicU64 = AtomicU64::new(0);
-static MAT_STOPS: Mutex<Vec<(&'static str, u64)>> = Mutex::new(Vec::new());
+
+
+static MATERIALS: Checked = Checked::new();
 
 thread_local! {
-    static MAT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static MATERIAL_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// --verify-render-lists: a material bind (main+0x7b42f0, run while the game records a material's list) predicted
-/// and compared with what the game records.
+/// A material bind (main+0x7b42f0, run while the game records a material's list) (material.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_material(d: usize, w: usize, entry: usize, set: usize, a: u32, b: u32) -> u32 {
-    if crate::nvn::api::capturing_to_compare() {
-        return 0;
-    }
-    MAT_CALLS.fetch_add(1, Ordering::Relaxed);
-    let mut port = draw::Port::new(mem::Mem::predicting(), crate::guest::loader::main_base(), false);
-    let mut result = Ok(());
-    let expected =
-        crate::nvn::api::capture_dry(|| result = material::bind(&mut port, d, w, entry, set, a as i32, b as i32));
-    match result {
-        Ok(()) => {
-            MAT_EXPECTED.with(|e| *e.borrow_mut() = Some(expected));
-            crate::nvn::api::capture_collect();
-        }
-        Err(what) => {
-            let mut s = MAT_STOPS.lock().unwrap();
-            match s.iter_mut().find(|x| x.0 == what) {
-                Some(x) => x.1 += 1,
-                None => s.push((what, 1)),
-            }
-        }
-    }
-    0
+    MATERIALS.run(&MATERIAL_EXPECTED, move |p| material::bind(p, d, w, entry, set, a as i32, b as i32))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn on_material_end() -> u32 {
-    let Some(expected) = MAT_EXPECTED.with(|e| e.borrow_mut().take()) else { return 0 };
-    let got = crate::nvn::api::capture_collected();
-    if expected == got {
-        MAT_SAME.fetch_add(1, Ordering::Relaxed);
-        return 0;
-    }
-    let k = MAT_DIFFERENT.fetch_add(1, Ordering::Relaxed);
-    if k < 4 {
-        println!("[model-draw] material mismatch #{k}:");
-        for i in 0..expected.len().max(got.len()) {
-            let (e, g) = (expected.get(i).map(|s| s.as_str()).unwrap_or("-"), got.get(i).map(|s| s.as_str()).unwrap_or("-"));
-            println!("[model-draw]   {} port: {e}", if e == g { " " } else { "!" });
-            if e != g {
-                println!("[model-draw]     game: {g}");
-            }
-        }
-    }
-    0
+    MATERIALS.end("material binds", &MATERIAL_EXPECTED)
 }
 
 #[no_mangle]
@@ -2106,18 +2362,6 @@ fn report() {
     if ls + ld > 0 {
         println!("[model-draw] material lists called: {} as their material binds now, {ld} differ", ls);
     }
-    let mn = MAT_CALLS.load(Ordering::Relaxed);
-    if mn > 0 {
-        let mut s = MAT_STOPS.lock().unwrap().clone();
-        s.sort_by(|a, b| b.1.cmp(&a.1));
-        let stops: Vec<String> = s.iter().map(|(w, k)| format!("{w} {k}")).collect();
-        println!(
-            "[model-draw] material binds checked: {mn}, {} identical, {} different; unported: {}",
-            MAT_SAME.load(Ordering::Relaxed),
-            MAT_DIFFERENT.load(Ordering::Relaxed),
-            stops.join(", ")
-        );
-    }
     let bv: Vec<String> = BY_VIEW
         .lock()
         .unwrap()
@@ -2274,6 +2518,57 @@ fn report() {
         println!("{l}");
     }
     if let Some(l) = STATE_BLITS.summary("state blits") {
+        println!("{l}");
+    }
+    if let Some(l) = FOOTPRINT_DRAWS.summary("footprint draws") {
+        println!("{l}");
+    }
+    if let Some(l) = BLUR_DRAWS.summary("blur draws") {
+        println!("{l}");
+    }
+    if let Some(l) = REDUCE_DRAWS.summary("reduce draws") {
+        println!("{l}");
+    }
+    if let Some(l) = MIP_COPIES.summary("mip copies") {
+        println!("{l}");
+    }
+    if let Some(l) = CAPTURE_PANES.summary("capture panes") {
+        println!("{l}");
+    }
+    if let Some(l) = PANE_DRAWS.summary("pane draws") {
+        println!("{l}");
+    }
+    if let Some(l) = MATERIALS.summary("material binds") {
+        println!("{l}");
+    }
+    if let Some(l) = DOF_BUFFERS.summary("depth of field buffers") {
+        println!("{l}");
+    }
+    if let Some(l) = BLOOM_BODIES.summary("bloom bodies") {
+        println!("{l}");
+    }
+    if let Some(l) = EXPAND_DRAWS.summary("expand draws") {
+        println!("{l}");
+    }
+    if let Some(l) = BLUR_TYPE1S.summary("blur type 1") {
+        println!("{l}");
+    }
+    if let Some(l) = BLUR_TYPE2S.summary("blur type 2") {
+        println!("{l}");
+    }
+    if let Some(l) = GAUSSIANS.summary("gaussian blurs") {
+        println!("{l}");
+    }
+    if let Some(l) = GAUSSIAN_OTHERS.summary("other blurs") {
+        println!("{l}");
+    }
+    if let Some(l) = TEXTURE_DRAWS.summary("texture draws") {
+        println!("{l}");
+    }
+    if let Some(l) = VIEWPORT_SETS.summary("viewport sets") {
+        println!("{l}");
+    }
+    if let Some(l) = SCISSOR_SETS.summary("scissor sets") {
         println!("{l}");
     }
     if let Some(l) = ENTRY_VOLUMES.summary("entry volumes") {
@@ -2532,6 +2827,57 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_entry_volumes(_, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_entry_volumes_end())) as usize;
         hook(base, mem_space, 0x95bef4, 0xa9ba7bfd, pre, post, "Entry volumes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_scissor_set(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_scissor_set_end())) as usize;
+        hook(base, mem_space, 0x85dbe0, 0x2d410001, pre, post, "Scissor sets");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_viewport_set(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_viewport_set_end())) as usize;
+        hook(base, mem_space, 0xa81ec8, 0xa9be7bfd, pre, post, "Viewport sets");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_texture_draw(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_texture_draw_end())) as usize;
+        hook(base, mem_space, 0xc58404, 0xd101c3ff, pre, post, "Texture draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_gaussian_other(_, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_gaussian_other_end())) as usize;
+        hook(base, mem_space, 0x21f65f4, 0xa9bc7bfd, pre, post, "Other blurs");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_gaussian(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_gaussian_end())) as usize;
+        hook(base, mem_space, 0x21f6568, 0xa9bb7bfd, pre, post, "Gaussian blurs");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_blur_type2(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_blur_type2_end())) as usize;
+        hook(base, mem_space, 0xbe1a74, 0xa9bc7bfd, pre, post, "Blur type 2");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_blur_type1(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_blur_type1_end())) as usize;
+        hook(base, mem_space, 0x7f2d48, 0xa9bb7bfd, pre, post, "Blur type 1");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_expand_draw(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_expand_draw_end())) as usize;
+        hook(base, mem_space, 0x2213440, 0xd10583ff, pre, post, "Expand draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_bloom_body(_, _, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_bloom_body_end())) as usize;
+        hook_float(base, mem_space, 0x21eb800, 0x6dba23e9, pre, post, "Bloom bodies");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_dof_buffers(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_dof_buffers_end())) as usize;
+        hook(base, mem_space, 0xc4b934, 0xfc170fec, pre, post, "Depth of field buffers");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_material(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_material_end())) as usize;
+        hook(base, mem_space, MATERIAL_SITE, MATERIAL_SITE_INSTRUCTION, pre, post, "Material binds");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_pane_draw(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_pane_draw_end())) as usize;
+        hook(base, mem_space, 0x85dae4, 0xa9bd7bfd, pre, post, "Pane draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_capture_pane(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_capture_pane_end())) as usize;
+        hook(base, mem_space, 0x98897c, 0x6db923e9, pre, post, "Capture panes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_mip_copy(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_mip_copy_end())) as usize;
+        hook(base, mem_space, 0xbd99e0, 0xfc190fe8, pre, post, "Mip copies");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_reduce_draw(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_reduce_draw_end())) as usize;
+        hook(base, mem_space, 0xd5d44c, 0xd10383ff, pre, post, "Reduce draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_blur_draw(_, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_blur_draw_end())) as usize;
+        hook(base, mem_space, 0x7ef8e0, 0xd10543ff, pre, post, "Blur draws");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_footprint_draw(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_footprint_draw_end())) as usize;
+        hook(base, mem_space, 0x18986f8, 0xd10603ff, pre, post, "Footprint draws");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_view_copy(_, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_view_copy_end())) as usize;
         hook(base, mem_space, 0x959a14, 0xa9ba7bfd, pre, post, "View copies");
@@ -2610,9 +2956,6 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_vfx_pass(_, _, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_vfx_pass_end())) as usize;
         hook(base, mem_space, VFX_PASS_SITE, VFX_PASS_SITE_INSTRUCTION, pre, post, "Vfx pass draw");
-        let pre = mem_space.make_hle_trampoline(crate::hle!(on_material(_, _, _, _, _, _))) as usize;
-        let post = mem_space.make_hle_trampoline(crate::hle!(on_material_end())) as usize;
-        hook(base, mem_space, MATERIAL_SITE, MATERIAL_SITE_INSTRUCTION, pre, post, "Material bind");
     }
     if d.verify_render_lists || d.verify_model_draws {
         let pre = mem_space.make_hle_trampoline(crate::hle!(ring::on_ring_alloc(_))) as usize;

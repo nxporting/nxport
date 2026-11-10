@@ -123,13 +123,15 @@ pub(super) unsafe fn view_gather(p: &mut Port, this: usize, w: usize, view: u32)
         match p.delegate_target(this + 0x140) {
             Some(None) => {}
             _ => {
-                if p.m.predict() {
-                    return Err("view callback");
-                }
-                p.m.commit();
-                // commit
                 let args: [u64; 5] = [w as u64, this as u64, view as u64 | 2 << 32, rb as u64, (rec + 0x19e0) as u64];
-                p.call(p.m.r64(p.m.r64(this + 0x140)), &[(this + 0x140) as u64, args.as_ptr() as u64]);
+                if !super::gather_callback::delegate_call(p, this + 0x140, args)? {
+                    if p.m.predict() {
+                        return Err("view callback");
+                    }
+                    p.m.commit();
+                    // commit
+                    p.call(p.m.r64(p.m.r64(this + 0x140)), &[(this + 0x140) as u64, args.as_ptr() as u64]);
+                }
             }
         }
     }

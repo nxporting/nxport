@@ -8453,6 +8453,9 @@ fn apply_fixed(st: &mut State, f: crate::nvn::cmd::FixedState) {
         FixedState::PolygonOffset { factor, units, clamp } => st.polygon_offset = (factor, units, clamp),
         FixedState::Multisample(v) => st.multisample = v,
         FixedState::DepthClamp(v) => st.depth_clamp = v,
+        FixedState::Scissor { x, y, w, h } => st.scissor = Some((x, y, w, h)),
+        FixedState::Viewport { x, y, w, h } => set_viewport(st, x, y, w, h),
+        FixedState::DepthRange { near, far } => st.depth_range = (near, far),
     }
 }
 
