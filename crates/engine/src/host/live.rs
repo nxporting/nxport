@@ -21,6 +21,8 @@ struct Live {
     swap_xy: AtomicBool,
     real_time_speed: AtomicBool,
     dynamic_aspect: AtomicBool,
+    mouse_look: AtomicBool,
+    exact_mouse_aim: AtomicBool,
     fps_in_title: AtomicBool,
 }
 
@@ -37,6 +39,8 @@ static LIVE: LazyLock<Live> = LazyLock::new(|| {
         swap_xy: AtomicBool::new(s.input.swap_xy),
         real_time_speed: AtomicBool::new(s.totk.enhancements.dynamic_fps),
         dynamic_aspect: AtomicBool::new(s.totk.enhancements.dynamic_aspect_ratio),
+        mouse_look: AtomicBool::new(s.input.mouse_look),
+        exact_mouse_aim: AtomicBool::new(s.totk.enhancements.exact_mouse_aim),
         fps_in_title: AtomicBool::new(s.display.fps_in_title),
     }
 });
@@ -156,6 +160,26 @@ pub fn set_fps_in_title(on: bool) {
 /// TotK: game time from real time (profile/totk/frame_time.rs); off, the stock step from the present interval.
 pub fn real_time_speed() -> bool {
     LIVE.real_time_speed.load(Relaxed)
+}
+
+/// Mouse look (input.mouse_look): the mouse, held by the window, moves the camera.
+pub fn mouse_look() -> bool {
+    LIVE.mouse_look.load(Relaxed)
+}
+
+pub fn set_mouse_look(on: bool) {
+    LIVE.mouse_look.store(on, Relaxed);
+    crate::config::remember(|p| p.input.mouse_look = Some(on));
+}
+
+/// TotK, experimental (totk.enhancements.exact_mouse_aim): mouse look turns the camera by exact angles, not the stick.
+pub fn exact_mouse_aim() -> bool {
+    LIVE.exact_mouse_aim.load(Relaxed)
+}
+
+pub fn set_exact_mouse_aim(on: bool) {
+    LIVE.exact_mouse_aim.store(on, Relaxed);
+    crate::config::remember(|p| p.totk.enhancements.exact_mouse_aim = Some(on));
 }
 
 pub fn set_real_time_speed(on: bool) {

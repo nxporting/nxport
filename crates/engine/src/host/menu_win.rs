@@ -70,10 +70,12 @@ mod id {
     pub const BY_POSITION: u16 = 51;
     pub const VIBRATION: u16 = 52;
     pub const TOUCH: u16 = 53;
+    pub const MOUSE_LOOK: u16 = 54;
     /// + the strength in percent.
     pub const STRENGTH: u16 = 500;
     pub const REAL_TIME: u16 = 60;
     pub const DYNAMIC_ASPECT: u16 = 62;
+    pub const EXACT_MOUSE_AIM: u16 = 63;
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
@@ -209,6 +211,7 @@ pub fn attach(hwnd: usize) {
             });
             separator(m);
             item(m, id::TOUCH, "Touch Screen with Mouse");
+            item(m, id::MOUSE_LOOK, "Mouse Look (F8 frees the mouse)");
             separator(m);
             sub(m, "Controls", |l| {
                 for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
@@ -222,6 +225,7 @@ pub fn attach(hwnd: usize) {
             if crate::profile::is_totk() {
                 item(m, id::REAL_TIME, "Variable Frame Rate");
                 item(m, id::DYNAMIC_ASPECT, "Dynamic Aspect Ratio");
+                item(m, id::EXACT_MOUSE_AIM, "Exact Mouse Aim (Experimental)");
                 separator(m);
             }
             sub(m, "Mods", |l| {
@@ -353,6 +357,10 @@ unsafe fn refresh(menu: *mut c_void) {
     check(id::TOUCH, live::touch());
     check(id::REAL_TIME, live::real_time_speed());
     check(id::DYNAMIC_ASPECT, live::dynamic_aspect());
+    check(id::MOUSE_LOOK, live::mouse_look());
+    check(id::EXACT_MOUSE_AIM, live::exact_mouse_aim());
+    // Exact aim works through mouse look.
+    enable(id::EXACT_MOUSE_AIM, live::mouse_look());
     for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
         let id = id::BIND + i as u16;
         ModifyMenuW(menu, id as u32, 0, id as usize, wide(&bind_label(*s)).as_ptr());
@@ -424,6 +432,8 @@ fn command(cmd: u16) -> bool {
         id::TOUCH => live::set_touch(!live::touch()),
         id::REAL_TIME => live::set_real_time_speed(!live::real_time_speed()),
         id::DYNAMIC_ASPECT => live::set_dynamic_aspect(!live::dynamic_aspect()),
+        id::MOUSE_LOOK => live::set_mouse_look(!live::mouse_look()),
+        id::EXACT_MOUSE_AIM => live::set_exact_mouse_aim(!live::exact_mouse_aim()),
         id::SAVE_FOLDER => open(crate::settings::get().files.save_dir.clone().or_else(|| crate::profile::data_subdir("save"))),
         id::CAPTURE => {
             crate::gpu::history::request();
@@ -477,7 +487,7 @@ mod tests {
             for b in &ranges[i + 1..] {
                 assert!(a.2 <= b.1 || b.2 <= a.1, "{} and {} overlap", a.0, b.0);
             }
-            for single in [id::VSYNC, id::LOW_LATENCY, id::PERF_OVERLAY, id::TOUCH, id::VIBRATION, id::LOG, id::CAPTURE] {
+            for single in [id::VSYNC, id::LOW_LATENCY, id::PERF_OVERLAY, id::TOUCH, id::MOUSE_LOOK, id::EXACT_MOUSE_AIM, id::VIBRATION, id::LOG, id::CAPTURE] {
                 assert!(!(a.1..a.2).contains(&single), "{} holds {single}", a.0);
             }
         }

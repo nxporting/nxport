@@ -779,7 +779,7 @@ const MOUSE_LOOK_FULL: f32 = 1500.0;
 const MOUSE_LOOK_DEADZONE: f32 = 0.15;
 
 pub(crate) fn mouse_look_on() -> bool {
-    crate::settings::try_get().is_some_and(|s| s.input.mouse_look && !s.input.direct_mouse)
+    crate::host::live::mouse_look() && crate::settings::try_get().is_some_and(|s| !s.input.direct_mouse)
 }
 
 /// Relative mouse movement while mouse look holds the mouse (window pixels; y down). The SDL host (Windows) holds
@@ -793,7 +793,8 @@ pub fn mouse_look_moved(dx: f32, dy: f32) {
     // While the game is paused its camera stores no angles: movement then is dropped, as a stick moved then would turn
     // nothing (the user's choice, 2026-11-08). Running means the camera stored its angles this frame or the last.
     let deg = || MOUSE_DEG_PER_PX * crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
-    let route = ANGLE_ROUTE.load(Ordering::Acquire);
+    // The exact route is experimental and switched in the game's menu; off, the mouse moves the stick.
+    let route = ANGLE_ROUTE.load(Ordering::Acquire) && crate::host::live::exact_mouse_aim();
     let running = crate::gpu::backend().presented_frames() as u64 <= CAMERA_FRAME.load(Ordering::Acquire) + 1;
     let dx = if route && ANGLE_SINK[0].load(Ordering::Relaxed) {
         if running {

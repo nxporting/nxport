@@ -5,7 +5,7 @@ use struct_patch::Patch;
 
 crate::settings::group! {
     /// Changes made to the game's code (the same on every version).
-    Enhancements "Tears of the Kingdom" [dynamic_aspect_ratio, dynamic_fps] {
+    Enhancements "Tears of the Kingdom" [dynamic_aspect_ratio, dynamic_fps, exact_mouse_aim] {
         /// Render at the window's shape and follow it as the window is resized (the camera, culling and HUD layouts
         /// follow it; narrower than 16:9 shows more vertically). Can be switched while the game runs
         dynamic_aspect_ratio: bool = true,
@@ -15,6 +15,9 @@ crate::settings::group! {
         /// Variable frame rate: game time follows the real time each frame took, so the game plays at the right speed at
         /// any frame rate (off: the console's fixed timing, held to 30 or 60 fps)
         dynamic_fps: bool = true,
+        /// Experimental: with mouse look on, the mouse turns the camera and the bow's aim by exact angles (into the game's
+        /// own camera code) instead of moving the right stick. Can be switched while the game runs
+        exact_mouse_aim: bool = false,
     }
 }
 
