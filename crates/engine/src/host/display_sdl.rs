@@ -107,6 +107,8 @@ pub fn run_main_thread() -> ! {
     let mut pump = sdl.event_pump().unwrap_or_else(|e| fail("SDL events", &e));
     let mut host = Host { window, gamepads, pads: Vec::new(), windowed_size: (w as u32, h as u32), mouse: sdl.mouse(), mouse_held: false, capture_base: None };
     host.hold_mouse(input::mouse_look_on());
+    // Mouse look can be switched in the menu: the window takes or gives back the mouse when it is.
+    let mut mouse_look = input::mouse_look_on();
 
     WINDOW_UP.store(true, Ordering::Release);
     println!("[+] Display: window up ({w}x{h}); presenting guest frames");
@@ -121,6 +123,10 @@ pub fn run_main_thread() -> ! {
             host.event(e);
         }
         host.poll_controllers();
+        if input::mouse_look_on() != mouse_look {
+            mouse_look = !mouse_look;
+            host.hold_mouse(mouse_look);
+        }
         match menu::take_request() {
             Some(menu::Request::FullScreen) => host.toggle_fullscreen(),
             Some(menu::Request::Size(h)) => host.set_window_height(h),
