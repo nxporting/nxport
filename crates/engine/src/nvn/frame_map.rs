@@ -74,7 +74,7 @@ pub(crate) unsafe fn note(name: &'static str, cmd: usize) {
         return;
     }
     let chain = guest_chain::<16>();
-    let thread = libc::pthread_mach_thread_np(libc::pthread_self()) as u64;
+    let thread = crate::os::current_thread_id();
     LOG.lock().unwrap().push(Entry { cmd, thread, name, chain });
 }
 
