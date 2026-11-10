@@ -161,7 +161,8 @@ fn set_window_height(mtm: MainThreadMarker, height: f64) {
 /// finished frame waiting for the screen (two drawables instead of three).
 fn update_layer() {
     let ptr = LAYER_PTR.load(Ordering::Acquire);
-    if ptr == 0 {
+    // Vulkan: MoltenVK's swapchain sets them (vulkan/window.rs makes it again when the settings change).
+    if ptr == 0 || crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
         return;
     }
     let layer = unsafe { &*(ptr as *const CAMetalLayer) };

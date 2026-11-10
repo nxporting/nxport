@@ -626,7 +626,10 @@ impl Ctx {
                 .name("vk-pool-free".into())
                 .spawn(move || {
                     while let Ok((pool, cbs)) = pool_rx.recv() {
-                        unsafe { device.free_command_buffers(pool, &cbs) };
+                        // A count of 0 is invalid usage.
+                        if !cbs.is_empty() {
+                            unsafe { device.free_command_buffers(pool, &cbs) };
+                        }
                         free.lock().unwrap().push(pool);
                     }
                 })

@@ -1080,6 +1080,10 @@ impl Textures {
         if ity == vk::ImageType::TYPE_3D && usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
             flags |= vk::ImageCreateFlags::TYPE_2D_ARRAY_COMPATIBLE;
         }
+        // 3D textures shaders sample as 2D (one slice): sampled_view_of.
+        if ity == vk::ImageType::TYPE_3D && dev.view_2d_of_3d {
+            flags |= vk::ImageCreateFlags::TYPE_2D_VIEW_COMPATIBLE_EXT;
+        }
         let levels = (p.levels.max(1) as u32).min(32 - extent.width.max(extent.height).max(extent.depth).leading_zeros());
         let info = vk::ImageCreateInfo::default()
             .image_type(ity)

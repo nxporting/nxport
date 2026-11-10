@@ -20,6 +20,10 @@ pub struct Dev {
     pub host_memory: Option<(ash::ext::external_memory_host::Device, u64)>,
     /// VK_EXT_depth_clip_control: NVN's -1..1 depth range without shader changes.
     pub depth_clip_control: bool,
+    /// VK_EXT_image_2d_view_of_3d with sampling: a shader declaring a 2D texture where the game binds a 3D one samples a
+    /// slice through a 2D view (3D images are then made 2D_VIEW_COMPATIBLE). Without it only portability implementations
+    /// (MoltenVK's imageView2DOn3DImage) allow such views.
+    pub view_2d_of_3d: bool,
     pub validation: bool,
     pub cmd_pool: vk::CommandPool,
     /// Alignment vertex strides and attribute offsets need, and whether attributes may read past their stride: Metal-based
@@ -339,6 +343,8 @@ impl Dev {
             if custom_border {
                 dexts.push(ash::ext::custom_border_color::NAME.as_ptr());
             }
+            let view_2d_of_3d_ext = c"VK_EXT_image_2d_view_of_3d";
+            let has_2d_of_3d = has(&dev_exts, view_2d_of_3d_ext);
             let prio = [1.0f32];
             let qinfo = [vk::DeviceQueueCreateInfo::default().queue_family_index(family).queue_priorities(&prio)];
             // Every feature only where the device has it.
@@ -347,7 +353,11 @@ impl Dev {
             let mut q11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut qr2 = vk::PhysicalDeviceRobustness2FeaturesEXT::default();
             let mut qcb = vk::PhysicalDeviceCustomBorderColorFeaturesEXT::default();
+            let mut q23 = vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT::default();
             let mut q2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut q13).push_next(&mut q12).push_next(&mut q11);
+            if has_2d_of_3d {
+                q2 = q2.push_next(&mut q23);
+            }
             if robustness2 {
                 q2 = q2.push_next(&mut qr2);
             }
@@ -356,6 +366,11 @@ impl Dev {
             }
             instance.get_physical_device_features2(pdev, &mut q2);
             let supported = q2.features;
+            // Both features or none: sampling slices is what the game needs.
+            let view_2d_of_3d = has_2d_of_3d && q23.image2_d_view_of3_d != 0 && q23.sampler2_d_view_of3_d != 0;
+            if view_2d_of_3d {
+                dexts.push(view_2d_of_3d_ext.as_ptr());
+            }
             if q13.dynamic_rendering == 0 {
                 return Err(format!("{name}: no dynamic rendering"));
             }
@@ -484,6 +499,12 @@ impl Dev {
             if has_portability {
                 info = info.push_next(&mut port);
             }
+            let mut f23 = vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT::default()
+                .image2_d_view_of3_d(view_2d_of_3d)
+                .sampler2_d_view_of3_d(view_2d_of_3d);
+            if view_2d_of_3d {
+                info = info.push_next(&mut f23);
+            }
             let device = instance.create_device(pdev, &info, None).map_err(|e| format!("vkCreateDevice: {e}"))?;
             let bindless = if bindless {
                 let mut ip = vk::PhysicalDeviceDescriptorIndexingProperties::default();
@@ -531,7 +552,13 @@ impl Dev {
                 host_memory.as_ref().map_or("no".to_string(), |h| format!("yes (alignment {:#x})", h.1)),
                 depth_clip_control,
                 robustness2,
-                !has_portability || port.image_view2_d_on3_d_image != 0,
+                if view_2d_of_3d {
+                    "yes"
+                } else if has_portability && port.image_view2_d_on3_d_image != 0 {
+                    "portability"
+                } else {
+                    "no (sampled slices invalid)"
+                },
                 push.is_some(),
                 validation
             );
@@ -556,6 +583,7 @@ impl Dev {
                 name,
                 host_memory,
                 depth_clip_control,
+                view_2d_of_3d,
                 validation,
                 // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
                 // after it in memory): the shaders check them.

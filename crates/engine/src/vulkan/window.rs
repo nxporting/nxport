@@ -153,6 +153,13 @@ impl Window {
         while self.done.len() < self.images.len() {
             self.done.push(dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).ok()?);
         }
+        println!(
+            "[vulkan] swapchain {}x{}, {} images, {:?}",
+            extent.width,
+            extent.height,
+            self.images.len(),
+            mode
+        );
         self.extent = extent;
         self.vsync = vsync;
         self.low_latency = low_latency;
@@ -185,6 +192,13 @@ impl Window {
         let (fence, sem) = (self.slots[self.next].fence, self.slots[self.next].acquired);
         if dev.device.wait_for_fences(&[fence], true, 1_000_000_000).is_err() {
             return;
+        }
+        // A swapchain may be destroyed only once its presents are done, which the slots' fences do not cover (they signal
+        // when the copy into the image is done): MoltenVK's present completion then ran on the destroyed swapchain's
+        // image (a crash entering the game, when the drawable takes the game's size). The device is waited for first:
+        // presents of every earlier submit are then done. Rare: only after a resize or a VSync / low-latency change.
+        if self.retired.iter().any(|&(_, left)| left == 1) {
+            let _ = dev.device.device_wait_idle();
         }
         self.retired.retain_mut(|(chain, left)| {
             *left -= 1;
