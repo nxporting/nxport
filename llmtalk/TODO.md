@@ -17,7 +17,12 @@ and update this file when you finish or drop it.
   that a set library holds loads that library once (one nx_rt_init) and registers every entry in it; later requests
   for its names take their tables from it without another load. Anything not in the set compiles and loads as now.
   The by_source index (d6402aa) keeps names stable when a mod's bytes vary per run. Left as is before the release:
-  it changes the patch loader.
+  it changes the patch loader. **Doubt, measured 2026-11-10 night: probably not worth it.** 87 of the user's cached
+  patch libraries, copied (new files), loaded in a fresh process: 2.0 s (23 ms each); the same files in a second,
+  separate process: 70 ms (0.8 ms each). So the cost is the system's first look at a file it has not seen, not a
+  per-process one: warm starts should load these in ~1 ms each, and a combined library would be a new file needing
+  that look after every change. Before building this, time the library loads inside a warm start again (the 11-09
+  ~16 ms each may have included symbol lookup, nx_rt_add_module or write_entries).
 - **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
   "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
   notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
