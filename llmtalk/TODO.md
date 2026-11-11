@@ -38,6 +38,22 @@ and update this file when you finish or drop it.
   only when the system has not looked at the files for a while (first start of a session), where the gain should be
   ~1 s. Not worth a second loading path in the patch loader before the release; revisit by timing a first start of a
   session with and without it.
+- **Super Mario Odyssey: a frame of solid blue / white / cyan blocks every few hundred frames (the user, 2026-11-11):
+  fixed by taking out the GPU-only-memory rebuild of b1c163c; its exact defect is still open.** Repro: the Odyssey app
+  built from main, the user's save (Cap Kingdom), headless, walking frames 2700-3500, 600 frames of history: the 3D
+  scene is replaced by solid blocks for one frame (HUD fine), 1-3 times per run. Bisect (engine exe swapped, same
+  guest.dll): 902b48b and a5ee0e3 clean (5 runs), b1c163c and 61b2bc3 flash, the user's 11-06 build clean. b1c163c's
+  two changes switched off one at a time: without its rebuild of images in memory the CPU cannot reach from the images
+  written over them since ("any_pool") 0 of 3 runs flash, without the rebuilt image's own contents in the group 3 of 3
+  do. Taken out (refresh of CPU-unreachable memory back to before b1c163c): 4 of 4 clean; TotK with mods unchanged
+  (61-62 fps against the installed exe's 61-62 in the same runs). Odyssey rebuilt ~15 images a frame that way: its
+  post-processing targets (800x450 f5/f37, 400x225 f13/f41, 200x112 ... down to 12x7, 128x128 f41 under 256x256
+  f5/f52) share scratch memory every frame, and the same rebuilds with the same writers in the same order happen in
+  flash and normal frames, so the defect is timing-dependent. Ruled out: the rebuilt image's content sequence (setting
+  it to the newest writer it took instead of a new one still flashed), a missing barrier (rebuild_on_gpu starts with a
+  full barrier). Untested: writers copied whole although a pass wrote only part of them (no per-rectangle write
+  tracking), the CPU snapshot of guest bytes taken at record time as the base. Cost of taking it out: TotK WITHOUT
+  mods (its pools CPU-unreachable) reads stale contents in its downsample chain again, as before 11-08.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
