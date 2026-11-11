@@ -8,6 +8,16 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **After the release: one live-patch library per mod set (startup, up to ~1.8 s of 8.4-9.4 s to the first frame
+  with UltraCam).** Measured 11-09: each cached per-function library costs ~10 ms on its first load in a process
+  (0.85 ms loading it again; an OS per-file cost, not its code), x ~118 at every start. Design: after a run has applied
+  its patches, link the cached C of every entry it used (each entry's files plus ONE rt.c; the per-entry
+  `{name}_fn_count/_fn_addrs/_fn_ptrs` symbols stay distinct) into `live_patches/sets/<hash of the sorted names>.dll`,
+  in the background at low priority, and record which names it holds. At the next start, the first request for a name
+  that a set library holds loads that library once (one nx_rt_init) and registers every entry in it; later requests
+  for its names take their tables from it without another load. Anything not in the set compiles and loads as now.
+  The by_source index (d6402aa) keeps names stable when a mod's bytes vary per run. Left as is before the release:
+  it changes the patch loader.
 - **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
   "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
   notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
