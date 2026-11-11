@@ -46,7 +46,9 @@ and update this file when you finish or drop it.
   timing, so a warm cache does not cover them). This is the spread of warm starts (8.5-10.7 s to the first frame). An
   exact fix needs a signal that the writing is done, not a delay: e.g. compile a changed function only when guest code
   first branches to it after the change (it runs interpreted until then anyway), or when the writer issues its cache
-  flush (host_code_changed / svc flush). Not started.
+  flush (host_code_changed / svc flush). Not started. Low priority: the warm run with 34 of these compiles reached its
+  first frame in 10.7 s, the one with none in 10.5 s (they run on the compiler threads, off the critical path); the
+  spread of first-frame times has another source still to find.
 - **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
   "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
   notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
