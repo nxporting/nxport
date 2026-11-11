@@ -1492,10 +1492,20 @@ impl Ctx {
         Some((t, view, fmt, extent, samples, image))
     }
 
+    /// --profile (gpu-replay): a timestamp closing what ran since the previous one, under `label`.
+    pub(super) unsafe fn profile_mark(&mut self, label: impl FnOnce() -> String) {
+        if self.profile_passes && self.timestamps != vk::QueryPool::null() && self.pass_labels.len() < PASS_TIMESTAMPS as usize {
+            let (pool, q) = (self.timestamps, 2 + self.pass_labels.len() as u32);
+            self.rec.cmd(move |d, cb| d.device.cmd_write_timestamp(cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, q));
+            self.pass_labels.push(label());
+        }
+    }
+
     unsafe fn begin_pass(&mut self) -> bool {
         if self.pass.is_some() {
             return true;
         }
+        self.profile_mark(|| "(between passes: dispatches, copies, refreshes)".to_string());
         self.fb_paused.clear();
         let mut colors = Vec::new();
         let mut nvn_colors = [(0u32, 0u32); 8];

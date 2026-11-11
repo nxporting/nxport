@@ -558,6 +558,7 @@ impl Ctx {
         self.checkpoint("dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
         self.rec.cmd(move |d, cb| d.device.cmd_dispatch(cb, x as u32, y as u32, z as u32));
         self.barrier();
+        self.profile_mark(|| format!("dispatch {x}x{y}x{z} s_{full:016x}"));
     }
 
     /// The descriptor set layout and pipeline layout of graphics stages,
