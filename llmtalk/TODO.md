@@ -67,6 +67,13 @@ and update this file when you finish or drop it.
   full barrier). Untested: writers copied whole although a pass wrote only part of them (no per-rectangle write
   tracking), the CPU snapshot of guest bytes taken at record time as the base. Cost of taking it out: TotK WITHOUT
   mods (its pools CPU-unreachable) reads stale contents in its downsample chain again, as before 11-08.
+  **Bisect by image size, 2026-11-11** (temporary probe NX_ANYPOOL_ONLY: the rule only for listed WxHfF, "!" for all
+  but those; not committed): all sizes flash (1 run); all but the 7 post-processing sizes 800x450 f5/f37, 400x225
+  f13/f41, 128x128f41, 100x56f37, 200x112f37 still flash (1 of 1); each group on its own clean (3 runs each): those 7
+  split in two halves, the full-resolution set (1600x900 f1/f5/f37/f41, 1440x810 f1/f5/f37), the mid set (1024/512/256
+  f5, 720x405 f5/f13/f41, 800x450 f13/f41, 400x225f37, 756x160f37). Every logged target is in one group. Still to run:
+  the small f37 chain (320x180 down to 5x3, 25 sizes) alone; if clean, the flash needs two groups together (pairs next).
+  Blocked 11-11 after a reboot: the game files' M: mount is gone (runs exit at start, os error 3).
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
