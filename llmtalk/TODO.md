@@ -38,6 +38,15 @@ and update this file when you finish or drop it.
   only when the system has not looked at the files for a while (first start of a session), where the gain should be
   ~1 s. Not worth a second loading path in the patch loader before the release; revisit by timing a first start of a
   session with and without it.
+- **Super Mario Odyssey: uneven frame pacing with vsync on (the user, 11-07), measured 2026-11-11, not fixed.** Windowed
+  on the RTX 4080 machine (display 59.95 Hz), a temporary probe timing Vulkan present() calls: vsync on, a steady
+  cycle of ~10, ~10, ~31 ms (exactly 100 of 300 intervals over 20 ms); vsync off (MAILBOX, the 60 fps limiter),
+  15.8-17.7 ms for 80% of frames, median 16.6. With vsync on near the display's rate the limiter steps aside and FIFO
+  paces (nvn/api.rs hle_nvnWindowAcquireTexture). Ruled out: the guest's vsync event from a 60.00 Hz timer beating
+  against the display: driving it from the display (D3DKMTWaitForVerticalBlankEvent, refused here with 0xc01e0006;
+  DwmFlush instead) left the cycle as it was and lost 1-2 fps (scratchpad vsync_vblank.diff, not committed). Next:
+  measure what reaches the screen (present timing / VK_KHR_present_wait) before changing the present path: the
+  cycle is CPU-side, and FIFO may still show one new frame per refresh.
 - **Super Mario Odyssey: a frame of solid blue / white / cyan blocks every few hundred frames (the user, 2026-11-11):
   fixed by taking out the GPU-only-memory rebuild of b1c163c; its exact defect is still open.** Repro: the Odyssey app
   built from main, the user's save (Cap Kingdom), headless, walking frames 2700-3500, 600 frames of history: the 3D
