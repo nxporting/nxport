@@ -21,7 +21,15 @@ and update this file when you finish or drop it.
   frame is one list (handle 244, 20561 commands, one recording thread); pass 149 (composite) draws a capture texture
   and then the capture subtree's own draws (2/72 constants, 72x72 icon textures), and pass 150 (the 72x72 capture)
   has its target, clears and a barrier but no draws. So at render time the capture's children were drawn in the
-  composite instead of into the capture. Next: the render-time decision (in the capture pane's draw, near
+  composite instead of into the capture. **Correction (later the same evening):** a known-good frame (7250) has the
+  same 9 composite draws from the main layout walk (2 at depth 8, 7 at depth 9 below main+0x81b348, issued from
+  main+0x40f5c); captures run only in the frames after a zoom change. So the composite draws are normal and only their
+  constants are wrong. Also measured with light probes in flashing runs: every constants build with a capture's
+  projection is for a real descendant of that capture pane (parent links, 0 exceptions); the constant allocator
+  (draw info + 0xc8) is in atomic mode. --guest-cores was a no-op on Windows (cores.rs is nx_native only); a port
+  (scratchpad guest_cores_windows.diff, not committed) still flashes at 115 fps. The flash also happens at a 60 fps
+  cap. Open: how a composite draw ends up bound to constants built inside a capture's layout. Old next step, for the
+  record: the render-time decision (in the capture pane's draw, near
   f_700233206c's class) that sends children to the capture pass or the composite, and what it reads that can change
   between layout and render (a ready flag from another thread, a report slot or sync the engine answers at a
   different time).
