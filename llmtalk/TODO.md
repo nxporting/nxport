@@ -28,7 +28,16 @@ and update this file when you finish or drop it.
   each, though the same files load in under 1 ms each from PowerShell (the in-game cost is the game process: likely
   the loader lock against its many threads). One library linked from 45 entries' C (one rt.c; duplicate f_ symbols
   when two versions of one function are cached, so a set takes one entry per function, the one the run used): 709 KB,
-  39 ms on its first load ever, 9 ms after. Expected gain: most of ~1.6 s per start.
+  39 ms on its first load ever, 9 ms after. Expected gain: most of ~1.6 s per start. **Built and measured, not
+  committed (scratchpad live_patch_sets.diff, 263 lines):** a run records the libraries it applied, and once patching
+  has been quiet for 20 s a background thread links them into live_patches/sets/set_<hash>.dll (one translation unit
+  per entry with its f_ functions static, since a mod writing its code piece by piece applies many versions of one
+  function: 142 applies, 56 distinct libraries, 0x700518a000 alone 70 times); the next start takes every listed entry
+  from it (one load, one nx_rt_init). Works: "combined library of 72 functions loaded", the game runs. Gain in
+  back-to-back warm starts only 0.1-0.2 s (8.9 vs 8.8 s, 8.7 vs 8.5 s to the first frame): the 14 ms per library shows
+  only when the system has not looked at the files for a while (first start of a session), where the gain should be
+  ~1 s. Not worth a second loading path in the patch loader before the release; revisit by timing a first start of a
+  session with and without it.
 - **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
   "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
   notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
