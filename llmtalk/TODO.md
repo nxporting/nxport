@@ -38,6 +38,12 @@ and update this file when you finish or drop it.
   only when the system has not looked at the files for a while (first start of a session), where the gain should be
   ~1 s. Not worth a second loading path in the patch loader before the release; revisit by timing a first start of a
   session with and without it.
+- **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
+  ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
+  every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
+  .metallib; Unreal uses them for iOS shaders on Windows) could build it: shader_cache_build.rs would call them on
+  Windows (same chunks), windows.rs would pass the cache to ipa::build. The tools need an Apple developer login to
+  download, so the builder can only find an installed copy and fall back to no cache. Waiting on the user (install).
 - **After the release: intermediate versions of a mod's code are compiled at every start (2026-11-10 night).** With
   the user's mods a warm start applies one function, 0x700518a000 (the plugin's code area, written piece by piece
   while the game starts), 56-92 times. Stage timings of the applies (probe around compiled / applying lock / library
