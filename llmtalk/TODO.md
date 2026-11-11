@@ -22,7 +22,13 @@ and update this file when you finish or drop it.
   separate process: 70 ms (0.8 ms each). So the cost is the system's first look at a file it has not seen, not a
   per-process one: warm starts should load these in ~1 ms each, and a combined library would be a new file needing
   that look after every change. Before building this, time the library loads inside a warm start again (the 11-09
-  ~16 ms each may have included symbol lookup, nx_rt_add_module or write_entries).
+  ~16 ms each may have included symbol lookup, nx_rt_add_module or write_entries). **Measured later the same night:
+  worth it after all.** A probe around Library::open in a real start with mods (private cache): cold run (libraries
+  just compiled by the process) 170 loads in 137 ms; warm run (new process, same files) 120 loads in 1657 ms, 14 ms
+  each, though the same files load in under 1 ms each from PowerShell (the in-game cost is the game process: likely
+  the loader lock against its many threads). One library linked from 45 entries' C (one rt.c; duplicate f_ symbols
+  when two versions of one function are cached, so a set takes one entry per function, the one the run used): 709 KB,
+  39 ms on its first load ever, 9 ms after. Expected gain: most of ~1.6 s per start.
 - **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
   "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
   notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
