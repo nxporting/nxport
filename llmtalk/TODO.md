@@ -8,6 +8,15 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
+  "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
+  notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
+  the map". It fits every measurement below (the game's CPU builds the bad constants, a capture replays them exactly,
+  a timing race inside the game), and an older save with few markers (slot_04) gives no flashes on the same input
+  script (worst frame 3k outlier pixels vs 120-360k). Not an engine difference: the fix is updating the game. Note for
+  that: nxport's TotK profile is per version (profile 1.0.0 in the log), so camera/mouse features need the update's
+  profile. The entries below are the investigation, kept for its tools (light entry probes via the lifter's
+  PROBE_FNS, draw caller stamps, list-boundary replay logs; scratchpad diffs, not in git).
 - **TotK map flashes: the bad draw is a capture's content drawn in the composite (2026-11-10 evening).** Established:
   (1) Main from before 11-09 and today's main both flash on the repro (123-355k outlier pixels at f7282-7284); any
   probe that adds work on the game's recording or layout threads in those frames hides it (watch probe, list probe,
