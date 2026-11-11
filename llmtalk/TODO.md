@@ -38,6 +38,15 @@ and update this file when you finish or drop it.
   only when the system has not looked at the files for a while (first start of a session), where the gain should be
   ~1 s. Not worth a second loading path in the patch loader before the release; revisit by timing a first start of a
   session with and without it.
+- **After the release: intermediate versions of a mod's code are compiled at every start (2026-11-10 night).** With
+  the user's mods a warm start applies one function, 0x700518a000 (the plugin's code area, written piece by piece
+  while the game starts), 56-92 times. Stage timings of the applies (probe around compiled / applying lock / library
+  open / redirect): when its versions are cached each apply takes 0-27 ms; in another warm run 34 of them took 330-480
+  ms each, i.e. compiles of intermediate states never seen before (which in-between states get snapshotted depends on
+  timing, so a warm cache does not cover them). This is the spread of warm starts (8.5-10.7 s to the first frame). An
+  exact fix needs a signal that the writing is done, not a delay: e.g. compile a changed function only when guest code
+  first branches to it after the change (it runs interpreted until then anyway), or when the writer issues its cache
+  flush (host_code_changed / svc flush). Not started.
 - **TotK map flashes: the game's own bug, closed (2026-11-10 night).** The user's game is TotK 1.0.0 (startup log:
   "version 1.0.0", build id 082CE09B...), and the repro save (slot_00) has a map covered in stamps. Nintendo's 1.2.1
   notes fix exactly this: "the screen would sometimes flicker intensely when a large number of stamps were placed on
