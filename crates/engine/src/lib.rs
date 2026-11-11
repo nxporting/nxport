@@ -1333,6 +1333,10 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     let s = settings::install(s);
     #[cfg(windows)]
     config::app_log();
+    // horizon/cores.rs schedules native code only (the HLE entry stub); lifted code runs every thread at once.
+    if s.guest.guest_cores {
+        println!("[!] --guest-cores has no effect here: guest cores are scheduled for native code (macOS / iOS) only");
+    }
     // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (cpu::crash_handler).
     #[cfg(windows)]
     os::on_access_fault(lifted_access_fault);
