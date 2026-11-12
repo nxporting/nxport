@@ -476,7 +476,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(windows)]
         Command::IosEngine => {
             let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
-            println!("[+] {}", nxport_build::ios_engine::build(&toolchains)?.display());
+            println!("[+] {}", nxport_build::ios_engine::build(&toolchains, &|name| println!("  compiling {name}"))?.display());
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
