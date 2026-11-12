@@ -3173,8 +3173,44 @@ pub unsafe extern "C" fn hle_nn_os_ReceiveLightMessageQueue(out: *mut u64, mq: *
     }
     let v = inner.queue.pop_front().unwrap();
     state.not_full.notify_one();
+    drop(inner);
     if !out.is_null() {
         *out = v;
+    }
+    present_paced_wait();
+}
+
+static PRESENT_PACED: StdMutex<Vec<&'static str>> = StdMutex::new(Vec::new());
+
+/// Light message queue receives on threads with this name return only after the next present (at most 20 ms later).
+pub fn pace_to_present(thread_name: &'static str) {
+    PRESENT_PACED.lock().unwrap().push(thread_name);
+}
+
+fn present_paced_wait() {
+    thread_local! {
+        static PACED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+    let paced = PACED.with(|p| {
+        *p.get().get_or_insert_with(|| {
+            let names = PRESENT_PACED.lock().unwrap();
+            if names.is_empty() {
+                return false;
+            }
+            let mut b = [0u8; 64];
+            unsafe { libc::pthread_getname_np(libc::pthread_self(), b.as_mut_ptr() as *mut _, b.len()) };
+            let name = std::ffi::CStr::from_bytes_until_nul(&b).map(|c| c.to_bytes()).unwrap_or(&[]);
+            names.iter().any(|n| n.as_bytes() == name)
+        })
+    });
+    if !paced {
+        return;
+    }
+    let Some(g) = crate::gpu::try_backend() else { return };
+    let f0 = g.presented_frames();
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(20);
+    while g.presented_frames() == f0 && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_micros(200));
     }
 }
 

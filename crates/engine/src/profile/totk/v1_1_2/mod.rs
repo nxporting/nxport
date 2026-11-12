@@ -95,6 +95,10 @@ pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::lo
     frame_time::install(base, mem_space, &SITES);
     // 3. Mouse aiming reads the camera's angles (installed whatever the settings, as above).
     super::camera_angles::install(base, mem_space);
+    // 4. Placement jobs paced to the present (a scheduling workaround, not a code hook).
+    if crate::settings::get().totk.enhancements.placement_after_present {
+        crate::horizon::hle::pace_to_present("PlacementMgr");
+    }
     #[cfg(nx_native)]
     install_native_hooks(base, mem_space);
 }
