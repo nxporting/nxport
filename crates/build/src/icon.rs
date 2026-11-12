@@ -1,16 +1,18 @@
-// App icons from a dump's Logo/<title id>.png (512x512), scaled with macOS's sips.
+// App icons for the Apple apps from the dump's icon (app_icon::source: the control data's icon_<language>.dat, a JPEG,
+// else Logo/<title id>.png), scaled with the image crate on every host.
 
 #[cfg(target_os = "macos")]
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
-/// The game's logo in the dump, if it has one.
+/// The game's icon in the dump, if it has one.
 pub fn logo(dump: &Path, title_id: u64) -> Option<PathBuf> {
-    let p = dump.join("Logo").join(format!("{title_id:016x}.png"));
-    p.is_file().then_some(p)
+    crate::app_icon::source(dump, title_id)
 }
 
+#[cfg(target_os = "macos")]
 fn run(cmd: &mut Command) -> Result<(), String> {
     let name = cmd.get_program().to_string_lossy().into_owned();
     let out = cmd.output().map_err(|e| format!("{name}: {e}"))?;
@@ -21,13 +23,30 @@ fn run(cmd: &mut Command) -> Result<(), String> {
     }
 }
 
-/// Writes `src` scaled to `px` square pixels as the PNG `out`.
+/// Writes `src` (JPEG or PNG, told apart by its bytes: the control icon's name ends in .dat) scaled to `px` square
+/// pixels as the PNG `out`.
 pub fn scaled_png(src: &Path, px: u32, out: &Path) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        let img = image::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-        return img.resize_exact(px, px, image::imageops::FilterType::Lanczos3).save(out).map_err(|e| format!("{}: {e}", out.display()));
+    let bytes = std::fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("{}: {e}", src.display()))?;
+    img.resize_exact(px, px, image::imageops::FilterType::Lanczos3)
+        .save_with_format(out, image::ImageFormat::Png)
+        .map_err(|e| format!("{}: {e}", out.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn scales_a_jpeg_named_dat_into_a_png() {
+        let dir = std::env::temp_dir().join(format!("nxport-icon-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("icon_AmericanEnglish.dat");
+        image::RgbImage::from_pixel(256, 256, image::Rgb([200, 30, 30])).save_with_format(&src, image::ImageFormat::Jpeg).unwrap();
+        let out = dir.join("AppIcon60x60@2x.png");
+        super::scaled_png(&src, 120, &out).unwrap();
+        let png = image::open(&out).unwrap();
+        assert_eq!((png.width(), png.height()), (120, 120));
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    run(Command::new("/usr/bin/sips").args(["-s", "format", "png", "-z", &px.to_string(), &px.to_string()]).arg(src).arg("--out").arg(out))
 }
 
 /// Writes a macOS icon file (.icns) made from `src` to `out`.
