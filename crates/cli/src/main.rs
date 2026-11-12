@@ -3,7 +3,10 @@
 use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
 #[cfg(target_os = "macos")]
-use nxport_build::{msl_specialize, pack, shader_cache_build, translation};
+use nxport_build::{msl_specialize, pack};
+// The shader cache build translates on Windows too (its Metal compile needs Apple's compiler).
+#[cfg(any(target_os = "macos", windows))]
+use nxport_build::{shader_cache_build, translation};
 #[cfg(any(target_os = "macos", windows))]
 use nxport_build::{ipa, macho};
 
@@ -257,7 +260,19 @@ enum Shaders {
         #[arg(long)]
         ctrl_out: Option<PathBuf>,
     },
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
+    /// Pack a translate-only build's MSL (build --msl-out) as the cache's source: <out>/source.pack and source/index.txt
+    PackSource {
+        /// The --msl-out folder (index.txt and <entry>.metal)
+        msl: PathBuf,
+        /// A pipeline list: only the stages it uses go in
+        #[arg(long)]
+        list: Option<PathBuf>,
+        /// The shader cache folder to write into
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    #[cfg(any(target_os = "macos", windows))]
     /// Build the Metal shader cache from stage dumps (incremental: stages translated before are reused)
     Build {
         /// Stage dump directories (*.code)
@@ -362,7 +377,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
             extract_shaders::extract_all(&romfs, &out, &dirs, ctrl_out.as_deref(), None)?;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
+        Command::Shaders(Shaders::PackSource { msl, list, out }) => {
+            let (n, bytes) = shader_cache_build::pack_source(&msl, list.as_deref(), &out)?;
+            println!("[+] {n} stages packed: {} ({} KB)", out.join("source.pack").display(), bytes / 1024);
+        }
+        #[cfg(any(target_os = "macos", windows))]
         Command::Shaders(Shaders::Build { dumps, out, ctrl_dir, msl_out, index_only, j, translation }) => {
             translation::install(translation);
             // A third of the cores by default: the build is thousands of short tool launches.

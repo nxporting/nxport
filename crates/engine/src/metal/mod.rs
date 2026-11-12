@@ -35,6 +35,7 @@ mod copy;
 mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
+pub mod source_pack;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
 mod programs;
