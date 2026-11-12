@@ -248,6 +248,19 @@ pub fn progress(job: &Mutex<Job>, sub: impl Into<String>, done: usize, total: us
     j.sub_frac = j.sub_frac.max(frac.min(1.0));
 }
 
+/// Sets the running step's sub-step for a build of `phases` phases in order: `done` of `total` in phase `phase`.
+#[allow(dead_code)]
+pub fn phase_progress(job: &Mutex<Job>, sub: String, phase: usize, phases: usize, done: usize, total: usize) {
+    let in_phase = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
+    progress(job, sub, done, total, (phase as f32 + in_phase) / phases.max(1) as f32);
+}
+
+/// Threads a shader cache build uses: all but two of the CPU's, at least two.
+#[allow(dead_code)]
+pub fn shader_jobs() -> usize {
+    std::thread::available_parallelism().map_or(6, |n| n.get()).saturating_sub(2).max(2)
+}
+
 /// Stop after the running step.
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -996,10 +1009,17 @@ impl Builder {
             job: job.clone(),
         };
         let mut steps: Vec<Step> = Vec::new();
-        #[cfg(target_os = "macos")]
-        let result = crate::apple::steps(req, &mut steps);
-        #[cfg(windows)]
-        let result = crate::windows::steps(req, &mut steps);
+        // The iOS app has one list of steps on every host (ios.rs); the host's own app its host's.
+        #[cfg(any(target_os = "macos", windows))]
+        let result = if req.target == Target::Ipa {
+            crate::ios::steps(req, &mut steps)
+        } else {
+            #[cfg(target_os = "macos")]
+            let r = crate::apple::steps(req, &mut steps);
+            #[cfg(windows)]
+            let r = crate::windows::steps(req, &mut steps);
+            r
+        };
         #[cfg(not(any(target_os = "macos", windows)))]
         let result = {
             let _ = req;

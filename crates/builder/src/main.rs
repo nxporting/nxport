@@ -6,6 +6,8 @@
 mod app;
 #[cfg(target_os = "macos")]
 mod apple;
+#[cfg(any(target_os = "macos", windows))]
+mod ios;
 mod log;
 mod window;
 #[cfg(windows)]
