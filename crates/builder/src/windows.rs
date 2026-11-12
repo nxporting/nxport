@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use nxport::settings::SettingsPatch;
 
-use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step, Target};
+use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step};
 
 /// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile).
 pub const PRECOMPILES_SHADERS: bool = true;
@@ -25,9 +25,6 @@ fn progress(job: &Mutex<Job>, sub: String, done: usize, total: usize) {
 }
 
 pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
-    if r.target == Target::Ipa {
-        return ipa_steps(r, steps);
-    }
     let Request { name, title_id, work, dump, mods, out_dir, edits, prebuild, bundle_game, job, .. } = r;
 
     let app = out_dir.join(name.replace([':', '/'], " -"));
@@ -250,105 +247,91 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     out
 }
 
-/// The iOS target: the engine for iOS from this checkout, the shaders translated to Metal source, then the app in a
-/// worker (the guest image needs a process of its own). Apple's Metal compiler being Mac-only, the shaders go in as
-/// source (<cache>/source): the app compiles each the first time the game uses it, without translating it.
-fn ipa_steps(r: Request, steps: &mut Vec<Step>) -> Output {
-    let Request { name, title_id, work, dump, mods, out_dir, edits, prebuild, bundle_game, entitlements, bundle_id, job, .. } = r;
-    let toolchains = crate::app::data_dir().join("toolchains");
-    let engine_job = job.clone();
+/// The iOS app's shaders on Windows (ios.rs), where Apple's Metal compiler does not run: the stages the shared pipeline
+/// list uses, translated and packed as Metal source (shader_cache_build::pack_source), which the app compiles the
+/// first time the game uses each. Built again when the stages, the translator or the list change; returns the cache
+/// folder the .ipa takes.
+pub(crate) fn ios_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
+    let (work, dump, title_id) = (&r.work, &r.dump, r.title_id);
+    let (stages, ios_cache) = (work.join("stages"), work.join("shader_cache_ios_source"));
+    // The stages as the Windows target extracts them (shared, skipped when the game's version is unchanged).
+    let main = nxport::profile::main_build_id_of(dump).unwrap_or_default();
+    let stamp = Stamp { file: work.join("stages.from"), inputs: format!("main {main}\n"), output: stages.clone() };
+    let extract = extract_stages_step(&r.job, dump, &stages);
+    steps.push((extract.0, Box::new(move || stamp.run("The shader stages are those of the last build", extract.1))));
+
+    let (cache, build_dir, job) = (ios_cache.clone(), work.join("shader_build_ios"), r.job.clone());
+    let stamp_file = work.join("shader_cache_ios_source.from");
     steps.push((
-        "Building the engine for iOS".into(),
+        "Translating the shaders for iOS".into(),
         Box::new(move || {
-            if nxport_build::ios_engine::source_root().is_some() {
-                // No count: cargo does not say how many crates it will compile.
-                let compiling = |name: &str| crate::app::progress(&engine_job, format!("Compiling {name}"), 0, 0, 0.0);
-                let engine = nxport_build::ios_engine::build(&toolchains, &compiling)?;
-                println!("  {}", engine.display());
-            }
-            Ok(())
+            std::fs::create_dir_all(&cache).map_err(|e| format!("{}: {e}", cache.display()))?;
+            pipeline_list(title_id, &cache, false)?;
+            let list = cache.join("pipelines.txt");
+            let listed = std::fs::read(&list).map_or(0, |b| nxport::vulkan::stage_cache::fnv1a64(&b));
+            let stamp = Stamp {
+                file: stamp_file,
+                inputs: format!("main {main}\ntranslator {}\npipelines {listed:016x}\n", nxport::vulkan::stage_cache::translator()),
+                output: cache.join("source"),
+            };
+            stamp.run("The translated shaders are those of the last build", || {
+                let msl = build_dir.join("msl");
+                let _ = std::fs::remove_dir_all(&msl);
+                let job_cb = job.clone();
+                let cb = move |phase: nxport_build::shader_cache_build::ShaderBuildPhase, done: usize, total: usize| {
+                    progress(&job_cb, phase.to_string(), done, total);
+                };
+                nxport_build::shader_cache_build::build(&nxport_build::shader_cache_build::Options {
+                    dump_dirs: vec![stages],
+                    out_dir: build_dir.clone(),
+                    ctrl_dir: None,
+                    jobs: crate::app::shader_jobs(),
+                    msl_out: Some(msl.clone()),
+                    index_only: false,
+                    on_progress: Some(Arc::new(cb)),
+                })?;
+                let (n, bytes) = nxport_build::shader_cache_build::pack_source(&msl, list.is_file().then_some(list.as_path()), &cache)?;
+                println!("  {n} shader stages packed as source ({} MB)", bytes >> 20);
+                // The loose source is ~1 GB for TotK: only the pack is kept.
+                let _ = std::fs::remove_dir_all(&msl);
+                Ok(())
+            })
         }),
     ));
-    let (stages, ios_cache) = (work.join("stages"), work.join("shader_cache_ios_source"));
-    if prebuild {
-        // The stages as the Windows target extracts them (shared, skipped when the game's version is unchanged).
-        let main = nxport::profile::main_build_id_of(&dump).unwrap_or_default();
-        let stamp = Stamp { file: work.join("stages.from"), inputs: format!("main {main}\n"), output: stages.clone() };
-        let extract = extract_stages_step(&job, &dump, &stages);
-        steps.push((extract.0, Box::new(move || stamp.run("The shader stages are those of the last build", extract.1))));
+    ios_cache
+}
 
-        // The stages the shared pipeline list uses, translated and packed (shader_cache_build::pack_source). Built again
-        // when the stages, the translator or the list change; the build's work folder keeps what it translated.
-        let (stages, ios_cache, build_dir, job) = (stages.clone(), ios_cache.clone(), work.join("shader_build_ios"), job.clone());
-        let stamp_file = work.join("shader_cache_ios_source.from");
-        steps.push((
-            "Translating the shaders for iOS".into(),
-            Box::new(move || {
-                std::fs::create_dir_all(&ios_cache).map_err(|e| format!("{}: {e}", ios_cache.display()))?;
-                pipeline_list(title_id, &ios_cache, false)?;
-                let list = ios_cache.join("pipelines.txt");
-                let listed = std::fs::read(&list).map_or(0, |b| nxport::vulkan::stage_cache::fnv1a64(&b));
-                let stamp = Stamp {
-                    file: stamp_file,
-                    inputs: format!("main {main}\ntranslator {}\npipelines {listed:016x}\n", nxport::vulkan::stage_cache::translator()),
-                    output: ios_cache.join("source"),
-                };
-                stamp.run("The translated shaders are those of the last build", || {
-                    let msl = build_dir.join("msl");
-                    let _ = std::fs::remove_dir_all(&msl);
-                    let job_cb = job.clone();
-                    let cb = move |phase: nxport_build::shader_cache_build::ShaderBuildPhase, done: usize, total: usize| {
-                        progress(&job_cb, phase.to_string(), done, total);
-                    };
-                    let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
-                    nxport_build::shader_cache_build::build(&nxport_build::shader_cache_build::Options {
-                        dump_dirs: vec![stages],
-                        out_dir: build_dir.clone(),
-                        ctrl_dir: None,
-                        jobs: cpus.saturating_sub(2).max(2),
-                        msl_out: Some(msl.clone()),
-                        index_only: false,
-                        on_progress: Some(Arc::new(cb)),
-                    })?;
-                    let (n, bytes) = nxport_build::shader_cache_build::pack_source(&msl, list.is_file().then_some(list.as_path()), &ios_cache)?;
-                    println!("  {n} shader stages packed as source ({} MB)", bytes >> 20);
-                    // The loose source is ~1 GB for TotK: only the pack is kept.
-                    let _ = std::fs::remove_dir_all(&msl);
-                    Ok(())
-                })
-            }),
-        ));
-    }
-    let out: Output = Arc::new(Mutex::new(None));
-    {
-        let (out, file) = (out.clone(), work.join("ipa.toml"));
-        steps.push((
-            "Building the iOS app".into(),
-            Box::new(move || {
-                std::fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
-                std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
-                let w = Work {
-                    kind: WorkKind::Ipa,
-                    dump,
-                    into: out_dir.clone(),
-                    mods,
-                    stages: None,
-                    pipeline_list: None,
-                    patched_image: None,
-                    base: None,
-                    bundle_game,
-                    entitlements,
-                    bundle_id,
-                    edits,
-                    cache: prebuild.then_some(ios_cache),
-                };
-                run_worker(&job, &file, &w)?;
-                *out.lock().unwrap() = Some(nxport_build::ipa::path_for(&out_dir, &name));
-                Ok(())
-            }),
-        ));
-    }
-    out
+/// The .ipa built in a worker (ios.rs): the guest image it patches is set up once per process.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipa_in_worker(
+    job: &Arc<Mutex<Job>>,
+    work: &Path,
+    dump: PathBuf,
+    mods: Option<PathBuf>,
+    into: PathBuf,
+    edits: SettingsPatch,
+    bundle_game: bool,
+    entitlements: bool,
+    bundle_id: Option<String>,
+    cache: Option<PathBuf>,
+) -> Result<(), String> {
+    std::fs::create_dir_all(work).map_err(|e| format!("{}: {e}", work.display()))?;
+    let w = Work {
+        kind: WorkKind::Ipa,
+        dump,
+        into,
+        mods,
+        stages: None,
+        pipeline_list: None,
+        patched_image: None,
+        base: None,
+        bundle_game,
+        entitlements,
+        bundle_id,
+        edits,
+        cache,
+    };
+    run_worker(job, &work.join("ipa.toml"), &w)
 }
 
 /// The folder of a game's build directory that holds its profiles, each <main's build id>-<lift::lifted_hash>.profdata.
