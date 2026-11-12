@@ -46,9 +46,9 @@ fn r_u32(d: &[u8], off: usize) -> u32 {
 /// calls of horizon::svc, reads of TPIDR_EL0 / TPIDRRO_EL0 / CTR_EL0 into stubs (in `stubs`, STUB_AREA bytes), and
 /// load-exclusives into acquire forms. Returns what was rewritten, for the log.
 #[cfg(any(nx_native, windows))]
-unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
+unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, image_end: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
     if crate::cpu::trampoline::x18_trampolines() {
-        crate::cpu::trampoline::rewrite_module(name, text, text_len).map_err(|e| e.to_string())?;
+        crate::cpu::trampoline::rewrite_module(name, text, text_len, image_end).map_err(|e| e.to_string())?;
     }
     let mut next = stubs;
     let (mut n_svc, mut n_tp, mut n_tpro) = (0, 0, 0);
@@ -337,7 +337,7 @@ pub unsafe fn load(
     // ── make the code runnable here ──
     #[cfg(any(nx_native, windows))]
     let rewritten = if crate::cpu::aot::native_rewrites() {
-        native_rewrites(name, base + text_mo, text_len, stubs, svc_entry)?
+        native_rewrites(name, base + text_mo, text_len, base + image_size, stubs, svc_entry)?
     } else {
         // Lifted code handles svc, the system registers and exclusives itself.
         "no sites".to_string()

@@ -439,17 +439,13 @@ impl Textures {
             img.cpu_writable = (gen, d.storage > 0x10000 && crate::nvn::api::memory_pool_cpu_writable(d.storage));
         }
         if !img.cpu_writable.1 {
+            // Memory the CPU cannot reach is not rebuilt from the images written over it later (b1c163c did, for TotK's
+            // downsample chain without mods): in Super Mario Odyssey, whose post-processing targets share scratch memory
+            // every frame, that showed a frame of solid blue / white / cyan blocks every few hundred frames
+            // (llmtalk/TODO.md).
             if first {
                 self.flush_overlaps(dev, d);
                 self.upload(dev, d);
-            } else if self.overwritten_since(d) {
-                // The CPU cannot reach this memory, but the GPU aliases it as on the console: other images' writes over
-                // it since its contents are what it now holds.
-                if self.rebuild_on_gpu(dev, d, true, true).is_some() {
-                    if let Some(img) = self.images.get_mut(d) {
-                        img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    }
-                }
             }
             return;
         }
