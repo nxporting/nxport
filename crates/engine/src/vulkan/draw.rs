@@ -405,7 +405,7 @@ impl Ctx {
         if self.fb_dirty.is_some_and(|w| w != program) {
             self.fb_epoch += 1;
             let epoch = self.fb_epoch;
-            crate::gpu::history::journal(|| format!("  feedback epoch {epoch}: another program after a write"));
+            crate::gpu::history::journal_fmt(format_args!("  feedback epoch {epoch}: another program after a write"));
             self.fb_taken.clear();
             self.fb_dirty = None;
         }
@@ -505,7 +505,7 @@ impl Ctx {
         }
         if crate::gpu::history::journal_on() {
             let full = self.stages[&(data, content)].known.full;
-            crate::gpu::history::journal(|| format!("dispatch s_{full:016x} {x}x{y}x{z}"));
+            crate::gpu::history::journal_fmt(format_args!("dispatch s_{full:016x} {x}x{y}x{z}"));
         }
         let key = hash(&("compute", data, content));
         let (pipe, layout) = match self.pipelines.get(&key) {
@@ -559,6 +559,7 @@ impl Ctx {
         self.checkpoint("dispatch (X, Y, Z, shader)", [x as u64, y as u64, z as u64, full]);
         self.rec.cmd(move |d, cb| d.device.cmd_dispatch(cb, x as u32, y as u32, z as u32));
         self.barrier();
+        self.profile_mark(|| format!("dispatch {x}x{y}x{z} s_{full:016x}"));
     }
 
     /// The descriptor set layout and pipeline layout of graphics stages,
@@ -1156,16 +1157,16 @@ impl Ctx {
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
         let rw = if write { "write" } else { "read" };
         if let Some((buf, off)) = self.shadow(a, size, write).filter(|(_, o)| o % align == 0) {
-            crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} shadow"));
+            crate::gpu::history::journal_fmt(format_args!("    storage {addr:#x}+{size:#x} {rw} shadow"));
             return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
         }
         if let Some((buf, off)) = self.imports.find(&self.dev, a, size) {
             if off % align == 0 {
-                crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} imported"));
+                crate::gpu::history::journal_fmt(format_args!("    storage {addr:#x}+{size:#x} {rw} imported"));
                 return Some(vk::DescriptorBufferInfo { buffer: buf, offset: off, range: size as u64 });
             }
         }
-        crate::gpu::history::journal(|| format!("    storage {addr:#x}+{size:#x} {rw} copy"));
+        crate::gpu::history::journal_fmt(format_args!("    storage {addr:#x}+{size:#x} {rw} copy"));
         // Ones the stage writes are read back by the watcher: on discrete GPUs host-cached memory (the other arena is
         // write-combined, slow to read).
         let (buf, off, p) = if write && self.dev.discrete { self.readback.alloc(&self.dev, size)? } else { self.arena.alloc(&self.dev, size)? };
@@ -1341,13 +1342,17 @@ impl Ctx {
         let Some(h) = handle else { return };
         let Some((obj, _)) = crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32) else { return };
         let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return };
-        let Some((img, level, layer)) = self.tex.get(&self.dev, &t) else { return };
-        let image = img.image;
+        // Looked up, not refreshed: the journal records what the draw binds and must not change it (a refresh here
+        // hashed guest memory and could upload or rebuild textures the draw itself skipped).
+        let (d, level, layer) = self.tex.locate(&t);
+        let Some(image) = self.tex.images.get(&d).map(|i| i.image) else { return };
         let fb = self.renders_to(&image);
         let (w, hgt, fmt) = (t.width, t.height, t.format);
-        crate::gpu::history::journal(|| {
-            format!("    sample {:x}:{fmt} {w}x{hgt} at {level}/{layer}{}", vk::Handle::as_raw(image), if fb { " feedback" } else { "" })
-        });
+        crate::gpu::history::journal_fmt(format_args!(
+            "    sample {:x}:{fmt} {w}x{hgt} at {level}/{layer}{}",
+            vk::Handle::as_raw(image),
+            if fb { " feedback" } else { "" }
+        ));
     }
 
     /// Whether the draw being prepared renders to `image`: an attachment of the current pass, or of the pass a feedback
@@ -1389,7 +1394,7 @@ impl Ctx {
             let (si, di) = (src.image, snap.image);
             self.checkpoint("feedback snapshot (W, H, levels, layers)", args);
             let epoch = self.fb_epoch;
-            crate::gpu::history::journal(|| format!("  snapshot {:x} {}x{} epoch {epoch}", vk::Handle::as_raw(si), args[0], args[1]));
+            crate::gpu::history::journal_fmt(format_args!("  snapshot {:x} {}x{} epoch {epoch}", vk::Handle::as_raw(si), args[0], args[1]));
             self.fb_taken.push(si);
             self.rec.cmd(move |d, cb| d.device.cmd_copy_image(cb, si, vk::ImageLayout::GENERAL, di, vk::ImageLayout::GENERAL, &regions));
             self.barrier();

@@ -375,54 +375,51 @@ fn entry_jump(to: u64) -> [u8; ENTRY_JUMP] {
 
 #[link(name = "kernel32")]
 extern "system" {
-    fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> *mut c_void;
-    fn Thread32First(snap: *mut c_void, e: *mut ThreadEntry) -> i32;
-    fn Thread32Next(snap: *mut c_void, e: *mut ThreadEntry) -> i32;
-    fn OpenThread(access: u32, inherit: i32, id: u32) -> *mut c_void;
     fn SuspendThread(t: *mut c_void) -> u32;
     fn ResumeThread(t: *mut c_void) -> u32;
     fn GetThreadContext(t: *mut c_void, ctx: *mut ThreadContext) -> i32;
     fn CloseHandle(h: *mut c_void) -> i32;
     fn GetCurrentThreadId() -> u32;
-    fn GetCurrentProcessId() -> u32;
+    fn GetThreadId(t: *mut c_void) -> u32;
     fn Sleep(ms: u32);
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct ThreadEntry {
-    size: u32,
-    usage: u32,
-    id: u32,
-    owner: u32,
-    base_priority: i32,
-    delta: i32,
-    flags: u32,
+#[link(name = "ntdll")]
+extern "system" {
+    /// The process's thread after `thread` (null: its first), opened with `access`; nonzero status when there is none.
+    fn NtGetNextThread(process: *mut c_void, thread: *mut c_void, access: u32, attributes: u32, flags: u32, next: *mut *mut c_void) -> i32;
 }
 
 /// CONTEXT: only ContextFlags (0x30) and Rip (0xF8) are read.
 #[repr(C, align(16))]
 struct ThreadContext([u8; 1232]);
 
-/// Handles of the process's other threads, opened for suspending.
+/// Handles of the process's other threads, opened for suspending. Walked from the process itself: a snapshot of the
+/// system's threads took about 50 ms each time, and a mod's start applies over a hundred patches.
 unsafe fn other_threads() -> Vec<*mut c_void> {
-    const TH32CS_SNAPTHREAD: u32 = 4;
-    const SUSPEND_AND_CONTEXT: u32 = 0x0002 | 0x0008;
-    let (me, pid) = (GetCurrentThreadId(), GetCurrentProcessId());
+    // Suspend/resume, get context, query limited information (for GetThreadId).
+    const ACCESS: u32 = 0x0002 | 0x0008 | 0x0800;
+    let current_process = -1isize as *mut c_void;
+    let me = GetCurrentThreadId();
     let mut out = Vec::with_capacity(256);
-    let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    let mut e = ThreadEntry { size: std::mem::size_of::<ThreadEntry>() as u32, ..Default::default() };
-    let mut ok = Thread32First(snap, &mut e);
-    while ok != 0 {
-        if e.owner == pid && e.id != me {
-            let h = OpenThread(SUSPEND_AND_CONTEXT, 0, e.id);
-            if !h.is_null() {
-                out.push(h);
-            }
+    // The walk continues from the previous handle, so this thread's own stays open until the next step.
+    let mut prev: *mut c_void = std::ptr::null_mut();
+    let mut prev_is_me = false;
+    loop {
+        let mut next = std::ptr::null_mut();
+        let status = NtGetNextThread(current_process, prev, ACCESS, 0, 0, &mut next);
+        if prev_is_me {
+            CloseHandle(prev);
         }
-        ok = Thread32Next(snap, &mut e);
+        if status != 0 || next.is_null() {
+            break;
+        }
+        prev_is_me = GetThreadId(next) == me;
+        if !prev_is_me {
+            out.push(next);
+        }
+        prev = next;
     }
-    CloseHandle(snap);
     out
 }
 
@@ -677,19 +674,27 @@ fn library_path(name: &str, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
     Ok(cache_root()?.join(name).join(format!("f_{h:016x}.dll")))
 }
 
-/// Lifts and compiles [func, end) as it is now, unless an earlier run did: the library's path.
-fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64>) -> Result<PathBuf, String> {
+/// Lifts and compiles [func, end) as it is now, unless an earlier run did: the library's path, and the module name its
+/// symbols carry (another entry's when an earlier run compiled the same C under another name, see `by_source`).
+fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64>) -> Result<(PathBuf, String), String> {
     let dir = cache_root()?.join(name);
     let dll = library_path(name, seeds)?;
     let lock = state.compiling.lock().unwrap().entry(name.to_string()).or_default().clone();
     let _guard = lock.lock().unwrap();
     if dll.is_file() {
-        return Ok(dll);
+        return Ok((dll, name.to_string()));
     }
     // Jump tables lie in the module's rodata: the image reaches past the code. Only what the lifter asks for is read.
     let image = unsafe { std::slice::from_raw_parts(func as *const u8, IMAGE_SPAN) };
     let module = nxport_lifter::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone() };
     let out = nxport_lifter::lift_module(&module, &Default::default());
+    // The cache name hashes the function's bytes, and some differ from run to run without changing the lifted code (a
+    // plugin's trampoline area holds this run's pointers, read at run time): 6 of a start's compiles with UltraCam were
+    // of C an earlier run had compiled. The same C compiles to the same library.
+    let source_key = by_source_key(state, name, &out.files);
+    if let Some(found) = by_source(source_key) {
+        return Ok(found);
+    }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for (file, body) in nxport_lifter::RUNTIME_FILES {
         std::fs::write(dir.join(file), body).map_err(|e| e.to_string())?;
@@ -714,14 +719,51 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
     std::fs::rename(&tmp, &dll).map_err(|e| e.to_string())?;
     let list: String = seeds.iter().map(|a| format!("{a:x}\n")).collect();
     std::fs::write(dir.join("entries.txt"), list).map_err(|e| e.to_string())?;
-    Ok(dll)
+    remember_source(source_key, name, &dll);
+    Ok((dll, name.to_string()))
+}
+
+/// The index of libraries by the C they were compiled from: by_source/<key>.txt holds the entry's name and its library.
+const BY_SOURCE: &str = "by_source";
+
+/// A hash of the lifted C with its module name masked (the same code lifted under another cache name gives the same
+/// key), the runtime it compiles with, and the engine build.
+fn by_source_key(state: &State, name: &str, files: &[(String, String)]) -> u64 {
+    let mut text = Vec::new();
+    for (file, body) in files {
+        text.extend_from_slice(file.replace(name, "\u{1}").as_bytes());
+        text.extend_from_slice(body.replace(name, "\u{1}").as_bytes());
+    }
+    for (file, body) in nxport_lifter::RUNTIME_FILES {
+        text.extend_from_slice(file.as_bytes());
+        text.extend_from_slice(body.as_bytes());
+    }
+    fnv(&text) ^ state.version
+}
+
+/// A library compiled from the same C by an earlier run, with the module name its symbols carry.
+fn by_source(key: u64) -> Option<(PathBuf, String)> {
+    let root = cache_root().ok()?;
+    let text = std::fs::read_to_string(root.join(BY_SOURCE).join(format!("{key:016x}.txt"))).ok()?;
+    let mut lines = text.lines();
+    let (name, file) = (lines.next()?, lines.next()?);
+    let dll = root.join(name).join(file);
+    dll.is_file().then(|| (dll, name.to_string()))
+}
+
+fn remember_source(key: u64, name: &str, dll: &std::path::Path) {
+    let Ok(root) = cache_root() else { return };
+    let Some(file) = dll.file_name() else { return };
+    let dir = root.join(BY_SOURCE);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{key:016x}.txt")), format!("{name}\n{}\n", file.to_string_lossy()));
 }
 
 /// The function [func, end) compiled as its code stands, and its entries pointed there.
 fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> Result<(), String> {
     let name = cache_name(state, func, end);
     let seeds = entry_points(state, &name, func, end, extra)?;
-    let dll = compiled(state, &name, func, end, &seeds)?;
+    let (dll, lib_name) = compiled(state, &name, func, end, &seeds)?;
     // A write meanwhile queued this function again: that compile applies.
     if cache_name(state, func, end) != name {
         return Ok(());
@@ -742,9 +784,9 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
         };
         let init: unsafe extern "C" fn(usize) = std::mem::transmute(sym("nx_rt_init")?);
         let add: AddModule = std::mem::transmute(sym("nx_rt_add_module")?);
-        let count = *(sym(&format!("{name}_fn_count"))? as *const u64) as usize;
-        let addrs = std::slice::from_raw_parts(sym(&format!("{name}_fn_addrs"))? as *const u64, count);
-        let fns = std::slice::from_raw_parts(sym(&format!("{name}_fn_ptrs"))? as *const usize, count);
+        let count = *(sym(&format!("{lib_name}_fn_count"))? as *const u64) as usize;
+        let addrs = std::slice::from_raw_parts(sym(&format!("{lib_name}_fn_addrs"))? as *const u64, count);
+        let fns = std::slice::from_raw_parts(sym(&format!("{lib_name}_fn_ptrs"))? as *const usize, count);
         init(state.host);
         add(addrs.as_ptr(), fns.as_ptr() as *const c_void, count as u64);
         if let Some((lo, hi)) = fns.first().and_then(|&f| crate::os::image_range(f)) {
