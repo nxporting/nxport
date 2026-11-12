@@ -92,6 +92,10 @@ and update this file when you finish or drop it.
   .metallib; Unreal uses them for iOS shaders on Windows) could build it: shader_cache_build.rs would call them on
   Windows (same chunks), windows.rs would pass the cache to ipa::build. The tools need an Apple developer login to
   download, so the builder can only find an installed copy and fall back to no cache. Waiting on the user (install).
+  2026-11-12: the user wants both routes (these tools when installed, else a long-press precompile on the phone). Not
+  installed here (nothing in Program Files or on PATH), so their install path and flags (no xcrun, no -sdk) cannot be
+  checked: build_ios (shader_cache_build.rs) and windows.rs stay unchanged until they are installed. The long-press
+  design waits on the iPhone test of branch ios-shader-cache-windows (builder at nxport-build\wttarget\release).
 - **After the release: intermediate versions of a mod's code are compiled at every start (2026-11-10 night).** With
   the user's mods a warm start applies one function, 0x700518a000 (the plugin's code area, written piece by piece
   while the game starts), 56-92 times. Stage timings of the applies (probe around compiled / applying lock / library
