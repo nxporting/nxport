@@ -2,7 +2,7 @@
 // the signed guest code image, the Windows app folder), and guest code lifted to C for hosts without the native runtime
 // (lift, compiled with zig cc on Windows).
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod batch_kernels;
 /// The app icon from the dump, as a Windows .ico written into the app's program.
 pub mod app_icon;
@@ -23,7 +23,7 @@ pub mod pack;
 pub mod pipeline_archive;
 pub mod ppm2png;
 mod sarc;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub mod shader_cache_build;
 pub mod tiny_kernels;
 pub mod translation;
