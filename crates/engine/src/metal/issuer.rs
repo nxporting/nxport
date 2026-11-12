@@ -270,12 +270,12 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
     }
 }
 
-/// Executes one render-encoder (or commit) op.
 thread_local! {
     /// Resources made resident (useResource) in the current render encoder, with their usage.
     static RESIDENT: std::cell::RefCell<rustc_hash::FxHashSet<(usize, usize)>> = std::cell::RefCell::new(Default::default());
 }
 
+/// Executes one render-encoder (or commit) op.
 unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
     if let Op::Begin { cb, desc, label } = op {
         RESIDENT.with(|r| r.borrow_mut().clear());
