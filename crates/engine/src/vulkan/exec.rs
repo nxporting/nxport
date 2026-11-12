@@ -790,7 +790,7 @@ impl Ctx {
     /// Records and queues a submit with `serial` (inflight.rs completes it). `fetched`: the lists it reaches, by handle
     /// (nvn::api::walk_command_lists), taken; with `resolve`, the roots only (vk-decode fetches the rest).
     pub unsafe fn submit(&mut self, lists: &[u64], serial: u64, fetched: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>, resolve: bool) {
-        crate::gpu::history::journal(|| format!("submit {} lists serial {serial}", lists.len()));
+        crate::gpu::history::journal_fmt(format_args!("submit {} lists serial {serial}", lists.len()));
         // Emptied when the previous submit ended.
         std::mem::swap(&mut self.lists, fetched);
         // vk-decode walks the lists while the submit is set up here: fetching what the roots call (~3,000 lists in TotK,
@@ -1349,7 +1349,7 @@ impl Ctx {
             Cmd::BindPolygonState(p) => self.st.polygon = *p,
             Cmd::BindMultisampleState(m) => self.st.multisample = *m,
             Cmd::Barrier(bits) => {
-                crate::gpu::history::journal(|| format!("barrier {bits:#x}"));
+                crate::gpu::history::journal_fmt(format_args!("barrier {bits:#x}"));
                 self.end_pass();
                 self.barrier();
                 // INVALIDATE_TEXTURE: textures read after it see what was rendered before it.
@@ -1759,11 +1759,11 @@ impl Ctx {
             self.checkpoint("end pass (W, H, color targets)", [p.extent.0 as u64, p.extent.1 as u64, p.colors.len() as u64, 0]);
             if crate::gpu::history::journal_on() {
                 let clears = p.color_clears.iter().filter(|c| c.is_some()).count() + p.depth_clear.is_some() as usize;
-                crate::gpu::history::journal(|| format!("  end draws {} cleared {clears}", p.draws));
+                crate::gpu::history::journal_fmt(format_args!("  end draws {} cleared {clears}", p.draws));
                 let mut pairs = p.pairs.clone();
                 pairs.sort_unstable();
                 for (v, f, n) in pairs {
-                    crate::gpu::history::journal(|| format!("    s_{v:016x} / s_{f:016x} x{n}"));
+                    crate::gpu::history::journal_fmt(format_args!("    s_{v:016x} / s_{f:016x} x{n}"));
                 }
             }
             if self.profile_passes && self.timestamps != vk::QueryPool::null() && self.pass_labels.len() < PASS_TIMESTAMPS as usize {
@@ -2040,7 +2040,7 @@ impl Ctx {
         if self.st.render_disabled || !self.begin_pass() {
             return;
         }
-        crate::gpu::history::journal(|| format!("clear color {index} mask {mask:#x} {rgba:?}"));
+        crate::gpu::history::journal_fmt(format_args!("clear color {index} mask {mask:#x} {rgba:?}"));
         let p = self.pass.as_ref().unwrap();
         let Some(Some((_, _, nvn_fmt))) = p.colors.get(index as usize) else { return };
         let (nvn_fmt, (w, h)) = (*nvn_fmt, p.extent);
@@ -2071,7 +2071,7 @@ impl Ctx {
         if self.st.render_disabled || !self.begin_pass() {
             return;
         }
-        crate::gpu::history::journal(|| format!("clear depth {depth} {depth_mask} stencil {stencil} {stencil_mask:#x}"));
+        crate::gpu::history::journal_fmt(format_args!("clear depth {depth} {depth_mask} stencil {stencil} {stencil_mask:#x}"));
         let p = self.pass.as_ref().unwrap();
         let Some((_, fmt)) = p.depth else { return };
         let mut aspect = vk::ImageAspectFlags::empty();

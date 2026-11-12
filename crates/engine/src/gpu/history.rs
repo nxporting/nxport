@@ -14,7 +14,11 @@ pub fn len() -> usize {
     *N.get_or_init(|| crate::settings::get().dump.frame_history)
 }
 
-static JOURNAL: Mutex<(Vec<String>, VecDeque<(u64, Vec<String>)>)> = Mutex::new((Vec::new(), VecDeque::new()));
+/// The frame being recorded and the kept frames: (presented frame, its events one per line, how many). One string per
+/// frame, reused when the oldest is dropped: a String per event (7,000-10,000 a frame in TotK) cost ~3.7 ms of
+/// recording a frame, much of it in the heap.
+static JOURNAL: Mutex<(String, usize, VecDeque<(u64, String, usize)>)> =
+    Mutex::new((String::new(), 0, VecDeque::new()));
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Frames a backend is recording for a capture asked without a kept history (0: none).
 static AHEAD: AtomicUsize = AtomicUsize::new(0);
@@ -23,7 +27,7 @@ static AHEAD: AtomicUsize = AtomicUsize::new(0);
 pub fn record_ahead(frames: usize) {
     AHEAD.store(frames, Ordering::Relaxed);
     if frames == 0 {
-        JOURNAL.lock().unwrap().1.clear();
+        JOURNAL.lock().unwrap().2.clear();
     }
 }
 
@@ -41,18 +45,38 @@ pub fn journal_on() -> bool {
 pub fn journal(line: impl FnOnce() -> String) {
     if journal_on() {
         let l = line();
-        JOURNAL.lock().unwrap().0.push(l);
+        let mut j = JOURNAL.lock().unwrap();
+        j.0.push_str(&l);
+        j.0.push('\n');
+        j.1 += 1;
+    }
+}
+
+/// Adds an event to the frame being recorded, formatted in place (`journal_fmt(format_args!(..))`: no allocation).
+pub fn journal_fmt(line: std::fmt::Arguments) {
+    if journal_on() {
+        use std::fmt::Write;
+        let mut j = JOURNAL.lock().unwrap();
+        let _ = j.0.write_fmt(line);
+        j.0.push('\n');
+        j.1 += 1;
     }
 }
 
 /// Closes the journal of presented frame `pn` (everything since the previous present).
 pub fn rotate(pn: u64) {
     let mut j = JOURNAL.lock().unwrap();
-    let cur = std::mem::take(&mut j.0);
-    j.1.push_back((pn, cur));
-    while j.1.len() > journaled() {
-        j.1.pop_front();
+    // The next frame writes into the oldest frame's string once it is dropped (its capacity kept).
+    let mut spare = String::new();
+    while j.2.len() >= journaled().max(1) {
+        if let Some((_, s, _)) = j.2.pop_front() {
+            spare = s;
+        }
     }
+    spare.clear();
+    let cur = std::mem::replace(&mut j.0, spare);
+    let n = std::mem::take(&mut j.1);
+    j.2.push_back((pn, cur, n));
 }
 
 /// Asks for the history to be written at the next present.
@@ -85,12 +109,9 @@ pub fn write_journal(dir: &str) {
 pub fn journal_text() -> String {
     let j = JOURNAL.lock().unwrap();
     let mut out = String::new();
-    for (f, lines) in &j.1 {
-        out.push_str(&format!("== frame {} ({} events)\n", f, lines.len()));
-        for l in lines {
-            out.push_str(l);
-            out.push('\n');
-        }
+    for (f, lines, n) in &j.2 {
+        out.push_str(&format!("== frame {f} ({n} events)\n"));
+        out.push_str(lines);
     }
     out
 }
