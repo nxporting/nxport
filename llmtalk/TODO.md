@@ -85,7 +85,12 @@ and update this file when you finish or drop it.
   only, outgrown ones kept). Left: GPU-side timing against something outside the queue order the barriers cover (other
   queues or threads submitting, the staging buffer's life in full mode, the relayout descriptor update while earlier
   submits run), or the copy reading a writer image whose own contents are partly stale. Low priority: the flash is
-  fixed; this only matters for bringing the rule back for TotK without mods.
+  fixed; this only matters for bringing the rule back for TotK without mods. By reading (2026-11-12), also not it: a
+  rebuild reading writers drawn in the same unsubmitted chunk (unflushed_over skips writers of the current serial; one
+  queue, so the upload batch's leading full barrier orders it after every earlier submit); the relayout descriptor
+  (push descriptors, recorded into the command buffer, nothing updated while in flight); the scratch growing between
+  two rebuilds of one batch (each binds the buffer it copied into). Left from the list above: the CPU snapshot of guest
+  bytes taken at record time as the base, and writers copied whole though a pass wrote part of them.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
