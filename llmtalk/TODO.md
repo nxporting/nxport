@@ -73,7 +73,19 @@ and update this file when you finish or drop it.
   split in two halves, the full-resolution set (1600x900 f1/f5/f37/f41, 1440x810 f1/f5/f37), the mid set (1024/512/256
   f5, 720x405 f5/f13/f41, 800x450 f13/f41, 400x225f37, 756x160f37). Every logged target is in one group. Still to run:
   the small f37 chain (320x180 down to 5x3, 25 sizes) alone; if clean, the flash needs two groups together (pairs next).
-  Blocked 11-11 after a reboot: the game files' M: mount is gone (runs exit at start, os error 3).
+  Then (same day, after remounting): the small chain alone clean (3); pairs: full+mid 0/3, full+small 2/3, mid+small
+  3/3; halving with mid on narrows the small side to **400x228f37**: with the mid group 2/2, with only 400x225f37 2/3,
+  with the mid group minus 400x225f37 3/3. So 400x228f37 plus any other rebuilt image in its memory. A journal probe
+  (scratchpad rb400_probe.diff / rb_all_probe.diff, 2 runs, every rebuild of the frame logged): two 400x228f37 images
+  are rebuilt every frame from the whole 1600x900f37 scene image just before their own pass draws them (wasted work),
+  and 800x450f13/f41 from 400x228/400x225/200x114.../1600x900; the rebuild list (targets, writers, offsets) is the same
+  in flash frames as in their neighbours, so what is rebuilt does not differ. Ruled out: chunk order (rebuilds go in the
+  upload batch queued before the chunk: --split-ms=0.0001 still flashes 2/3, --split-ms=0 2/3, no more often), the
+  incremental path (from_image=false, rebuilt from guest bytes plus all writers: 3/4 flash), the scratch buffer (grows
+  only, outgrown ones kept). Left: GPU-side timing against something outside the queue order the barriers cover (other
+  queues or threads submitting, the staging buffer's life in full mode, the relayout descriptor update while earlier
+  submits run), or the copy reading a writer image whose own contents are partly stale. Low priority: the flash is
+  fixed; this only matters for bringing the rule back for TotK without mods.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
