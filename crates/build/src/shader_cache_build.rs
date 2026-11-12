@@ -106,7 +106,7 @@ fn collect_metal_files(src: &Path) -> Vec<PathBuf> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShaderBuildPhase {
     Decompiling,
-    TranslatingToMetal,
+    Specializing,
     CompilingMetal,
     LinkingLibraries,
 }
@@ -114,7 +114,7 @@ pub enum ShaderBuildPhase {
 impl ShaderBuildPhase {
     pub const ALL: [ShaderBuildPhase; 4] = [
         ShaderBuildPhase::Decompiling,
-        ShaderBuildPhase::TranslatingToMetal,
+        ShaderBuildPhase::Specializing,
         ShaderBuildPhase::CompilingMetal,
         ShaderBuildPhase::LinkingLibraries,
     ];
@@ -125,7 +125,7 @@ impl ShaderBuildPhase {
     pub fn phase_index(self) -> usize {
         match self {
             Self::Decompiling => 0,
-            Self::TranslatingToMetal => 1,
+            Self::Specializing => 1,
             Self::CompilingMetal => 2,
             Self::LinkingLibraries => 3,
         }
@@ -135,7 +135,7 @@ impl ShaderBuildPhase {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Decompiling => "Decompiling shaders",
-            Self::TranslatingToMetal => "Translating to Metal",
+            Self::Specializing => "Specializing shaders",
             Self::CompilingMetal => "Compiling Metal shaders",
             Self::LinkingLibraries => "Linking shader libraries",
         }
@@ -945,11 +945,11 @@ pub fn build(o: &Options) -> Result<(), String> {
     }
     let mut prepared: Vec<(PathBuf, u64, StageRecord, String)> = Vec::new();
     if let Some(cb) = &o.on_progress {
-        cb(ShaderBuildPhase::TranslatingToMetal, 0, jobs.len());
+        cb(ShaderBuildPhase::Specializing, 0, jobs.len());
     }
     let p_cb2 = o.on_progress.as_ref().map(|cb| {
         let cb = cb.clone();
-        move |done, total| cb(ShaderBuildPhase::TranslatingToMetal, done, total)
+        move |done, total| cb(ShaderBuildPhase::Specializing, done, total)
     });
     for ((code, weak, _, _), res) in jobs.iter().zip(parallel_progress(&jobs, o.jobs, p_cb2.as_ref().map(|f| f as &(dyn Fn(usize, usize) + Sync)), |(c, _, st, sz)| prepare_stage(c, &work, &spv_dir, *st, *sz, o))) {
         match res {
