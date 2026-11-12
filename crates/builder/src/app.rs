@@ -188,8 +188,9 @@ impl Target {
     pub fn prebuilds_shaders(self) -> bool {
         match self {
             Target::MacApp => true,
-            // The Metal shader compiler is Apple's: on Windows the iOS app translates shaders as the game loads them.
-            Target::Ipa => cfg!(target_os = "macos"),
+            // On a Mac as compiled metallibs; on Windows (no Metal compiler) as packed Metal source the app compiles as the
+            // game first uses each stage, without translating it.
+            Target::Ipa => true,
             #[cfg(windows)]
             Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
             #[cfg(not(windows))]
