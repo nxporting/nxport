@@ -96,7 +96,10 @@ and update this file when you finish or drop it.
   an image GPU-written in a submit not yet settled; settle runs on completion), and which writers count depends on
   which submit they were recorded in (unflushed_over / overwritten_since skip the current serial), which time-based
   chunk splits move. A probe logging, per rebuild of 400x228f37, its settled state, the route (incremental or from
-  guest bytes) and the writers' serials, compared between a flash frame and its neighbours, should tell.
+  guest bytes) and the writers' serials, compared between a flash frame and its neighbours, should tell. Written, not
+  yet compiled or run (2026-11-12, session scratchpad rb_timing_probe.diff): rb_all_probe plus `[rb-skip]` lines for
+  refreshes skipped while the image's own write is in flight, and serial / own submit / each writer's submit and
+  settled state on `[rb]` lines; run as before with NX_ANYPOOL_ONLY=400x228f37 and the frame history.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
