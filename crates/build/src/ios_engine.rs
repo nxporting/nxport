@@ -96,7 +96,8 @@ fn libc_includes(zig: &Path) -> String {
 }
 
 /// Builds the engine for iOS from this checkout (cargo does nothing when it is up to date); returns its path.
-pub fn build(toolchains: &Path) -> Result<PathBuf, String> {
+/// `compiling` gets the name of each crate as cargo starts compiling it.
+pub fn build(toolchains: &Path, compiling: &dyn Fn(&str)) -> Result<PathBuf, String> {
     let root = source_root().ok_or("the iOS engine builds from nxport's source, which is not here")?;
     let llvm = llvm_bin()?;
     let zig = crate::zig::cc(toolchains, &|_, _| {})?;
@@ -136,9 +137,25 @@ pub fn build(toolchains: &Path) -> Result<PathBuf, String> {
         .env("AR_aarch64_apple_ios", "llvm-ar")
         .env("CARGO_TARGET_AARCH64_APPLE_IOS_LINKER", llvm.join("ld64.lld.exe"))
         .env("CARGO_TARGET_AARCH64_APPLE_IOS_RUSTFLAGS", "-C linker-flavor=ld64.lld -C link-arg=-flat_namespace -C link-arg=-undefined -C link-arg=suppress");
-    let out = c.output().map_err(|e| format!("cargo: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
+    // cargo reports on stderr: each "Compiling <crate> <version>" line as it starts, kept whole for the error.
+    let mut child = c
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cargo: {e}"))?;
+    let mut err = String::new();
+    {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
+            if let Some(name) = line.trim_start().strip_prefix("Compiling ").and_then(|r| r.split_whitespace().next()) {
+                compiling(name);
+            }
+            err.push_str(&line);
+            err.push('\n');
+        }
+    }
+    let status = child.wait().map_err(|e| format!("cargo: {e}"))?;
+    if !status.success() {
         let hint = if err.contains("aarch64-apple-ios") && err.contains("target may not be installed") { "\nrustup target add aarch64-apple-ios" } else { "" };
         let tail: Vec<&str> = err.lines().rev().take(12).collect();
         return Err(format!("building the iOS engine failed:\n{}{hint}", tail.into_iter().rev().collect::<Vec<_>>().join("\n")));

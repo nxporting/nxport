@@ -256,11 +256,14 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
 fn ipa_steps(r: Request, steps: &mut Vec<Step>) -> Output {
     let Request { name, title_id, work, dump, mods, out_dir, edits, prebuild, bundle_game, entitlements, bundle_id, job, .. } = r;
     let toolchains = crate::app::data_dir().join("toolchains");
+    let engine_job = job.clone();
     steps.push((
         "Building the engine for iOS".into(),
         Box::new(move || {
             if nxport_build::ios_engine::source_root().is_some() {
-                let engine = nxport_build::ios_engine::build(&toolchains)?;
+                // No count: cargo does not say how many crates it will compile.
+                let compiling = |name: &str| crate::app::progress(&engine_job, format!("Compiling {name}"), 0, 0, 0.0);
+                let engine = nxport_build::ios_engine::build(&toolchains, &compiling)?;
                 println!("  {}", engine.display());
             }
             Ok(())
@@ -616,7 +619,11 @@ pub fn worker(file: &Path) -> Result<(), String> {
                     entitlements: w.entitlements,
                     bundle_id: w.bundle_id,
                 },
-                &|step| println!("[+] {step}"),
+                // Each step to the progress bar too, as the macOS builder shows it.
+                &|step| {
+                    println!("[+] {step}");
+                    report(step.default_fraction(), 0, 0, &step.to_string());
+                },
             )?;
             println!("  {}", ipa.display());
         }
