@@ -89,8 +89,14 @@ and update this file when you finish or drop it.
   rebuild reading writers drawn in the same unsubmitted chunk (unflushed_over skips writers of the current serial; one
   queue, so the upload batch's leading full barrier orders it after every earlier submit); the relayout descriptor
   (push descriptors, recorded into the command buffer, nothing updated while in flight); the scratch growing between
-  two rebuilds of one batch (each binds the buffer it copied into). Left from the list above: the CPU snapshot of guest
-  bytes taken at record time as the base, and writers copied whole though a pass wrote part of them.
+  two rebuilds of one batch (each binds the buffer it copied into). Also unlikely by reading: the guest-byte snapshot
+  as the base (in memory the CPU cannot reach nothing writes guest bytes: the game cannot, and flush_overlaps drops
+  writers there via guest_can_take, so the snapshot is the same every frame). Writers copied whole is deterministic too.
+  What does vary with timing, to test next: which route a refresh takes depends on when submits complete (refresh skips
+  an image GPU-written in a submit not yet settled; settle runs on completion), and which writers count depends on
+  which submit they were recorded in (unflushed_over / overwritten_since skip the current serial), which time-based
+  chunk splits move. A probe logging, per rebuild of 400x228f37, its settled state, the route (incremental or from
+  guest bytes) and the writers' serials, compared between a flash frame and its neighbours, should tell.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
