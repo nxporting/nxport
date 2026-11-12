@@ -110,6 +110,16 @@ and update this file when you finish or drop it.
   installed here (nothing in Program Files or on PATH), so their install path and flags (no xcrun, no -sdk) cannot be
   checked: build_ios (shader_cache_build.rs) and windows.rs stay unchanged until they are installed. The long-press
   design waits on the iPhone test of branch ios-shader-cache-windows (builder at nxport-build\wttarget\release).
+  The user built the test .ipa at 14:40 (has shader_cache/source.pack 7.6 MB, source/index.txt, pipelines.txt). Branch
+  since: 16d165b (Precompile shaders was hidden and off for iOS on Windows, so the window never made the pack),
+  dea256f (progress detail in the worker's .ipa step and the engine's cargo run), f977da0 (phase renamed, as main).
+  **If iOS does not keep source-compiled shaders between launches, the long-press is smaller than I said:**
+  metal/pipeline_archive.rs::build already plans every pipeline in pipelines.txt, builds their descriptors and writes
+  MTLBinaryArchives (serializeToURL) for the GPU it runs on, and load() opens pipelines*.metalar from the cache dir. On
+  the phone it would need: stage libraries compiled from the source pack (compiled_stage / source_set) where build
+  takes load_shader_lib's metallibs and index()'s stages, an output folder in Library/ (the bundle is read-only), and
+  load() scanning that folder too. Then the long-press runs build in the background; the game afterwards gets
+  archive hits (stats() counts them) instead of compiles.
 - **After the release: intermediate versions of a mod's code are compiled at every start (2026-11-10 night).** With
   the user's mods a warm start applies one function, 0x700518a000 (the plugin's code area, written piece by piece
   while the game starts), 56-92 times. Stage timings of the applies (probe around compiled / applying lock / library
