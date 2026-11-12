@@ -112,7 +112,11 @@ and update this file when you finish or drop it.
   design waits on the iPhone test of branch ios-shader-cache-windows (builder at nxport-build\wttarget\release).
   The user built the test .ipa at 14:40 (has shader_cache/source.pack 7.6 MB, source/index.txt, pipelines.txt). Branch
   since: 16d165b (Precompile shaders was hidden and off for iOS on Windows, so the window never made the pack),
-  dea256f (progress detail in the worker's .ipa step and the engine's cargo run), f977da0 (phase renamed, as main).
+  dea256f (progress detail in the worker's .ipa step and the engine's cargo run), f977da0 (phase renamed, as main),
+  80cda67 (icon from the control data, as main 480c493), 1496107 (the user asked "why a codebase per platform": the
+  .ipa's two step lists, apple.rs and windows.rs, merged into builder/src/ios.rs; host differences are leaves.
+  Type-checked for Windows and aarch64-apple-darwin, builder tests pass, **never run on a Mac**: run a Mac .ipa build
+  once before merging the branch).
   **If iOS does not keep source-compiled shaders between launches, the long-press is smaller than I said:**
   metal/pipeline_archive.rs::build already plans every pipeline in pipelines.txt, builds their descriptors and writes
   MTLBinaryArchives (serializeToURL) for the GPU it runs on, and load() opens pipelines*.metalar from the cache dir. On
