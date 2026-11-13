@@ -412,9 +412,9 @@ fn zip_mode(p: &Path) -> std::io::Result<u32> {
 
 /// App icons from the game's logo in the dump; the plist entries, or none without one.
 fn icons(dump: &Path, title_id: u64, app: &Path) -> Result<String, String> {
-    let Some(src) = crate::icon::logo(dump, title_id) else { return Ok(String::new()) };
+    let Some(src) = crate::app_icon::source(dump, title_id) else { return Ok(String::new()) };
     for (file, px) in [("AppIcon60x60@2x.png", 120), ("AppIcon60x60@3x.png", 180), ("AppIcon76x76@2x~ipad.png", 152), ("AppIcon83.5x83.5@2x~ipad.png", 167)] {
-        crate::icon::scaled_png(&src, px, &app.join(file))?;
+        crate::app_icon::scaled_png(&src, px, &app.join(file))?;
     }
     Ok("<key>CFBundleIcons</key><dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array></dict></dict>\
 <key>CFBundleIcons~ipad</key><dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon60x60</string><string>AppIcon76x76</string><string>AppIcon83.5x83.5</string></array></dict></dict>".into())
