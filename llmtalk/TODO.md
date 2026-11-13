@@ -8,6 +8,12 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **A power cut while the builder links can leave zig's cache broken (2026-11-13, win-worker).** After an outage during
+  "Lifting and compiling" (link step), every rebuild failed: lld-link "undefined symbol: ___chkstk_ms" from main_034.o,
+  because zig's cache held a 1 KB compiler_rt.lib (the good one is 1.2 MB). Deleting that one entry did not help; deleting
+  the whole zig-cache (in nxport's data folder, beside builds/) did. A player hitting this sees a link error with no hint.
+  **Fixed the same day:** a failed link is tried once more with zig's cache cleared (lift::compile), and says so.
+
 - **A debug builder overflows its stack translating shaders (seen 2026-11-13 by a win-worker subagent).** A debug
   build of nxport-builder doing a macOS app's shader translation (25,218 stages, the Windows source-pack path) died
   with "thread has overflowed its stack"; the release build does not. Not checked whether new, nor which stage or
