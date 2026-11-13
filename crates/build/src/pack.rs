@@ -208,6 +208,14 @@ fn place(src: &Path, dst: &Path, link: bool) -> std::io::Result<()> {
     copy_dir_recursive(src, dst)
 }
 
+/// The app as `<app>.zip`, its files' modes kept: how a macOS app packed on a host without file modes (Windows) reaches
+/// the Mac with its executable intact. The game files are stored, as in the .ipa.
+pub fn zip_app(app: &Path) -> Result<PathBuf, String> {
+    let out = app.with_file_name(format!("{}.zip", app.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())));
+    crate::bundle_zip::write(app, &out, &|rel| rel.contains("/Resources/Dump/"))?;
+    Ok(out)
+}
+
 pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // The engine build.rs built from this tool's own source, else one next to this tool (a release).
     let candidates = [

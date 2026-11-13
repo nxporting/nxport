@@ -395,21 +395,6 @@ fn set_executable(p: &Path) -> Result<(), String> {
     }
 }
 
-/// A file's mode in the zip. Hosts without modes: Mach-O files are executable.
-fn zip_mode(p: &Path) -> std::io::Result<u32> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::metadata(p).map(|m| m.permissions().mode())
-    }
-    #[cfg(not(unix))]
-    {
-        let mut magic = [0u8; 4];
-        let is_macho = std::io::Read::read_exact(&mut fs::File::open(p)?, &mut magic).is_ok() && u32::from_le_bytes(magic) == 0xfeed_facf;
-        Ok(if is_macho { 0o755 } else { 0o644 })
-    }
-}
-
 /// App icons from the game's logo in the dump; the plist entries, or none without one.
 fn icons(dump: &Path, title_id: u64, app: &Path) -> Result<String, String> {
     let Some(src) = crate::app_icon::source(dump, title_id) else { return Ok(String::new()) };
@@ -489,39 +474,9 @@ const ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 
 /// The .ipa: Payload/ zipped; game files stored as they are (already compressed, and large), the rest deflated.
+/// Payload/ as the .ipa: the game files stored, the rest compressed, with their modes (bundle_zip).
 fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
-    use std::io::Write;
-    use zip::write::SimpleFileOptions;
-    let err = |e: &dyn std::fmt::Display| format!("{}: {e}", ipa.display());
-    let _ = fs::remove_file(ipa);
-    let file = fs::File::create(ipa).map_err(|e| err(&e))?;
-    let mut z = zip::ZipWriter::new(std::io::BufWriter::new(file));
-    let base = payload.parent().unwrap();
-    let mut stack = vec![payload.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let rel = dir.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
-        z.add_directory(format!("{rel}/"), SimpleFileOptions::default()).map_err(|e| err(&e))?;
-        let mut entries: Vec<_> = fs::read_dir(&dir).map_err(|e| err(&e))?.flatten().map(|e| e.path()).collect();
-        entries.sort();
-        for p in entries {
-            if p.is_dir() {
-                stack.push(p);
-                continue;
-            }
-            let rel = p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
-            let stored = rel.contains(".app/Game/");
-            let mode = zip_mode(&p).map_err(|e| err(&e))?;
-            let opts = SimpleFileOptions::default()
-                .compression_method(if stored { zip::CompressionMethod::Stored } else { zip::CompressionMethod::Deflated })
-                .unix_permissions(mode & 0o777)
-                .large_file(fs::metadata(&p).map(|m| m.len() >= u32::MAX as u64).unwrap_or(false));
-            z.start_file(rel, opts).map_err(|e| err(&e))?;
-            let mut f = fs::File::open(&p).map_err(|e| err(&e))?;
-            std::io::copy(&mut f, &mut z).map_err(|e| err(&e))?;
-        }
-    }
-    z.finish().map_err(|e| err(&e))?.flush().map_err(|e| err(&e))?;
-    Ok(())
+    crate::bundle_zip::write(payload, ipa, &|rel| rel.contains(".app/Game/"))
 }
 
 fn mod_matches_tid(p: &Path, tid: u64) -> bool {
