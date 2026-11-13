@@ -356,7 +356,12 @@ fn system(wd: u32) -> R {
         (bits(wd, 19, 2), bits(wd, 16, 3), bits(wd, 12, 4), bits(wd, 8, 4), bits(wd, 5, 3), bits(wd, 0, 5));
     if op0 == 0 && !l {
         if crn == 2 && op1 == 3 && rt == 31 {
-            return op("/* hint */".into()); // nop, yield, wfe, ..., also the PAC hints
+            // HINT #(crm:op2): yield (1) and wfe (2) wait on another thread (runtime/cpu.h RT_PAUSE); nop, sev, the PAC
+            // hints and the rest change nothing here.
+            return match crm << 3 | op2 {
+                1 | 2 => op("RT_PAUSE();".into()),
+                _ => op("/* hint */".into()),
+            };
         }
         if crn == 3 && op1 == 3 && rt == 31 {
             return match op2 {
