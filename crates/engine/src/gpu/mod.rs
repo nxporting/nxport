@@ -134,6 +134,11 @@ pub fn install(b: &'static dyn Backend) {
     }
 }
 
+/// The backend, if one is installed yet.
+pub fn try_backend() -> Option<&'static dyn Backend> {
+    BACKEND.get().copied()
+}
+
 /// The backend, installed before any guest code runs.
 pub fn backend() -> &'static dyn Backend {
     *BACKEND

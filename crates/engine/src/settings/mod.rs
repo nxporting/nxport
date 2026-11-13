@@ -350,6 +350,8 @@ group! {
         /// Capture presented frame N for GPU backend tests: its NVN commands, the memory they reach and the textures only
         /// the GPU holds
         capture_frame: Option<u64> = None,
+        /// With --capture-frame: every presented frame up to this one too, each in its own frame_N directory
+        capture_last: Option<u64> = None,
         /// Where --capture-frame writes (default: the game's data directory's captures/frame_N)
         capture_dir: Option<PathBuf> = None,
         /// Exit once the capture is written
