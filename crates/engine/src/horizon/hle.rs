@@ -3197,9 +3197,10 @@ fn present_paced_wait() {
             if names.is_empty() {
                 return false;
             }
-            let mut b = [0u8; 64];
-            unsafe { libc::pthread_getname_np(libc::pthread_self(), b.as_mut_ptr() as *mut _, b.len()) };
-            let name = std::ffi::CStr::from_bytes_until_nul(&b).map(|c| c.to_bytes()).unwrap_or(&[]);
+            // The name the game gave this thread (nn::os::SetThreadName), the same on every host; the host thread's own
+            // name is set differently per platform.
+            let p = unsafe { hle_nn_os_GetThreadNamePointer(std::ptr::null()) };
+            let name = if p.is_null() { &[][..] } else { unsafe { CStr::from_ptr(p) }.to_bytes() };
             names.iter().any(|n| n.as_bytes() == name)
         })
     });
