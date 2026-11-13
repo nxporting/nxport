@@ -59,6 +59,9 @@ pub struct Sites {
     /// The screen behind the ability wheel and the quick menus (open_short_cut_bg): where the UI manager's pointer is, the
     /// function that finds a screen by its hash, the hash.
     pub short_cut_bg: Option<(usize, usize, u64)>,
+    /// The equipment-switch cooldown's step test (equip_cooldown), where known: its `fmov s1, w8` (FLT_EPSILON), and the
+    /// `ldr s0, [x19, #0x109c]` that loads the cooldown before it (1.0.0 has an add and the constant between them).
+    pub equip_cooldown: Option<(usize, usize)>,
 }
 
 /// An instruction of the hair and cloth clock: (offset, the code expected, its replacement; ADRP_TO_CLOTH: `adrp x8` to
@@ -400,6 +403,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
             }
         }
     }
+    if let Some((at, load)) = s.equip_cooldown {
+        equip_cooldown(base, at, load);
+    }
     if let Some((at, ldr_obj)) = s.ground_carry {
         let carry = vec![
             ldr_obj,     // ldr x8, [xN]
@@ -423,5 +429,28 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     if patch(base, s.lowest, MOVZ_X8_2, MOVZ_X8_1, "lowest interval") && patch(base, s.veto, CBNZ_VETO, NOP, "veto") {
         println!("[+] Frame pacer: lowest present interval 1, drops not vetoed (the frame-rate setting caps it)");
+    }
+}
+
+/// The equipment-switch cooldown (player state +0x109c) is stepped only while it is above FLT_EPSILON, but the equipment
+/// gate blocks weapon, shield and bow changes while it is above 0: a real-time step can leave a remainder in
+/// (0, FLT_EPSILON] that is never stepped again, and equipment stays locked until a load. Compared with 0 instead, the
+/// last step takes it below 0 like any other; whole 30 Hz steps reach exactly 0 either way, so this holds at any rate.
+/// Found on 1.2.1 and 1.4.3 by totk-pc-recomp (issue 18) and MacNativeGames, both MIT; located here in 1.0.0 and 1.1.2
+/// by the same code: the load, this compare, and a branch that hands main + 0x109c to the timer step.
+unsafe fn equip_cooldown(base: usize, at: usize, load_at: usize) {
+    const LDR_S0_COOLDOWN: u32 = 0xbd50_9e60; // ldr s0, [x19, #0x109c]
+    const FMOV_S1_EPSILON: u32 = 0x1e27_0101; // fmov s1, w8 (w8 = FLT_EPSILON)
+    const FMOV_S1_ZERO: u32 = 0x1e27_03e1; // fmov s1, wzr
+    let load = std::ptr::read((base + load_at) as *const u32);
+    let p = (base + at) as *mut u32;
+    match (load, std::ptr::read(p)) {
+        (LDR_S0_COOLDOWN, FMOV_S1_EPSILON) => {
+            std::ptr::write(p, FMOV_S1_ZERO);
+            crate::os::flush_icache(p as usize, 4);
+            println!("[+] Equipment: its switch cooldown runs out at any frame rate");
+        }
+        (LDR_S0_COOLDOWN, FMOV_S1_ZERO) => {}
+        (l, w) => println!("[!] Equipment: unexpected code {l:#010x} {w:#010x} at main+{load_at:#x} / main+{at:#x}; not patched"),
     }
 }

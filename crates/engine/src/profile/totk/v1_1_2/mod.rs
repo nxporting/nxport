@@ -39,6 +39,7 @@ pub static SITES: Sites = Sites {
     ground_carry: Some((0xbbb4b4, 0xf940_0348)), // ldr x8, [x26]
     cloth: None, // 1.1.2 leaves that clock unset
     short_cut_bg: Some((0x462cb20, 0x19af400, 0xc5a4_9707)),
+    equip_cooldown: Some((0xa02330, 0xa0232c)),
 };
 
 /// Screen shapes other than 16:9 (aspect.rs, hud.rs).
