@@ -92,6 +92,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
             if is_single_mod {
                 if matches_game(mods) {
                     packaged_any_mods = true;
+                    crate::mod_check::report(mods, tid, opts.dump_dir);
                     place(mods, &dest_mods, opts.symlink_assets)?;
                 }
             } else {
@@ -105,6 +106,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     packaged_any_mods = true;
+                    crate::mod_check::report(&path, tid, opts.dump_dir);
                     place(&path, &dest_mods.join(entry.file_name()), opts.symlink_assets)?;
                 }
                 if packaged_any_mods {
