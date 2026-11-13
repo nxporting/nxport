@@ -40,8 +40,7 @@ iOS Metal.
    takes windows/nxport.exe beside the builder and carries SDL3.dll; both modules build on every host. Left:
    (1) lifting on a Mac must patch as Windows does: native_rewrites() is `cfg!(nx_native) || FOR_NATIVE`, so a Mac lift
    gets the native rewrites (asked mac-worker to take the loader side; check: its lifted C hashes equal Windows');
-   (2) lift_overlay (code mods) opens the base guest.dll with Library::open to read its tables: off Windows that needs
-   the DLL's exports read from the file instead; (3) builder/src/windows.rs compiled on every host with the Vulkan
+   (2) done: lift_overlay reads the base library's tables from the file (pe_exports.rs); (3) builder/src/windows.rs compiled on every host with the Vulkan
    precompile (and the Windows-host .ipa steps) Windows-only, the engine hash in the lift's inputs taken from
    winapp::engine(), and WindowsApp added to the Mac's Target::ALL; (4) release.yml: the macOS archive gets
    windows/nxport.exe (the Windows job's builder; on branch ios-shader-cache-windows, which already reworks that file).
