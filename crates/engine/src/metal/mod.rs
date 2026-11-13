@@ -237,6 +237,13 @@ pub(crate) struct State {
     pub(super) enc_fb_epoch: u64,
     /// The command being executed comes from a called list recorded in an earlier frame (--log-phases).
     pub(super) in_old_list: bool,
+    /// The last two frames each render target (by storage id) began a pass in, the latest first, and the frame these
+    /// were last pruned in: whether the current pass's targets are drawn every frame (`enc_recur`).
+    pub(super) rt_frames: HashMap<u64, (u64, u64)>,
+    pub(super) rt_frames_pruned: u64,
+    /// One of the current render encoder's targets was drawn in the previous frame too: a draw skipped there while its
+    /// pipeline compiles is drawn again next frame. Elsewhere (a target drawn now and then) its draw waits.
+    pub(super) enc_recur: bool,
     /// Texture pointer -> root id, for the current frame (translated::feedback_snapshots; holds the textures).
     root_memo: HashMap<usize, (Tex, u64)>,
     /// Submitted command buffers the GPU may still be running, oldest first (at most `frames_in_flight()`).
@@ -611,6 +618,9 @@ impl Default for State {
             fb_epoch: 0,
             enc_fb_epoch: 0,
             in_old_list: false,
+            rt_frames: HashMap::default(),
+            rt_frames_pruned: 0,
+            enc_recur: false,
             root_memo: HashMap::default(),
             enc: None,
             issuer: issuer::Issuer::new(),
