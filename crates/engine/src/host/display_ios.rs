@@ -2,7 +2,7 @@
 // full-screen landscape window whose root view hosts a CAMetalLayer, handed to metal/mod.rs like the macOS window's layer.
 // Game controllers are polled on the main thread at 250 Hz (host/input.rs, GameController.framework).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -632,6 +632,7 @@ define_class!(
         #[unsafe(method(poll:))]
         fn poll(&self, _timer: &AnyObject) {
             crate::host::input::poll_controllers(MainThreadMarker::from(self));
+            log_power_state();
         }
 
         // No GPU work while inactive (metal::SUSPENDED): iOS fails command buffers from background apps. The executor
@@ -791,6 +792,30 @@ extern "C" {
         delegate: *const NSString,
     ) -> i32;
     fn NSSetUncaughtExceptionHandler(handler: extern "C" fn(*mut AnyObject));
+}
+
+/// Once a second (from the 250 Hz poll): the device's thermal state and Low Power Mode into the log when they change. A
+/// phone that heats up lowers its clocks; frame-rate reports from a device mean little without this.
+fn log_power_state() {
+    static TICKS: AtomicU32 = AtomicU32::new(0);
+    static LAST: AtomicU32 = AtomicU32::new(u32::MAX);
+    if TICKS.fetch_add(1, Ordering::Relaxed) % 250 != 0 {
+        return;
+    }
+    let Some(cls) = objc2::runtime::AnyClass::get(c"NSProcessInfo") else { return };
+    let (thermal, low_power): (isize, bool) = unsafe {
+        let info: *mut AnyObject = msg_send![cls, processInfo];
+        (msg_send![info, thermalState], msg_send![info, isLowPowerModeEnabled])
+    };
+    let now = (thermal as u32) | (low_power as u32) << 8;
+    if LAST.swap(now, Ordering::Relaxed) != now {
+        let name = ["nominal", "fair", "serious", "critical"].get(thermal as usize).copied().unwrap_or("unknown");
+        println!(
+            "[+] Device: thermal state {name}, Low Power Mode {} (frame {})",
+            if low_power { "on" } else { "off" },
+            crate::gpu::try_backend().map_or(0, |g| g.presented_frames())
+        );
+    }
 }
 
 /// Runs UIApplicationMain with the delegate above. Must be called on the process main thread; never returns.
