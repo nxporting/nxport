@@ -592,7 +592,7 @@ impl Builder {
             let dir = PathBuf::from(self.mods.trim());
             let list = if dir.is_dir() { mods_in(&dir) } else { Vec::new() };
             if list.is_empty() {
-                detail(ui, WARN, &format!("no romfs/ or exefs/ under {}", dir.display()));
+                detail(ui, WARN, &format!("no romfs/, exefs/ or cheats/ under {}", dir.display()));
             }
             for (name, k) in list {
                 let mut parts = Vec::new();
@@ -605,7 +605,10 @@ impl Builder {
                 if k.plugin {
                     parts.push(if lifted { "exefs/subsdk plugin (lifted)" } else { "exefs/subsdk plugin" });
                 }
-                let parts = if parts.is_empty() { "no romfs/ or exefs/".to_string() } else { parts.join(", ") };
+                if k.cheats {
+                    parts.push("cheats/");
+                }
+                let parts = if parts.is_empty() { "no romfs/, exefs/ or cheats/".to_string() } else { parts.join(", ") };
                 detail(ui, MUTED, &format!("{name}: {parts}"));
             }
         }
@@ -1122,6 +1125,7 @@ struct ModKinds {
     romfs: bool,
     patches: bool,
     plugin: bool,
+    cheats: bool,
 }
 
 fn mod_kinds(dir: &Path) -> ModKinds {
@@ -1139,12 +1143,13 @@ fn mod_kinds(dir: &Path) -> ModKinds {
         romfs: sub(&["romfs", "RomFS"]).is_some(),
         patches: files.iter().any(|f| f.ends_with(".ips") || f.ends_with(".pchtxt")),
         plugin: files.iter().any(|f| f.starts_with("subsdk")),
+        cheats: nxport::mods::mod_subdir(dir, "cheats").is_dir(),
     }
 }
 
-/// The mods in `dir`: one folder each, or a single mod's romfs / exefs at the top.
+/// The mods in `dir`: one folder each, or a single mod's romfs / exefs / cheats at the top.
 fn mods_in(dir: &Path) -> Vec<(String, ModKinds)> {
-    if ["romfs", "RomFS", "exefs", "ExeFS"].iter().any(|n| dir.join(n).is_dir()) {
+    if nxport::mods::is_mod_dir(dir) {
         let name = dir.file_name().map_or_else(|| "Mod".into(), |n| n.to_string_lossy().into_owned());
         return vec![(name, mod_kinds(dir))];
     }
