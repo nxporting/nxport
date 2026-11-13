@@ -46,6 +46,16 @@ _Static_assert(sizeof(Cpu) == 1024, "size");
 #define RT_CC
 #endif
 
+// yield and wfe: the guest waits on another thread. The CPU's own spin-wait hint: on x86-64 `pause`, which also lends the
+// core to its other hardware thread (often the one being waited on); on arm64 `yield`. Lifted code had nothing there.
+#if defined(__x86_64__) || defined(__i386__)
+#define RT_PAUSE() __builtin_ia32_pause()
+#elif defined(__aarch64__)
+#define RT_PAUSE() __asm__ volatile("yield")
+#else
+#define RT_PAUSE() ((void)0)
+#endif
+
 typedef void (RT_CC *GuestFn)(Cpu *);
 
 // Builds for games with code mods: a mod patches a function at its entry, and a caller holding an inlined copy would never
