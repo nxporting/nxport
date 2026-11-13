@@ -27,6 +27,11 @@ and update this file when you finish or drop it.
   few frames ahead on a user-interactive QoS thread (off the efficiency cores). Before replacing the decoder, check
   the cheaper causes of "slow then fast": how far ahead the movie HLE decodes, and the decode thread's QoS. Fallback if
   software still falls short: the builder transcodes the movies to HEVC once (every iPhone decodes it in hardware).
+  **Found by reading, same day: decoding runs under the one lock every movie call takes.** horizon/movie.rs
+  d_send_input holds DECODER_LOCK while md_send decodes the frame (VP9: ~17 ms average, 44 ms worst on the PC, more on
+  a phone), and the same lock guards the output side (acquire / release of decoded frames) and the audio decoder. So
+  while a video frame decodes, the game can neither take ready frames nor decode audio: frames bunch up, then come out
+  in a burst. Fix in progress (win-worker): decode outside the lock, take it again only to hand the frames over.
 
 - **macOS parity, open (2026-11-09, Mac session):** (1) TotK 1.1.2 logs "the camera's angle code was not found":
   camera_angles.rs's AROUND pattern does not match 1.1.2, so Exact Mouse Aim does nothing there on any platform (found
