@@ -14,7 +14,9 @@ and update this file when you finish or drop it.
   the whole zig-cache (in nxport's data folder, beside builds/) did. A player hitting this sees a link error with no hint.
   **Fixed the same day:** a failed link is tried once more with zig's cache cleared (lift::compile), and says so.
 
-- **A debug builder overflows its stack translating shaders (seen 2026-11-13 by a win-worker subagent).** A debug
+- **A debug builder overflows its stack translating shaders (seen 2026-11-13 by a win-worker subagent). Fixed the same
+  day:** parallel_progress threads get 64 MiB stacks (reproduced and checked with a debug macOS source pack; the
+  Vulkan path never overflowed). A debug
   build of nxport-builder doing a macOS app's shader translation (25,218 stages, the Windows source-pack path) died
   with "thread has overflowed its stack"; the release build does not. Not checked whether new, nor which stage or
   thread: debug frames are larger, so a deep recursion in sass2spv (or a thread spawned with a small stack) is the
