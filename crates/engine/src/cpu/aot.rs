@@ -4,7 +4,7 @@
 // interposition, HLE trampolines). Every region that would then become executable is registered here instead of being
 // mprotect'ed directly (`make_exec`). The patched bytes do not depend on where things land in a run (code refers to
 // per-run addresses only through data words: `literal`), so they are the same on every launch:
-//   crate::guest_image   builds the image in memory without running the game (nxport-cli wraps it in a signed dylib,
+//   crate::guest_image   builds the image in memory without running the game (the builder wraps it in a signed dylib,
 //                          section __TEXT,__guest); --aot-dump=<file> writes it from a run (with plugin mods, after
 //                          they patched the code);
 //   --aot-image=<dylib> loads that dylib (so the system registers its code signature), checks that each region's

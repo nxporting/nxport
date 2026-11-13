@@ -1,7 +1,7 @@
 // Batched instanced draws: TotK issues runs of consecutive draws that
 // differ only in their uniform buffers (413 boxes per Hateno frame with one 256-byte block each, shadow casters, ...).
 // The Metal stage of the issuer draws such a run as one instanced draw of the pipeline's batched variant, whose stages
-// (crates/cli/src/batch_kernels.rs, `tb_<entry>`) read every constant buffer through a per-instance table of GPU
+// (crates/build/src/batch_kernels.rs, `tb_<entry>`) read every constant buffer through a per-instance table of GPU
 // addresses. Metal keeps primitive order across the instances of a draw, so the result is that of the separate draws.
 //
 // Detection needs no knowledge of the draws: translated::EncCache sends only state that changed, so between two draws

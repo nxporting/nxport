@@ -804,18 +804,9 @@ dependencies = [
  "nxport-pipelines",
  "sdl3",
  "serde",
+ "serde_json",
  "struct-patch",
  "toml",
-]
-
-[[package]]
-name = "nxport-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "nxport",
- "nxport-build",
- "serde_json",
 ]
 
 [[package]]
