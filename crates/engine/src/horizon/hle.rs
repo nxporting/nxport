@@ -3195,7 +3195,10 @@ fn present_paced_wait() {
         static PACED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     }
     let paced = PACED.with(|p| {
-        *p.get().get_or_insert_with(|| {
+        if let Some(v) = p.get() {
+            return v;
+        }
+        let v = (|| {
             let names = PRESENT_PACED.lock().unwrap();
             if names.is_empty() {
                 return false;
@@ -3205,7 +3208,9 @@ fn present_paced_wait() {
             let p = unsafe { hle_nn_os_GetThreadNamePointer(std::ptr::null()) };
             let name = if p.is_null() { &[][..] } else { unsafe { CStr::from_ptr(p) }.to_bytes() };
             names.iter().any(|n| n.as_bytes() == name)
-        })
+        })();
+        p.set(Some(v));
+        v
     });
     if !paced {
         return;
