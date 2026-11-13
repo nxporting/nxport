@@ -1190,12 +1190,15 @@ pub fn build(o: &Options) -> Result<(), String> {
 /// with the metallibs compiled for iOS from the specialized MSL the macOS build keeps in CACHE/work. The engine finds
 /// functions by entry name in whatever libraries it loads, so the grouping into libraries need not match the macOS
 /// build. Incremental: an .air is rebuilt only when its .metal is newer. MSL 3.0 (spirv-cross --msl-version 30000)
-/// needs iOS 16.
+/// needs iOS 16. `keep_arg_variants`: the stages' argument-buffer variants (ab_, --arg-buffers) too; without it they
+/// are cut from the MSL compiled for iOS and their index lines dropped (about a fifth of the libraries' size: an app
+/// that does not draw through argument buffers never loads them).
 pub fn build_ios(
     cache: &Path,
     out: &Path,
     jobs: usize,
     simulator: bool,
+    keep_arg_variants: bool,
     on_progress: Option<&(dyn Fn(IosShaderBuildPhase, usize, usize) + Sync)>,
 ) -> Result<(), String> {
     const IOS_LINK_CHUNK: usize = 150; // fewer files open on iOS than macOS's 50 per library (iOS limits open files)
@@ -1212,6 +1215,11 @@ pub fn build_ios(
         if cache.join(f).exists() {
             std::fs::copy(cache.join(f), out.join(f)).map_err(|e| e.to_string())?;
         }
+    }
+    if !keep_arg_variants {
+        let index = std::fs::read_to_string(out.join("index.txt")).map_err(|e| e.to_string())?;
+        let kept: String = index.lines().filter(|l| !l.starts_with("ab ")).flat_map(|l| [l, "\n"]).collect();
+        std::fs::write(out.join("index.txt"), kept).map_err(|e| e.to_string())?;
     }
     let sdk = if simulator { "iphonesimulator" } else { "iphoneos" };
     let min_flag = if simulator { format!("-mios-simulator-version-min={MIN_IOS}") } else { format!("-mios-version-min={MIN_IOS}") };
@@ -1236,6 +1244,19 @@ pub fn build_ios(
                     by_entry.insert(entry, m);
                 }
             }
+        }
+    }
+    // Without the argument-buffer variants: each stage from a copy of its MSL cut before them (written again only when
+    // its source is newer, so the build stays incremental).
+    if !keep_arg_variants {
+        for (entry, m) in by_entry.iter_mut() {
+            let text = std::fs::read_to_string(&*m).map_err(|e| format!("{}: {e}", m.display()))?;
+            let Some(cut) = text.find(crate::arg_kernels::MARKER) else { continue };
+            let copy = shard_dir(&work, entry).join(format!("{entry}.metal"));
+            if mtime(&copy).is_none() || mtime(&copy) < mtime(m) {
+                std::fs::write(&copy, &text[..cut]).map_err(|e| format!("{}: {e}", copy.display()))?;
+            }
+            *m = copy;
         }
     }
     let todo: Vec<(String, PathBuf)> = by_entry
