@@ -420,6 +420,11 @@ fn fit_layer(bounds: CGRect) {
         return;
     };
     let (bw, bh) = (bounds.size.width, bounds.size.height);
+    // The screen's shape for a game that renders at it (TotK's dynamic aspect ratio): its output then takes this shape,
+    // and the layer below fills the view.
+    if bh > 0.0 {
+        crate::host::live::screen_shape(bw / bh);
+    }
     let (tar_w, tar_h) = target_aspect_ratio();
     let stretch = crate::settings::get().display.stretch;
     let (w, h) = if stretch

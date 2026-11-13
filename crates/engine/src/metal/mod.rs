@@ -35,6 +35,8 @@ mod copy;
 mod fence_guard;
 mod issuer;
 pub mod msl_specialize;
+mod pass_graph;
+mod pass_plan;
 pub mod source_pack;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
@@ -44,6 +46,7 @@ pub(crate) use crate::gpu::report_guard;
 pub(crate) mod rt_guard;
 pub mod shader_cache;
 mod tex_backing;
+mod tex_heap;
 mod translated;
 
 use crate::nvn::api::NvnTexture;
@@ -278,6 +281,9 @@ pub(super) struct TexCache {
     /// Frame each `tex_by_desc` entry was last resolved through (creation, alias view, by-description lookup), for
     /// `sweep_shared_storage`.
     pub(super) desc_used: HashMap<TexDesc, u64>,
+    /// Depth twins of colour textures sampled with depth comparison (translated.rs depth_twin), by the colour texture's
+    /// storage id: (twin, the colour object's generation it was filled at).
+    pub(super) depth_twins: HashMap<u64, (Tex, u64)>,
     /// Frame each texture description was last checked for CPU-side changes (see `refresh_cpu_written`).
     pub(super) tex_checked: HashMap<TexDesc, u64>,
     /// Sparse content samples of compressed textures as of their last full check (see `refresh_cpu_written`).
@@ -313,6 +319,7 @@ impl Default for TexCache {
             alias_of: HashMap::default(),
             tex_by_desc: HashMap::default(),
             desc_used: HashMap::default(),
+            depth_twins: HashMap::default(),
             tex_checked: HashMap::default(),
             tex_sparse: HashMap::default(),
             view_cache: HashMap::default(),
@@ -365,6 +372,8 @@ pub(super) struct EncodeCtx {
         usize,
         usize,
     )>,
+    /// Texture and sampler descriptor heaps of this encoding thread (stages built with --texture-heap).
+    pub(super) heaps: tex_heap::TexHeaps,
 }
 
 impl Default for EncodeCtx {
@@ -384,6 +393,7 @@ impl Default for EncodeCtx {
             translated_hist: HashMap::default(),
             driver_cb_memo: [None, None],
             index_memo: None,
+            heaps: Default::default(),
         }
     }
 }
@@ -401,6 +411,9 @@ pub(super) struct SharedCaches {
     pub(super) repack_bytes: usize,
     /// (stage data, cache entry: CachedStage pointer, 'static) -> the stage's cbuf 1.
     pub(super) const_banks: HashMap<(u64, usize), Retained<ProtocolObject<dyn MTLBuffer>>>,
+    /// Every sampler state made, by descriptor: one Metal object per distinct sampler (samplers that can be used
+    /// through argument buffers are a limited device resource, and pool slots repeat descriptors).
+    pub(super) sampler_states: Vec<(crate::nvn::api::SamplerDesc, Retained<ProtocolObject<dyn MTLSamplerState>>)>,
     pub(super) samplers: HashMap<
         i32,
         (
@@ -429,6 +442,7 @@ impl Default for SharedCaches {
             repack_bytes: 0,
             const_banks: HashMap::default(),
             samplers: HashMap::default(),
+            sampler_states: Vec::new(),
             default_sampler: None,
             ds_states: HashMap::default(),
             translated_pipelines: HashMap::default(),
@@ -1283,6 +1297,10 @@ impl Gfx {
                 .entry((loc.file(), loc.line()))
                 .or_insert(0) += 1;
         }
+        if st.enc.is_some() && pass_graph::on() {
+            let loc = std::panic::Location::caller();
+            println!("[pg]   end by {}:{} after {} draws", loc.file().rsplit('/').next().unwrap_or(""), loc.line(), st.enc_draws);
+        }
         if let Some(e) = st.enc.take() {
             rt_guard::pass_end();
             st.rts_dirty = true;
@@ -1317,6 +1335,9 @@ impl Gfx {
             Some(&objc2_foundation::NSString::from_str("bc proxy resolve")),
         );
         for (proxy, target, level) in std::mem::take(&mut st.bc_pending) {
+            if pass_graph::on() {
+                pass_graph::blit("bc proxy", Some(&proxy), Some(&target));
+            }
             let (bw, bh) = (proxy.width(), proxy.height());
             let bpb = match proxy.pixelFormat() {
                 MTLPixelFormat::RGBA32Uint | MTLPixelFormat::RGBA32Sint => 16,
@@ -2329,7 +2350,7 @@ impl Gfx {
     }
 
     /// Fills every level / layer of `tex` from the guest's block-linear (or pitch-linear) storage.
-    unsafe fn upload_texture(&self, tex: &Tex, t: &NvnTexture) {
+    pub(super) unsafe fn upload_texture(&self, tex: &Tex, t: &NvnTexture) {
         TEXSTAT[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         journal(|| {
             format!(
@@ -2801,193 +2822,14 @@ impl Gfx {
                     }
                     st.point_size = *sz;
                 }
-                Cmd::SetRenderEnableConditional { mode, counters } => {
-                    // Counter reports earlier in the stream were written when they executed, so this sees them in order,
-                    // except SAMPLES_PASSED reports: those are written when their command buffer completes, so a
-                    // condition on one from this submit or an uncompleted one is not known yet while encoding. The GPU
-                    // would evaluate it after the report; Metal has no predication, so such draws render (Ryujinx's
-                    // fallback when a counter is not available). Skipping them instead culled TotK's Hyrule Field grass
-                    // patches (both reports still read 0).
-                    // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them
-                    // (they used to be missed here: conditions on them read stale memory and skipped the draw, e.g. a
-                    // signpost's new LOD for one frame, 2026-10-14).
-                    let unresolved = |a: u64| {
-                        st.occl.pending.iter().any(|(_, r)| *r == a)
-                            || st.inflight.iter().any(|f| {
-                                f.occl.iter().any(|(_, r)| *r == a)
-                                    || f.occl_watched.as_ref().is_some_and(|w| {
-                                        w.lock()
-                                            .unwrap()
-                                            .as_ref()
-                                            .is_some_and(|v| v.iter().any(|(_, r)| *r == a))
-                                    })
-                            })
-                    };
-                    let pending = *counters > 0x10000
-                        && (unresolved(*counters) || unresolved(*counters + 16));
-                    st.render_enabled = if pending {
-                        true
-                    } else if *counters > 0x10000 {
-                        // Report pages held by --report-guard are read through their aliases (the engine never waits).
-                        let p = report_guard::engine_ptr(*counters as usize) as *const u64;
-                        let equal = p.read_unaligned()
-                            == (report_guard::engine_ptr(*counters as usize + 16) as *const u64)
-                                .read_unaligned();
-                        equal == (*mode == 0)
-                    } else {
-                        true
-                    };
-                    let read2 = |c: u64| unsafe {
-                        (
-                            (report_guard::engine_ptr(c as usize) as *const u64).read_unaligned(),
-                            (report_guard::engine_ptr(c as usize + 16) as *const u64)
-                                .read_unaligned(),
-                        )
-                    };
-                    if journal_on() && *counters > 0x10000 {
-                        let (a, b) = read2(*counters);
-                        let en = st.render_enabled;
-                        journal(|| {
-                            format!(
-                                "  cond mode {} @{:#x} [{:#x}, {:#x}]{} -> {}",
-                                mode,
-                                counters,
-                                a,
-                                b,
-                                if pending { " pending" } else { "" },
-                                en
-                            )
-                        });
-                    }
-                    if tracing_frame() && *counters > 0x10000 {
-                        let (a, b) = read2(*counters);
-                        println!("[cmdtrace]   conditional mode={} @{:#x} [{:#x}, {:#x}]{} -> render_enabled={}", mode, counters, a, b, if pending { " (report pending)" } else { "" }, st.render_enabled);
-                    }
-                }
+                Cmd::SetRenderEnableConditional { mode, counters } => self.render_enable_conditional(st, *mode, *counters),
                 Cmd::BindTexturesDeferred {
                     stage,
                     first,
                     count,
                     handles,
-                } => {
-                    for i in 0..(*count).clamp(0, 32) {
-                        let h = if *handles > 0x10000 {
-                            std::ptr::read_unaligned((*handles as *const u64).add(i as usize))
-                        } else {
-                            0
-                        };
-                        st.textures_bound.insert((*stage, *first + i), h);
-                    }
-                }
-                Cmd::SetRenderTargets { colors, depth } => {
-                    let resolve = |r: &crate::nvn::cmd::RtRef| crate::nvn::cmd::RtRef {
-                        texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen),
-                        ..*r
-                    };
-                    let colors: Vec<crate::nvn::cmd::RtRef> = colors.iter().map(resolve).collect();
-                    let depth = depth.as_deref().map(resolve);
-                    if let Some(w) = watch_storage() {
-                        for (i, c) in colors.iter().enumerate() {
-                            if tex_info(c.texture).is_some_and(|(_, t)| t.storage == w) {
-                                println!("[watch] f{} render target c{} = texture 0x{:x} (storage {:#x})", presented_frames() + 1, i, c.texture, w);
-                                // --watch-trace: trace the rest of this frame (and --trace-trigger-frames after it).
-                                if crate::settings::get().trace.watch_trace
-                                    && TRACE_TRIGGERED_FRAME
-                                        .load(std::sync::atomic::Ordering::Relaxed)
-                                        == 0
-                                {
-                                    TRACE_TRIGGERED_FRAME.store(
-                                        presented_frames() + 1,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    // Debug: --log-rt-frames=a-b logs every render-target bind (storage, size, format) in frames a..b.
-                    if let Some(crate::settings::Span {
-                        first: fa,
-                        last: fb,
-                    }) = crate::settings::get().log.log_rt_frames
-                    {
-                        let f = presented_frames() + 1;
-                        if (fa..=fb).contains(&f) {
-                            for (i, c) in colors.iter().enumerate() {
-                                if let Some((_, t)) = tex_info(c.texture) {
-                                    println!("[rt-log] f{} c{} storage {:#x} {}x{}x{} fmt {} levels {} level {} layer {} view_format {}", f, i, t.storage, t.width, t.height, t.depth, t.format, t.levels, c.level, c.layer, c.view_format);
-                                }
-                            }
-                        }
-                    }
-                    // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
-                    // Every target (depth too) ends older holds on its memory.
-                    if rt_guard::enabled() {
-                        for c in colors.iter().chain(depth.iter()) {
-                            let Some((_, t)) = tex_info(c.texture) else { continue };
-                            if let Some(tex) = self.texture(&mut st.tc, c.texture) {
-                                rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
-                            }
-                        }
-                    }
-                    if rt_writeback_enabled() {
-                        let f = presented_frames() + 1;
-                        for c in colors.iter() {
-                            let Some((_, t)) = tex_info(c.texture) else {
-                                continue;
-                            };
-                            // The guard covers targets in CPU-visible pools (rt_guard::hold); the rest keep this.
-                            if rt_guard::enabled() && crate::nvn::api::memory_pool_cpu_writable(t.storage) {
-                                continue;
-                            }
-                            // Only targets not rendered in the previous 4 frames: per-frame targets, swapchain images and
-                            // ping-pong pairs are skipped after their first use, textures rendered once (generated maps)
-                            // are written back.
-                            let prev = st.rt_history.insert(t.storage, f);
-                            if prev.map_or(true, |p| p + 4 < f) {
-                                st.writeback.0.insert(c.texture, f);
-                            }
-                        }
-                        if st.rt_history.len() > 1 << 14 {
-                            st.rt_history.retain(|_, &mut v| v + 600 > f);
-                        }
-                    }
-                    if let Some((ww, wh)) = watch_size() {
-                        for (i, c) in colors.iter().enumerate() {
-                            if let Some((_, t)) = tex_info(c.texture)
-                                .filter(|(_, t)| t.width as u32 == ww && t.height as u32 == wh)
-                            {
-                                println!("[watch-size] f{} render target c{} = texture {:#x} storage {:#x} fmt {} levels {} view {:?}",
-                                    presented_frames() + 1, i, c.texture, t.storage, t.format, t.levels, c);
-                            }
-                        }
-                    }
-                    // Two slots naming one surface (same storage, level and layer): on the GPU both write the same
-                    // memory and a slot a shader does not write leaves it alone. Two Metal attachments of one texture
-                    // each store their own tile at the end of the pass, so an unwritten slot stored its stale tile over
-                    // the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
-                    // only 3: the G-buffer came out empty). The later slot stays unattached; its clears go to the earlier
-                    // one.
-                    let mut colors = colors;
-                    let surface = |c: &crate::nvn::cmd::RtRef| {
-                        tex_info(c.texture).map(|(_, t)| (t.storage, c.level, c.layer))
-                    };
-                    let surfaces: Vec<_> = colors.iter().map(surface).collect();
-                    st.color_dups = (0..colors.len())
-                        .map(|j| match surfaces[j] {
-                            Some(s) if s.0 != 0 => (0..j).find(|&i| surfaces[i] == Some(s)),
-                            _ => None,
-                        })
-                        .collect();
-                    for (j, d) in st.color_dups.iter().enumerate() {
-                        if d.is_some() {
-                            colors[j] = crate::nvn::cmd::RtRef::default();
-                        }
-                    }
-                    st.colors = colors;
-                    st.depth = depth;
-                    st.rts_dirty = true;
-                    st.cached_rts = None;
-                }
+                } => apply_textures_deferred(st, *stage, *first, *count, *handles),
+                Cmd::SetRenderTargets { colors, depth } => self.set_render_targets(st, colors, depth.as_deref()),
                 Cmd::ClearColor { index, rgba, mask } => {
                     st.stats.clears += 1;
                     let index = match st.color_dups.get(*index as usize) {
@@ -3005,15 +2847,7 @@ impl Gfx {
                     st.stats.clears += 1;
                     self.clear_depth(st, cb, *depth, *depth_mask, *stencil, *stencil_mask);
                 }
-                Cmd::BindProgram { program, stages } => {
-                    // NVN_SHADER_STAGE_COMPUTE_BIT: compute and graphics programs are bound independently.
-                    if *stages & 0x20 != 0 {
-                        st.compute_program = Some(*program);
-                    }
-                    if *stages & 0x1F != 0 || *stages == 0 {
-                        st.program = Some(*program);
-                    }
-                }
+                Cmd::BindProgram { program, stages } => apply_program(st, *program, *stages),
                 Cmd::DispatchCompute { x, y, z } => {
                     if translated::enabled() {
                         self.end_encoder(st);
@@ -3129,27 +2963,7 @@ impl Gfx {
                         self.occl_reset(st);
                     }
                 }
-                Cmd::ReportCounter { counter, addr } => {
-                    // Reports are written into guest memory by the engine: older render-target holds there end.
-                    rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
-                    if *counter == 1 && self.real_samples() {
-                        self.occl_report(st, *addr);
-                    } else {
-                        write_counter(*counter, *addr, None);
-                        if *counter == 0 && gpu_timestamps() && *addr >= 0x10000 {
-                            // Rewritten with the GPU's time once the command buffer completes (the CPU time stays as a
-                            // provisional value).
-                            st.ts_pending.push((*addr, st.lb.enc_labels.is_empty()));
-                        }
-                        if *counter == 1 {
-                            report_guard::close(crate::nvn::api::translate_virtual(*addr as usize));
-                        }
-                    }
-                    st.plan_ubo.invalidate(*addr, *addr + 16);
-                    st.cx.ubo_copies.invalidate(*addr, *addr + 16);
-                    st.ubo_plan_epoch += 1;
-                    GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
-                }
+                Cmd::ReportCounter { counter, addr } => self.report_counter(st, *counter, *addr),
                 Cmd::ReportValue { value, addr } => {
                     rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
                     write_counter(0, *addr, Some(*value as u64));
@@ -3167,16 +2981,7 @@ impl Gfx {
                 Cmd::BindChannelMaskState(s) => {
                     st.channel_mask = *s;
                 }
-                Cmd::SetViewport { x, y, w, h } => {
-                    st.viewport = Some((*x, *y, *w, *h));
-                    // The main 3D passes (3+ colour targets: the G-buffer) show the game's render resolution (its
-                    // dynamic resolution scales the viewport): reported with the fps line.
-                    if st.colors.len() >= 3 && *w > 0 && *h > 0 {
-                        // Largest since the last report (area in the high bits).
-                        let (w, h) = ((*w as u64).min(0xFFFFF), (*h as u64).min(0xFFFFF));
-                        SCENE_VIEWPORT.fetch_max((w * h) << 40 | w << 20 | h, Ordering::Relaxed);
-                    }
-                }
+                Cmd::SetViewport { x, y, w, h } => set_viewport(st, *x, *y, *w, *h),
                 Cmd::SetScissor { x, y, w, h } => {
                     st.scissor = Some((*x, *y, *w, *h));
                 }
@@ -3212,18 +3017,7 @@ impl Gfx {
                         st.storage_buffers[*stage as usize][*index as usize] = (*addr, *size);
                     }
                 }
-                Cmd::UpdateUniformBuffer { addr, offset, data } => {
-                    if *addr > 0x10000 && !data.is_empty() {
-                        let dest = (*addr as isize + *offset) as *mut u8;
-                        std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
-                        // Plan-side copies and encode-side copies overlapping the written range are stale now.
-                        let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
-                        st.plan_ubo.invalidate(lo, hi);
-                        st.cx.ubo_copies.invalidate(lo, hi);
-                        st.ubo_plan_epoch += 1;
-                        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                Cmd::UpdateUniformBuffer { addr, offset, data } => update_uniform(st, *addr, *offset, data),
                 Cmd::BindVertexAttribState(attribs) => {
                     st.vertex_attribs = **attribs;
                 }
@@ -3371,6 +3165,141 @@ impl Gfx {
                 Cmd::SetBlendColor(c) => {
                     st.blend_color = *c;
                 }
+                Cmd::RenderState(r) => apply_render_state(st, r),
+                Cmd::VertexInput(v) => apply_vertex_input(st, v),
+                Cmd::ModelDraw(m) => {
+                    use crate::nvn::cmd::ModelItem;
+                    for item in &m.items {
+                        match item {
+                            // The material from the game's objects: the model's vertex input, then the material's
+                            // bindings (replay side B runs the recorded list instead).
+                            ModelItem::Unit { material: Some(mat), .. } if !replay_b() => {
+                                for c in mat.iter() {
+                                    match c {
+                                        Cmd::VertexInput(v) => apply_vertex_input(st, v),
+                                        Cmd::BindTexture { stage, index, handle } => {
+                                            st.textures_bound.insert((*stage, *index), *handle);
+                                        }
+                                        Cmd::BindUniformBuffer { stage, index, addr, size } => {
+                                            st.uniform_buffers.insert((*stage, *index), (*addr, *size));
+                                        }
+                                        Cmd::BindStorageBuffer { stage, index, addr, size } => {
+                                            if (0..6).contains(stage) && (0..16).contains(index) {
+                                                st.storage_buffers[*stage as usize][*index as usize] = (*addr, *size);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            ModelItem::Unit { list, .. } => {
+                                let c = cur.clone();
+                                self.run_list(st, &c, *list, depth + 1);
+                                if let Some(new_cb) = &st.cur_cb {
+                                    if Retained::as_ptr(&cur) != Retained::as_ptr(new_cb) {
+                                        cur = new_cb.clone();
+                                    }
+                                }
+                            }
+                            ModelItem::Bind { stage, index, kind } => apply_model_bind(st, *stage, *index, *kind),
+                            ModelItem::RenderState(r) => apply_render_state(st, r),
+                            ModelItem::Program { program, stages } => apply_program(st, *program, *stages),
+                            ModelItem::Targets { colors, depth } => self.set_render_targets(st, colors, depth.as_ref()),
+                            ModelItem::Fixed(f) => apply_fixed(st, *f),
+                            ModelItem::UpdateUniform { addr, offset, data } => update_uniform(st, *addr, *offset, data),
+                            ModelItem::PointSize(sz) => st.point_size = *sz,
+                            ModelItem::PrimitiveRestart { enable, index } => st.prim_restart = enable.then_some(*index),
+                            ModelItem::Barrier(bits) => {
+                                if bits & 0x10 != 0 {
+                                    st.fb_epoch += 1;
+                                }
+                            }
+                            ModelItem::RenderEnable(e) => {
+                                if journal_on() && st.render_enabled != *e {
+                                    journal(|| format!("  render-enable {}", e));
+                                }
+                                st.render_enabled = *e;
+                            }
+                            ModelItem::RenderEnableConditional { mode, counters } => {
+                                self.render_enable_conditional(st, *mode, *counters)
+                            }
+                            ModelItem::ResetCounter(counter) => {
+                                if *counter == 1 && self.real_samples() {
+                                    self.occl_reset(st);
+                                }
+                            }
+                            ModelItem::ReportCounter { counter, addr } => self.report_counter(st, *counter, *addr),
+                            ModelItem::Dispatch { x, y, z } => {
+                                if translated::enabled() {
+                                    self.end_encoder(st);
+                                    let c = cur.clone();
+                                    self.dispatch_compute(st, &c, *x, *y, *z);
+                                }
+                            }
+                            ModelItem::Clear { .. } | ModelItem::ClearDepth { .. } if !st.render_enabled => {
+                                journal(|| format!("  cond-skip program {:#x}", st.program.unwrap_or(0)));
+                            }
+                            ModelItem::Clear { index, rgba, mask } => {
+                                st.stats.clears += 1;
+                                let index = match st.color_dups.get(*index as usize) {
+                                    Some(Some(i)) => *i as i32,
+                                    _ => *index,
+                                };
+                                let c = cur.clone();
+                                self.clear(st, &c, index, *rgba, *mask);
+                            }
+                            ModelItem::ClearDepth { depth, depth_mask, stencil, stencil_mask } => {
+                                st.stats.clears += 1;
+                                let c = cur.clone();
+                                self.clear_depth(st, &c, *depth, *depth_mask, *stencil, *stencil_mask);
+                            }
+                            ModelItem::Viewport { x, y, w, h, near, far } => {
+                                st.scissor = Some((*x, *y, *w, *h));
+                                set_viewport(st, *x, *y, *w, *h);
+                                st.depth_range = (*near, *far);
+                            }
+                            ModelItem::VertexAttribs(a) => st.vertex_attribs = *a,
+                            ModelItem::VertexStreams(v) => st.vertex_streams.clone_from(v),
+                            ModelItem::TexturesDeferred { stage, first, count, handles } => {
+                                apply_textures_deferred(st, *stage, *first, *count, *handles)
+                            }
+                            // Conditional rendering off: draws are skipped as the commands' are.
+                            ModelItem::Draw(_) | ModelItem::DrawArrays { .. } if !st.render_enabled => {
+                                journal(|| format!("  cond-skip program {:#x}", st.program.unwrap_or(0)));
+                            }
+                            ModelItem::DrawArrays { mode, first, count, base_instance, instances } => {
+                                st.cur_caller = 0;
+                                st.stats.draws += 1;
+                                if st.occl.counting {
+                                    st.occl.draws_seen += 1;
+                                }
+                                if gfx_mode() >= GfxMode::Draws || gfx_mode() == GfxMode::Dry {
+                                    self.draw_arrays(st, &cur, *mode, *first, *count, *base_instance, *instances);
+                                }
+                            }
+                            ModelItem::Draw(r) => {
+                                st.cur_caller = 0;
+                                st.stats.draws += 1;
+                                if st.occl.counting {
+                                    st.occl.draws_seen += 1;
+                                }
+                                if gfx_mode() >= GfxMode::Draws || gfx_mode() == GfxMode::Dry {
+                                    self.draw_elements(
+                                        st,
+                                        &cur,
+                                        r.mode,
+                                        r.index_type,
+                                        r.count,
+                                        r.index_addr,
+                                        r.base_vertex,
+                                        r.base_instance,
+                                        r.instances,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 Cmd::CallCommands(handles) => {
                     // --log-draw-reuse: the call path through lists from earlier frames (per-frame lists change
                     // every frame and are left out).
@@ -3396,6 +3325,207 @@ impl Gfx {
         if let Some((n, t)) = cmd_t {
             note_cmd_time(n, t.elapsed().as_nanos() as u64);
         }
+    }
+
+    /// nvnCommandBufferSetRenderEnableConditional (and the native item).
+    unsafe fn render_enable_conditional(&self, st: &mut State, mode: i32, counters: u64) {
+        let (mode, counters) = (&mode, &counters);
+        // Counter reports earlier in the stream were written when they executed, so this sees them in order,
+        // except SAMPLES_PASSED reports: those are written when their command buffer completes, so a
+        // condition on one from this submit or an uncompleted one is not known yet while encoding. The GPU
+        // would evaluate it after the report; Metal has no predication, so such draws render (Ryujinx's
+        // fallback when a counter is not available). Skipping them instead culled TotK's Hyrule Field grass
+        // patches (both reports still read 0).
+        // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them
+        // (they used to be missed here: conditions on them read stale memory and skipped the draw, e.g. a
+        // signpost's new LOD for one frame, 2026-10-14).
+        let unresolved = |a: u64| {
+            st.occl.pending.iter().any(|(_, r)| *r == a)
+                || st.inflight.iter().any(|f| {
+                    f.occl.iter().any(|(_, r)| *r == a)
+                        || f.occl_watched.as_ref().is_some_and(|w| {
+                            w.lock()
+                                .unwrap()
+                                .as_ref()
+                                .is_some_and(|v| v.iter().any(|(_, r)| *r == a))
+                        })
+                })
+        };
+        let pending = *counters > 0x10000
+            && (unresolved(*counters) || unresolved(*counters + 16));
+        st.render_enabled = if pending {
+            true
+        } else if *counters > 0x10000 {
+            // Report pages held by --report-guard are read through their aliases (the engine never waits).
+            let p = report_guard::engine_ptr(*counters as usize) as *const u64;
+            let equal = p.read_unaligned()
+                == (report_guard::engine_ptr(*counters as usize + 16) as *const u64)
+                    .read_unaligned();
+            equal == (*mode == 0)
+        } else {
+            true
+        };
+        let read2 = |c: u64| unsafe {
+            (
+                (report_guard::engine_ptr(c as usize) as *const u64).read_unaligned(),
+                (report_guard::engine_ptr(c as usize + 16) as *const u64)
+                    .read_unaligned(),
+            )
+        };
+        if journal_on() && *counters > 0x10000 {
+            let (a, b) = read2(*counters);
+            let en = st.render_enabled;
+            journal(|| {
+                format!(
+                    "  cond mode {} @{:#x} [{:#x}, {:#x}]{} -> {}",
+                    mode,
+                    counters,
+                    a,
+                    b,
+                    if pending { " pending" } else { "" },
+                    en
+                )
+            });
+        }
+        if tracing_frame() && *counters > 0x10000 {
+            let (a, b) = read2(*counters);
+            println!("[cmdtrace]   conditional mode={} @{:#x} [{:#x}, {:#x}]{} -> render_enabled={}", mode, counters, a, b, if pending { " (report pending)" } else { "" }, st.render_enabled);
+        }
+    }
+
+    /// nvnCommandBufferReportCounter (and the native item).
+    unsafe fn report_counter(&self, st: &mut State, counter: i32, addr: u64) {
+        let (counter, addr) = (&counter, &addr);
+        // Reports are written into guest memory by the engine: older render-target holds there end.
+        rt_guard::superseded(crate::nvn::api::translate_virtual(*addr as usize), 16);
+        if *counter == 1 && self.real_samples() {
+            self.occl_report(st, *addr);
+        } else {
+            write_counter(*counter, *addr, None);
+            if *counter == 0 && gpu_timestamps() && *addr >= 0x10000 {
+                // Rewritten with the GPU's time once the command buffer completes (the CPU time stays as a
+                // provisional value).
+                st.ts_pending.push((*addr, st.lb.enc_labels.is_empty()));
+            }
+            if *counter == 1 {
+                report_guard::close(crate::nvn::api::translate_virtual(*addr as usize));
+            }
+        }
+        st.plan_ubo.invalidate(*addr, *addr + 16);
+        st.cx.ubo_copies.invalidate(*addr, *addr + 16);
+        st.ubo_plan_epoch += 1;
+        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// nvnCommandBufferSetRenderTargets (and the native targets item): the pass's render targets.
+    unsafe fn set_render_targets(&self, st: &mut State, colors: &[crate::nvn::cmd::RtRef], depth: Option<&crate::nvn::cmd::RtRef>) {
+        let resolve = |r: &crate::nvn::cmd::RtRef| crate::nvn::cmd::RtRef {
+            texture: crate::nvn::api::resolve_texture_ref(r.texture, r.gen),
+            ..*r
+        };
+        let colors: Vec<crate::nvn::cmd::RtRef> = colors.iter().map(resolve).collect();
+        let depth = depth.map(resolve);
+        if let Some(w) = watch_storage() {
+            for (i, c) in colors.iter().enumerate() {
+                if tex_info(c.texture).is_some_and(|(_, t)| t.storage == w) {
+                    println!("[watch] f{} render target c{} = texture 0x{:x} (storage {:#x})", presented_frames() + 1, i, c.texture, w);
+                    // --watch-trace: trace the rest of this frame (and --trace-trigger-frames after it).
+                    if crate::settings::get().trace.watch_trace
+                        && TRACE_TRIGGERED_FRAME
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            == 0
+                    {
+                        TRACE_TRIGGERED_FRAME.store(
+                            presented_frames() + 1,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
+                }
+            }
+        }
+        // Debug: --log-rt-frames=a-b logs every render-target bind (storage, size, format) in frames a..b.
+        if let Some(crate::settings::Span {
+            first: fa,
+            last: fb,
+        }) = crate::settings::get().log.log_rt_frames
+        {
+            let f = presented_frames() + 1;
+            if (fa..=fb).contains(&f) {
+                for (i, c) in colors.iter().enumerate() {
+                    if let Some((_, t)) = tex_info(c.texture) {
+                        println!("[rt-log] f{} c{} storage {:#x} {}x{}x{} fmt {} levels {} level {} layer {} view_format {}", f, i, t.storage, t.width, t.height, t.depth, t.format, t.levels, c.level, c.layer, c.view_format);
+                    }
+                }
+            }
+        }
+        // Render targets in CPU-visible memory reach guest memory when the CPU touches them (metal/rt_guard.rs).
+        // Every target (depth too) ends older holds on its memory.
+        if rt_guard::enabled() {
+            for c in colors.iter().chain(depth.iter()) {
+                let Some((_, t)) = tex_info(c.texture) else { continue };
+                if let Some(tex) = self.texture(&mut st.tc, c.texture) {
+                    rt_guard::hold(&tex, &t, c.level as usize, c.layer as usize);
+                }
+            }
+        }
+        if rt_writeback_enabled() {
+            let f = presented_frames() + 1;
+            for c in colors.iter() {
+                let Some((_, t)) = tex_info(c.texture) else {
+                    continue;
+                };
+                // The guard covers targets in CPU-visible pools (rt_guard::hold); the rest keep this.
+                if rt_guard::enabled() && crate::nvn::api::memory_pool_cpu_writable(t.storage) {
+                    continue;
+                }
+                // Only targets not rendered in the previous 4 frames: per-frame targets, swapchain images and
+                // ping-pong pairs are skipped after their first use, textures rendered once (generated maps)
+                // are written back.
+                let prev = st.rt_history.insert(t.storage, f);
+                if prev.map_or(true, |p| p + 4 < f) {
+                    st.writeback.0.insert(c.texture, f);
+                }
+            }
+            if st.rt_history.len() > 1 << 14 {
+                st.rt_history.retain(|_, &mut v| v + 600 > f);
+            }
+        }
+        if let Some((ww, wh)) = watch_size() {
+            for (i, c) in colors.iter().enumerate() {
+                if let Some((_, t)) = tex_info(c.texture)
+                    .filter(|(_, t)| t.width as u32 == ww && t.height as u32 == wh)
+                {
+                    println!("[watch-size] f{} render target c{} = texture {:#x} storage {:#x} fmt {} levels {} view {:?}",
+                        presented_frames() + 1, i, c.texture, t.storage, t.format, t.levels, c);
+                }
+            }
+        }
+        // Two slots naming one surface (same storage, level and layer): on the GPU both write the same
+        // memory and a slot a shader does not write leaves it alone. Two Metal attachments of one texture
+        // each store their own tile at the end of the pass, so an unwritten slot stored its stale tile over
+        // the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
+        // only 3: the G-buffer came out empty). The later slot stays unattached; its clears go to the earlier
+        // one.
+        let mut colors = colors;
+        let surface = |c: &crate::nvn::cmd::RtRef| {
+            tex_info(c.texture).map(|(_, t)| (t.storage, c.level, c.layer))
+        };
+        let surfaces: Vec<_> = colors.iter().map(surface).collect();
+        st.color_dups = (0..colors.len())
+            .map(|j| match surfaces[j] {
+                Some(s) if s.0 != 0 => (0..j).find(|&i| surfaces[i] == Some(s)),
+                _ => None,
+            })
+            .collect();
+        for (j, d) in st.color_dups.iter().enumerate() {
+            if d.is_some() {
+                colors[j] = crate::nvn::cmd::RtRef::default();
+            }
+        }
+        st.colors = colors;
+        st.depth = depth;
+        st.rts_dirty = true;
+        st.cached_rts = None;
     }
 
     unsafe fn draw_elements(
@@ -5392,6 +5522,10 @@ fn cur_cb_and_ranges(
     st.ubo_updated = ranges;
     st.lists_stack = stack;
     st.submit_lists = submit_lists;
+    if pass_graph::on() {
+        let binds = pass_plan::scan(&st.submit_lists, handles);
+        pass_plan::log(&binds, &pass_plan::groups(&binds));
+    }
     LISTS_SEEN.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
     // Sorted, merged: ubo_updated is a binary search.
     st.ubo_updated.sort_unstable();
@@ -5439,6 +5573,9 @@ fn submit_inner(handles: &[u64]) {
         {
             let mut st = g.state.lock().unwrap();
             st.stats.submits += 1;
+            if pass_graph::on() {
+                println!("[pg] submit {} lists", handles.len());
+            }
             // The issuer thread's encode state (parallel encoding) resets its per-submit memory in stream order.
             st.issuer.push(issuer::Op::SubmitStart);
             st.cx.arena.reset();
@@ -5990,6 +6127,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 _ => t,
             }
         };
+        pass_graph::at_present(presented_frames() + 1, &src);
         if let Some(layer) = g.layer.get().filter(|_| gfx_mode() != GfxMode::Dry) {
             // The drawable (and on iOS the letterboxed layer) follows the shape the game presents: mods render other aspect
             // ratios (UltraCam at the iPhone's 19.5:9).
@@ -8248,5 +8386,119 @@ fn dump_main_image() {
             path.display()
         ),
         Err(e) => println!("[!] main image dump to {} failed: {}", path.display(), e),
+    }
+}
+
+fn apply_vertex_input(st: &mut State, v: &crate::nvn::cmd::VertexInput) {
+    st.vertex_attribs = v.attribs;
+    st.vertex_streams.clone_from(&v.streams);
+    for &(i, a, n) in &v.buffers {
+        st.vertex_buffers.insert(i, (a, n));
+    }
+}
+
+fn apply_render_state(st: &mut State, r: &crate::nvn::cmd::RenderState) {
+    for &b in &r.blend {
+        st.blend_states[(b & 7) as usize] = b;
+    }
+    st.color_state = r.color;
+    st.channel_mask = r.channel_mask;
+    st.blend_color = r.blend_color;
+    st.depth_stencil = r.depth_stencil;
+    if let Some((mask, reference)) = r.stencil {
+        st.stencil = [[reference; 2], [mask; 2], [0xff; 2]];
+    }
+    st.polygon = r.polygon;
+    st.polygon_offset = r.polygon_offset;
+    st.depth_clamp = r.depth_clamp;
+}
+
+fn apply_model_bind(st: &mut State, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) {
+    use crate::nvn::cmd::ModelBindKind;
+    match kind {
+        ModelBindKind::Uniform { addr, size } => {
+            st.uniform_buffers.insert((stage, index), (addr, size));
+        }
+        ModelBindKind::Storage { addr, size } => {
+            if (0..6).contains(&stage) && (0..16).contains(&index) {
+                st.storage_buffers[stage as usize][index as usize] = (addr, size);
+            }
+        }
+        ModelBindKind::Texture(handle) => {
+            st.textures_bound.insert((stage, index), handle);
+        }
+        ModelBindKind::Vertex { addr, size } => {
+            st.vertex_buffers.insert(index, (addr, size));
+        }
+    }
+}
+
+fn apply_program(st: &mut State, program: usize, stages: i32) {
+    // NVN_SHADER_STAGE_COMPUTE_BIT: compute and graphics programs are bound independently.
+    if stages & 0x20 != 0 {
+        st.compute_program = Some(program);
+    }
+    if stages & 0x1F != 0 || stages == 0 {
+        st.program = Some(program);
+    }
+}
+
+unsafe fn apply_textures_deferred(st: &mut State, stage: i32, first: i32, count: i32, handles: u64) {
+    for i in 0..count.clamp(0, 32) {
+        let h = if handles > 0x10000 { std::ptr::read_unaligned((handles as *const u64).add(i as usize)) } else { 0 };
+        st.textures_bound.insert((stage, first + i), h);
+    }
+}
+
+fn set_viewport(st: &mut State, x: i32, y: i32, w: i32, h: i32) {
+    st.viewport = Some((x, y, w, h));
+    // The main 3D passes (3+ colour targets: the G-buffer) show the game's render resolution (its dynamic resolution
+    // scales the viewport): reported with the fps line.
+    if st.colors.len() >= 3 && w > 0 && h > 0 {
+        // Largest since the last report (area in the high bits).
+        let (w, h) = ((w as u64).min(0xFFFFF), (h as u64).min(0xFFFFF));
+        SCENE_VIEWPORT.fetch_max((w * h) << 40 | w << 20 | h, Ordering::Relaxed);
+    }
+}
+
+fn apply_fixed(st: &mut State, f: crate::nvn::cmd::FixedState) {
+    use crate::nvn::cmd::FixedState;
+    match f {
+        FixedState::Blend(v) => st.blend_states[(v & 7) as usize] = v,
+        FixedState::Color(v) => st.color_state = v,
+        FixedState::ChannelMask(v) => st.channel_mask = v,
+        FixedState::BlendColor(c) => st.blend_color = c,
+        FixedState::DepthStencil(v) => st.depth_stencil = v,
+        FixedState::Stencil { kind, faces, value } => {
+            // NVNface: FRONT 1, BACK 2, FRONT_AND_BACK 3.
+            let k = (kind as usize).min(2);
+            if faces & 1 != 0 {
+                st.stencil[k][0] = value as u8;
+            }
+            if faces & 2 != 0 {
+                st.stencil[k][1] = value as u8;
+            }
+        }
+        FixedState::DepthBounds { enable, min, max } => st.depth_bounds = enable.then_some((min, max)),
+        FixedState::Polygon(v) => st.polygon = v,
+        FixedState::PolygonOffset { factor, units, clamp } => st.polygon_offset = (factor, units, clamp),
+        FixedState::Multisample(v) => st.multisample = v,
+        FixedState::DepthClamp(v) => st.depth_clamp = v,
+        FixedState::Scissor { x, y, w, h } => st.scissor = Some((x, y, w, h)),
+        FixedState::Viewport { x, y, w, h } => set_viewport(st, x, y, w, h),
+        FixedState::DepthRange { near, far } => st.depth_range = (near, far),
+    }
+}
+
+unsafe fn update_uniform(st: &mut State, addr: u64, offset: isize, data: &[u8]) {
+    if addr > 0x10000 && !data.is_empty() {
+        let dest = (addr as isize + offset) as *mut u8;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
+        // Plan-side copies and encode-side copies overlapping the written range are stale now.
+        let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
+        st.plan_ubo.invalidate(lo, hi);
+        st.cx.ubo_copies.invalidate(lo, hi);
+        st.ubo_plan_epoch += 1;
+        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
     }
 }

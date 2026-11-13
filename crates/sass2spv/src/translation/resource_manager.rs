@@ -281,6 +281,8 @@ impl ResourceManager {
         };
 
         let definition = TextureDefinition {
+            cbuf_slot: info.cbuf_slot,
+            handle: info.handle,
             set: set_index,
             binding,
             array_length,

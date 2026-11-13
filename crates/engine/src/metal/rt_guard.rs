@@ -24,7 +24,7 @@ use objc2_metal::{
     MTLTextureType,
 };
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use super::Tex;
@@ -92,6 +92,27 @@ static LIVE: AtomicUsize = AtomicUsize::new(0);
 /// Every held range lies in [LO, HI) (widened on hold, never narrowed: a quick reject for engine lookups).
 static LO: AtomicUsize = AtomicUsize::new(usize::MAX);
 static HI: AtomicUsize = AtomicUsize::new(0);
+/// Holds covering each page, counted per page index modulo COUNTS: lookups (engine_ptr, held) skip the slot scan for
+/// pages no hold covers (the engine reads uniform, index and vertex data through engine_ptr for every draw).
+const COUNTS: usize = 1 << 16;
+static PAGE_HOLDS: [AtomicU16; COUNTS] = [const { AtomicU16::new(0) }; COUNTS];
+
+fn page_holds(page: usize) -> &'static AtomicU16 {
+    &PAGE_HOLDS[(page / PAGE) & (COUNTS - 1)]
+}
+
+fn count_holds(start: usize, end: usize, add: bool) {
+    let mut p = start;
+    while p < end {
+        if add {
+            page_holds(p).fetch_add(1, Ordering::AcqRel);
+        } else {
+            page_holds(p).fetch_sub(1, Ordering::AcqRel);
+        }
+        p += PAGE;
+    }
+}
+
 /// Per slot: an engine access opened some of its pages (the next hold of it protects them again).
 static OPENED: [AtomicU8; SLOTS] = [const { AtomicU8::new(0) }; SLOTS];
 /// A guest thread waits for a write-back (the write-back thread polls fast while set).
@@ -188,6 +209,9 @@ fn held(page: usize) -> bool {
     if LIVE.load(Ordering::Acquire) == 0 || page >= HI.load(Ordering::Relaxed) || page + PAGE <= LO.load(Ordering::Relaxed) {
         return false;
     }
+    if page_holds(page).load(Ordering::Acquire) == 0 {
+        return false;
+    }
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
     (0..n).any(|i| covers(i, page))
 }
@@ -217,13 +241,15 @@ unsafe fn open_range(start: usize, end: usize) {
 /// Ends slot `i`'s hold (written back or dropped) and opens its pages (signal-safe: the payload and alias stay until
 /// the slot is reused).
 unsafe fn finish(i: usize) {
+    // The range is fixed while the slot is held (hold() sets it only on a free slot), so read it before freeing.
+    let (start, end) = (START[i].load(Ordering::Acquire), END[i].load(Ordering::Acquire));
     if STATE[i]
         .compare_exchange(HELD, FREE, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
         LIVE.fetch_sub(1, Ordering::AcqRel);
         REQ[i].store(0, Ordering::Release);
-        let (start, end) = (START[i].load(Ordering::Acquire), END[i].load(Ordering::Acquire));
+        count_holds(start, end, false);
         let mut p = start;
         while p < end && p < start + RECENT * PAGE {
             RECENT_PAGES[RECENT_NEXT.fetch_add(1, Ordering::Relaxed) % RECENT].store(p, Ordering::Release);
@@ -238,6 +264,11 @@ unsafe fn finish(i: usize) {
 /// overwrite it. Bytes, not pages: mip levels and layers share pages without sharing texels.
 unsafe fn supersede(start: usize, end: usize, keep: bool, why: Option<&str>) {
     if LIVE.load(Ordering::Acquire) == 0 || start >= HI.load(Ordering::Relaxed) || end <= LO.load(Ordering::Relaxed) {
+        return;
+    }
+    // No hold on any of its pages (short ranges: checking the counts is cheaper than the slot scan).
+    let (p0, p1) = (start & !(PAGE - 1), end.div_ceil(PAGE) * PAGE);
+    if p1 - p0 <= 64 * PAGE && (p0..p1).step_by(PAGE).all(|p| page_holds(p).load(Ordering::Acquire) == 0) {
         return;
     }
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
@@ -381,6 +412,10 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
     LO.fetch_min(start, Ordering::Relaxed);
     HI.fetch_max(end, Ordering::Relaxed);
     let new = STATE[i].swap(HELD, Ordering::AcqRel) != HELD;
+    // Paired with finish's decrement (each transition to HELD counts once), at the same point LIVE counts it.
+    if new {
+        count_holds(start, end, true);
+    }
     super::journal(|| format!("  rt-guard hold {:#x}..{:#x} {}x{} fmt {} level {} layer {}{}", start, end, t.width, t.height, t.format, level, layer, if new { "" } else { " (again)" }));
     super::watch_texture(t);
     super::watch_log(a, a + size as usize, || format!("rt-guard hold {:#x}..{:#x} {}x{} fmt {} level {} layer {}{}", a, a + size as usize, t.width, t.height, t.format, level, layer, if new { "" } else { " (again)" }));
@@ -789,6 +824,9 @@ pub(crate) fn engine_ptr(a: usize) -> Option<usize> {
         return None;
     }
     let page = a & !(PAGE - 1);
+    if page_holds(page).load(Ordering::Acquire) == 0 {
+        return None;
+    }
     let n = HIGH.load(Ordering::Acquire).min(SLOTS);
     (0..n)
         .find(|&i| covers(i, page))

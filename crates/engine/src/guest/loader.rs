@@ -612,6 +612,24 @@ impl GuestMemorySpace {
         base as *const ()
     }
 
+    /// Reserves room for `words` instructions of hook code in the trampoline pool (consecutive entries, filled with
+    /// brk) and returns its address. Code longer than one entry must come from here: a later trampoline would overwrite
+    /// whatever runs past its entry.
+    pub fn make_code_block(&mut self, words: usize) -> *mut u32 {
+        let entries = words.div_ceil(TRAMPOLINE_WORDS).max(1);
+        assert!(
+            self.trampoline_next + entries <= self.trampoline_capacity,
+            "trampoline pool exhausted ({} entries)",
+            self.trampoline_capacity
+        );
+        let base = unsafe { self.trampoline_pool.add(self.trampoline_next * TRAMPOLINE_WORDS) };
+        for w in 0..entries * TRAMPOLINE_WORDS {
+            unsafe { ptr::write(base.add(w), 0xD420_0000u32) }; // brk #0
+        }
+        self.trampoline_next += entries;
+        base
+    }
+
     /// Make the trampoline pool executable (W^X) and flush the icache.
     pub fn finalize_trampoline_pool(&self) {
         if self.trampoline_pool.is_null() {

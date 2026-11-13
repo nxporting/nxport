@@ -135,6 +135,7 @@ pub fn translate_functions(
         binding_base: gpu.host.binding_base,
         fragment_inputs: gpu.host.fragment_inputs,
         sampler_slots: gpu.host.sampler_slots,
+        texture_heap: gpu.host.texture_heap,
         bindless: info.bindless.clone(),
     };
     let (binary_code, msl) = match target {

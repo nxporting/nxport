@@ -2,7 +2,6 @@
 // A macOS .app with the engine, a game dump (ExeFS + RomFS), its mods and its shader cache.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub struct PackOptions<'a> {
@@ -52,10 +51,12 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     let dest_bin = macos.join("nxport");
     copy_file_robust(&engine_bin, &dest_bin)?;
 
-    // Make sure it is executable
-    let mut perms = fs::metadata(&dest_bin)?.permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&dest_bin, perms)?;
+    // Executable on a Unix host; elsewhere the bundle's archive gives it the mode (zip_app).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dest_bin, fs::Permissions::from_mode(0o755))?;
+    }
 
     let frameworks = contents.join("Frameworks");
     let _ = fs::create_dir_all(&frameworks);
@@ -64,31 +65,10 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     let dest_exefs = bundle_dump.join("ExeFS");
     let dest_romfs = bundle_dump.join("RomFS");
 
-    if opts.symlink_assets {
-        println!("  Linking assets (symlinks)...");
-        if dest_exefs.is_symlink() || dest_exefs.exists() {
-            clean_path(&dest_exefs)?;
-        }
-        std::os::unix::fs::symlink(fs::canonicalize(&exefs)?, &dest_exefs)?;
-        if romfs.is_dir() {
-            if dest_romfs.is_symlink() || dest_romfs.exists() {
-                clean_path(&dest_romfs)?;
-            }
-            std::os::unix::fs::symlink(fs::canonicalize(&romfs)?, &dest_romfs)?;
-        }
-    } else {
-        println!("  Copying ExeFS...");
-        if dest_exefs.is_symlink() {
-            clean_path(&dest_exefs)?;
-        }
-        copy_dir_recursive(&exefs, &dest_exefs)?;
-        if romfs.is_dir() {
-            println!("  Copying RomFS (this may take a few moments)...");
-            if dest_romfs.is_symlink() {
-                clean_path(&dest_romfs)?;
-            }
-            copy_dir_recursive(&romfs, &dest_romfs)?;
-        }
+    println!("  {} ExeFS and RomFS...", if opts.symlink_assets { "Linking" } else { "Copying" });
+    place(&exefs, &dest_exefs, opts.symlink_assets)?;
+    if romfs.is_dir() {
+        place(&romfs, &dest_romfs, opts.symlink_assets)?;
     }
 
     // Copy or link Mods if provided, filtering for this game's program ID
@@ -112,19 +92,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
             if is_single_mod {
                 if matches_game(mods) {
                     packaged_any_mods = true;
-                    if opts.symlink_assets {
-                        println!("  Linking mod directory...");
-                        if dest_mods.is_symlink() || dest_mods.exists() {
-                            clean_path(&dest_mods)?;
-                        }
-                        std::os::unix::fs::symlink(fs::canonicalize(mods)?, &dest_mods)?;
-                    } else {
-                        println!("  Copying mod directory...");
-                        if dest_mods.is_symlink() {
-                            clean_path(&dest_mods)?;
-                        }
-                        copy_dir_recursive(mods, &dest_mods)?;
-                    }
+                    place(mods, &dest_mods, opts.symlink_assets)?;
                 }
             } else {
                 for entry in fs::read_dir(mods)? {
@@ -137,19 +105,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     packaged_any_mods = true;
-                    let dest = dest_mods.join(entry.file_name());
-                    if opts.symlink_assets {
-                        if dest.is_symlink() || dest.exists() {
-                            clean_path(&dest)?;
-                        }
-                        let _ = fs::create_dir_all(&dest_mods);
-                        std::os::unix::fs::symlink(fs::canonicalize(&path)?, &dest)?;
-                    } else {
-                        if dest.is_symlink() {
-                            clean_path(&dest)?;
-                        }
-                        copy_dir_recursive(&path, &dest)?;
-                    }
+                    place(&path, &dest_mods.join(entry.file_name()), opts.symlink_assets)?;
                 }
                 if packaged_any_mods {
                     println!("  Included mods from {}", mods.display());
@@ -177,11 +133,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(shader_cache) = opts.shader_cache_dir.filter(|d| d.is_dir()) {
         let dest_cache = resources.join("shader_cache");
         clean_path(&dest_cache)?;
-        if opts.symlink_assets {
-            std::os::unix::fs::symlink(fs::canonicalize(&shader_cache)?, &dest_cache)?;
-        } else {
-            copy_dir_recursive(&shader_cache, &dest_cache)?;
-        }
+        place(shader_cache, &dest_cache, opts.symlink_assets)?;
         println!("  Included shader cache from {}", shader_cache.display());
     }
 
@@ -239,6 +191,31 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     Ok(())
 }
 
+/// `src` placed at `dst`: a symbolic link to it when `link` (quick test apps on a Unix host), else a copy; a link left at
+/// `dst` by an earlier build goes first. Hosts without symbolic links always copy.
+fn place(src: &Path, dst: &Path, link: bool) -> std::io::Result<()> {
+    if dst.is_symlink() || (link && dst.exists()) {
+        clean_path(dst)?;
+    }
+    #[cfg(unix)]
+    if link {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        return std::os::unix::fs::symlink(fs::canonicalize(src)?, dst);
+    }
+    let _ = link;
+    copy_dir_recursive(src, dst)
+}
+
+/// The app as `<app>.zip`, its files' modes kept: how a macOS app packed on a host without file modes (Windows) reaches
+/// the Mac with its executable intact. The game files are stored, as in the .ipa.
+pub fn zip_app(app: &Path) -> Result<PathBuf, String> {
+    let out = app.with_file_name(format!("{}.zip", app.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())));
+    crate::bundle_zip::write(app, &out, &|rel| rel.contains("/Resources/Dump/"))?;
+    Ok(out)
+}
+
 pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
     // The engine build.rs built from this tool's own source, else one next to this tool (a release).
     let candidates = [
@@ -265,7 +242,9 @@ pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Erro
 
 /// Ensures that `path` has user write permissions so it can be modified, overwritten, or removed.
 pub fn ensure_writable(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
     if let Ok(metadata) = fs::symlink_metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
         if !metadata.is_symlink() {
             let mut perms = metadata.permissions();
             let mode = perms.mode();
@@ -274,6 +253,16 @@ pub fn ensure_writable(path: &Path) -> std::io::Result<()> {
                 perms.set_mode(mode | needed);
                 let _ = fs::set_permissions(path, perms);
             }
+        }
+    }
+    // Elsewhere only the read-only attribute stands in the way.
+    #[cfg(not(unix))]
+    if let Ok(metadata) = fs::symlink_metadata(path) {
+        let mut perms = metadata.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = fs::set_permissions(path, perms);
         }
     }
     #[cfg(target_os = "macos")]
@@ -396,16 +385,29 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
                 if dest_path.exists() || dest_path.is_symlink() {
                     let _ = clean_path(&dest_path);
                 }
+                // A link stays a link where the host has them; elsewhere what it points to is copied.
+                #[cfg(unix)]
                 let _ = std::os::unix::fs::symlink(&target, &dest_path);
+                #[cfg(not(unix))]
+                {
+                    let _ = target;
+                    if entry.path().is_dir() {
+                        copy_dir_recursive(&entry.path(), &dest_path)?;
+                    } else {
+                        copy_file_robust(&entry.path(), &dest_path)?;
+                    }
+                }
             }
         }
     }
     Ok(())
 }
 
-#[cfg(test)]
+// The tests set Unix file modes.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     struct TempDir(PathBuf);
     impl TempDir {

@@ -2,6 +2,9 @@
 // the signed guest code image, the Windows app folder), and guest code lifted to C for hosts without the native runtime
 // (lift, compiled with zig cc on Windows).
 
+// Kernels the Metal shader cache build appends (shader_cache_build), on the hosts that build it.
+#[cfg(any(target_os = "macos", windows))]
+mod arg_kernels;
 #[cfg(any(target_os = "macos", windows))]
 mod batch_kernels;
 /// The app icon from the dump, for every target.
@@ -10,12 +13,16 @@ pub mod extract_shaders;
 // The Apple packaging (app bundles, signed Mach-O images, Metal shader caches through xcrun) runs on macOS hosts.
 #[cfg(any(target_os = "macos", windows))]
 pub mod ipa;
+/// Apple bundles zipped with their Unix modes (the .ipa; the macOS app packed on Windows).
+#[cfg(any(target_os = "macos", windows))]
+mod bundle_zip;
 pub mod adhoc_sign;
 pub mod lift;
 pub mod macho;
 pub mod mod_check;
 pub use nxport::metal::msl_specialize;
-#[cfg(target_os = "macos")]
+// The macOS app, packed on any host (PARITY #1).
+#[cfg(any(target_os = "macos", windows))]
 pub mod pack;
 #[cfg(target_os = "macos")]
 pub mod pipeline_archive;

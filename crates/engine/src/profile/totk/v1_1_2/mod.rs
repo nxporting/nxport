@@ -4,6 +4,8 @@
 // The hook writes code of its own into trampolines: native runtime only.
 #[cfg(nx_native)]
 pub mod font_draw;
+#[cfg(nx_native)]
+pub mod model;
 
 use crate::profile::VersionProfile;
 
@@ -93,6 +95,10 @@ pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::lo
     frame_time::install(base, mem_space, &SITES);
     // 3. Mouse aiming reads the camera's angles (installed whatever the settings, as above).
     super::camera_angles::install(base, mem_space);
+    // 4. Placement jobs paced to the present (a scheduling workaround, not a code hook).
+    if crate::settings::get().totk.enhancements.placement_after_present {
+        crate::horizon::hle::pace_to_present("PlacementMgr");
+    }
     #[cfg(nx_native)]
     install_native_hooks(base, mem_space);
 }
@@ -133,7 +139,7 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
 
     // 4. --log-drawables (RE probe): the render-list loop main+0x12de2a0 calls each entry's
     // drawable through its vtable (entry+0x10, slot 0x60) at main+0x12de360 (`blr x8`, the object in x0). The call
-    // branches to a wrapper (a second trampoline entry's 16 words) that saves the argument registers, tells
+    // branches to a wrapper that saves the argument registers, tells
     // nvn::cmd::note_drawable(object, target, context), restores them and makes the call; draws recorded meanwhile carry the
     // drawable (gfx_cmd note_draw_caller).
     if crate::settings::get().totk.diagnostics.log_drawables {
@@ -142,12 +148,8 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
         let site = (base + SITE) as *mut u32;
         let tramp =
             mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize;
-        // Entries are 8 words, made one after another: the wrapper (15 words) takes two, the code after the call a third.
-        let wrap =
-            mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _))) as usize;
-        mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _)));
-        mem_space.make_hle_trampoline(crate::hle!(crate::nvn::cmd::note_drawable(_, _, _)));
-        let post = wrap + 64;
+        let wrap = mem_space.make_code_block(15) as usize;
+        let post = mem_space.make_code_block(8) as usize; // after the call
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;
             (d.abs() < 1 << 27).then(
@@ -207,5 +209,10 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
     let d = &crate::settings::get().totk.diagnostics;
     if d.native_font_draws || d.verify_font_draws {
         font_draw::install(base, mem_space);
+    }
+
+    // 6. The model renderer port (main+0x688c68)
+    if d.verify_model_draws || d.native_model_draws || d.verify_render_lists || d.native_render_lists {
+        model::install(base, mem_space);
     }
 }

@@ -63,6 +63,9 @@ unsafe fn read_level(g: &Gfx, tex: &Tex, level: usize, layer: usize, format: i32
         .device
         .newBufferWithLength_options(len.max(16), MTLResourceOptions::StorageModeShared)?;
     let cb = g.queue.commandBuffer()?;
+    if super::pass_graph::on() {
+        super::pass_graph::blit("readback", Some(tex), None);
+    }
     let blit = cb.blitCommandEncoder()?;
     blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage_options(
         tex,

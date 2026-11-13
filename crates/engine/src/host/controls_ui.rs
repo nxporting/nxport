@@ -1,9 +1,15 @@
-// The game window's keyboard view and the Controls window (app menu > Controls…, Cmd-,), where each Switch input gets a
-// keyboard key and a controller element. Click a binding, then press a key (or a controller button / stick direction);
-// Esc cancels, Delete clears. Changes apply and save immediately (host/input.rs owns the bindings and the file).
+// The game window's keyboard and mouse view and the Controls window (app menu > Controls…, Cmd-,), where each Switch
+// input gets a keyboard key or mouse button and a controller element. Click a binding, then press a key, mouse button
+// (in the window, outside the buttons) or controller button / stick direction; Esc cancels, Delete clears. Changes apply
+// and save immediately (host/input.rs owns the bindings and the file).
+//
+// The mouse, as on Windows (host/display_sdl.rs): with mouse look (Input menu) the window holds it (hidden, its movement
+// turns the camera, its buttons are keys controls.cfg can bind); F8 frees it, and a freed mouse is the touch screen (left
+// button), so menus drawn for touch take its clicks; F8 holds it again. With direct mouse access the game reads the mouse
+// itself. Keys also reach nn::hid's keyboard state (direct keyboard access) by their USB usage.
 //
 // Everything here runs on the main thread. A 250 Hz timer (`tick`) polls controllers, captures controller bindings, and
-// drops held keys when the game window loses focus (its key-up events would go elsewhere).
+// drops held keys and frees the mouse when the game window loses focus (its key-up events would go elsewhere).
 
 use std::cell::RefCell;
 
@@ -18,8 +24,45 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSSt
 
 use crate::host::input::{self, Bindings, PAD_ELEMS, SWITCH_INPUTS};
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
+    fn CGWarpMouseCursorPosition(p: CGPoint) -> i32;
+}
+
+/// F6, F8, F9, F10 and space as macOS virtual key codes.
+const KEY_F6: u16 = 97;
+const KEY_F8: u16 = 100;
+const KEY_F9: u16 = 101;
+const KEY_F10: u16 = 109;
+const KEY_SPACE: u16 = 49;
+
+/// The nn::hid::MouseButtonSet bit of an NSEvent buttonNumber (0 left, 1 right, 2 middle, 3 back, 4 forward).
+fn mouse_bit(number: isize) -> Option<u32> {
+    Some(match number {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 3,
+        _ => return None,
+    })
+}
+
+fn direct_mouse() -> bool {
+    crate::settings::get().input.direct_mouse
+}
+
 define_class!(
-    /// Content view of the game window: forwards key state to host/input.rs (and keeps AppKit from beeping at unhandled keys).
+    /// Content view of the game window: forwards key and mouse state to host/input.rs (and keeps AppKit from beeping at
+    /// unhandled keys).
     #[unsafe(super(NSView, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     pub struct GameView;
@@ -32,50 +75,56 @@ define_class!(
             true
         }
 
+        // The first click on an inactive window reaches the game too (the touch screen, a bound mouse button).
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
+            let code = event.keyCode();
+            let repeat = event.isARepeat();
+            if let Some(u) = input::usage_of_mac_key(code) {
+                input::set_usb_key(u, true);
+            }
             // F9 or space (unless space is bound to a game input): capture the next frame (image + per-draw trace in the
             // log; with --frame-history also the last frames) to show a glitch from a live session.
-            let space_free = || !input::bindings().iter().any(|b| b.key == Some(49));
-            // F6: display pacing of unlocked frame rates on / off (to compare by feel).
-            if event.keyCode() == 97 {
-                if !event.isARepeat() {
-                    crate::metal::toggle_display_pacing();
-                }
-                return;
-            }
-            if event.keyCode() == 101 || (event.keyCode() == 49 && space_free()) {
-                if !event.isARepeat() {
-                    if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
-                        crate::gpu::history::request();
-                        println!("[+] Capture requested: the frame history is written at the next present");
-                    } else {
-                        crate::metal::request_capture();
+            let space_free = || !input::bindings().iter().any(|b| b.key == Some(KEY_SPACE));
+            match code {
+                // F6: display pacing of unlocked frame rates on / off (to compare by feel).
+                KEY_F6 => {
+                    if !repeat {
+                        crate::metal::toggle_display_pacing();
                     }
                 }
-                return;
+                // F8: mouse look frees the mouse, or takes it again.
+                KEY_F8 if input::mouse_look_on() => {
+                    if !repeat {
+                        let held = with_ui(|ui| ui.mouse_held).unwrap_or(false);
+                        hold_mouse(!held);
+                    }
+                }
+                // F10: the performance overlay.
+                KEY_F10 => {
+                    if !repeat {
+                        crate::host::overlay::toggle_overlay();
+                    }
+                }
+                _ if code == KEY_F9 || (code == KEY_SPACE && space_free()) => {
+                    if !repeat {
+                        request_capture();
+                    }
+                }
+                _ => input::set_key(code, true),
             }
-            input::set_key(event.keyCode(), true);
-        }
-
-        // The mouse (left button) is the touch screen: one finger at the cursor while the button is down.
-        #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, event: &NSEvent) {
-            self.mouse_touch(event, false);
-        }
-
-        #[unsafe(method(mouseDragged:))]
-        fn mouse_dragged(&self, event: &NSEvent) {
-            self.mouse_touch(event, false);
-        }
-
-        #[unsafe(method(mouseUp:))]
-        fn mouse_up(&self, event: &NSEvent) {
-            self.mouse_touch(event, true);
         }
 
         #[unsafe(method(keyUp:))]
         fn key_up(&self, event: &NSEvent) {
+            if let Some(u) = input::usage_of_mac_key(event.keyCode()) {
+                input::set_usb_key(u, false);
+            }
             input::set_key(event.keyCode(), false);
         }
 
@@ -83,40 +132,186 @@ define_class!(
         fn flags_changed(&self, event: &NSEvent) {
             let code = event.keyCode();
             if let Some(down) = input::modifier_down(code, event.modifierFlags().0) {
+                if let Some(u) = input::usage_of_mac_key(code) {
+                    input::set_usb_key(u, down);
+                }
                 input::set_key(code, down);
+            }
+        }
+
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            self.motion(event, false);
+        }
+
+        #[unsafe(method(mouseDragged:))]
+        fn mouse_dragged(&self, event: &NSEvent) {
+            self.motion(event, true);
+        }
+
+        #[unsafe(method(rightMouseDragged:))]
+        fn right_mouse_dragged(&self, event: &NSEvent) {
+            self.motion(event, false);
+        }
+
+        #[unsafe(method(otherMouseDragged:))]
+        fn other_mouse_dragged(&self, event: &NSEvent) {
+            self.motion(event, false);
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            self.button(event, true);
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, event: &NSEvent) {
+            self.button(event, false);
+        }
+
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            self.button(event, true);
+        }
+
+        #[unsafe(method(rightMouseUp:))]
+        fn right_mouse_up(&self, event: &NSEvent) {
+            self.button(event, false);
+        }
+
+        #[unsafe(method(otherMouseDown:))]
+        fn other_mouse_down(&self, event: &NSEvent) {
+            self.button(event, true);
+        }
+
+        #[unsafe(method(otherMouseUp:))]
+        fn other_mouse_up(&self, event: &NSEvent) {
+            self.button(event, false);
+        }
+
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            if direct_mouse() {
+                // Wheel units of 120 a notch, as on Windows.
+                input::mouse_wheel((event.deltaY() * 120.0).round() as i32);
             }
         }
     }
 );
+
+/// F9 / space: the frame capture of the backend in use.
+fn request_capture() {
+    if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
+        crate::gpu::history::request();
+        println!("[+] Capture requested: the frame history is written at the next present");
+    } else {
+        crate::metal::request_capture();
+    }
+}
 
 impl GameView {
     pub fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
         unsafe { msg_send![Self::alloc(mtm), initWithFrame: frame] }
     }
 
-    /// The 16:9 drawable is fitted into the view (letterboxed, host/display.rs), so the panel position is the cursor's fraction
-    /// of that fitted rectangle (the view is not flipped: y grows upwards).
-    fn mouse_touch(&self, event: &NSEvent, up: bool) {
-        if up {
-            input::touch_ended(0);
-            return;
-        }
+    /// The game's picture is fitted into the view at the shape it renders at (16:9 letterboxed, or the window's own with
+    /// the dynamic aspect ratio), so a position in it is the cursor's fraction of that fitted rectangle, 0 to 1 across each
+    /// side from the top left (the view is not flipped: y grows upwards).
+    fn game_position(&self, event: &NSEvent) -> (f64, f64) {
         let p = self.convertPoint_fromView(event.locationInWindow(), None);
         let b = self.bounds();
-        if b.size.width > 0.0 && b.size.height > 0.0 {
-            let (w, h) = if b.size.width * 9.0 > b.size.height * 16.0 {
-                (b.size.height * 16.0 / 9.0, b.size.height)
+        if b.size.width <= 0.0 || b.size.height <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let a = crate::profile::rendered_aspect().unwrap_or(16.0 / 9.0);
+        let (w, h) = if b.size.width > b.size.height * a {
+            (b.size.height * a, b.size.height)
+        } else {
+            (b.size.width, b.size.width / a)
+        };
+        let (x0, y0) = ((b.size.width - w) / 2.0, (b.size.height - h) / 2.0);
+        ((p.x - x0) / w, 1.0 - (p.y - y0) / h)
+    }
+
+    fn held() -> bool {
+        with_ui(|ui| ui.mouse_held).unwrap_or(false)
+    }
+
+    /// Movement: the game's own mouse (direct access), mouse look while held, else the touch screen while the left
+    /// button drags.
+    fn motion(&self, event: &NSEvent, left: bool) {
+        if direct_mouse() {
+            let (x, y) = self.game_position(event);
+            input::mouse_moved((x * 1280.0) as i32, (y * 720.0) as i32, event.deltaX() as i32, event.deltaY() as i32);
+        } else if Self::held() {
+            input::mouse_look_moved(event.deltaX() as f32, event.deltaY() as f32);
+        } else if left {
+            let (x, y) = self.game_position(event);
+            input::touch_moved(0, x, y);
+        }
+    }
+
+    /// A button: the game's own mouse (direct access), a bindable key while held (input::MOUSE_KEYS), else the left
+    /// button is the touch screen.
+    fn button(&self, event: &NSEvent, down: bool) {
+        let Some(bit) = mouse_bit(event.buttonNumber()) else { return };
+        if direct_mouse() {
+            input::mouse_button(bit, down);
+        } else if Self::held() {
+            if let Some(&(code, _)) = input::MOUSE_KEYS.get(bit as usize) {
+                input::set_key(code, down);
+            }
+        } else if bit == 0 {
+            if down {
+                let (x, y) = self.game_position(event);
+                input::touch_moved(0, x, y);
             } else {
-                (b.size.width, b.size.width * 9.0 / 16.0)
-            };
-            let (x0, y0) = ((b.size.width - w) / 2.0, (b.size.height - h) / 2.0);
-            input::touch_moved(0, (p.x - x0) / w, 1.0 - (p.y - y0) / h);
+                input::touch_ended(0);
+            }
+        }
+    }
+}
+
+/// Mouse look: hold the mouse in the game window (hidden, its movement relative: the cursor stays put) or free it.
+fn hold_mouse(hold: bool) {
+    let Some(window) = with_ui(|ui| {
+        ui.mouse_held = hold;
+        ui.game_window.clone()
+    })
+    .flatten() else {
+        return;
+    };
+    grab_cursor(&window, hold && window.isKeyWindow());
+}
+
+/// Detaches the cursor from the mouse and hides it over the window's centre (so a click lands in the window), or gives it
+/// back. Balanced: NSCursor counts hides.
+fn grab_cursor(window: &NSWindow, grab: bool) {
+    let grabbed = with_ui(|ui| std::mem::replace(&mut ui.cursor_grabbed, grab)).unwrap_or(false);
+    if grabbed == grab {
+        return;
+    }
+    unsafe {
+        if grab {
+            let f = window.frame();
+            let screen_h = window.screen().map_or(f.origin.y + f.size.height, |s| {
+                // Global display coordinates start at the top of the primary screen.
+                let primary: Option<Retained<objc2_app_kit::NSScreen>> =
+                    objc2_app_kit::NSScreen::screens(MainThreadMarker::from(window)).firstObject();
+                primary.map_or(s.frame().size.height, |p| p.frame().size.height)
+            });
+            CGWarpMouseCursorPosition(CGPoint { x: f.origin.x + f.size.width / 2.0, y: screen_h - (f.origin.y + f.size.height / 2.0) });
+            CGAssociateMouseAndMouseCursorPosition(0);
+            let _: () = msg_send![objc2::class!(NSCursor), hide];
+        } else {
+            CGAssociateMouseAndMouseCursorPosition(1);
+            let _: () = msg_send![objc2::class!(NSCursor), unhide];
         }
     }
 }
 
 define_class!(
-    /// Content view of the Controls window: receives the key press that completes a keyboard binding.
+    /// Content view of the Controls window: receives the key press or mouse button that completes a keyboard binding.
     #[unsafe(super(NSView, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     struct CaptureView;
@@ -146,8 +341,32 @@ define_class!(
                 captured_key(code, Some(()));
             }
         }
+
+        // A mouse button outside the window's buttons binds it (input::MOUSE_KEYS).
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            captured_mouse(event);
+        }
+
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            captured_mouse(event);
+        }
+
+        #[unsafe(method(otherMouseDown:))]
+        fn other_mouse_down(&self, event: &NSEvent) {
+            captured_mouse(event);
+        }
     }
 );
+
+fn captured_mouse(event: &NSEvent) {
+    if let Some(&(code, _)) = mouse_bit(event.buttonNumber()).and_then(|b| input::MOUSE_KEYS.get(b as usize)) {
+        if with_ui(|ui| matches!(ui.capture, Some((_, 0)))).unwrap_or(false) {
+            captured_key(code, None);
+        }
+    }
+}
 
 define_class!(
     /// Target of the Controls window's buttons and of the input timer.
@@ -202,6 +421,14 @@ struct Ui {
     capture: Option<(usize, usize)>,
     /// Controller values when the capture started (lowered as elements are released): only a new press binds.
     baseline: [f32; 25],
+    /// Mouse look holds the mouse (F8 toggles); while the window is not key the cursor is given back meanwhile.
+    mouse_held: bool,
+    /// The cursor is detached and hidden now.
+    cursor_grabbed: bool,
+    /// The game window was key at the last tick.
+    was_key: bool,
+    /// Mouse look was on at the last tick (the menu switches it).
+    mouse_look: bool,
 }
 
 thread_local! {
@@ -234,6 +461,10 @@ pub fn install(mtm: MainThreadMarker, game_window: Option<&NSWindow>) {
             buttons: Vec::new(),
             capture: None,
             baseline: [0.0; 25],
+            mouse_held: false,
+            cursor_grabbed: false,
+            was_key: false,
+            mouse_look: false,
         })
     });
     input::update_npad();
@@ -326,6 +557,7 @@ fn self_test(mtm: MainThreadMarker) {
 
 fn tick(mtm: MainThreadMarker) {
     input::poll_controllers(mtm);
+    follow_focus_and_mouse_look();
     let mut done: Option<(usize, input::PadElem)> = None;
     let mut closed = false;
     with_ui(|ui| {
@@ -361,6 +593,31 @@ fn tick(mtm: MainThreadMarker) {
         b[row].pad = Some(e);
         finish_capture(b);
     }
+}
+
+/// Mouse look switched in the menu takes or frees the mouse; the cursor is given back while the game window is not key
+/// (the Controls window, another app) and taken again when it is, as long as mouse look holds it.
+fn follow_focus_and_mouse_look() {
+    let Some((window, was_key, held, look)) =
+        with_ui(|ui| ui.game_window.clone().map(|w| (w, ui.was_key, ui.mouse_held, ui.mouse_look))).flatten()
+    else {
+        return;
+    };
+    let on = input::mouse_look_on();
+    if on != look {
+        with_ui(|ui| ui.mouse_look = on);
+        hold_mouse(on);
+        println!("[+] Input: mouse look {}", if on { "on (F8 frees the mouse)" } else { "off" });
+    }
+    let key = window.isKeyWindow();
+    if key != was_key {
+        with_ui(|ui| ui.was_key = key);
+        if !key {
+            input::touch_ended(0);
+        }
+    }
+    let held = with_ui(|ui| ui.mouse_held).unwrap_or(held);
+    grab_cursor(&window, held && key);
 }
 
 fn start_capture(row: usize, col: usize) {
@@ -517,7 +774,7 @@ pub fn open(mtm: MainThreadMarker) {
     }
     let foot = TOP + ROW * SWITCH_INPUTS.len() as f64 + 12.0;
     label(
-        "Click a binding, then press a key or a controller button / stick direction. Esc cancels; Delete clears.",
+        "Click a binding, then press a key, mouse button or controller button / stick direction. Esc cancels; Delete clears.",
         NSRect::new(NSPoint::new(20.0, foot), NSSize::new(600.0, 18.0)),
         false,
     );

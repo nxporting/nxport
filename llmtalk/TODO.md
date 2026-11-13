@@ -8,6 +8,38 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
+  28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
+  Windows PC (scratch decode loop, release): DmT_OP_GanonWakeUp_PreRender.webm, 1920x1080 30 fps, 6421 frames at 57.1
+  fps decoded, slowest frame 43.6 ms. A phone has fewer, slower cores, and the first movies play while the engine
+  compiles the listed pipelines (from source on a Windows-built .ipa). To ask the user: also in later movies, after
+  the shader bar is gone? Candidates: hardware VP9 through VideoToolbox (check that iOS lets apps decode VP9 in
+  hardware, and which devices), decoding ahead of the presentation time (helps spikes, not a sustained deficit).
+  Measure on the phone before choosing (the log has the movie's timing if the HLE logs it; else add that).
+
+- **macOS parity, open (2026-11-09, Mac session):** (1) TotK 1.1.2 logs "the camera's angle code was not found":
+  camera_angles.rs's AROUND pattern does not match 1.1.2, so Exact Mouse Aim does nothing there on any platform (found
+  on the Mac's 1.1.2 dump; the Windows work used 1.0.0). (2) Natively the camera pitch and bow-aim hooks
+  (install_decision / install_aim) stay lifted-only: they rewrite instructions mid-function and read x19 / x20 / s14,
+  which natively needs a wrapper that saves every caller-saved register; only the yaw call is hooked on macOS. (3) The
+  Mac menus and mouse look are built but not yet tried in a window.
+- MetalFX upscaling (render below output resolution, upscale) as a future opt-in setting, off by default: it changes
+  the image, so it is not part of the exact performance work (user decision 2026-10-28).
+- **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
+  UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
+  For now, delta time only makes game time follow real time (no physics verification).
+- **iOS images must be patched exactly as the iOS engine patches at start (fixed 2026-11-12, 41d5940; not yet run on
+  the iPhone).** A Windows-built .ipa (TotK 1.0.0, no mods) failed cpu/aot.rs's check: "hle.trampolines: 1 of 4 pages
+  differ (first at +0x9180); x18.island: 50 of 182 pages differ". Causes: (1) capped jump table stubs (6a1b826) stored
+  BASE absolute, and the image is made at FIXED_GUEST_BASE while the phone loads the guest anywhere: now stored as
+  BASE - brk; this also broke Mac-built images since 11-10, both hosts. (2) camera_angles' install_decision /
+  install_aim are compiled only into the lifted engine, so a Windows-made image had 4 trampolines more than the native
+  engine makes (1168 vs 1164; a trampoline's code depends only on its index, so the first differing one gives the
+  count): now skipped when aot::native_rewrites(). Rule: patch decisions follow native_rewrites(), never cfg(nx_native),
+  and patched code holds no absolute address (per-run values go through aot's literal pool). Audited the other
+  cfg(nx_native) branches in cpu/guest/horizon/profile: they change behaviour at run time, not the patched code.
+  Next: the user's .ipa from the fixed builder, then the shader stutter test.
+
 - **After the release: one live-patch library per mod set (startup, up to ~1.8 s of 8.4-9.4 s to the first frame
   with UltraCam).** Measured 11-09: each cached per-function library costs ~10 ms on its first load in a process
   (0.85 ms loading it again; an OS per-file cost, not its code), x ~118 at every start. Design: after a run has applied
@@ -85,13 +117,45 @@ and update this file when you finish or drop it.
   only, outgrown ones kept). Left: GPU-side timing against something outside the queue order the barriers cover (other
   queues or threads submitting, the staging buffer's life in full mode, the relayout descriptor update while earlier
   submits run), or the copy reading a writer image whose own contents are partly stale. Low priority: the flash is
-  fixed; this only matters for bringing the rule back for TotK without mods.
+  fixed; this only matters for bringing the rule back for TotK without mods. By reading (2026-11-12), also not it: a
+  rebuild reading writers drawn in the same unsubmitted chunk (unflushed_over skips writers of the current serial; one
+  queue, so the upload batch's leading full barrier orders it after every earlier submit); the relayout descriptor
+  (push descriptors, recorded into the command buffer, nothing updated while in flight); the scratch growing between
+  two rebuilds of one batch (each binds the buffer it copied into). Also unlikely by reading: the guest-byte snapshot
+  as the base (in memory the CPU cannot reach nothing writes guest bytes: the game cannot, and flush_overlaps drops
+  writers there via guest_can_take, so the snapshot is the same every frame). Writers copied whole is deterministic too.
+  What does vary with timing, to test next: which route a refresh takes depends on when submits complete (refresh skips
+  an image GPU-written in a submit not yet settled; settle runs on completion), and which writers count depends on
+  which submit they were recorded in (unflushed_over / overwritten_since skip the current serial), which time-based
+  chunk splits move. A probe logging, per rebuild of 400x228f37, its settled state, the route (incremental or from
+  guest bytes) and the writers' serials, compared between a flash frame and its neighbours, should tell. Written, not
+  yet compiled or run (2026-11-12, session scratchpad rb_timing_probe.diff): rb_all_probe plus `[rb-skip]` lines for
+  refreshes skipped while the image's own write is in flight, and serial / own submit / each writer's submit and
+  settled state on `[rb]` lines; run as before with NX_ANYPOOL_ONLY=400x228f37 and the frame history.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
   .metallib; Unreal uses them for iOS shaders on Windows) could build it: shader_cache_build.rs would call them on
   Windows (same chunks), windows.rs would pass the cache to ipa::build. The tools need an Apple developer login to
   download, so the builder can only find an installed copy and fall back to no cache. Waiting on the user (install).
+  2026-11-12: the user wants both routes (these tools when installed, else a long-press precompile on the phone). Not
+  installed here (nothing in Program Files or on PATH), so their install path and flags (no xcrun, no -sdk) cannot be
+  checked: build_ios (shader_cache_build.rs) and windows.rs stay unchanged until they are installed. The long-press
+  design waits on the iPhone test of branch ios-shader-cache-windows (builder at nxport-build\wttarget\release).
+  The user built the test .ipa at 14:40 (has shader_cache/source.pack 7.6 MB, source/index.txt, pipelines.txt). Branch
+  since: 16d165b (Precompile shaders was hidden and off for iOS on Windows, so the window never made the pack),
+  dea256f (progress detail in the worker's .ipa step and the engine's cargo run), f977da0 (phase renamed, as main),
+  80cda67 (icon from the control data, as main 480c493), 1496107 (the user asked "why a codebase per platform": the
+  .ipa's two step lists, apple.rs and windows.rs, merged into builder/src/ios.rs; host differences are leaves.
+  Type-checked for Windows and aarch64-apple-darwin, builder tests pass, **never run on a Mac**: run a Mac .ipa build
+  once before merging the branch).
+  **If iOS does not keep source-compiled shaders between launches, the long-press is smaller than I said:**
+  metal/pipeline_archive.rs::build already plans every pipeline in pipelines.txt, builds their descriptors and writes
+  MTLBinaryArchives (serializeToURL) for the GPU it runs on, and load() opens pipelines*.metalar from the cache dir. On
+  the phone it would need: stage libraries compiled from the source pack (compiled_stage / source_set) where build
+  takes load_shader_lib's metallibs and index()'s stages, an output folder in Library/ (the bundle is read-only), and
+  load() scanning that folder too. Then the long-press runs build in the background; the game afterwards gets
+  archive hits (stats() counts them) instead of compiles.
 - **After the release: intermediate versions of a mod's code are compiled at every start (2026-11-10 night).** With
   the user's mods a warm start applies one function, 0x700518a000 (the plugin's code area, written piece by piece
   while the game starts), 56-92 times. Stage timings of the applies (probe around compiled / applying lock / library
@@ -545,6 +609,19 @@ and update this file when you finish or drop it.
 
 ## Done recently
 
+- **macOS brought level with Windows (2026-11-09, Mac session, after merging origin/main into the Mac's main).**
+  Menus: one definition, host/menu.rs (items, check marks, availability, commands); menu_win.rs only draws it, the Mac
+  draws the same items with AppKit. Mouse: mouse look, F8, buttons as keys, direct mouse and keyboard
+  (input::usage_of_mac_key, the SDL table moved to input.rs). The frame-rate limit now paces natively too (it was
+  lifted-only: no 90 / 120 / 144 on the Mac; headless Mac benchmarks now need a raised limit, as on Windows); the
+  Mac window reports the refresh rate; the Metal layer follows VSync (displaySyncEnabled was never set) and Low
+  Latency; rumble follows the live switches; a Finder-started app shows startup errors / svcBreak in an alert.
+  Fixed for Windows: nvn/frame_map.rs used pthread_mach_thread_np (main's native-command work broke the Windows
+  build). Windows type-checks from the Mac: cargo check --target x86_64-pc-windows-msvc with CC/CXX/AR for that
+  target pointed at a script that only creates the output files. Checked on the Mac: release builder and both
+  engines build, release test set passes; the builder with an empty HOME built TotK 1.1.2 (25218 of 25220 stages,
+  ~21 min Metal compile, 2357 pipelines precompiled) and that app reached Hateno gameplay, picture right; a 4000-frame
+  glitch scan had 0 flashes / sky dips and the report guard 0 timeouts / repairs / late retries (its retry fix, run).
 - **Lifted code's CPU target measured, left native** (S41L0R Windows Machine): `zig cc -target x86_64-windows-gnu`
   (the x86-64-v3 flags, generic tuning) ran TotK 11% slower than the default `-mcpu=native` (shrine, headless,
   uncapped: 147 -> 131 fps steady), so apps stay built for the building machine. Objects now recompile when the

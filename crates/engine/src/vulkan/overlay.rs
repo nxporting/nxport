@@ -1,5 +1,5 @@
-// The performance overlay (host/overlay.rs) on Vulkan: Dear ImGui's draw data drawn over the swapchain image, in the
-// command buffer that blits the frame to it. Nothing here runs until the overlay is turned on.
+// The overlays on Vulkan (host/overlay.rs: the performance window; the shader progress bar): Dear ImGui's draw data
+// drawn over the swapchain image, in the command buffer that blits the frame to it. Nothing here runs until one is shown.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -427,10 +427,14 @@ unsafe fn make(dev: &Dev, slots: usize) -> Result<Overlay, String> {
     Ok(Overlay { ctx, consumer, gpu: Gpu::new(dev, slots)? })
 }
 
-/// Draws the overlay over `image`, a swapchain image in TRANSFER_DST_OPTIMAL with its frame's picture, if the overlay is
-/// on. True: it is now in COLOR_ATTACHMENT_OPTIMAL. `slot` is the window's slot, whose fence has been waited on.
+/// Draws the overlays over `image`, a swapchain image in TRANSFER_DST_OPTIMAL with its frame's picture: the performance
+/// window if it is on, the shader progress bar while the picture waits on shaders. True: it is now in
+/// COLOR_ATTACHMENT_OPTIMAL. `slot` is the window's slot, whose fence has been waited on.
 pub(super) unsafe fn record(dev: &Dev, cb: vk::CommandBuffer, image: vk::Image, extent: vk::Extent2D, slot: usize, slots: usize) -> bool {
-    if !crate::host::overlay::is_overlay_enabled() || FAILED.with(|f| f.get()) {
+    // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
+    let progress = crate::gpu::pipeline_list::take_frame_progress();
+    let perf = crate::host::overlay::is_overlay_enabled();
+    if (!perf && progress.is_none()) || FAILED.with(|f| f.get()) {
         return false;
     }
     STATE.with(|st| {
@@ -454,7 +458,12 @@ pub(super) unsafe fn record(dev: &Dev, cb: vk::CommandBuffer, image: vk::Image, 
         io.set_display_framebuffer_scale([1.0, 1.0]);
         io.set_delta_time(stats.frame_time_ms.max(1.0) / 1000.0);
         let frame = o.ctx.begin_frame();
-        crate::host::overlay::draw_window(frame.ui(), w, &stats, &times[..count]);
+        if perf {
+            crate::host::overlay::draw_window(frame.ui(), w, &stats, &times[..count]);
+        }
+        if let Some(listed) = progress {
+            crate::perf_stats::draw_shader_progress(frame.ui(), w, h, listed);
+        }
         let pending = frame.render(&o.consumer);
         let result = o.gpu.textures(dev, cb, pending).and_then(|rendered| o.gpu.draw(dev, cb, image, extent, slot, rendered.draw_data()));
         if let Err(e) = result {

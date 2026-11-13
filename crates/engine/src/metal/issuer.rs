@@ -18,8 +18,8 @@ use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder,
     MTLComputePipelineState, MTLCullMode, MTLDepthClipMode, MTLDepthStencilState, MTLIndexType,
     MTLPrimitiveType, MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLRenderPipelineState,
-    MTLSamplerState, MTLScissorRect, MTLSize, MTLTexture, MTLTriangleFillMode, MTLViewport,
-    MTLVisibilityResultMode, MTLWinding,
+    MTLRenderStages, MTLResource, MTLResourceUsage, MTLSamplerState, MTLScissorRect, MTLSize, MTLTexture,
+    MTLTriangleFillMode, MTLViewport, MTLVisibilityResultMode, MTLWinding,
 };
 
 type Buf = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -40,6 +40,15 @@ pub(super) enum Op {
         label: String,
     },
     End,
+    /// An argument-buffer draw's per-stage structs (bound at buffer 0 of each stage) and the resources they point to
+    /// (made resident once per encoder).
+    ArgStructs {
+        v: Box<[u64]>,
+        f: Box<[u64]>,
+        res: Vec<(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage)>,
+    },
+    /// A resource draws reach only through descriptor heaps (metal/tex_heap.rs): made resident once per encoder.
+    Use(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage),
     Pipeline(Retained<ProtocolObject<dyn MTLRenderPipelineState>>),
     Viewport(MTLViewport),
     Scissor(MTLScissorRect),
@@ -89,10 +98,14 @@ pub(super) enum Op {
     CBuf(Buf, usize, usize),
     CTex(Tex, usize),
     CSamp(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize),
+    /// Op::Use for the compute encoder.
+    CUse(Retained<ProtocolObject<dyn MTLResource>>, MTLResourceUsage),
     CDispatch(MTLSize, MTLSize),
     /// Tiny compute draws: continue the compute encoder a previous tiny draw left open on the same
     /// command buffer (its dispatches run in order: serial dispatch), else begin one.
-    CJoin(Retained<ProtocolObject<dyn MTLCommandBuffer>>, String),
+    /// With `fresh`, always a new encoder: what the next dispatches read only through descriptor heaps is ordered after
+    /// earlier dispatches' writes only across encoders (no hazard tracking between dispatches of one encoder for it).
+    CJoin(Retained<ProtocolObject<dyn MTLCommandBuffer>>, String, bool),
     /// Leave the compute encoder open for the next CJoin; any other op (or the issuer going idle) ends it first.
     CLinger,
     /// A blit pass (buffer / texture copies, fills): `f` encodes the commands. Queued in order so the encoding thread does
@@ -138,6 +151,7 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
             | Op::CBuf(..)
             | Op::CTex(..)
             | Op::CSamp(..)
+            | Op::CUse(..)
             | Op::CDispatch(..)
             | Op::CJoin(..)
             | Op::CLinger
@@ -148,9 +162,10 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
     if !render && super::batch::pending() {
         super::batch::flush(enc, &mut |o, e| exec_render(o, e));
     }
-    if let Op::CJoin(cb, label) = op {
+    if let Op::CJoin(cb, label, fresh) = op {
         JOINED.with(|j| *j.borrow_mut() = Some(cb.clone()));
-        let same = LINGER
+        let same = !fresh
+            && LINGER
             .with(|l| l.borrow_mut().take())
             .is_some_and(|c| std::ptr::eq(&*c, &*cb))
             && cenc.is_some();
@@ -172,6 +187,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
     end_linger(cenc);
     match op {
         Op::CBegin(cb, label) => {
+            if super::pass_graph::on() {
+                super::pass_graph::compute_pass(&label);
+            }
             super::ISSUED_PASSES[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *cenc = match super::pass_prof::compute_pass(&label) {
                 Some(d) => cb.computeCommandEncoderWithDescriptor(&d),
@@ -199,6 +217,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
             return;
         }
         Op::CTex(t, i) => {
+            if super::pass_graph::on() {
+                super::pass_graph::bind(&t, b'c', i);
+            }
             if let Some(e) = cenc.as_ref() {
                 e.setTexture_atIndex(Some(&t), i)
             }
@@ -210,7 +231,16 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
             }
             return;
         }
+        Op::CUse(x, usage) => {
+            if let Some(e) = cenc.as_ref() {
+                e.useResource_usage(&x, usage)
+            }
+            return;
+        }
         Op::CDispatch(groups, threads) => {
+            if super::pass_graph::on() {
+                super::pass_graph::dispatch((groups.width, groups.height, groups.depth), (threads.width, threads.height, threads.depth));
+            }
             if let Some(e) = cenc.as_ref() {
                 e.dispatchThreadgroups_threadsPerThreadgroup(groups, threads)
             }
@@ -219,6 +249,9 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
         Op::Blit { cb, label, f } => {
             if let Some(e) = enc.take() {
                 e.endEncoding(); // never expected: the encoding thread ends its render encoder first
+            }
+            if super::pass_graph::on() {
+                super::pass_graph::blit(label, None, None);
             }
             match cb.blitCommandEncoder() {
                 Some(b) => {
@@ -237,9 +270,18 @@ unsafe fn exec(op: Op, enc: &mut Option<Enc>, cenc: &mut Option<CEnc>) {
     }
 }
 
+thread_local! {
+    /// Resources made resident (useResource) in the current render encoder, with their usage.
+    static RESIDENT: std::cell::RefCell<rustc_hash::FxHashSet<(usize, usize)>> = std::cell::RefCell::new(Default::default());
+}
+
 /// Executes one render-encoder (or commit) op.
 unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
     if let Op::Begin { cb, desc, label } = op {
+        RESIDENT.with(|r| r.borrow_mut().clear());
+        if super::pass_graph::on() {
+            super::pass_graph::render_pass(&desc, &label);
+        }
         super::pass_prof::render_pass(&desc);
         super::ISSUED_PASSES[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *enc = cb.renderCommandEncoderWithDescriptor(&desc);
@@ -283,12 +325,50 @@ unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
         Op::DepthStencil(d) => e.setDepthStencilState(Some(&d)),
         Op::StencilRef(f, b) => e.setStencilFrontReferenceValue_backReferenceValue(f, b),
         Op::Blend(c) => e.setBlendColorRed_green_blue_alpha(c[0], c[1], c[2], c[3]),
+        Op::Use(x, usage) => {
+            let k = (&*x as *const ProtocolObject<dyn MTLResource> as *const u8 as usize, usage.0);
+            if RESIDENT.with(|r| r.borrow_mut().insert(k)) {
+                e.useResource_usage_stages(&x, usage, MTLRenderStages::Vertex | MTLRenderStages::Fragment);
+            }
+        }
+        Op::ArgStructs { v, f, res } => {
+            RESIDENT.with(|r| {
+                let mut r = r.borrow_mut();
+                for (x, usage) in &res {
+                    let k = (&**x as *const ProtocolObject<dyn MTLResource> as *const u8 as usize, usage.0);
+                    if r.insert(k) {
+                        e.useResource_usage_stages(x, *usage, MTLRenderStages::Vertex | MTLRenderStages::Fragment);
+                    }
+                }
+            });
+            for (t, vertex) in [(&v, true), (&f, false)] {
+                if t.is_empty() {
+                    continue;
+                }
+                let ptr = std::ptr::NonNull::new(t.as_ptr() as *mut libc::c_void).unwrap();
+                if vertex {
+                    e.setVertexBytes_length_atIndex(ptr, t.len() * 8, 0);
+                } else {
+                    e.setFragmentBytes_length_atIndex(ptr, t.len() * 8, 0);
+                }
+            }
+        }
         Op::VBuf(b, off, i) => e.setVertexBuffer_offset_atIndex(Some(&b), off, i),
         Op::FBuf(b, off, i) => e.setFragmentBuffer_offset_atIndex(Some(&b), off, i),
         Op::VBufOff(off, i) => e.setVertexBufferOffset_atIndex(off, i),
         Op::FBufOff(off, i) => e.setFragmentBufferOffset_atIndex(off, i),
-        Op::VTex(t, i) => e.setVertexTexture_atIndex(Some(&t), i),
-        Op::FTex(t, i) => e.setFragmentTexture_atIndex(Some(&t), i),
+        Op::VTex(t, i) => {
+            if super::pass_graph::on() {
+                super::pass_graph::bind(&t, b'v', i);
+            }
+            e.setVertexTexture_atIndex(Some(&t), i)
+        }
+        Op::FTex(t, i) => {
+            if super::pass_graph::on() {
+                super::pass_graph::bind(&t, b'f', i);
+            }
+            e.setFragmentTexture_atIndex(Some(&t), i)
+        }
         Op::VSamp(s, i) => e.setVertexSamplerState_atIndex(s.as_deref(), i),
         Op::FSamp(s, i) => e.setFragmentSamplerState_atIndex(s.as_deref(), i),
         Op::Visibility(m, off) => e.setVisibilityResultMode_offset(m, off),
@@ -306,7 +386,7 @@ unsafe fn exec_render(op: Op, enc: &mut Option<Enc>) {
         Op::PushGroup(s) => e.pushDebugGroup(&NSString::from_str(&s)),
         Op::PopGroup => e.popDebugGroup(),
         Op::Begin { .. } | Op::End | Op::Commit(..) => {}
-        Op::CBegin(..) | Op::CPipeline(_) | Op::CBuf(..) | Op::CTex(..) | Op::CSamp(..) | Op::CDispatch(..) | Op::CJoin(..) | Op::CLinger | Op::Blit { .. } => {}
+        Op::CBegin(..) | Op::CPipeline(_) | Op::CBuf(..) | Op::CTex(..) | Op::CSamp(..) | Op::CUse(..) | Op::CDispatch(..) | Op::CJoin(..) | Op::CLinger | Op::Blit { .. } => {}
         Op::DrawJob(_) | Op::SubmitStart => {} // handled by the issuer thread's loop (never queued in inline mode)
     }
 }

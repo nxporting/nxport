@@ -205,7 +205,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         return;
     }
     let tramp = mem_space.make_hle_trampoline(crate::hle!(on_rect_drawer_add_draw(_, _, _, _, _, _, _))) as usize;
-    let wrap = mem_space.make_hle_trampoline(crate::hle!(on_rect_drawer_add_draw(_, _, _, _, _, _, _))) as usize;
+    let wrap = mem_space.make_code_block(16) as usize;
     let b = |from: usize, to: usize, link: bool| -> Option<u32> {
         let d = to as i64 - from as i64;
         (d.abs() < 1 << 27).then(|| (if link { 0x9400_0000 } else { 0x1400_0000 }) | ((d >> 2) as u32 & 0x03ff_ffff))

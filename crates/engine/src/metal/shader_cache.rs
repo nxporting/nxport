@@ -67,6 +67,11 @@ pub struct CachedStage {
     /// The stage clamps computed constant buffer reads to the bound sizes the engine writes into the driver cbuf (index
     /// line `cl`; msl_specialize.bound_cbuf_reads): it needs binding 17 even when it reads nothing else there.
     pub cbuf_limits: bool,
+    /// Sampled textures of the bound texture table come from the descriptor heaps (index line `th`): the engine
+    /// writes heap addresses and handles into the driver cbuf (binding 17) instead of binding textures.
+    pub texture_heap: bool,
+    /// A heap stage whose tiny kernels take their samplers as parameters (index line `tks`).
+    pub tiny_samplers: bool,
     /// The stage has a compute version for the tiny-pass path (index line `tk`): tkv_<entry> for a
     /// vertex stage, tkf_<entry> for a fragment stage.
     pub tiny_kernel: bool,
@@ -78,6 +83,10 @@ pub struct CachedStage {
     /// The stage has a batched variant tb_<entry> (index line `tb`, crates/cli/src/batch_kernels.rs): the constant
     /// buffer bindings its address table holds, in order.
     pub batch_cbufs: Option<Vec<u32>>,
+    /// The stage has an argument-buffer variant ab_<entry> (index line `ab`, crates/build/src/arg_kernels.rs): its
+    /// struct's members in order, (class, original binding) with class b'c' constant buffer, b'b' device buffer,
+    /// b't' texture, b's' sampler.
+    pub args: Option<Vec<(u8, u32)>>,
     /// Compute workgroup size (the kernel does not declare it; Metal takes it at dispatch).
     pub local_size: [u32; 3],
     /// Fragment stage only: its SPH says it can discard (KillsPixels), writes depth or sample mask, or stores to
@@ -175,10 +184,13 @@ fn parse_index(text: &str) -> Index {
                         sbuffers: Vec::new(),
                         sb_readonly: Vec::new(),
                         cbuf_limits: false,
+                        texture_heap: false,
+                        tiny_samplers: false,
                         tiny_kernel: false,
                         tiny_implicit: None,
                         tiny_clears: false,
                         batch_cbufs: None,
+                        args: None,
                         local_size: [1, 1, 1],
                         fs_effects: OnceLock::new(),
                     },
@@ -211,9 +223,27 @@ fn parse_index(text: &str) -> Index {
                     st.cbuf_limits = true;
                 }
             }
+            ["th"] => {
+                if let Some((.., st)) = cur.as_mut() {
+                    st.texture_heap = true;
+                }
+            }
+            ["tks"] => {
+                if let Some((.., st)) = cur.as_mut() {
+                    st.tiny_samplers = true;
+                }
+            }
             ["tk"] => {
                 if let Some((.., st)) = cur.as_mut() {
                     st.tiny_kernel = true;
+                }
+            }
+            ["ab", members @ ..] => {
+                if let Some((.., st)) = cur.as_mut() {
+                    st.args = members
+                        .iter()
+                        .map(|m| Some((*m.as_bytes().first()?, m.get(1..)?.parse().ok()?)))
+                        .collect::<Option<Vec<_>>>();
                 }
             }
             ["tb", bindings @ ..] => {
@@ -467,6 +497,12 @@ fn save_runtime_stage(weak: u64, full: u64, st: &CachedStage, msl: &str) {
     }
     if st.cbuf_limits {
         r.push_str("cl\n");
+    }
+    if st.texture_heap {
+        r.push_str("th\n");
+    }
+    if st.tiny_samplers {
+        r.push_str("tks\n");
     }
     for b in &st.sb_readonly {
         let _ = writeln!(r, "sr {b}");
@@ -751,10 +787,13 @@ pub unsafe fn lookup_or_translate_dynamic(
         sbuffers,
         sb_readonly,
         cbuf_limits,
+        texture_heap: specialized.contains("nx_heaps["),
+        tiny_samplers: false,
         tiny_kernel: false,
         tiny_implicit: None,
         tiny_clears: false,
         batch_cbufs: None,
+        args: None,
         local_size: compute_fields.map_or([1, 1, 1], |c| [c[0].max(1) as u32, c[1].max(1) as u32, c[2].max(1) as u32]),
         fs_effects: OnceLock::new(),
     }));

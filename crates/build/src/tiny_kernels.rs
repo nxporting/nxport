@@ -314,6 +314,40 @@ fn explicit_lod(body: &str, textures: &[(String, String)], implicit: &mut Vec<St
     Some(out)
 }
 
+/// Textures the stage reads from the descriptor heaps (sass2spv Host::texture_heap): locals at the top of the body,
+/// tagged with their binding. (name, type without template arguments, binding)
+fn heap_textures(body: &str) -> Vec<(String, String, u32)> {
+    regex::Regex::new(r"(?m)^\s*(\w+)<[^>]*> (\w+) = reinterpret_cast<const device NxHeap<.*// heap texture\((\d+)\)")
+        .unwrap()
+        .captures_iter(body)
+        .filter_map(|c| Some((c[2].to_string(), c[1].to_string(), c[3].parse().ok()?)))
+        .collect()
+}
+
+/// Kernels take the samplers a stage reads from the descriptor heap as parameters bound at their texture's binding: a
+/// sampler read from the sampler heap in a compute kernel gave varying results between runs of the same frame (TotK's
+/// atmosphere LUT kernel). Returns the body without those locals, and the parameters (None: a binding Metal cannot bind).
+fn heap_samplers_as_params(body: &str) -> Option<(String, Vec<Param>)> {
+    let heap = heap_textures(body);
+    let re = regex::Regex::new(r"(?m)^\s*sampler (\w+) = reinterpret_cast<const device NxSamplerHeap\*>[^\n]*\n").unwrap();
+    let mut params = Vec::new();
+    for c in re.captures_iter(body) {
+        let name = c[1].to_string();
+        let (.., b) = heap.iter().find(|(t, ..)| format!("{t}Smplr") == name)?;
+        if *b >= 16 {
+            return None;
+        }
+        params.push(Param { decl: format!("sampler {name}"), attr: format!("[[sampler({b})]]"), name });
+    }
+    Some((re.replace_all(body, "").into_owned(), params))
+}
+
+/// The tiny kernels appended to a stage (from MARKER, before any other variants) read no sampler from the sampler heap:
+/// what the index line `tks` tells the engine. Kernels generated before heap_samplers_as_params did.
+pub fn kernels_bind_samplers(kernels: &str) -> bool {
+    !kernels.contains("NxSamplerHeap")
+}
+
 /// Comment line in a fragment kernel listing the Metal texture bindings it samples with implicit LOD (comma list, maybe
 /// empty); the cache builder copies it into the index (`tk <list>`).
 pub const IMPLICIT_TAG: &str = "// tk-implicit-lod: ";
@@ -347,6 +381,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
     let (ret, name, params, b0, b1) = entry(msl, "fragment")?;
     // Kernels have no helper threads.
     let body_owned = msl[b0..b1].replace("simd_is_helper_thread()", "false");
+    let (body_owned, heap_samplers) = tk_try!(heap_samplers_as_params(&body_owned));
     let body = body_owned.as_str();
     let sig_and_body = format!("{}{}", &msl[msl.find("\nfragment ")?..b0], body);
     if INELIGIBLE.iter().any(|w| sig_and_body.contains(w)) {
@@ -404,14 +439,19 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
     if pass.iter().any(|p| p.attr.contains("buffer(27)") || p.attr.contains("buffer(28)") || (24..40).any(|i| p.attr.contains(&format!("texture({})", i)))) {
         return tk_none(line!());
     }
+    pass.extend(heap_samplers.iter());
+    let heap = heap_textures(body);
     let textures: Vec<(String, String)> = pass.iter().filter(|p| p.decl.starts_with("texture") || p.decl.starts_with("depth"))
-        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string())).collect();
+        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string()))
+        .chain(heap.iter().map(|(n, t, _)| (n.clone(), t.clone())))
+        .collect();
     let mut implicit = Vec::new();
     let body = tk_try!(explicit_lod(body, &textures, &mut implicit));
     // Metal texture bindings sampled with implicit LOD (see explicit_lod).
     let mut implicit_bindings: Vec<u32> = pass.iter()
         .filter(|p| implicit.contains(&p.name))
         .filter_map(|p| regex::Regex::new(r"texture\((\d+)\)").unwrap().captures(&p.attr).and_then(|c| c[1].parse().ok()))
+        .chain(heap.iter().filter(|(n, ..)| implicit.contains(n)).map(|(.., b)| *b))
         .collect();
     implicit_bindings.sort_unstable();
     implicit_bindings.dedup();
@@ -439,12 +479,6 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
             members.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, interp, fc));
         }
     }
-    // A tiny pass draw is at most 2 triangles (3-6 vertices) for fullscreen quads/blurs/downsamples.
-    // Fragment shaders taking more than 4 varyings are complex 3D surface shaders (tangents, normals, shadow coords, etc.)
-    // that never qualify for tiny passes.
-    if members.len() > 4 {
-        return tk_none(line!());
-    }
     // Color outputs: (type, member, color index, function constant).
     let mut outs = Vec::new();
     for line in struct_body(msl, &ret)?.lines() {
@@ -455,8 +489,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
         let caps = tk_try!(regex::Regex::new(r"^(\w+) (\w+) \[\[color\((\d+)\)(?:, function_constant\((\w+)\))?\]\]$").unwrap().captures(line));
         outs.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, caps.get(4).map(|m| m.as_str().to_string())));
     }
-    // Tiny passes have at most 6 targets (cubemap MRTs) or 1-2 targets (blurs/downsamples).
-    if outs.is_empty() || outs.len() > 6 || outs.iter().any(|o| o.2 > 7) {
+    if outs.is_empty() || outs.iter().any(|o| o.2 > 7) {
         return tk_none(line!());
     }
     let decls: Vec<String> = pass.iter().map(|p| p.decl.clone()).collect();
@@ -586,7 +619,8 @@ TK_CLEAR_UNCOVERED        }
 /// Appends `tkv_<entry>` to a translated vertex stage (see module docs). None: no kernel.
 pub fn vertex_kernel(msl: &str) -> Option<String> {
     let (ret, name, params, b0, b1) = entry(msl, "vertex")?;
-    let body = &msl[b0..b1];
+    let (body_owned, heap_samplers) = heap_samplers_as_params(&msl[b0..b1])?;
+    let body = body_owned.as_str();
     let sig_and_body = &msl[msl.find("\nvertex ")?..b1];
     if ["atomic", "simd_", "threadgroup", "access::write", "access::read_write"].iter().any(|w| sig_and_body.contains(w)) {
         return None;
@@ -621,8 +655,11 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
     if pass.iter().any(|p| (25..=28).any(|i| p.attr.contains(&format!("buffer({})", i)))) {
         return None;
     }
+    pass.extend(heap_samplers.iter());
     let textures: Vec<(String, String)> = pass.iter().filter(|p| p.decl.starts_with("texture") || p.decl.starts_with("depth"))
-        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string())).collect();
+        .map(|p| (p.name.clone(), p.decl.split('<').next().unwrap_or("").to_string()))
+        .chain(heap_textures(body).into_iter().map(|(n, t, _)| (n, t)))
+        .collect();
     let body = explicit_lod(body, &textures, &mut Vec::new())?; // vertex samples are explicit already; same rewrite for safety
     // Attributes: (type, member, location, function constant).
     let mut attrs = Vec::new();
@@ -636,8 +673,7 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
             attrs.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, caps.get(4).map(|m| m.as_str().to_string())));
         }
     }
-    // Fullscreen quads/blurs only have at most 4 attributes (position, uv, color) from streams 0/1.
-    if attrs.len() > 4 || attrs.iter().any(|a| a.2 > 15) {
+    if attrs.iter().any(|a| a.2 > 15) {
         return None;
     }
     // Outputs: gl_Position and user locations.
@@ -659,8 +695,7 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
         }
     }
     let pos = pos?;
-    // Fullscreen quads/blurs pass at most 4 varyings (uv, color).
-    if outs.len() > 4 || outs.iter().any(|o| o.2 > 31) {
+    if outs.iter().any(|o| o.2 > 31) {
         return None;
     }
     let mut decls: Vec<String> = pass.iter().map(|p| p.decl.clone()).collect();

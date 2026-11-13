@@ -52,12 +52,22 @@ pub struct Host {
     /// Samplers a stage may bind (0: no limit). A stage needing more samples its textures through a sampler table
     /// (properties::sampler_table_plan): Metal without argument buffers (MoltenVK) has 16 per stage.
     pub sampler_slots: u32,
+    /// MSL: sampled textures whose handles are in the bound texture table read their texture and sampler from the
+    /// host's descriptor heaps (TEXTURE_HEAP_* in the driver constant buffer) instead of bound slots.
+    pub texture_heap: bool,
     /// Graphics stages sample their textures through the host's global arrays (BINDLESS_SET) instead of a binding
     /// each: the push constants hold one word per texture (properties::bindless_plan), an index into the array of its
     /// view type (low 20 bits) and one into the sampler array (high 12 bits), as NVN packs a handle. Not with
     /// sampler_slots.
     pub bindless_textures: bool,
 }
+
+/// Driver constant buffer bytes used with Host::texture_heap: GPU addresses (u64) of one texture heap per
+/// MTLTextureType value (0..8) and of the sampler heap (TEXTURE_HEAP_SAMPLERS), then the stage's bound texture handles
+/// by handle index (one u32 each: texture heap index in the low 20 bits, sampler heap index above).
+pub const TEXTURE_HEAP_ADDRESSES: i32 = 0xd00;
+pub const TEXTURE_HEAP_SAMPLERS: u32 = 9;
+pub const TEXTURE_HEAP_HANDLES: i32 = 0xd60;
 
 impl Default for Host {
     fn default() -> Self {
@@ -75,6 +85,7 @@ impl Default for Host {
             binding_base: 0,
             fragment_inputs: None,
             sampler_slots: 0,
+            texture_heap: false,
             bindless_textures: false,
         }
     }

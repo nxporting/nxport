@@ -157,19 +157,6 @@ fn has_icon_resource() -> bool {
     unsafe { !FindResourceW(GetModuleHandleW(std::ptr::null()), 1 as *const u16, RT_GROUP_ICON as *const u16).is_null() }
 }
 
-/// Starts this program again with the same arguments, then leaves (the guest has no clean shutdown).
-pub fn restart() -> ! {
-    match std::env::current_exe() {
-        Ok(exe) => {
-            if let Err(e) = std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
-                println!("[!] Restart: {e}");
-            }
-        }
-        Err(e) => println!("[!] Restart: {e}"),
-    }
-    std::process::exit(0)
-}
-
 /// Closing the window quits: the guest has no clean shutdown path, so leave immediately.
 fn quit() -> ! {
     println!("[+] Display: quit requested; exiting");
@@ -471,66 +458,7 @@ fn mouse_button(button: MouseButton, down: bool) {
     input::mouse_button(bit, down);
 }
 
-/// The macOS virtual key code (Carbon kVK_*, what controls.cfg stores) of the key at SDL scancode `sc` (USB HID usage):
-/// the key in the same place on a US keyboard. PC keys without a Mac counterpart take the Mac key in their place (Alt is
-/// Option, the Windows key Command, Insert is Help, Num Lock the keypad's Clear).
+/// The macOS virtual key code (what controls.cfg stores) of the key at SDL scancode `sc` (USB HID usage).
 fn mac_key(sc: Scancode) -> Option<u16> {
-    let sc = sc.to_i32();
-    Some(match sc {
-        // Letters A..Z (4..29).
-        4..=29 => [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6][(sc - 4) as usize],
-        // Digits 1..9, 0 (30..39).
-        30..=39 => [18, 19, 20, 21, 23, 22, 26, 28, 25, 29][(sc - 30) as usize],
-        40 => 36, // Return
-        41 => 53, // Escape
-        42 => 51, // Backspace (Delete)
-        43 => 48, // Tab
-        44 => 49, // Space
-        45 => 27, // -
-        46 => 24, // =
-        47 => 33, // [
-        48 => 30, // ]
-        49 | 50 => 42, // \ (and the ISO key beside Return)
-        51 => 41,  // ;
-        52 => 39,  // '
-        53 => 50,  // `
-        54 => 43,  // ,
-        55 => 47,  // .
-        56 => 44,  // /
-        57 => 57,  // Caps Lock
-        // F1..F12 (58..69).
-        58..=69 => [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111][(sc - 58) as usize],
-        73 => 114, // Insert (Help)
-        74 => 115, // Home
-        75 => 116, // Page Up
-        76 => 117, // Delete (Forward Delete)
-        77 => 119, // End
-        78 => 121, // Page Down
-        79 => 124, // →
-        80 => 123, // ←
-        81 => 125, // ↓
-        82 => 126, // ↑
-        83 => 71,  // Num Lock (Keypad Clear)
-        84 => 75,  // Keypad /
-        85 => 67,  // Keypad *
-        86 => 78,  // Keypad -
-        87 => 69,  // Keypad +
-        88 => 76,  // Keypad Enter
-        // Keypad 1..9, 0 (89..98).
-        89..=98 => [83, 84, 85, 86, 87, 88, 89, 91, 92, 82][(sc - 89) as usize],
-        99 => 65,  // Keypad .
-        100 => 10, // the ISO key beside left Shift (kVK_ISO_Section)
-        103 => 81, // Keypad =
-        // F13..F20 (104..111).
-        104..=111 => [105, 107, 113, 106, 64, 79, 80, 90][(sc - 104) as usize],
-        224 => 59, // left Control
-        225 => 56, // left Shift
-        226 => 58, // left Alt (Option)
-        227 => 55, // left Windows (Command)
-        228 => 62, // right Control
-        229 => 60, // right Shift
-        230 => 61, // right Alt (Option)
-        231 => 54, // right Windows (Command)
-        _ => return None,
-    })
+    input::mac_key_of_usage(sc.to_i32())
 }
