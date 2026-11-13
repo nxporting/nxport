@@ -2,8 +2,10 @@
 // the signed guest code image, the Windows app folder), and guest code lifted to C for hosts without the native runtime
 // (lift, compiled with zig cc on Windows).
 
+// Kernels the Metal shader cache build appends (shader_cache_build), on the hosts that build it.
 #[cfg(target_os = "macos")]
 mod arg_kernels;
+#[cfg(target_os = "macos")]
 mod batch_kernels;
 /// The app icon from the dump, for every target.
 pub mod app_icon;
