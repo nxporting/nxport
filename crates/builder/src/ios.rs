@@ -1,9 +1,9 @@
 // The iOS app's build steps: one list on every host. Only how some steps are done depends on the host:
 // - the engine for iOS: a Mac builder carries it (build.rs builds it beside the builder); on Windows it is built from
-//   this checkout first (nxport_build::ios_engine).
+//   this checkout first (nxport_build::apple_engine).
 // - the shaders: on a Mac, Apple's Metal compiler compiles the shader cache for iOS (and, for a chosen GPU, its listed
 //   pipelines); on Windows, without that compiler, the stages are translated and packed as Metal source, which the app
-//   compiles the first time the game uses each (metal/source_pack.rs).
+//   compiles the first time the game uses each (metal/source_pack.rs), as the macOS app built on Windows does.
 // - the app (nxport_build::ipa): on a Mac in this process; on Windows in a worker process, as every Windows step that
 //   sets up the guest image (windows.rs).
 
@@ -29,22 +29,10 @@ fn ipa_progress(job: &Mutex<crate::app::Job>, step: nxport_build::ipa::IpaBuildP
     crate::app::progress(job, step.to_string(), 0, 0, step.default_fraction());
 }
 
-/// The engine for iOS, built from this checkout (cargo does nothing when it is up to date). A Mac builder carries it.
+/// The engine for iOS, built from this checkout (as the macOS app's). A Mac builder carries it.
 #[cfg(windows)]
 fn engine(r: &Request, steps: &mut Vec<Step>) {
-    let (toolchains, job) = (crate::app::data_dir().join("toolchains"), r.job.clone());
-    steps.push((
-        "Building the engine for iOS".into(),
-        Box::new(move || {
-            if nxport_build::ios_engine::source_root().is_some() {
-                // No count: cargo does not say how many crates it will compile.
-                let compiling = |name: &str| crate::app::progress(&job, format!("Compiling {name}"), 0, 0, 0.0);
-                let engine = nxport_build::ios_engine::build(&toolchains, &compiling)?;
-                println!("  {}", engine.display());
-            }
-            Ok(())
-        }),
-    ));
+    crate::apple::engine_from_source(nxport_build::apple_engine::Os::Ios, r, steps);
 }
 
 #[cfg(target_os = "macos")]
@@ -84,7 +72,7 @@ fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
 /// Windows: the stages the shared pipeline list uses, translated and packed as Metal source.
 #[cfg(windows)]
 fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
-    crate::windows::ios_source_steps(r, steps)
+    crate::windows::metal_source_steps(r, steps)
 }
 
 /// The .ipa itself.

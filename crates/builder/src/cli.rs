@@ -26,6 +26,9 @@ pub enum Command {
     /// Build the engine for iOS from this checkout, without Apple's tools (needs LLVM and the Rust target)
     #[cfg(windows)]
     IosEngine,
+    /// Build the engine for macOS from this checkout, without Apple's tools (needs LLVM and the Rust target)
+    #[cfg(windows)]
+    MacosEngine,
     #[cfg(any(target_os = "macos", windows))]
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
@@ -468,9 +471,11 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             println!("    Output cache directory: {}", stats.cache_dir.display());
         }
         #[cfg(windows)]
-        Command::IosEngine => {
+        Command::IosEngine | Command::MacosEngine => {
+            use nxport_build::apple_engine::{build, Os};
+            let os = if matches!(command, Command::IosEngine) { Os::Ios } else { Os::MacOs };
             let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
-            println!("[+] {}", nxport_build::ios_engine::build(&toolchains, &|name| println!("  compiling {name}"))?.display());
+            println!("[+] {}", build(os, &toolchains, &|name| println!("  compiling {name}"))?.display());
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {

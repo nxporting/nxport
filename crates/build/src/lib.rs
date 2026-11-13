@@ -34,9 +34,10 @@ pub mod tiny_kernels;
 pub mod translation;
 #[cfg(nx_runtime)]
 pub mod vulkan_precompile;
-// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts.
+// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts;
+// there too, the engines for iOS and macOS, built from source without Apple's tools.
 #[cfg(windows)]
-pub mod ios_engine;
+pub mod apple_engine;
 #[cfg(windows)]
 pub mod winapp;
 #[cfg(windows)]
