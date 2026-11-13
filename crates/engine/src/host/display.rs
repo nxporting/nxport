@@ -372,19 +372,7 @@ pub fn follow_window_shape(layer: &CAMetalLayer) -> bool {
     }
     let a = b.width / b.height;
     WINDOW_ASPECT.store(a.to_bits(), Ordering::Relaxed);
-    static LAST_REPORTED: AtomicU64 = AtomicU64::new(0);
-    // Off, the game is back at 16:9 (live::set_dynamic_aspect): switched on again, the shape is reported again.
-    if !crate::host::live::dynamic_aspect() {
-        LAST_REPORTED.store(0, Ordering::Relaxed);
-        return false;
-    }
-    let prev = f64::from_bits(LAST_REPORTED.load(Ordering::Relaxed));
-    if (a - prev).abs() < 0.002 * a {
-        return false;
-    }
-    LAST_REPORTED.store(a.to_bits(), Ordering::Relaxed);
-    crate::profile::screen_aspect_changed(a);
-    true
+    crate::host::live::screen_shape(a)
 }
 
 static LAYER_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

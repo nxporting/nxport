@@ -198,10 +198,31 @@ pub fn set_dynamic_aspect(on: bool) {
     crate::config::remember(|p| p.totk.enhancements.dynamic_aspect_ratio = Some(on));
 }
 
-/// On, the window reports its shape at its next present (vulkan/window.rs; host/display.rs follow_window_shape); off,
-/// the game goes back to 16:9 at once.
+/// On, the screen's shape is reported at the next present (screen_shape); off, the game goes back to 16:9 at once.
 fn apply_dynamic_aspect(on: bool) {
-    if LIVE.dynamic_aspect.swap(on, Relaxed) != on && !on {
-        crate::profile::screen_aspect_changed(16.0 / 9.0);
+    if LIVE.dynamic_aspect.swap(on, Relaxed) != on {
+        SHAPE_REPORTED.store(0, Relaxed);
+        if !on {
+            crate::profile::screen_aspect_changed(16.0 / 9.0);
+        }
     }
+}
+
+/// The shape last passed on to the game (f64 bits; 0: none since the dynamic aspect ratio was switched on).
+static SHAPE_REPORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The screen's shape (width / height of what the game is shown in), from every host as it presents or lays out: the
+/// macOS window (host/display.rs), the Vulkan window (vulkan/window.rs) and the iOS view (host/display_ios.rs). With
+/// the dynamic aspect ratio on, a game that renders at the screen's shape follows it. Whether it was passed on.
+pub fn screen_shape(aspect: f64) -> bool {
+    if !dynamic_aspect() || !aspect.is_finite() || aspect <= 0.0 {
+        return false;
+    }
+    let prev = f64::from_bits(SHAPE_REPORTED.load(Relaxed));
+    if (aspect - prev).abs() < 0.002 * aspect {
+        return false;
+    }
+    SHAPE_REPORTED.store(aspect.to_bits(), Relaxed);
+    crate::profile::screen_aspect_changed(aspect);
+    true
 }
