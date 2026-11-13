@@ -31,12 +31,26 @@ pub struct Options<'a> {
     pub shader_cache: Option<&'a Path>,
 }
 
-/// The engine the app runs: this program, which links the engine and starts it when it is named nxport.exe
+/// The engine the app runs: on Windows this program, which links the engine and starts it when it is named nxport.exe
 /// (nxport-builder's main). The code it lifts calls into the engine it was built with (HLE trampolines, hooks), so the
-/// app carries that one.
+/// app carries that one. Elsewhere the Windows builder of the same commit, which a release puts beside this one as
+/// windows/nxport.exe.
 pub fn engine() -> Result<PathBuf, String> {
-    std::env::current_exe().map_err(|e| e.to_string())
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    if cfg!(windows) {
+        return Ok(me);
+    }
+    let beside = me.with_file_name("windows").join("nxport.exe");
+    beside.is_file().then_some(beside.clone()).ok_or_else(|| {
+        format!("{}: no Windows engine (a release of the builder carries it there, built from the same source)", beside.display())
+    })
 }
+
+/// SDL3.dll, the library the Windows engine is built against (vendor/SDL3).
+#[cfg(windows)]
+const SDL3_DLL: &[u8] = nxport::sdl_library::DLL;
+#[cfg(not(windows))]
+const SDL3_DLL: &[u8] = include_bytes!("../../../vendor/SDL3/lib/SDL3.dll");
 
 /// Lays out the app folder, all but the guest library: the engine, the settings, mods, the game files and the pipeline
 /// list. Returns the directory the app's mods are in, if it has any (the code is lifted with them).
@@ -54,8 +68,17 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     match crate::app_icon::source(o.dump, tid) {
         Some(src) => {
             let ico = crate::app_icon::ico(&src)?;
-            crate::app_icon::set_exe_icon(&exe, &ico)?;
-            println!("  Icon from {}", src.display());
+            #[cfg(windows)]
+            {
+                crate::app_icon::set_exe_icon(&exe, &ico)?;
+                println!("  Icon from {}", src.display());
+            }
+            // Resources are written with Windows' own calls.
+            #[cfg(not(windows))]
+            {
+                let _ = ico;
+                println!("  [!] The icon is set only when the app is built on Windows: this one keeps the default");
+            }
         }
         None => println!("  [!] No icon in the dump (control/icon_*.dat or Logo/{tid:016x}.png): the app keeps the default"),
     }
@@ -64,7 +87,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     copied?;
     // Windows looks for a program's DLLs in its own directory first: SDL3.dll from the copy the engine carries.
     let sdl = o.app.join("SDL3.dll");
-    std::fs::write(&sdl, nxport::sdl_library::DLL).map_err(|e| format!("{}: {e}", sdl.display()))?;
+    std::fs::write(&sdl, SDL3_DLL).map_err(|e| format!("{}: {e}", sdl.display()))?;
 
     let mods = o.app.join("Mods");
     let _ = std::fs::remove_dir_all(&mods);
@@ -186,6 +209,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
     fn engine_executable_is_found() {
         let eng = engine();
         assert!(eng.is_ok(), "engine executable not found: {:?}", eng);

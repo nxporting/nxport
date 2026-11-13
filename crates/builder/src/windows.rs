@@ -42,7 +42,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         steps.push((
             "Getting the C compiler".into(),
             Box::new(move || {
-                let cc = nxport_build::zig::cc(&toolchains, &move |done, total| {
+                let cc = nxport_build::zig::windows_cc(&toolchains, &move |done, total| {
                     let mb = |b: u64| (b >> 20) as usize;
                     progress(&job, format!("Downloading zig {}", nxport_build::zig::VERSION), mb(done), mb(total));
                 })?;
@@ -235,7 +235,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             Box::new(move || {
                 let mods = app_mods.lock().unwrap().clone();
                 if has_plugin_mods(mods.as_deref(), title_id) {
-                    nxport_build::zig::copy_into_app(&toolchains, &app)?;
+                    nxport_build::zig::copy_into_app(&toolchains, &app, &|_, _| {})?;
                 } else {
                     let _ = std::fs::remove_dir_all(app.join("zig"));
                 }
@@ -343,7 +343,7 @@ fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, 
 /// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt), optimised by `profile`. A
 /// profile the compiler cannot read costs the optimisation, not the build.
 fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Option<&Path>, no_inline: bool, job: &Arc<Mutex<Job>>) -> Result<(), String> {
-    let mut cc = nxport_build::zig::cc(toolchains, &|_, _| {})?;
+    let mut cc = nxport_build::zig::windows_cc(toolchains, &|_, _| {})?;
     if no_inline {
         cc.push("-DNX_NO_INLINE".into());
     }

@@ -34,10 +34,9 @@ pub mod tiny_kernels;
 pub mod translation;
 #[cfg(nx_runtime)]
 pub mod vulkan_precompile;
-// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts.
+// The iOS engine cross-built on Windows.
 #[cfg(windows)]
 pub mod ios_engine;
-#[cfg(windows)]
+// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on any host.
 pub mod winapp;
-#[cfg(windows)]
 pub mod zig;
