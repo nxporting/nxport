@@ -143,8 +143,9 @@ fn load_builder_preset(path: &Path) -> Result<(Option<BuildPreset>, SettingsPatc
 
 impl Target {
     /// The targets this host builds (the first is the default). Presets for the others still load their settings.
+    /// A Mac builds the Windows app from the lifted game and the Windows engine a release carries beside the builder.
     #[cfg(target_os = "macos")]
-    pub const ALL: &'static [Target] = &[Target::MacApp, Target::Ipa];
+    pub const ALL: &'static [Target] = &[Target::MacApp, Target::Ipa, Target::WindowsApp];
     #[cfg(windows)]
     pub const ALL: &'static [Target] = &[Target::WindowsApp, Target::Ipa];
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -160,6 +161,9 @@ impl Target {
         }
         Some(match self {
             Target::MacApp | Target::Ipa => "Builds on a macOS host: the Metal shader compiler, actool / iconutil and codesign.",
+            Target::WindowsApp if cfg!(target_os = "macos") => {
+                "Needs the Windows engine beside the builder (windows/nxport.exe): a release of the builder carries it."
+            }
             Target::WindowsApp => "Builds on a Windows host: the Windows engine (nxport.exe) the app carries, and the lifted code's toolchain.",
         })
     }
@@ -181,7 +185,8 @@ impl Target {
     }
 
     pub fn offered(self) -> bool {
-        Self::ALL.contains(&self)
+        // Off Windows the Windows app needs the Windows engine a release puts beside the builder.
+        Self::ALL.contains(&self) && (self != Target::WindowsApp || cfg!(windows) || nxport_build::winapp::engine().is_ok())
     }
 
     /// Whether the app's shaders can be translated when it is built (Windows: windows::PRECOMPILES_SHADERS).
@@ -1183,10 +1188,9 @@ fn game_sections<'a>(s: &'a mut Settings, game: &nxport::profile::GameProfile) -
 fn parse_target(s: &str) -> Result<Target, String> {
     let t: Target = serde::de::Deserialize::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(s))
         .map_err(|_| format!("{s}: not a target (windows, mac or ios)"))?;
-    if Target::ALL.contains(&t) {
-        Ok(t)
-    } else {
-        Err(format!("{s}: not made on this host (here: {})", Target::ALL.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")))
+    match t.unavailable() {
+        None => Ok(t),
+        Some(why) => Err(format!("{s}: not made here: {why}")),
     }
 }
 
