@@ -19,6 +19,18 @@ and update this file when you finish or drop it.
 - **Dynamic FPS done properly, physics included** (later): the user will provide a newer TotK so we can study how
   UltraCam handles frame-rate-independent time and physics. UltraCam itself is not a goal once dynamic FPS is right.
   For now, delta time only makes game time follow real time (no physics verification).
+- **iOS images must be patched exactly as the iOS engine patches at start (fixed 2026-11-12, 41d5940; not yet run on
+  the iPhone).** A Windows-built .ipa (TotK 1.0.0, no mods) failed cpu/aot.rs's check: "hle.trampolines: 1 of 4 pages
+  differ (first at +0x9180); x18.island: 50 of 182 pages differ". Causes: (1) capped jump table stubs (6a1b826) stored
+  BASE absolute, and the image is made at FIXED_GUEST_BASE while the phone loads the guest anywhere: now stored as
+  BASE - brk; this also broke Mac-built images since 11-10, both hosts. (2) camera_angles' install_decision /
+  install_aim are compiled only into the lifted engine, so a Windows-made image had 4 trampolines more than the native
+  engine makes (1168 vs 1164; a trampoline's code depends only on its index, so the first differing one gives the
+  count): now skipped when aot::native_rewrites(). Rule: patch decisions follow native_rewrites(), never cfg(nx_native),
+  and patched code holds no absolute address (per-run values go through aot's literal pool). Audited the other
+  cfg(nx_native) branches in cpu/guest/horizon/profile: they change behaviour at run time, not the patched code.
+  Next: the user's .ipa from the fixed builder, then the shader stutter test.
+
 - **After the release: one live-patch library per mod set (startup, up to ~1.8 s of 8.4-9.4 s to the first frame
   with UltraCam).** Measured 11-09: each cached per-function library costs ~10 ms on its first load in a process
   (0.85 ms loading it again; an OS per-file cost, not its code), x ~118 at every start. Design: after a run has applied
