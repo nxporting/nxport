@@ -186,14 +186,14 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Icon from the game's logo
-    let icon = match crate::icon::logo(opts.dump_dir, tid) {
+    let icon = match crate::app_icon::source(opts.dump_dir, tid) {
         Some(logo) => {
             let icon_path = resources.join("AppIcon.icns");
             if icon_path.exists() || icon_path.is_symlink() {
                 let _ = ensure_writable(&icon_path);
                 let _ = fs::remove_file(&icon_path);
             }
-            crate::icon::icns(&logo, &icon_path)?;
+            crate::app_icon::icns(&logo, &icon_path)?;
             let _ = ensure_writable(&icon_path);
             "\n    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>"
         }

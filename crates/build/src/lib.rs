@@ -5,11 +5,9 @@
 #[cfg(target_os = "macos")]
 mod arg_kernels;
 mod batch_kernels;
-/// The app icon from the dump, as a Windows .ico written into the app's program.
+/// The app icon from the dump, for every target.
 pub mod app_icon;
 pub mod extract_shaders;
-#[cfg(any(target_os = "macos", windows))]
-mod icon;
 // The Apple packaging (app bundles, signed Mach-O images, Metal shader caches through xcrun) runs on macOS hosts.
 #[cfg(any(target_os = "macos", windows))]
 pub mod ipa;

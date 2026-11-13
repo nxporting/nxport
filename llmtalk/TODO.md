@@ -96,13 +96,45 @@ and update this file when you finish or drop it.
   only, outgrown ones kept). Left: GPU-side timing against something outside the queue order the barriers cover (other
   queues or threads submitting, the staging buffer's life in full mode, the relayout descriptor update while earlier
   submits run), or the copy reading a writer image whose own contents are partly stale. Low priority: the flash is
-  fixed; this only matters for bringing the rule back for TotK without mods.
+  fixed; this only matters for bringing the rule back for TotK without mods. By reading (2026-11-12), also not it: a
+  rebuild reading writers drawn in the same unsubmitted chunk (unflushed_over skips writers of the current serial; one
+  queue, so the upload batch's leading full barrier orders it after every earlier submit); the relayout descriptor
+  (push descriptors, recorded into the command buffer, nothing updated while in flight); the scratch growing between
+  two rebuilds of one batch (each binds the buffer it copied into). Also unlikely by reading: the guest-byte snapshot
+  as the base (in memory the CPU cannot reach nothing writes guest bytes: the game cannot, and flush_overlaps drops
+  writers there via guest_can_take, so the snapshot is the same every frame). Writers copied whole is deterministic too.
+  What does vary with timing, to test next: which route a refresh takes depends on when submits complete (refresh skips
+  an image GPU-written in a submit not yet settled; settle runs on completion), and which writers count depends on
+  which submit they were recorded in (unflushed_over / overwritten_since skip the current serial), which time-based
+  chunk splits move. A probe logging, per rebuild of 400x228f37, its settled state, the route (incremental or from
+  guest bytes) and the writers' serials, compared between a flash frame and its neighbours, should tell. Written, not
+  yet compiled or run (2026-11-12, session scratchpad rb_timing_probe.diff): rb_all_probe plus `[rb-skip]` lines for
+  refreshes skipped while the image's own write is in flight, and serial / own submit / each writer's submit and
+  settled state on `[rb]` lines; run as before with NX_ANYPOOL_ONLY=400x228f37 and the frame history.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
   .metallib; Unreal uses them for iOS shaders on Windows) could build it: shader_cache_build.rs would call them on
   Windows (same chunks), windows.rs would pass the cache to ipa::build. The tools need an Apple developer login to
   download, so the builder can only find an installed copy and fall back to no cache. Waiting on the user (install).
+  2026-11-12: the user wants both routes (these tools when installed, else a long-press precompile on the phone). Not
+  installed here (nothing in Program Files or on PATH), so their install path and flags (no xcrun, no -sdk) cannot be
+  checked: build_ios (shader_cache_build.rs) and windows.rs stay unchanged until they are installed. The long-press
+  design waits on the iPhone test of branch ios-shader-cache-windows (builder at nxport-build\wttarget\release).
+  The user built the test .ipa at 14:40 (has shader_cache/source.pack 7.6 MB, source/index.txt, pipelines.txt). Branch
+  since: 16d165b (Precompile shaders was hidden and off for iOS on Windows, so the window never made the pack),
+  dea256f (progress detail in the worker's .ipa step and the engine's cargo run), f977da0 (phase renamed, as main),
+  80cda67 (icon from the control data, as main 480c493), 1496107 (the user asked "why a codebase per platform": the
+  .ipa's two step lists, apple.rs and windows.rs, merged into builder/src/ios.rs; host differences are leaves.
+  Type-checked for Windows and aarch64-apple-darwin, builder tests pass, **never run on a Mac**: run a Mac .ipa build
+  once before merging the branch).
+  **If iOS does not keep source-compiled shaders between launches, the long-press is smaller than I said:**
+  metal/pipeline_archive.rs::build already plans every pipeline in pipelines.txt, builds their descriptors and writes
+  MTLBinaryArchives (serializeToURL) for the GPU it runs on, and load() opens pipelines*.metalar from the cache dir. On
+  the phone it would need: stage libraries compiled from the source pack (compiled_stage / source_set) where build
+  takes load_shader_lib's metallibs and index()'s stages, an output folder in Library/ (the bundle is read-only), and
+  load() scanning that folder too. Then the long-press runs build in the background; the game afterwards gets
+  archive hits (stats() counts them) instead of compiles.
 - **After the release: intermediate versions of a mod's code are compiled at every start (2026-11-10 night).** With
   the user's mods a warm start applies one function, 0x700518a000 (the plugin's code area, written piece by piece
   while the game starts), 56-92 times. Stage timings of the applies (probe around compiled / applying lock / library
