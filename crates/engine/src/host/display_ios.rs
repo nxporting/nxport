@@ -137,8 +137,11 @@ fn sync_ios_settings() {
         }
         let _: bool = msg_send![defaults, synchronize];
 
+        // As VSync below: a switch the user never set keeps what the app was built with.
         let k_overlay = NSString::from_str("perf_overlay");
-        let has_overlay: bool = msg_send![defaults, boolForKey: &*k_overlay];
+        let k_overlay_val: *mut AnyObject = msg_send![defaults, objectForKey: &*k_overlay];
+        let has_overlay: bool =
+            if k_overlay_val.is_null() { crate::settings::get().display.perf_overlay } else { msg_send![defaults, boolForKey: &*k_overlay] };
         crate::host::overlay::set_overlay_enabled(has_overlay);
 
         let k_vsync = NSString::from_str("vsync");

@@ -88,6 +88,40 @@
         </dict>
         <dict>
             <key>Type</key>
+            <string>PSMultiValueSpecifier</string>
+            <key>Title</key>
+            <string>Frame Rate Limit</string>
+            <key>Key</key>
+            <string>frame_limit</string>
+            <key>DefaultValue</key>
+            <string>60</string>
+            <key>Titles</key>
+            <array>
+                <string>30 fps (the console's timing)</string>
+                <string>60 fps</string>
+                <string>90 fps</string>
+                <string>120 fps</string>
+            </array>
+            <key>Values</key>
+            <array>
+                <string>30</string>
+                <string>60</string>
+                <string>90</string>
+                <string>120</string>
+            </array>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Low Latency</string>
+            <key>Key</key>
+            <string>low_latency</string>
+            <key>DefaultValue</key>
+            <false/>
+        </dict>
+        <dict>
+            <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
             <string>Controls</string>
@@ -130,6 +164,39 @@
             <key>DefaultValue</key>
             <false/>
         </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Vibration</string>
+            <key>Key</key>
+            <string>vibration</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSMultiValueSpecifier</string>
+            <key>Title</key>
+            <string>Vibration Strength</string>
+            <key>Key</key>
+            <string>vibration_strength</string>
+            <key>DefaultValue</key>
+            <string>100</string>
+            <key>Titles</key>
+            <array>
+                <string>50%</string>
+                <string>100%</string>
+                <string>150%</string>
+            </array>
+            <key>Values</key>
+            <array>
+                <string>50</string>
+                <string>100</string>
+                <string>150</string>
+            </array>
+        </dict>
+        <!-- game -->
     </array>
 </dict>
 </plist>

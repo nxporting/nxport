@@ -180,6 +180,36 @@ fn preferences() -> crate::settings::SettingsPatch {
             objc2::msg_send![defaults, stringForKey: &*k_mode];
         prefs.system.handheld =
             Some(!ns_string(val).is_some_and(|m| m.eq_ignore_ascii_case("docked")));
+
+        // The switches the desktop menus have (host/menu.rs), as the settings they start from: only those the user
+        // set in the Settings app; the others keep what the app was built with (its settings.toml).
+        let set = |key: &str| {
+            let k = objc2_foundation::NSString::from_str(key);
+            let v: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults, objectForKey: &*k];
+            (!v.is_null()).then_some(k)
+        };
+        let flag = |key: &str| set(key).map(|k| -> bool { objc2::msg_send![defaults, boolForKey: &*k] });
+        let number = |key: &str| {
+            set(key).and_then(|k| {
+                let v: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults, stringForKey: &*k];
+                ns_string(v).and_then(|s| s.parse::<u32>().ok())
+            })
+        };
+        if let Some(fps) = number("frame_limit") {
+            // 30: the console's own timing (the menus' Frame Rate Limit, host/menu.rs).
+            if fps == 30 {
+                prefs.system.fps = Some(crate::settings::FpsMode::Stock30);
+            } else {
+                prefs.system.fps = Some(crate::settings::FpsMode::Unlocked);
+                prefs.display.frame_limit = Some(fps);
+            }
+        }
+        prefs.display.low_latency = flag("low_latency");
+        prefs.display.perf_overlay = flag("perf_overlay");
+        prefs.input.no_rumble = flag("vibration").map(|on| !on);
+        prefs.input.rumble_scale = number("vibration_strength").map(|p| p as f32 / 100.0);
+        prefs.totk.enhancements.dynamic_fps = flag("totk_dynamic_fps");
+        prefs.totk.enhancements.dynamic_aspect_ratio = flag("totk_dynamic_aspect");
     }
     prefs
 }
