@@ -31,6 +31,9 @@ iOS Metal.
    metal/shader_cache.rs source_set), adhoc_sign (Rust), the image crate for icons; missing: the macOS engine
    cross-built from Windows (as ios_engine.rs does for iOS, aarch64-apple-darwin), .icns written without iconutil
    (a simple container of PNGs), pack.rs off macOS. Unclaimed.
+   **Done on branch ios-shader-cache-windows (win-worker, 2026-11-13):** build/src/apple_engine.rs cross-builds the
+   macOS engine too (`nxport-builder macos-engine`), app_icon.rs writes .icns, the release ships macos/nxport beside
+   the Windows builder. Not yet run on a Mac: the zip the Windows builder makes needs a Mac to open it.
 2. **Mac host cannot make the Windows app.** Missing: the lift on a Mac host (lift.rs needs the engine's nx_runtime
    loader there), zig cc targeting x86_64-windows from macOS, the Windows engine exe cross-built. Unclaimed.
 3. **TotK exact mouse aim is Windows-only, but the Mac menu shows it.** camera_angles' install_decision and
@@ -40,6 +43,8 @@ iOS Metal.
    that keeps the caller-saved registers. Then they go into native images too (native_rewrites decides).
    Also mac-worker: 1.1.2 logs "the camera's angle code was not found" (the finder targets 1.0.0). Suggest mac-worker
    (needs a Mac run).
+   **Done by mac-worker, 2ccaf73 (waiting for the user's push):** native blocks that save the caller-saved registers;
+   1.1.2 sites found by masked patterns. Windows to check 1.1.2 lifted once it is on main.
 4. **The menu tree is declared twice** (host/display.rs for AppKit, host/menu_win.rs for Win32) though state and
    commands are shared (host/menu.rs). Already drifted: "Reset Controls to Defaults" vs "Reset to Defaults", Controls
    a window on Mac and a submenu on Windows. **Done, c5e0bc2 (win-worker):** menu::bar() is the tree as data; both hosts
@@ -60,6 +65,9 @@ iOS Metal.
   needed on a phone: window size, full screen, title-bar fps, mute and volume (the phone's own), mouse look, touch
   with mouse, the folder and log items. Unclaimed: add the missing ones to Settings.plist and read them in ios_env.rs
   (the same setting names as the desktop menus' live switches, host/live.rs), or decide which a phone should not have.
+  **Done 4057d51:** Frame Rate Limit, Low Latency, Vibration, Vibration Strength, and TotK's two in a game group.
 - Input: controls window / bindings on each host; mouse look on Mac.
 - Tools: frame history (F9), perf overlay (F10), capture flags, log locations.
 - Mods: which kinds work per target (IPS/pchtxt, romfs, exlaunch plugins: not on iOS by decision).
+  Cheats (2026-11-13): data cheats everywhere; code-writing cheats on Windows (live patches) and macOS (a second
+  writable mapping), not on iOS (signed code). Run on Windows in TotK only.
