@@ -73,7 +73,9 @@ pub const LIFTED_FREQUENCY: u64 = 19_200_000;
 /// CNTPCT_EL0 / CNTVCT_EL0 in lifted code: the host clock in LIFTED_FREQUENCY ticks.
 #[cfg(not(nx_native))]
 pub fn lifted_ticks() -> u64 {
-    (crate::clock::now_ns() as u128 * LIFTED_FREQUENCY as u128 / 1_000_000_000) as u64
+    // Host ticks to LIFTED_FREQUENCY in one 64-bit step (clock::Scale): every lifted counter read comes here.
+    static SCALE: std::sync::OnceLock<crate::clock::Scale> = std::sync::OnceLock::new();
+    SCALE.get_or_init(|| crate::clock::scale_to(LIFTED_FREQUENCY)).apply(crate::clock::ticks())
 }
 
 /// TPIDRRO_EL0: the guest thread's Horizon thread-local region (IPC buffer, the thread pointer at +0x1f8). Natively
