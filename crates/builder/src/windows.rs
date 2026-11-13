@@ -247,11 +247,12 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     out
 }
 
-/// The iOS app's shaders on Windows (ios.rs), where Apple's Metal compiler does not run: the stages the shared pipeline
-/// list uses, translated and packed as Metal source (shader_cache_build::pack_source), which the app compiles the
-/// first time the game uses each. Built again when the stages, the translator or the list change; returns the cache
-/// folder the .ipa takes.
-pub(crate) fn ios_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
+/// The iOS and macOS apps' shaders on Windows (ios.rs, apple.rs), where Apple's Metal compiler does not run: the stages
+/// the shared pipeline list uses, translated and packed as Metal source (shader_cache_build::pack_source), which the app
+/// compiles the first time the game uses each. The same source serves both systems, so both apps share the pack (its
+/// folder keeps the name it had when only the .ipa took it). Built again when the stages, the translator or the list
+/// change; returns the cache folder the app takes.
+pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
     let (work, dump, title_id) = (&r.work, &r.dump, r.title_id);
     let (stages, ios_cache) = (work.join("stages"), work.join("shader_cache_ios_source"));
     // The stages as the Windows target extracts them (shared, skipped when the game's version is unchanged).
@@ -263,7 +264,7 @@ pub(crate) fn ios_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
     let (cache, build_dir, job) = (ios_cache.clone(), work.join("shader_build_ios"), r.job.clone());
     let stamp_file = work.join("shader_cache_ios_source.from");
     steps.push((
-        "Translating the shaders for iOS".into(),
+        "Translating the shaders as Metal source".into(),
         Box::new(move || {
             std::fs::create_dir_all(&cache).map_err(|e| format!("{}: {e}", cache.display()))?;
             pipeline_list(title_id, &cache, false)?;

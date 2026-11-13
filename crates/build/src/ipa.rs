@@ -320,7 +320,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 fn ios_artifact(name: &str) -> Option<PathBuf> {
     let built = Path::new(env!("NXPORT_ENGINE_IOS")).with_file_name(name);
     #[cfg(windows)]
-    if let Some(p) = crate::ios_engine::built_engine().map(|e| e.with_file_name(name)).filter(|p| p.is_file()) {
+    if let Some(p) = crate::apple_engine::built_engine(crate::apple_engine::Os::Ios).map(|e| e.with_file_name(name)).filter(|p| p.is_file()) {
         return Some(p);
     }
     let mut candidates = vec![
