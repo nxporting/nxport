@@ -6,6 +6,24 @@ and update this file when you finish or drop it.
 ## Claimed: S41L0R Windows Machine
 
 
+## For the user's morning: Mac and iOS (mac-worker, 2026-11-13 night)
+
+Local, unpushed commits on the Mac's main (push is your call): 1cf4baf present pacing caches its per-thread decision;
+68cbb9b iOS pipeline archives (pipelines.metalar was empty since 92d3c8a; now 165 MB for A18, 13 of 13171 pipelines
+left out); 2ccaf73 TotK exact mouse aim on 1.1.2 and on native engines. To check by hand (windowed, needs you):
+1. Mouse aim on the Mac (TotK 1.1.2, Exact Mouse Aim on): mouse look turns the camera sideways and up / down; with a
+   bow drawn, the aim follows the mouse both ways. Headless runs only showed the hooks install and the game runs.
+2. iPhone: an .ipa from the Mac builder now carries a real pipeline archive: the first launch's precompile should be
+   short, and the phone log's precompile summary should say most pipelines came "from binary archives".
+3. Movies (win-worker's b1ea336 + d24baa2, not run on the Mac: no save reaches a movie headless): play one to the end
+   (new game opening, or Event/Movie), no freeze.
+4. macOS Game Mode (nxnative reports it pins the GPU low on M4 Pro): needs a fullscreen windowed run with and without
+   LSSupportsGameMode=false in the app's Info.plist; not measured.
+5. Windows-made macOS app (win-worker, PARITY #1): unzip on the Mac, launch, `codesign --verify --deep`.
+Found tonight, not regressions: the frame capture misses some lighting input (replay vs live 18-26% of pixels in sun,
+the sunlit surfaces darker in the replay; the conformance suite stays valid, replays are deterministic). The Hateno
+capture was re-recorded (the Oct 22 one was unreadable after f6805da).
+
 ## Open (unclaimed)
 
 - **D16 clears against rasterized depth on Vulkan (mac-worker's Metal finding, 2026-11-13, 54cc5b0).** On Apple GPUs a
