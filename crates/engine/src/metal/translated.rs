@@ -99,6 +99,8 @@ pub(super) struct PipeJob {
     blend_color: [f32; 4],
     /// Build the batched variant (metal/batch.rs: tb_<entry> functions).
     batched: bool,
+    /// Build the argument-buffer variant (ab_<entry> functions, --arg-buffers).
+    args: bool,
 }
 
 pub(super) enum AsyncPipe {
@@ -200,6 +202,7 @@ fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
                         super::HITCH_PIPE_N.fetch_add(take as u64, std::sync::atomic::Ordering::Relaxed);
                         continue;
                     }
+                    crate::gpu::pipeline_list::listed_done();
                     let mut g = pipe_queue().0.lock().unwrap();
                     g.listed_done += 1;
                     g.listed_failed += !ok as usize;
@@ -240,6 +243,7 @@ fn build_job(j: &PipeJob) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTL
         j.channel_mask,
         j.blend_color,
         j.batched,
+        j.args,
     )
 }
 
@@ -249,6 +253,7 @@ fn push_job(job: SendJob, listed: bool) {
     if listed {
         g.listed.push_back(job);
         g.listed_n += 1;
+        crate::gpu::pipeline_list::listed_queued(1);
     } else {
         g.draws.push_back(job);
     }
@@ -263,6 +268,7 @@ fn promote(slot: &std::sync::Arc<Slot>) {
         let j = g.listed.remove(i).unwrap();
         g.draws.push_front(j);
         g.listed_n -= 1;
+        crate::gpu::pipeline_list::listed_unqueued();
     }
 }
 
@@ -346,6 +352,7 @@ pub(super) fn queue_precompile(e: &crate::gpu::pipeline_list::Entry) -> bool {
         channel_mask: e.channel_mask,
         blend_color: [0.0; 4],
         batched: false,
+        args: false,
     };
     push_job(SendJob(job, slot), true);
     true
@@ -464,6 +471,14 @@ pub(crate) struct DriverCbKey {
     base_instance: i32,
     sb_descs: Vec<(usize, u64, u64)>,
     limits: [u32; 18],
+    heap: Option<HeapCb>,
+}
+
+/// A heap stage's driver cbuf part (metal/tex_heap.rs): heap addresses, (handle index, handle) per sampled texture.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct HeapCb {
+    addresses: [u64; super::tex_heap::HEAPS],
+    handles: smallvec::SmallVec<[(u16, u32); 8]>,
 }
 
 /// Registers a new pipeline with the batcher (metal/batch.rs) when its draws can be batched: both stages have batched
@@ -512,6 +527,7 @@ fn register_batchable(
         channel_mask: p.channel_mask,
         blend_color: p.blend_color,
         batched: true,
+        args: false,
     };
     super::batch::register(pipe, vtb, ftb, key, job);
 }
@@ -1497,6 +1513,71 @@ pub(super) fn derive_layout(vs: &CachedStage, attr_bits: &[Option<u32>], vertex_
         repack.push((s, new_stride, copies));
     }
     Layout { attr_descs, streams_used, needs_default_attr, streams_eff, repack }
+}
+
+/// Pipeline key marker of argument-buffer pipelines (ab_ variants).
+const AB_KEY: u64 = 0xAB00_0000_0000_0000;
+
+/// --arg-buffers, or replay side B with --replay-ab-args.
+fn args_on() -> bool {
+    static ON: std::sync::OnceLock<(bool, bool)> = std::sync::OnceLock::new();
+    let (on, ab) = *ON.get_or_init(|| {
+        let s = crate::settings::get();
+        (s.graphics.arg_buffers, s.replay.replay_ab_args)
+    });
+    on || (ab && super::replay_b())
+}
+
+/// The struct of an argument-buffer variant (index line `ab`): per member the GPU address of the buffer the plain path
+/// bound at that binding, or the resource ID of its texture / sampler. Unbound buffers point at the zero buffer.
+unsafe fn compose_args(
+    stage: &CachedStage,
+    bufs: &[(Retained<ProtocolObject<dyn MTLBuffer>>, usize, usize)],
+    tex: &[(Tex, usize)],
+    samp: &[(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize)],
+    zero: Option<&ProtocolObject<dyn MTLBuffer>>,
+    res: &mut Vec<(Retained<ProtocolObject<dyn objc2_metal::MTLResource>>, objc2_metal::MTLResourceUsage)>,
+) -> Vec<u64> {
+    use objc2_metal::{MTLResource, MTLResourceUsage};
+    let members = stage.args.as_deref().unwrap_or(&[]);
+    let mut out = Vec::with_capacity(members.len());
+    for &(class, b) in members {
+        let b = b as usize;
+        out.push(match class {
+            b'c' | b'b' => {
+                // Storage buffers the shader may write (older caches list them as c: by the stage's storage bindings).
+                let written = class == b'b'
+                    || (stage.sbuffers.iter().any(|s| s.0 as usize == b) && !stage.sb_readonly.iter().any(|&r| r as usize == b));
+                let usage = if written { MTLResourceUsage::Read | MTLResourceUsage::Write } else { MTLResourceUsage::Read };
+                let (buf, off) = match bufs.iter().rev().find(|x| x.2 == b) {
+                    Some((buf, off, _)) => (Some(&**buf), *off),
+                    None => (zero, 0),
+                };
+                match buf {
+                    Some(buf) => {
+                        res.push((ProtocolObject::<dyn MTLResource>::from_ref(buf).retain(), usage));
+                        buf.gpuAddress() + off as u64
+                    }
+                    None => 0,
+                }
+            }
+            b't' => match tex.iter().rev().find(|x| x.1 == b) {
+                Some((t, _)) => {
+                    res.push((ProtocolObject::<dyn MTLResource>::from_ref(&**t).retain(), MTLResourceUsage::Read));
+                    std::mem::transmute::<_, u64>(t.gpuResourceID())
+                }
+                None => 0,
+            },
+            b's' => samp
+                .iter()
+                .rev()
+                .find(|x| x.1 == b)
+                .and_then(|(s, _)| s.as_ref())
+                .map_or(0, |s| std::mem::transmute::<_, u64>(s.gpuResourceID())),
+            _ => 0,
+        });
+    }
+    out
 }
 
 /// The key of the render pipeline build_translated_pipeline makes from these inputs.
@@ -2589,6 +2670,11 @@ impl Gfx {
                 return Some(s.clone());
             }
         }
+        if let Some((_, s)) = sh.sampler_states.iter().find(|(d, _)| *d == desc) {
+            let s = s.clone();
+            sh.samplers.insert(id, (desc, s.clone()));
+            return Some(s);
+        }
         let sd = MTLSamplerDescriptor::new();
         let (min_linear, mip) = match desc.min_filter {
             0 => (false, MTLSamplerMipFilter::NotMipmapped),
@@ -2633,6 +2719,7 @@ impl Gfx {
         sd.setSupportArgumentBuffers(true); // samplers 16+ are passed by handle (see bind_extra_samplers)
         let s = self.device.newSamplerStateWithDescriptor(&sd)?;
         sh.samplers.insert(id, (desc, s.clone()));
+        sh.sampler_states.push((desc, s.clone()));
         Some(s)
     }
 
@@ -2701,6 +2788,54 @@ impl Gfx {
         let d = self.device.newDepthStencilStateWithDescriptor(&desc)?;
         sh.ds_states.insert(key, d.clone());
         Some(d)
+    }
+
+    /// The depth twin of colour texture `t` for a binding that samples `v` (a view of `t`) with depth comparison: its
+    /// memory read as R32F -> Depth32Float, R16 -> Depth16Unorm (layout::depth_twin), what the console compares. Filled
+    /// from guest memory (shared storage, as a CPU-written texture is), again when the object's generation changes. None
+    /// for other formats, or a colour texture the GPU wrote (guest memory does not hold its contents: the caller binds
+    /// a dummy, as before).
+    unsafe fn depth_twin(&self, tc: &mut TexCache, t: &Tex, v: &Tex, gen: u64, snap: &crate::nvn::api::NvnTexture) -> Option<Tex> {
+        let pf = match crate::nvn::layout::depth_twin(snap.format) {
+            Some(52) => MTLPixelFormat::Depth32Float,
+            Some(50) => MTLPixelFormat::Depth16Unorm,
+            _ => return None,
+        };
+        if tc.gpu_written.contains(&super::storage_id(t)) {
+            return None;
+        }
+        let key = super::storage_id(t);
+        let twin = match tc.depth_twins.get(&key) {
+            Some((tw, g)) if *g == gen => tw.clone(),
+            _ => {
+                let desc = MTLTextureDescriptor::new();
+                desc.setTextureType(t.textureType());
+                desc.setPixelFormat(pf);
+                desc.setWidth(t.width());
+                desc.setHeight(t.height());
+                desc.setDepth(t.depth());
+                desc.setArrayLength(t.arrayLength());
+                desc.setMipmapLevelCount(t.mipmapLevelCount());
+                desc.setUsage(MTLTextureUsage::ShaderRead);
+                desc.setStorageMode(MTLStorageMode::Shared);
+                let tw = self.device.newTextureWithDescriptor(&desc)?;
+                self.upload_texture(&tw, snap);
+                tc.depth_twins.insert(key, (tw.clone(), gen));
+                tw
+            }
+        };
+        // The binding's levels and layers of the twin.
+        if v.mipmapLevelCount() == twin.mipmapLevelCount() && v.arrayLength() == twin.arrayLength() && v.textureType() == twin.textureType() {
+            return Some(twin);
+        }
+        let (level, slice) = if v.parentTexture().is_some() { (v.parentRelativeLevel(), v.parentRelativeSlice()) } else { (0, 0) };
+        let slices = if matches!(v.textureType(), MTLTextureType::TypeCube | MTLTextureType::TypeCubeArray) { v.arrayLength() * 6 } else { v.arrayLength() };
+        twin.newTextureViewWithPixelFormat_textureType_levels_slices(
+            pf,
+            v.textureType(),
+            objc2_foundation::NSRange::new(level, v.mipmapLevelCount()),
+            objc2_foundation::NSRange::new(slice, slices),
+        )
     }
 
     /// A 1x1 texture of `ty` to bind when the game's texture can't be expressed (yet).
@@ -2962,7 +3097,12 @@ impl Gfx {
                     tc.refresh_memo.insert(tex_addr, memo);
                 }
                 let tex_swizzle = info.map_or([2, 3, 4, 5], |(_, snap)| snap.swizzle);
-                texture_for_binding(&mut tc.view_cache, &t, view.as_ref(), want, tex_swizzle)
+                let v = texture_for_binding(&mut tc.view_cache, &t, view.as_ref(), want, tex_swizzle);
+                // Depth comparison of a colour texture: its memory read as depth (layout::depth_twin).
+                match (tb.shadow, v, info) {
+                    (true, Some(v), Some((gen, snap))) => self.depth_twin(tc, &t, &v, gen, &snap).or(Some(v)),
+                    (_, v, _) => v,
+                }
             });
             let alias_root = pool.and_then(|(a, _)| tc.alias_of.get(&a).copied());
             (resolved, alias_root)
@@ -3145,7 +3285,7 @@ impl Gfx {
         };
         // Consecutive dispatches (and tiny compute draws) share one compute encoder: serial dispatch keeps their order
         // and makes each see the previous one's writes; any other op ends it (issuer CJoin / CLinger).
-        st.issuer.push(super::issuer::Op::CJoin(cur_cb, cached.entry.clone()));
+        st.issuer.push(super::issuer::Op::CJoin(cur_cb, cached.entry.clone(), cached.texture_heap));
         self.note_encoder(
             st,
             format!(
@@ -3162,6 +3302,54 @@ impl Gfx {
         }
         if let Some((buf, off)) = st.cx.arena.alloc(&self.device, &sup) {
             st.issuer.push(super::issuer::Op::CBuf(buf, off, 0));
+        }
+        // Descriptor heaps (metal/tex_heap.rs): slots, handles and heap addresses in the driver cbuf, residency.
+        if cached.texture_heap {
+            let frame = super::presented_frames();
+            st.cx.heaps.sweep(frame);
+            let mut used = 1u32 << super::tex_heap::SAMPLERS;
+            for tb in &cached.textures {
+                let (tex, sampler_id) = self.bound_texture(st, STAGE_COMPUTE, tb);
+                let Some(tex) = tex.or_else(|| self.dummy_texture(&mut st.tc, &tb.ty)) else {
+                    continue;
+                };
+                let sampler = {
+                    let mut g = shm.lock().unwrap();
+                    sampler_id
+                        .and_then(|id| self.sampler_state(&mut g, id))
+                        .or_else(|| self.default_sampler(&mut g))
+                };
+                let Some(ss) = sampler.and_then(|s| st.cx.heaps.sampler(&self.device, &s, frame))
+                else {
+                    continue;
+                };
+                let Some((ts, root)) = st.cx.heaps.texture(&self.device, tb.declared, &tex, frame)
+                else {
+                    continue;
+                };
+                let o = super::tex_heap::HANDLES + tb.handle_index as usize * 4;
+                c0[o..o + 4].copy_from_slice(&(ts | ss << 20).to_le_bytes());
+                used |= 1 << tb.declared.min(super::tex_heap::SAMPLERS - 1);
+                for t in [&tex, &root] {
+                    st.issuer.push(super::issuer::Op::CUse(
+                        ProtocolObject::<dyn objc2_metal::MTLResource>::from_retained(t.clone()),
+                        objc2_metal::MTLResourceUsage::Read,
+                    ));
+                }
+            }
+            for h in 0..super::tex_heap::HEAPS {
+                if used >> h & 1 == 0 {
+                    continue;
+                }
+                let o = super::tex_heap::ADDRESSES + h * 8;
+                c0[o..o + 8].copy_from_slice(&st.cx.heaps.address(h).to_le_bytes());
+                if let Some(b) = st.cx.heaps.buffer(h).cloned() {
+                    st.issuer.push(super::issuer::Op::CUse(
+                        ProtocolObject::<dyn objc2_metal::MTLResource>::from_retained(b),
+                        objc2_metal::MTLResourceUsage::Read,
+                    ));
+                }
+            }
         }
         // Bound size of each constant buffer the kernel reads, in the driver cbuf (see CBUF_LIMITS_OFFSET).
         if c0.len() >= CBUF_LIMITS_OFFSET + 18 * 4 {
@@ -3183,7 +3371,10 @@ impl Gfx {
                     .copy_from_slice(&l.to_le_bytes());
             }
         }
-        if cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0) {
+        // Heap stages read the driver cbuf at binding 17 (sass2spv: a parameter of its own when the stage binds it elsewhere).
+        if (cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0))
+            || (cached.texture_heap && !cached.cbuffers.iter().any(|&(b, _)| b == 17))
+        {
             if let Some((buf, off)) = st.cx.arena.alloc(&self.device, &c0) {
                 st.issuer.push(super::issuer::Op::CBuf(buf, off, 17));
             }
@@ -3296,6 +3487,9 @@ impl Gfx {
         let mut extra_samplers: Vec<(usize, Retained<ProtocolObject<dyn MTLSamplerState>>)> =
             Vec::new();
         for tb in &cached.textures {
+            if cached.texture_heap {
+                break;
+            }
             let (tex, sampler_id) = self.bound_texture(st, STAGE_COMPUTE, tb);
             let Some(tex) = tex.or_else(|| self.dummy_texture(&mut st.tc, &tb.ty)) else {
                 continue;
@@ -3574,6 +3768,13 @@ impl Gfx {
         resolved: &ResolvedTex,
     ) -> Option<TinyPlan> {
         if !tiny_enabled() {
+            return None;
+        }
+        // Kernels reading their samplers from the sampler heap gave varying results from one run of the same frame to
+        // the next (TotK's atmosphere LUT kernel s_ec8a96bdd2f04e50: whole-frame tint flashes; the render versions are
+        // stable, cause not found): only kernels that take their samplers as parameters run (index line `tks`).
+        let heap_samplers = |c: &CachedStage| c.texture_heap && !c.textures.is_empty() && !c.tiny_samplers;
+        if heap_samplers(vs) || fs.is_some_and(heap_samplers) {
             return None;
         }
         let r = self.tiny_plan_inner(st, vs, fs, call, mode, color_texs, depth_tex, resolved);
@@ -4223,6 +4424,7 @@ impl Gfx {
         enc.push(Op::CJoin(
             tp.cb.clone(),
             format!("tiny {} / {}", vs.entry, fs.entry),
+            !rec.uses.is_empty(),
         ));
         enc.push(Op::CPipeline(kv));
         if crate::settings::get().log.log_tiny_bufs {
@@ -4245,6 +4447,9 @@ impl Gfx {
         }
         if let Some((b, off)) = &ib {
             enc.push(Op::CBuf(b.clone(), *off, 26));
+        }
+        for x in &rec.uses {
+            enc.push(Op::CUse(x.clone(), objc2_metal::MTLResourceUsage::Read));
         }
         for (t, i) in rec.vtex {
             enc.push(Op::CTex(t, i));
@@ -5264,6 +5469,12 @@ impl Gfx {
         let blend = blends[0];
         // Points take the command buffer's point size (only point draws, so other draws share one pipeline).
         let point_size = if mode == 0 { p.point_size } else { 1.0 };
+        // Argument-buffer draws: both stages bind their resources through one struct each (their ab_ variants).
+        let use_ab = args_on()
+            && p.tiny.is_none()
+            && !super::batch::enabled()
+            && vs.args.is_some()
+            && fs.map_or(true, |f| f.args.is_some());
         let mut memo_key: smallvec::SmallVec<[u64; 64]> = smallvec::smallvec![
             point_size.to_bits() as u64,
             vs as *const CachedStage as u64,
@@ -5278,6 +5489,7 @@ impl Gfx {
         memo_key.push(p.attr_bits.len() as u64);
         memo_key.extend(p.attr_bits.iter().map(|b| b.map_or(u64::MAX, |b| b as u64)));
         memo_key.extend(p.vertex_streams.iter().copied());
+        memo_key.push(use_ab as u64);
         // Consecutive draws mostly repeat the previous draw's inputs: compare with those before hashing.
         let last_hit = env
             .cx
@@ -5366,7 +5578,7 @@ impl Gfx {
                         }
                     }
                 }
-                let key = pipeline_key(
+                let mut key = pipeline_key(
                     point_size,
                     vs,
                     fs,
@@ -5380,6 +5592,9 @@ impl Gfx {
                     &streams_used,
                     &streams_eff,
                 );
+                if use_ab {
+                    key.push(AB_KEY);
+                }
 
                 let pipe = if let Some(p) = env.sh.translated_pipelines.get(key.as_slice()) {
                     p.clone()
@@ -5409,6 +5624,7 @@ impl Gfx {
                         channel_mask: p.channel_mask,
                         blend_color: p.blend_color,
                         batched: false,
+                        args: use_ab,
                     };
                     match async_pipeline(key.as_slice(), job) {
                         AsyncPipe::Ready(pipe) => {
@@ -5435,6 +5651,7 @@ impl Gfx {
                         }
                         AsyncPipe::Pending => {
                             {
+                                crate::gpu::pipeline_list::draw_skipped_compiling();
                                 if super::tracing_frame() {
                                     println!("[ftrace] SKIP draw: pipeline still compiling");
                                 }
@@ -5471,6 +5688,7 @@ impl Gfx {
                             p.channel_mask,
                             p.blend_color,
                             false,
+                            use_ab,
                         );
                         super::HITCH_PIPE_NS.fetch_add(
                             t0.elapsed().as_nanos() as u64,
@@ -5938,6 +6156,9 @@ impl Gfx {
             );
         }
         // ---- per-stage resources ----
+        if use_ab {
+            env.cx.ec.bind_rec = Some(TinyRec::default());
+        }
         let mut notes: Vec<String> = Vec::new();
         // Per-draw detail text is only for traces and GPU-error reports (first 16 draws of an encoder); formatting it for
         // every draw cost ~20% of the executor.
@@ -6129,6 +6350,69 @@ impl Gfx {
                     }
                 }
             }
+            // Descriptor heaps (metal/tex_heap.rs): each sampled texture's and sampler's slot, the handles and heap
+            // addresses for the driver cbuf, residency once per encoder.
+            let heap_cb = if cached.texture_heap {
+                let frame = super::presented_frames();
+                env.cx.heaps.sweep(frame);
+                let mut hc = HeapCb::default();
+                let mut used = 1u32 << super::tex_heap::SAMPLERS;
+                for tb in &cached.textures {
+                    let Some(r) = resolved_tex
+                        .iter()
+                        .find(|r| r.0 == nvn_stage && r.1 == tb.binding)
+                    else {
+                        continue;
+                    };
+                    let Some(tex) = r.2.clone() else { continue };
+                    let sampler = r
+                        .3
+                        .and_then(|id| self.sampler_state(&mut *env.sh, id))
+                        .or_else(|| self.default_sampler(&mut *env.sh));
+                    // Tiny kernels take the sampler as a parameter at the texture's binding (index line `tks`).
+                    if let (Some(r), Some(s)) = (env.cx.ec.rec.as_mut(), sampler.as_ref()) {
+                        let smp = (Some(s.clone()), tb.binding as usize);
+                        if is_vs {
+                            r.vsamp.push(smp);
+                        } else {
+                            r.fsamp.push(smp);
+                        }
+                    }
+                    let Some(ss) =
+                        sampler.and_then(|s| env.cx.heaps.sampler(&self.device, &s, frame))
+                    else {
+                        continue;
+                    };
+                    let Some((ts, root)) =
+                        env.cx.heaps.texture(&self.device, tb.declared, &tex, frame)
+                    else {
+                        continue;
+                    };
+                    hc.handles.push((tb.handle_index as u16, ts | ss << 20));
+                    used |= 1 << tb.declared.min(super::tex_heap::SAMPLERS - 1);
+                    for t in [&tex, &root] {
+                        env.cx.ec.heap_use(
+                            &enc,
+                            ProtocolObject::<dyn objc2_metal::MTLResource>::from_ref(&**t),
+                        );
+                    }
+                }
+                for h in 0..super::tex_heap::HEAPS {
+                    if used >> h & 1 == 0 {
+                        continue;
+                    }
+                    hc.addresses[h] = env.cx.heaps.address(h);
+                    if let Some(b) = env.cx.heaps.buffer(h).cloned() {
+                        env.cx.ec.heap_use(
+                            &enc,
+                            ProtocolObject::<dyn objc2_metal::MTLResource>::from_ref(&*b),
+                        );
+                    }
+                }
+                Some(hc)
+            } else {
+                None
+            };
             // Bound size of each constant buffer the stage reads (see CBUF_LIMITS_OFFSET).
             let mut limits = [4096u32; 18];
             for &(binding, slot) in &cached.cbuffers {
@@ -6160,6 +6444,16 @@ impl Gfx {
                     c0[CBUF_LIMITS_OFFSET + b * 4..CBUF_LIMITS_OFFSET + b * 4 + 4]
                         .copy_from_slice(&l.to_le_bytes());
                 }
+                if let Some(hc) = &heap_cb {
+                    for (h, a) in hc.addresses.iter().enumerate() {
+                        let o = super::tex_heap::ADDRESSES + h * 8;
+                        c0[o..o + 8].copy_from_slice(&a.to_le_bytes());
+                    }
+                    for &(i, v) in &hc.handles {
+                        let o = super::tex_heap::HANDLES + i as usize * 4;
+                        c0[o..o + 4].copy_from_slice(&v.to_le_bytes());
+                    }
+                }
             };
             // One copy per distinct content: consecutive draws mostly share it (--no-driver-cb-memo: a copy per draw).
             let dkey = DriverCbKey {
@@ -6167,6 +6461,7 @@ impl Gfx {
                 base_instance: base_instance_value,
                 sb_descs: sb_descs.clone(),
                 limits,
+                heap: heap_cb.clone(),
             };
             let driver_cb =
                 |env: &mut EncodeEnv| -> Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)> {
@@ -6180,7 +6475,9 @@ impl Gfx {
                     env.cx.driver_cb_memo[si] = Some((dkey.clone(), x.clone()));
                     Some(x)
                 };
-            if cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0) {
+            if (cached.cbuf_limits && !cached.cbuffers.iter().any(|&(_, slot)| slot == 0))
+                || (cached.texture_heap && !cached.cbuffers.iter().any(|&(b, _)| b == 17))
+            {
                 if let Some((buf, off)) = driver_cb(env) {
                     if is_vs {
                         env.cx.ec.vbuf(&enc, &buf, off, 17);
@@ -6470,6 +6767,9 @@ impl Gfx {
                     p.handle(nvn_stage, k as i32), sampler_id, src, nvn.unwrap_or_default()
                 ));
                 }
+                if cached.texture_heap {
+                    continue;
+                }
                 let sampler = sampler_id
                     .and_then(|id| self.sampler_state(&mut *env.sh, id))
                     .or_else(|| self.default_sampler(&mut *env.sh));
@@ -6730,6 +7030,18 @@ impl Gfx {
             env.cx.translated_draws += 1;
             super::TRANSLATED_DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return true;
+        }
+        if use_ab {
+            let rec = env.cx.ec.bind_rec.take().unwrap_or_default();
+            // The structs take buffer 0 of each stage: the plain path's binding there is gone.
+            env.cx.ec.vbuf[0] = (0, usize::MAX);
+            env.cx.ec.fbuf[0] = (0, usize::MAX);
+            let zero = self.zero_buffer(&mut *env.sh);
+            let mut res = Vec::new();
+            let v = compose_args(vs, &rec.vbufs, &rec.vtex, &rec.vsamp, zero.as_deref(), &mut res);
+            let f = fs.map_or_else(Vec::new, |f| compose_args(f, &rec.fbufs, &rec.ftex, &rec.fsamp, zero.as_deref(), &mut res));
+            res.extend(rec.uses.into_iter().map(|x| (x, objc2_metal::MTLResourceUsage::Read)));
+            enc.push(Op::ArgStructs { v: v.into(), f: f.into(), res });
         }
         if details {
             enc.push(Op::PushGroup(pair.clone()));
@@ -7096,6 +7408,7 @@ impl Gfx {
         channel_mask: u32,
         _blend_color: [f32; 4],
         batched: bool,
+        args: bool,
     ) -> Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
         let desc = pipeline_descriptor(
             &self.device,
@@ -7114,6 +7427,7 @@ impl Gfx {
             color_state,
             channel_mask,
             batched,
+            args,
         )?;
         super::pipeline_archive::create(&self.device, &desc, &vs.entry, fs.map_or("-", |f| f.entry.as_str()))
     }
@@ -7138,6 +7452,7 @@ pub(super) fn pipeline_descriptor(
     color_state: u32,
     channel_mask: u32,
     batched: bool,
+    args: bool,
 ) -> Option<Retained<MTLRenderPipelineDescriptor>> {
 
     let set_int = |cv: &MTLFunctionConstantValues, id: usize, v: i32| unsafe {
@@ -7175,6 +7490,8 @@ pub(super) fn pipeline_descriptor(
     // constant buffer and stays as it is.
     let vres = if batched {
         lib.kernel(&vs.entry, &format!("tb_{}", vs.entry), &vcv)
+    } else if args {
+        lib.kernel(&vs.entry, &format!("ab_{}", vs.entry), &vcv)
     } else {
         lib.function(&vs.entry, &vcv)
     };
@@ -7241,6 +7558,8 @@ pub(super) fn pipeline_descriptor(
         }
         let fres = if batched && fs.batch_cbufs.is_some() {
             lib.kernel(&fs.entry, &format!("tb_{}", fs.entry), &fcv)
+        } else if args && fs.args.is_some() {
+            lib.kernel(&fs.entry, &format!("ab_{}", fs.entry), &fcv)
         } else {
             lib.function(&fs.entry, &fcv)
         };
@@ -7519,6 +7838,11 @@ pub(crate) struct EncCache {
     /// Tiny-pass compute mode: bindings are recorded per stage for the kernels instead of being
     /// set on a render encoder, fixed-function state is ignored.
     pub(super) rec: Option<TinyRec>,
+    /// Argument-buffer draws (--arg-buffers): resource bindings are recorded for the draw's structs; fixed-function
+    /// state is set as usual.
+    pub(super) bind_rec: Option<TinyRec>,
+    /// Resources made resident for heap reads in this encoder (Op::Use), by pointer.
+    heap_used: rustc_hash::FxHashSet<usize>,
 }
 
 /// Bindings encode_draw made for a draw that runs as compute: (object, offset / none, index) per stage.
@@ -7530,6 +7854,8 @@ pub(super) struct TinyRec {
     pub(super) ftex: Vec<(Tex, usize)>,
     pub(super) vsamp: Vec<(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize)>,
     pub(super) fsamp: Vec<(Option<Retained<ProtocolObject<dyn MTLSamplerState>>>, usize)>,
+    /// Resources the stages read through descriptor heaps (made resident, not bound).
+    pub(super) uses: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLResource>>>,
 }
 
 impl Default for EncCache {
@@ -7553,6 +7879,8 @@ impl Default for EncCache {
             vsamp: [usize::MAX; 32],
             fsamp: [usize::MAX; 32],
             rec: None,
+            bind_rec: None,
+            heap_used: Default::default(),
         }
     }
 }
@@ -7565,6 +7893,20 @@ fn ptr_of<T: ?Sized>(o: Option<&T>) -> usize {
 }
 
 impl EncCache {
+    /// Makes a resource read through the descriptor heaps resident (once per encoder; recorded for kernels).
+    pub(super) unsafe fn heap_use(
+        &mut self,
+        enc: &Enc,
+        r: &ProtocolObject<dyn objc2_metal::MTLResource>,
+    ) {
+        if let Some(rec) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
+            rec.uses.push(r.retain());
+            return;
+        }
+        if self.heap_used.insert(ptr_of(Some(r))) {
+            enc.push(Op::Use(r.retain(), objc2_metal::MTLResourceUsage::Read));
+        }
+    }
     pub(super) unsafe fn pipeline(
         &mut self,
         enc: &Enc,
@@ -7695,7 +8037,7 @@ impl EncCache {
         off: usize,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.vbufs.push((b.retain(), off, i));
             return;
         }
@@ -7720,7 +8062,7 @@ impl EncCache {
         off: usize,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.fbufs.push((b.retain(), off, i));
             return;
         }
@@ -7744,7 +8086,7 @@ impl EncCache {
         t: &ProtocolObject<dyn objc2_metal::MTLTexture>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.vtex.push((t.retain(), i));
             return;
         }
@@ -7763,7 +8105,7 @@ impl EncCache {
         t: &ProtocolObject<dyn objc2_metal::MTLTexture>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.ftex.push((t.retain(), i));
             return;
         }
@@ -7782,7 +8124,7 @@ impl EncCache {
         s: Option<&ProtocolObject<dyn MTLSamplerState>>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.vsamp.push((s.map(|x| x.retain()), i));
             return;
         }
@@ -7801,7 +8143,7 @@ impl EncCache {
         s: Option<&ProtocolObject<dyn MTLSamplerState>>,
         i: usize,
     ) {
-        if let Some(r) = &mut self.rec {
+        if let Some(r) = self.rec.as_mut().or(self.bind_rec.as_mut()) {
             r.fsamp.push((s.map(|x| x.retain()), i));
             return;
         }

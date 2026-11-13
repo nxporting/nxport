@@ -2087,6 +2087,10 @@ pub(crate) struct RecordedCommandList {
     /// (ranges written by UpdateUniformBuffer, handles called), computed on first use (see metal::ubo_updated_ranges).
     /// Ranges its uniform updates and reports write, the lists it calls, its SAMPLES_PASSED report addresses.
     pub(crate) summary: std::sync::OnceLock<(Vec<(u64, u64)>, Vec<u64>, Vec<u64>)>,
+    /// Its render-pass events, computed on first use (see `pass_events`).
+    pub(crate) pass_events: std::sync::OnceLock<Vec<PassEvent>>,
+    /// (op index, call chain) of its pass-level commands (--log-frame-map).
+    pub(crate) recorder: Option<Box<Vec<(u32, [u32; 16])>>>,
     /// Frames presented when it was recorded (diagnostics: replayed lists vs. lists recorded this frame).
     pub(crate) recorded_frame: u64,
 }
@@ -2116,6 +2120,24 @@ impl RecordedCommandList {
                     Some(crate::nvn::cmd::Cmd::CallCommands(h)) => {
                         calls.extend_from_slice(h.as_slice())
                     }
+                    Some(crate::nvn::cmd::Cmd::ModelDraw(m)) => {
+                        for i in &m.items {
+                            match i {
+                                crate::nvn::cmd::ModelItem::Unit { list, .. } => calls.push(*list),
+                                crate::nvn::cmd::ModelItem::UpdateUniform { addr, offset, data } => {
+                                    let a = (*addr as i64 + *offset as i64) as u64;
+                                    ranges.push((a, a + data.len() as u64));
+                                }
+                                crate::nvn::cmd::ModelItem::ReportCounter { counter, addr } if *addr > 0x10000 => {
+                                    ranges.push((*addr, *addr + 16));
+                                    if *counter == 1 {
+                                        samples.push(*addr);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2135,6 +2157,70 @@ fn free_later(l: std::sync::Arc<RecordedCommandList>) {
     if let Some(tx) = tx {
         // Sent back (and dropped here) only if the thread is gone.
         let _ = tx.lock().unwrap().send(l);
+    }
+}
+
+/// What a command list does that decides how its draws can share render passes, in order: render-target binds, draws
+/// (consecutive ones as one), clears of the bound targets, commands that need earlier passes' results stored (compute,
+/// copies, buffer / texture clears) and the lists it calls.
+#[derive(Clone, Debug)]
+pub(crate) enum PassEvent {
+    /// The bind, with its op index in the list.
+    Targets(Vec<crate::nvn::cmd::RtRef>, Option<crate::nvn::cmd::RtRef>, u32),
+    Draw,
+    Clear,
+    Break(&'static str),
+    Call(u64),
+}
+
+impl RecordedCommandList {
+    pub(crate) fn pass_events(&self) -> &[PassEvent] {
+        use crate::nvn::cmd::Cmd;
+        self.pass_events.get_or_init(|| {
+            let mut ev = Vec::new();
+            for (index, op) in self.ops.iter().enumerate() {
+                let e = match &op.typed {
+                    Some(Cmd::SetRenderTargets { colors, depth }) => PassEvent::Targets(colors.clone(), depth.as_deref().copied(), index as u32),
+                    Some(
+                        Cmd::DrawArrays { .. }
+                        | Cmd::DrawElements { .. }
+                        | Cmd::DrawArraysInstanced { .. }
+                        | Cmd::DrawElementsInstanced { .. },
+                    ) => PassEvent::Draw,
+                    Some(Cmd::ModelDraw(m)) => {
+                        for item in &m.items {
+                            match item {
+                                crate::nvn::cmd::ModelItem::Unit { list, .. } => ev.push(PassEvent::Call(*list)),
+                                crate::nvn::cmd::ModelItem::Draw(_) if !matches!(ev.last(), Some(PassEvent::Draw)) => {
+                                    ev.push(PassEvent::Draw)
+                                }
+                                _ => {}
+                            }
+                        }
+                        continue;
+                    }
+                    Some(Cmd::ClearColor { .. } | Cmd::ClearDepthStencil { .. }) => PassEvent::Clear,
+                    Some(Cmd::DispatchCompute { .. }) => PassEvent::Break("compute"),
+                    Some(
+                        Cmd::CopyBufferToTexture { .. }
+                        | Cmd::CopyTextureToBuffer { .. }
+                        | Cmd::CopyTextureToTexture { .. }
+                        | Cmd::CopyBufferToBuffer { .. },
+                    ) => PassEvent::Break("copy"),
+                    Some(Cmd::ClearBuffer { .. } | Cmd::ClearTexture { .. }) => PassEvent::Break("clear texture / buffer"),
+                    Some(Cmd::CallCommands(h)) => {
+                        ev.extend(h.iter().map(|&h| PassEvent::Call(h)));
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if matches!(e, PassEvent::Draw) && matches!(ev.last(), Some(PassEvent::Draw)) {
+                    continue;
+                }
+                ev.push(e);
+            }
+            ev
+        })
     }
 }
 
@@ -2528,6 +2614,8 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         // short) and made the next BeginRecording allocate it again.
         ops: ops_vec.drain(..).collect(),
         summary: std::sync::OnceLock::new(),
+        pass_events: std::sync::OnceLock::new(),
+        recorder: super::frame_map::take_recorder(cmd as usize),
         recorded_frame: crate::gpu::backend().presented_frames(),
     });
     // Here on the recording thread rather than on the Presentation Thread at submit (they scan every op).
@@ -2706,6 +2794,7 @@ unsafe fn record_generic(
     a5: u64,
 ) {
     record_hle_call(name);
+    super::frame_map::note(name, cmd as usize);
     drawable_cmd_probe(name);
     if cmd.is_null() || (*cmd).ops == 0 {
         return;
@@ -2722,7 +2811,24 @@ unsafe fn record_generic(
     ) {
         return;
     }
-    if capture(|| format!("{name} {a1:#x} {a2:#x} {a3:#x} {a4:#x} {a5:#x}")) {
+    if buffer(cmd as usize, || RecordedNvnCommand { name, typed: None, args: Some(Box::new([a1, a2, a3, a4, a5])) }) {
+        return;
+    }
+    if capture(|| {
+        // Registers past a call's arguments hold whatever the caller left there.
+        let n = match name {
+            "nvnCommandBufferSetTiledCacheAction"
+            | "nvnCommandBufferSetRasterizerDiscard"
+            | "nvnCommandBufferSetSampleMask"
+            | "nvnCommandBufferSetConservativeRasterEnable" => 1,
+            "nvnCommandBufferSetTiledCacheTileSize" => 2,
+            // Float arguments travel in s registers.
+            "nvnCommandBufferSetDepthBounds" => 1,
+            _ => 5,
+        };
+        let a = [a1, a2, a3, a4, a5];
+        std::iter::once(name.to_string()).chain(a[..n].iter().map(|v| format!("{v:#x}"))).collect::<Vec<_>>().join(" ")
+    }) {
         return;
     }
     let ops_vec = &mut *((*cmd).ops as *mut Vec<RecordedNvnCommand>);
@@ -2750,6 +2856,58 @@ enum Capture {
     Dry(Vec<String>),
     /// Commands are recorded and collected until there are as many as expected, then passed to the report.
     Watch { expected: Vec<String>, got: Vec<String>, report: fn(&[String], &[String]) },
+    /// Commands are recorded and collected until capture_collected.
+    Collect(Vec<String>),
+    /// Typed commands are collected and not recorded (`ok` false once an untyped command came).
+    Typed { cmds: Vec<crate::nvn::cmd::Cmd>, ok: bool },
+    /// Commands are kept, with their command buffer, to be recorded later (commit_buffered) or dropped.
+    Buffer(Vec<(usize, RecordedNvnCommand)>),
+}
+
+/// Commands kept by capture_buffered.
+pub(crate) struct Buffered(Vec<(usize, RecordedNvnCommand)>);
+
+/// Runs `f` with this thread's commands kept instead of recorded.
+/// Nests: inside another capture of this thread, that capture is kept aside for `f` and put back after it (commands
+/// committed then go to it, see commit_buffered).
+pub(crate) fn capture_buffered<R>(f: impl FnOnce() -> R) -> (R, Buffered) {
+    let outer = CAPTURE.with(|c| c.borrow_mut().replace(Capture::Buffer(Vec::new())));
+    let r = f();
+    let inner = CAPTURE.with(|c| std::mem::replace(&mut *c.borrow_mut(), outer));
+    match inner {
+        Some(Capture::Buffer(v)) => (r, Buffered(v)),
+        _ => (r, Buffered(Vec::new())),
+    }
+}
+
+/// Records commands kept by capture_buffered, in order: into the enclosing buffered capture when there is one.
+pub(crate) unsafe fn commit_buffered(b: Buffered) {
+    let mut b = Some(b);
+    CAPTURE.with(|c| {
+        if let Some(Capture::Buffer(v)) = c.borrow_mut().as_mut() {
+            v.extend(b.take().unwrap().0);
+        }
+    });
+    let Some(b) = b else { return };
+    for (cmd, op) in b.0 {
+        let cmd = cmd as *mut NvnCommandBuffer;
+        if cmd.is_null() || (*cmd).ops == 0 {
+            continue;
+        }
+        (*((*cmd).ops as *mut Vec<RecordedNvnCommand>)).push(op);
+        (*cmd).command_used += 32;
+    }
+}
+
+/// Keeps the command for capture_buffered (true) when this thread is buffering.
+fn buffer(cmd: usize, op: impl FnOnce() -> RecordedNvnCommand) -> bool {
+    CAPTURE.with(|c| match c.borrow_mut().as_mut() {
+        Some(Capture::Buffer(v)) => {
+            v.push((cmd, op()));
+            true
+        }
+        _ => false,
+    })
 }
 
 thread_local! {
@@ -2766,6 +2924,73 @@ pub fn capture_dry(f: impl FnOnce()) -> Vec<String> {
     }
 }
 
+/// A note in this thread's dry capture, if any (--compare-port marks the game functions a port calls).
+pub fn capture_note(note: impl FnOnce() -> String) {
+    if !NOTES.with(|n| n.get()) {
+        return;
+    }
+    let note = note();
+    CAPTURE.with(|c| {
+        if let Some(Capture::Dry(v)) = c.borrow_mut().as_mut() {
+            v.push(note);
+        }
+    });
+}
+
+thread_local! {
+    /// capture_note writes notes (only while a port is compared with the game).
+    static NOTES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `capture_dry` with notes of the game functions called (capture_note).
+pub fn capture_dry_noted(f: impl FnOnce()) -> Vec<String> {
+    NOTES.with(|n| n.set(true));
+    let v = capture_dry(f);
+    NOTES.with(|n| n.set(false));
+    v
+}
+
+/// `capture_dry` inside another capture of this thread (which it leaves as it was).
+pub fn capture_dry_nested(f: impl FnOnce()) -> Vec<String> {
+    let outer = CAPTURE.with(|c| c.borrow_mut().take());
+    let v = capture_dry(f);
+    CAPTURE.with(|c| *c.borrow_mut() = outer);
+    v
+}
+
+/// The typed commands `f` would record on this thread, not recorded; None when any of them is not a typed command.
+pub fn capture_typed_dry(f: impl FnOnce()) -> Option<Vec<crate::nvn::cmd::Cmd>> {
+    let outer = CAPTURE.with(|c| c.borrow_mut().take());
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Typed { cmds: Vec::new(), ok: true }));
+    f();
+    let got = CAPTURE.with(|c| c.borrow_mut().take());
+    CAPTURE.with(|c| *c.borrow_mut() = outer);
+    match got {
+        Some(Capture::Typed { cmds, ok: true }) => Some(cmds),
+        _ => None,
+    }
+}
+
+/// The recording `handle` refers to now (a recording at the same command memory keeps its handle), without
+/// touching its eviction state.
+pub(crate) fn command_list_peek(handle: u64) -> Option<std::sync::Arc<RecordedCommandList>> {
+    COMMAND_LISTS.lock().unwrap().get(&handle).map(|e| e.0.clone())
+}
+
+/// A recorded list's commands as captures show them (None for an unknown handle).
+pub(crate) fn list_texts(handle: u64) -> Option<Vec<String>> {
+    let list = COMMAND_LISTS.lock().unwrap().get(&handle).map(|e| e.0.clone())?;
+    Some(
+        list.ops
+            .iter()
+            .map(|op| match &op.typed {
+                Some(t) => format!("{} {t:?}", op.name),
+                None => op.name.to_string(),
+            })
+            .collect(),
+    )
+}
+
 /// Collects this thread's next `expected.len()` commands (recorded as usual), then calls `report(expected, got)`.
 pub fn capture_watch(expected: Vec<String>, report: fn(&[String], &[String])) {
     if expected.is_empty() {
@@ -2774,12 +2999,35 @@ pub fn capture_watch(expected: Vec<String>, report: fn(&[String], &[String])) {
     CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Watch { expected, got: Vec::new(), report }));
 }
 
+/// Collects this thread's commands (recorded as usual) until capture_collected.
+pub fn capture_collect() {
+    CAPTURE.with(|c| *c.borrow_mut() = Some(Capture::Collect(Vec::new())));
+}
+
+/// The commands collected since capture_collect (empty if this thread was not collecting); ends the collection.
+pub fn capture_collected() -> Vec<String> {
+    match CAPTURE.with(|c| c.borrow_mut().take()) {
+        Some(Capture::Collect(v)) => v,
+        _ => Vec::new(),
+    }
+}
+
 /// Ends an unfinished watch: (expected, got so far).
 pub fn capture_finish() -> Option<(Vec<String>, Vec<String>)> {
     match CAPTURE.with(|c| c.borrow_mut().take()) {
         Some(Capture::Watch { expected, got, .. }) => Some((expected, got)),
         _ => None,
     }
+}
+
+/// Whether this thread collects its commands (a prediction or a check is under way).
+pub fn capturing() -> bool {
+    CAPTURE.with(|c| c.borrow().is_some())
+}
+
+/// This thread captures for a comparison (not a buffered apply run, which nested ports may join).
+pub fn capturing_to_compare() -> bool {
+    CAPTURE.with(|c| matches!(&*c.borrow(), Some(c) if !matches!(c, Capture::Buffer(_))))
 }
 
 /// Collects the command when this thread captures; true when it must not be recorded.
@@ -2792,6 +3040,15 @@ fn capture(text: impl FnOnce() -> String) -> bool {
                 v.push(text());
                 true
             }
+            Some(Capture::Collect(v)) => {
+                v.push(text());
+                false
+            }
+            Some(Capture::Typed { ok, .. }) => {
+                *ok = false;
+                true
+            }
+            Some(Capture::Buffer(_)) => true,
             Some(Capture::Watch { expected, got, .. }) => {
                 got.push(text());
                 if got.len() == expected.len() {
@@ -2807,9 +3064,34 @@ fn capture(text: impl FnOnce() -> String) -> bool {
 }
 
 /// Record a decoded command (see nvn/cmd.rs). `cmd` is the NvnCommandBuffer address.
+/// Commands recorded so far into the list `cmd` is recording.
+pub(crate) unsafe fn recording_len(cmd: usize) -> Option<usize> {
+    let cmd = cmd as *const NvnCommandBuffer;
+    if cmd.is_null() || (*cmd).ops == 0 {
+        return None;
+    }
+    Some((*((*cmd).ops as *const Vec<RecordedNvnCommand>)).len())
+}
+
 pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::nvn::cmd::Cmd) {
     record_hle_call(name);
+    super::frame_map::note(name, cmd);
     drawable_cmd_probe(name);
+    let typed_capture = CAPTURE.with(|c| match c.borrow_mut().as_mut() {
+        Some(Capture::Typed { cmds, .. }) => {
+            cmds.push(typed.clone());
+            true
+        }
+        _ => false,
+    });
+    if typed_capture {
+        return;
+    }
+    let mut typed = Some(typed);
+    if buffer(cmd, || RecordedNvnCommand { name, typed: typed.take(), args: None }) {
+        return;
+    }
+    let typed = typed.unwrap();
     if capture(|| {
         let mut t = typed.clone();
         if let crate::nvn::cmd::Cmd::DrawElementsInstanced { caller, .. } = &mut t {
@@ -3092,6 +3374,13 @@ pub unsafe extern "C" fn hle_nvnBufferInitialize(
         },
     );
     1
+}
+/// The address nvnBufferInitialize gives a buffer with storage (`pool`, `offset`).
+pub unsafe fn buffer_address(pool: usize, offset: u64) -> u64 {
+    if pool == 0 {
+        return 0;
+    }
+    translate_virtual((*(pool as *const NvnMemoryPool)).memory + offset as usize) as u64
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnBufferFinalize(buf: *mut NvnBuffer) {
@@ -6385,10 +6674,10 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         let interval = present_interval();
         let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
         let vsync = crate::host::overlay::is_vsync();
-        // Windows: the frame-rate limit paces (vsync only chooses how the swapchain presents). A title whose game time
-        // does not follow real time is also held to its interval: running faster would run it fast.
-        #[cfg(not(nx_native))]
-        let limited = Some({
+        // The frame-rate limit paces (vsync only chooses how the swapchain presents). A title whose game time does not
+        // follow real time is also held to its interval: running faster would run it fast. VSync off still stops at
+        // UNPACED_MAX_FPS: above the audio renderer's 200 frames a second TotK starts no sounds at all.
+        let frame = {
             let mut fps = crate::host::live::frame_limit().clamp(30, UNPACED_MAX_FPS as u32);
             if is_stock30 {
                 fps = 30;
@@ -6411,21 +6700,6 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             } else {
                 std::time::Duration::from_nanos(1_000_000_000 / fps.max(1) as u64)
             }
-        });
-        #[cfg(nx_native)]
-        let limited: Option<std::time::Duration> = None;
-        let frame = if let Some(f) = limited {
-            f
-        } else if is_stock30 {
-            std::time::Duration::from_nanos(1_000_000_000 / 30)
-        } else if !vsync {
-            // VSync off still stops at UNPACED_MAX_FPS: above the audio renderer's 200 frames a second TotK starts no sounds at
-            // all (silent at 240 and at 400-600 uncapped; sound at 60 and 144, through gameplay).
-            std::time::Duration::from_nanos(1_000_000_000 / UNPACED_MAX_FPS)
-        } else if interval == 0 {
-            std::time::Duration::ZERO
-        } else {
-            std::time::Duration::from_nanos(16_666_667 * interval.max(1) as u64)
         };
         let wait = if frame.is_zero() {
             #[cfg(nx_native)]
@@ -7141,6 +7415,8 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
     let list = std::sync::Arc::new(RecordedCommandList {
         ops,
         summary: std::sync::OnceLock::new(),
+        pass_events: std::sync::OnceLock::new(),
+        recorder: None,
         recorded_frame: 0,
     });
     let bytes = recorded_list_bytes(&list);

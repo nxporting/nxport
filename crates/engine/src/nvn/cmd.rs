@@ -280,10 +280,190 @@ pub enum Cmd {
     },
     /// `color` holds the raw 32-bit words of the float / int / uint clear value.
     ClearTexture(Box<ClearTextureParams>),
+    /// What TotK's renderer port (--native-model-draws) records on a command buffer between the game's own commands:
+    /// render units, bindings, draws and render states, in order, built from the game's objects.
+    ModelDraw(Box<ModelDraw>),
+    /// A whole render state from TotK's graphics context in one command (the port, --native-model-draws), in place of
+    /// the state object binds sead::GraphicsContext::apply records.
+    RenderState(Box<RenderState>),
+    /// A TotK model's vertex input (the port, --native-model-draws): attribute and stream states and vertex buffers.
+    VertexInput(Box<VertexInput>),
     /// nvnCommandBufferSetTexturePool: handles resolve in this pool (nvn::api::texture_pool_number) from here on.
     SetTexturePool(u32),
     /// nvnCommandBufferSetSamplerPool: likewise.
     SetSamplerPool(u32),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VertexInput {
+    pub attribs: AttribState,
+    pub streams: Vec<u64>,
+    /// (index, address, size)
+    pub buffers: smallvec::SmallVec<[(i32, u64, usize); 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RenderState {
+    /// Blend states of the targets that blend (target index in bits 0..4).
+    pub blend: smallvec::SmallVec<[u64; 4]>,
+    pub color: u32,
+    pub channel_mask: u32,
+    pub blend_color: [f32; 4],
+    pub depth_stencil: u64,
+    /// Stencil value mask and reference for both faces (write mask 0xff), when the stencil test is on.
+    pub stencil: Option<(u8, u8)>,
+    pub polygon: u32,
+    pub polygon_offset: (f32, f32, f32),
+    pub depth_clamp: bool,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ModelDraw {
+    pub items: smallvec::SmallVec<[ModelItem; 4]>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ModelItem {
+    /// A render unit's material list. `material`: its description from the game's objects, in place of running the
+    /// list (the model's vertex input and the material's bindings). Captures keep only the list.
+    Unit {
+        list: u64,
+        #[serde(skip)]
+        material: Option<std::sync::Arc<Vec<Cmd>>>,
+    },
+    Bind { stage: i32, index: i32, kind: ModelBindKind },
+    Draw(ModelRange),
+    RenderState(Box<RenderState>),
+    Program { program: usize, stages: i32 },
+    /// Fixed-function state words as nn::gfx's state objects bind them.
+    Fixed(FixedState),
+    /// Bytes written into a uniform buffer in stream order.
+    UpdateUniform { addr: u64, offset: isize, data: Vec<u8> },
+    RenderEnable(bool),
+    PointSize(f32),
+    PrimitiveRestart { enable: bool, index: u32 },
+    Barrier(u32),
+    RenderEnableConditional { mode: i32, counters: u64 },
+    ResetCounter(i32),
+    ReportCounter { counter: i32, addr: u64 },
+    Clear { index: i32, rgba: [f32; 4], mask: i32 },
+    ClearDepth { depth: f32, depth_mask: bool, stencil: i32, stencil_mask: i32 },
+    /// Render targets (agl::RenderBuffer::bind).
+    Targets { colors: Vec<RtRef>, depth: Option<RtRef> },
+    /// sead::Viewport::apply: the same rectangle as scissor and viewport, then the depth range.
+    Viewport { x: i32, y: i32, w: i32, h: i32, near: f32, far: f32 },
+    VertexAttribs(AttribState),
+    VertexStreams(Vec<u64>),
+    DrawArrays { mode: i32, first: i32, count: i32, base_instance: i32, instances: i32 },
+    /// Texture handles read from guest memory when the commands run (the game fills the table later).
+    TexturesDeferred { stage: i32, first: i32, count: i32, handles: u64 },
+    /// A compute dispatch with the bound compute program.
+    Dispatch { x: i32, y: i32, z: i32 },
+}
+
+impl ModelItem {
+    /// A binding or draw as the command it stands for (None for units and render states).
+    pub fn cmd(&self) -> Option<Cmd> {
+        Some(match *self {
+            ModelItem::Bind { stage, index, kind } => match kind {
+                ModelBindKind::Uniform { addr, size } => Cmd::BindUniformBuffer { stage, index, addr, size },
+                ModelBindKind::Storage { addr, size } => Cmd::BindStorageBuffer { stage, index, addr, size },
+                ModelBindKind::Texture(handle) => Cmd::BindTexture { stage, index, handle },
+                ModelBindKind::Vertex { addr, size } => Cmd::BindVertexBuffer { index, addr, size },
+            },
+            ModelItem::VertexAttribs(a) => Cmd::BindVertexAttribState(Box::new(a)),
+            ModelItem::VertexStreams(ref v) => Cmd::BindVertexStreamState(v.clone()),
+            ModelItem::Program { program, stages } => Cmd::BindProgram { program, stages },
+            ModelItem::Fixed(f) => f.cmd(),
+            ModelItem::UpdateUniform { addr, offset, ref data } => Cmd::UpdateUniformBuffer { addr, offset, data: data.clone() },
+            ModelItem::RenderEnable(e) => Cmd::SetRenderEnable(e),
+            ModelItem::PointSize(s) => Cmd::SetPointSize(s),
+            ModelItem::PrimitiveRestart { enable, index } => Cmd::SetPrimitiveRestart { enable, index },
+            ModelItem::Barrier(bits) => Cmd::Barrier(bits),
+            ModelItem::RenderEnableConditional { mode, counters } => Cmd::SetRenderEnableConditional { mode, counters },
+            ModelItem::ResetCounter(counter) => Cmd::ResetCounter { counter },
+            ModelItem::ReportCounter { counter, addr } => Cmd::ReportCounter { counter, addr },
+            ModelItem::Clear { index, rgba, mask } => Cmd::ClearColor { index, rgba, mask },
+            ModelItem::ClearDepth { depth, depth_mask, stencil, stencil_mask } => {
+                Cmd::ClearDepthStencil { depth, depth_mask, stencil, stencil_mask }
+            }
+            ModelItem::Draw(r) => Cmd::DrawElementsInstanced {
+                mode: r.mode,
+                index_type: r.index_type,
+                count: r.count,
+                index_addr: r.index_addr,
+                base_vertex: r.base_vertex,
+                base_instance: r.base_instance,
+                instances: r.instances,
+                caller: 0,
+            },
+            ModelItem::DrawArrays { mode, first, count, base_instance, instances } => {
+                Cmd::DrawArraysInstanced { mode, first, count, base_instance, instances, caller: 0 }
+            }
+            ModelItem::Dispatch { x, y, z } => Cmd::DispatchCompute { x, y, z },
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum FixedState {
+    Blend(u64),
+    Color(u32),
+    ChannelMask(u32),
+    BlendColor([f32; 4]),
+    DepthStencil(u64),
+    /// kind 0 reference, 1 value mask, 2 write mask
+    Stencil { kind: u8, faces: i32, value: i32 },
+    DepthBounds { enable: bool, min: f32, max: f32 },
+    Polygon(u32),
+    PolygonOffset { factor: f32, units: f32, clamp: f32 },
+    Multisample(u64),
+    DepthClamp(bool),
+    Scissor { x: i32, y: i32, w: i32, h: i32 },
+    Viewport { x: i32, y: i32, w: i32, h: i32 },
+    DepthRange { near: f32, far: f32 },
+}
+
+impl FixedState {
+    pub fn cmd(self) -> Cmd {
+        match self {
+            FixedState::Blend(v) => Cmd::BindBlendState(v),
+            FixedState::Color(v) => Cmd::BindColorState(v),
+            FixedState::ChannelMask(v) => Cmd::BindChannelMaskState(v),
+            FixedState::BlendColor(c) => Cmd::SetBlendColor(c),
+            FixedState::DepthStencil(v) => Cmd::BindDepthStencilState(v),
+            FixedState::Stencil { kind, faces, value } => Cmd::SetStencilValue { kind, faces, value },
+            FixedState::DepthBounds { enable, min, max } => Cmd::SetDepthBounds { enable, min, max },
+            FixedState::Polygon(v) => Cmd::BindPolygonState(v),
+            FixedState::PolygonOffset { factor, units, clamp } => Cmd::SetPolygonOffset { factor, units, clamp },
+            FixedState::Multisample(v) => Cmd::BindMultisampleState(v),
+            FixedState::DepthClamp(v) => Cmd::SetDepthClamp(v),
+            FixedState::Scissor { x, y, w, h } => Cmd::SetScissor { x, y, w, h },
+            FixedState::Viewport { x, y, w, h } => Cmd::SetViewport { x, y, w, h },
+            FixedState::DepthRange { near, far } => Cmd::SetDepthRange { near, far },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub enum ModelBindKind {
+    Uniform { addr: u64, size: usize },
+    Storage { addr: u64, size: usize },
+    Texture(u64),
+    /// A vertex buffer (`index` is the stream).
+    Vertex { addr: u64, size: usize },
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ModelRange {
+    pub mode: i32,
+    pub index_type: i32,
+    pub count: i32,
+    pub index_addr: u64,
+    pub base_vertex: i32,
+    pub base_instance: i32,
+    pub instances: i32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -341,9 +521,57 @@ unsafe fn rt_list(tex: *const usize, views: *const usize, n: usize) -> Vec<RtRef
 }
 
 macro_rules! rec {
-    ($name:literal, $cmd:expr, $val:expr) => {
+    ($name:literal, $cmd:expr, $val:expr) => {{
+        note_cmd_caller($name);
         record_typed($name, $cmd as usize, $val)
+    }};
+}
+
+/// --log-draw-callers=N also counts every command the game records through the NVN entry points by its first two guest
+/// return addresses, frames N..N+60 (the game code still recording through NVN, per call site).
+unsafe fn note_cmd_caller(name: &'static str) {
+    static FROM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let Some(from) = *FROM.get_or_init(|| crate::settings::get().log.log_draw_callers) else {
+        return;
     };
+    static MAP: std::sync::Mutex<Option<std::collections::HashMap<(&'static str, usize, usize), u64>>> = std::sync::Mutex::new(None);
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let frame = crate::gpu::backend().presented_frames();
+    if frame < from {
+        return;
+    }
+    if frame >= from + 60 {
+        if !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let g = MAP.lock().unwrap();
+            let mut rows: Vec<_> = g.as_ref().map(|m| m.iter().map(|(k, v)| (*k, *v)).collect()).unwrap_or_default();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            for ((n, a, b), c) in rows.iter().take(300) {
+                println!("[cmd-callers] {:7.1} per frame  main+ {:#x} <- {:#x}  {}", *c as f64 / 60.0, a, b, n);
+            }
+        }
+        return;
+    }
+    let base = crate::guest::loader::main_base();
+    let mut fp = crate::guest_reg!(x29);
+    let mut key = [0usize; 2];
+    let mut n = 0;
+    for _ in 0..32 {
+        if fp < 0x1000 || fp & 7 != 0 || n == 2 {
+            break;
+        }
+        let next = *(fp as *const usize);
+        let ret = *((fp + 8) as *const usize);
+        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
+        if !stub && ret >= base && ret < base + (256 << 20) {
+            key[n] = ret - base;
+            n += 1;
+        }
+        if next <= fp && !stub {
+            break;
+        }
+        fp = next;
+    }
+    *MAP.lock().unwrap().get_or_insert_with(Default::default).entry((name, key[0], key[1])).or_default() += 1;
 }
 
 #[no_mangle]
@@ -443,28 +671,34 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetRenderTargets(
             println!("[rt-caller]   chain (base+): {}", chain.join(" <- "));
         }
     }
+    let (colors, depth) = render_targets(num, colors, color_views, depth, depth_view);
+    rec!("nvnCommandBufferSetRenderTargets", cmd, Cmd::SetRenderTargets { colors, depth: depth.map(Box::new) });
+}
+
+/// The references SetRenderTargets records: `num` colour textures with their views, the depth texture and view.
+pub(crate) unsafe fn render_targets(
+    num: c_int,
+    colors: *const usize,
+    color_views: *const usize,
+    depth: usize,
+    depth_view: *const u8,
+) -> (Vec<RtRef>, Option<RtRef>) {
     let (dl, dy) = view_level_layer(depth_view);
     crate::nvn::api::capture_texture(depth);
-    rec!(
-        "nvnCommandBufferSetRenderTargets",
-        cmd,
-        Cmd::SetRenderTargets {
-            colors: rt_list(colors, color_views, num.max(0) as usize),
-            depth: if depth != 0 {
-                let (view_format, view_target) = view_format_target(depth_view);
-                Some(Box::new(RtRef {
-                    texture: depth,
-                    gen: crate::nvn::api::texture_ref_gen(depth),
-                    level: dl,
-                    layer: dy,
-                    view_format,
-                    view_target,
-                }))
-            } else {
-                None
-            },
-        }
-    );
+    let depth = if depth != 0 {
+        let (view_format, view_target) = view_format_target(depth_view);
+        Some(RtRef {
+            texture: depth,
+            gen: crate::nvn::api::texture_ref_gen(depth),
+            level: dl,
+            layer: dy,
+            view_format,
+            view_target,
+        })
+    } else {
+        None
+    };
+    (rt_list(colors, color_views, num.max(0) as usize), depth)
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferClearColor(
@@ -809,7 +1043,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindDepthStencilState(cmd: usize, s
         Cmd::BindDepthStencilState(if s.is_null() {
             0
         } else {
-            std::ptr::read_unaligned(s)
+            std::ptr::read_unaligned(s) & crate::nvn::state::DS_DEFINED
         })
     );
 }

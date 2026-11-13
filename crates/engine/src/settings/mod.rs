@@ -294,6 +294,8 @@ group! {
         tiny_max_px: u64 = 640 * 360,
         /// Draw runs that differ only in their uniforms as one instanced draw
         batch: bool = false,
+        /// Draws bind their resources through one argument buffer per stage (the stages' ab_ variants)
+        arg_buffers: bool = false,
         /// TIMESTAMP reports carry the GPU's times (the game's dynamic resolution then sees GPU load)
         gpu_timestamps: bool = false,
         /// Guest pages under textures that live in Metal
@@ -339,6 +341,8 @@ group! {
         replay_ab_skip: Vec<String> = Vec::new(),
         /// Side B: draws of these shaders get a 1x1 scissor (or "all")
         replay_ab_scissor: Vec<String> = Vec::new(),
+        /// Replay side B draws through argument buffers (--arg-buffers)
+        replay_ab_args: bool = false,
         /// Side B: no draw calls (1); none on either side (2)
         replay_ab_null_draws: u8 = 0,
         /// Side B: render encoders cut every N draws
@@ -346,6 +350,8 @@ group! {
         /// Capture presented frame N for GPU backend tests: its NVN commands, the memory they reach and the textures only
         /// the GPU holds
         capture_frame: Option<u64> = None,
+        /// With --capture-frame: every presented frame up to this one too, each in its own frame_N directory
+        capture_last: Option<u64> = None,
         /// Where --capture-frame writes (default: the game's data directory's captures/frame_N)
         capture_dir: Option<PathBuf> = None,
         /// Exit once the capture is written
@@ -444,6 +450,10 @@ group! {
         cmd_stats_at: Option<u64> = None,
         /// HLE call history at this presented frame
         hle_history_at: Option<u64> = None,
+        /// GPU passes of frames N and N+1 in order: attachments, bound textures, blits (data flow)
+        log_pass_graph: Option<u64> = None,
+        /// NVN commands the game records in frame N, with the recording thread and call chain
+        log_frame_map: Option<u64> = None,
         /// Frames slower than this many ms: what happened in them
         log_hitch: Option<f64> = None,
         /// Draws by the game's call chain, frames N..N+60
@@ -519,6 +529,9 @@ group! {
         /// Vulkan backend: also a checkpoint before every command and draw (costs GPU time: the driver orders work
         /// around each)
         gpu_checkpoints_each: bool = false,
+        /// Vulkan on MoltenVK: its queue submits and presents on the calling thread (MoltenVK's default) instead of its
+        /// own (A/B for presentation races)
+        mvk_sync_submits: bool = false,
         /// Vulkan backend: no guest memory imported as GPU buffers (VK_EXT_external_memory_host); everything the GPU
         /// reads or writes of guest memory is a copy (bisection aid)
         no_host_import: bool = false,

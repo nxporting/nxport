@@ -201,7 +201,7 @@ pub struct Ctx {
     /// Repacked vertex streams of this submit, by (guest range, layout, elements).
     pub(super) repacked: rustc_hash::FxHashMap<u64, (vk::Buffer, u64)>,
     /// Texture bindings resolved in this submit: (handle, view type) -> (image, view, sampler).
-    pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType), (vk::Image, vk::ImageView, vk::Sampler)>,
+    pub(super) bindings: rustc_hash::FxHashMap<(u64, vk::ImageViewType, bool), (vk::Image, vk::ImageView, vk::Sampler)>,
     /// Advanced when `bindings` is emptied; the bound texture slots' last resolutions (draw.rs texture_binding) are valid
     /// at the generation they were made in.
     bindings_gen: u64,
@@ -626,7 +626,10 @@ impl Ctx {
                 .name("vk-pool-free".into())
                 .spawn(move || {
                     while let Ok((pool, cbs)) = pool_rx.recv() {
-                        unsafe { device.free_command_buffers(pool, &cbs) };
+                        // A count of 0 is invalid usage.
+                        if !cbs.is_empty() {
+                            unsafe { device.free_command_buffers(pool, &cbs) };
+                        }
                         free.lock().unwrap().push(pool);
                     }
                 })
@@ -983,6 +986,9 @@ impl Ctx {
         self.inflight_dirty.push((serial, std::mem::take(&mut self.gpu_dirty)));
         // Guest memory under GPU-written images is CPU memory: what it holds now is what later CPU writes change.
         self.tex.settle();
+        if crate::settings::get().log.verify_tex {
+            self.tex.verify();
+        }
         self.repacked.clear();
         self.bindings.clear();
         self.bindings_gen += 1;

@@ -37,10 +37,6 @@ pub(super) struct Window {
     /// Swapchains a resize replaced, with the presents left before their last frames are certainly done (each present
     /// first waits for the slot it reuses): destroyed then, so a resize never waits for the frames in flight.
     retired: Vec<(vk::SwapchainKHR, usize)>,
-    /// The window shape last reported to the game (profile::screen_aspect_changed); 0 while the dynamic aspect ratio is
-    /// off, so turning it on reports the shape again.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    reported: f64,
 }
 
 struct Slot {
@@ -95,7 +91,6 @@ impl Window {
             next: 0,
             done: Vec::new(),
             content: (0, 0),
-            reported: 0.0,
             retired: Vec::new(),
         };
         w.recreate(dev)?;
@@ -115,10 +110,14 @@ impl Window {
         if extent.width == 0 || extent.height == 0 {
             return None;
         }
-        // Low latency: as few images as the surface allows (at least 2), so with FIFO at most one finished frame waits
-        // for the screen, against up to two more with the usual count.
+        // Low latency: as few images as the surface allows (at least 2; 3 on MoltenVK: Dev::min_swapchain_images), so with
+        // FIFO at most one finished frame waits for the screen, against up to two more with the usual count.
         let low_latency = crate::host::overlay::is_low_latency();
-        let wanted = if low_latency { caps.min_image_count.max(2) } else { (caps.min_image_count + 1).max(SLOTS as u32) };
+        let wanted = if low_latency {
+            caps.min_image_count.max(dev.min_swapchain_images)
+        } else {
+            (caps.min_image_count + 1).max(SLOTS as u32).max(dev.min_swapchain_images)
+        };
         let count = wanted.min(if caps.max_image_count > 0 { caps.max_image_count } else { u32::MAX });
         // VSync off: the newest frame replaces a waiting one (MAILBOX), else frames show at once and may tear
         // (IMMEDIATE). FIFO is the only mode every implementation has.
@@ -153,6 +152,13 @@ impl Window {
         while self.done.len() < self.images.len() {
             self.done.push(dev.device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None).ok()?);
         }
+        println!(
+            "[vulkan] swapchain {}x{}, {} images, {:?}",
+            extent.width,
+            extent.height,
+            self.images.len(),
+            mode
+        );
         self.extent = extent;
         self.vsync = vsync;
         self.low_latency = low_latency;
@@ -185,6 +191,13 @@ impl Window {
         let (fence, sem) = (self.slots[self.next].fence, self.slots[self.next].acquired);
         if dev.device.wait_for_fences(&[fence], true, 1_000_000_000).is_err() {
             return;
+        }
+        // A swapchain may be destroyed only once its presents are done, which the slots' fences do not cover (they signal
+        // when the copy into the image is done): MoltenVK's present completion then ran on the destroyed swapchain's
+        // image (a crash entering the game, when the drawable takes the game's size). The device is waited for first:
+        // presents of every earlier submit are then done. Rare: only after a resize or a VSync / low-latency change.
+        if self.retired.iter().any(|&(_, left)| left == 1) {
+            let _ = dev.device.device_wait_idle();
         }
         self.retired.retain_mut(|(chain, left)| {
             *left -= 1;
@@ -224,15 +237,7 @@ impl Window {
         let (full_w, full_h) = (self.extent.width as i32, self.extent.height as i32);
         // The window's shape for a game that renders at it (macOS: host/display.rs follow_window_shape).
         #[cfg(not(target_os = "macos"))]
-        if crate::host::live::dynamic_aspect() {
-            let a = full_w as f64 / full_h as f64;
-            if (a - self.reported).abs() >= 0.002 * a {
-                self.reported = a;
-                crate::profile::screen_aspect_changed(a);
-            }
-        } else {
-            self.reported = 0.0;
-        }
+        crate::host::live::screen_shape(full_w as f64 / full_h as f64);
         // The picture's place in the image: all of it on macOS (the drawable has the picture's shape), else the largest
         // rectangle of the picture's shape, centred, with the rest cleared to black.
         #[cfg(target_os = "macos")]

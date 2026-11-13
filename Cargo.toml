@@ -21,6 +21,12 @@ panic = "abort"
 strip = true
 
 # Release code with symbols, for sampling/profiling (cargo build --profile profiling).
+# Probes and diagnostics: no LTO, parallel codegen (minutes faster per build).
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 [profile.profiling]
 inherits = "release"
 strip = false

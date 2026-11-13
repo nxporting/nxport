@@ -55,6 +55,8 @@ dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-ui-kit = "0.3"
+# The overlays (performance, shader progress), drawn with Dear ImGui as on macOS (host/ui/renderer.rs).
+dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 objc2-core-foundation = "0.3"
 
 

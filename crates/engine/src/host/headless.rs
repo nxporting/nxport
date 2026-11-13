@@ -18,6 +18,9 @@ pub mod rumble;
 #[path = "live.rs"]
 pub mod live;
 
+#[path = "menu.rs"]
+pub mod menu;
+
 
 pub mod overlay {
     pub use crate::perf_stats::*;

@@ -259,6 +259,9 @@ impl Gfx {
                     return;
                 };
                 st.issuer.push(super::issuer::Op::Blit { cb: cb.retain(), label: "copy buffer->texture", f: Box::new(move |blit| {
+                    if super::pass_graph::on() {
+                        super::pass_graph::blit("buffer->texture", None, Some(&tex));
+                    }
                     for i in 0..g.layers {
                         blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
                             &sb, so + i * g.bytes_per_image, g.bytes_per_row, g.bytes_per_image, g.size, &tex, g.slice0 + i, g.level, g.origin,
@@ -305,6 +308,9 @@ impl Gfx {
                     return;
                 };
                 st.issuer.push(super::issuer::Op::Blit { cb: cb.retain(), label: "copy texture->buffer", f: Box::new(move |blit| {
+                    if super::pass_graph::on() {
+                        super::pass_graph::blit("texture->buffer", Some(&tex), None);
+                    }
                     for i in 0..g.layers {
                         blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
                             &tex, g.slice0 + i, g.level, g.origin, g.size, &db, d_off + i * g.bytes_per_image, g.bytes_per_row, g.bytes_per_image,
@@ -344,6 +350,9 @@ impl Gfx {
                     return;
                 }
                 st.issuer.push(super::issuer::Op::Blit { cb: cb.retain(), label: "copy texture->texture", f: Box::new(move |blit| {
+                    if super::pass_graph::on() {
+                        super::pass_graph::blit("texture->texture", Some(&stex), Some(&dtex));
+                    }
                     for i in 0..sg.layers.min(dg.layers) {
                         blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
                             &stex, sg.slice0 + i, sg.level, sg.origin, sg.size, &dtex, dg.slice0 + i, dg.level, dg.origin,

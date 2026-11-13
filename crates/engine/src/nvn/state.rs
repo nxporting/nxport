@@ -312,6 +312,9 @@ const _: () = assert!(std::mem::size_of::<DepthStencilState>() == 8);
 
 const DS_FRONT: u32 = 7;
 const DS_BACK: u32 = 23;
+/// The bits the setters define; the rest of the 8-byte object is whatever the game's memory held (TotK builds these
+/// on the stack without SetDefaults).
+pub(crate) const DS_DEFINED: u64 = (1 << (DS_BACK + 16)) - 1;
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnDepthStencilStateSetDefaults(s: *mut DepthStencilState) {

@@ -152,6 +152,7 @@ pub(super) struct TexMemo {
     pub(super) gen: u64,
     pub(super) handle: u64,
     pub(super) declared: vk::ImageViewType,
+    pub(super) shadow: bool,
     pub(super) image: vk::Image,
     pub(super) view: vk::ImageView,
     pub(super) sampler: vk::Sampler,
@@ -668,6 +669,7 @@ impl Ctx {
                             p
                         }
                         crate::vulkan::async_pipe::AsyncPipe::Pending => {
+                            crate::gpu::pipeline_list::draw_skipped_compiling();
                             return None;
                         }
                         crate::vulkan::async_pipe::AsyncPipe::Failed => {
@@ -1012,7 +1014,7 @@ impl Ctx {
                         None => {}
                     }
                 }
-                Feed::Texture { cbuf_slot, handle_index, view, count, buffer, slot } => {
+                Feed::Texture { cbuf_slot, handle_index, view, count, buffer, slot, shadow } => {
                     let mut infos: smallvec::SmallVec<[vk::DescriptorImageInfo; 1]> = Default::default();
                     for j in 0..*count {
                         let mut at = None;
@@ -1030,7 +1032,7 @@ impl Ctx {
                             self.warn("buffer textures are not implemented");
                             (vk::ImageView::null(), self.default_sampler)
                         } else {
-                            self.texture_binding(handle, *view, at)
+                            self.texture_binding(handle, *view, *shadow, at)
                         };
                         if crate::gpu::history::journal_on() {
                             self.journal_texture(handle);
@@ -1178,7 +1180,9 @@ impl Ctx {
     }
 
     /// `at`: the bound texture slot (stage, index) it was read from, whose last resolution (Ctx::tex_memo) is tried first.
-    unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
+    /// `shadow`: the shader samples it with depth comparison, which only depth formats allow (the console compares a
+    /// colour texture's red channel): a colour texture then binds nothing, as on Metal (metal/translated.rs).
+    unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, shadow: bool, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
         // The handle with the pools it resolves in: the same handle in another pool is another texture.
         let hq = h | crate::nvn::api::active_pools_bits();
@@ -1186,17 +1190,17 @@ impl Ctx {
         let memo = at.and_then(|(s, k)| Some((usize::try_from(s).ok().filter(|&s| s < 6)?, usize::try_from(k).ok().filter(|&k| k < TEX_MEMO)?)));
         if let Some((s, k)) = memo {
             let m = self.tex_memo[s][k];
-            if m.gen == self.bindings_gen && m.handle == hq && m.declared == declared && !in_pass(self, m.image) {
+            if m.gen == self.bindings_gen && m.handle == hq && m.declared == declared && m.shadow == shadow && !in_pass(self, m.image) {
                 return (m.view, m.sampler);
             }
         }
         // Pools change between submits only (registration is CPU work): a handle resolves the same way within one,
         // except where its image is an attachment of the current pass (render-target feedback).
-        let key = (hq, declared);
+        let key = (hq, declared, shadow);
         if let Some(&(img, v, s)) = self.bindings.get(&key) {
             if !in_pass(self, img) {
                 if let Some((ms, mk)) = memo {
-                    self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, image: img, view: v, sampler: s };
+                    self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, shadow, image: img, view: v, sampler: s };
                 }
                 return (v, s);
             }
@@ -1205,8 +1209,21 @@ impl Ctx {
         let mut image = vk::Image::null();
         let mut feedback = false;
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
-            let (_, t) = crate::nvn::api::texture_snapshot(obj)?;
-            image = self.tex.get(&self.dev, &t)?.0.image;
+            let (_, mut t) = crate::nvn::api::texture_snapshot(obj)?;
+            // Depth comparison of a colour texture: its memory read as depth (layout::depth_twin), which is what the
+            // console compares; a depth texture over the same memory is that image.
+            if shadow {
+                if let Some(f) = crate::nvn::layout::depth_twin(t.format) {
+                    t.format = f;
+                    let (d, _, _) = self.tex.locate(&t);
+                    self.tex.depth_twins.insert(d);
+                }
+            }
+            let img = &self.tex.get(&self.dev, &t)?.0;
+            if shadow && !super::format::aspects(img.format).contains(vk::ImageAspectFlags::DEPTH) {
+                return None;
+            }
+            image = img.image;
             // Every barrier ends the pass, so the current pass began after the last one.
             if self.renders_to(&image) {
                 feedback = true;
@@ -1221,7 +1238,7 @@ impl Ctx {
         if !feedback {
             self.bindings.insert(key, (image, r.0, r.1));
             if let Some((ms, mk)) = memo {
-                self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, image, view: r.0, sampler: r.1 };
+                self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, shadow, image, view: r.0, sampler: r.1 };
             }
         }
         r

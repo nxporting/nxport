@@ -1545,8 +1545,15 @@ const SOCKET_ENETDOWN: i32 = 100;
 pub(crate) unsafe extern "C" fn socket_fail() -> i32 {
     -1
 }
+thread_local! {
+    static SOCKET_ERRNO: std::cell::Cell<i32> = const { std::cell::Cell::new(SOCKET_ENETDOWN) };
+}
+/// The errno the calling thread's next nn::socket::GetLastErrno returns.
+pub(crate) fn set_socket_errno(e: i32) {
+    SOCKET_ERRNO.with(|c| c.set(e));
+}
 pub(crate) unsafe extern "C" fn socket_get_last_errno() -> i32 {
-    SOCKET_ENETDOWN
+    SOCKET_ERRNO.with(|c| c.get())
 }
 pub(crate) unsafe extern "C" fn socket_get_addr_info(
     _node: *const u8,

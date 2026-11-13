@@ -15,6 +15,10 @@ crate::settings::group! {
         /// Variable frame rate: game time follows the real time each frame took, so the game plays at the right speed at
         /// any frame rate (off: the console's fixed timing, held to 30 or 60 fps)
         dynamic_fps: bool = true,
+        /// Workaround: the game's placement thread starts each job only after the next frame is shown. Without it, it
+        /// can recycle object instances while the frame being built still draws with them (a cliff flashing in front of
+        /// Hateno for one frame when gliding toward it)
+        placement_after_present: bool = true,
         /// Experimental: with mouse look on, the mouse turns the camera and the bow's aim by exact angles (into the game's
         /// own camera code) instead of moving the right stick. Can be switched while the game runs
         exact_mouse_aim: bool = false,
@@ -34,6 +38,18 @@ crate::settings::group! {
         native_font_draws: bool = false,
         /// Compare each text draw the game records with what --native-font-draws would record
         verify_font_draws: bool = false,
+        /// Compare each model draw the game records with what the model renderer port predicts
+        verify_model_draws: bool = false,
+        /// Model draws by the port instead of the game's model renderer
+        native_model_draws: bool = false,
+        /// Compare each render-list loop's NVN commands with what the render-list port predicts
+        verify_render_lists: bool = false,
+        /// Render lists drawn by the port (model units through the model port)
+        native_render_lists: bool = false,
+        /// Port hooks not installed: main+ offsets in hex (the game's own function then runs)
+        no_port_hook: Vec<String> = Vec::new(),
+        /// Apply mode: this port (its summary name) and the game take turns; both command lists are printed ([compare])
+        compare_port: Option<String> = None,
     }
 }
 

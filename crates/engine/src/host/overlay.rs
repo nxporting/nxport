@@ -36,28 +36,6 @@ pub fn init() {
     }
 }
 
-/// The live switch (host/live.rs), kept in the game's settings file.
-pub fn is_dynamic_aspect() -> bool {
-    crate::host::live::dynamic_aspect()
-}
-
-pub fn set_dynamic_aspect(val: bool) {
-    // Off: back to 16:9 at once (live::set_dynamic_aspect). On: the window's shape now.
-    crate::host::live::set_dynamic_aspect(val);
-    if val {
-        #[cfg(target_os = "macos")]
-        if let Some(aspect) = crate::host::display::current_window_aspect() {
-            crate::profile::screen_aspect_changed(aspect);
-        }
-    }
-}
-
-pub fn toggle_dynamic_aspect() -> bool {
-    let next = !is_dynamic_aspect();
-    set_dynamic_aspect(next);
-    next
-}
-
 pub fn fps_mode() -> FpsMode {
     init();
     if FPS_MODE.load(Ordering::Relaxed) == 0 {
@@ -72,16 +50,6 @@ pub fn set_fps_mode(mode: FpsMode) {
     FPS_MODE.store(if mode == FpsMode::Stock30 { 0 } else { 1 }, Ordering::Relaxed);
 }
 
-pub fn toggle_fps_mode() -> FpsMode {
-    let next = if fps_mode() == FpsMode::Stock30 {
-        FpsMode::Unlocked
-    } else {
-        FpsMode::Stock30
-    };
-    set_fps_mode(next);
-    next
-}
-
 pub fn is_vsync() -> bool {
     init();
     VSYNC.load(Ordering::Relaxed)
@@ -93,7 +61,6 @@ pub fn is_low_latency() -> bool {
     LOW_LATENCY.load(Ordering::Relaxed)
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn toggle_low_latency() -> bool {
     init();
     !LOW_LATENCY.fetch_xor(true, Ordering::Relaxed)
@@ -127,10 +94,10 @@ pub fn toggle_async_shaders() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// macOS ImGui Overlay Renderer
+// The overlays on Metal (macOS and iOS): the performance window and the shader progress bar, drawn with Dear ImGui
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod render_impl {
     use super::*;
     use std::cell::RefCell;
@@ -153,7 +120,10 @@ mod render_impl {
         cb: &ProtocolObject<dyn MTLCommandBuffer>,
         target: &ProtocolObject<dyn MTLTexture>,
     ) {
-        if !is_overlay_enabled() {
+        // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
+        let progress = crate::gpu::pipeline_list::take_frame_progress();
+        let perf = is_overlay_enabled();
+        if !perf && progress.is_none() {
             return;
         }
 
@@ -199,7 +169,12 @@ mod render_impl {
             let frame = state.ctx.begin_frame();
             {
                 let ui = frame.ui();
-                draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1]);
+                if perf {
+                    draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1]);
+                }
+                if let Some(listed) = progress {
+                    crate::perf_stats::draw_shader_progress(ui, w, h, listed);
+                }
             }
 
             let pending = frame.render(state.renderer.consumer());
@@ -208,10 +183,10 @@ mod render_impl {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use render_impl::render;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub fn render(
     _device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
     _cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,

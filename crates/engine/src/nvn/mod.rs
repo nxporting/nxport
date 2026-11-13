@@ -3,5 +3,6 @@
 
 pub mod api;
 pub mod cmd;
+pub(crate) mod frame_map;
 pub mod layout;
 pub mod state;

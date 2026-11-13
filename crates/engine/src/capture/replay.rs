@@ -101,6 +101,74 @@ fn flatten(
                     flatten(lists, c, depth + 1, out, missing);
                 }
             }
+            Some(Cmd::ModelDraw(m)) if depth < 16 => {
+                for item in &m.items {
+                    match item {
+                        crate::nvn::cmd::ModelItem::Unit { list, .. } => flatten(lists, *list, depth + 1, out, missing),
+                        crate::nvn::cmd::ModelItem::TexturesDeferred { stage, first, count, handles } => out.push(Op {
+                            name: "nvnCommandBufferBindTexturesDeferred".into(),
+                            typed: Some(Cmd::BindTexturesDeferred { stage: *stage, first: *first, count: *count, handles: *handles }),
+                            args: None,
+                        }),
+                        crate::nvn::cmd::ModelItem::Targets { colors, depth } => out.push(Op {
+                            name: "nvnCommandBufferSetRenderTargets".into(),
+                            typed: Some(Cmd::SetRenderTargets { colors: colors.clone(), depth: depth.map(Box::new) }),
+                            args: None,
+                        }),
+                        crate::nvn::cmd::ModelItem::Viewport { x, y, w, h, near, far } => {
+                            let r = (*x, *y, *w, *h);
+                            for (name, t) in [
+                                ("nvnCommandBufferSetScissor", Cmd::SetScissor { x: r.0, y: r.1, w: r.2, h: r.3 }),
+                                ("nvnCommandBufferSetViewport", Cmd::SetViewport { x: r.0, y: r.1, w: r.2, h: r.3 }),
+                                ("nvnCommandBufferSetDepthRange", Cmd::SetDepthRange { near: *near, far: *far }),
+                            ] {
+                                out.push(Op { name: name.into(), typed: Some(t), args: None });
+                            }
+                        }
+                        crate::nvn::cmd::ModelItem::RenderState(r) => out.push(Op {
+                            name: "nvnCommandBufferRenderState".into(),
+                            typed: Some(Cmd::RenderState(r.clone())),
+                            args: None,
+                        }),
+                        item => {
+                            let t = item.cmd().unwrap();
+                            let name = match t {
+                                Cmd::BindUniformBuffer { .. } => "nvnCommandBufferBindUniformBuffer",
+                                Cmd::BindStorageBuffer { .. } => "nvnCommandBufferBindStorageBuffer",
+                                Cmd::BindTexture { .. } => "nvnCommandBufferBindTexture",
+                                Cmd::DrawArraysInstanced { .. } => "nvnCommandBufferDrawArraysInstanced",
+                                Cmd::BindVertexBuffer { .. } => "nvnCommandBufferBindVertexBuffer",
+                                Cmd::BindVertexAttribState(_) => "nvnCommandBufferBindVertexAttribState",
+                                Cmd::BindVertexStreamState(_) => "nvnCommandBufferBindVertexStreamState",
+                                Cmd::BindProgram { .. } => "nvnCommandBufferBindProgram",
+                                Cmd::SetRenderEnable(_) => "nvnCommandBufferSetRenderEnable",
+                                Cmd::SetPointSize(_) => "nvnCommandBufferSetPointSize",
+                                Cmd::UpdateUniformBuffer { .. } => "nvnCommandBufferUpdateUniformBuffer",
+                                Cmd::BindBlendState(_) => "nvnCommandBufferBindBlendState",
+                                Cmd::BindColorState(_) => "nvnCommandBufferBindColorState",
+                                Cmd::BindChannelMaskState(_) => "nvnCommandBufferBindChannelMaskState",
+                                Cmd::SetBlendColor(_) => "nvnCommandBufferSetBlendColor",
+                                Cmd::BindDepthStencilState(_) => "nvnCommandBufferBindDepthStencilState",
+                                Cmd::SetStencilValue { .. } => "nvnCommandBufferSetStencilRef",
+                                Cmd::SetDepthBounds { .. } => "nvnCommandBufferSetDepthBounds",
+                                Cmd::BindPolygonState(_) => "nvnCommandBufferBindPolygonState",
+                                Cmd::SetPolygonOffset { .. } => "nvnCommandBufferSetPolygonOffsetClamp",
+                                Cmd::BindMultisampleState(_) => "nvnCommandBufferBindMultisampleState",
+                                Cmd::SetDepthClamp(_) => "nvnCommandBufferSetDepthClamp",
+                                Cmd::SetPrimitiveRestart { .. } => "nvnCommandBufferSetPrimitiveRestart",
+                                Cmd::Barrier(_) => "nvnCommandBufferBarrier",
+                                Cmd::SetRenderEnableConditional { .. } => "nvnCommandBufferSetRenderEnableConditional",
+                                Cmd::ResetCounter { .. } => "nvnCommandBufferResetCounter",
+                                Cmd::ReportCounter { .. } => "nvnCommandBufferReportCounter",
+                                Cmd::ClearColor { .. } => "nvnCommandBufferClearColor",
+                                Cmd::ClearDepthStencil { .. } => "nvnCommandBufferClearDepthStencil",
+                                _ => "nvnCommandBufferDrawElementsInstanced",
+                            };
+                            out.push(Op { name: name.into(), typed: Some(t), args: None });
+                        }
+                    }
+                }
+            }
             _ => out.push(op.clone()),
         }
     }

@@ -25,11 +25,19 @@ fn target() -> Option<u64> {
     crate::settings::get().replay.capture_frame
 }
 
+/// Presented frame n is captured: --capture-frame, or within --capture-frame..=--capture-last.
+fn wanted(n: u64) -> bool {
+    let r = &crate::settings::get().replay;
+    r.capture_frame.is_some_and(|f| n == f || r.capture_last.is_some_and(|l| (f..=l).contains(&n)))
+}
+
 /// nvnQueueSubmitCommands, before the backend runs the lists.
 pub(crate) fn on_submit(handles: &[u64]) {
-    let Some(n) = target() else { return };
+    if target().is_none() {
+        return;
+    }
     let gpu = crate::gpu::backend();
-    if gpu.presented_frames() + 1 != n {
+    if !wanted(gpu.presented_frames() + 1) {
         return;
     }
     let mut s = SUBMITS.lock().unwrap();
@@ -57,15 +65,20 @@ pub(crate) fn hold(serial: u64) {
 
 /// nvnQueuePresentTexture, before the backend presents.
 pub(crate) fn on_present(texture: usize, crop: [i32; 4]) {
-    let Some(n) = target() else { return };
-    if crate::gpu::backend().presented_frames() + 1 != n {
+    if target().is_none() {
         return;
     }
+    let n = crate::gpu::backend().presented_frames() + 1;
+    if !wanted(n) {
+        return;
+    }
+    let ranged = crate::settings::get().replay.capture_last.is_some();
     let submits = std::mem::take(&mut *SUBMITS.lock().unwrap());
     let dir = crate::settings::get()
         .replay
         .capture_dir
         .clone()
+        .map(|d| if ranged { d.join(format!("frame_{n}")) } else { d })
         .or_else(|| crate::profile::data_subdir("captures").map(|d| d.join(format!("frame_{n}"))))
         .unwrap_or_else(|| PathBuf::from(format!("capture_frame_{n}")));
     let t0 = std::time::Instant::now();
@@ -80,13 +93,23 @@ pub(crate) fn on_present(texture: usize, crop: [i32; 4]) {
         Err(e) => eprintln!("[capture] frame {n}: {e}"),
     }
     CAPTURING.store(false, Ordering::Release);
-    if crate::settings::get().replay.capture_exit {
+    let last = crate::settings::get().replay.capture_last.unwrap_or(n);
+    if crate::settings::get().replay.capture_exit && n >= last {
         std::process::exit(0);
     }
 }
 
 /// Guest memory a command reads or writes, beyond what textures and pools cover: (address, length).
 fn cmd_ranges(c: &Cmd, out: &mut Vec<(u64, u64)>) {
+    // Native commands: what their NVN equivalents name (units' lists are captured with the lists).
+    if let Cmd::ModelDraw(m) = c {
+        for item in &m.items {
+            if let Some(c) = item.cmd() {
+                cmd_ranges(&c, out);
+            }
+        }
+        return;
+    }
     let mut add = |a: u64, len: u64| {
         if a > 0x10000 && len > 0 {
             let a = crate::nvn::api::translate_virtual(a as usize) as u64;

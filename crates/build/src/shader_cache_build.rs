@@ -384,7 +384,10 @@ fn translate_batch(paths: &[PathBuf], spv_dir: &Path, o: &Options) -> HashMap<St
         let fields: Vec<i32> = ctrl_fields(p, o.ctrl_dir.as_deref()).split('\t').map(|f| f.parse().unwrap_or(-1)).collect();
         let compute = (fields.len() > 1).then(|| [fields[1], fields[2], fields[3], fields[4]]);
         let res = std::fs::read(p).map_err(|e| e.to_string()).and_then(|code| {
-            std::panic::catch_unwind(|| sass2spv::translate_stage_to(&code, if compute.is_some() { 3 } else { 0 }, fields[0], compute, &target))
+            let host = sass2spv::accessor::Host { texture_heap: crate::translation::get().texture_heap, ..Default::default() };
+            std::panic::catch_unwind(|| {
+                sass2spv::translate_stage_for(&code, if compute.is_some() { 3 } else { 0 }, fields[0], compute, &target, None, host.clone())
+            })
                 .unwrap_or_else(|_| Err("translator panicked".into()))
         });
         let res = match res {
@@ -434,7 +437,7 @@ pub fn cbuf_extents(msl: &str) -> BTreeMap<u32, usize> {
     // Only the stage's own code: the tiny-pass kernels appended after it (tiny_kernels::COMMON onwards) pass every
     // buffer whole to a copy of the body, which read as a whole-buffer use and dropped every tiny-capable stage's extents.
     let body = &msl[m.end()..];
-    let body = [crate::tiny_kernels::MARKER, crate::batch_kernels::MARKER].iter().filter_map(|m| body.find(m)).min().map_or(body, |e| &body[..e]);
+    let body = [crate::tiny_kernels::MARKER, crate::batch_kernels::MARKER, crate::arg_kernels::MARKER].iter().filter_map(|m| body.find(m)).min().map_or(body, |e| &body[..e]);
     for c in param.captures_iter(m.as_str()) {
         let use_re = Regex::new(&format!(r"\b{}\b", regex::escape(&c[1]))).unwrap();
         let mut top = Some(0usize);
@@ -543,11 +546,24 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
             _ => None,
         }
     };
+    // Argument-buffer variants (crate::arg_kernels), from the stage's own code. --no-arg-kernels: none.
+    let args = if crate::translation::get().no_arg_kernels {
+        None
+    } else {
+        match stage {
+            ShaderStage::Vertex => crate::arg_kernels::arg_variant(&text, "vertex"),
+            ShaderStage::Fragment => crate::arg_kernels::arg_variant(&text, "fragment"),
+            _ => None,
+        }
+    };
     if let Some(k) = &tiny {
         text.push('\n');
         text.push_str(k);
     }
     if let Some((k, _)) = &batch {
+        text.push_str(k);
+    }
+    if let Some((k, _)) = &args {
         text.push_str(k);
     }
     std::fs::write(&msl_path, &text).map_err(|e| {
@@ -586,10 +602,13 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
         cbext,
         sbro: readonly_sbuffers(&text),
         cl: uses_cbuf_limits(&text),
+        th: text.contains("nx_heaps["),
+        tks: tiny.as_deref().is_some_and(crate::tiny_kernels::kernels_bind_samplers),
         tk: tiny.is_some(),
         tkl: tiny.as_deref().and_then(crate::tiny_kernels::implicit_tag),
         tkc: tiny.as_deref().is_some_and(crate::tiny_kernels::applies_clears),
         tb: batch.as_ref().map(|(_, b)| b.clone()),
+        ab: args.as_ref().map(|(_, a)| a.clone()),
     };
     Ok((rec, tag))
 }
@@ -618,6 +637,12 @@ pub struct StageRecord {
     pub sbro: Vec<u32>,
     #[serde(default)]
     pub cl: bool,
+    /// Reads textures from the descriptor heaps (--texture-heap).
+    #[serde(default)]
+    pub th: bool,
+    /// Its tiny kernels take their samplers as parameters (tiny_kernels::kernels_bind_samplers).
+    #[serde(default)]
+    pub tks: bool,
     #[serde(default)]
     pub tk: bool,
     #[serde(default)]
@@ -626,6 +651,8 @@ pub struct StageRecord {
     pub tkc: bool,
     #[serde(default)]
     pub tb: Option<Vec<u32>>,
+    #[serde(default)]
+    pub ab: Option<Vec<String>>,
 }
 
 /// Compiles the .metal files of `tags` in one Metal compiler launch: {tag: None | (phase, message)}; each AIR is renamed
@@ -778,6 +805,12 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
         if r.cl {
             f.push_str("cl\n");
         }
+        if r.th {
+            f.push_str("th\n");
+            if r.tks {
+                f.push_str("tks\n");
+            }
+        }
         // The stage has a compute version (tkv_<entry> / tkf_<entry>).
         // Fragment kernels also list the texture bindings they sample with implicit LOD (exact only for one level).
         if r.tk {
@@ -792,6 +825,10 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
         // Batched variant tb_<entry> (crate::batch_kernels): its address table's constant-buffer bindings in order.
         if let Some(b) = &r.tb {
             f.push_str(&format!("tb {}\n", b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ")));
+        }
+        // Argument-buffer variant ab_<entry> (crate::arg_kernels): its struct's members in order.
+        if let Some(a) = &r.ab {
+            f.push_str(&format!("ab {}\n", a.join(" ")));
         }
         for t in &mf.textures {
             let _ = writeln!(f, "tex {} {} {} {}", t.binding, t.cbuf_slot, t.handle_index, t.texture_type.replace(", ", "+").replace(' ', ""));
@@ -903,19 +940,27 @@ pub fn build(o: &Options) -> Result<(), String> {
     if o.index_only {
         let mut st: StateFile = serde_json::from_str(&std::fs::read_to_string(&state_path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         // Text-derived metadata is recomputed from the MSL the build kept (work/<stem>.metal), so a fix to its analysis
-        // reaches an existing cache without retranslating: the constant-buffer extents (`cx`).
-        let mut ext_by_entry: HashMap<String, BTreeMap<u32, usize>> = HashMap::new();
+        // reaches an existing cache without retranslating: the constant-buffer extents (`cx`), descriptor heap reads
+        // (`th`).
+        let mut ext_by_entry: HashMap<String, (BTreeMap<u32, usize>, bool, bool)> = HashMap::new();
         for m in collect_metal_files(&work) {
             let Ok(text) = std::fs::read_to_string(&m) else { continue };
             let Some(m) = entry_line_re().find(&text) else { continue };
             let Some(name) = m.as_str().split_whitespace().nth(2).map(|n| n.split('(').next().unwrap_or(n).to_string()) else { continue };
-            ext_by_entry.insert(name, cbuf_extents(&text));
+            let tks = text.find(crate::tiny_kernels::MARKER).is_some_and(|i| {
+                let k = &text[i..];
+                let end = [crate::batch_kernels::MARKER, crate::arg_kernels::MARKER].iter().filter_map(|m| k.find(m)).min().unwrap_or(k.len());
+                crate::tiny_kernels::kernels_bind_samplers(&k[..end])
+            });
+            ext_by_entry.insert(name, (cbuf_extents(&text), text.contains("nx_heaps["), tks));
         }
         let mut changed = 0;
         for r in &mut st.records {
-            if let Some(ext) = ext_by_entry.get(&r.entry) {
-                if &r.cbext != ext {
+            if let Some((ext, th, tks)) = ext_by_entry.get(&r.entry) {
+                if &r.cbext != ext || r.th != *th || r.tks != (*tks && r.tk) {
                     r.cbext = ext.clone();
+                    r.th = *th;
+                    r.tks = *tks && r.tk;
                     changed += 1;
                 }
             }
@@ -923,7 +968,7 @@ pub fn build(o: &Options) -> Result<(), String> {
         if changed > 0 {
             std::fs::write(&state_path, serde_json::to_string(&st).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         }
-        println!("[+] constant-buffer extents recomputed from {} kept MSL files: {} stages changed", ext_by_entry.len(), changed);
+        println!("[+] constant-buffer extents and heap reads recomputed from {} kept MSL files: {} stages changed", ext_by_entry.len(), changed);
         let records: Vec<&StageRecord> = st.records.iter().collect();
         write_index(&out_dir.join("index.txt"), &records).map_err(|e| e.to_string())?;
         println!("[+] wrote {} ({} stages)", out_dir.join("index.txt").display(), records.len());

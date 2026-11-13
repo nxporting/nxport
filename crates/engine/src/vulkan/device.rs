@@ -20,6 +20,10 @@ pub struct Dev {
     pub host_memory: Option<(ash::ext::external_memory_host::Device, u64)>,
     /// VK_EXT_depth_clip_control: NVN's -1..1 depth range without shader changes.
     pub depth_clip_control: bool,
+    /// VK_EXT_image_2d_view_of_3d with sampling: a shader declaring a 2D texture where the game binds a 3D one samples a
+    /// slice through a 2D view (3D images are then made 2D_VIEW_COMPATIBLE). Without it only portability implementations
+    /// (MoltenVK's imageView2DOn3DImage) allow such views.
+    pub view_2d_of_3d: bool,
     pub validation: bool,
     pub cmd_pool: vk::CommandPool,
     /// Alignment vertex strides and attribute offsets need, and whether attributes may read past their stride: Metal-based
@@ -37,6 +41,12 @@ pub struct Dev {
     pub link_varyings: bool,
     /// Primitive restart follows Metal's rules (MoltenVK): strips only, compared after adding the base vertex.
     pub metal_restart: bool,
+    /// Fewest swapchain images: 3 on MoltenVK, whose image is acquirable again once its present's command buffer completes
+    /// but whose drawable is let go only once on screen: with 2 images and its own submit thread an image came back
+    /// still holding a presented drawable ("addPresentedHandler cannot be called after drawable has been presented"),
+    /// then a crash in its present handler (2026-11-09: 1055 such warnings in 150 s with 2 images, none with 3 or with
+    /// synchronous submits). Elsewhere 2.
+    pub min_swapchain_images: u32,
     /// Occlusion queries count samples exactly (else only zero / nonzero).
     pub precise_occlusion: bool,
     /// What shader translation may use on this device.
@@ -240,6 +250,7 @@ impl Dev {
             // (Hateno: ~17% of the frame); stages needing more than Metal's 16 samplers then use a sampler table
             // (Host::sampler_slots).
             let off: i32 = 0;
+            let sync_submits = crate::settings::get().debug.mvk_sync_submits;
             let settings: Vec<vk::LayerSettingEXT> = [
                 c"MVK_CONFIG_FAST_MATH_ENABLED",
                 c"FAST_MATH_ENABLED",
@@ -249,6 +260,7 @@ impl Dev {
                 c"USE_METAL_ARGUMENT_BUFFERS",
             ]
             .iter()
+            .filter(|name| !(sync_submits && name.to_bytes().ends_with(b"SYNCHRONOUS_QUEUE_SUBMITS")))
             .map(|name| vk::LayerSettingEXT {
                 p_layer_name: c"MoltenVK".as_ptr(),
                 p_setting_name: name.as_ptr(),
@@ -339,6 +351,8 @@ impl Dev {
             if custom_border {
                 dexts.push(ash::ext::custom_border_color::NAME.as_ptr());
             }
+            let view_2d_of_3d_ext = c"VK_EXT_image_2d_view_of_3d";
+            let has_2d_of_3d = has(&dev_exts, view_2d_of_3d_ext);
             let prio = [1.0f32];
             let qinfo = [vk::DeviceQueueCreateInfo::default().queue_family_index(family).queue_priorities(&prio)];
             // Every feature only where the device has it.
@@ -347,7 +361,11 @@ impl Dev {
             let mut q11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut qr2 = vk::PhysicalDeviceRobustness2FeaturesEXT::default();
             let mut qcb = vk::PhysicalDeviceCustomBorderColorFeaturesEXT::default();
+            let mut q23 = vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT::default();
             let mut q2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut q13).push_next(&mut q12).push_next(&mut q11);
+            if has_2d_of_3d {
+                q2 = q2.push_next(&mut q23);
+            }
             if robustness2 {
                 q2 = q2.push_next(&mut qr2);
             }
@@ -356,6 +374,11 @@ impl Dev {
             }
             instance.get_physical_device_features2(pdev, &mut q2);
             let supported = q2.features;
+            // Both features or none: sampling slices is what the game needs.
+            let view_2d_of_3d = has_2d_of_3d && q23.image2_d_view_of3_d != 0 && q23.sampler2_d_view_of3_d != 0;
+            if view_2d_of_3d {
+                dexts.push(view_2d_of_3d_ext.as_ptr());
+            }
             if q13.dynamic_rendering == 0 {
                 return Err(format!("{name}: no dynamic rendering"));
             }
@@ -405,6 +428,7 @@ impl Dev {
                 binding_base: 0,
                 fragment_inputs: None,
                 sampler_slots: 0,
+                texture_heap: false,
                 bindless_textures: false,
             };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
@@ -483,6 +507,12 @@ impl Dev {
             if has_portability {
                 info = info.push_next(&mut port);
             }
+            let mut f23 = vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT::default()
+                .image2_d_view_of3_d(view_2d_of_3d)
+                .sampler2_d_view_of3_d(view_2d_of_3d);
+            if view_2d_of_3d {
+                info = info.push_next(&mut f23);
+            }
             let device = instance.create_device(pdev, &info, None).map_err(|e| format!("vkCreateDevice: {e}"))?;
             let bindless = if bindless {
                 let mut ip = vk::PhysicalDeviceDescriptorIndexingProperties::default();
@@ -530,7 +560,13 @@ impl Dev {
                 host_memory.as_ref().map_or("no".to_string(), |h| format!("yes (alignment {:#x})", h.1)),
                 depth_clip_control,
                 robustness2,
-                !has_portability || port.image_view2_d_on3_d_image != 0,
+                if view_2d_of_3d {
+                    "yes"
+                } else if has_portability && port.image_view2_d_on3_d_image != 0 {
+                    "portability"
+                } else {
+                    "no (sampled slices invalid)"
+                },
                 push.is_some(),
                 validation
             );
@@ -555,6 +591,7 @@ impl Dev {
                 name,
                 host_memory,
                 depth_clip_control,
+                view_2d_of_3d,
                 validation,
                 // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
                 // after it in memory): the shaders check them.
@@ -572,6 +609,7 @@ impl Dev {
                 feedback_in_place: has_portability,
                 link_varyings: true,
                 metal_restart: has_portability,
+                min_swapchain_images: if has_portability { 3 } else { 2 },
                 precise_occlusion: supported.occlusion_query_precise != 0,
                 cmd_pool,
                 push,

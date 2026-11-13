@@ -627,7 +627,16 @@ pub unsafe extern "C" fn socket_send(_fd: i32, buf: *const u8, len: usize, _flag
     println!("[mod-net] {}", String::from_utf8_lossy(bytes).trim_end());
     len as isize
 }
-pub unsafe extern "C" fn socket_recv(_fd: i32, _buf: *mut u8, _len: usize, _flags: i32) -> isize {
+pub unsafe extern "C" fn socket_recv(_fd: i32, _buf: *mut u8, _len: usize, flags: i32) -> isize {
+    const MSG_DONTWAIT: i32 = 0x80;
+    const EAGAIN: i32 = 11;
+    // Nothing ever arrives: a non-blocking receive says so at once. UltraCam polls its command socket this way on the
+    // game's worker threads several times per frame.
+    if mod_log_socket() && flags & MSG_DONTWAIT != 0 {
+        crate::horizon::nn::set_socket_errno(EAGAIN);
+        return -1;
+    }
+    crate::horizon::nn::set_socket_errno(100); // ENETDOWN
     if mod_log_socket() {
         std::thread::sleep(std::time::Duration::from_millis(100)); // nothing ever arrives; don't let a reader spin
     }

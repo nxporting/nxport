@@ -53,6 +53,17 @@ const fn fi(block_w: u32, block_h: u32, bytes: u32) -> Option<FormatInfo> {
 }
 
 /// Block size and bytes per block for an NVNformat value.
+/// The depth format with `fmt`'s memory layout, for a colour format read with depth comparison: R32F as DEPTH32F, R16 as
+/// DEPTH16. The console compares the colour texture's first component; GPUs where comparison needs a depth format read the
+/// same bytes as depth (Ryujinx aliases these pairs: TextureCompatibility IsValidColorAsDepthAlias).
+pub fn depth_twin(fmt: i32) -> Option<i32> {
+    match fmt {
+        10 => Some(52),
+        6 => Some(50),
+        _ => None,
+    }
+}
+
 pub fn format_info(fmt: i32) -> Option<FormatInfo> {
     match fmt {
         1..=4 | 49 | 81 | 82 => fi(1, 1, 1),
@@ -216,6 +227,19 @@ fn level_block_dims(
 fn level_bh(p: &TextureParams, info: &FormatInfo, level: usize) -> usize {
     let hb0 = (p.height.max(1) as u64 + info.block_h as u64 - 1) / info.block_h as u64;
     level_block_dims(hb0, 1, false, level + 1, info.block_h as u64, p.flags)[level].0 as usize
+}
+
+/// Level 0 of a block-linear 2D texture in bands: each row of blocks is one contiguous run of guest memory. Texel rows
+/// per band and bytes per band; None for linear textures.
+pub fn level0_bands(p: &TextureParams) -> Option<(usize, usize)> {
+    let info = format_info(p.format)?;
+    if linear_pitch(p, &info).is_some() {
+        return None;
+    }
+    let wb = (p.width.max(1) as u64).div_ceil(info.block_w as u64);
+    let pitch = align(wb * info.bytes as u64, 64) as usize;
+    let gob_rows = 8 * level_bh(p, &info, 0);
+    Some((gob_rows * info.block_h as usize, pitch * gob_rows))
 }
 
 pub fn sample_dims(samples: i32) -> (u32, u32) {
