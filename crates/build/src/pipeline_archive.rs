@@ -74,16 +74,33 @@ pub fn build_ios(ios_cache: &Path, work: &Path, arch: &str) -> Result<(), String
     let _ = std::fs::remove_dir_all(work);
     run_engine(ios_cache, work, true)?;
     let out = ios_cache.join("pipelines.metalar");
-    let o = Command::new("/usr/bin/xcrun")
-        .args(["-sdk", "iphoneos", "metal-tt", "-arch", arch, "-ios-version-min", min, "pipelines.mtlp-json", "-o"])
-        .arg(&out)
-        .current_dir(work)
-        .output()
-        .map_err(|e| format!("metal-tt (Xcode): {e}"))?;
-    if !o.status.success() || !out.exists() {
+    // metal-tt finds some functions the script names nowhere in the engine's archives (on this Mac, fragment functions
+    // without stage inputs: an empty one, one that only writes a storage buffer). It names them; their pipelines leave
+    // the script and the app compiles those when first drawn.
+    let mut dropped = 0;
+    for _ in 0..4 {
+        let o = Command::new("/usr/bin/xcrun")
+            .args(["-sdk", "iphoneos", "metal-tt", "-arch", arch, "-ios-version-min", min, "pipelines.mtlp-json", "-o"])
+            .arg(&out)
+            .current_dir(work)
+            .output()
+            .map_err(|e| format!("metal-tt (Xcode): {e}"))?;
+        if o.status.success() && out.exists() {
+            break;
+        }
         let err = String::from_utf8_lossy(&o.stderr);
-        let err = err.lines().filter(|l| !l.starts_with('+')).find(|l| l.contains("error")).unwrap_or("failed");
-        return Err(format!("metal-tt: {err}"));
+        let missing = missing_functions(&err);
+        if missing.is_empty() {
+            let err = err.lines().filter(|l| !l.starts_with('+')).find(|l| l.contains("error")).unwrap_or("failed");
+            return Err(format!("metal-tt: {err}"));
+        }
+        dropped += drop_pipelines(&work.join("pipelines.mtlp-json"), &missing)?;
+    }
+    if !out.exists() {
+        return Err("metal-tt: functions still missing after leaving out their pipelines".into());
+    }
+    if dropped > 0 {
+        println!("  {dropped} pipelines left out (metal-tt did not find their functions); the app compiles them when first drawn");
     }
     let _ = std::fs::remove_dir_all(work);
     println!(
@@ -92,4 +109,68 @@ pub fn build_ios(ios_cache: &Path, work: &Path, arch: &str) -> Result<(), String
         std::fs::metadata(&out).map_or(0, |m| m.len() >> 20)
     );
     Ok(())
+}
+
+/// The functions metal-tt reports missing ("note: 'name' is missing").
+fn missing_functions(stderr: &str) -> Vec<String> {
+    let mut names: Vec<String> = stderr
+        .lines()
+        .filter_map(|l| l.split("note: '").nth(1)?.strip_suffix("' is missing").map(str::to_string))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Removes the script's render pipelines that use any of `functions`; returns how many.
+fn drop_pipelines(script: &Path, functions: &[String]) -> Result<usize, String> {
+    let text = std::fs::read_to_string(script).map_err(|e| e.to_string())?;
+    let mut v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let Some(list) = v.pointer_mut("/pipelines/render_pipelines").and_then(|l| l.as_array_mut()) else {
+        return Ok(0);
+    };
+    let before = list.len();
+    let uses = |p: &serde_json::Value, key: &str| {
+        p.get(key).and_then(|f| f.as_str()).and_then(|f| f.rsplit('#').next()).is_some_and(|f| functions.iter().any(|m| m == f))
+    };
+    list.retain(|p| !uses(p, "vertex_function") && !uses(p, "fragment_function"));
+    let n = before - list.len();
+    if n == 0 {
+        return Err(format!("metal-tt: missing functions {functions:?} are in no pipeline of the script"));
+    }
+    std::fs::write(script, serde_json::to_string(&v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metal_tt_missing_functions() {
+        let err = "applegpu-nt: error: cannot locate all required functions in 'a.metalar'\n\
+                   applegpu-nt: note: 's_d69ac109e0368b5c' is missing\n\
+                   applegpu-nt: note: 's_d69ac109e0368b5c' is missing\n\
+                   applegpu-nt: note: 's_189d8d8576b127f0' is missing\n";
+        assert_eq!(missing_functions(err), ["s_189d8d8576b127f0", "s_d69ac109e0368b5c"]);
+    }
+
+    #[test]
+    fn drops_pipelines_using_missing_functions() {
+        let dir = std::env::temp_dir().join(format!("nxport-mtt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("p.mtlp-json");
+        std::fs::write(
+            &script,
+            r#"{"pipelines":{"render_pipelines":[
+                {"vertex_function":"alias:g0#s_a","fragment_function":"alias:g0#s_b"},
+                {"vertex_function":"alias:g0#s_a","fragment_function":"alias:g1#s_c"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(drop_pipelines(&script, &["s_b".into()]).unwrap(), 1);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&script).unwrap()).unwrap();
+        assert_eq!(v["pipelines"]["render_pipelines"].as_array().unwrap().len(), 1);
+        assert!(drop_pipelines(&script, &["s_b".into()]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
