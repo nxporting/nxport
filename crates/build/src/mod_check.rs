@@ -40,5 +40,61 @@ pub fn report(dir: &Path, tid: u64, dump: &Path) {
                 );
             }
         }
+        romfs_for_other_version(&mod_name, &nxport::mods::mod_subdir(&path, "romfs"), &dump.join("RomFS"));
+    }
+}
+
+/// The `.Product.<version>.` part of a file name (TotK names its resource size table and message archives by the game
+/// version: ResourceSizeTable.Product.100.rsizetable.zs, Mals/USen.Product.100.sarc.zs), and the name around it.
+fn product_version(name: &str) -> Option<(&str, &str, &str)> {
+    let at = name.find(".Product.")?;
+    let rest = &name[at + ".Product.".len()..];
+    let end = rest.find('.').unwrap_or(rest.len());
+    let version = &rest[..end];
+    (!version.is_empty() && version.bytes().all(|b| b.is_ascii_digit())).then(|| (&name[..at], version, &rest[end..]))
+}
+
+/// Warns for each RomFS file of a mod named for another version of the game: one the game has no file of, beside which
+/// the game has the same name with another `.Product.<version>.` (a mod merged for 1.1.2 on a 1.0.0 game: the game
+/// opens its own version's names, so those files are never read and the mod works in part).
+fn romfs_for_other_version(mod_name: &str, mod_romfs: &Path, game_romfs: &Path) {
+    let mut stack = vec![mod_romfs.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            let Some((stem, version, tail)) = product_version(&name) else { continue };
+            let Ok(rel) = p.strip_prefix(mod_romfs) else { continue };
+            let game_dir = game_romfs.join(rel.parent().unwrap_or(Path::new("")));
+            if game_romfs.join(rel).exists() {
+                continue;
+            }
+            let ours = std::fs::read_dir(&game_dir).into_iter().flatten().flatten().find_map(|g| {
+                let n = g.file_name().to_string_lossy().into_owned();
+                product_version(&n).filter(|&(s, v, t)| s == stem && t == tail && v != version).map(|(_, v, _)| v.to_string())
+            });
+            if let Some(game_version) = ours {
+                println!(
+                    "  [!] Mod '{mod_name}': romfs/{} is for version {version} of the game (this game reads \
+                     .Product.{game_version}.), so it is never read",
+                    rel.display().to_string().replace('\\', "/")
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn product_versions_are_read_from_names() {
+        assert_eq!(super::product_version("ResourceSizeTable.Product.112.rsizetable.zs"), Some(("ResourceSizeTable", "112", ".rsizetable.zs")));
+        assert_eq!(super::product_version("USen.Product.100.sarc.zs"), Some(("USen", "100", ".sarc.zs")));
+        assert_eq!(super::product_version("Link.bfres.zs"), None);
+        assert_eq!(super::product_version("Odd.Product.x1.zs"), None);
     }
 }
