@@ -303,13 +303,18 @@ pub fn compile(
     let rsp = obj_dir.join("link.rsp");
     let quoted: String = objects.iter().map(|o| format!("\"{}\"\n", o.display().to_string().replace('\\', "/"))).collect();
     std::fs::write(&rsp, quoted)?;
-    let o = command(prog)
-        .args(pre)
-        .arg("-shared")
-        .arg("-o")
-        .arg(out)
-        .arg(format!("@{}", rsp.display()))
-        .output()?;
+    let link = || command(prog).args(pre).arg("-shared").arg("-o").arg(out).arg(format!("@{}", rsp.display())).output();
+    let mut o = link()?;
+    // A build cut off while zig wrote its cache (a power cut) can leave a broken runtime library there, and every later
+    // link then fails (seen: an empty compiler_rt.lib, "undefined symbol: ___chkstk_ms"). The cache holds only what zig
+    // can make again, so the link is tried once more without it.
+    if !o.status.success() {
+        if let Some(dir) = cache.filter(|d| d.is_dir()) {
+            println!("  Linking failed; trying again with zig's cache ({}) cleared", dir.display());
+            let _ = std::fs::remove_dir_all(dir);
+            o = link()?;
+        }
+    }
     if !o.status.success() {
         return Err(format!("linking {}: {}", out.display(), String::from_utf8_lossy(&o.stderr)).into());
     }
