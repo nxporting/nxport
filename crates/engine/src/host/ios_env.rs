@@ -1,11 +1,11 @@
 // iOS app setup, first thing in run: the app's folders (a platform-environment settings layer) and the choices made in
 // the Settings app (a layer above the game profiles).
 //   Documents/Game/{ExeFS,RomFS}   the game dump (copied in with Finder or the Files app), unless the app carries one
-//   <bundle>/Game/{ExeFS,RomFS}    (nxport-cli ipa --bundle-game)
+//   <bundle>/Game/{ExeFS,RomFS}    (nxport-builder ipa --bundle-game)
 //   Documents/save                 saves
 //   Documents/log.txt              stdout + stderr (the engine logs a lot; send this file when something breaks)
 //   Documents/shader_dump_missing  shader stages the cache lacks (they draw nothing; send them back to add them)
-//   <bundle>/shader_cache          the iOS shader cache (nxport-cli shaders build-ios)
+//   <bundle>/shader_cache          the iOS shader cache (nxport-builder shaders build-ios)
 //   <bundle>/Frameworks/NxportGuest.framework/NxportGuest   the signed guest code image (cpu/aot.rs)
 //   <bundle>/mods                  mods built into the app (the image holds their code patches)
 //   <bundle>/settings.toml         the settings the app was built with (a layer above the game profiles)
@@ -45,7 +45,7 @@ pub fn setup() -> (
     }
     let b = bundle();
     let mut env = crate::settings::SettingsPatch::default();
-    // A game built into the app (nxport-cli ipa --bundle-game), else the one copied into Documents/Game.
+    // A game built into the app (nxport-builder ipa --bundle-game), else the one copied into Documents/Game.
     let game = if b.join("Game/ExeFS").is_dir() {
         b.join("Game")
     } else {
@@ -180,6 +180,36 @@ fn preferences() -> crate::settings::SettingsPatch {
             objc2::msg_send![defaults, stringForKey: &*k_mode];
         prefs.system.handheld =
             Some(!ns_string(val).is_some_and(|m| m.eq_ignore_ascii_case("docked")));
+
+        // The switches the desktop menus have (host/menu.rs), as the settings they start from: only those the user
+        // set in the Settings app; the others keep what the app was built with (its settings.toml).
+        let set = |key: &str| {
+            let k = objc2_foundation::NSString::from_str(key);
+            let v: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults, objectForKey: &*k];
+            (!v.is_null()).then_some(k)
+        };
+        let flag = |key: &str| set(key).map(|k| -> bool { objc2::msg_send![defaults, boolForKey: &*k] });
+        let number = |key: &str| {
+            set(key).and_then(|k| {
+                let v: *mut objc2::runtime::AnyObject = objc2::msg_send![defaults, stringForKey: &*k];
+                ns_string(v).and_then(|s| s.parse::<u32>().ok())
+            })
+        };
+        if let Some(fps) = number("frame_limit") {
+            // 30: the console's own timing (the menus' Frame Rate Limit, host/menu.rs).
+            if fps == 30 {
+                prefs.system.fps = Some(crate::settings::FpsMode::Stock30);
+            } else {
+                prefs.system.fps = Some(crate::settings::FpsMode::Unlocked);
+                prefs.display.frame_limit = Some(fps);
+            }
+        }
+        prefs.display.low_latency = flag("low_latency");
+        prefs.display.perf_overlay = flag("perf_overlay");
+        prefs.input.no_rumble = flag("vibration").map(|on| !on);
+        prefs.input.rumble_scale = number("vibration_strength").map(|p| p as f32 / 100.0);
+        prefs.totk.enhancements.dynamic_fps = flag("totk_dynamic_fps");
+        prefs.totk.enhancements.dynamic_aspect_ratio = flag("totk_dynamic_aspect");
     }
     prefs
 }

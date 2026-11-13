@@ -1191,10 +1191,14 @@ fn game_sections<'a>(s: &'a mut Settings, game: &nxport::profile::GameProfile) -
     nxport::profile::option_sections(game, s)
 }
 
-/// The builder: turns a game dump into an app.
+/// The builder: turns a game dump into an app (in its window, or with --build), or runs one of its steps (a command).
+// The dump is a positional the commands' names could be taken for: a word that names a command is the command (a dump
+// folder of that name is given as a path, ./shaders), and the builder's own options are refused with a command.
 #[derive(clap::Parser)]
-#[command(name = "nxport-builder", version)]
+#[command(name = "nxport-builder", version, args_conflicts_with_subcommands = true)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<crate::cli::Command>,
     /// Game dump to start with
     dump: Option<PathBuf>,
     /// Render the window into this PNG instead of opening it
@@ -1277,7 +1281,13 @@ fn attach_console() {
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let Args { dump, snapshot, expand, height, build, preset, out, mods, worker } = clap::Parser::parse();
+    // Help, the version and parse errors are printed by clap, so they need the console first.
+    let args = <Args as clap::Parser>::try_parse().unwrap_or_else(|e| {
+        #[cfg(windows)]
+        attach_console();
+        e.exit()
+    });
+    let Args { command, dump, snapshot, expand, height, build, preset, out, mods, worker } = args;
     #[cfg(windows)]
     if let Some(file) = worker {
         return crate::windows::worker(&file).map_err(Into::into);
@@ -1286,6 +1296,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = worker;
     #[cfg(windows)]
     attach_console();
+    if let Some(command) = command {
+        return crate::cli::run(command);
+    }
     let mut b = Builder::new(dump);
     b.expand_all = expand;
     if build {
@@ -1348,6 +1361,24 @@ mod tests {
         b.presets = game_presets(title_id, profile);
         b.rebase();
         b
+    }
+
+    fn parse(args: &[&str]) -> Result<Args, clap::Error> {
+        <Args as clap::Parser>::try_parse_from(std::iter::once("nxport-builder").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn a_command_name_is_the_command_and_a_path_the_dump() {
+        let a = parse(&["shaders", "extract", "--romfs", "RomFS", "--out", "stages"]).unwrap();
+        assert!(a.dump.is_none());
+        assert!(matches!(a.command, Some(crate::cli::Command::Shaders(crate::cli::Shaders::Extract { .. }))));
+        for dump in [r"C:\some\dump", "/some/dump", "./shaders"] {
+            let a = parse(&[dump, "--build", "--preset", "Mac"]).unwrap();
+            assert!(a.command.is_none() && a.build, "{dump}");
+            assert_eq!(a.dump, Some(PathBuf::from(dump)));
+        }
+        // The builder's own options belong to the window and --build, not to a command.
+        assert!(parse(&["--build", "dump", "ppm2png", "a.ppm", "a.png"]).is_err());
     }
 
     #[test]

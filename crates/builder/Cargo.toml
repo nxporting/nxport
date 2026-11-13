@@ -17,6 +17,10 @@ libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = "1.1"
 
+# shaders specialize --meta (cli.rs): the index metadata as JSON, on macOS, where Metal caches are built.
+[target.'cfg(target_os = "macos")'.dependencies]
+serde_json = "1"
+
 # The window on Windows: Dear ImGui over SDL3 (the engine's settings editor draws into it), on the SDL3.dll the engine
 # links against (vendor/SDL3), so nothing is built with CMake (window_sdl.rs).
 [target.'cfg(windows)'.dependencies]

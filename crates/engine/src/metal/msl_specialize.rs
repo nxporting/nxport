@@ -1,4 +1,4 @@
-// crates/cli/src/msl_specialize.rs
+// crates/engine/src/metal/msl_specialize.rs
 // Makes a translated stage's vertex inputs / fragment outputs format-agnostic, and the other MSL passes the Metal
 // backend needs (port of the former tools/msl_specialize.py; its output is byte-identical, checked over ~4,800 stages).
 //

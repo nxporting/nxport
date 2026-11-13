@@ -1,4 +1,4 @@
-// crates/cli/src/tiny_kernels.rs
+// crates/build/src/tiny_kernels.rs
 //! Compute versions of translated stages: a render pass costs ~40 us of fixed GPU time on Apple
 //! GPUs, a compute dispatch ~1 us, and TotK runs ~76 tiny render passes per frame. For a draw the engine runs as
 //! compute, the vertex stage's `tkv_<entry>` evaluates the draw's few vertices into a buffer and the fragment stage's

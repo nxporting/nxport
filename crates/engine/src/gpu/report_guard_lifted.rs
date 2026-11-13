@@ -71,7 +71,7 @@ thread_local! {
 }
 
 /// Guest code: the lifted guest library's image.
-/// The overlay library's code (nxport-cli lift-overlay), guest code too.
+/// The overlay library's code (nxport-builder lift-overlay), guest code too.
 static OVERLAY_START: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_END: AtomicUsize = AtomicUsize::new(0);
 

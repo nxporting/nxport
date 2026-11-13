@@ -882,9 +882,16 @@ const IN_SLOTS: usize = 4;
 const OUT_SLOTS: usize = 16;
 const MAX_PENDING: usize = 4;
 
-/// Decoder calls come from the game's input threads (send) and its output side (acquire / release): one lock.
+/// Decoder calls come from the game's input threads (send) and its output side (acquire / release): one lock for the
+/// decoders' queues and slots. A frame is decoded outside it, under its decoder's Codec lock (d_send_input): a VP9 frame
+/// takes tens of milliseconds, and under this lock the game could neither take ready frames nor decode audio meanwhile
+/// (movies played slow, then fast). Lock order: a Codec, then this.
 static DECODER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// A decoder's decoding side: held while it decodes or drains, and while its frames are queued (so they keep their order).
+struct Codec {
+    scratch: Vec<u8>,
+}
 struct OutFrame {
     data: Vec<u8>,
     pts: i64,
@@ -906,7 +913,7 @@ struct Decoder {
     eos_in: bool,
     eos_out: bool,
     started: bool,
-    scratch: Vec<u8>,
+    codec: std::sync::Arc<std::sync::Mutex<Codec>>,
     /// --log-movie: inputs sent / outputs acquired / acquire attempts with nothing ready.
     n_in: u64,
     n_out: u64,
@@ -935,7 +942,15 @@ fn signal(d: &Decoder, which: usize) {
         crate::horizon::nn::signal_event(d.events[which]);
     }
 }
+/// The decoder's Codec lock (taken before DECODER_LOCK by those that touch the media decoder), or None once it is gone.
+unsafe fn codec_of(this: *mut usize) -> Option<std::sync::Arc<std::sync::Mutex<Codec>>> {
+    let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    dec(this).map(|d| d.codec.clone())
+}
 unsafe extern "C" fn d_dtor(this: *mut usize) {
+    // Freed only once no frame is decoding: its Codec lock first (lock order, see DECODER_LOCK).
+    let codec = codec_of(this);
+    let _codec = codec.as_ref().map(|c| c.lock().unwrap_or_else(|e| e.into_inner()));
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if *this.add(1) != 0 {
         let d = Box::from_raw(*this.add(1) as *mut Decoder);
@@ -1064,6 +1079,11 @@ unsafe extern "C" fn d_stop(this: *mut usize) -> u32 {
     OK
 }
 unsafe extern "C" fn d_flush(this: *mut usize) -> u32 {
+    // The decoder is reset only once no frame is decoding: its Codec lock first (lock order, see DECODER_LOCK).
+    let Some(codec) = codec_of(this) else {
+        return NULL_DECODER;
+    };
+    let _codec = codec.lock().unwrap_or_else(|e| e.into_inner());
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(d) = dec(this) else {
         return NULL_DECODER;
@@ -1097,14 +1117,25 @@ fn distribute(d: &mut Decoder) {
         signal(d, 1);
     }
 }
-unsafe fn drain(d: &mut Decoder) {
+/// A decoded frame or audio packet as the decoder handed it out: its bytes, presentation time, and picture size.
+struct Received {
+    data: Vec<u8>,
+    pts: i64,
+    width: i32,
+    height: i32,
+}
+
+/// Everything the media decoder `handle` has ready, under its Codec lock only; and whether it then had nothing more
+/// (its last answer negative: at the end of the stream, the end).
+unsafe fn receive_all(handle: usize, codec: &mut Codec) -> (Vec<Received>, bool) {
     let s = media();
+    let mut out = Vec::new();
     loop {
         let (mut pts, mut w, mut h, mut stride, mut need) = (0i64, 0, 0, 0, 0);
-        let cap = d.scratch.len() as c_int;
+        let cap = codec.scratch.len() as c_int;
         let n = (s.md_receive)(
-            d.dec as *mut c_void,
-            d.scratch.as_mut_ptr(),
+            handle as *mut c_void,
+            codec.scratch.as_mut_ptr(),
             cap,
             &mut pts,
             &mut w,
@@ -1113,37 +1144,37 @@ unsafe fn drain(d: &mut Decoder) {
             &mut need,
         );
         if n == -2 {
-            d.scratch.resize(need as usize, 0);
+            codec.scratch.resize(need as usize, 0);
             continue;
         }
         if n > 0 {
-            // formatChangedEvent before the first output (and on size changes), as MediaCodec-style decoders report the
-            // output format first: Kirby's guide movies (no audio track) waited ~5 s for it before starting playback.
-            if d.is_video && (w != d.width || h != d.height || !d.format_reported) {
-                d.width = w;
-                d.height = h;
-                d.format_reported = true;
-                signal(d, 2);
-            } else if !d.is_video && !d.format_reported {
-                d.format_reported = true;
-                signal(d, 2);
-            }
-            d.pending.push_back(OutFrame {
-                data: d.scratch[..n as usize].to_vec(),
-                pts,
-                flags: 0,
-            });
+            out.push(Received { data: codec.scratch[..n as usize].to_vec(), pts, width: w, height: h });
             continue;
         }
-        if n < 0 && d.eos_in && !d.eos_out {
-            d.eos_out = true;
-            d.pending.push_back(OutFrame {
-                data: Vec::new(),
-                pts: 0,
-                flags: BUFFER_FLAG_EOS,
-            });
+        return (out, n < 0);
+    }
+}
+
+/// Queues what receive_all took (under DECODER_LOCK), and the end-of-stream output once the decoder is done after the
+/// last input.
+fn deliver(d: &mut Decoder, received: Vec<Received>, done: bool) {
+    for r in received {
+        // formatChangedEvent before the first output (and on size changes), as MediaCodec-style decoders report the
+        // output format first: Kirby's guide movies (no audio track) waited ~5 s for it before starting playback.
+        if d.is_video && (r.width != d.width || r.height != d.height || !d.format_reported) {
+            d.width = r.width;
+            d.height = r.height;
+            d.format_reported = true;
+            signal(d, 2);
+        } else if !d.is_video && !d.format_reported {
+            d.format_reported = true;
+            signal(d, 2);
         }
-        break;
+        d.pending.push_back(OutFrame { data: r.data, pts: r.pts, flags: 0 });
+    }
+    if done && d.eos_in && !d.eos_out {
+        d.eos_out = true;
+        d.pending.push_back(OutFrame { data: Vec::new(), pts: 0, flags: BUFFER_FLAG_EOS });
     }
     distribute(d);
 }
@@ -1197,26 +1228,44 @@ unsafe extern "C" fn d_send_input(
     pts: i64,
     flags: u32,
 ) -> u32 {
+    // Taken from the input slot under DECODER_LOCK (the slot is free again at once: the game may refill it while this
+    // frame decodes, so the bytes are copied), then decoded under the decoder's Codec lock alone (see DECODER_LOCK).
+    let (handle, codec, data, size, eos) = {
+        let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(d) = dec(this) else {
+            return NULL_DECODER;
+        };
+        let Some(slot) = d.inputs.get_mut(idx as usize) else {
+            return ERR_INVALID_RANGE;
+        };
+        let eos = flags & BUFFER_FLAG_EOS != 0;
+        let start = (off.max(0) as usize).min(slot.0.len());
+        let size = size.max(0).min(slot.0.len() as i32 - start as i32);
+        let data = slot.0[start..start + size as usize].to_vec();
+        slot.1 = true;
+        if eos {
+            d.eos_in = true;
+        }
+        (d.dec, d.codec.clone(), data, size, eos)
+    };
+    let mut codec = codec.lock().unwrap_or_else(|e| e.into_inner());
+    let (failed, received, done) = if handle != 0 {
+        let failed = (media().md_send)(handle as *mut c_void, data.as_ptr(), size, pts, eos as c_int) < 0;
+        let (received, done) = receive_all(handle, &mut codec);
+        (failed, received, done)
+    } else {
+        (false, Vec::new(), false)
+    };
+    // Still holding the Codec lock: frames of two sends are queued in the order they were decoded.
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
-    let s = media();
-    let Some(slot) = d.inputs.get_mut(idx as usize) else {
-        return ERR_INVALID_RANGE;
-    };
-    let eos = flags & BUFFER_FLAG_EOS != 0;
-    let data = slot.0.as_ptr().add(off.max(0) as usize);
-    let size = size.max(0).min(slot.0.len() as i32 - off.max(0));
-    slot.1 = true;
-    if eos {
-        d.eos_in = true;
-    }
-    if d.dec != 0 {
-        if (s.md_send)(d.dec as *mut c_void, data, size, pts, eos as c_int) < 0 {
+    if handle != 0 {
+        if failed {
             signal(d, 3);
         }
-        drain(d);
+        deliver(d, received, done);
     }
     d.n_in += 1;
     if log_enabled() && (d.n_in <= 5 || d.n_in % 100 == 0 || eos) {
@@ -1430,7 +1479,7 @@ unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
         eos_in: false,
         eos_out: false,
         started: false,
-        scratch: vec![0u8; 1 << 20],
+        codec: std::sync::Arc::new(std::sync::Mutex::new(Codec { scratch: vec![0u8; 1 << 20] })),
         n_in: 0,
         n_out: 0,
         n_empty: 0,

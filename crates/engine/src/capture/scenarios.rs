@@ -1,6 +1,6 @@
 // Synthetic captures: short NVN command sequences recorded through the frontend (nvn::api) as a game would record them,
 // with hand-encoded Maxwell shaders (maxwell.rs) that go through sass2spv like the games'. Each scenario writes a capture
-// that replay.rs runs; their references live in the repository (crates/cli/tests/gpu/<name>/).
+// that replay.rs runs; their references live in the repository (crates/builder/tests/gpu/<name>/).
 //
 // Everything a scenario makes lives in one reserved region at a fixed address, so its capture maps at the same place in
 // every run. Nothing runs on a GPU here: the null backend is installed and the commands are only recorded.

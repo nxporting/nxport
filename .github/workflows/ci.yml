@@ -1,5 +1,5 @@
 # Pushes and pull requests to main: builds and tests in debug, with cargo's output cached. No game files are involved:
-# the tests make their own data, and those needing a dump or a capture are macOS's nxport-cli GPU tests, left out.
+# the tests make their own data, and those needing a dump or a capture are macOS's nxport-builder GPU tests, left out.
 name: CI
 
 on:
@@ -44,7 +44,7 @@ jobs:
         run: cargo test --workspace --locked --lib --bins
 
   # The engine and the crates without Apple engines of their own. nxport-build's build script compiles the macOS and iOS
-  # engines in release with LTO, so nxport-build, nxport-builder and nxport-cli build only in the release workflow.
+  # engines in release with LTO, so nxport-build and nxport-builder build only in the release workflow.
   macos:
     runs-on: macos-15
     timeout-minutes: 60

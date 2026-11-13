@@ -1,4 +1,4 @@
-// crates/cli/src/batch_kernels.rs
+// crates/build/src/batch_kernels.rs
 //! Batched variants of translated stages: TotK draws many runs of
 //! consecutive draws that differ only in their uniform buffers (413 occlusion-style boxes per Hateno frame, each with its
 //! own 256-byte block; terrain tiles; shadow casters). The engine draws such a run as one instanced draw of the stage's
