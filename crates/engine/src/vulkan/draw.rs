@@ -669,6 +669,7 @@ impl Ctx {
                             p
                         }
                         crate::vulkan::async_pipe::AsyncPipe::Pending => {
+                            crate::gpu::pipeline_list::draw_skipped_compiling();
                             return None;
                         }
                         crate::vulkan::async_pipe::AsyncPipe::Failed => {

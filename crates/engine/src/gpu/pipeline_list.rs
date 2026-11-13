@@ -284,3 +284,41 @@ fn request(method: &str, url: &str, body: Option<&[u8]>, if_none_match: Option<&
     let etag = resp.valueForHTTPHeaderField(&NSString::from_str("ETag")).map(|t| t.to_string());
     Ok(Response { status: resp.statusCode(), body: data.map(|d| d.to_vec()).unwrap_or_default(), etag })
 }
+
+// What the shader progress bar shows (host/perf_stats.rs draw_shader_progress), the same on every backend: the listed
+// pipelines handed to the backend and done, and whether the frame just presented skipped draws because their pipeline
+// was still compiling (the picture is then missing parts, or black at the start).
+static LISTED_TOTAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LISTED_DONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SKIPPED_DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The backend took `n` more listed pipelines to make.
+pub fn listed_queued(n: usize) {
+    LISTED_TOTAL.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A listed pipeline left the list before it was made (a draw now waits for it; it is made as a draw's).
+pub fn listed_unqueued() {
+    LISTED_TOTAL.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The backend finished one listed pipeline (made, failed, or found already made).
+pub fn listed_done() {
+    LISTED_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A draw was skipped because its pipeline is still compiling (asynchronous shader compilation).
+pub fn draw_skipped_compiling() {
+    SKIPPED_DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// At a present: whether the frame skipped draws for compiling pipelines (the count starts again), and the listed
+/// pipelines (done, total) when some are still to make. Some while the picture waits on shaders.
+pub fn take_frame_progress() -> Option<Option<(usize, usize)>> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if SKIPPED_DRAWS.swap(0, Relaxed) == 0 {
+        return None;
+    }
+    let (done, total) = (LISTED_DONE.load(Relaxed), LISTED_TOTAL.load(Relaxed));
+    Some((done < total).then_some((done, total)))
+}

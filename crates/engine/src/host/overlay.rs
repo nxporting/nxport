@@ -94,10 +94,10 @@ pub fn toggle_async_shaders() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// macOS ImGui Overlay Renderer
+// The overlays on Metal (macOS and iOS): the performance window and the shader progress bar, drawn with Dear ImGui
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod render_impl {
     use super::*;
     use std::cell::RefCell;
@@ -120,7 +120,10 @@ mod render_impl {
         cb: &ProtocolObject<dyn MTLCommandBuffer>,
         target: &ProtocolObject<dyn MTLTexture>,
     ) {
-        if !is_overlay_enabled() {
+        // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
+        let progress = crate::gpu::pipeline_list::take_frame_progress();
+        let perf = is_overlay_enabled();
+        if !perf && progress.is_none() {
             return;
         }
 
@@ -166,7 +169,12 @@ mod render_impl {
             let frame = state.ctx.begin_frame();
             {
                 let ui = frame.ui();
-                draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1]);
+                if perf {
+                    draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1]);
+                }
+                if let Some(listed) = progress {
+                    crate::perf_stats::draw_shader_progress(ui, w, h, listed);
+                }
             }
 
             let pending = frame.render(state.renderer.consumer());
@@ -175,10 +183,10 @@ mod render_impl {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use render_impl::render;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub fn render(
     _device: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>,
     _cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
