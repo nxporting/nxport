@@ -22,6 +22,8 @@ iOS Metal.
   must hold exactly the patches the iOS engine makes at start (41d5940).
 - Patched code holds no absolute address; per-run values go through aot's literal pool (41d5940, test e5e1e7d).
 - Two checkouts never share a cargo target dir (stale build-script output; nx_native goes missing).
+- Before pushing, type-check the other host: b1f95b4 used pthread_getname_np and main stopped building on Windows
+  (75ca4fc). From Windows: cargo check --target aarch64-apple-darwin with zig cc as the C compiler.
 
 ## Gaps
 
@@ -40,8 +42,9 @@ iOS Metal.
    (needs a Mac run).
 4. **The menu tree is declared twice** (host/display.rs for AppKit, host/menu_win.rs for Win32) though state and
    commands are shared (host/menu.rs). Already drifted: "Reset Controls to Defaults" vs "Reset to Defaults", Controls
-   a window on Mac and a submenu on Windows. Fix: declare the tree once in menu.rs as data, both hosts walk it.
-   win-worker (Win32 side runnable here, AppKit side type-checked; mac-worker runs it).
+   a window on Mac and a submenu on Windows. **Done, c5e0bc2 (win-worker):** menu::bar() is the tree as data; both hosts
+   walk it and keep only their leaves (shortcuts by id, Controls as a window or a submenu, the Mac's Cmd-, item).
+   Type-checked both hosts; mac-worker to run the AppKit menus.
 5. **The .ipa built on Windows has no compiled shaders** (Apple's Metal compiler is Mac-only): source pack plus the
    long-press precompile planned (TODO.md); Apple's Metal Developer Tools for Windows when installed. win-worker.
 6. **The unified iOS step list has not run on a Mac** (1496107 on the branch): mac-worker asked to build an .ipa from it.
