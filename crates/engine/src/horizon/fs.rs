@@ -1656,12 +1656,16 @@ pub unsafe extern "C" fn hle_nn_fs_WriteFile(
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_fs_FlushFile(handle: u64) -> i32 {
-    let files = OPEN_FILES.lock().unwrap();
-    if let Some(Some(OpenFile {
-        data: FileData::Fd(f),
-        ..
-    })) = files.get((handle.wrapping_sub(1)) as usize)
-    {
+    // Synced through a second handle to the same file, outside OPEN_FILES: a sync waits on the disk (tens of
+    // milliseconds), and under the lock every other file call of the game waited with it (reads of game data included).
+    let file = {
+        let files = OPEN_FILES.lock().unwrap();
+        match files.get((handle.wrapping_sub(1)) as usize) {
+            Some(Some(OpenFile { data: FileData::Fd(f), .. })) => f.try_clone().ok(),
+            _ => None,
+        }
+    };
+    if let Some(f) = file {
         let _ = f.sync_all();
     }
     0
