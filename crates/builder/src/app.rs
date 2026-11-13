@@ -190,10 +190,7 @@ impl Target {
             Target::MacApp => true,
             // The Metal shader compiler is Apple's: on Windows the iOS app translates shaders as the game loads them.
             Target::Ipa => cfg!(target_os = "macos"),
-            #[cfg(windows)]
             Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
-            #[cfg(not(windows))]
-            Target::WindowsApp => false,
         }
     }
 }
@@ -998,14 +995,18 @@ impl Builder {
             job: job.clone(),
         };
         let mut steps: Vec<Step> = Vec::new();
-        #[cfg(target_os = "macos")]
-        let result = crate::apple::steps(req, &mut steps);
-        #[cfg(windows)]
-        let result = crate::windows::steps(req, &mut steps);
-        #[cfg(not(any(target_os = "macos", windows)))]
-        let result = {
-            let _ = req;
-            Arc::new(Mutex::new(None))
+        // The Windows app's steps are the same on every host; the others are the host's.
+        let result = if req.target == Target::WindowsApp || cfg!(windows) {
+            crate::windows::steps(req, &mut steps)
+        } else {
+            #[cfg(target_os = "macos")]
+            let result = crate::apple::steps(req, &mut steps);
+            #[cfg(not(target_os = "macos"))]
+            let result = {
+                let _ = req;
+                Arc::new(Mutex::new(None))
+            };
+            result
         };
 
         job.lock().unwrap().steps = steps.len();
@@ -1294,12 +1295,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         e.exit()
     });
     let Args { command, dump, snapshot, expand, height, build, target, preset, out, mods, worker } = args;
-    #[cfg(windows)]
     if let Some(file) = worker {
         return crate::windows::worker(&file).map_err(Into::into);
     }
-    #[cfg(not(windows))]
-    let _ = worker;
     #[cfg(windows)]
     attach_console();
     if let Some(command) = command {

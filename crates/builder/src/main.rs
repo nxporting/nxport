@@ -11,7 +11,7 @@ mod log;
 mod window;
 #[cfg(windows)]
 mod window_sdl;
-#[cfg(windows)]
+// The Windows app's steps (on any host) and the Windows host's .ipa steps.
 mod windows;
 
 fn main() -> std::process::ExitCode {

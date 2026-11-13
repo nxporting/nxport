@@ -14,10 +14,11 @@ use std::sync::{Arc, Mutex};
 
 use nxport::settings::SettingsPatch;
 
-use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step, Target};
+use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step};
 
-/// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile).
-pub const PRECOMPILES_SHADERS: bool = true;
+/// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile), where Vulkan runs: on Windows.
+/// Built elsewhere, the app translates and compiles shaders as the game loads them.
+pub const PRECOMPILES_SHADERS: bool = cfg!(windows);
 
 /// Sets the running step's sub-step to `done` of `total`, which is that share of the step.
 fn progress(job: &Mutex<Job>, sub: String, done: usize, total: usize) {
@@ -25,7 +26,8 @@ fn progress(job: &Mutex<Job>, sub: String, done: usize, total: usize) {
 }
 
 pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
-    if r.target == Target::Ipa {
+    #[cfg(windows)]
+    if r.target == crate::app::Target::Ipa {
         return ipa_steps(r, steps);
     }
     let Request { name, title_id, work, dump, mods, out_dir, edits, prebuild, bundle_game, job, .. } = r;
@@ -249,6 +251,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
 
 /// The iOS target: the engine for iOS from this checkout, then the app in a worker (the guest image needs a process of
 /// its own). Apple's Metal compiler being Mac-only, the app has no shader cache: it translates as the game loads.
+#[cfg(windows)]
 fn ipa_steps(r: Request, steps: &mut Vec<Step>) -> Output {
     let Request { name, work, dump, mods, out_dir, edits, bundle_game, entitlements, bundle_id, job, .. } = r;
     let toolchains = crate::app::data_dir().join("toolchains");
