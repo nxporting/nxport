@@ -134,26 +134,59 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The macOS archive gets the Windows builder as windows/nxport.exe: with it a Mac makes the Windows app (the engine the
+  # app runs, from the same commit as the code it lifts; nxport_build::winapp::engine). On every run, so a dry run's
+  # macos-with-windows artifact is what a release would publish.
+  macos-with-windows:
+    needs: [windows, macos]
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.macos.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '{windows,macos}'
+          path: in
+          merge-multiple: true
+      - name: Add the Windows engine
+        run: |
+          mac=$(ls in/*-macos-arm64.tar.gz)
+          root=$(basename "$mac" -macos-arm64.tar.gz)
+          stage="$RUNNER_TEMP/mac"
+          mkdir -p "$stage" dist
+          tar -xzf "$mac" -C "$stage"
+          unzip -q -j in/*-windows-x86_64.zip "$root/nxport-builder.exe" -d "$RUNNER_TEMP/win"
+          mkdir -p "$stage/$root/windows"
+          cp "$RUNNER_TEMP/win/nxport-builder.exe" "$stage/$root/windows/nxport.exe"
+          printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt ios/nxport nxport nxport-builder windows/nxport.exe \
+            | LC_ALL=C sort > "$RUNNER_TEMP/expected"
+          (cd "$stage/$root" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+          tar -czf "dist/$(basename "$mac")" -C "$stage" "$root"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-with-windows
+          path: dist/*
+          if-no-files-found: error
+
   # Windows is required; a macOS failure leaves its archive out and says so, as nobody here can build for a Mac to fix
   # it before a release. This is the only job with write access, and it runs no third-party code.
   publish:
-    needs: [windows, macos]
+    needs: [windows, macos, macos-with-windows]
     if: ${{ !cancelled() && github.ref_type == 'tag' && needs.windows.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # The two archives only (the symbols stay with the run).
+      # The two archives only (the symbols stay with the run): Windows's, and macOS's with the Windows engine added.
       - uses: actions/download-artifact@v8
         with:
-          pattern: '{windows,macos}'
+          pattern: '{windows,macos-with-windows}'
           path: dist
           merge-multiple: true
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          MACOS_RESULT: ${{ needs.macos.result }}
+          MACOS_RESULT: ${{ needs.macos-with-windows.result }}
         run: |
           cd dist
           sha256sum -- * > SHA256SUMS.txt
