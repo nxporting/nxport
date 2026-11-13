@@ -37,18 +37,20 @@ and update this file when you finish or drop it.
   -fprofile-generate plus a profile runtime it builds), so training needs no separate LLVM?
   **Done the same day (win-worker): 1.0.0 trained, kit rebuilt.** Correction first: nothing was ever published (the builder
   found no profile online for 1.0.0 or 1.1.2), and published profiles are named by main's build id alone; functions
-  changed later are built without it, so a profile stays useful across lifter changes. New kit, nxport-buildpgo-kit:
+  changed later are built without it, so a profile stays useful across lifter changes. New kit, nxport-build/pgo-kit:
   prof.a = compiler-rt 22.1.8 lib/profile (13 C files + the .cpp, sources beside it) compiled with zig 0.17.1
   (`zig cc -O2 -c -Iinclude -DCOMPILER_RT_HAS_ATOMICS=1`, `zig ar rcs`); llvm-profdata from the official LLVM 22.1.8
-  Windows package at nxport-buildlvm22 (LLVM 23's refuses raw version 10). Steps: `nxport-builder lift-game --out c
-  <dump>`; `compile-guest --cc "<zig> cc -fprofile-generate -mllvm -enable-name-compression=false" --out appguest.dll
+  Windows package at nxport-build/llvm22 (LLVM 23's refuses raw version 10). Steps: `nxport-builder lift-game --out c
+  <dump>`; `compile-guest --cc "<zig> cc -fprofile-generate -mllvm -enable-name-compression=false" --out app/guest.dll
   c` (objects compile; the link fails on the runtime, as compile cannot take a library); then link by hand: `<zig> cc
-  -fprofile-generate -mllvm -enable-name-compression=false -shared -o appguest.dll @c/obj/link.rsp prof.a`; app folder =
+  -fprofile-generate -mllvm -enable-name-compression=false -shared -o app/guest.dll @c/obj/link.rsp prof.a`; app folder =
   that dll + modules.txt + the same commit's nxport.exe + SDL3.dll + settings; runs with LLVM_PROFILE_FILE=...un-%p.profraw
   (written at exit; 90 MB each); `llvm-profdata merge -o <main id>.profdata raw/*`. TotK 1.0.0 (main
   082CE09B06E33A12...): 3 runs at the user's save (5200, 9000, 9000 frames), every function matched, A/B 3 valid pairs
-  100.2 / 110.5 / 102.4 against 95.9 / 98.2 / 93.5 fps (~7%). Ready to publish: pgo-kitprofiles<id>.profdata.gz (16 MB),
-  the user's call. 1.1.2: train after mac-worker's commits are pushed (same steps, dump totk-upddump).
+  100.2 / 110.5 / 102.4 against 95.9 / 98.2 / 93.5 fps (~7%). Ready to publish: pgo-kit/profiles/<id>.profdata.gz (16 MB),
+  the user's call. **1.1.2 trained too** (main 9A10ED9435C06733..., same steps and runs): every function matched, A/B 3
+  valid pairs 108.5 / 99.8 / 109.0 against 99.0 / 98.2 / 97.5 fps (~10%); mac-worker's 2ccaf73 leaves its 3 changed
+  files' functions unprofiled, the rest still matches. Both in pgo-kit/profiles, gzipped, named as the builder fetches.
 
 - **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
   28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
