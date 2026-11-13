@@ -13,6 +13,9 @@ pub mod extract_shaders;
 // The Apple packaging (app bundles, signed Mach-O images, Metal shader caches through xcrun) runs on macOS hosts.
 #[cfg(any(target_os = "macos", windows))]
 pub mod ipa;
+/// Apple bundles zipped with their Unix modes (the .ipa; the macOS app packed on Windows).
+#[cfg(any(target_os = "macos", windows))]
+mod bundle_zip;
 pub mod adhoc_sign;
 pub mod lift;
 pub mod macho;
