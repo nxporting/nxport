@@ -904,7 +904,7 @@ fn parallel_progress<T: Sync, R: Send>(
     let results: Mutex<Vec<Option<R>>> = Mutex::new((0..total).map(|_| None).collect());
     std::thread::scope(|s| {
         for _ in 0..jobs.max(1) {
-            s.spawn(|| loop {
+            let work = || loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if i >= total {
                     break;
@@ -915,7 +915,8 @@ fn parallel_progress<T: Sync, R: Send>(
                 if let Some(cb) = on_progress {
                     cb(completed, total);
                 }
-            });
+            };
+            std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(s, work).expect("a shader thread");
         }
     });
     results.into_inner().unwrap().into_iter().map(|r| r.unwrap()).collect()
