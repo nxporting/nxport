@@ -1173,6 +1173,17 @@ fn game_sections<'a>(s: &'a mut Settings, game: &nxport::profile::GameProfile) -
 /// The builder: turns a game dump into an app (in its window, or with --build), or runs one of its steps (a command).
 // The dump is a positional the commands' names could be taken for: a word that names a command is the command (a dump
 // folder of that name is given as a path, ./shaders), and the builder's own options are refused with a command.
+/// A --target value, by the names presets use for targets (windows, mac, ios).
+fn parse_target(s: &str) -> Result<Target, String> {
+    let t: Target = serde::de::Deserialize::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(s))
+        .map_err(|_| format!("{s}: not a target (windows, mac or ios)"))?;
+    if Target::ALL.contains(&t) {
+        Ok(t)
+    } else {
+        Err(format!("{s}: not made on this host (here: {})", Target::ALL.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")))
+    }
+}
+
 #[derive(clap::Parser)]
 #[command(name = "nxport-builder", version, args_conflicts_with_subcommands = true)]
 struct Args {
@@ -1193,6 +1204,9 @@ struct Args {
     /// game (or --preset's), printing the progress
     #[arg(long, requires = "dump")]
     build: bool,
+    /// With --build: what to make: windows, mac or ios (the app this host makes first when not given)
+    #[arg(long, requires = "build", value_parser = parse_target)]
+    target: Option<Target>,
     /// With --build: one of the game's presets
     #[arg(long, requires = "build")]
     preset: Option<String>,
@@ -1209,13 +1223,21 @@ struct Args {
 
 impl Builder {
     /// Runs a build as the Build button starts it, waiting for it and printing where it is.
-    fn build_now(&mut self, preset: Option<&str>, mods: Option<PathBuf>, out: Option<PathBuf>) -> Result<PathBuf, String> {
+    fn build_now(&mut self, target: Option<Target>, preset: Option<&str>, mods: Option<PathBuf>, out: Option<PathBuf>) -> Result<PathBuf, String> {
+        // The target first, as picking it in the window: its remembered mods and settings come with it.
+        if let Some(t) = target.filter(|&t| t != self.target) {
+            self.set_target(t);
+        }
         if let Some(name) = preset {
             let p = self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(name)).cloned();
             let p = p.ok_or_else(|| format!("no preset {name} for this game"))?;
             self.select_preset(&p.name, &p.path);
             if let Some(e) = self.message.take() {
                 return Err(e);
+            }
+            // A preset made for another target than the one asked for: say so rather than build either.
+            if let Some(t) = target.filter(|&t| t != self.target) {
+                return Err(format!("preset {name} is for {}, not {}", self.target.label(), t.label()));
             }
         }
         // After the preset: changing target recalls what that target last used.
@@ -1266,7 +1288,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         attach_console();
         e.exit()
     });
-    let Args { command, dump, snapshot, expand, height, build, preset, out, mods, worker } = args;
+    let Args { command, dump, snapshot, expand, height, build, target, preset, out, mods, worker } = args;
     #[cfg(windows)]
     if let Some(file) = worker {
         return crate::windows::worker(&file).map_err(Into::into);
@@ -1281,7 +1303,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut b = Builder::new(dump);
     b.expand_all = expand;
     if build {
-        let app = b.build_now(preset.as_deref(), mods, out)?;
+        let app = b.build_now(target, preset.as_deref(), mods, out)?;
         println!("Built {}", app.display());
         return Ok(());
     }
@@ -1358,6 +1380,17 @@ mod tests {
         }
         // The builder's own options belong to the window and --build, not to a command.
         assert!(parse(&["--build", "dump", "ppm2png", "a.ppm", "a.png"]).is_err());
+    }
+
+    #[test]
+    fn build_takes_a_target_this_host_makes() {
+        let a = parse(&["dump", "--build", "--target", "ios"]).unwrap();
+        assert_eq!(a.target, Some(Target::Ipa));
+        assert!(parse(&["dump", "--build", "--target", "wii"]).is_err());
+        // Only with --build; and a target another host makes is refused here.
+        assert!(parse(&["dump", "--target", "ios"]).is_err());
+        let other = if cfg!(target_os = "macos") { "windows" } else { "mac" };
+        assert!(parse(&["dump", "--build", "--target", other]).is_err());
     }
 
     #[test]
