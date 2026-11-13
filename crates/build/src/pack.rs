@@ -217,7 +217,12 @@ pub fn zip_app(app: &Path) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // The engine build.rs built from this tool's own source, else one next to this tool (a release).
+    // The engine build.rs built from this tool's own source (on Windows, apple_engine::build), else one next to this tool
+    // (a release).
+    #[cfg(windows)]
+    if let Some(p) = crate::apple_engine::built_engine(crate::apple_engine::Os::MacOs).filter(|p| p.is_file()) {
+        return Ok(p);
+    }
     let candidates = [
         PathBuf::from(env!("NXPORT_ENGINE_MACOS")),
         std::env::current_exe()?.with_file_name("nxport"),

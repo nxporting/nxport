@@ -4,7 +4,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod apple;
 mod cli;
 #[cfg(any(target_os = "macos", windows))]
