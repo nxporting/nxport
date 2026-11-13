@@ -891,6 +891,9 @@ static DECODER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// A decoder's decoding side: held while it decodes or drains, and while its frames are queued (so they keep their order).
 struct Codec {
     scratch: Vec<u8>,
+    /// The destructor closed the media decoder (d_dtor, under this lock): a send that took its handle before then and
+    /// waited here must not use it.
+    closed: bool,
 }
 struct OutFrame {
     data: Vec<u8>,
@@ -950,7 +953,11 @@ unsafe fn codec_of(this: *mut usize) -> Option<std::sync::Arc<std::sync::Mutex<C
 unsafe extern "C" fn d_dtor(this: *mut usize) {
     // Freed only once no frame is decoding: its Codec lock first (lock order, see DECODER_LOCK).
     let codec = codec_of(this);
-    let _codec = codec.as_ref().map(|c| c.lock().unwrap_or_else(|e| e.into_inner()));
+    let mut codec = codec.as_ref().map(|c| c.lock().unwrap_or_else(|e| e.into_inner()));
+    // A send waiting for this lock with the handle in hand sees this and leaves it alone.
+    if let Some(c) = codec.as_mut() {
+        c.closed = true;
+    }
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if *this.add(1) != 0 {
         let d = Box::from_raw(*this.add(1) as *mut Decoder);
@@ -1249,6 +1256,9 @@ unsafe extern "C" fn d_send_input(
         (d.dec, d.codec.clone(), data, size, eos)
     };
     let mut codec = codec.lock().unwrap_or_else(|e| e.into_inner());
+    if codec.closed {
+        return NULL_DECODER;
+    }
     let (failed, received, done) = if handle != 0 {
         let failed = (media().md_send)(handle as *mut c_void, data.as_ptr(), size, pts, eos as c_int) < 0;
         let (received, done) = receive_all(handle, &mut codec);
@@ -1479,7 +1489,7 @@ unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
         eos_in: false,
         eos_out: false,
         started: false,
-        codec: std::sync::Arc::new(std::sync::Mutex::new(Codec { scratch: vec![0u8; 1 << 20] })),
+        codec: std::sync::Arc::new(std::sync::Mutex::new(Codec { scratch: vec![0u8; 1 << 20], closed: false })),
         n_in: 0,
         n_out: 0,
         n_empty: 0,
