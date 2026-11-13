@@ -8,6 +8,14 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **Release blocker: TotK's hosted PGO profiles no longer match (2026-11-13 night).** Profiles are keyed
+  <main build id>-<lift::lifted_hash> (hash of the lifted C). The night's changes alter the lifted C for TotK 1.0.0 and
+  1.1.2: the equipment-cooldown patch (dcddb9e, game code patched before lifting), the lifter's yield/wfe pause
+  (63306e6), and the high-fps gameplay fixes in progress. Without a matching profile a Windows build loses PGO (6-12% a
+  frame, and cold code compiled for size). After the night's lifter-output changes are all in: retrain both versions'
+  profiles (the play-folder PGO procedure, "PGO in the play folder" below) and publish them where the builder fetches
+  them. Publishing is outward-facing: the user's call (left for the morning).
+
 - **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
   28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
   Windows PC (scratch decode loop, release): DmT_OP_GanonWakeUp_PreRender.webm, 1920x1080 30 fps, 6421 frames at 57.1
