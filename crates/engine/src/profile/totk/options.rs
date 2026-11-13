@@ -15,6 +15,10 @@ crate::settings::group! {
         /// Variable frame rate: game time follows the real time each frame took, so the game plays at the right speed at
         /// any frame rate (off: the console's fixed timing, held to 30 or 60 fps)
         dynamic_fps: bool = true,
+        /// Workaround: the game's placement thread starts each job only after the next frame is shown. Without it, it
+        /// can recycle object instances while the frame being built still draws with them (a cliff flashing in front of
+        /// Hateno for one frame when gliding toward it)
+        placement_after_present: bool = true,
         /// Experimental: with mouse look on, the mouse turns the camera and the bow's aim by exact angles (into the game's
         /// own camera code) instead of moving the right stick. Can be switched while the game runs
         exact_mouse_aim: bool = false,
