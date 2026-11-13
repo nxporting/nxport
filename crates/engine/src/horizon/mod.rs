@@ -4,6 +4,7 @@ pub mod audio;
 #[cfg(nx_native)]
 pub mod cores;
 pub mod fs;
+pub mod heap_layout;
 pub mod hle;
 pub mod mii;
 pub mod sdk;
