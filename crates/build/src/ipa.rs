@@ -288,7 +288,9 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     write(&app.join("Info.plist"), &app_plist(&name, &bundle_id, icons, &aspect))?;
     mkdir(&app.join("Settings.bundle/en.lproj"))?;
     write(&app.join("Settings.bundle/en.lproj/Root.strings"), "")?;
-    write(&app.join("Settings.bundle/Root.plist"), include_str!("ipa_files/Settings.plist"))?;
+    // The Settings app's page: the switches every game has, then the running game's own (host/ios_env.rs reads them).
+    let game_settings = if id.profile.is_some_and(|p| p.is_totk()) { include_str!("ipa_files/SettingsTotK.plist") } else { "" };
+    write(&app.join("Settings.bundle/Root.plist"), &include_str!("ipa_files/Settings.plist").replace("<!-- game -->", game_settings.trim_start()))?;
 
     log(IpaBuildPhase::SigningApp);
     macho::sign(&fw, None)?;

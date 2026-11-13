@@ -1,0 +1,26 @@
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Tears of the Kingdom</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Variable Frame Rate</string>
+            <key>Key</key>
+            <string>totk_dynamic_fps</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Dynamic Aspect Ratio</string>
+            <key>Key</key>
+            <string>totk_dynamic_aspect</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
