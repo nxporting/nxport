@@ -36,6 +36,10 @@ and update this file when you finish or drop it.
   the shader bar is gone? Candidates: hardware VP9 through VideoToolbox (check that iOS lets apps decode VP9 in
   hardware, and which devices), decoding ahead of the presentation time (helps spikes, not a sustained deficit).
   Measure on the phone before choosing (the log has the movie's timing if the HLE logs it; else add that).
+  **QoS ruled out on a Mac (mac-worker, 2026-11-13):** a decode loop of DmT_OP_GanonWakeUp (1080p30, M4 idle) takes
+  7.8 ms a frame (p95 15.2, max ~18) at every QoS of the calling thread, even BACKGROUND. On the phone the suspect is
+  contention (the first movies play while the pipeline list compiles) and fewer, slower cores: needs on-device numbers
+  (--log-movie: empty acquire attempts, decode ms per frame).
   **Researched 2026-11-12 (subagent, primary sources):** VideoToolbox VP9 is not usable by a sideloaded iOS app:
   VTIsHardwareDecodeSupported(VP9) is false for third-party apps (Apple forums 664770, 722933: iPhone 11 Pro, 13, 15
   Pro); Safari gets it through the private com.apple.developer.coremedia.allow-alternate-video-decoder-selection
