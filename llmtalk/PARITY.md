@@ -36,6 +36,15 @@ iOS Metal.
    the Windows builder. Not yet run on a Mac: the zip the Windows builder makes needs a Mac to open it.
 2. **Mac host cannot make the Windows app.** Missing: the lift on a Mac host (lift.rs needs the engine's nx_runtime
    loader there), zig cc targeting x86_64-windows from macOS, the Windows engine exe cross-built. Unclaimed.
+   **Started 2026-11-13 (win-worker, 8b18693):** zig for a macOS host compiling for Windows (zig::windows_cc), winapp
+   takes windows/nxport.exe beside the builder and carries SDL3.dll; both modules build on every host. Left:
+   (1) lifting on a Mac must patch as Windows does: native_rewrites() is `cfg!(nx_native) || FOR_NATIVE`, so a Mac lift
+   gets the native rewrites (asked mac-worker to take the loader side; check: its lifted C hashes equal Windows');
+   (2) lift_overlay (code mods) opens the base guest.dll with Library::open to read its tables: off Windows that needs
+   the DLL's exports read from the file instead; (3) builder/src/windows.rs compiled on every host with the Vulkan
+   precompile (and the Windows-host .ipa steps) Windows-only, the engine hash in the lift's inputs taken from
+   winapp::engine(), and WindowsApp added to the Mac's Target::ALL; (4) release.yml: the macOS archive gets
+   windows/nxport.exe (the Windows job's builder; on branch ios-shader-cache-windows, which already reworks that file).
 3. **TotK exact mouse aim is Windows-only, but the Mac menu shows it.** camera_angles' install_decision and
    install_aim (camera-input test, bow aim) are compiled only into the lifted engine; native gets the yaw hook only, so
    the item does little on a Mac. They call into the engine from the middle of a guest function, which a lifted host
