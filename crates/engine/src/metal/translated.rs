@@ -3600,6 +3600,49 @@ impl Gfx {
     /// copy the attachment's root texture, and bind the copy (a matching view of it); the next pass loads the targets.
     /// Draws after the first one in an epoch read the same copy, as the texture cache on the Switch would until the next
     /// barrier. --no-fb-snapshot disables.
+    /// The draw's fragment texture bindings that sample its own colour targets, as (Metal texture binding, colour
+    /// index), when every texture it samples from its pass is such a binding that can be read from the tile instead
+    /// (tile_feedback.rs: the same level, layer, format and channels, the viewport over the whole target). None when
+    /// it samples none, or any other way (a depth target, a vertex stage, another view).
+    unsafe fn tile_map(
+        &self,
+        st: &mut State,
+        colors: &[(usize, Tex, RtRef)],
+        depth: Option<&Tex>,
+        resolved: &ResolvedTex,
+    ) -> Option<Vec<(u32, u32)>> {
+        let mut memo_root = |t: &Tex| -> u64 {
+            let k = Retained::as_ptr(t) as *const () as usize;
+            if let Some(&(_, r)) = st.root_memo.get(&k) {
+                return r;
+            }
+            let r = root_id(t);
+            st.root_memo.insert(k, (t.clone(), r));
+            r
+        };
+        let color_roots: smallvec::SmallVec<[u64; 8]> = colors.iter().map(|(_, t, _)| memo_root(t)).collect();
+        let depth_root = depth.map(|t| memo_root(t));
+        let mut map = Vec::new();
+        for (stage, binding, t, _, root) in resolved.iter() {
+            let Some(t) = t else { continue };
+            let root = root.unwrap_or_else(|| memo_root(t));
+            if depth_root == Some(root) {
+                return None;
+            }
+            let Some(i) = color_roots.iter().position(|&r| r == root) else { continue };
+            let (k, a, rt) = &colors[i];
+            if *stage != STAGE_FRAGMENT || !super::tile_feedback::same_pixels(t, a, rt.level as usize, rt.layer as usize) {
+                return None;
+            }
+            let (w, h) = ((a.width() >> rt.level) as i32, (a.height() >> rt.level) as i32);
+            if st.viewport.is_some_and(|v| v != (0, 0, w, h)) {
+                return None;
+            }
+            map.push((*binding, *k as u32));
+        }
+        (!map.is_empty()).then_some(map)
+    }
+
     unsafe fn feedback_snapshots(
         &self,
         st: &mut State,
@@ -4931,7 +4974,24 @@ impl Gfx {
             ];
             st.tex_reuse = Some((key, resolved.clone()));
         }
-        if st.enc.is_some() && st.enc_fb_epoch != st.fb_epoch {
+        // A draw whose samples of its pass's colour targets are all at its own pixel reads them from the tile with a
+        // variant of its fragment stage (tile_feedback.rs): its pass stays open.
+        let mut fs = fs;
+        let mut tile = false;
+        if super::tile_feedback::active() && st.enc.is_some() && st.enc_fb_epoch != st.fb_epoch && !y_negate() {
+            if let (Some(f), Some(fc)) = (fs, fs_code) {
+                let depth = depth_tex.as_ref().map(|(t, _)| t);
+                if let Some(map) = self.tile_map(st, &color_texs, depth, &resolved) {
+                    let v = super::tile_feedback::variant(vs, (vs_code.data, vs_code.control), f, (fc.data, fc.control), &map);
+                    if let Some(v) = v {
+                        fs = Some(v);
+                        tile = true;
+                        super::tile_feedback::STATS[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        if !tile && st.enc.is_some() && st.enc_fb_epoch != st.fb_epoch {
             self.feedback_snapshots(
                 st,
                 &color_texs,

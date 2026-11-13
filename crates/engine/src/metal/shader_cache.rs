@@ -560,21 +560,26 @@ fn stage_kind_str(k: StageKind) -> &'static str {
     }
 }
 
-/// Translates and compiles a missing guest shader stage synchronously into a Metal library.
-pub unsafe fn lookup_or_translate_dynamic(
-    data: u64,
-    control: u64,
-    stage_index: usize,
-) -> Option<&'static CachedStage> {
-    if data < 0x1_0000_0000 || !crate::settings::get().graphics.dynamic_shaders {
-        return None;
-    }
-    if let Some(stages) = DYNAMIC_STAGES.get() {
-        if let Some(&st) = stages.lock().unwrap().get(&data) {
-            return Some(st);
-        }
-    }
+/// A guest stage translated at run time as the cache build translates it: its stage, manifest, bytes of stage data up to
+/// the end of its code, full hash, entry name `s_<full>` and specialized MSL (with attributes, colours and varyings).
+pub(super) struct RuntimeStage {
+    pub stage: sass2spv::ShaderStage,
+    pub info: sass2spv::manifest::ShaderManifest,
+    pub compute_fields: Option<[i32; 4]>,
+    /// The stage's guest code (readable bytes from its start, up to 64 KiB).
+    pub code_slice: &'static [u8],
+    pub total: usize,
+    pub full: u64,
+    pub entry: String,
+    pub specialized: String,
+    pub attrs: Vec<u32>,
+    pub colors: Vec<u32>,
+    pub varyings: Vec<u32>,
+}
 
+/// Translates the guest stage at `data` (control section `control`; `stage_index` 1 = fragment when its header does not
+/// say) to specialized MSL.
+pub(super) unsafe fn translate_runtime(data: u64, control: u64, stage_index: usize) -> Option<RuntimeStage> {
     let magic = *(data as *const u32);
     // Compute stages: TotK's carry a 0x12345679 preamble; older GLSLC output has none and is told apart by its control
     // section's workgroup size, as in the cache build.
@@ -661,6 +666,35 @@ pub unsafe fn lookup_or_translate_dynamic(
     };
     let full = fnv1a64(&code_slice[..total.min(code_slice.len())]);
 
+    let entry = format!("s_{full:016x}");
+    let msl_raw = msl.replace(sass2spv::MSL_ENTRY_PLACEHOLDER, &entry);
+    let (specialized, attrs, colors, varyings) = super::msl_specialize::specialize(&msl_raw);
+
+    Some(RuntimeStage { stage, info, compute_fields, code_slice, total, full, entry, specialized, attrs, colors, varyings })
+}
+
+/// Compiles a variant of a stage (metal/tile_feedback.rs) from MSL.
+pub(super) fn compile_variant(src: &str, entry: &str) -> Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLLibrary>>> {
+    compile_msl(src, entry)
+}
+
+/// Translates and compiles a missing guest shader stage synchronously into a Metal library.
+pub unsafe fn lookup_or_translate_dynamic(
+    data: u64,
+    control: u64,
+    stage_index: usize,
+) -> Option<&'static CachedStage> {
+    if data < 0x1_0000_0000 || !crate::settings::get().graphics.dynamic_shaders {
+        return None;
+    }
+    if let Some(stages) = DYNAMIC_STAGES.get() {
+        if let Some(&st) = stages.lock().unwrap().get(&data) {
+            return Some(st);
+        }
+    }
+
+    let RuntimeStage { stage, info, compute_fields, code_slice, total, full, entry, specialized, attrs, colors, varyings } =
+        translate_runtime(data, control, stage_index)?;
     if let Some(by_hash) = DYNAMIC_STAGES_BY_HASH.get() {
         if let Some(&existing) = by_hash.lock().unwrap().get(&full) {
             DYNAMIC_STAGES
@@ -671,10 +705,6 @@ pub unsafe fn lookup_or_translate_dynamic(
             return Some(existing);
         }
     }
-
-    let entry = format!("s_{full:016x}");
-    let msl_raw = msl.replace(sass2spv::MSL_ENTRY_PLACEHOLDER, &entry);
-    let (specialized, attrs, colors, varyings) = super::msl_specialize::specialize(&msl_raw);
 
     let lib = compile_msl(&specialized, &entry)?;
     super::translated::register_dynamic_library(&entry, lib);
