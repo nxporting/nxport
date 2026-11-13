@@ -8,6 +8,12 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **A debug builder overflows its stack translating shaders (seen 2026-11-13 by a win-worker subagent).** A debug
+  build of nxport-builder doing a macOS app's shader translation (25,218 stages, the Windows source-pack path) died
+  with "thread has overflowed its stack"; the release build does not. Not checked whether new, nor which stage or
+  thread: debug frames are larger, so a deep recursion in sass2spv (or a thread spawned with a small stack) is the
+  likely place. Release builds are unaffected; matters for debugging only.
+
 - **Release blocker: TotK's hosted PGO profiles no longer match (2026-11-13 night).** Profiles are keyed
   <main build id>-<lift::lifted_hash> (hash of the lifted C). The night's changes alter the lifted C for TotK 1.0.0 and
   1.1.2: the equipment-cooldown patch (dcddb9e, game code patched before lifting), the lifter's yield/wfe pause
