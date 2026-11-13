@@ -190,6 +190,8 @@ pub struct Ctx {
     /// The last two frames each render target (by storage address) was drawn in, the latest first: whether a pass's
     /// targets are drawn every frame (targets_recur).
     rt_frames: HashMap<usize, (u64, u64)>,
+    /// The frame rt_frames was last pruned in.
+    rt_frames_pruned: u64,
     writeback_rts: Vec<NvnTexture>,
     /// Candidates of presented frames, read by the next submit; that submit's reads (texture, level, copy, bytes) and
     /// the images whose guest bytes it rewrites (settled again once it completed).
@@ -706,6 +708,7 @@ impl Ctx {
             bc_pending: Vec::new(),
             rt_history: Default::default(),
             rt_frames: Default::default(),
+            rt_frames_pruned: 0,
             writeback_rts: Vec::new(),
             pending_rt_reads: Vec::new(),
             rt_reads: Vec::new(),
@@ -1628,8 +1631,11 @@ impl Ctx {
                 *e = (f, e.0);
             }
         }
-        if self.rt_frames.len() > 1 << 14 {
-            self.rt_frames.retain(|_, v| v.0 + 600 > f);
+        // Once a frame: targets_recur reads only this frame and the one before, so older entries go (a cap pruned on
+        // every pass cost ~5% of the frame once the game had cycled through more targets than it).
+        if self.rt_frames_pruned != f {
+            self.rt_frames_pruned = f;
+            self.rt_frames.retain(|_, v| v.0 + 1 >= f);
         }
         self.pass = Some(Pass {
             color_targets,
