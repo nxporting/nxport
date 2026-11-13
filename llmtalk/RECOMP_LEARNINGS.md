@@ -31,7 +31,7 @@ Status column: what nxport has, from a quick check of our code (verify before re
 | P9 | Re-record only changed dynamic states (752e15b); rebind only changed vertex streams a draw reads (7c5f88d); descriptor update templates and set reuse; recorder queue fields on separate cache lines (b578d26) | | Checked 2026-11-13: dynamic states, uniform buffers, textures and whole draw states are memoised already (vulkan/draw.rs). |
 | P10 | Windows host: no file I/O on game/render threads (small opens 11-40 ms); save Commit on its own thread (93-135 ms); vkGetPipelineCacheData off the pipeline lock (~60 ms per autosave); VMA blocks allocated ahead on a background thread (8-19 ms each) | windows-host.md, `vk_headroom.c` | Save flush off the file lock (7e8925c), pipeline cache saved on its own thread (03ca386); allocations ahead not done. |
 | P11 | MEM_WRITE_WATCH + GetWriteWatch for CPU-written pages (no faults); idle pool regions read-only | | We use page protection (`vulkan/guard.rs`): write watch could lower texture-cache cost. |
-| P12 | PGO, 6-12% a frame; retrain rules in `docs/pgo.md` (inline helper header changes invalidate a profile silently) | | We have PGO (`build/src/lift.rs`); read their rules. |
+| P12 | PGO, 6-12% a frame; retrain rules in `docs/pgo.md` (inline helper header changes invalidate a profile silently) | | We have PGO (`build/src/lift.rs`). Their silent-invalidation case is visible here: lift::compile counts clang's "(hash mismatch)" warnings and prints how many functions were built without the profile. 2026-11-13: profiles trained for TotK 1.0.0 (+7%) and 1.1.2 (+10%), kit and steps in TODO.md. |
 
 ## 2. TotK patches and game fixes (their sites are 1.2.1 / 1.4.3 main offsets: locate in 1.0.0 and 1.1.2)
 
