@@ -229,6 +229,19 @@ fn level_bh(p: &TextureParams, info: &FormatInfo, level: usize) -> usize {
     level_block_dims(hb0, 1, false, level + 1, info.block_h as u64, p.flags)[level].0 as usize
 }
 
+/// Level 0 of a block-linear 2D texture in bands: each row of blocks is one contiguous run of guest memory. Texel rows
+/// per band and bytes per band; None for linear textures.
+pub fn level0_bands(p: &TextureParams) -> Option<(usize, usize)> {
+    let info = format_info(p.format)?;
+    if linear_pitch(p, &info).is_some() {
+        return None;
+    }
+    let wb = (p.width.max(1) as u64).div_ceil(info.block_w as u64);
+    let pitch = align(wb * info.bytes as u64, 64) as usize;
+    let gob_rows = 8 * level_bh(p, &info, 0);
+    Some((gob_rows * info.block_h as usize, pitch * gob_rows))
+}
+
 pub fn sample_dims(samples: i32) -> (u32, u32) {
     match samples {
         2 => (2, 1),
