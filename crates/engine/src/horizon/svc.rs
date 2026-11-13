@@ -97,6 +97,16 @@ fn small_alias_region() -> (usize, usize) {
     })
 }
 
+/// The alias region as svcGetInfo reports it (AliasRegionAddress / Size): (start, size).
+pub fn alias_region_extents() -> (usize, usize) {
+    small_alias_region()
+}
+
+/// The ASLR region as svcGetInfo reports it (AslrRegionAddress / Size): (start, size).
+pub fn aslr_region_extents() -> (usize, usize) {
+    alias_region()
+}
+
 fn log_enabled() -> bool {
     static L: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *L.get_or_init(|| crate::settings::get().log.log_svc)
