@@ -5,11 +5,7 @@
 // control.nacp (control/ when the control NCA's RomFS is extracted into the dump). Logo/<title id>.png is a logo some
 // dumps carry.
 
-#[cfg(target_os = "macos")]
-use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process::Command;
 
 /// Where the dump's icon is, if it has one: the American English control icon first, then any language's, then a logo.
 pub fn source(dump: &Path, title_id: u64) -> Option<PathBuf> {
@@ -120,17 +116,6 @@ pub fn set_exe_icon(exe: &Path, ico: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn run(cmd: &mut Command) -> Result<(), String> {
-    let name = cmd.get_program().to_string_lossy().into_owned();
-    let out = cmd.output().map_err(|e| format!("{name}: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!("{name}: {}", String::from_utf8_lossy(&out.stderr).trim()))
-    }
-}
-
 /// Writes `src` (JPEG or PNG, told apart by its bytes: the control icon's name ends in .dat) scaled to `px` square
 /// pixels as the PNG `out`.
 pub fn scaled_png(src: &Path, px: u32, out: &Path) -> Result<(), String> {
@@ -155,22 +140,67 @@ mod tests {
         assert_eq!((png.width(), png.height()), (120, 120));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn icns_holds_every_size_as_png() {
+        let dir = std::env::temp_dir().join(format!("nxport-icns-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("icon_AmericanEnglish.dat");
+        image::RgbImage::from_pixel(256, 256, image::Rgb([30, 200, 30])).save_with_format(&src, image::ImageFormat::Jpeg).unwrap();
+        let out = dir.join("AppIcon.icns");
+        super::icns(&src, &out).unwrap();
+        let f = std::fs::read(&out).unwrap();
+        assert_eq!(&f[..4], b"icns");
+        assert_eq!(u32::from_be_bytes(f[4..8].try_into().unwrap()) as usize, f.len());
+        let (mut at, mut found) = (8, Vec::new());
+        while at < f.len() {
+            let len = u32::from_be_bytes(f[at + 4..at + 8].try_into().unwrap()) as usize;
+            let png = image::load_from_memory_with_format(&f[at + 8..at + len], image::ImageFormat::Png).unwrap();
+            found.push((String::from_utf8_lossy(&f[at..at + 4]).into_owned(), png.width(), png.height()));
+            at += len;
+        }
+        assert_eq!(at, f.len());
+        let want = [("icp4", 16), ("ic11", 32), ("icp5", 32), ("ic12", 64), ("ic07", 128), ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024)];
+        assert_eq!(found, want.iter().map(|(t, p)| (t.to_string(), *p, *p)).collect::<Vec<_>>());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
-/// Writes a macOS icon file (.icns) made from `src` to `out`.
-#[cfg(target_os = "macos")]
+/// `img` scaled to `px` square pixels, as PNG bytes.
+fn png_of(img: &image::DynamicImage, px: u32) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    img.resize_exact(px, px, image::imageops::FilterType::Lanczos3)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(png)
+}
+
+/// Writes a macOS icon file (.icns) made from `src` to `out`, on any host: the images iconutil makes from a full
+/// .iconset, each a PNG under its type code (16 to 1024 pixels, the @2x sizes included), after the file's header.
 pub fn icns(src: &Path, out: &Path) -> Result<(), String> {
-    let set = out.with_extension("iconset");
-    let _ = fs::remove_dir_all(&set);
-    fs::create_dir_all(&set).map_err(|e| format!("{}: {e}", set.display()))?;
-    for (px, name) in [
-        (16, "icon_16x16"), (32, "icon_16x16@2x"), (32, "icon_32x32"), (64, "icon_32x32@2x"),
-        (128, "icon_128x128"), (256, "icon_128x128@2x"), (256, "icon_256x256"), (512, "icon_256x256@2x"),
-        (512, "icon_512x512"), (1024, "icon_512x512@2x"), // iconutil requires every size
-    ] {
-        scaled_png(src, px, &set.join(format!("{name}.png")))?;
+    let bytes = std::fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("{}: {e}", src.display()))?;
+    const TYPES: [(&[u8; 4], u32); 10] = [
+        (b"icp4", 16),
+        (b"ic11", 32),
+        (b"icp5", 32),
+        (b"ic12", 64),
+        (b"ic07", 128),
+        (b"ic13", 256),
+        (b"ic08", 256),
+        (b"ic14", 512),
+        (b"ic09", 512),
+        (b"ic10", 1024),
+    ];
+    let mut body = Vec::new();
+    for (kind, px) in TYPES {
+        let png = png_of(&img, px)?;
+        body.extend_from_slice(kind);
+        body.extend_from_slice(&(png.len() as u32 + 8).to_be_bytes());
+        body.extend_from_slice(&png);
     }
-    let r = run(Command::new("/usr/bin/iconutil").args(["-c", "icns", "-o"]).arg(out).arg(&set));
-    let _ = fs::remove_dir_all(&set);
-    r
+    let mut file = b"icns".to_vec();
+    file.extend_from_slice(&(body.len() as u32 + 8).to_be_bytes());
+    file.extend_from_slice(&body);
+    std::fs::write(out, file).map_err(|e| format!("{}: {e}", out.display()))
 }
