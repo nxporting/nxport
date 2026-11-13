@@ -146,7 +146,7 @@ impl Target {
     #[cfg(target_os = "macos")]
     pub const ALL: &'static [Target] = &[Target::MacApp, Target::Ipa];
     #[cfg(windows)]
-    pub const ALL: &'static [Target] = &[Target::WindowsApp, Target::Ipa];
+    pub const ALL: &'static [Target] = &[Target::WindowsApp, Target::MacApp, Target::Ipa];
     #[cfg(not(any(target_os = "macos", windows)))]
     pub const ALL: &'static [Target] = &[];
 
@@ -159,7 +159,7 @@ impl Target {
             return None;
         }
         Some(match self {
-            Target::MacApp | Target::Ipa => "Builds on a macOS host: the Metal shader compiler, actool / iconutil and codesign.",
+            Target::MacApp | Target::Ipa => "Builds on a macOS host (Apple's Metal shader compiler and codesign), or on Windows (the engine built from source with LLVM).",
             Target::WindowsApp => "Builds on a Windows host: the Windows engine (nxport.exe) the app carries, and the lifted code's toolchain.",
         })
     }
@@ -187,10 +187,9 @@ impl Target {
     /// Whether the app's shaders can be translated when it is built (Windows: windows::PRECOMPILES_SHADERS).
     pub fn prebuilds_shaders(self) -> bool {
         match self {
-            Target::MacApp => true,
             // On a Mac as compiled metallibs; on Windows (no Metal compiler) as packed Metal source the app compiles as the
             // game first uses each stage, without translating it.
-            Target::Ipa => true,
+            Target::MacApp | Target::Ipa => true,
             #[cfg(windows)]
             Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
             #[cfg(not(windows))]
@@ -330,6 +329,8 @@ pub fn data_dir() -> PathBuf {
 fn default_out_dir(target: Target) -> String {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
     match target {
+        // On Windows the app's zip, to carry to the Mac.
+        Target::MacApp if cfg!(windows) => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
         Target::MacApp => home.map(|h| h.join("Applications").display().to_string()).unwrap_or_default(),
         Target::Ipa => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
         Target::WindowsApp => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
@@ -1009,16 +1010,15 @@ impl Builder {
             job: job.clone(),
         };
         let mut steps: Vec<Step> = Vec::new();
-        // The iOS app has one list of steps on every host (ios.rs); the host's own app its host's.
+        // The iOS and macOS apps have one list of steps on every host (ios.rs, apple.rs); the Windows app is Windows'.
         #[cfg(any(target_os = "macos", windows))]
-        let result = if req.target == Target::Ipa {
-            crate::ios::steps(req, &mut steps)
-        } else {
-            #[cfg(target_os = "macos")]
-            let r = crate::apple::steps(req, &mut steps);
+        let result = match req.target {
+            Target::Ipa => crate::ios::steps(req, &mut steps),
+            Target::MacApp => crate::apple::steps(req, &mut steps),
             #[cfg(windows)]
-            let r = crate::windows::steps(req, &mut steps);
-            r
+            Target::WindowsApp => crate::windows::steps(req, &mut steps),
+            #[cfg(not(windows))]
+            Target::WindowsApp => crate::apple::steps(req, &mut steps),
         };
         #[cfg(not(any(target_os = "macos", windows)))]
         let result = {

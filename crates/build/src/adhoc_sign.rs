@@ -1,6 +1,6 @@
-// Ad-hoc code signatures without Apple's tools, for building iOS apps on hosts that have no codesign: what
+// Ad-hoc code signatures without Apple's tools, for building iOS and macOS apps on hosts that have no codesign: what
 // `codesign -f -s -` writes into a Mach-O file, and a bundle's _CodeSignature/CodeResources. Sideloading tools replace
-// these with their own signatures; they exist so the app is well formed until then.
+// an iOS app's with their own signatures, so these only keep it well formed until then; a macOS app runs with them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -299,16 +299,19 @@ pub fn sign_path(path: &Path, entitlements: Option<&Path>) -> Result<(), String>
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let ent = entitlements.map(|e| fs::read_to_string(e).map_err(|x| err(e, x))).transpose()?;
     let (exe, identifier, info, res) = if path.is_dir() {
-        let info_path = path.join("Info.plist");
+        // A macOS bundle keeps everything in Contents/ and its executable in Contents/MacOS/; an iOS bundle is flat.
+        let (root, exe_dir) = if path.join("Contents/Info.plist").is_file() { (path.join("Contents"), "MacOS/") } else { (path.to_path_buf(), "") };
+        let info_path = root.join("Info.plist");
         let info = fs::read(&info_path).map_err(|e| err(&info_path, e))?;
         let text = String::from_utf8_lossy(&info);
         let exe = plist_string(&text, "CFBundleExecutable").ok_or("Info.plist has no CFBundleExecutable")?;
         let id = plist_string(&text, "CFBundleIdentifier").ok_or("Info.plist has no CFBundleIdentifier")?;
-        let resources = code_resources(path, &exe)?;
-        let dir = path.join("_CodeSignature");
+        let exe = format!("{exe_dir}{exe}");
+        let resources = code_resources(&root, &exe)?;
+        let dir = root.join("_CodeSignature");
         fs::create_dir_all(&dir).map_err(|e| err(&dir, e))?;
         fs::write(dir.join("CodeResources"), &resources).map_err(|e| err(&dir, e))?;
-        (path.join(exe), id, Some(sha256(&info)), Some(sha256(resources.as_bytes())))
+        (root.join(exe), id, Some(sha256(&info)), Some(sha256(resources.as_bytes())))
     } else {
         let id = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         (path.to_path_buf(), id, None, None)
@@ -408,6 +411,26 @@ mod tests {
         let mut d = sample();
         sign_macho(&mut d, &Inputs { identifier: "x", entitlements: None, info_plist: None, code_resources: None }).unwrap();
         assert_eq!(verify(&d), ("x".to_string(), 2));
+    }
+
+    #[test]
+    fn macos_bundle_is_sealed_from_contents() {
+        let app = std::env::temp_dir().join(format!("nxport-sign-{}.app", std::process::id()));
+        let _ = fs::remove_dir_all(&app);
+        let contents = app.join("Contents");
+        fs::create_dir_all(contents.join("MacOS")).unwrap();
+        fs::create_dir_all(contents.join("Resources")).unwrap();
+        let plist = "<plist><dict><key>CFBundleExecutable</key><string>nxport</string><key>CFBundleIdentifier</key><string>com.nxport.t</string></dict></plist>";
+        fs::write(contents.join("Info.plist"), plist).unwrap();
+        fs::write(contents.join("MacOS/nxport"), sample()).unwrap();
+        fs::write(contents.join("Resources/settings.toml"), "x").unwrap();
+        sign_path(&app, None).unwrap();
+        let res = fs::read_to_string(contents.join("_CodeSignature/CodeResources")).unwrap();
+        assert!(res.contains("<key>Resources/settings.toml</key>") && res.contains("<key>Info.plist</key>"));
+        assert!(!res.contains("MacOS/nxport"));
+        let d = fs::read(contents.join("MacOS/nxport")).unwrap();
+        assert_eq!(verify(&d), ("com.nxport.t".to_string(), 3));
+        let _ = fs::remove_dir_all(&app);
     }
 
     #[test]

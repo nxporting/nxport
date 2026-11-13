@@ -11,7 +11,7 @@ iOS Metal.
 
 |              | Windows app        | macOS app          | iOS .ipa                                       |
 |--------------|--------------------|--------------------|------------------------------------------------|
-| Windows host | yes (lifted, zig)  | **no**             | yes; shaders as Metal source (branch ios-shader-cache-windows) |
+| Windows host | yes (lifted, zig)  | built, not yet run on a Mac (branch parity1-macos-on-windows); a .zip | yes; shaders as Metal source (branch ios-shader-cache-windows) |
 | Mac host     | **no**             | yes                | yes; shaders as compiled metallibs             |
 
 ## Rules (from bugs that broke parity)
@@ -27,10 +27,12 @@ iOS Metal.
 
 ## Gaps
 
-1. **Windows host cannot make the macOS app.** Pieces that exist: the source pack (the Mac engine reads it as iOS does:
-   metal/shader_cache.rs source_set), adhoc_sign (Rust), the image crate for icons; missing: the macOS engine
-   cross-built from Windows (as ios_engine.rs does for iOS, aarch64-apple-darwin), .icns written without iconutil
-   (a simple container of PNGs), pack.rs off macOS. Unclaimed.
+1. **Windows host makes the macOS app: built, not yet run on a Mac** (branch parity1-macos-on-windows). One list of
+   steps in builder/src/apple.rs: on Windows the engine cross-built (build/src/apple_engine.rs, Os::MacOs: stub .tbd
+   libraries, ld64.lld, LC_BUILD_VERSION macos 11.0 sdk 12.0 so x18 is kept), shaders packed as Metal source (shared
+   with the .ipa), the bundle sealed by adhoc_sign (Contents/ layout) and zipped with Unix modes. Left: launch the zip's
+   app on a Mac (unzip, xattr -d com.apple.quarantine if downloaded, open); ship macos/nxport in the Windows release
+   archive (release.yml builds only the iOS engine; pack.rs finds a release engine only as nxport beside the builder).
 2. **Mac host cannot make the Windows app.** Missing: the lift on a Mac host (lift.rs needs the engine's nx_runtime
    loader there), zig cc targeting x86_64-windows from macOS, the Windows engine exe cross-built. Unclaimed.
 3. **TotK exact mouse aim is Windows-only, but the Mac menu shows it.** camera_angles' install_decision and
