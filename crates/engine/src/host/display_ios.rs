@@ -558,7 +558,12 @@ define_class!(
 
     impl AppDelegate {
         #[unsafe(method(application:didFinishLaunchingWithOptions:))]
-        fn did_finish_launching(&self, _app: &AnyObject, options: *mut AnyObject) -> bool {
+        fn did_finish_launching(&self, app: &AnyObject, options: *mut AnyObject) -> bool {
+            // Played with a controller, the screen is never touched: without this iOS dims and locks it after the
+            // auto-lock delay mid-game. Applies only while the app is in front.
+            unsafe {
+                let _: () = msg_send![app, setIdleTimerDisabled: true];
+            }
             if !options.is_null() {
                 unsafe {
                     let k = NSString::from_str("UIApplicationLaunchOptionsShortcutItemKey");
