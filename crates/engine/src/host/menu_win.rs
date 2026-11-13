@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicUsize, Ordering};
 
 use crate::host::input;
 use crate::host::live;
-use crate::host::menu::{self, id, LIMITS, SIZES, STRENGTHS, VOLUMES};
+use crate::host::menu::{self, id, LIMITS};
 
 #[link(name = "user32")]
 extern "system" {
@@ -67,95 +67,43 @@ unsafe fn sub(parent: *mut c_void, text: &str, fill: impl FnOnce(*mut c_void)) {
     AppendMenuW(parent, MF_POPUP, m as usize, wide(text).as_ptr());
 }
 
-pub fn attach(hwnd: usize) {
-    unsafe {
-        let bar = CreateMenu();
-        sub(bar, "nxport", |m| {
-            item(m, id::DATA_FOLDER, "Open Game Data Folder");
-            separator(m);
-            item(m, id::RESTART, "Restart");
-            item(m, id::QUIT, "Quit");
-        });
-        sub(bar, "System", |m| {
-            radio(m, id::DOCKED, "Docked (1080p)");
-            radio(m, id::HANDHELD, "Handheld (720p)");
-        });
-        sub(bar, "Display", |m| {
-            item(m, id::VSYNC, "VSync");
-            item(m, id::LOW_LATENCY, "Low Latency");
-            item(m, id::PERF_OVERLAY, "Performance Overlay");
-            sub(m, "Frame Rate Limit", |l| {
-                for fps in LIMITS {
-                    radio(l, id::LIMIT + fps as u16, &menu::limit_label(fps));
+/// The menus of menu::bar as Win32 popups; the shortcuts shown beside items are Windows' own (F11, F9).
+unsafe fn fill(menu_handle: *mut c_void, entries: &[menu::Entry]) {
+    for e in entries {
+        match e {
+            menu::Entry::Item { label, id, choice } => {
+                let text = match *id {
+                    id::FULL_SCREEN => format!("{label}\tF11"),
+                    id::CAPTURE => format!("{label}\tF9"),
+                    _ => label.clone(),
+                };
+                if *choice {
+                    radio(menu_handle, *id, &text);
+                } else {
+                    item(menu_handle, *id, &text);
                 }
-            });
-            separator(m);
-            item(m, id::FULL_SCREEN, "Full Screen\tF11");
-            sub(m, "Window Size", |l| {
-                for h in SIZES {
-                    item(l, id::SIZE + h as u16, &format!("{}p", h));
-                }
-            });
-            item(m, id::FPS_TITLE, "Frame Rate in Title Bar");
-        });
-        sub(bar, "Graphics", |m| {
-            item(m, id::ASYNC_SHADERS, "Asynchronous Shader Compilation");
-            separator(m);
-            item(m, id::SHADER_CACHE, "Open Shader Cache Folder");
-        });
-        sub(bar, "Audio", |m| {
-            item(m, id::MUTE, "Mute");
-            sub(m, "Volume", |l| {
-                for v in VOLUMES {
-                    radio(l, id::VOLUME + v as u16, &format!("{v}%"));
-                }
-            });
-        });
-        sub(bar, "Input", |m| {
-            sub(m, "Button Layout", |l| {
-                radio(l, id::BY_LABEL, "By Label (A is the button marked A)");
-                radio(l, id::BY_POSITION, "By Position (as on a Switch controller)");
-            });
-            item(m, id::VIBRATION, "Vibration");
-            sub(m, "Vibration Strength", |l| {
-                for v in STRENGTHS {
-                    radio(l, id::STRENGTH + v as u16, &format!("{v}%"));
-                }
-            });
-            separator(m);
-            item(m, id::TOUCH, "Touch Screen with Mouse");
-            item(m, id::MOUSE_LOOK, "Mouse Look (F8 frees the mouse)");
-            separator(m);
-            sub(m, "Controls", |l| {
+            }
+            menu::Entry::Note(text) => {
+                AppendMenuW(menu_handle, MF_GRAYED, 0, wide(text).as_ptr());
+            }
+            menu::Entry::Separator => separator(menu_handle),
+            menu::Entry::Sub(label, inner) => sub(menu_handle, label, |m| fill(m, inner)),
+            // No Controls window here: each input in turn, set by the next key, mouse or controller button.
+            menu::Entry::Controls => sub(menu_handle, "Controls", |l| {
                 for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
                     item(l, id::BIND + i as u16, &menu::bind_label(*s));
                 }
                 separator(l);
                 item(l, id::RESET_CONTROLS, "Reset to Defaults");
-            });
-        });
-        sub(bar, &menu::title_label(), |m| {
-            if crate::profile::is_totk() {
-                item(m, id::REAL_TIME, "Variable Frame Rate");
-                item(m, id::DYNAMIC_ASPECT, "Dynamic Aspect Ratio");
-                item(m, id::EXACT_MOUSE_AIM, "Exact Mouse Aim (Experimental)");
-                separator(m);
-            }
-            sub(m, "Mods", |l| {
-                let list = menu::mods();
-                if list.is_empty() {
-                    AppendMenuW(l, MF_GRAYED, 0, wide("None").as_ptr());
-                }
-                for (name, code) in list {
-                    AppendMenuW(l, MF_GRAYED, 0, wide(&menu::mod_label(&name, code)).as_ptr());
-                }
-            });
-            item(m, id::SAVE_FOLDER, "Open Save Data Folder");
-        });
-        sub(bar, "Tools", |m| {
-            item(m, id::CAPTURE, "Capture Frame History\tF9");
-            item(m, id::LOG, "Open Log");
-        });
+            }),
+        }
+    }
+}
+
+pub fn attach(hwnd: usize) {
+    unsafe {
+        let bar = CreateMenu();
+        fill(bar, &menu::bar());
         BAR.store(bar as usize, Ordering::Relaxed);
         let wrapped: unsafe extern "system" fn(usize, u32, usize, isize) -> isize = window_proc;
         PREVIOUS.store(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wrapped as usize as isize), Ordering::Release);
@@ -194,23 +142,14 @@ unsafe fn refresh(m: *mut c_void) {
         }
         EnableMenuItem(m, id as u32, if menu::enabled(id) { 0 } else { MF_GRAYED });
     };
-    for id in [
-        id::DOCKED, id::HANDHELD, id::VSYNC, id::LOW_LATENCY, id::FPS_TITLE, id::PERF_OVERLAY, id::ASYNC_SHADERS, id::MUTE,
-        id::BY_LABEL, id::BY_POSITION, id::VIBRATION, id::TOUCH, id::REAL_TIME, id::DYNAMIC_ASPECT, id::MOUSE_LOOK,
-        id::EXACT_MOUSE_AIM,
-    ] {
+    // Every command the menus hold (menu::bar), the bindings' own ids aside.
+    for id in menu::ids(&menu::bar()) {
         check(id);
     }
     for fps in LIMITS {
         let id = id::LIMIT + fps as u16;
         ModifyMenuW(m, id as u32, MFT_RADIOCHECK, id as usize, wide(&menu::limit_item_label(fps)).as_ptr());
         check(id);
-    }
-    for v in VOLUMES {
-        check(id::VOLUME + v as u16);
-    }
-    for v in STRENGTHS {
-        check(id::STRENGTH + v as u16);
     }
     for (i, s) in input::SWITCH_INPUTS.iter().enumerate() {
         let id = id::BIND + i as u16;

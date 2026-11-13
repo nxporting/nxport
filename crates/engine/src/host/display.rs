@@ -176,10 +176,10 @@ fn update_layer() {
     }
 }
 
-/// The menu bar: the app menu, then the menus every desktop host shares (host/menu.rs), each item sending menuCommand:
-/// with its id as the tag.
+/// The menu bar: the menus every desktop host shares (host/menu.rs bar), each item sending menuCommand: with its id as
+/// the tag. What is the Mac's own: key equivalents, Controls as a window, and "Controls…" (⌘,) atop the app menu.
 fn install_menu(app: &NSApplication, mtm: MainThreadMarker) {
-    use crate::host::menu::{self, id, LIMITS, SIZES, STRENGTHS, VOLUMES};
+    use crate::host::menu::{self, id, Entry};
     let new_item = |title: &str, cmd: u16, key: &str| {
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -192,110 +192,64 @@ fn install_menu(app: &NSApplication, mtm: MainThreadMarker) {
         item.setTag(cmd as isize);
         item
     };
-    let item = |m: &NSMenu, title: &str, cmd: u16| m.addItem(&new_item(title, cmd, ""));
-    let keyed = |m: &NSMenu, title: &str, cmd: u16, key: &str| m.addItem(&new_item(title, cmd, key));
     let separator = |m: &NSMenu| m.addItem(&NSMenuItem::separatorItem(mtm));
-    let label = |m: &NSMenu, title: &str| {
+    let note = |m: &NSMenu, title: &str| {
         let i = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(mtm.alloc(), &NSString::from_str(title), None, &NSString::from_str("")) };
         i.setEnabled(false);
         m.addItem(&i);
     };
-    let sub = |parent: &NSMenu, title: &str, fill: &dyn Fn(&NSMenu)| {
-        let m = NSMenu::new(mtm);
-        m.setTitle(&NSString::from_str(title));
-        fill(&m);
-        let i = NSMenuItem::new(mtm);
-        i.setTitle(&NSString::from_str(title));
-        i.setSubmenu(Some(&m));
-        parent.addItem(&i);
+    // A command as the Mac shows it: its key equivalent, or the key that does it shown in the title.
+    let command = |m: &NSMenu, label: &str, cmd: u16| {
+        let i = match cmd {
+            id::QUIT => new_item(label, cmd, "q"),
+            id::PERF_OVERLAY => new_item(label, cmd, "o"),
+            id::FULL_SCREEN => {
+                let i = new_item(label, cmd, "f");
+                i.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Control);
+                i
+            }
+            id::CAPTURE => new_item(&format!("{label} (F9)"), cmd, ""),
+            _ => new_item(label, cmd, ""),
+        };
+        m.addItem(&i);
     };
-
-    let bar = NSMenu::new(mtm);
-    sub(&bar, "nxport", &|m| {
-        keyed(m, "Controls…", id::CONTROLS, ",");
-        separator(m);
-        item(m, "Open Game Data Folder", id::DATA_FOLDER);
-        separator(m);
-        item(m, "Restart", id::RESTART);
-        keyed(m, "Quit", id::QUIT, "q");
-    });
-    sub(&bar, "System", &|m| {
-        item(m, "Docked (1080p)", id::DOCKED);
-        item(m, "Handheld (720p)", id::HANDHELD);
-    });
-    sub(&bar, "Display", &|m| {
-        item(m, "VSync", id::VSYNC);
-        item(m, "Low Latency", id::LOW_LATENCY);
-        keyed(m, "Performance Overlay", id::PERF_OVERLAY, "o");
-        sub(m, "Frame Rate Limit", &|l| {
-            for fps in LIMITS {
-                item(l, &menu::limit_label(fps), id::LIMIT + fps as u16);
+    // `head` fills the top of the first menu (the app menu) before its entries.
+    fn fill(m: &NSMenu, entries: &[Entry], mtm: MainThreadMarker, head: Option<&dyn Fn(&NSMenu)>, leaf: &dyn Fn(&NSMenu, &Entry)) {
+        for (n, e) in entries.iter().enumerate() {
+            match e {
+                Entry::Sub(title, inner) => {
+                    let sm = NSMenu::new(mtm);
+                    sm.setTitle(&NSString::from_str(title));
+                    if let Some(head) = head.filter(|_| n == 0) {
+                        head(&sm);
+                    }
+                    fill(&sm, inner, mtm, None, leaf);
+                    let i = NSMenuItem::new(mtm);
+                    i.setTitle(&NSString::from_str(title));
+                    i.setSubmenu(Some(&sm));
+                    m.addItem(&i);
+                }
+                other => leaf(m, other),
             }
-        });
-        separator(m);
-        let full = new_item("Full Screen", id::FULL_SCREEN, "f");
-        full.setKeyEquivalentModifierMask(objc2_app_kit::NSEventModifierFlags::Command | objc2_app_kit::NSEventModifierFlags::Control);
-        m.addItem(&full);
-        sub(m, "Window Size", &|l| {
-            for h in SIZES {
-                item(l, &format!("{h}p"), id::SIZE + h as u16);
-            }
-        });
-        item(m, "Frame Rate in Title Bar", id::FPS_TITLE);
-    });
-    sub(&bar, "Graphics", &|m| {
-        item(m, "Asynchronous Shader Compilation", id::ASYNC_SHADERS);
-        separator(m);
-        item(m, "Open Shader Cache Folder", id::SHADER_CACHE);
-    });
-    sub(&bar, "Audio", &|m| {
-        item(m, "Mute", id::MUTE);
-        sub(m, "Volume", &|l| {
-            for v in VOLUMES {
-                item(l, &format!("{v}%"), id::VOLUME + v as u16);
-            }
-        });
-    });
-    sub(&bar, "Input", &|m| {
-        sub(m, "Button Layout", &|l| {
-            item(l, "By Label (A is the button marked A)", id::BY_LABEL);
-            item(l, "By Position (as on a Switch controller)", id::BY_POSITION);
-        });
-        item(m, "Vibration", id::VIBRATION);
-        sub(m, "Vibration Strength", &|l| {
-            for v in STRENGTHS {
-                item(l, &format!("{v}%"), id::STRENGTH + v as u16);
-            }
-        });
-        separator(m);
-        item(m, "Touch Screen with Mouse", id::TOUCH);
-        item(m, "Mouse Look (F8 frees the mouse)", id::MOUSE_LOOK);
-        separator(m);
-        item(m, "Controls…", id::CONTROLS);
-        item(m, "Reset Controls to Defaults", id::RESET_CONTROLS);
-    });
-    sub(&bar, &menu::title_label(), &|m| {
-        if crate::profile::is_totk() {
-            item(m, "Variable Frame Rate", id::REAL_TIME);
-            item(m, "Dynamic Aspect Ratio", id::DYNAMIC_ASPECT);
-            item(m, "Exact Mouse Aim (Experimental)", id::EXACT_MOUSE_AIM);
-            separator(m);
         }
-        sub(m, "Mods", &|l| {
-            let list = menu::mods();
-            if list.is_empty() {
-                label(l, "None");
-            }
-            for (name, code) in list {
-                label(l, &menu::mod_label(&name, code));
-            }
-        });
-        item(m, "Open Save Data Folder", id::SAVE_FOLDER);
-    });
-    sub(&bar, "Tools", &|m| {
-        item(m, "Capture Frame History (F9)", id::CAPTURE);
-        item(m, "Open Log", id::LOG);
-    });
+    }
+    let leaf = |m: &NSMenu, e: &Entry| match e {
+        Entry::Item { label, id: cmd, .. } => command(m, label, *cmd),
+        Entry::Note(text) => note(m, text),
+        Entry::Separator => separator(m),
+        Entry::Controls => {
+            command(m, "Controls…", id::CONTROLS);
+            command(m, "Reset Controls to Defaults", id::RESET_CONTROLS);
+        }
+        Entry::Sub(..) => {}
+    };
+    let bar = NSMenu::new(mtm);
+    // The app menu opens with the Controls window, as a Mac app's settings (⌘,).
+    let head = |m: &NSMenu| {
+        m.addItem(&new_item("Controls…", id::CONTROLS, ","));
+        separator(m);
+    };
+    fill(&bar, &menu::bar(), mtm, Some(&head), &leaf);
     app.setMainMenu(Some(&bar));
 }
 

@@ -64,6 +64,107 @@ pub const SIZES: [u32; 3] = [720, 1080, 1440];
 pub const VOLUMES: [u32; 4] = [25, 50, 75, 100];
 pub const STRENGTHS: [u32; 3] = [50, 100, 150];
 
+/// One entry of the menu bar, declared once here and drawn by each desktop host (host/display.rs with AppKit,
+/// host/menu_win.rs with Win32). What a host adds is its own: shortcuts by command id, and how Controls looks.
+pub enum Entry {
+    /// A command: its label and id; `choice` when it is one of a group of values (Windows draws a radio mark).
+    Item { label: String, id: u16, choice: bool },
+    /// Text that does nothing (the Mods list).
+    Note(String),
+    Separator,
+    Sub(String, Vec<Entry>),
+    /// The key and controller bindings: on macOS a window (host/controls_ui.rs), on Windows a submenu binding each input
+    /// in turn. Followed by the command that resets them.
+    Controls,
+}
+
+fn item(label: &str, id: u16) -> Entry {
+    Entry::Item { label: label.to_string(), id, choice: false }
+}
+
+fn choice(label: impl Into<String>, id: u16) -> Entry {
+    Entry::Item { label: label.into(), id, choice: true }
+}
+
+fn sub(label: impl Into<String>, entries: Vec<Entry>) -> Entry {
+    Entry::Sub(label.into(), entries)
+}
+
+/// The menu bar every desktop host shows, as the running title and the app's mods make it now.
+pub fn bar() -> Vec<Entry> {
+    use Entry::Separator;
+    let mut title = Vec::new();
+    if crate::profile::is_totk() {
+        title.extend([
+            item("Variable Frame Rate", id::REAL_TIME),
+            item("Dynamic Aspect Ratio", id::DYNAMIC_ASPECT),
+            item("Exact Mouse Aim (Experimental)", id::EXACT_MOUSE_AIM),
+            Separator,
+        ]);
+    }
+    let mods = mods();
+    let mut listed: Vec<Entry> = mods.iter().map(|(name, code)| Entry::Note(mod_label(name, *code))).collect();
+    if listed.is_empty() {
+        listed.push(Entry::Note("None".into()));
+    }
+    title.extend([sub("Mods", listed), item("Open Save Data Folder", id::SAVE_FOLDER)]);
+    vec![
+        sub("nxport", vec![item("Open Game Data Folder", id::DATA_FOLDER), Separator, item("Restart", id::RESTART), item("Quit", id::QUIT)]),
+        sub("System", vec![choice("Docked (1080p)", id::DOCKED), choice("Handheld (720p)", id::HANDHELD)]),
+        sub(
+            "Display",
+            vec![
+                item("VSync", id::VSYNC),
+                item("Low Latency", id::LOW_LATENCY),
+                item("Performance Overlay", id::PERF_OVERLAY),
+                sub("Frame Rate Limit", LIMITS.iter().map(|&fps| choice(limit_label(fps), id::LIMIT + fps as u16)).collect()),
+                Separator,
+                item("Full Screen", id::FULL_SCREEN),
+                sub("Window Size", SIZES.iter().map(|&h| item(&format!("{h}p"), id::SIZE + h as u16)).collect()),
+                item("Frame Rate in Title Bar", id::FPS_TITLE),
+            ],
+        ),
+        sub("Graphics", vec![item("Asynchronous Shader Compilation", id::ASYNC_SHADERS), Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]),
+        sub("Audio", vec![item("Mute", id::MUTE), sub("Volume", VOLUMES.iter().map(|&v| choice(format!("{v}%"), id::VOLUME + v as u16)).collect())]),
+        sub(
+            "Input",
+            vec![
+                sub(
+                    "Button Layout",
+                    vec![
+                        choice("By Label (A is the button marked A)", id::BY_LABEL),
+                        choice("By Position (as on a Switch controller)", id::BY_POSITION),
+                    ],
+                ),
+                item("Vibration", id::VIBRATION),
+                sub("Vibration Strength", STRENGTHS.iter().map(|&v| choice(format!("{v}%"), id::STRENGTH + v as u16)).collect()),
+                Separator,
+                item("Touch Screen with Mouse", id::TOUCH),
+                item("Mouse Look (F8 frees the mouse)", id::MOUSE_LOOK),
+                Separator,
+                Entry::Controls,
+            ],
+        ),
+        sub(title_label(), title),
+        sub("Tools", vec![item("Capture Frame History", id::CAPTURE), item("Open Log", id::LOG)]),
+    ]
+}
+
+/// Every command id in `entries`, submenus included (a host refreshing check marks and labels as a menu opens).
+#[allow(dead_code)]
+pub fn ids(entries: &[Entry]) -> Vec<u16> {
+    let mut out = Vec::new();
+    for e in entries {
+        match e {
+            Entry::Item { id, .. } => out.push(*id),
+            Entry::Sub(_, inner) => out.extend(ids(inner)),
+            Entry::Controls => out.push(id::RESET_CONTROLS),
+            Entry::Note(_) | Entry::Separator => {}
+        }
+    }
+    out
+}
+
 /// What only the host's window can do.
 pub enum Action {
     FullScreen,
