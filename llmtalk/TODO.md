@@ -16,6 +16,17 @@ and update this file when you finish or drop it.
   the shader bar is gone? Candidates: hardware VP9 through VideoToolbox (check that iOS lets apps decode VP9 in
   hardware, and which devices), decoding ahead of the presentation time (helps spikes, not a sustained deficit).
   Measure on the phone before choosing (the log has the movie's timing if the HLE logs it; else add that).
+  **Researched 2026-11-12 (subagent, primary sources):** VideoToolbox VP9 is not usable by a sideloaded iOS app:
+  VTIsHardwareDecodeSupported(VP9) is false for third-party apps (Apple forums 664770, 722933: iPhone 11 Pro, 13, 15
+  Pro); Safari gets it through the private com.apple.developer.coremedia.allow-alternate-video-decoder-selection
+  entitlement (WebKit process-entitlements.sh), and VTRegisterSupplementalVideoDecoderIfAvailable is macOS 11+ only.
+  On macOS (Apple silicon) it is public: register the supplemental decoder, a 'vp09' format description with a 12-byte
+  vpcC atom (version 1, flags 0, profile, level, bitdepth<<4|subsampling<<1|range, primaries, transfer, matrix, 0), and
+  superframes split into frames before decoding (FFmpeg videotoolbox_vp9.c does exactly this). For the iPhone: FFmpeg's
+  vp9 decoder (hand-written aarch64 NEON, frame threads; faster than libvpx) in a minimal LGPL build, or libvpx; decode a
+  few frames ahead on a user-interactive QoS thread (off the efficiency cores). Before replacing the decoder, check
+  the cheaper causes of "slow then fast": how far ahead the movie HLE decodes, and the decode thread's QoS. Fallback if
+  software still falls short: the builder transcodes the movies to HEVC once (every iPhone decodes it in hardware).
 
 - **macOS parity, open (2026-11-09, Mac session):** (1) TotK 1.1.2 logs "the camera's angle code was not found":
   camera_angles.rs's AROUND pattern does not match 1.1.2, so Exact Mouse Aim does nothing there on any platform (found
