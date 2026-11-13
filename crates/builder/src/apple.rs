@@ -95,6 +95,8 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             if prebuild {
                 let (cache, ios_cache_dir) = (cache.clone(), ios_cache.clone());
                 let job = job.clone();
+                // The argument-buffer variants only for an app that draws through them.
+                let arg_variants = resolved.graphics.arg_buffers;
                 steps.push(("Building the iOS shader cache".into(), Box::new(move || {
                     let ios_cache = ios_cache_dir;
                     let job_cb = job.clone();
@@ -115,7 +117,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                     };
                     let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
                     let jobs = cpus.saturating_sub(2).max(2);
-                    nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, jobs, false, Some(&cb))?;
+                    nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, jobs, false, arg_variants, Some(&cb))?;
                     let list = cache.join("pipelines.txt");
                     if list.exists() {
                         std::fs::copy(&list, ios_cache.join("pipelines.txt")).map_err(|e| e.to_string())?;

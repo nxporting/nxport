@@ -288,6 +288,9 @@ pub enum Shaders {
         /// Parallel jobs
         #[arg(short, default_value_t = 6)]
         j: usize,
+        /// Keep the stages' argument-buffer variants (for an app run with --arg-buffers)
+        #[arg(long)]
+        arg_variants: bool,
     },
     #[cfg(target_os = "macos")]
     /// Specialize one translated MSL file for Metal
@@ -364,7 +367,7 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             shader_cache_build::build(&shader_cache_build::Options { dump_dirs: dumps, out_dir: out, ctrl_dir, jobs, msl_out, index_only, on_progress: None })?;
         }
         #[cfg(target_os = "macos")]
-        Command::Shaders(Shaders::BuildIos { cache, out, sim, j }) => shader_cache_build::build_ios(&cache, &out, j, sim, None)?,
+        Command::Shaders(Shaders::BuildIos { cache, out, sim, j, arg_variants }) => shader_cache_build::build_ios(&cache, &out, j, sim, arg_variants, None)?,
         #[cfg(target_os = "macos")]
         Command::Shaders(Shaders::Specialize { input, output, meta, translation }) => {
             translation::install(translation);
