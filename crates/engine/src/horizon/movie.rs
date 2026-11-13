@@ -923,6 +923,27 @@ struct Decoder {
     n_empty: u64,
     /// formatChangedEvent signaled for the current output format.
     format_reported: bool,
+    /// Video frames decoded since the decoder started or was flushed, their decode time in all and the longest, and how
+    /// many took longer than a 30 fps frame: printed when the movie ends (report_decode).
+    decodes: u64,
+    decode_us: u64,
+    decode_max_us: u64,
+    decode_slow: u64,
+}
+/// One line on how fast a movie decoded, so a stutter can be told apart from a decoder that cannot keep up.
+fn report_decode(d: &mut Decoder) {
+    if d.is_video && d.decodes > 0 {
+        println!(
+            "[+] movie: {} video frames ({}x{}) decoded in {:.1} ms on average, the longest {:.1} ms, {} over 33.3 ms",
+            d.decodes,
+            d.width,
+            d.height,
+            d.decode_us as f64 / d.decodes as f64 / 1000.0,
+            d.decode_max_us as f64 / 1000.0,
+            d.decode_slow
+        );
+    }
+    (d.decodes, d.decode_us, d.decode_max_us, d.decode_slow) = (0, 0, 0, 0);
 }
 /// The implementation, or None after the destructor ran (methods then return Status_NullDecoder).
 unsafe fn dec<'a>(this: *mut usize) -> Option<&'a mut Decoder> {
@@ -960,7 +981,8 @@ unsafe extern "C" fn d_dtor(this: *mut usize) {
     }
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if *this.add(1) != 0 {
-        let d = Box::from_raw(*this.add(1) as *mut Decoder);
+        let mut d = Box::from_raw(*this.add(1) as *mut Decoder);
+        report_decode(&mut d);
         if d.dec != 0 {
             (media().md_close)(d.dec as *mut c_void);
         }
@@ -1095,6 +1117,7 @@ unsafe extern "C" fn d_flush(this: *mut usize) -> u32 {
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
+    report_decode(d);
     if d.dec != 0 {
         (media().md_flush)(d.dec as *mut c_void);
     }
@@ -1259,6 +1282,7 @@ unsafe extern "C" fn d_send_input(
     if codec.closed {
         return NULL_DECODER;
     }
+    let t0 = std::time::Instant::now();
     let (failed, received, done) = if handle != 0 {
         let failed = (media().md_send)(handle as *mut c_void, data.as_ptr(), size, pts, eos as c_int) < 0;
         let (received, done) = receive_all(handle, &mut codec);
@@ -1266,6 +1290,7 @@ unsafe extern "C" fn d_send_input(
     } else {
         (false, Vec::new(), false)
     };
+    let us = t0.elapsed().as_micros() as u64;
     // Still holding the Codec lock: frames of two sends are queued in the order they were decoded.
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(d) = dec(this) else {
@@ -1276,6 +1301,12 @@ unsafe extern "C" fn d_send_input(
             signal(d, 3);
         }
         deliver(d, received, done);
+        if d.is_video {
+            d.decodes += 1;
+            d.decode_us += us;
+            d.decode_max_us = d.decode_max_us.max(us);
+            d.decode_slow += (us > 33_333) as u64;
+        }
     }
     d.n_in += 1;
     if log_enabled() && (d.n_in <= 5 || d.n_in % 100 == 0 || eos) {
@@ -1494,6 +1525,10 @@ unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
         n_out: 0,
         n_empty: 0,
         format_reported: false,
+        decodes: 0,
+        decode_us: 0,
+        decode_max_us: 0,
+        decode_slow: 0,
     };
     *this.add(1) = Box::into_raw(Box::new(d)) as usize;
 }
