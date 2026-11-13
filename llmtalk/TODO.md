@@ -20,6 +20,14 @@ left out); 2ccaf73 TotK exact mouse aim on 1.1.2 and on native engines. To check
 4. macOS Game Mode (nxnative reports it pins the GPU low on M4 Pro): needs a fullscreen windowed run with and without
    LSSupportsGameMode=false in the app's Info.plist; not measured.
 5. Windows-made macOS app (win-worker, PARITY #1): unzip on the Mac, launch, `codesign --verify --deep`.
+6. Tile-read decals (acf59df, --tile-feedback, off by default): your call whether to turn it on. It cuts the passes
+   ended for feedback 13 -> 6 a Hateno frame (phone GPU not measured), and changes overlapping terrain decals to
+   Ryujinx's behaviour (each sees the previous one): some cliffs show less grass green. A/B: --tile-feedback, or the same
+   frame with --replay=8800:40 --replay-ab --replay-ab-tile --replay-dump.
+7. Cheats (win-worker): a test cheat file loads and runs on the Mac; a real data cheat (e.g. rupees) and the Cheats
+   submenu in the window are untested.
+Also unpushed from the Mac: 9878ced (Metal waits for a compiling pipeline unless its targets are drawn every frame,
+async compilation only), 187179d (a Mac lifts the game to the same C as Windows: PARITY #2's loader side).
 Found tonight, not regressions: the frame capture misses some lighting input (replay vs live 18-26% of pixels in sun,
 the sunlit surfaces darker in the replay; the conformance suite stays valid, replays are deterministic). The Hateno
 capture was re-recorded (the Oct 22 one was unreadable after f6805da).
