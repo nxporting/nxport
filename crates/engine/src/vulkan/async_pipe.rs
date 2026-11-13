@@ -164,3 +164,18 @@ pub(super) fn query_async_pipeline(key: u64, job: PipeJob) -> AsyncPipe {
     }
     r
 }
+
+/// Waits for the pipeline query_async_pipeline started for `key` to be made or to fail, however long it takes: for a
+/// draw into a target not drawn every frame (exec.rs targets_recur), which a skip could leave undrawn for good.
+pub(super) fn wait_async_pipeline(key: u64) -> AsyncPipe {
+    let (q, _) = async_queue();
+    let Some(slot) = q.lock().unwrap().slots.get(&key).cloned() else { return AsyncPipe::Failed };
+    let t0 = std::time::Instant::now();
+    let g = slot.1.wait_while(slot.0.lock().unwrap(), |s| matches!(s, SlotState::Pending | SlotState::Running)).unwrap();
+    ASYNC_WAITED_US.fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+    match *g {
+        SlotState::Ready(p) => AsyncPipe::Ready(p),
+        SlotState::Failed => AsyncPipe::Failed,
+        SlotState::Pending | SlotState::Running => AsyncPipe::Pending,
+    }
+}
