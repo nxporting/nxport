@@ -31,6 +31,10 @@
 // call) load two words time_step keeps at {step seconds, step frames} instead, and scale both by the factor at once
 // (`ldr d`, `fmul v.2s, v.2s, v.s[0]`, `str d`): the same instruction count, no call. 1.1.2 leaves that clock unset.
 //
+// Steps the game takes without its frame ratio, which only the 30 fps it ships at hid (found by totk-pc-recomp): the
+// rotation check of gears and water wheels (rotate_check), the map cursor's pan (map_pan) and the gyro's vertical aim
+// (gyro_pitch) take the ratio the code around them already has.
+//
 // The hooks rewrite instructions and branch to HLE trampolines (no code of our own in guest memory), so they apply to
 // every runtime: natively, and to the image that is lifted.
 
@@ -62,6 +66,16 @@ pub struct Sites {
     /// The equipment-switch cooldown's step test (equip_cooldown), where known: its `fmov s1, w8` (FLT_EPSILON), and the
     /// `ldr s0, [x19, #0x109c]` that loads the cooldown before it (1.0.0 has an add and the constant between them).
     pub equip_cooldown: Option<(usize, usize)>,
+    /// The rotation check of gears and water wheels (rotate_check), where known: the update's `ldr x1, [x0, #0x40]` (the
+    /// first of rotate_entry_code), the function that normalises a vector it calls three words on, and the threshold's
+    /// `fdiv s12, s0, s4`.
+    pub rotate_check: Option<(usize, usize, usize)>,
+    /// The map cursor's pan step (map_pan), where known: its 16 words from `ldr s3, [x19, #0x2cc]` (map_pan_code).
+    pub map_pan: Option<(usize, [u32; 16])>,
+    /// The gyro's vertical aim (gyro_pitch), where known: the four loads after the call at the aim update's join, the
+    /// version's `ldr s9, [x22, #<gyro pitch>]` two words before them, and where the update loads the frame ratio
+    /// (`ldr s10, [x20, #8]`).
+    pub gyro_pitch: Option<(usize, u32, usize)>,
 }
 
 /// An instruction of the hair and cloth clock: (offset, the code expected, its replacement; ADRP_TO_CLOTH: `adrp x8` to
@@ -406,6 +420,15 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     if let Some((at, load)) = s.equip_cooldown {
         equip_cooldown(base, at, load);
     }
+    if let Some((at, normalize, fdiv)) = s.rotate_check {
+        install_rotate_check(base, mem_space, at, normalize, fdiv);
+    }
+    if let Some((at, code)) = s.map_pan {
+        map_pan(base, at, &code);
+    }
+    if let Some((at, ldr_pitch, ratio_at)) = s.gyro_pitch {
+        gyro_pitch(base, at, ldr_pitch, ratio_at);
+    }
     if let Some((at, ldr_obj)) = s.ground_carry {
         let carry = vec![
             ldr_obj,     // ldr x8, [xN]
@@ -452,5 +475,184 @@ unsafe fn equip_cooldown(base: usize, at: usize, load_at: usize) {
         }
         (LDR_S0_COOLDOWN, FMOV_S1_ZERO) => {}
         (l, w) => println!("[!] Equipment: unexpected code {l:#010x} {w:#010x} at main+{load_at:#x} / main+{at:#x}; not patched"),
+    }
+}
+
+/// The rotate module's update (the AI's check that a gear or water wheel turns, which shrine doors at Riogok, Turakamik
+/// and the Wind Temple wait on) reports turning when the angle turned since its last update is above RotateStartDeg / 30:
+/// the angle of one 30 Hz frame. It is called with the AI's update context, whose +8 is the frame delta in 30 Hz frames
+/// (the frame-counter node adds it up each update), but ignores it: above 30 fps a gear turned less than that per update,
+/// read as stopped, and the doors never opened. The threshold becomes the angle of the update's own delta, one 30 Hz
+/// frame's times the delta (1.4.3 divides the angle by the delta instead: the same test).
+///
+/// The update's first words (rotate_entry_code) load the module's axis, keep the module and normalise the axis into a
+/// local. They become: keep the module, call rotate_check (which normalises the axis with the same function and returns
+/// 30 / delta), keep that in s12, which the prologue has saved and the update first writes at the threshold. The
+/// threshold's `fdiv s12, s0, s4` (s4 = 30) then divides by s12 instead: 30 / 1 at 30 fps, the stock value bit for bit.
+/// Found on 1.2.1 and 1.4.3 by totk-pc-recomp (MIT, built on MacNativeGames, MIT).
+pub const fn rotate_entry_code(at: usize, normalize: usize) -> [u32; 4] {
+    let d = (normalize as i64 - (at as i64 + 12)) >> 2;
+    [
+        0xf940_2001,                   // ldr x1, [x0, #0x40] (the axis)
+        0xaa00_03f3,                   // mov x19, x0
+        0xd100_e3a0,                   // sub x0, x29, #0x38
+        BL | (d as u32 & 0x03ff_ffff), // bl <normalize>
+    ]
+}
+const FDIV_S12_S0_S4: u32 = 0x1e24_180c;
+const FDIV_S12_S0_S12: u32 = 0x1e2c_180c;
+
+/// The function rotate_check normalises the axis with (guest address).
+static NORMALIZE: AtomicU64 = AtomicU64::new(0);
+
+/// Called at the start of the rotate module's update (x0 = the module, x1 = the update context, x2 = where the update
+/// keeps the normalised axis): normalises the axis as the update did, and returns 30 / the context's frame delta, which
+/// the threshold then divides by.
+pub unsafe extern "C" fn rotate_check(module: usize, ctx: usize, out: usize) -> f32 {
+    crate::guest::call(NORMALIZE.load(Ordering::Relaxed) as usize, &[out as u64, *((module + 0x40) as *const u64)]);
+    if ctx == 0 {
+        return 30.0;
+    }
+    30.0 / *((ctx + 8) as *const f32)
+}
+
+#[cfg(nx_runtime)]
+unsafe fn install_rotate_check(
+    base: usize,
+    mem_space: &mut crate::guest::loader::GuestMemorySpace,
+    at: usize,
+    normalize: usize,
+    fdiv: usize,
+) {
+    let w = std::ptr::read((base + fdiv) as *const u32);
+    if w != FDIV_S12_S0_S4 {
+        return println!("[!] Gears: unexpected instruction {w:#010x} at main+{fdiv:#x}; their rotation check stays at 30 fps");
+    }
+    NORMALIZE.store((base + normalize) as u64, Ordering::Relaxed);
+    let code = vec![
+        0xaa00_03f3, // mov x19, x0
+        0xd100_e3a2, // sub x2, x29, #0x38
+        BL,          // bl <rotate_check trampoline> (s0 = 30 / delta)
+        0x1e20_400c, // fmov s12, s0
+    ];
+    let hle = crate::hle!(rotate_check(_, _, _));
+    match replace_with_call(base, mem_space, at, &rotate_entry_code(at, normalize), code, 2, hle) {
+        Ok(()) => {
+            std::ptr::write((base + fdiv) as *mut u32, FDIV_S12_S0_S12);
+            crate::os::flush_icache(base + fdiv, 4);
+            println!("[+] Gears: their rotation check counts the update's frame delta (shrine doors open at any frame rate)");
+        }
+        Err(e) => println!("[!] Gears: main+{at:#x}: {e}; their rotation check stays at 30 fps"),
+    }
+}
+
+/// Rewrites the words at main+`at` from `from` to `to` in place (the same count); true if they are `to` now. On other
+/// code, says where it differs and writes nothing.
+unsafe fn rewrite(base: usize, at: usize, from: &[u32], to: &[u32], what: &str) -> bool {
+    let p = (base + at) as *mut u32;
+    let now: Vec<u32> = (0..from.len()).map(|k| std::ptr::read(p.add(k))).collect();
+    if now == to {
+        return true;
+    }
+    if let Some(k) = (0..from.len()).find(|&k| now[k] != from[k]) {
+        println!("[!] {what}: unexpected instruction {:#010x} at main+{:#x}; not patched", now[k], at + 4 * k);
+        return false;
+    }
+    for (k, w) in to.iter().enumerate() {
+        std::ptr::write(p.add(k), *w);
+    }
+    crate::os::flush_icache(p as usize, 4 * to.len());
+    true
+}
+
+/// The map cursor's pan step, with the version's stick loads (`ldr s1` / `ldr s2` of x and y), the old position's
+/// `fmov s0, wN`, the bound load (`ldr s4, [x8, #..]`) and the `adrp x8` that reloads the page x8 already holds.
+pub const fn map_pan_code(stick_x: u32, stick_y: u32, fmov_old_x: u32, ldr_bound: u32, adrp: u32) -> [u32; 16] {
+    [
+        0xbd42_ce63, // ldr s3, [x19, #0x2cc] (the position's y)
+        0x1e21_3922, // fsub s2, s9, s1
+        0x1e22_0800, // fmul s0, s0, s2
+        0xbd42_ca62, // ldr s2, [x19, #0x2c8] (its x)
+        0x1e20_2820, // fadd s0, s1, s0 (the pan speed, eased towards its target)
+        0xbd02_e260, // str s0, [x19, #0x2e0]
+        stick_x,     // ldr s1, <stick x>
+        0x1e20_0821, // fmul s1, s1, s0
+        0x1e21_2841, // fadd s1, s2, s1
+        0xbd02_ca61, // str s1, [x19, #0x2c8] (stored again, clamped, before anything reads it)
+        stick_y,     // ldr s2, <stick y>
+        0x1e22_0802, // fmul s2, s0, s2
+        fmov_old_x,  // fmov s0, wN
+        0x1e24_3800, // fsub s0, s0, s4
+        ldr_bound,   // ldr s4, [x8, #..]
+        adrp,        // adrp x8, <the page x8 holds>
+    ]
+}
+
+/// The map screen's update eases the cursor's pan speed towards its target with the frame's 30 Hz ratio (0.75 to the
+/// power of the ratio: the same speed after the same time at any frame rate) but steps the position by speed * stick
+/// each update, so the cursor panned 2x as fast at 60 fps and 4x at 120. The step is speed * ratio * stick: the ratio
+/// the easing reads ([[x23] + 8]), the same at 30 fps (1.0) bit for bit. Room for the two loads and the multiply comes
+/// from the code itself: the position's x and y load as one pair through x21 (the update set it to x19 + 0x2c8 on the
+/// one way here), the first store of the unclamped x goes (the clamped x is stored over it before anything reads it),
+/// and so does an adrp of the page x8 already holds. x9 and s5 are free: the code after the window writes them before
+/// any read (the easing's call clobbers them before it). Found on 1.2.1 by totk-pc-recomp (MIT, built on MacNativeGames,
+/// MIT).
+unsafe fn map_pan(base: usize, at: usize, code: &[u32; 16]) {
+    let c = code;
+    let to = [
+        0xf940_02e9, // ldr x9, [x23] (the frame object)
+        c[1],
+        c[2],
+        0x2d40_0ea2, // ldp s2, s3, [x21] (x, y)
+        c[4],
+        c[5],
+        0xbd40_0925, // ldr s5, [x9, #8] (the 30 Hz ratio)
+        0x1e25_0800, // fmul s0, s0, s5 (this update's step)
+        c[6],
+        c[7],
+        c[8],
+        c[10],
+        c[11],
+        c[12],
+        c[13],
+        c[14],
+    ];
+    if rewrite(base, at, code, &to, "Map cursor") {
+        println!("[+] Map cursor: it pans at the same speed at any frame rate");
+    }
+}
+
+/// The aim update for Ultrahand and Recall turns the gyro's vertical movement ([x22 + <gyro pitch>], loaded into s9 at
+/// its join) into aim without the frame's 30 Hz ratio, which the update loaded into s10 ([x20 + 8]) and multiplies its
+/// stick aim by: above 30 fps the vertical gyro aim moved 2x as fast at 60 fps and 4x at 120. s9 is read twice after: the
+/// Recall aim's vertical step and the Ultrahand gyro aim's, whose step totk-pc-recomp scales after it is divided by the
+/// aim's range (where nxport's camera_rate already scales the stick's: scaling there would count it twice). Scaling s9
+/// by s10 at the join scales both by the ratio once. s10 holds [x20 + 8] there on every way in (nothing writes it before
+/// later in the update). Room for the multiply: the four loads after the call become an add and two pairs (offsets past
+/// what a pair can reach, from x8, which the call has clobbered and the code writes again before reading). Found on 1.2.1
+/// by totk-pc-recomp (MIT, built on MacNativeGames, MIT).
+unsafe fn gyro_pitch(base: usize, at: usize, ldr_pitch: u32, ratio_at: usize) {
+    const LDR_S10_RATIO: u32 = 0xbd40_0a8a; // ldr s10, [x20, #8]
+    let from = [
+        0xbd41_ae68, // ldr s8, [x19, #0x1ac]
+        0xbd41_b26b, // ldr s11, [x19, #0x1b0]
+        0xbd41_be6d, // ldr s13, [x19, #0x1bc]
+        0xbd41_c26e, // ldr s14, [x19, #0x1c0]
+    ];
+    let to = [
+        0x9106_b268, // add x8, x19, #0x1ac
+        0x2d40_2d08, // ldp s8, s11, [x8]
+        0x2d42_390d, // ldp s13, s14, [x8, #0x10]
+        0x1e2a_0929, // fmul s9, s9, s10
+    ];
+    let (pitch, ratio) = (std::ptr::read((base + at - 8) as *const u32), std::ptr::read((base + ratio_at) as *const u32));
+    if pitch != ldr_pitch || ratio != LDR_S10_RATIO {
+        return println!(
+            "[!] Gyro aim: unexpected code {pitch:#010x} {ratio:#010x} at main+{:#x} / main+{ratio_at:#x}; not patched",
+            at - 8
+        );
+    }
+    if rewrite(base, at, &from, &to, "Gyro aim") {
+        println!("[+] Gyro aim: vertical gyro aiming moves at the same speed at any frame rate");
     }
 }
