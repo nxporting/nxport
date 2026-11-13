@@ -52,6 +52,14 @@ iOS Metal.
 ## Checks still to make (claim and fill in)
 
 - Settings: every setting reachable from each host's UI (menus, Controls windows, iOS Settings.bundle).
+  **Checked 2026-11-12 (win-worker, by reading):** macOS and Windows show the same menus (one tree, host/menu.rs bar).
+  The iOS Settings app (build/src/ipa_files/Settings.plist, read in host/ios_env.rs) has Default Mode, Display Aspect,
+  Performance Overlay, VSync, Asynchronous Shaders, On-Screen Controls, Physical Controller, Swap A and B, Swap X and Y.
+  Missing there against the desktop menus: Frame Rate Limit, Low Latency, Vibration and Vibration Strength, and TotK's
+  Variable Frame Rate and Dynamic Aspect Ratio (an .ipa fixes them when it is built: the builder's settings). Not
+  needed on a phone: window size, full screen, title-bar fps, mute and volume (the phone's own), mouse look, touch
+  with mouse, the folder and log items. Unclaimed: add the missing ones to Settings.plist and read them in ios_env.rs
+  (the same setting names as the desktop menus' live switches, host/live.rs), or decide which a phone should not have.
 - Input: controls window / bindings on each host; mouse look on Mac.
 - Tools: frame history (F9), perf overlay (F10), capture flags, log locations.
 - Mods: which kinds work per target (IPS/pchtxt, romfs, exlaunch plugins: not on iOS by decision).
