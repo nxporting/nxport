@@ -9,7 +9,7 @@
 //   Graphics  the GPU library the title calls (nvn): shader compilation
 //   Audio     audren / audout output on the host's device
 //   Input     hid: the controller layout the title sees, vibration, the touch screen, the key and controller bindings
-//   <title>   the running title's own code and data: nxport's patches for it, its mods, its save data
+//   <title>   the running title's own code and data: nxport's patches for it, its mods and cheats, its save data
 //   Tools     diagnostics
 //
 // Switches apply at once and are kept in the game's settings file (host/live.rs, config::remember).
@@ -57,12 +57,16 @@ pub mod id {
     pub const RESET_CONTROLS: u16 = 900;
     /// The Controls window (macOS; Windows lists the bindings in the menu instead).
     pub const CONTROLS: u16 = 901;
+    /// + the cheat's index in guest::cheats::listed().
+    pub const CHEAT: u16 = 3000;
 }
 
 pub const LIMITS: [u32; 5] = [30, 60, 90, 120, 144];
 pub const SIZES: [u32; 3] = [720, 1080, 1440];
 pub const VOLUMES: [u32; 4] = [25, 50, 75, 100];
 pub const STRENGTHS: [u32; 3] = [50, 100, 150];
+/// Room for the cheats' ids: eight mods' files of dmnt's 0x7F cheats each.
+pub const CHEATS: u16 = 1024;
 
 /// One entry of the menu bar, declared once here and drawn by each desktop host (host/display.rs with AppKit,
 /// host/menu_win.rs with Win32). What a host adds is its own: shortcuts by command id, and how Controls looks.
@@ -113,7 +117,12 @@ pub fn bar() -> Vec<Entry> {
     if listed.is_empty() {
         listed.push(Entry::Note("None".into()));
     }
-    title.extend([sub("Mods", listed), item("Open Save Data Folder", id::SAVE_FOLDER)]);
+    title.push(sub("Mods", listed));
+    let cheats = cheats();
+    if !cheats.is_empty() {
+        title.push(sub("Cheats", cheats));
+    }
+    title.push(item("Open Save Data Folder", id::SAVE_FOLDER));
     vec![
         sub("nxport", vec![item("Open Game Data Folder", id::DATA_FOLDER), Separator, item("Restart", id::RESTART), item("Quit", id::QUIT)]),
         sub("System", vec![choice("Docked (1080p)", id::DOCKED), choice("Handheld (720p)", id::HANDHELD)]),
@@ -214,6 +223,28 @@ pub fn mods() -> Vec<(String, bool)> {
     list
 }
 
+/// The cheats of the mods' cheat files, each a switch (guest/cheats; master cheats always run and are not listed).
+fn cheats() -> Vec<Entry> {
+    let files = crate::guest::cheats::files();
+    crate::guest::cheats::listed()
+        .into_iter()
+        .take(CHEATS as usize)
+        .enumerate()
+        .map(|(i, (f, c))| {
+            let name = &files[f].cheats[c].name;
+            // Which mod a cheat is from, once there is more than one.
+            let label = if files.len() > 1 { format!("{}: {name}", files[f].mod_name) } else { name.clone() };
+            item(&label, id::CHEAT + i as u16)
+        })
+        .collect()
+}
+
+/// The cheat behind menu command `cmd`: (file, cheat).
+fn cheat_of(cmd: u16) -> Option<(usize, usize)> {
+    let i = cmd.checked_sub(id::CHEAT).filter(|&i| i < CHEATS)?;
+    crate::guest::cheats::listed().get(i as usize).copied()
+}
+
 /// A mod as the Mods menu lists it.
 pub fn mod_label(name: &str, code: bool) -> String {
     if code && cfg!(windows) {
@@ -295,6 +326,10 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::DYNAMIC_ASPECT => live::dynamic_aspect(),
         id::MOUSE_LOOK => live::mouse_look(),
         id::EXACT_MOUSE_AIM => live::exact_mouse_aim(),
+        c if cheat_of(c).is_some() => {
+            let (f, n) = cheat_of(c).unwrap();
+            crate::guest::cheats::is_enabled(f, n)
+        }
         _ => return None,
     })
 }
@@ -412,6 +447,10 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
             println!("[+] Input: controls reset to the defaults");
         }
         id::CONTROLS => return Err(Action::Controls),
+        c if cheat_of(c).is_some() => {
+            let (f, n) = cheat_of(c).unwrap();
+            crate::guest::cheats::set_enabled(f, n, !crate::guest::cheats::is_enabled(f, n));
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -434,6 +473,7 @@ mod tests {
             ("bind", id::BIND, id::BIND + n),
             ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),
             ("controls", id::CONTROLS, id::CONTROLS + 1),
+            ("cheats", id::CHEAT, id::CHEAT + CHEATS),
         ];
         for (i, a) in ranges.iter().enumerate() {
             for b in &ranges[i + 1..] {

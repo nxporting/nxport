@@ -249,12 +249,23 @@ impl GuestLibrary {
                 Ok(())
             };
             register(&lib, path)?;
+            // Cheats may write main's code too (guest/cheats): live patches make the lifted code follow them, and a library
+            // too old for live patches only costs those cheats.
             #[cfg(windows)]
-            if crate::settings::get().guest.live_patches {
+            let live = {
+                let asked = crate::settings::get().guest.live_patches;
                 let dispatcher = lib.symbol("nx_rt_dispatcher");
-                if dispatcher.is_null() {
+                if asked && dispatcher.is_null() {
                     return Err(format!("{}: too old for live patches (no nx_rt_dispatcher): lift it again", path.display()));
                 }
+                let for_cheats = !crate::guest::cheats::files().is_empty();
+                if !asked && for_cheats && dispatcher.is_null() {
+                    println!("[!] Cheats: {} is too old for live patches (no nx_rt_dispatcher): cheats that write code do nothing", path.display());
+                }
+                Some(dispatcher).filter(|d| !d.is_null() && (asked || for_cheats))
+            };
+            #[cfg(windows)]
+            if let Some(dispatcher) = live {
                 let get: unsafe extern "C" fn() -> usize = std::mem::transmute(dispatcher);
                 let names = overlay.map_or(&[][..], |(_, n)| n).iter().chain(modules);
                 let tables = over_tables.iter().chain(&base_tables).zip(names).map(|(t, name)| {

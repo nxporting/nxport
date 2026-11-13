@@ -1,6 +1,7 @@
 // ExeFS patches made for another build of the game (`<build id>.ips`, pchtxt): they apply to the module of that build
 // only, so with this game they change nothing, which looks like a bug in the mod or in nxport. The builder says so as
-// it packages mods; the engine says it again as the modules load (mod_patches::report_other_builds).
+// it packages mods; the engine says it again as the modules load (mod_patches::report_other_builds). Cheat files
+// (`cheats/<build id>.txt`) are named for main's build id alone, and checked against it.
 
 use std::path::Path;
 
@@ -41,6 +42,7 @@ pub fn report(dir: &Path, tid: u64, dump: &Path) {
             }
         }
         romfs_for_other_version(&mod_name, &nxport::mods::mod_subdir(&path, "romfs"), &dump.join("RomFS"));
+        cheats_for_other_build(&mod_name, &nxport::mods::mod_subdir(&path, "cheats"), dump);
     }
 }
 
@@ -96,5 +98,24 @@ mod tests {
         assert_eq!(super::product_version("USen.Product.100.sarc.zs"), Some(("USen", "100", ".sarc.zs")));
         assert_eq!(super::product_version("Link.bfres.zs"), None);
         assert_eq!(super::product_version("Odd.Product.x1.zs"), None);
+    }
+}
+
+/// Warns of each cheat file in `cheats` named for another build of main than the dump's (the first 8 bytes of its build
+/// id, in hex): only the file named for the running main is loaded.
+fn cheats_for_other_build(mod_name: &str, cheats: &Path, dump: &Path) {
+    let main = ["ExeFS", "exefs"].iter().find_map(|d| nxport::nso::nso_build_id(&dump.join(d).join("main").display().to_string()));
+    let Some(id) = main.as_deref().and_then(|m| m.get(..16)) else { return };
+    for e in std::fs::read_dir(cheats).into_iter().flatten().flatten() {
+        let path = e.path();
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let txt = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("txt"));
+        if txt && stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit()) && !stem.eq_ignore_ascii_case(id) {
+            println!(
+                "  [!] Mod '{mod_name}': cheats/{} is for another build of the game (this one's main is {id}), so it is not \
+                 loaded",
+                e.file_name().to_string_lossy()
+            );
+        }
     }
 }

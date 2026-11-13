@@ -70,7 +70,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     let _ = std::fs::remove_dir_all(&mods);
     let mut any_mods = false;
     if let Some(m) = o.mods.filter(|m| m.is_dir()) {
-        let single = ["romfs", "exefs", "RomFS", "ExeFS"].iter().any(|d| m.join(d).is_dir());
+        let single = nxport::mods::is_mod_dir(m);
         let candidates: Vec<(PathBuf, PathBuf)> = if single {
             vec![(m.to_path_buf(), mods.clone())]
         } else {
