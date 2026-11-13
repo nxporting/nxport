@@ -228,6 +228,8 @@ pub(crate) fn locate_engine_binary() -> Result<PathBuf, Box<dyn std::error::Erro
     let candidates = [
         PathBuf::from(env!("NXPORT_ENGINE_MACOS")),
         std::env::current_exe()?.with_file_name("nxport"),
+        // A Windows release: macos/nxport beside the builder, as ios/nxport (.github/workflows/release.yml).
+        std::env::current_exe()?.with_file_name("macos").join("nxport"),
         PathBuf::from("target/release/nxport"),
     ];
     for c in &candidates {

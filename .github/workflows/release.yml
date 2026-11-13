@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios
+          targets: aarch64-apple-ios, aarch64-apple-darwin
       # The debug output main's CI saved, for the tests and the builder's ios-engine run. Release output is not worth a
       # cache entry.
       - uses: Swatinem/rust-cache@v2
@@ -53,23 +53,27 @@ jobs:
         run: |
           if (-not (Test-Path 'C:\Program Files\LLVM\bin\ld64.lld.exe')) { choco install llvm -y --no-progress }
           cargo run --locked -p nxport-builder -- ios-engine
+      # The same for the macOS app the Windows builder makes: macos/nxport beside it (pack.rs locate_engine_binary).
+      - name: Build the engine for macOS
+        run: cargo run --locked -p nxport-builder -- macos-engine
       - name: Assemble the archive
         shell: bash
         run: |
           root="nxport-builder-$VERSION"
           stage="$RUNNER_TEMP/stage/$root"
-          mkdir -p "$stage/ios" dist
+          mkdir -p "$stage/ios" "$stage/macos" dist
           cp target/release/nxport-builder.exe "$stage/"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/zig.zip" "https://ziglang.org/download/$ZIG_VERSION/$ZIG_NAME.zip"
           echo "$ZIG_SHA256  $RUNNER_TEMP/zig.zip" | sha256sum -c -
           7z x -bd -o"$RUNNER_TEMP/zig-unpacked" "$RUNNER_TEMP/zig.zip" > /dev/null
           mv "$RUNNER_TEMP/zig-unpacked/$ZIG_NAME" "$stage/zig"
           cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
+          cp target/engines/aarch64-apple-darwin/release/nxport "$stage/macos/nxport"
           # The project's licence, and one file of every other notice: the crates', then the two projects these crates derive from.
           cp LICENSE "$stage/"
-          perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" x86_64-pc-windows-msvc
+          perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" x86_64-pc-windows-msvc aarch64-apple-ios aarch64-apple-darwin
           .github/scripts/fold-licences.sh "$stage/THIRD_PARTY_LICENSES.txt"
-          printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt ios/nxport nxport-builder.exe \
+          printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt ios/nxport macos/nxport nxport-builder.exe \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"
           (cd "$stage" && find . -type f -not -path './zig/*' | sed 's|^\./||' | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
           test -f "$stage/zig/zig.exe"
@@ -117,7 +121,7 @@ jobs:
           cp target/engines/aarch64-apple-darwin/release/nxport "$stage/nxport"
           cp target/engines/aarch64-apple-ios/release/nxport "$stage/ios/nxport"
           cp LICENSE "$stage/"
-          perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" aarch64-apple-darwin
+          perl .github/scripts/notices.pl "$stage/THIRD_PARTY_LICENSES.txt" aarch64-apple-darwin aarch64-apple-ios
           .github/scripts/fold-licences.sh "$stage/THIRD_PARTY_LICENSES.txt"
           printf '%s\n' LICENSE THIRD_PARTY_LICENSES.txt ios/nxport nxport nxport-builder \
             | LC_ALL=C sort > "$RUNNER_TEMP/expected"

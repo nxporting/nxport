@@ -1,31 +1,37 @@
 #!/usr/bin/perl
 # The licence texts of what the builder is built from, as one file for the release archive: each crate the build reaches
-# through normal dependencies, its own licence files. Usage: notices.pl <output file> [target triple]
+# through normal dependencies, its own licence files. Usage: notices.pl <output file> [target triple ...]: each target
+# whose code the archive holds, the union of what each reaches (a Windows release also ships the iOS and macOS engines,
+# whose Apple-only crates a Windows walk never reaches).
 use strict;
 use warnings;
 use JSON::PP;
 
-my ($out, $target) = @ARGV;
-die "usage: notices.pl <output> [target]\n" unless $out;
-my $filter = $target ? "--filter-platform $target" : "";
-my $json = `cargo metadata --format-version 1 --locked $filter`;
-die "cargo metadata failed\n" if $?;
-my $meta = decode_json($json);
-
-my %member = map { $_ => 1 } @{ $meta->{workspace_members} };
-my %node = map { $_->{id} => $_ } @{ $meta->{resolve}{nodes} };
-my @todo = grep { /nxport-builder/ } @{ $meta->{workspace_members} };
-die "no nxport-builder in the workspace\n" unless @todo;
-my %reached;
-while (defined(my $id = shift @todo)) {
-    next if $reached{$id}++;
-    for my $dep (@{ $node{$id}{deps} }) {
-        push @todo, $dep->{pkg} if grep { !defined $_->{kind} } @{ $dep->{dep_kinds} };
+my ($out, @targets) = @ARGV;
+die "usage: notices.pl <output> [target ...]\n" unless $out;
+my (%reached, %member, %package);
+for my $target (@targets ? @targets : (undef)) {
+    my $filter = $target ? "--filter-platform $target" : "";
+    my $json = `cargo metadata --format-version 1 --locked $filter`;
+    die "cargo metadata failed\n" if $?;
+    my $meta = decode_json($json);
+    $member{$_} = 1 for @{ $meta->{workspace_members} };
+    $package{ $_->{id} } = $_ for @{ $meta->{packages} };
+    my %node = map { $_->{id} => $_ } @{ $meta->{resolve}{nodes} };
+    my @todo = grep { /nxport-builder/ } @{ $meta->{workspace_members} };
+    die "no nxport-builder in the workspace\n" unless @todo;
+    my %seen;
+    while (defined(my $id = shift @todo)) {
+        next if $seen{$id}++;
+        $reached{$id} = 1;
+        for my $dep (@{ $node{$id}{deps} }) {
+            push @todo, $dep->{pkg} if grep { !defined $_->{kind} } @{ $dep->{dep_kinds} };
+        }
     }
 }
 
 my @crates = sort { $a->{name} cmp $b->{name} || $a->{version} cmp $b->{version} }
-    grep { $reached{ $_->{id} } && !$member{ $_->{id} } } @{ $meta->{packages} };
+    grep { !$member{ $_->{id} } } map { $package{$_} } keys %reached;
 (my $notices = $0) =~ s{[^\\/]*$}{};
 $notices .= "../notices";
 sub slurp {
@@ -40,6 +46,8 @@ sub kept_for {
     return ('opus-decoder.txt', 'libopus.txt') if $name eq 'opus-decoder';
     return ('dear-imgui-rs.txt', 'dear-imgui.txt') if $name =~ /^dear-imgui/;
     return ('openh264-rs.txt', 'openh264.txt') if $name =~ /^openh264/;
+    # The objc2 project publishes its crates without licence files (its LICENSE-MIT.txt; each is MIT, or offers it).
+    return ('objc2.txt') if $name =~ /^(objc2|block2$|dispatch2$)/;
     return ();
 }
 open(my $o, '>:raw', $out) or die "$out: $!\n";
