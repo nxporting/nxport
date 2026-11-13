@@ -133,7 +133,7 @@ impl GuestMemorySpace {
         // code, so the guest must sit at the same address in the run that dumps the image (macOS) and the runs that load
         // it (iOS). A fixed spot both address spaces leave free; any other run lets the kernel choose.
         // Lifted code (docs/windows-port.md) has the guest addresses it was lifted at built in: always fixed there.
-        let fixed = !cfg!(nx_native)
+        let fixed = !crate::cpu::aot::native_rewrites()
             || (crate::cpu::aot::active()
                 && crate::horizon::fs::mods().iter().any(|(_, d)| crate::horizon::fs::mod_has_plugin(d)))
             || crate::settings::get().guest.fixed_guest_base;

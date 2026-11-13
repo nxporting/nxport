@@ -131,6 +131,8 @@ fn mod_module_name(label: &str) -> String {
 /// replaces the code of every region it holds.
 #[cfg(nx_runtime)]
 pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Vec<GuestModule>, String> {
+    // The C a lift makes must not depend on the host: patched as a lifted runtime patches, on a Mac too.
+    cpu::aot::patch_for_lifted();
     settings::try_install(s)?;
     let l = load().map_err(|e| e.to_string())?;
     if let (Some((label, _)), None) = (l.mod_inits.first(), patched) {
