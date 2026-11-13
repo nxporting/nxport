@@ -202,6 +202,7 @@ fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
                         super::HITCH_PIPE_N.fetch_add(take as u64, std::sync::atomic::Ordering::Relaxed);
                         continue;
                     }
+                    crate::gpu::pipeline_list::listed_done();
                     let mut g = pipe_queue().0.lock().unwrap();
                     g.listed_done += 1;
                     g.listed_failed += !ok as usize;
@@ -252,6 +253,7 @@ fn push_job(job: SendJob, listed: bool) {
     if listed {
         g.listed.push_back(job);
         g.listed_n += 1;
+        crate::gpu::pipeline_list::listed_queued(1);
     } else {
         g.draws.push_back(job);
     }
@@ -266,6 +268,7 @@ fn promote(slot: &std::sync::Arc<Slot>) {
         let j = g.listed.remove(i).unwrap();
         g.draws.push_front(j);
         g.listed_n -= 1;
+        crate::gpu::pipeline_list::listed_unqueued();
     }
 }
 
@@ -5648,6 +5651,7 @@ impl Gfx {
                         }
                         AsyncPipe::Pending => {
                             {
+                                crate::gpu::pipeline_list::draw_skipped_compiling();
                                 if super::tracing_frame() {
                                     println!("[ftrace] SKIP draw: pipeline still compiling");
                                 }

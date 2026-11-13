@@ -67,8 +67,14 @@ pub const STRENGTHS: [u32; 3] = [50, 100, 150];
 /// One entry of the menu bar, declared once here and drawn by each desktop host (host/display.rs with AppKit,
 /// host/menu_win.rs with Win32). What a host adds is its own: shortcuts by command id, and how Controls looks.
 pub enum Entry {
-    /// A command: its label and id; `choice` when it is one of a group of values (Windows draws a radio mark).
-    Item { label: String, id: u16, choice: bool },
+    /// A command: its label and id; `choice` when it is one of a group of values (Windows draws a radio mark; AppKit's
+    /// check mark already shows the chosen one).
+    Item {
+        label: String,
+        id: u16,
+        #[cfg_attr(not(windows), allow(dead_code))]
+        choice: bool,
+    },
     /// Text that does nothing (the Mods list).
     Note(String),
     Separator,

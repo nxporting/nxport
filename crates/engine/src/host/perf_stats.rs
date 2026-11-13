@@ -145,11 +145,11 @@ pub fn current_stats() -> FrameStats {
 // The overlay's window, on every renderer
 // ---------------------------------------------------------------------------
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", target_os = "ios", windows))]
 use dear_imgui_rs as imgui;
 
 /// The stats, and the frame times oldest first with how many there are.
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", target_os = "ios", windows))]
 pub fn snapshot() -> (FrameStats, [f32; HISTORY_LEN], usize) {
     let h = HISTORY.lock().unwrap();
     let mut buf = [0.0f32; HISTORY_LEN];
@@ -163,7 +163,7 @@ pub fn snapshot() -> (FrameStats, [f32; HISTORY_LEN], usize) {
     (h.stats, buf, n)
 }
 
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", target_os = "ios", windows))]
 pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32]) {
     let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.78]);
     let _border = ui.push_style_color(imgui::StyleColor::Border, [0.35, 0.35, 0.45, 0.6]);
@@ -228,3 +228,40 @@ pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32]) {
         });
 }
 
+
+/// While the picture waits on shaders (gpu::pipeline_list::take_frame_progress): a bar at the bottom of the screen with
+/// the listed pipelines compiled so far, or, when the shaders waited for are not on the list, the words alone.
+#[cfg(any(target_os = "macos", target_os = "ios", windows))]
+pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, listed: Option<(usize, usize)>) {
+    let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.85]);
+    let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(6.0));
+    let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([14.0, 10.0]));
+    unsafe {
+        imgui::sys::igSetNextWindowPos(
+            imgui::sys::ImVec2 { x: w / 2.0, y: h - 24.0 },
+            imgui::Condition::Always as i32,
+            imgui::sys::ImVec2 { x: 0.5, y: 1.0 },
+        );
+    }
+    ui.window("Shaders##Progress")
+        .flags(
+            imgui::WindowFlags::NO_TITLE_BAR
+                | imgui::WindowFlags::NO_RESIZE
+                | imgui::WindowFlags::NO_MOVE
+                | imgui::WindowFlags::NO_SCROLLBAR
+                | imgui::WindowFlags::ALWAYS_AUTO_RESIZE
+                | imgui::WindowFlags::NO_SAVED_SETTINGS
+                | imgui::WindowFlags::NO_FOCUS_ON_APPEARING
+                | imgui::WindowFlags::NO_NAV_INPUTS
+                | imgui::WindowFlags::NO_NAV_FOCUS
+                | imgui::WindowFlags::NO_MOUSE_INPUTS,
+        )
+        .build(|| match listed {
+            Some((done, total)) => {
+                ui.text(format!("Compiling shaders: {done} of {total}"));
+                let width = (w * 0.4).clamp(220.0, 520.0);
+                ui.progress_bar(done as f32 / total.max(1) as f32).size([width, 0.0]).overlay_text("").build();
+            }
+            None => ui.text("Compiling shaders"),
+        });
+}

@@ -251,6 +251,7 @@ pub fn compile(entries: Vec<Entry>) {
     let Some((dev, cache)) = TARGET.get().cloned() else { return };
     let entries: Vec<Entry> = entries.into_iter().map(ensure_nvn).collect();
     let total = entries.len();
+    crate::gpu::pipeline_list::listed_queued(total);
     let queue = Arc::new(Mutex::new(entries));
     let built = Arc::new(AtomicUsize::new(0));
     let threads = std::thread::available_parallelism().map_or(2, |n| (n.get() / 3).clamp(1, 4));
@@ -261,6 +262,8 @@ pub fn compile(entries: Vec<Entry>) {
         let _ = std::thread::Builder::new().name(format!("vk-pipe-compile{i}")).spawn(move || unsafe {
             loop {
                 let Some(e) = queue.lock().unwrap().pop() else { break };
+                // Done whichever way it ends (made, or its stages not in this game yet).
+                let _done = Done;
                 let Some((v, f)) = stages(&dev, &e) else { continue };
                 let Some(d) = desc(&dev, &e, &v, f.as_ref()) else { continue };
                 let Some(lay) = pipelines::made_layout(v.id, None, f.as_ref().map(|f| f.id)).or_else(|| {
@@ -282,5 +285,14 @@ pub fn compile(entries: Vec<Entry>) {
                 );
             }
         });
+    }
+}
+
+/// Counts a listed entry done for the shader progress bar (gpu::pipeline_list) when it goes out of scope.
+struct Done;
+
+impl Drop for Done {
+    fn drop(&mut self) {
+        crate::gpu::pipeline_list::listed_done();
     }
 }
