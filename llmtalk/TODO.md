@@ -8,6 +8,15 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
+  28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
+  Windows PC (scratch decode loop, release): DmT_OP_GanonWakeUp_PreRender.webm, 1920x1080 30 fps, 6421 frames at 57.1
+  fps decoded, slowest frame 43.6 ms. A phone has fewer, slower cores, and the first movies play while the engine
+  compiles the listed pipelines (from source on a Windows-built .ipa). To ask the user: also in later movies, after
+  the shader bar is gone? Candidates: hardware VP9 through VideoToolbox (check that iOS lets apps decode VP9 in
+  hardware, and which devices), decoding ahead of the presentation time (helps spikes, not a sustained deficit).
+  Measure on the phone before choosing (the log has the movie's timing if the HLE logs it; else add that).
+
 - **macOS parity, open (2026-11-09, Mac session):** (1) TotK 1.1.2 logs "the camera's angle code was not found":
   camera_angles.rs's AROUND pattern does not match 1.1.2, so Exact Mouse Aim does nothing there on any platform (found
   on the Mac's 1.1.2 dump; the Windows work used 1.0.0). (2) Natively the camera pitch and bow-aim hooks
