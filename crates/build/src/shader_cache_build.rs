@@ -1,10 +1,10 @@
-// crates/cli/src/shader_cache_build.rs
-// `nxport-cli shaders build`: the ahead-of-time shader cache for the Metal backend (port of the former
+// crates/build/src/shader_cache_build.rs
+// `nxport-builder shaders build`: the ahead-of-time shader cache for the Metal backend (port of the former
 // tools/build_shader_cache.py).
 //
 // Input : directories of stage dumps (NAME_sN.code, optional NAME_sN.ctrl), written by the engine
-//         (--dump-shaders=<dir>, missing-stage dumps) or extracted from RomFS (`nxport-cli shaders extract`). The index
-//         covers exactly the stages in the given directories.
+//         (--dump-shaders=<dir>, missing-stage dumps) or extracted from RomFS (`nxport-builder shaders extract`).
+//         The index covers exactly the stages in the given directories.
 // Output: <out>/shaders_NNNN.metallib   libraries of LINK_CHUNK stages each, entry point `s_<hash>`
 //         <out>/index.txt               lookup index + resource bindings, parsed by crates/engine/src/shader_cache.rs
 //         <out>/failures.txt            stages not translated, with the phase and message
@@ -1271,10 +1271,11 @@ pub fn build(o: &Options) -> Result<(), String> {
     Ok(())
 }
 
-/// `nxport-cli shaders build-ios CACHE OUT`: the iOS flavour of a macOS cache. The same index and failure list, with the
-/// metallibs compiled for iOS from the specialized MSL the macOS build keeps in CACHE/work. The engine finds functions by
-/// entry name in whatever libraries it loads, so the grouping into libraries need not match the macOS build.
-/// Incremental: an .air is rebuilt only when its .metal is newer. MSL 3.0 (spirv-cross --msl-version 30000) needs iOS 16.
+/// `nxport-builder shaders build-ios CACHE OUT`: the iOS flavour of a macOS cache. The same index and failure list,
+/// with the metallibs compiled for iOS from the specialized MSL the macOS build keeps in CACHE/work. The engine finds
+/// functions by entry name in whatever libraries it loads, so the grouping into libraries need not match the macOS
+/// build. Incremental: an .air is rebuilt only when its .metal is newer. MSL 3.0 (spirv-cross --msl-version 30000)
+/// needs iOS 16.
 pub fn build_ios(
     cache: &Path,
     out: &Path,
@@ -1284,7 +1285,7 @@ pub fn build_ios(
 ) -> Result<(), String> {
     const IOS_LINK_CHUNK: usize = 150; // fewer files open on iOS than macOS's 50 per library (iOS limits open files)
     const MIN_IOS: &str = "16.0";
-    let src = std::fs::canonicalize(cache.join("work")).map_err(|_| format!("{}/work missing: build the macOS cache first (nxport-cli shaders build)", cache.display()))?;
+    let src = std::fs::canonicalize(cache.join("work")).map_err(|_| format!("{}/work missing: build the macOS cache first (nxport-builder shaders build)", cache.display()))?;
     std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let out = std::fs::canonicalize(out).map_err(|e| e.to_string())?;
     let work = out.join("work_ios");

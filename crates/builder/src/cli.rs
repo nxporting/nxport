@@ -1,4 +1,5 @@
-// nxport-cli: shader caches, app bundles and frame-dump conversion for nxport.
+// The builder's commands (`nxport-builder <command>`): shader caches, app bundles, lifted code and frame-dump
+// conversion, one step at a time, for development and the release workflow.
 
 use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
@@ -12,17 +13,10 @@ use nxport_build::{ipa, macho};
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
-
-#[derive(Parser)]
-#[command(name = "nxport-cli", version, about = "Shader caches, app bundles and frame-dump conversion for nxport")]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
+use clap::Subcommand;
 
 #[derive(Subcommand)]
-enum Command {
+pub enum Command {
     #[cfg(target_os = "macos")]
     /// Package a macOS .app with a game dump, its mods and its shader cache
     Pack(PackArgs),
@@ -222,7 +216,7 @@ fn parse_hex(s: &str) -> Result<u64, String> {
 }
 
 #[derive(clap::Args)]
-struct PackArgs {
+pub struct PackArgs {
     /// Game dump (ExeFS/ and RomFS/)
     #[arg(short, long)]
     dump: PathBuf,
@@ -244,7 +238,7 @@ struct PackArgs {
 }
 
 #[derive(Subcommand)]
-enum Shaders {
+pub enum Shaders {
     /// Extract every shader stage embedded in a RomFS
     Extract {
         /// The game's RomFS directory
@@ -355,8 +349,8 @@ enum Shaders {
     },
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    match Cli::parse().command {
+pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
         #[cfg(target_os = "macos")]
         Command::Pack(a) => {
             let mods = a.mods.or_else(|| {

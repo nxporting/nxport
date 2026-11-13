@@ -1,4 +1,4 @@
-// crates/cli/src/ppm2png.rs
+// crates/build/src/ppm2png.rs
 // Fast standalone PPM to PNG converter in pure Rust.
 // Replaces tools/ppm2png.py with zero external python dependencies.
 

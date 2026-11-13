@@ -137,7 +137,7 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
 }
 
 /// A stage the cache lacks draws nothing (its program's draws are skipped): write it to
-/// shader_dump_missing/ in the game's data directory (named by weak hash, once) so the next cache build (nxport-cli
+/// shader_dump_missing/ in the game's data directory (named by weak hash, once) so the next cache build (nxport-builder
 /// shaders build with that directory) translates it. Every play session collects what it was missing; games use stage
 /// variants that depend on settings and places. --no-miss-dump disables it; --miss-dump-dir picks the directory.
 fn dump_missing(st: &StageCode, index: usize) {

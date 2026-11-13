@@ -1,6 +1,6 @@
 // GPU backend conformance: frame captures replayed on the backend and checked against their references, pass by pass.
 //
-// Synthetic scenarios (nxport-cli gpu-scenario) are written fresh and checked against the references in tests/gpu/.
+// Synthetic scenarios (nxport-builder gpu-scenario) are written fresh and checked against the references in tests/gpu/.
 // Game captures (nxport --capture-frame) hold game data and stay outside the repository: every capture with references
 // in a game's data directory (games/<title id>/captures/*/ref in nxport::config::support_dir) is checked too, and
 // without any that part is skipped. A capture's args.txt holds engine options for its replay, one per line (the shader
@@ -10,18 +10,18 @@
 // Metal's, and a capture's tolerance.toml can relax them for another backend ([vulkan] table).
 //
 // Re-recording a scenario's references after a deliberate change:
-//   nxport-cli gpu-scenario NAME DIR && nxport-cli gpu-replay DIR --record --refs crates/cli/tests/gpu/NAME
+//   nxport-builder gpu-scenario NAME DIR && nxport-builder gpu-replay DIR --record --refs crates/builder/tests/gpu/NAME
 #![cfg(target_os = "macos")]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_nxport-cli"))
+fn builder() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_nxport-builder"))
 }
 
 fn run(mut c: Command) -> (bool, String) {
-    let out = c.output().expect("runs nxport-cli");
+    let out = c.output().expect("runs nxport-builder");
     let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     (out.status.success(), text)
 }
@@ -40,7 +40,7 @@ fn summary(text: &str) -> String {
 #[test]
 fn scenarios() {
     let (ok, list) = run({
-        let mut c = cli();
+        let mut c = builder();
         c.args(["gpu-scenario", "list"]);
         c
     });
@@ -52,7 +52,7 @@ fn scenarios() {
         let dir = tmp.join(name);
         let _ = std::fs::remove_dir_all(&dir);
         let (ok, text) = run({
-            let mut c = cli();
+            let mut c = builder();
             c.args(["gpu-scenario", name]).arg(&dir);
             c
         });
@@ -63,7 +63,7 @@ fn scenarios() {
         }
         for backend in BACKENDS {
             let (ok, text) = run({
-                let mut c = cli();
+                let mut c = builder();
                 c.arg("gpu-replay").arg(&dir).arg("--all").arg("--backend").arg(backend).arg("--refs").arg(refs.join(name));
                 c
             });
@@ -106,7 +106,7 @@ fn game_frames() {
     }
     let mut failed = Vec::new();
     for ((dir, cache), backend) in caps.iter().flat_map(|c| BACKENDS.iter().map(move |b| (c.clone(), *b))) {
-        let mut c = cli();
+        let mut c = builder();
         c.arg("gpu-replay").arg(&dir).arg("--backend").arg(backend).arg("--");
         let args: Vec<String> = std::fs::read_to_string(dir.join("args.txt"))
             .unwrap_or_default()
