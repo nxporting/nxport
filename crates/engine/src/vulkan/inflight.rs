@@ -115,6 +115,7 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
             let ns = ((ts[1] - ts[0]) as f64 * period as f64) as u64;
             super::GPU_NS.fetch_add(ns, Ordering::Relaxed);
             super::LAST_GPU_NS.store(ns, Ordering::Relaxed);
+            super::OVERLAY_GPU_NS.fetch_add(ns, Ordering::Relaxed);
             if !d.pass_labels.is_empty() {
                 let mut t = vec![0u64; d.pass_labels.len()];
                 if device.get_query_pool_results(d.timestamps, 2, &mut t, vk::QueryResultFlags::TYPE_64).is_ok() {
@@ -173,5 +174,6 @@ pub(super) fn wait(serial: u64, timeout_ns: u64) -> bool {
     let ns = t0.elapsed().as_nanos() as u64;
     super::WAIT_NS.fetch_add(ns, Ordering::Relaxed);
     super::LAST_WAIT_NS.fetch_add(ns, Ordering::Relaxed);
+    super::OVERLAY_WAIT_NS.fetch_add(ns, Ordering::Relaxed);
     true
 }
