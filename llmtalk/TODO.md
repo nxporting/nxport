@@ -22,7 +22,8 @@ and update this file when you finish or drop it.
   thread: debug frames are larger, so a deep recursion in sass2spv (or a thread spawned with a small stack) is the
   likely place. Release builds are unaffected; matters for debugging only.
 
-- **Release blocker: TotK's hosted PGO profiles no longer match (2026-11-13 night).** Profiles are keyed
+- **TotK PGO profiles: trained for 1.0.0 and 1.1.2 (2026-11-13), waiting to be published.** (Was: "hosted profiles no
+  longer match"; there were none hosted.) Profiles are keyed
   <main build id>-<lift::lifted_hash> (hash of the lifted C). The night's changes alter the lifted C for TotK 1.0.0 and
   1.1.2: the equipment-cooldown patch (dcddb9e, game code patched before lifting), the lifter's yield/wfe pause
   (63306e6), and the high-fps gameplay fixes in progress. Without a matching profile a Windows build loses PGO (6-12% a
