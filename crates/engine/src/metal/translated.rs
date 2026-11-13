@@ -464,6 +464,29 @@ pub(super) fn async_pipeline(key: &[u64], job: PipeJob) -> AsyncPipe {
     r
 }
 
+/// Waits for the pipeline async_pipeline started for `key` to be made or to fail, however long it takes: for a draw into
+/// targets not drawn every frame (State::enc_recur), which a skip could leave undrawn for good.
+pub(super) fn async_pipeline_wait(key: &[u64]) -> AsyncPipe {
+    let Some(slot) = ASYNC_SLOTS.get_or_init(Default::default).lock().unwrap().get(key).cloned() else {
+        return AsyncPipe::Failed;
+    };
+    if matches!(*slot.0.lock().unwrap(), SlotState::Pending) {
+        promote(&slot);
+    }
+    let t0 = std::time::Instant::now();
+    let g = slot.1.wait_while(slot.0.lock().unwrap(), |s| matches!(s, SlotState::Pending | SlotState::Running)).unwrap();
+    ASYNC_WAITED_US.fetch_add(t0.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
+    let r = match &*g {
+        SlotState::Ready(p) => AsyncPipe::Ready(p.clone()),
+        SlotState::Failed => AsyncPipe::Failed,
+        SlotState::Pending | SlotState::Running => AsyncPipe::Pending,
+    };
+    if !matches!(r, AsyncPipe::Pending) {
+        ASYNC_SKIPS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    r
+}
+
 /// What a stage's driver cbuf (guest cbuf 0) holds: EncodeCtx::driver_cb_memo.
 #[derive(Clone, PartialEq)]
 pub(crate) struct DriverCbKey {
@@ -1683,6 +1706,9 @@ pub(super) struct DrawPacket {
     pub(super) tiny: Option<TinyPlan>,
     /// The draw came from a command list recorded in an earlier frame (--log-phases).
     pub(super) from_old_list: bool,
+    /// A pass target was drawn in the previous frame too (State::enc_recur): a skip while the pipeline compiles is
+    /// made up next frame; otherwise the draw waits for its pipeline.
+    pub(super) targets_recur: bool,
 }
 
 /// A draw the tiny-pass path runs as compute: the command buffer, its color outputs (color index, target texture) and
@@ -1751,6 +1777,7 @@ impl Default for DrawPacket {
             nvn_targets: ([(0, 0); 8], (0, 0), 1),
             tiny: None,
             from_old_list: false,
+            targets_recur: false,
         }
     }
 }
@@ -1779,6 +1806,7 @@ impl DrawPacket {
         self.prim = prim;
         self.call = call;
         self.from_old_list = st.in_old_list;
+        self.targets_recur = st.enc_recur;
         self.vs = Some(vs);
         self.fs = fs;
         self.vs_code = CodeRef {
@@ -5051,6 +5079,22 @@ impl Gfx {
                 }
             }
             self.end_encoder_keep_clears(st);
+            // Whether this pass's targets were drawn in the previous frame too (State::enc_recur), from the last two
+            // frames each began a pass in; pruned once a frame to what that test reads.
+            let f = super::presented_frames() + 1;
+            if st.rt_frames_pruned != f {
+                st.rt_frames_pruned = f;
+                st.rt_frames.retain(|_, v| v.0 + 1 >= f);
+            }
+            let mut recur = false;
+            for t in color_texs.iter().map(|(_, t, _)| t).chain(depth_tex.as_ref().map(|(t, _)| t)) {
+                let e = st.rt_frames.entry(super::storage_id(t)).or_insert((0, 0));
+                if e.0 != f {
+                    *e = (f, e.0);
+                }
+                recur |= e.1 != 0 && e.1 + 1 == f;
+            }
+            st.enc_recur = recur;
             let mut take_clear =
                 |t: &Tex, level: usize, layer: usize, color: bool| -> Option<super::ClearKind> {
                     let i = st.pending_clears.iter().position(|c| {
@@ -5686,7 +5730,14 @@ impl Gfx {
                         batched: false,
                         args: use_ab,
                     };
-                    match async_pipeline(key.as_slice(), job) {
+                    let mut r = async_pipeline(key.as_slice(), job);
+                    // Still compiling: skipped only where the pass's targets are drawn every frame (the next frame draws
+                    // it); a target drawn now and then (an icon, a cloud or fog layer made once) may never be drawn again,
+                    // so its draw waits.
+                    if matches!(r, AsyncPipe::Pending) && !p.targets_recur {
+                        r = async_pipeline_wait(key.as_slice());
+                    }
+                    match r {
                         AsyncPipe::Ready(pipe) => {
                             env.sh
                                 .translated_pipelines
