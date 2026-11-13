@@ -26,6 +26,10 @@ left out); 2ccaf73 TotK exact mouse aim on 1.1.2 and on native engines. To check
    frame with --replay=8800:40 --replay-ab --replay-ab-tile --replay-dump.
 7. Cheats (win-worker): a test cheat file loads and runs on the Mac; a real data cheat (e.g. rupees) and the Cheats
    submenu in the window are untested.
+8. Window-only checks of win-worker's night (type-checked only): resizing the game window still changes TotK's aspect
+   (Metal and Vulkan, e91df2e); the shader progress bar shows with async shaders on and an empty pipeline cache, and the
+   perf overlay (Cmd-O) still draws (2f61d11); every menu item and key as before (c5e0bc2, compared in code only).
+9. iPhone: the screen no longer auto-locks mid-game (e99e1a6); log.txt has "Device: thermal state ..." lines (9689895).
 Also unpushed from the Mac: 9878ced (Metal waits for a compiling pipeline unless its targets are drawn every frame,
 async compilation only), 187179d (a Mac lifts the game to the same C as Windows: PARITY #2's loader side).
 Found tonight, not regressions: the frame capture misses some lighting input (replay vs live 18-26% of pixels in sun,
