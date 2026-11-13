@@ -24,6 +24,7 @@ pub use nxport::metal::msl_specialize;
 // The macOS app, packed on any host (PARITY #1).
 #[cfg(any(target_os = "macos", windows))]
 pub mod pack;
+pub mod pe_exports;
 #[cfg(target_os = "macos")]
 pub mod pipeline_archive;
 pub mod ppm2png;
