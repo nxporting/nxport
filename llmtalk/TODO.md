@@ -29,6 +29,11 @@ and update this file when you finish or drop it.
   frame, and cold code compiled for size). After the night's lifter-output changes are all in: retrain both versions'
   profiles (the play-folder PGO procedure, "PGO in the play folder" below) and publish them where the builder fetches
   them. Publishing is outward-facing: the user's call (left for the morning).
+  **2026-11-13 morning, win-worker:** 1.0.0 could be trained now (mac-worker's 2ccaf73 / 187179d leave its lifted C
+  alone), but the training kit is gone: nxport-build is empty (prof_ctl.c, LLVM 22.1.8's clang_rt.profile lib and the
+  merged profiles of 11-05 are no longer there), and no 1.0.0 dump is mounted since the power cut. Question for the
+  user: where did the kit go (deleted on purpose?), and should the builder learn to make profiles itself (zig's own
+  -fprofile-generate plus a profile runtime it builds), so training needs no separate LLVM?
 
 - **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
   28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
