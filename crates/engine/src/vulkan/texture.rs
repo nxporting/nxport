@@ -94,6 +94,10 @@ pub struct Image {
     /// The write sequence its contents are as of: its last GPU write, or the upload. A GPU write over the same memory with a
     /// later one has made them stale; the memory's bytes need not be looked at to know.
     content_seq: u64,
+    /// Hashes of its guest bytes per band (layout::level0_bands) as last uploaded, for images that upload by band (one
+    /// level, one layer, 2D, block-linear): a CPU change uploads only the bands that differ (TotK's font thread adds a few
+    /// glyphs to its 8 MiB atlas at a time).
+    bands: Vec<u64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -474,14 +478,30 @@ impl Textures {
             self.flush_overlaps(dev, d);
         }
         let Some(img) = self.images.get_mut(d) else { return };
+        // Only the CPU changed it since its last upload: the bands that differ, when fewer than half do.
+        let changed_bands = if rebuilt.is_none() && !first && changed && !overwritten && !img.bands.is_empty() {
+            band_hashes(d).and_then(|now| {
+                let diff: Vec<usize> = (0..now.len()).filter(|&i| img.bands.get(i) != Some(&now[i])).collect();
+                (now.len() == img.bands.len() && diff.len() * 2 < now.len()).then_some((now, diff))
+            })
+        } else {
+            None
+        };
         Self::take_baseline(d, img);
         img.content_seq = GPU_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         img.gpu_written = false;
         img.settled = false;
         // Rebuilt from its own GPU contents too: guest memory still lacks them.
         img.unflushed = rebuilt == Some(true);
-        if rebuilt.is_none() {
+        if let Some((now, diff)) = changed_bands {
+            img.bands = now;
+            if !diff.is_empty() {
+                self.upload_bands(dev, d, &diff);
+            }
+        } else if rebuilt.is_none() {
             self.upload(dev, d);
+        } else {
+            img.bands.clear();
         }
     }
 
@@ -1197,10 +1217,62 @@ impl Textures {
             never_loaded: false,
             interior_token: None,
             content_seq: 0,
+            bands: Vec::new(),
         })
     }
 
     /// Fills every level / layer from guest memory (block-linear or pitch-linear), as the Metal backend does.
+    /// Uploads bands `bands` (layout::level0_bands) of a single-level 2D image from guest memory.
+    unsafe fn upload_bands(&mut self, dev: &Dev, d: &Desc, bands: &[usize]) {
+        let Some(img) = self.images.get(d) else { return };
+        let p = &d.params;
+        let (Some(info), Some((rows, _))) = (layout::format_info(p.format), layout::level0_bands(p)) else { return };
+        let aspect = format::aspects(img.format);
+        let (w, h) = (img.extent.width as usize, img.extent.height as usize);
+        let bpr = w.div_ceil(info.block_w as usize) * info.bytes as usize;
+        let mut data: Vec<u8> = Vec::new();
+        let mut regions = Vec::new();
+        for &b in bands {
+            let y = b * rows;
+            if y >= h {
+                continue;
+            }
+            let bh = rows.min(h - y);
+            let off = data.len();
+            data.resize(off + bpr * bh.div_ceil(info.block_h as usize), 0);
+            if !layout::read_texels_2d(d.storage as *const u8, 0, p, 0, 0, y as i32, w as i32, bh as i32, data[off..].as_mut_ptr()) {
+                data.truncate(off);
+                continue;
+            }
+            regions.push(
+                vk::BufferImageCopy::default()
+                    .buffer_offset(off as u64)
+                    .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(aspect).mip_level(0).base_array_layer(0).layer_count(1))
+                    .image_offset(vk::Offset3D { x: 0, y: y as i32, z: 0 })
+                    .image_extent(vk::Extent3D { width: w as u32, height: bh as u32, depth: 1 }),
+            );
+            data.resize(data.len().next_multiple_of(16), 0);
+        }
+        if regions.is_empty() {
+            return;
+        }
+        let image = img.image;
+        let Ok(staging) = self.staging(dev, data.len()) else { return };
+        super::hitch_add(super::HITCH_UPLOADS, 1);
+        super::hitch_add(super::HITCH_UPLOAD_BYTES, data.len() as u64);
+        std::ptr::copy_nonoverlapping(data.as_ptr(), staging.ptr, data.len());
+        let batched = self.batch.is_some();
+        self.record(dev, |cb| {
+            dev.full_barrier(cb);
+            dev.checkpoint(cb, "texture band upload (W, H, format, guest address)", [p.width as u64, p.height as u64, p.format as u64, d.storage as u64]);
+            dev.device.cmd_copy_buffer_to_image(cb, staging.buffer, image, vk::ImageLayout::GENERAL, &regions);
+        });
+        match &mut self.batch {
+            Some(b) if batched => b.staging.push(staging),
+            _ => self.recycle_staging(dev, staging),
+        }
+    }
+
     unsafe fn upload(&mut self, dev: &Dev, d: &Desc) {
         let Some(img) = self.images.get(d) else { return };
         let p = &d.params;
@@ -1277,6 +1349,11 @@ impl Textures {
         if regions.is_empty() {
             return;
         }
+        let bands = if levels == 1 && layers == 1 && !is3d && !linear { band_hashes(d).unwrap_or_default() } else { Vec::new() };
+        if let Some(img) = self.images.get_mut(d) {
+            img.bands = bands;
+        }
+        let Some(img) = self.images.get(d) else { return };
         if super::astc::is_astc(p.format) && img.format == vk::Format::R8G8B8A8_UNORM {
             let (bw, bh) = (info.block_w as u32, info.block_h as u32);
             self.upload_astc(dev, d, &data, &regions, bw, bh);
@@ -1774,4 +1851,17 @@ mod index_tests {
             assert_eq!(got, want, "range {start:#x}..{end:#x}");
         }
     }
+}
+
+/// Band hashes of image `d`'s guest bytes, for images that upload by band (see `Image::bands`).
+unsafe fn band_hashes(d: &Desc) -> Option<Vec<u64>> {
+    let p = &d.params;
+    // ASTC is decoded on upload: bands of its raw blocks cannot be copied in.
+    if p.target != layout::NVN_TARGET_2D || p.levels > 1 || p.samples > 1 || d.storage <= 0x10000 || super::astc::is_astc(p.format) {
+        return None;
+    }
+    let (_, band) = layout::level0_bands(p)?;
+    let len = layout::compute_layout(p).total as usize;
+    let bands = len.div_ceil(band);
+    Some((0..bands).map(|i| hash_bytes(std::slice::from_raw_parts((d.storage + i * band) as *const u8, band.min(len - i * band)))).collect())
 }
