@@ -55,9 +55,19 @@ pub fn patch_for_native() {
     FOR_NATIVE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// This process patches guest code as a lifted runtime does, though it could run it natively: a Mac lifting a game for
+/// the Windows app, whose C must equal the Windows host's lift.
+static FOR_LIFTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Patch as a lifted runtime does (crate::guest_modules, before the game loads).
+pub fn patch_for_lifted() {
+    FOR_LIFTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Whether guest code gets the rewrites native execution needs (x18, tpidr_el0, svc, exclusives).
 pub fn native_rewrites() -> bool {
-    cfg!(nx_native) || FOR_NATIVE.load(std::sync::atomic::Ordering::Relaxed)
+    (cfg!(nx_native) && !FOR_LIFTED.load(std::sync::atomic::Ordering::Relaxed))
+        || FOR_NATIVE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Makes this process build an image in memory instead of what the settings say; before anything asks for the mode.

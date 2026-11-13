@@ -105,7 +105,9 @@ pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::lo
         crate::horizon::hle::pace_to_present("PlacementMgr");
     }
     #[cfg(nx_native)]
-    install_native_hooks(base, mem_space);
+    if crate::cpu::aot::native_rewrites() {
+        install_native_hooks(base, mem_space);
+    }
 }
 
 #[cfg(nx_native)]
