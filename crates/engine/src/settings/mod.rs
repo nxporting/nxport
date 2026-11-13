@@ -288,6 +288,8 @@ group! {
         split_ms: f64 = 1.0,
         /// Run tiny render passes as compute kernels
         tiny_compute: bool = true,
+        /// Draws that sample their own pass's colour targets at their own pixel read the tile instead of ending the pass
+        tile_feedback: bool = false,
         /// Unlocked frame rates (present interval 0): start frames on the display's refresh (F6 toggles)
         display_pacing: bool = true,
         /// Largest tiny-pass rectangle, in pixels
@@ -347,6 +349,8 @@ group! {
         replay_ab_null_draws: u8 = 0,
         /// Side B: render encoders cut every N draws
         replay_ab_split: Option<u32> = None,
+        /// Replay side B reads feedback from the tile (--tile-feedback), side A ends the pass as without it
+        replay_ab_tile: bool = false,
         /// Capture presented frame N for GPU backend tests: its NVN commands, the memory they reach and the textures only
         /// the GPU holds
         capture_frame: Option<u64> = None,

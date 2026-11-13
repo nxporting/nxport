@@ -46,6 +46,7 @@ pub(crate) mod rt_guard;
 pub mod shader_cache;
 mod tex_backing;
 mod tex_heap;
+mod tile_feedback;
 mod translated;
 
 use crate::nvn::api::NvnTexture;
@@ -6835,6 +6836,15 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                     e.saturating_sub(LAST.swap(e, Relaxed)) as f64 / 50.0
                 }, SLOW_RES[0].swap(0, Relaxed) as f64 / 50.0, SLOW_RES[1].swap(0, Relaxed) as f64 / 50.0 / 1e6,
                 EPOCH_BUMPS[0].swap(0, Relaxed) as f64 / 50.0, EPOCH_BUMPS[1].swap(0, Relaxed) as f64 / 50.0);
+                if tile_feedback::enabled() {
+                    let s = &tile_feedback::STATS;
+                    println!(
+                        "[timeline] tile feedback: {:.1} draws per frame read the tile; variants made {}, not provable {}",
+                        s[1].swap(0, Relaxed) as f64 / 50.0,
+                        s[0].load(Relaxed),
+                        s[2].load(Relaxed)
+                    );
+                }
             }
         }
     });
