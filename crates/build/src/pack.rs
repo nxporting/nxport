@@ -1,4 +1,4 @@
-// crates/cli/src/pack.rs
+// crates/build/src/pack.rs
 // A macOS .app with the engine, a game dump (ExeFS + RomFS), its mods and its shader cache.
 
 use std::fs;

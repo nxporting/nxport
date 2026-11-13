@@ -1,4 +1,4 @@
-// Draw path that runs the game's own shaders (translated ahead of time, see nxport-cli shaders build and
+// Draw path that runs the game's own shaders (translated ahead of time, see nxport-builder shaders build and
 // metal/shader_cache.rs).
 //
 // What it maps (conventions in the project notes; sources: Ryujinx Graphics.Shader, deko3d):
@@ -10,7 +10,7 @@
 //   - cbuf 1              the stage's compiler-generated constant bank (inside the stage data, after the code)
 //   - cbuf N+3            user uniform buffer N
 //   - textures            texture handle table (cbuf 2, 8-byte entries from byte 0x20) -> BindTexture index
-//   - clip space          the vertex stage negates y and remaps z (crates/cli/src/msl_specialize.rs); the winding flips
+//   - clip space          the vertex stage negates y and remaps z (metal/msl_specialize.rs); the winding flips
 //                         accordingly
 //
 // Guest memory is wrapped, not copied: each NVN memory pool becomes one no-copy MTLBuffer (see `pool_buffer`).
@@ -40,14 +40,14 @@ const SUPPORT_BUFFER_SIZE: usize = 16 * (1 + 8 + 1 + 1 + 1 + 73 + 1 + 1);
 /// Metal buffer index of vertex stream `s` (cbufs use 0..17, storage buffers 18..).
 const VB_BASE: usize = 30;
 /// Metal's per-stage sampler table holds 16; higher sampler indices go through an argument buffer at this index
-/// (must match EXTRA_SAMPLER_BASE / EXTRA_SAMPLER_BUFFER in crates/cli/src/msl_specialize.rs).
+/// (must match EXTRA_SAMPLER_BASE / EXTRA_SAMPLER_BUFFER in metal/msl_specialize.rs).
 const EXTRA_SAMPLER_BASE: usize = 16;
 const EXTRA_SAMPLER_BUFFER: usize = 29;
 const MAX_STREAMS: usize = 11;
 /// Buffer index of the (0,0,0,1) default-attribute buffer (Metal vertex buffer indices must be < 31; streams use 20..30).
 const DEFAULT_ATTR_BUFFER: usize = 19;
 /// Byte offset in the driver cbuf (guest cbuf 0, Metal binding 17) where each stage's constant buffer sizes go, one u32
-/// (float4 count) per Metal binding 0..17 (must match CBUF_LIMITS_VEC4 in crates/cli/src/msl_specialize.rs). The game never
+/// (float4 count) per Metal binding 0..17 (must match CBUF_LIMITS_VEC4 in metal/msl_specialize.rs). The game never
 /// reads there. Computed-index reads beyond a buffer's bound size return zero, as on the GPU.
 const CBUF_LIMITS_OFFSET: usize = 0xF00;
 
@@ -7357,7 +7357,7 @@ impl Gfx {
     }
 
     /// Samplers at index 16+ (beyond Metal's per-stage sampler table): an argument buffer of their GPU handles, laid out
-    /// as crates/cli/src/msl_specialize.rs's `spvExtraSamplers` (one MTLResourceID per slot).
+    /// as metal/msl_specialize.rs's `spvExtraSamplers` (one MTLResourceID per slot).
     fn extra_sampler_buffer(
         &self,
         cx: &mut EncodeCtx,

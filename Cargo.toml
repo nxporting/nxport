@@ -2,14 +2,13 @@
 members = [
     "crates/engine",
     "crates/build",
-    "crates/cli",
     "crates/builder",
     "crates/sass2spv",
     "crates/pipelines",
     "crates/lifter",
     "crates/media",
 ]
-# `cargo run` / `cargo build` in the root: the builder (cargo build --workspace for the engine and the command line too).
+# `cargo run` / `cargo build` in the root: the builder (cargo build --workspace for the engine too).
 default-members = ["crates/builder"]
 resolver = "2"
 

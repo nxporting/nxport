@@ -1,4 +1,4 @@
-// Lookup side of the AOT shader cache built by `nxport-cli shaders build` (crates/cli/src/shader_cache_build.rs).
+// Lookup side of the AOT shader cache built by `nxport-builder shaders build` (crates/build/src/shader_cache_build.rs).
 //
 // <cache>/index.txt maps a stage's code bytes to a translated Metal function (`s_<hash>` in
 // <cache>/shaders.metallib) plus the resource bindings the translated function expects. A stage is
@@ -80,7 +80,7 @@ pub struct CachedStage {
     pub tiny_implicit: Option<Vec<u32>>,
     /// Fragment kernels that apply folded clears (index line `tkc`).
     pub tiny_clears: bool,
-    /// The stage has a batched variant tb_<entry> (index line `tb`, crates/cli/src/batch_kernels.rs): the constant
+    /// The stage has a batched variant tb_<entry> (index line `tb`, crates/build/src/batch_kernels.rs): the constant
     /// buffer bindings its address table holds, in order.
     pub batch_cbufs: Option<Vec<u32>>,
     /// The stage has an argument-buffer variant ab_<entry> (index line `ab`, crates/build/src/arg_kernels.rs): its

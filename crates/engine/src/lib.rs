@@ -1313,7 +1313,7 @@ pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::err
 }
 
 /// Runs a game whose code is lifted (docs/windows-port.md): resolves the settings as the native run does, loads and
-/// patches the game, then runs its entry chain in the guest library `files.guest_library` (nxport-cli lift-game and
+/// patches the game, then runs its entry chain in the guest library `files.guest_library` (nxport-builder lift-game and
 /// compile-guest, with the same settings: the code was lifted as these patch it). The main thread then runs the window
 /// (host/display_sdl.rs) and never returns; with --headless it returns when nnMain does.
 #[cfg(all(nx_runtime, not(nx_native)))]
@@ -1368,7 +1368,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         None => String::new(),
     };
     let overlay_modules: Vec<&str> = overlay_names.lines().filter(|l| !l.is_empty()).collect();
-    // A plugin mod's code runs only if the library was lifted with it (and with its patches: nxport-cli lift-game
+    // A plugin mod's code runs only if the library was lifted with it (and with its patches: nxport-builder lift-game
     // --patched-image, or the builder).
     if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.iter().chain(&overlay_modules).any(|m| *m == mod_module_name(label).as_str())) {
         return Err(format!(

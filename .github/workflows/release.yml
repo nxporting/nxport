@@ -34,24 +34,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
-      # The debug output main's CI saved, for the tests and nxport-cli. Release output is not worth a cache entry.
+      # The debug output main's CI saved, for the tests and the builder's ios-engine run. Release output is not worth a
+      # cache entry.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows
           save-if: false
-      # See ci.yml: the test programs and nxport-cli link SDL3.dll at start. The builder carries its own.
+      # See ci.yml: the test programs link SDL3.dll at start. The builder carries its own.
       - run: Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\vendor\SDL3\lib"
       - name: Test
         run: cargo test --workspace --locked --lib --bins
       - name: Build the builder
         run: cargo build --release --locked -p nxport-builder
       # A release cannot build the iOS engine where it runs (no source): it takes ios/nxport beside the builder, which
-      # must come from the same commit, as the engine refuses a guest image patched by other code. nxport-cli only
+      # must come from the same commit, as the engine refuses a guest image patched by other code. The builder only
       # drives the build, so debug will do.
       - name: Build the engine for iOS
         run: |
           if (-not (Test-Path 'C:\Program Files\LLVM\bin\ld64.lld.exe')) { choco install llvm -y --no-progress }
-          cargo run --locked -p nxport-cli -- ios-engine
+          cargo run --locked -p nxport-builder -- ios-engine
       - name: Assemble the archive
         shell: bash
         run: |
