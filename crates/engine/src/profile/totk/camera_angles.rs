@@ -192,10 +192,15 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     std::ptr::write((base + at) as *mut u32, 0x9400_0000 | ((d >> 2) as u32 & 0x03ff_ffff));
     crate::os::flush_icache(base + at, 4);
+    // The camera-input test and the bow's aim are hooked only where guest code is lifted: not in a native engine, nor
+    // in an image made here for one (an .ipa built on Windows), which must hold exactly the native engine's patches
+    // (cpu/aot.rs checks them page by page at start).
     #[cfg(not(nx_native))]
-    let pitch = install_decision(base, text, mem_space);
+    let pitch = !crate::cpu::aot::native_rewrites() && install_decision(base, text, mem_space);
     #[cfg(not(nx_native))]
-    install_aim(base, text, mem_space);
+    if !crate::cpu::aot::native_rewrites() {
+        install_aim(base, text, mem_space);
+    }
     #[cfg(nx_native)]
     let pitch = false;
     crate::host::input::set_angle_sink(pitch);

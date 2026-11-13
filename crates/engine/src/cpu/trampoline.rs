@@ -78,7 +78,9 @@ pub static ISLAND: std::sync::Mutex<Option<TrampolineIsland>> = std::sync::Mutex
 /// Landings a jump table stub holds at most (8 bytes each). TotK's main has ~50 halfword tables whose entries are out of
 /// sight of jump_table_of (bases loaded before a loop): 65536 landings each was 25 MB, three times the island.
 pub const JT_LANDINGS: usize = 4096;
-/// The slow path of a jump table stub past its landings: `brk #0x7a2`, followed by BASE (two words).
+/// The slow path of a jump table stub past its landings: `brk #0x7a2`, followed by BASE as its distance from the brk
+/// (two words, signed): code holds no absolute address, so an image made at one address matches a run at another
+/// (cpu/aot.rs).
 pub const BRK_JT: u32 = 0xD420_F440;
 
 /// The signal handler's half of a jump table stub's slow path, at its `brk` (`pc`): x17 holds 4 * offset and the stub's
@@ -88,7 +90,7 @@ pub unsafe fn jump_table_trap(pc: usize, x17: u64, sp: u64) -> Option<(u64, u64,
     if ptr::read(pc as *const u32) != BRK_JT {
         return None;
     }
-    let base = ptr::read_unaligned((pc + 4) as *const u64);
+    let base = (pc as u64).wrapping_add(ptr::read_unaligned((pc + 4) as *const u64));
     let saved16 = ptr::read(sp as *const u64);
     let saved17 = ptr::read((sp + 8) as *const u64);
     Some((base.wrapping_add(x17), saved16, saved17, sp + 16))
@@ -767,10 +769,11 @@ impl TrampolineIsland {
                 // b BASE + 4j
             }
             if capped {
-                // SLOW: brk, then BASE for the handler (jump_table_trap).
+                // SLOW: brk, then BASE - SLOW for the handler (jump_table_trap).
+                let rel = (base as u64).wrapping_sub(slow as u64);
                 words.push(BRK_JT);
-                words.push(base as u32);
-                words.push((base as u64 >> 32) as u32);
+                words.push(rel as u32);
+                words.push((rel >> 32) as u32);
             }
             for (i, &w) in words.iter().enumerate() {
                 ptr::write(stub_ptr.add(i), w);
@@ -1795,7 +1798,9 @@ mod tests {
         let stub = &words[16..16 + used];
         let brk = stub.iter().position(|&w| w == BRK_JT).expect("no slow path");
         let base = text as u64 + 7 * 4;
-        assert_eq!(stub[brk + 1] as u64 | (stub[brk + 2] as u64) << 32, base);
+        // BASE as its distance from the brk: the same wherever the code sits.
+        let brk_at = unsafe { text.add(16 + brk) } as u64;
+        assert_eq!(brk_at.wrapping_add(stub[brk + 1] as u64 | (stub[brk + 2] as u64) << 32), base);
         let lsr = stub.iter().position(|&w| w == 0xD34E_FE30).expect("no lsr x16, x17, #14");
         let cbnz = stub[lsr + 1];
         assert_eq!(cbnz & 0xFF00_001F, 0xB500_0010, "cbnz x16");
