@@ -1814,6 +1814,31 @@ mod tests {
     }
 
     #[test]
+    fn jump_table_stub_is_the_same_wherever_the_code_sits() {
+        // An image is made with the guest at one address and checked against a run that loads it at another (cpu/aot.rs):
+        // the island's words must not depend on where text and island sit, as long as they move together by whole pages.
+        let _ = crate::settings::try_install(Default::default());
+        let code = [0x7100_091fu32, 0x5400_0148, 0x1000_00b2, 0x1000_01a9, 0x7868_7928, 0x8b08_0a52, 0xd61f_0240];
+        let (island_words, copy_words, apart) = (64 * 1024, 16 + 64 * 1024, 0x10000 / 4);
+        let mut buf = vec![0u32; 0x4000 / 4 + apart + copy_words + copy_words];
+        // Both copies start on a 16 KiB page, 64 KiB apart.
+        let first = (0x4000 - (buf.as_ptr() as usize % 0x4000)) % 0x4000 / 4;
+        let stub_of = |buf: &mut Vec<u32>, at: usize| -> Vec<u32> {
+            buf[at..at + 16].fill(0xd503_201f);
+            buf[at..at + code.len()].copy_from_slice(&code);
+            let text = unsafe { buf.as_mut_ptr().add(at) };
+            let mut island = TrampolineIsland::new(unsafe { text.add(16) } as usize, island_words * 4).unwrap();
+            unsafe { island.patch_text(text, 16 * 4, text as usize + 16 * 4) }.unwrap();
+            let used = island.next_offset / 4;
+            buf[at + 16..at + 16 + used].to_vec()
+        };
+        let a = stub_of(&mut buf, first);
+        let b = stub_of(&mut buf, first + copy_words.next_multiple_of(apart));
+        assert!(a.contains(&BRK_JT), "no slow path");
+        assert_eq!(a, b);
+    }
+
+    #[test]
     fn jump_table_landings_from_entries() {
         // cmp w8, #2; b.hi; adr x18, BASE; adr x9, table; ldrh w8, [x9, x8, lsl #1]; add x18, x18, x8, lsl #2; br x18
         let mut words = vec![0x7100_091fu32, 0x5400_0148, 0x1000_00b2, 0x1000_01a9, 0x7868_7928, 0x8b08_0a52, 0xd61f_0240];
