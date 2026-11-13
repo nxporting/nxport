@@ -1017,8 +1017,22 @@ impl Ctx {
         let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         let total = super::PIPELINES_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
         if total > self.saved_pipelines && frame >= self.pipeline_cache_saved + 1800 {
+            // On a thread of its own: copying the cache out of the driver and writing it takes tens of milliseconds
+            // (totk-pc-recomp measured ~60 ms), a hitch on this thread, which records every frame. A pipeline cache is
+            // internally synchronized (not created EXTERNALLY_SYNCHRONIZED), so pipelines may be made meanwhile; one
+            // save at a time.
+            static SAVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if let Some(c) = self.pipeline_cache {
-                super::stage_cache::save_pipeline_cache(&self.dev, c);
+                if !SAVING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    let dev = self.dev.clone();
+                    let spawned = std::thread::Builder::new().name("vk-cache-save".into()).spawn(move || {
+                        super::stage_cache::save_pipeline_cache(&dev, c);
+                        SAVING.store(false, std::sync::atomic::Ordering::Release);
+                    });
+                    if spawned.is_err() {
+                        SAVING.store(false, std::sync::atomic::Ordering::Release);
+                    }
+                }
             }
             self.saved_pipelines = total;
             self.pipeline_cache_saved = frame;

@@ -60,6 +60,7 @@ pub static SITES: Sites = Sites {
     ground_carry: Some((0xce3fe0, 0xf940_0328)), // ldr x8, [x25]
     cloth: Some((0x4666ff8, &CLOTH)), // the last words of the page after .bss
     short_cut_bg: Some((0x45596a8, 0x196dee8, 0xc5a4_9707)),
+    equip_cooldown: Some((0x6a9834, 0x6a9828)),
 };
 
 /// Screen shapes other than 16:9: 1.1.2's sites at their 1.0.0 addresses (the code matches apart from pc-relative

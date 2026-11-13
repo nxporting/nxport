@@ -170,19 +170,29 @@ pub fn has(key: u64) -> bool {
     dir().is_some_and(|d| d.join("t").join(format!("{key:016x}.bin")).is_file())
 }
 
-/// A translation's SPIR-V alone.
-pub fn load_spirv(key: u64) -> Option<Vec<u8>> {
+/// A stored translation's SPIR-V and the bytes after it, if the file holds SPIR-V at all: a file cut short or zeroed (a
+/// crash while it was written, a driver crash during pipeline preparation) reads as missing, and the stage is translated
+/// again, instead of handing the driver an empty or garbled module.
+fn record(key: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+    const SPIRV_MAGIC: u32 = 0x0723_0203;
     let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;
     let n = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap()) as usize;
-    Some(bytes.get(4..4 + n)?.to_vec())
+    let spv = bytes.get(4..4 + n)?;
+    if n % 4 != 0 || spv.get(..4).map(|m| u32::from_le_bytes(m.try_into().unwrap())) != Some(SPIRV_MAGIC) {
+        return None;
+    }
+    Some((spv.to_vec(), bytes[4 + n..].to_vec()))
+}
+
+/// A translation's SPIR-V alone.
+pub fn load_spirv(key: u64) -> Option<Vec<u8>> {
+    record(key).map(|(spv, _)| spv)
 }
 
 /// A translation: SPIR-V and its manifest.
 pub fn load(key: u64) -> Option<(Vec<u8>, sass2spv::manifest::ShaderManifest)> {
-    let bytes = std::fs::read(dir()?.join("t").join(format!("{key:016x}.bin"))).ok()?;
-    let n = u32::from_le_bytes(bytes.get(..4)?.try_into().unwrap()) as usize;
-    let spv = bytes.get(4..4 + n)?.to_vec();
-    let m = serde_json::from_slice(bytes.get(4 + n..)?).ok()?;
+    let (spv, rest) = record(key)?;
+    let m = serde_json::from_slice(&rest).ok()?;
     Some((spv, m))
 }
 
