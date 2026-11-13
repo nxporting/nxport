@@ -3020,11 +3020,6 @@ pub fn capture_finish() -> Option<(Vec<String>, Vec<String>)> {
     }
 }
 
-/// Whether this thread collects its commands (a prediction or a check is under way).
-pub fn capturing() -> bool {
-    CAPTURE.with(|c| c.borrow().is_some())
-}
-
 /// This thread captures for a comparison (not a buffered apply run, which nested ports may join).
 pub fn capturing_to_compare() -> bool {
     CAPTURE.with(|c| matches!(&*c.borrow(), Some(c) if !matches!(c, Capture::Buffer(_))))
