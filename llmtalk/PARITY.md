@@ -44,6 +44,9 @@ iOS Metal.
    precompile (and the Windows-host .ipa steps) Windows-only, the engine hash in the lift's inputs taken from
    winapp::engine(), and WindowsApp added to the Mac's Target::ALL; (4) release.yml: the macOS archive gets
    windows/nxport.exe (the Windows job's builder; on branch ios-shader-cache-windows, which already reworks that file).
+   **Status the same night:** (1) mac-worker 187179d, Mac lift equal to Windows' but for its 1.1.2 hook files; (3) done
+   here, the Mac offers the target in mac-worker's 79e2adb; (4) done on the branch (aa00b93, job macos-with-windows).
+   Left: an end-to-end run on a Mac from a dry-run archive.
 3. **TotK exact mouse aim is Windows-only, but the Mac menu shows it.** camera_angles' install_decision and
    install_aim (camera-input test, bow aim) are compiled only into the lifted engine; native gets the yaw hook only, so
    the item does little on a Mac. They call into the engine from the middle of a guest function, which a lifted host
