@@ -39,7 +39,7 @@ iOS Metal.
    **Started 2026-11-13 (win-worker, 8b18693):** zig for a macOS host compiling for Windows (zig::windows_cc), winapp
    takes windows/nxport.exe beside the builder and carries SDL3.dll; both modules build on every host. Left:
    (1) lifting on a Mac must patch as Windows does: native_rewrites() is `cfg!(nx_native) || FOR_NATIVE`, so a Mac lift
-   gets the native rewrites (asked mac-worker to take the loader side; check: its lifted C hashes equal Windows');
+   gets the native rewrites (loader side: **mac-worker**, claimed 2026-11-13; check: its lifted C hashes equal Windows');
    (2) done: lift_overlay reads the base library's tables from the file (pe_exports.rs); (3) builder/src/windows.rs compiled on every host with the Vulkan
    precompile (and the Windows-host .ipa steps) Windows-only, the engine hash in the lift's inputs taken from
    winapp::engine(), and WindowsApp added to the Mac's Target::ALL; (4) release.yml: the macOS archive gets
@@ -63,7 +63,8 @@ iOS Metal.
    Type-checked both hosts; mac-worker to run the AppKit menus.
 5. **The .ipa built on Windows has no compiled shaders** (Apple's Metal compiler is Mac-only): source pack plus the
    long-press precompile planned (TODO.md); Apple's Metal Developer Tools for Windows when installed. win-worker.
-6. **The unified iOS step list has not run on a Mac** (1496107 on the branch): mac-worker asked to build an .ipa from it.
+6. **The unified iOS step list has not run on a Mac** (1496107 on the branch): **mac-worker**, running 6c8b4af in worktree
+   ../nxport-iostest (2026-11-12).
 
 ## Checks still to make (claim and fill in)
 
