@@ -312,13 +312,13 @@ pub fn draw_skipped_compiling() {
     SKIPPED_DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// At a present: whether the frame skipped draws for compiling pipelines (the count starts again), and the listed
-/// pipelines (done, total) when some are still to make. Some while the picture waits on shaders.
+/// At a present: Some while the picture waits on shaders, that is while listed pipelines are still to make (draws
+/// wait for them or are skipped: the first launch on a phone shows little but black for minutes) or the frame skipped
+/// draws for other compiling pipelines (the count starts again); with the listed pipelines (done, total) then.
 pub fn take_frame_progress() -> Option<Option<(usize, usize)>> {
     use std::sync::atomic::Ordering::Relaxed;
-    if SKIPPED_DRAWS.swap(0, Relaxed) == 0 {
-        return None;
-    }
+    let skipped = SKIPPED_DRAWS.swap(0, Relaxed) > 0;
     let (done, total) = (LISTED_DONE.load(Relaxed), LISTED_TOTAL.load(Relaxed));
-    Some((done < total).then_some((done, total)))
+    let listed = (done < total).then_some((done, total));
+    (skipped || listed.is_some()).then_some(listed)
 }
