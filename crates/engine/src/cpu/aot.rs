@@ -28,27 +28,6 @@ use std::sync::Mutex;
 
 const PAGE: usize = 0x4000;
 const MAGIC: &[u8; 8] = b"NXAOTIM1";
-/// The game an image was made from, at the end of its first header page: this tag, then "<main build id> <version>".
-const GAME_TAG: &[u8; 8] = b"NXGAME01";
-const GAME_AT: usize = PAGE - 128;
-
-/// "<main build id> <version>" of the game this run loaded.
-fn game_of_run() -> String {
-    let id = crate::profile::main_build_id().unwrap_or("?");
-    let dir = crate::game::exefs();
-    let version = dir.parent().and_then(crate::game::control_of).and_then(|c| c.version).unwrap_or_else(|| "?".into());
-    format!("{id} {version}")
-}
-
-/// The game an image was made from (images made before the tag have none).
-fn game_of_image(img: &[u8]) -> Option<String> {
-    let t = img.get(GAME_AT..GAME_AT + 128)?;
-    if &t[..8] != GAME_TAG {
-        return None;
-    }
-    let n = t[8..].iter().position(|&b| b == 0).unwrap_or(120);
-    Some(String::from_utf8_lossy(&t[8..8 + n]).into_owned())
-}
 
 #[derive(Clone, PartialEq)]
 pub enum Mode {
@@ -452,11 +431,6 @@ fn dump(to: &DumpTo, regions: &[Region]) -> Result<(), String> {
     header[..8].copy_from_slice(MAGIC);
     header[8..16].copy_from_slice(&(regions.len() as u64).to_le_bytes());
     header[PAGE..PAGE + 8].copy_from_slice(&(pages.len() as u64).to_le_bytes());
-    assert!(16 + regions.len() * 64 <= GAME_AT);
-    let game = game_of_run();
-    header[GAME_AT..GAME_AT + 8].copy_from_slice(GAME_TAG);
-    let g = &game.as_bytes()[..game.len().min(119)];
-    header[GAME_AT + 8..GAME_AT + 8 + g.len()].copy_from_slice(g);
     let mut body = Vec::new();
     let mut kept = 0;
     let mut k = 0;
@@ -581,23 +555,6 @@ unsafe fn load(path: &str, regions: &[Region]) -> Result<(), String> {
         return Err("AOT image section is not a 16 KiB-aligned guest image (rebuild it)".into());
     }
     let img = &file[sect..];
-    // Its code fits one version of the game's files only: say so before any region differs.
-    if let Some(made) = game_of_image(img) {
-        let run = game_of_run();
-        let id = |g: &str| g.split(' ').next().unwrap_or("").to_ascii_lowercase();
-        if id(&made) != id(&run) {
-            let show = |g: &str| {
-                let (id, v) = g.split_once(' ').unwrap_or((g, "?"));
-                let id = &id[..id.len().min(16)];
-                if v == "?" { format!("main {id}") } else { format!("version {v} (main {id})") }
-            };
-            return Err(format!(
-                "this app was built for the game's {}, but the game files here are {}: build the app from the same version of the game as these files",
-                show(&made),
-                show(&run)
-            ));
-        }
-    }
     let count = u64::from_le_bytes(img[8..16].try_into().unwrap()) as usize;
     let mut entries = std::collections::HashMap::new();
     for i in 0..count {
