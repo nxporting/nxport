@@ -127,17 +127,17 @@ pub unsafe fn create(
     layout: vk::PipelineLayout,
     cache: vk::PipelineCache,
 ) -> Result<vk::Pipeline, vk::Result> {
-    let entry = c"main";
     // Held until the pipeline is made, when these go (Module's Drop).
     let vmodule = vstage.module(dev)?;
     let gmodule = gstage.map(|g| g.module(dev)).transpose()?;
     let fmodule = fstage.map(|f| f.module(dev)).transpose()?;
-    let mut stages = vec![vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::VERTEX).module(vmodule.module).name(entry)];
+    let (mut vreq, mut greq, mut freq) = Default::default();
+    let mut stages = vec![vmodule.stage(vk::ShaderStageFlags::VERTEX, &mut vreq)];
     if let Some(g) = &gmodule {
-        stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::GEOMETRY).module(g.module).name(entry));
+        stages.push(g.stage(vk::ShaderStageFlags::GEOMETRY, &mut greq));
     }
     if let Some(f) = &fmodule {
-        stages.push(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::FRAGMENT).module(f.module).name(entry));
+        stages.push(f.stage(vk::ShaderStageFlags::FRAGMENT, &mut freq));
     }
     let mut vb: Vec<vk::VertexInputBindingDescription> = d
         .streams

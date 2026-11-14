@@ -69,6 +69,9 @@ pub struct Dev {
     /// graphics.vk_bindless_textures where the device has descriptor indexing (not portability implementations: macOS
     /// draws through Metal): the global texture set (vulkan/bindless.rs).
     pub bindless: Option<super::bindless::Global>,
+    /// Shader stages a pipeline may require to run 32 lanes wide (VK_EXT_subgroup_size_control, core in 1.3): those whose
+    /// shaders use subgroup operations are (shader.rs Module::stage). Empty where the device cannot.
+    pub subgroup_32: vk::ShaderStageFlags,
 }
 
 /// The most recent checkpoints (Dev::checkpoint): marker, what follows it and its numbers.
@@ -431,8 +434,17 @@ impl Dev {
                 texture_heap: false,
                 bindless_textures: false,
             };
+            // Stages that may be required to run 32 lanes wide (Module::stage): sass2spv writes subgroup operations for 32.
+            let subgroup_32 = {
+                let mut p13 = vk::PhysicalDeviceVulkan13Properties::default();
+                let mut p2 = vk::PhysicalDeviceProperties2::default().push_next(&mut p13);
+                instance.get_physical_device_properties2(pdev, &mut p2);
+                let fits = (p13.min_subgroup_size..=p13.max_subgroup_size).contains(&32);
+                if q13.subgroup_size_control != 0 && fits { p13.required_subgroup_size_stages } else { vk::ShaderStageFlags::empty() }
+            };
             let mut f13 = vk::PhysicalDeviceVulkan13Features::default()
                 .dynamic_rendering(true)
+                .subgroup_size_control(!subgroup_32.is_empty())
                 .synchronization2(q13.synchronization2 != 0)
                 .shader_demote_to_helper_invocation(q13.shader_demote_to_helper_invocation != 0);
             // Bindless textures (vulkan/bindless.rs): runtime arrays of sampled images and samplers, partially bound and
@@ -580,6 +592,7 @@ impl Dev {
             });
             Ok(Dev {
                 surfaces,
+                subgroup_32,
                 _entry: entry,
                 instance,
                 pdev,

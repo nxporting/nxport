@@ -139,6 +139,45 @@ pub struct Stage {
 pub struct Module<'a> {
     dev: &'a Dev,
     pub module: vk::ShaderModule,
+    /// It uses subgroup operations (shuffles, votes, ballots), which sass2spv writes for 32 lanes.
+    pub subgroups: bool,
+}
+
+impl Module<'_> {
+    /// A stage of a pipeline made from this module: required to run 32 lanes wide when it uses subgroup operations and
+    /// the device lets that stage be required to (Dev::subgroup_32; AMD may otherwise run it 64 wide). `req` holds the
+    /// requirement for as long as the stage info is used.
+    pub fn stage<'r>(
+        &self,
+        stage: vk::ShaderStageFlags,
+        req: &'r mut vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo<'static>,
+    ) -> vk::PipelineShaderStageCreateInfo<'r> {
+        let info = vk::PipelineShaderStageCreateInfo::default().stage(stage).module(self.module).name(c"main");
+        if self.subgroups && self.dev.subgroup_32.contains(stage) {
+            *req = vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default().required_subgroup_size(32);
+            info.push_next(req)
+        } else {
+            info
+        }
+    }
+}
+
+/// Whether SPIR-V `words` declare a subgroup capability (GroupNonUniform* or the KHR subgroup ones).
+pub fn uses_subgroups(words: &[u32]) -> bool {
+    const OP_CAPABILITY: u32 = 17;
+    const OP_MEMORY_MODEL: u32 = 14;
+    let mut i = 5;
+    while let Some(&w) = words.get(i) {
+        let (count, op) = ((w >> 16) as usize, w & 0xffff);
+        if op == OP_MEMORY_MODEL || count == 0 {
+            break;
+        }
+        if op == OP_CAPABILITY && words.get(i + 1).is_some_and(|c| (61..=68).contains(c) || [4423, 4431].contains(c)) {
+            return true;
+        }
+        i += count;
+    }
+    false
 }
 
 impl Drop for Module<'_> {
@@ -159,7 +198,7 @@ impl Stage {
             }
         };
         let module = dev.device.create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)?;
-        Ok(Module { dev, module })
+        Ok(Module { dev, module, subgroups: uses_subgroups(words) })
     }
 }
 
