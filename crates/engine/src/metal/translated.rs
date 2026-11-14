@@ -5169,7 +5169,7 @@ impl Gfx {
                 } else {
                     MTLLoadAction::Load
                 });
-                att.setClearDepth(clear_depth.unwrap_or(0.0) as f64);
+                att.setClearDepth(super::clear_depth_value(t.pixelFormat(), clear_depth.unwrap_or(0.0)));
                 att.setStoreAction(MTLStoreAction::Store);
                 if matches!(
                     depth_pf,
