@@ -921,6 +921,11 @@ struct Decoder {
     n_in: u64,
     n_out: u64,
     n_empty: u64,
+    /// Times the video clock restarted from a late frame, and the last video frame's pts.
+    n_rebased: u64,
+    last_pts: i64,
+    /// The video's frame interval: the smallest step between frames' pts (some frames share one).
+    frame_us: i64,
     /// formatChangedEvent signaled for the current output format.
     format_reported: bool,
     /// Video frames decoded since the decoder started or was flushed, their decode time in all and the longest, and how
@@ -942,13 +947,14 @@ fn report_decode(d: &mut Decoder) {
 fn print_decode(d: &Decoder, so_far: &str) {
     if d.is_video && d.decodes > 0 {
         println!(
-            "[+] movie{so_far}: {} video frames ({}x{}) decoded in {:.1} ms on average, the longest {:.1} ms, {} over 33.3 ms",
+            "[+] movie{so_far}: {} video frames ({}x{}) decoded in {:.1} ms on average, the longest {:.1} ms, {} over 33.3 ms; the clock restarted {} times",
             d.decodes,
             d.width,
             d.height,
             d.decode_us as f64 / d.decodes as f64 / 1000.0,
             d.decode_max_us as f64 / 1000.0,
-            d.decode_slow
+            d.decode_slow,
+            d.n_rebased
         );
     }
 }
@@ -1400,19 +1406,34 @@ unsafe extern "C" fn d_acquire_output(
     // A video frame is handed out once its presentation time has come, counted from the first one. The game's player
     // shows the newest frame it has each time it draws (TotK: one per draw, so its movies played at the draw rate,
     // twice as fast at 60 fps); the console draws them at the video's 30. Without a new frame the player keeps showing
-    // the last one.
+    // the last one. A frame that comes out a whole frame interval (frame_us) or more after its time (the decoder fell
+    // behind, the game stalled, or it took the first frame long before playing: TotK decodes a movie's first frame
+    // while its event loads) restarts the clock from it: the console shows the next frame one draw later and never catches up, and
+    // handing out every late frame played them at the draw rate, twice the video's speed at 60 fps.
     if d.is_video {
         if let Some(&slot) = d.ready.front() {
             let pts = d.outputs[slot].as_ref().map_or(0, |f| f.pts);
+            let now = std::time::Instant::now();
             match d.clock {
-                None => d.clock = Some((std::time::Instant::now(), pts)),
-                Some((t0, p0)) if (t0.elapsed().as_micros() as i64) < pts - p0 => {
-                    d.n_empty += 1;
-                    signal_output_at(d, t0 + std::time::Duration::from_micros((pts - p0) as u64));
-                    return OUTPUT_NOT_AVAILABLE;
+                None => d.clock = Some((now, pts)),
+                Some((t0, p0)) => {
+                    let late = (now - t0).as_micros() as i64 - (pts - p0);
+                    if late < 0 {
+                        d.n_empty += 1;
+                        signal_output_at(d, t0 + std::time::Duration::from_micros((pts - p0) as u64));
+                        return OUTPUT_NOT_AVAILABLE;
+                    }
+                    if pts > d.last_pts {
+                        let step = pts - d.last_pts;
+                        d.frame_us = if d.frame_us == 0 { step } else { d.frame_us.min(step) };
+                    }
+                    if d.frame_us > 0 && late >= d.frame_us {
+                        d.clock = Some((now, pts));
+                        d.n_rebased += 1;
+                    }
                 }
-                Some(_) => {}
             }
+            d.last_pts = pts;
         }
     }
     let Some(slot) = d.ready.pop_front() else {
@@ -1422,8 +1443,9 @@ unsafe extern "C" fn d_acquire_output(
     let f = d.outputs[slot].as_ref().unwrap();
     d.n_out += 1;
     if log_enabled() && (d.n_out <= 5 || d.n_out % 60 == 0 || f.flags != 0) {
-        println!("[movie] t={}ms {} output #{}: slot {} pts {} us, {} bytes, flags {:#x} (empty polls {})", log_ms(),
-            if d.is_video { "video" } else { "audio" }, d.n_out, slot, f.pts, f.data.len(), f.flags, d.n_empty);
+        println!("[movie] t={}ms {} output #{}: slot {} pts {} us, {} bytes, flags {:#x} (empty polls {}, clock restarts {})",
+            log_ms(), if d.is_video { "video" } else { "audio" }, d.n_out, slot, f.pts, f.data.len(), f.flags, d.n_empty,
+            d.n_rebased);
     }
     *idx = slot as i32;
     if !pts.is_null() {
@@ -1603,6 +1625,9 @@ unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
         n_in: 0,
         n_out: 0,
         n_empty: 0,
+        n_rebased: 0,
+        last_pts: 0,
+        frame_us: 0,
         format_reported: false,
         decodes: 0,
         decode_us: 0,
