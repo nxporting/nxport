@@ -246,30 +246,50 @@ static MOVIE_RESTORE_TO: AtomicUsize = AtomicUsize::new(0);
 static MOVIE_SAVED: std::sync::Mutex<Option<(usize, [i32; 4])>> = std::sync::Mutex::new(None);
 
 /// Before a movie frame is copied over the screen buffer: the game's call (the movie's graphics state, `gfx` into the
-/// draw context `ctx`), then, when the current viewport is not 16:9, the target cleared black and the copy kept to a
-/// centred 16:9 rectangle of it (the video is 16:9; stretched across a wider picture otherwise).
+/// draw context `ctx`), then, when the picture is shown at a shape other than 16:9, the target cleared black and the
+/// copy kept to the part of the viewport that shows as a centred 16:9 rectangle (the video is 16:9; the buffer keeps
+/// its 1920x1080 and is stretched to the screen, so a full copy stretched the video).
 #[cfg(nx_runtime)]
 pub unsafe extern "C" fn movie_apply(gfx: usize, ctx: usize) {
     crate::guest::call(MOVIE_APPLY_TO.load(Ordering::Relaxed), &[gfx as u64, ctx as u64]);
+    // What the hook saw, for the first movie frame and every 300th after.
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    let log = CALLS.fetch_add(1, Ordering::Relaxed) % 300 == 0;
     if ctx == 0 || !readable(ctx + CTX_COMMAND_BUFFER, 8) {
+        if log {
+            println!("[!] Aspect: movie frame: no draw context ({ctx:#x})");
+        }
         return;
     }
     let cmd = *((ctx + CTX_COMMAND_BUFFER) as *const usize);
-    let Some([x, y, w, h]) = crate::nvn::cmd::last_viewport(cmd) else { return };
+    let Some([x, y, w, h]) = crate::nvn::cmd::last_viewport(cmd) else {
+        if log {
+            println!("[!] Aspect: movie frame: no viewport recorded on this thread for command buffer {cmd:#x}");
+        }
+        return;
+    };
+    if log {
+        println!("[+] Aspect: movie frame in viewport {x},{y} {w}x{h}");
+    }
     if w <= 0 || h <= 0 {
         return;
     }
+    // The buffer keeps its size; the picture is shown at the shape the game renders at (rendered_aspect), so the
+    // video's 16:9 is that share of the viewport.
     let video = 16.0 / 9.0;
-    let shape = w as f64 / h as f64;
-    let (rx, ry, rw, rh) = if shape > video * 1.001 {
-        let rw = (h as f64 * video).round() as i32;
+    let Some(shown) = rendered_aspect() else { return };
+    let (rx, ry, rw, rh) = if shown > video * 1.001 {
+        let rw = (w as f64 * video / shown).round() as i32;
         (x + (w - rw) / 2, y, rw, h)
-    } else if shape < video / 1.001 {
-        let rh = (w as f64 / video).round() as i32;
+    } else if shown < video / 1.001 {
+        let rh = (h as f64 * shown / video).round() as i32;
         (x, y + (h - rh) / 2, w, rh)
     } else {
         return;
     };
+    if log {
+        println!("[+] Aspect: movie kept to {rx},{ry} {rw}x{rh} (the picture is shown at {shown:.3})");
+    }
     use crate::nvn::cmd::{hle_nvnCommandBufferClearColor, hle_nvnCommandBufferSetScissor, hle_nvnCommandBufferSetViewport};
     hle_nvnCommandBufferSetScissor(cmd, x, y, w, h);
     hle_nvnCommandBufferClearColor(cmd, 0, [0.0f32, 0.0, 0.0, 1.0].as_ptr(), 0xf);
