@@ -17,6 +17,14 @@
 //!   vertex:   buffer(27) tk_VParams, buffer(28) the vertex records (output), buffer(25 + s) vertex stream s (s < 2).
 //! Vertex record: TK_VSTRIDE float4s per vertex: [0] gl_Position, [1 + L] the varying at user location L.
 
+/// A regex compiled once (these run on every line of every stage translated).
+macro_rules! re {
+    ($p:literal) => {{
+        static R: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new($p).unwrap());
+        &*R
+    }};
+}
+
 macro_rules! tk_try {
     ($e:expr) => {
         match $e {
@@ -329,7 +337,7 @@ fn heap_textures(body: &str) -> Vec<(String, String, u32)> {
 /// atmosphere LUT kernel). Returns the body without those locals, and the parameters (None: a binding Metal cannot bind).
 fn heap_samplers_as_params(body: &str) -> Option<(String, Vec<Param>)> {
     let heap = heap_textures(body);
-    let re = regex::Regex::new(r"(?m)^\s*sampler (\w+) = reinterpret_cast<const device NxSamplerHeap\*>[^\n]*\n").unwrap();
+    let re = re!(r"(?m)^\s*sampler (\w+) = reinterpret_cast<const device NxSamplerHeap\*>[^\n]*\n");
     let mut params = Vec::new();
     for c in re.captures_iter(body) {
         let name = c[1].to_string();
@@ -394,8 +402,8 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
             return tk_none(line!());
         }
         // Results and plain copies of them (`uint _68 = _176;`) must not be read anywhere else.
-        let mut tainted: Vec<String> = regex::Regex::new(r"(\w+) = atomic_fetch_").unwrap().captures_iter(body).map(|c| c[1].to_string()).collect();
-        let copy = regex::Regex::new(r"\b(\w+) = (\w+);").unwrap();
+        let mut tainted: Vec<String> = re!(r"(\w+) = atomic_fetch_").captures_iter(body).map(|c| c[1].to_string()).collect();
+        let copy = re!(r"\b(\w+) = (\w+);");
         loop {
             let more: Vec<String> = copy.captures_iter(body).filter(|c| tainted.contains(&c[2].to_string()) && !tainted.contains(&c[1].to_string()))
                 .map(|c| c[1].to_string()).collect();
@@ -450,7 +458,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
     // Metal texture bindings sampled with implicit LOD (see explicit_lod).
     let mut implicit_bindings: Vec<u32> = pass.iter()
         .filter(|p| implicit.contains(&p.name))
-        .filter_map(|p| regex::Regex::new(r"texture\((\d+)\)").unwrap().captures(&p.attr).and_then(|c| c[1].parse().ok()))
+        .filter_map(|p| re!(r"texture\((\d+)\)").captures(&p.attr).and_then(|c| c[1].parse().ok()))
         .chain(heap.iter().filter(|(n, ..)| implicit.contains(n)).map(|(.., b)| *b))
         .collect();
     implicit_bindings.sort_unstable();
@@ -472,9 +480,9 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
             if line.is_empty() {
                 continue;
             }
-            let caps = tk_try!(regex::Regex::new(r"^(\w+) (\w+) \[\[user\(locn(\d+)\)([^\]]*)\]\]$").unwrap().captures(line));
+            let caps = tk_try!(re!(r"^(\w+) (\w+) \[\[user\(locn(\d+)\)([^\]]*)\]\]$").captures(line));
             let rest = caps.get(4).map_or("", |m| m.as_str());
-            let fc = regex::Regex::new(r"function_constant\((\w+)\)").unwrap().captures(rest).map(|c| c[1].to_string());
+            let fc = re!(r"function_constant\((\w+)\)").captures(rest).map(|c| c[1].to_string());
             let interp = if rest.contains("flat") { "flat" } else if rest.contains("no_perspective") { "linear" } else { "persp" };
             members.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, interp, fc));
         }
@@ -486,7 +494,7 @@ pub fn fragment_kernel(msl: &str) -> Option<String> {
         if line.is_empty() || line.contains("[[depth(") {
             continue;
         }
-        let caps = tk_try!(regex::Regex::new(r"^(\w+) (\w+) \[\[color\((\d+)\)(?:, function_constant\((\w+)\))?\]\]$").unwrap().captures(line));
+        let caps = tk_try!(re!(r"^(\w+) (\w+) \[\[color\((\d+)\)(?:, function_constant\((\w+)\))?\]\]$").captures(line));
         outs.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, caps.get(4).map(|m| m.as_str().to_string())));
     }
     if outs.is_empty() || outs.iter().any(|o| o.2 > 7) {
@@ -669,7 +677,7 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
             if line.is_empty() {
                 continue;
             }
-            let caps = regex::Regex::new(r"^(\w+) (\w+) \[\[attribute\((\d+)\)(?:, function_constant\((\w+)\))?\]\]$").unwrap().captures(line)?;
+            let caps = re!(r"^(\w+) (\w+) \[\[attribute\((\d+)\)(?:, function_constant\((\w+)\))?\]\]$").captures(line)?;
             attrs.push((caps[1].to_string(), caps[2].to_string(), caps[3].parse::<usize>().ok()?, caps.get(4).map(|m| m.as_str().to_string())));
         }
     }
@@ -684,9 +692,9 @@ pub fn vertex_kernel(msl: &str) -> Option<String> {
         if line.is_empty() {
             continue;
         }
-        if let Some(c) = regex::Regex::new(r"^\w+ (\w+) \[\[position").unwrap().captures(line) {
+        if let Some(c) = re!(r"^\w+ (\w+) \[\[position").captures(line) {
             pos = Some(c[1].to_string());
-        } else if let Some(c) = regex::Regex::new(r"^(\w+) (\w+) \[\[user\(locn(\d+)\)").unwrap().captures(line) {
+        } else if let Some(c) = re!(r"^(\w+) (\w+) \[\[user\(locn(\d+)\)").captures(line) {
             outs.push((c[1].to_string(), c[2].to_string(), c[3].parse::<usize>().ok()?));
         } else if line.contains("point_size") || line.contains("clip_distance") {
             // not needed by the fragment kernel
