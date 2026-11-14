@@ -634,6 +634,10 @@ fn guest_chain(
 /// computer, or the folder moved) the player is asked for one (host/game_files.rs), remembered for the game.
 fn with_game_files(mut layers: Vec<settings::SettingsPatch>) -> Result<settings::Settings, String> {
     let s = resolve_settings(layers.clone());
+    // Tools the builder runs through the engine load no game.
+    if s.graphics.build_pipeline_archive.is_some() {
+        return Ok(s);
+    }
     let title = s.files.title_id.as_deref().and_then(|t| u64::from_str_radix(t, 16).ok());
     if s.files.game_dir.as_deref().is_some_and(|d| host::game_files::holds(d, title)) {
         return Ok(s);
