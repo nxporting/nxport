@@ -82,7 +82,7 @@ iOS Metal.
   **Checked 2026-11-13 (win-worker, by reading):** F10 overlay and F8 (free the mouse) are the same on both. F9 captures
   on both (the Mac's request_capture picks the backend's capture; Windows the frame history). Mac only: space captures
   too when no game input is bound to it, and F6 switches display pacing (a Metal switch). Windows only: F11 / Alt+Enter
-  full screen (the Mac's is its menu shortcut). Left as they are unless the user wants space on Windows too.
+  full screen (the Mac's is its menu shortcut). Space now captures on Windows too (same rule, display_sdl.rs).
 - Mods: which kinds work per target (IPS/pchtxt, romfs, exlaunch plugins: not on iOS by decision).
   Cheats (2026-11-13): data cheats everywhere; code-writing cheats on Windows (live patches) and macOS (a second
   writable mapping), not on iOS (signed code). Run on Windows in TotK only.
