@@ -4266,11 +4266,29 @@ pub unsafe extern "C" fn hle_nvnTextureSetDebugLabel(_tex: *mut NvnTexture, _lab
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnTextureCompare(a: *const NvnTexture, b: *const NvnTexture) -> u8 {
     record_hle_call("hle_nvnTextureCompare");
+    // NVN compares what the two objects describe, not where they are: BotW rebuilds a texture into a new object and keeps
+    // its texture pool slot only when the two compare equal (Savage Wind #16: comparing addresses freed the slot each
+    // time, and cuttable tree trunks then drew whatever texture took it).
     if a == b {
-        1
-    } else {
-        0
+        return 1;
     }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
+    let (a, b) = (&*a, &*b);
+    (a.target == b.target
+        && a.format == b.format
+        && a.flags == b.flags
+        && a.width == b.width
+        && a.height == b.height
+        && a.depth == b.depth
+        && a.levels == b.levels
+        && a.samples == b.samples
+        && a.swizzle == b.swizzle
+        && a.stride == b.stride
+        && a.storage == b.storage
+        && a.pool == b.pool
+        && a.pool_offset == b.pool_offset) as u8
 }
 
 #[no_mangle]
