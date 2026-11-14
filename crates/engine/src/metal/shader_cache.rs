@@ -431,13 +431,34 @@ fn compile_msl(
     }
 }
 
+/// The shader cache as source: <cache>/source/index.txt and <cache>/source.pack (source_pack), the stages' specialized
+/// MSL. An app built without Apple's Metal compiler (an .ipa built on Windows) ships this instead of compiled
+/// libraries: a stage is compiled from it the first time the game uses it, without translating it.
+fn source_set() -> Option<&'static (Index, super::source_pack::Pack)> {
+    static R: OnceLock<Option<(Index, super::source_pack::Pack)>> = OnceLock::new();
+    R.get_or_init(|| {
+        let text = std::fs::read_to_string(cache_dir().join("source").join("index.txt")).ok()?;
+        let pack = super::source_pack::Pack::open(&cache_dir().join("source.pack"))?;
+        let idx = parse_index(&text);
+        println!("[+] Shader cache: {} stages as source ({} in the pack), compiled on first use", idx.stages.len(), pack.len());
+        Some((idx, pack))
+    })
+    .as_ref()
+}
+
 /// A stage kept from an earlier start, with its library compiled on first use.
 fn runtime_stage(st: &'static CachedStage) -> Option<&'static CachedStage> {
+    let dir = runtime_dir()?;
+    compiled_stage(st, || std::fs::read_to_string(dir.join(format!("{}.metal", st.entry))).ok())
+}
+
+/// `st` with its library compiled from `source` on first use.
+fn compiled_stage(st: &'static CachedStage, source: impl FnOnce() -> Option<String>) -> Option<&'static CachedStage> {
     let compiled = COMPILED.get_or_init(Default::default);
     if compiled.lock().unwrap().contains(&st.entry) {
         return Some(st);
     }
-    let src = std::fs::read_to_string(runtime_dir()?.join(format!("{}.metal", st.entry))).ok()?;
+    let src = source()?;
     let lib = compile_msl(&src, &st.entry)?;
     super::translated::register_dynamic_library(&st.entry, lib);
     compiled.lock().unwrap().insert(st.entry.clone());
@@ -528,7 +549,12 @@ pub unsafe fn lookup(data: u64) -> Option<&'static CachedStage> {
     };
     let st = match index().and_then(find) {
         Some(st) => st,
-        None => runtime_stage(runtime_index().and_then(find)?)?,
+        // A stage the source set lacks, or whose source fails to compile, goes on to the stages of earlier starts and
+        // then to translation (the caller's lookup_or_translate_dynamic).
+        None => match source_set().and_then(|(idx, pack)| compiled_stage(find(idx)?, || pack.source(&find(idx)?.entry))) {
+            Some(st) => st,
+            None => runtime_stage(runtime_index().and_then(find)?)?,
+        },
     };
     if st.kind == StageKind::Fragment {
         st.fs_effects.get_or_init(|| fragment_effects(data));

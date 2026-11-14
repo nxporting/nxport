@@ -51,6 +51,7 @@ pub mod metal;
 #[cfg(not(nx_native))]
 pub mod metal {
     pub mod msl_specialize;
+    pub mod source_pack;
 }
 #[cfg(nx_runtime)]
 mod nvn;

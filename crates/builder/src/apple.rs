@@ -1,170 +1,181 @@
-// The Apple targets' build steps: the Metal shader cache from the game's shader stages, the shared pipeline list and
-// its precompiled pipelines, then the macOS app (nxport_build::pack) or the iOS app (nxport_build::ipa).
+// The macOS app's build steps: one list on every host. Only how some steps are done depends on the host:
+// - the engine for macOS: a Mac builder carries it (build.rs builds it beside the builder); on Windows it is built from
+//   this checkout first (nxport_build::apple_engine, as for iOS).
+// - the shaders: on a Mac, the Metal shader cache from the game's shader stages (Apple's Metal compiler), the shared
+//   pipeline list and its precompiled pipelines; on Windows, without that compiler, the stages the list uses translated
+//   and packed as Metal source, which the app compiles the first time the game uses each (as the iOS app's,
+//   windows::metal_source_steps).
+// - the app (nxport_build::pack): on a Mac a folder, signed by the linker; on Windows signed with the Rust ad-hoc signer
+//   (the engine with it: Apple silicon runs no unsigned code) and zipped with its file modes, so the executable reaches
+//   the Mac executable (pack::zip_app).
+// The iOS app's steps are in ios.rs; on a Mac they share the shader cache steps here.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use nxport::settings;
 
-use crate::app::{extract_stages_step, pipeline_list, Output, Request, Step, Target};
+use crate::app::{Output, Request, Step};
 
 pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
-    let Request { target, name, title_id, work, dump, mods, out_dir, edits, settings: resolved, prebuild, bundle_game, entitlements, ios_gpu, bundle_id, job } = r;
-    let (stages, cache) = (work.join("stages"), work.join("shader_cache"));
+    engine(&r, steps);
     // Without the cache the app translates every shader as the game loads it.
-    if prebuild {
-        steps.push(extract_stages_step(&job, &dump, &stages));
-        let batch_enabled = resolved.graphics.batch;
-        // The argument-buffer variants only for an app that draws through them (about a third of the libraries).
-        let args_enabled = resolved.graphics.arg_buffers;
-        {
-            let (stages, cache) = (stages.clone(), cache.clone());
-            let job = job.clone();
-            steps.push(("Building the shader cache".into(), Box::new(move || {
+    let cache = if r.prebuild { Some(shaders(&r, steps)) } else { None };
+    app(r, cache, steps)
+}
+
+#[cfg(windows)]
+fn engine(r: &Request, steps: &mut Vec<Step>) {
+    engine_from_source(nxport_build::apple_engine::Os::MacOs, r, steps);
+}
+
+#[cfg(target_os = "macos")]
+fn engine(_: &Request, _: &mut Vec<Step>) {}
+
+/// Windows: the engine for `os` (the macOS app's, or the iOS app's), built from this checkout first (cargo does nothing
+/// when it is up to date).
+#[cfg(windows)]
+pub(crate) fn engine_from_source(os: nxport_build::apple_engine::Os, r: &Request, steps: &mut Vec<Step>) {
+    let (toolchains, job) = (crate::app::data_dir().join("toolchains"), r.job.clone());
+    steps.push((
+        format!("Building the engine for {}", os.name()),
+        Box::new(move || {
+            if nxport_build::apple_engine::source_root().is_some() {
+                // No count: cargo does not say how many crates it will compile.
+                let compiling = |name: &str| crate::app::progress(&job, format!("Compiling {name}"), 0, 0, 0.0);
+                let engine = nxport_build::apple_engine::build(os, &toolchains, &compiling)?;
+                println!("  {}", engine.display());
+            }
+            Ok(())
+        }),
+    ));
+}
+
+/// Mac: the Metal shader cache, and its listed pipelines precompiled.
+#[cfg(target_os = "macos")]
+fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
+    let cache = metal_cache_steps(r, steps);
+    let archive_cache = cache.clone();
+    steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_build::pipeline_archive::build_mac(&archive_cache))));
+    cache
+}
+
+/// Windows: the stages the shared pipeline list uses, translated and packed as Metal source.
+#[cfg(windows)]
+fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
+    crate::windows::metal_source_steps(r, steps)
+}
+
+/// The app itself: what the host hands over (the .app on a Mac, its zip on Windows).
+fn app(r: Request, cache: Option<PathBuf>, steps: &mut Vec<Step>) -> Output {
+    let Request { name, work, dump, mods, out_dir, edits, bundle_game, .. } = r;
+    let app = out_dir.join(format!("{}.app", name.replace([':', '/'], " -")));
+    let settings_file = work.join("settings.toml");
+    let out: Output = Arc::new(Mutex::new(Some(handed_over(&app))));
+    let app2 = app.clone();
+    steps.push((
+        "Packaging the app".into(),
+        Box::new(move || {
+            let mut edits = edits.clone();
+            if mods.is_none() {
+                edits.files.no_mods = Some(true);
+            }
+            if settings_file.exists() || settings_file.is_symlink() {
+                let _ = nxport_build::pack::ensure_writable(&settings_file);
+                let _ = std::fs::remove_file(&settings_file);
+            }
+            settings::save_preset(&settings_file, &edits)?;
+            if let Some(parent) = app2.parent() {
+                let _ = nxport_build::pack::ensure_writable(parent);
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            nxport_build::pack::pack_app(&nxport_build::pack::PackOptions {
+                dump_dir: &dump,
+                mods_dir: mods.as_deref(),
+                shader_cache_dir: cache.as_deref(),
+                out_app: Some(&app2),
+                settings: Some(&settings_file),
+                symlink_assets: false,
+                // A Mac app made on Windows carries the game: a Windows path to the dump means nothing on the Mac.
+                bundle_game: bundle_game || cfg!(windows),
+            })
+            .map_err(|e| e.to_string())
+        }),
+    ));
+    finish(&app, steps);
+    out
+}
+
+/// Mac: the .app as it is.
+#[cfg(target_os = "macos")]
+fn handed_over(app: &std::path::Path) -> PathBuf {
+    app.to_path_buf()
+}
+
+#[cfg(target_os = "macos")]
+fn finish(_: &std::path::Path, _: &mut Vec<Step>) {}
+
+/// Windows: <app>.zip (pack::zip_app).
+#[cfg(windows)]
+fn handed_over(app: &std::path::Path) -> PathBuf {
+    let mut zip = app.as_os_str().to_owned();
+    zip.push(".zip");
+    PathBuf::from(zip)
+}
+
+/// Windows: the app signed (its engine with it), zipped, and the folder removed: the zip is what goes to the Mac.
+#[cfg(windows)]
+fn finish(app: &std::path::Path, steps: &mut Vec<Step>) {
+    let (app, signed) = (app.to_path_buf(), app.to_path_buf());
+    steps.push(("Signing the app".into(), Box::new(move || nxport_build::macho::sign(&signed, None))));
+    steps.push((
+        "Zipping the app".into(),
+        Box::new(move || {
+            let zip = nxport_build::pack::zip_app(&app)?;
+            debug_assert_eq!(zip, handed_over(&app));
+            nxport_build::pack::clean_path(&app).map_err(|e| format!("{}: {e}", app.display()))?;
+            println!("  {}", zip.display());
+            Ok(())
+        }),
+    ));
+}
+
+/// The macOS Metal shader cache (stages extracted, translated, compiled by Apple's Metal compiler) and the shared
+/// pipeline list beside it: the macOS app's cache, and what the iOS cache is compiled again from. Returns its folder.
+#[cfg(target_os = "macos")]
+pub(crate) fn metal_cache_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
+    use crate::app::{extract_stages_step, pipeline_list};
+    let (stages, cache) = (r.work.join("stages"), r.work.join("shader_cache"));
+    steps.push(extract_stages_step(&r.job, &r.dump, &stages));
+    let batch_enabled = r.settings.graphics.batch;
+    // The argument-buffer variants only for an app that draws through them (about a third of the libraries).
+    let args_enabled = r.settings.graphics.arg_buffers;
+    {
+        let (cache, job) = (cache.clone(), r.job.clone());
+        steps.push((
+            "Building the shader cache".into(),
+            Box::new(move || {
+                use nxport_build::shader_cache_build::ShaderBuildPhase as Phase;
                 let mut translation = nxport_build::translation::get();
                 translation.no_batch_kernels = !batch_enabled;
                 translation.no_arg_kernels = !args_enabled;
                 nxport_build::translation::install(translation);
-
-                let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
-                let jobs = cpus.saturating_sub(2).max(2);
-                let job_cb = job.clone();
-                let on_progress = Arc::new(move |phase: nxport_build::shader_cache_build::ShaderBuildPhase, done: usize, total: usize| {
-                    let mut j = job_cb.lock().unwrap();
-                    j.sub_step = Some(phase.to_string());
-                    j.sub_done = done;
-                    j.sub_total = total;
-                    let phase_idx = phase.phase_index();
-                    let num_phases = nxport_build::shader_cache_build::ShaderBuildPhase::NUM_PHASES;
-                    let phase_frac = if total > 0 {
-                        (done as f32 / total as f32).min(1.0)
-                    } else {
-                        0.0
-                    };
-                    let new_sub_frac = (phase_idx as f32 + phase_frac) / num_phases as f32;
-                    j.sub_frac = j.sub_frac.max(new_sub_frac).min(1.0);
+                let on_progress = Arc::new(move |phase: Phase, done: usize, total: usize| {
+                    crate::app::phase_progress(&job, phase.to_string(), phase.phase_index(), Phase::NUM_PHASES, done, total);
                 });
                 nxport_build::shader_cache_build::build(&nxport_build::shader_cache_build::Options {
                     dump_dirs: vec![stages],
                     out_dir: cache,
                     ctrl_dir: None,
-                    jobs,
+                    jobs: crate::app::shader_jobs(),
                     msl_out: None,
                     index_only: false,
                     on_progress: Some(on_progress),
                 })
-            })));
-        }
-        let list_cache = cache.clone();
-        steps.push(("Getting the shared pipeline list".into(), Box::new(move || pipeline_list(title_id, &list_cache, true))));
-        if target == Target::MacApp {
-            let archive_cache = cache.clone();
-            steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_build::pipeline_archive::build_mac(&archive_cache))));
-        }
+            }),
+        ));
     }
-    match target {
-        Target::MacApp => {
-            let app = out_dir.join(format!("{}.app", name.replace([':', '/'], " -")));
-            let settings_file = work.join("settings.toml");
-            let app2 = app.clone();
-            steps.push(("Packaging the app".into(), Box::new(move || {
-                let mut edits = edits.clone();
-                if mods.is_none() {
-                    edits.files.no_mods = Some(true);
-                }
-                if settings_file.exists() || settings_file.is_symlink() {
-                    let _ = nxport_build::pack::ensure_writable(&settings_file);
-                    let _ = std::fs::remove_file(&settings_file);
-                }
-                settings::save_preset(&settings_file, &edits)?;
-                if let Some(parent) = app2.parent() {
-                    let _ = nxport_build::pack::ensure_writable(parent);
-                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                nxport_build::pack::pack_app(&nxport_build::pack::PackOptions {
-                    dump_dir: &dump,
-                    mods_dir: mods.as_deref(),
-                    shader_cache_dir: prebuild.then_some(cache.as_path()),
-                    out_app: Some(&app2),
-                    settings: Some(&settings_file),
-                    symlink_assets: false,
-                    bundle_game,
-                })
-                .map_err(|e| e.to_string())
-            })));
-            Arc::new(Mutex::new(Some(app)))
-        }
-        Target::Ipa => {
-            let ios_cache = work.join("shader_cache_ios");
-            if prebuild {
-                let (cache, ios_cache_dir) = (cache.clone(), ios_cache.clone());
-                let job = job.clone();
-                // The argument-buffer variants only for an app that draws through them.
-                let arg_variants = resolved.graphics.arg_buffers;
-                steps.push(("Building the iOS shader cache".into(), Box::new(move || {
-                    let ios_cache = ios_cache_dir;
-                    let job_cb = job.clone();
-                    let cb = move |sub: nxport_build::shader_cache_build::IosShaderBuildPhase, done: usize, total: usize| {
-                        let mut j = job_cb.lock().unwrap();
-                        j.sub_step = Some(sub.to_string());
-                        j.sub_done = done;
-                        j.sub_total = total;
-                        let phase_idx = sub.phase_index();
-                        let num_phases = nxport_build::shader_cache_build::IosShaderBuildPhase::NUM_PHASES;
-                        let phase_frac = if total > 0 {
-                            (done as f32 / total as f32).min(1.0)
-                        } else {
-                            0.0
-                        };
-                        let new_sub_frac = (phase_idx as f32 + phase_frac) / num_phases as f32;
-                        j.sub_frac = j.sub_frac.max(new_sub_frac).min(1.0);
-                    };
-                    let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
-                    let jobs = cpus.saturating_sub(2).max(2);
-                    nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, jobs, false, arg_variants, Some(&cb))?;
-                    let list = cache.join("pipelines.txt");
-                    if list.exists() {
-                        std::fs::copy(&list, ios_cache.join("pipelines.txt")).map_err(|e| e.to_string())?;
-                    }
-                    Ok(())
-                })));
-                if !ios_gpu.is_empty() {
-                    let (ios_cache, scratch, gpu) = (ios_cache.clone(), work.join("pipeline_script"), ios_gpu.clone());
-                    steps.push(("Precompiling pipelines".into(), Box::new(move || {
-                        nxport_build::pipeline_archive::build_ios(&ios_cache, &scratch, &gpu)
-                    })));
-                }
-            }
-            let out: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
-            let out2 = out.clone();
-            steps.push(("Building the iOS app".into(), Box::new(move || {
-                std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-                let job_cb = job.clone();
-                let ipa = nxport_build::ipa::build(
-                    &nxport_build::ipa::Options {
-                        dump: &dump,
-                        mods: mods.as_deref(),
-                        cache: prebuild.then_some(ios_cache.as_path()),
-                        out_dir: &out_dir,
-                        edits,
-                        bundle_game,
-                        entitlements,
-                        bundle_id,
-                    },
-                    &move |step| {
-                        println!("[+] {step}");
-                        let mut j = job_cb.lock().unwrap();
-                        j.sub_step = Some(step.to_string());
-                        j.sub_done = 0;
-                        j.sub_total = 0;
-                        j.sub_frac = j.sub_frac.max(step.default_fraction());
-                    },
-                )?;
-                *out2.lock().unwrap() = Some(ipa);
-                Ok(())
-            })));
-            out
-        }
-        Target::WindowsApp => unreachable!("not a target here"),
-    }
+    let (list_cache, title_id) = (cache.clone(), r.title_id);
+    steps.push(("Getting the shared pipeline list".into(), Box::new(move || pipeline_list(title_id, &list_cache, true))));
+    cache
 }

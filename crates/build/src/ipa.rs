@@ -178,8 +178,12 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
             || n == "pipelines.txt"
             || (n.starts_with("shaders_") && n.ends_with(".metallib"))
             || (n.starts_with("pipelines") && n.ends_with(".metalar"))
+            || n == "source.pack"
         {
             copy(&e.path(), &app.join("shader_cache").join(&n))?;
+        } else if n == "source" && e.path().is_dir() {
+            // The shaders as Metal source (shaders build --msl-out): built without Apple's compiler.
+            copy_tree(&e.path(), &app.join("shader_cache/source"))?;
         }
     }
     let font_src = o.edits.files.shared_fonts.as_deref()
@@ -316,7 +320,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
 fn ios_artifact(name: &str) -> Option<PathBuf> {
     let built = Path::new(env!("NXPORT_ENGINE_IOS")).with_file_name(name);
     #[cfg(windows)]
-    if let Some(p) = crate::ios_engine::built_engine().map(|e| e.with_file_name(name)).filter(|p| p.is_file()) {
+    if let Some(p) = crate::apple_engine::built_engine(crate::apple_engine::Os::Ios).map(|e| e.with_file_name(name)).filter(|p| p.is_file()) {
         return Some(p);
     }
     let mut candidates = vec![
