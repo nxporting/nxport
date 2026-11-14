@@ -8,6 +8,14 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
+- **D16 clears against rasterized depth on Vulkan (mac-worker's Metal finding, 2026-11-13, 54cc5b0).** On Apple GPUs a
+  Depth16Unorm clear truncates (0.5 -> 32767) while rasterized depth rounds (32768), so an EQUAL draw at the cleared z
+  fails; TotK clears two D16 targets to 0.5 every frame in Hateno and selects regions with EQUAL (tied to blocks in
+  Ultrahand / Fuse effects). Our Vulkan backend runs on Windows only (no MoltenVK); whether NVIDIA / AMD / Intel clear
+  D16 with the same rounding as rasterization is untested. Test: clear a D16 image to z, draw a full-screen quad at z
+  with EQUAL, count passing pixels (0.5, 0.25, 0.3, 0.1, 0.75), on each vendor we can reach; apply mac-worker's
+  clear_depth_value rule only where it fails.
+
 - **A power cut while the builder links can leave zig's cache broken (2026-11-13, win-worker).** After an outage during
   "Lifting and compiling" (link step), every rebuild failed: lld-link "undefined symbol: ___chkstk_ms" from main_034.o,
   because zig's cache held a 1 KB compiler_rt.lib (the good one is 1.2 MB). Deleting that one entry did not help; deleting
