@@ -259,11 +259,36 @@ impl Host {
             Event::GamepadAdded { which, .. } => match self.gamepads.open(which) {
                 Ok(pad) => {
                     println!("[+] Input: controller connected: {}", pad.name().unwrap_or_default());
+                    // Its gyroscope and accelerometer, if it has them: motion for the game (input.rs motion_*).
+                    use sdl3::sensor::SensorType;
+                    let motion = pad.sensor_set_enabled(SensorType::Gyroscope, true).is_ok()
+                        && pad.sensor_set_enabled(SensorType::Accelerometer, true).is_ok();
+                    if motion {
+                        println!("[+] Input: the controller's motion sensors are on");
+                    }
                     self.pads.push((pad, Rumbler::new()));
                 }
                 Err(e) => println!("[!] Input: cannot open a controller: {e}"),
             },
+            // SDL's controller axes: X right, Y up out of its face, Z toward the player; acceleration in m/s^2 (the push against
+            // gravity), the gyroscope in rad/s. The Switch's: X right, Y forward, Z up out of the face; acceleration in G.
+            Event::GamepadSensorUpdated { which, sensor, data, timestamp } => {
+                use sdl3::sensor::SensorType;
+                let Some(player) = self.pads.iter().position(|(p, _)| p.id().ok() == Some(which)) else { return };
+                let d = data.map(|v| v as f64);
+                match sensor {
+                    SensorType::Gyroscope => input::motion_gyro(player, [d[0], -d[2], d[1]], timestamp),
+                    SensorType::Accelerometer => {
+                        const G: f64 = 9.80665;
+                        input::motion_accel(player, [-d[0] / G, d[2] / G, -d[1] / G]);
+                    }
+                    _ => {}
+                }
+            }
             Event::GamepadRemoved { which, .. } => {
+                if let Some(i) = self.pads.iter().position(|(p, _)| p.id().ok() == Some(which)) {
+                    input::motion_clear(i);
+                }
                 self.pads.retain(|(p, _)| p.id().ok() != Some(which));
                 println!("[+] Input: controller disconnected");
             }

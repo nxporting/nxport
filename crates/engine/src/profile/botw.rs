@@ -11,6 +11,15 @@ pub static V1_0_0: VersionProfile = VersionProfile {
     draw_item: None,
 };
 
+pub static V1_6_0: VersionProfile = VersionProfile {
+    version_string: "1.6.0",
+    build_id_prefix: "8e9978d50bdd20b4c8395a106c27ffde",
+    install_hooks: None,
+    heap_instance_offset: None,
+    allocator_pool_offset: None,
+    draw_item: None,
+};
+
 pub static V1_5_0: VersionProfile = VersionProfile {
     version_string: "1.5.0",
     build_id_prefix: "16a91992bba71201e98756f3bc8f5d2f",
@@ -31,7 +40,7 @@ pub static PROFILE: GameProfile = GameProfile {
     title_id: BOTW_TITLE_ID,
     lower_left_window_origin: false,
     compute_has_preamble: true,
-    versions: &[V1_0_0, V1_5_0],
+    versions: &[V1_0_0, V1_5_0, V1_6_0],
     shader_dirs: &["Pack", "Effect", "UI", "Layout", "System", "Model"],
     options: Some(options),
     platform_options: None,
