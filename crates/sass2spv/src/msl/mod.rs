@@ -1242,7 +1242,8 @@ fn emit_block_contents(c: &mut Ctx, block: AstId) -> R<()> {
                     inline_decl = Some(t);
                 } else {
                     let name = c.locals[&l].clone();
-                    c.line(&format!("{t} {name};"));
+                    // Registers start at 0, as on the Switch (codegen/declarations.rs declare_locals).
+                    c.line(&format!("{t} {name} = {{}};"));
                 }
             }
         }
