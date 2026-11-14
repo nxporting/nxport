@@ -70,6 +70,18 @@ pub(super) fn load(device: &Device) -> bool {
                 })
                 .collect();
             paths.sort();
+            // An iPhone archive holds the code of the iOS SDK compiler that made it (the builder writes its version
+            // beside it); on another iOS release every pipeline would miss it, and loading it only costs time.
+            if let Ok(sdk) = std::fs::read_to_string(dir.join("pipelines.metalar.sdk")) {
+                let (sdk, os) = (sdk.trim().to_string(), os_version());
+                if sdk.split('.').next() != os.split('.').next() {
+                    println!(
+                        "[+] Pipelines: the binary archive was compiled with the iOS {sdk} SDK, this is iOS {os}: not used, \
+                         the listed pipelines compile here"
+                    );
+                    return None;
+                }
+            }
             // Opening an archive parses every entry: one thread per file.
             let opened: Vec<Option<SendArchive>> = std::thread::scope(|s| {
                 let workers: Vec<_> = paths

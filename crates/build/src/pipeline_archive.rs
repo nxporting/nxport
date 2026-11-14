@@ -70,6 +70,13 @@ pub fn build_ios(ios_cache: &Path, work: &Path, arch: &str) -> Result<(), String
         println!("  No pipeline list: nothing to precompile");
         return Ok(());
     }
+    let _ = std::fs::remove_file(ios_cache.join(SDK_FILE));
+    // An archive holds the code of the iOS SDK's shader compiler; a phone on another iOS release compiles every pipeline
+    // itself, so without Xcode's metal-tt the phone does all of it.
+    let Some(sdk) = ios_sdk_version() else {
+        println!("  No Xcode with the iOS SDK and metal-tt: the app compiles the listed pipelines on the phone at first launch");
+        return Ok(());
+    };
     let min = IOS_GPUS.iter().find(|g| g.1 == arch).map_or("18.0", |g| g.2);
     let _ = std::fs::remove_dir_all(work);
     run_engine(ios_cache, work, true)?;
@@ -103,12 +110,28 @@ pub fn build_ios(ios_cache: &Path, work: &Path, arch: &str) -> Result<(), String
         println!("  {dropped} pipelines left out (metal-tt did not find their functions); the app compiles them when first drawn");
     }
     let _ = std::fs::remove_dir_all(work);
+    std::fs::write(ios_cache.join(SDK_FILE), format!("{sdk}\n")).map_err(|e| e.to_string())?;
     println!(
-        "  {} for {arch}: {} MB",
+        "  {} for {arch} with the iOS {sdk} SDK: {} MB (used on iOS {}.x; other releases compile on the phone)",
         out.display(),
-        std::fs::metadata(&out).map_or(0, |m| m.len() >> 20)
+        std::fs::metadata(&out).map_or(0, |m| m.len() >> 20),
+        sdk.split('.').next().unwrap_or(&sdk)
     );
     Ok(())
+}
+
+/// Beside pipelines.metalar: the iOS SDK version whose compiler made it (the app uses it only on that iOS release).
+pub const SDK_FILE: &str = "pipelines.metalar.sdk";
+
+/// The iOS SDK's version, when Xcode has the SDK and metal-tt.
+fn ios_sdk_version() -> Option<String> {
+    let run = |args: &[&str]| {
+        Command::new("/usr/bin/xcrun").args(args).output().ok().filter(|o| o.status.success())
+    };
+    run(&["-sdk", "iphoneos", "--find", "metal-tt"])?;
+    let o = run(&["-sdk", "iphoneos", "--show-sdk-version"])?;
+    let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    (!v.is_empty()).then_some(v)
 }
 
 /// The functions metal-tt reports missing ("note: 'name' is missing").
