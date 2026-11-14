@@ -50,7 +50,7 @@ dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 # against the pre-built SDL3.dll in vendor/SDL3/. The settings editor (settings::edit) uses dear-imgui-rs.
 [target.'cfg(windows)'.dependencies]
 sdl3-sys = { version = "0.7.2", default-features = false }
-sdl3 = { version = "0.20.0", default-features = false }
+sdl3 = { version = "0.20.0", default-features = false, features = ["hidapi"] }
 dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
