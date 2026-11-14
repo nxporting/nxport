@@ -136,23 +136,10 @@ pub(super) fn function(
     let d = objc2_metal::MTLFunctionDescriptor::new();
     d.setName(Some(&NSString::from_str(name)));
     d.setConstantValues(Some(constants));
-    BUILDING.with(|b| {
-        if let Some(list) = b.borrow_mut().as_mut() {
-            list.push((d.clone(), lib.retain()));
-        }
-    });
     if let Some(a) = archives(&lib.device()) {
         d.setBinaryArchives(Some(&a.0));
     }
     lib.newFunctionWithDescriptor_error(&d)
-}
-
-type Specialised = (Retained<objc2_metal::MTLFunctionDescriptor>, Retained<ProtocolObject<dyn MTLLibrary>>);
-
-thread_local! {
-    /// --build-pipeline-archive: the specialised functions a pipeline descriptor was made of, added to the archive
-    /// with it (an archive serves a specialised function only when it holds it).
-    static BUILDING: std::cell::RefCell<Option<Vec<Specialised>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Creates a pipeline, from the archives when they have it.
@@ -416,26 +403,18 @@ pub fn build(out: &Path, script: bool) -> Result<(), String> {
                             }
                         };
                         let mut lines = Vec::new();
-                        let mut added_functions = std::collections::HashSet::new();
                         for &i in group {
                             let p = &planned[i];
-                            BUILDING.with(|b| *b.borrow_mut() = Some(Vec::new()));
+                            // Pipelines only, no separately added specialised functions: opening an archive that holds
+                            // them costs ~23x its size in memory (TotK, M4: 2.3 GB per 100 MB archive, ten archives
+                            // 23 GB before the first frame; the app reached 30-40 GB), while a pipelines-only archive
+                            // opens in milliseconds for next to nothing and still serves the pipelines (5575 of 5877
+                            // listed ones). For the script they would also take the specialisation's name.
                             let desc = descriptor(&device, &lib, p);
-                            let functions = BUILDING.with(|b| b.borrow_mut().take()).unwrap_or_default();
                             let Some(desc) = desc else {
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             };
-                            // (Not for the script: the function would join the archive under its name next to the
-                            // pipeline's own specialisation, which then gets another name.)
-                            for (fd, flib) in functions.iter().filter(|_| !script) {
-                                let name = fd.name().map(|n| n.to_string()).unwrap_or_default();
-                                if added_functions.insert(name) {
-                                    if let Err(e) = archive.addFunctionWithDescriptor_library_error(fd, flib) {
-                                        println!("[!] Pipelines: function: {}", e.localizedDescription());
-                                    }
-                                }
-                            }
                             if let Err(e) = archive.addRenderPipelineFunctionsWithDescriptor_error(&desc) {
                                 println!("[!] Pipelines: {} / {}: {}", p.entry.vs, p.entry.fs.as_deref().unwrap_or("-"), e.localizedDescription());
                                 failed.fetch_add(1, Ordering::Relaxed);
