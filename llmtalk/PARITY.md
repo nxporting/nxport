@@ -78,6 +78,10 @@ iOS Metal.
   (the same setting names as the desktop menus' live switches, host/live.rs), or decide which a phone should not have.
   **Done 4057d51:** Frame Rate Limit, Low Latency, Vibration, Vibration Strength, and TotK's two in a game group.
 - Input: controls window / bindings on each host; mouse look on Mac.
+  **Checked 2026-11-13 (win-worker, by reading):** one set of bindings (input::bindings, controls.cfg) on both; the Mac
+  edits them in a Controls window, Windows in an Input > Controls submenu (one tree, menu::bar). Mouse look is the same
+  on both: input::mouse_look_moved from relative mouse motion, F8 frees or holds the mouse, the window takes it again on
+  focus. "Reset to Defaults" sits inside the Windows submenu, so it drops the word Controls the Mac's item needs.
 - Tools: frame history (F9), perf overlay (F10), capture flags, log locations.
   **Checked 2026-11-13 (win-worker, by reading):** F10 overlay and F8 (free the mouse) are the same on both. F9 captures
   on both (the Mac's request_capture picks the backend's capture; Windows the frame history). Mac only: space captures
