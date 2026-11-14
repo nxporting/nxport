@@ -95,6 +95,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **BotW 1.0.0 crashes on Windows before its first frame (2026-11-14, win-worker).** Built from the user's base NSP
+  (main 2094f152...): guest-main reads [0 + 0x20] in f_7000b21a78 (main+0xa21a78), called from f_7000afeb38, which
+  loads a global object pointer through the pointer table at 0x700237df98 and finds it still null; the crash comes right
+  after NVN setup, as the game starts its "Prepare Thread". Not yet found: what should have created that object (a
+  singleton set elsewhere, maybe by the Prepare Thread or an HLE call that returned without doing its part). BotW 1.5.0
+  runs on the Mac, so it may be 1.0.0-specific or Windows-specific; a 1.9.0 dump (pending a title key) would tell.
+
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
   1.0.0 files (a 1.0.0 image needs 0x2d8000, measured on Windows). Fix for the user: build the .ipa from the version on
