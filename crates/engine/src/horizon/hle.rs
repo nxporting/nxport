@@ -1025,7 +1025,28 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, size: usize) -> i32 {
-    let Ok(ptr) = crate::os::alloc_on_demand(size) else {
+    let file_backed = {
+        #[cfg(unix)]
+        {
+            crate::settings::get().guest.file_backed_memory.then(|| crate::os::alloc_file_backed(size, &std::env::temp_dir()))
+        }
+        #[cfg(not(unix))]
+        {
+            None::<std::io::Result<*mut u8>>
+        }
+    };
+    let alloc = match file_backed {
+        Some(Ok(p)) => {
+            println!("[+] HLE: AllocateMemoryBlock: {} MB file-backed", size >> 20);
+            Ok(p)
+        }
+        Some(Err(e)) => {
+            eprintln!("[!] HLE: AllocateMemoryBlock: file-backed memory failed ({e}); anonymous instead");
+            crate::os::alloc_on_demand(size)
+        }
+        None => crate::os::alloc_on_demand(size),
+    };
+    let Ok(ptr) = alloc else {
         eprintln!(
             "[-] HLE: AllocateMemoryBlock failed for {} bytes",
             size
