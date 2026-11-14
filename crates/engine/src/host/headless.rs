@@ -21,6 +21,10 @@ pub mod live;
 #[path = "menu.rs"]
 pub mod menu;
 
+// An app built without the game's files asks for them (host/game_files.rs).
+#[path = "game_files.rs"]
+pub mod game_files;
+
 
 pub mod overlay {
     pub use crate::perf_stats::*;

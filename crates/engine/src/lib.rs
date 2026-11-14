@@ -629,7 +629,7 @@ fn guest_chain(
     Ok(())
 }
 
-#[cfg(nx_native)]
+#[cfg(nx_runtime)]
 /// The settings of a run; when they name no folder with the game's files (an app built without them, on another
 /// computer, or the folder moved) the player is asked for one (host/game_files.rs), remembered for the game.
 fn with_game_files(mut layers: Vec<settings::SettingsPatch>) -> Result<settings::Settings, String> {
@@ -1356,7 +1356,7 @@ pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::err
 /// (host/display_sdl.rs) and never returns; with --headless it returns when nnMain does.
 #[cfg(all(nx_runtime, not(nx_native)))]
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    let s = resolve_settings(layers);
+    let s = with_game_files(layers)?;
     let null = match s.graphics.gpu {
         settings::GpuBackend::Vulkan => false,
         // Without a window: what it would show comes from the Vulkan backend.
