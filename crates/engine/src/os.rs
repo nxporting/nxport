@@ -72,6 +72,24 @@ pub unsafe fn alloc_on_demand(size: usize) -> io::Result<*mut u8> {
     imp::alloc_on_demand(size)
 }
 
+/// alloc_on_demand backed by an unlinked sparse file in `dir` instead of anonymous memory: its written pages are file
+/// pages the kernel can write out, not anonymous memory counted whole against the process's limit (iOS ends an app whose
+/// footprint reaches it). Pages read zero until written, as anonymous ones do.
+#[cfg(unix)]
+pub unsafe fn alloc_file_backed(size: usize, dir: &std::path::Path) -> io::Result<*mut u8> {
+    use std::os::unix::io::AsRawFd;
+    let path = dir.join(format!("nxport-guest-{}-{size:x}", std::process::id()));
+    let f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+    let _ = std::fs::remove_file(&path);
+    f.set_len(size as u64)?;
+    let p = libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0);
+    if p == libc::MAP_FAILED {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(p as *mut u8)
+    }
+}
+
 /// Commits now what alloc_on_demand left for its first access, in [addr, addr + len). For the accesses no fault can serve:
 /// a buffer the kernel fills (it fails with no exception), memory handed to a driver to import. Nothing elsewhere.
 /// # Safety
