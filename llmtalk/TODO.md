@@ -27,7 +27,8 @@ Must do, in order:
    Trojan:Win32/Bearfoos.A!ml before, a machine-learning false positive): say so, and how to report one
    (https://www.microsoft.com/wdsi/filesubmission, "Incorrectly detected"); no exclusions or binary tricks. macOS: the
    archive is unsigned and not notarized; the text already gives xattr -dr com.apple.quarantine.
-6. Tag v<version> to publish (publishing is your call). No secrets or repo settings needed: release.yml uses only
+6. Tag v<version> to publish (publishing is your call). If your iPhone test of a Windows-built .ipa passed, first drop
+   "iOS apps built on Windows have not been run on a device yet" from the notes in release.yml. No secrets or repo settings needed: release.yml uses only
    GITHUB_TOKEN, contents: write in the publish job alone.
 
 Your call, optional for the first release:
