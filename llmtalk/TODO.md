@@ -95,7 +95,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
-- **An SDK layer for every SDK release (user, 2026-11-14).** Source list: titledb.nintendo-research.com/switch/main.html
+- **An SDK layer for every SDK release (user, 2026-11-14).** Source lists: titledb.nintendo-research.com/switch/main.html
+  and subsdks.html there (the SDK versions of the extra modules, subsdk0..n, which can differ from the sdk module's);
   (or a more complete list if one turns up). Today a version between layers takes the closest older one, which broke SMO
   1.0.0 once (c0ea1b4). Each layer should carry only what is known for that release: the NVN version from a game's own
   check or the release's headers, the thread layout from a game that runs on it, and the functions it changed. Layers
