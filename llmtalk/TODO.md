@@ -108,8 +108,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 - **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
-  sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0; pending
-  commit after an SMO check). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
+  sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
+  checked on SMO 1.0.0 to its title menu and TotK 1.0.0 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
   crashes in f_7000f52794 (main+0xe52794, after f_7000f51cc8 returns): the singleton at 0x70023ebee0 (made by
   main+0xe52fac, 0x40 bytes) still has +0x38 null, which only main+0xdbeb3c sets (called from main+0x7ae8f0, called
   from main+0x7b7b54). Same in every run, but it is an ordering between threads: a probe (fprintf at those
