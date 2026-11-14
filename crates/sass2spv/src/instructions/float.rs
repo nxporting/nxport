@@ -33,7 +33,7 @@ pub fn dfma_r(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_reg(c, op.src_b(), true);
     let s = get_src_reg(c, op.src_c(), true);
-    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc());
+    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc(), false);
 }
 
 pub fn dfma_i(c: &mut Ctx) {
@@ -41,7 +41,7 @@ pub fn dfma_i(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_imm(c, imm20_to_float(op.imm20()), true);
     let s = get_src_reg(c, op.src_c(), true);
-    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc());
+    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc(), false);
 }
 
 pub fn dfma_c(c: &mut Ctx) {
@@ -49,7 +49,7 @@ pub fn dfma_c(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_cbuf(c, op.cbuf_slot(), op.cbuf_offset(), true);
     let s = get_src_reg(c, op.src_c(), true);
-    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc());
+    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc(), false);
 }
 
 pub fn dfma_rc(c: &mut Ctx) {
@@ -57,28 +57,28 @@ pub fn dfma_rc(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_reg(c, op.src_c(), true);
     let s = get_src_cbuf(c, op.cbuf_slot(), op.cbuf_offset(), true);
-    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc());
+    emit_ffma(c, I::FP64, a, b, s, op.dest(), op.neg_a(), op.neg_c(), false, op.write_cc(), false);
 }
 
 pub fn dmul_r(c: &mut Ctx) {
     let op = InstDmulR(c.raw_op());
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_reg(c, op.src_b(), true);
-    emit_fmul(c, I::FP64, MultiplyScale::NO_SCALE, a, b, op.dest(), op.neg_a(), false, op.write_cc());
+    emit_fmul(c, I::FP64, MultiplyScale::NO_SCALE, a, b, op.dest(), op.neg_a(), false, op.write_cc(), false);
 }
 
 pub fn dmul_i(c: &mut Ctx) {
     let op = InstDmulI(c.raw_op());
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_imm(c, imm20_to_float(op.imm20()), true);
-    emit_fmul(c, I::FP64, MultiplyScale::NO_SCALE, a, b, op.dest(), op.neg_a(), false, op.write_cc());
+    emit_fmul(c, I::FP64, MultiplyScale::NO_SCALE, a, b, op.dest(), op.neg_a(), false, op.write_cc(), false);
 }
 
 pub fn dmul_c(c: &mut Ctx) {
     let op = InstDmulC(c.raw_op());
     let a = get_src_reg(c, op.src_a(), true);
     let b = get_src_cbuf(c, op.cbuf_slot(), op.cbuf_offset(), true);
-    emit_fmul(c, I::FP64, MultiplyScale::NO_SCALE, a, b, op.dest(), op.neg_a(), false, op.write_cc());
+    emit_fmul(c, I::FP64, MultiplyScale::NO_SCALE, a, b, op.dest(), op.neg_a(), false, op.write_cc(), false);
 }
 
 pub fn fadd_r(c: &mut Ctx) {
@@ -114,7 +114,7 @@ pub fn ffma_r(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_reg(c, op.src_b(), false);
     let s = get_src_reg(c, op.src_c(), false);
-    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc());
+    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn ffma_i(c: &mut Ctx) {
@@ -122,7 +122,7 @@ pub fn ffma_i(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_imm(c, imm20_to_float(op.imm20()), false);
     let s = get_src_reg(c, op.src_c(), false);
-    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc());
+    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn ffma_c(c: &mut Ctx) {
@@ -130,7 +130,7 @@ pub fn ffma_c(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_cbuf(c, op.cbuf_slot(), op.cbuf_offset(), false);
     let s = get_src_reg(c, op.src_c(), false);
-    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc());
+    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn ffma_rc(c: &mut Ctx) {
@@ -138,7 +138,7 @@ pub fn ffma_rc(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_reg(c, op.src_c(), false);
     let s = get_src_cbuf(c, op.cbuf_slot(), op.cbuf_offset(), false);
-    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc());
+    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn ffma32i(c: &mut Ctx) {
@@ -146,35 +146,35 @@ pub fn ffma32i(c: &mut Ctx) {
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_imm(c, op.imm32(), false);
     let s = get_src_reg(c, op.dest(), false);
-    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc());
+    emit_ffma(c, I::FP32, a, b, s, op.dest(), op.neg_a(), op.neg_c(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn fmul_r(c: &mut Ctx) {
     let op = InstFmulR(c.raw_op());
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_reg(c, op.src_b(), false);
-    emit_fmul(c, I::FP32, op.scale(), a, b, op.dest(), op.neg_a(), op.sat(), op.write_cc());
+    emit_fmul(c, I::FP32, op.scale(), a, b, op.dest(), op.neg_a(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn fmul_i(c: &mut Ctx) {
     let op = InstFmulI(c.raw_op());
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_imm(c, imm20_to_float(op.imm20()), false);
-    emit_fmul(c, I::FP32, op.scale(), a, b, op.dest(), op.neg_a(), op.sat(), op.write_cc());
+    emit_fmul(c, I::FP32, op.scale(), a, b, op.dest(), op.neg_a(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn fmul_c(c: &mut Ctx) {
     let op = InstFmulC(c.raw_op());
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_cbuf(c, op.cbuf_slot(), op.cbuf_offset(), false);
-    emit_fmul(c, I::FP32, op.scale(), a, b, op.dest(), op.neg_a(), op.sat(), op.write_cc());
+    emit_fmul(c, I::FP32, op.scale(), a, b, op.dest(), op.neg_a(), op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn fmul32i(c: &mut Ctx) {
     let op = InstFmul32i(c.raw_op());
     let a = get_src_reg(c, op.src_a(), false);
     let b = get_src_imm(c, op.imm32(), false);
-    emit_fmul(c, I::FP32, MultiplyScale::NO_SCALE, a, b, op.dest(), false, op.sat(), op.write_cc());
+    emit_fmul(c, I::FP32, MultiplyScale::NO_SCALE, a, b, op.dest(), false, op.sat(), op.write_cc(), op.fmz() == Fmz::FMZ);
 }
 
 pub fn hadd2_r(c: &mut Ctx) {
@@ -283,18 +283,36 @@ fn emit_fadd(c: &mut Ctx, fp: I, a: OperandId, b: OperandId, rd: i32, neg_a: boo
     set_fp_zn_flags(c, res, write_cc, fp);
 }
 
+/// `.FMZ` (FP32 FFMA/FMUL): a zero operand makes the product +0, whatever the other operand holds (infinity or NaN
+/// too), as the Maxwell ALU computes it. Shaders built for it multiply by factors that are 0 where a value is
+/// undefined (a scale animating from 0, a weight of 0 on an infinite term), so the IEEE product, NaN, would reach
+/// positions and colours: one corner of a UI quad at NaN drew a triangle over half the screen.
+fn zero_product(c: &mut Ctx, a: OperandId, b: OperandId, if_zero: OperandId, otherwise: OperandId, fp: I) -> OperandId {
+    let z = c.const_f(0.0);
+    let a_zero = c.fp_compare_equal(a, z, fp);
+    let b_zero = c.fp_compare_equal(b, z, fp);
+    let r = c.conditional_select(b_zero, if_zero, otherwise);
+    c.conditional_select(a_zero, if_zero, r)
+}
+
 #[allow(clippy::too_many_arguments)]
-fn emit_ffma(c: &mut Ctx, fp: I, a: OperandId, b: OperandId, s: OperandId, rd: i32, neg_b: bool, neg_c: bool, sat: bool, write_cc: bool) {
+fn emit_ffma(c: &mut Ctx, fp: I, a: OperandId, b: OperandId, s: OperandId, rd: i32, neg_b: bool, neg_c: bool, sat: bool, write_cc: bool, fmz: bool) {
     let b = c.fp_negate_if(b, neg_b, fp);
     let s = c.fp_negate_if(s, neg_c, fp);
-    let fma = c.fp_fused_multiply_add(a, b, s, fp);
+    let mut fma = c.fp_fused_multiply_add(a, b, s, fp);
+    if fmz && fp == I::FP32 {
+        // +0 + c: the addend, with -0 becoming +0 as an addition of the zero product gives it.
+        let z = c.const_f(0.0);
+        let plus_s = c.fp_add(z, s, fp);
+        fma = zero_product(c, a, b, plus_s, fma, fp);
+    }
     let res = c.fp_saturate_if(fma, sat, fp);
     set_dest(c, res, rd, fp == I::FP64);
     set_fp_zn_flags(c, res, write_cc, fp);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_fmul(c: &mut Ctx, fp: I, scale: MultiplyScale, mut a: OperandId, b: OperandId, rd: i32, neg_b: bool, sat: bool, write_cc: bool) {
+fn emit_fmul(c: &mut Ctx, fp: I, scale: MultiplyScale, mut a: OperandId, b: OperandId, rd: i32, neg_b: bool, sat: bool, write_cc: bool, fmz: bool) {
     let fp64 = fp == I::FP64;
     let b = c.fp_negate_if(b, neg_b, fp);
     if scale != MultiplyScale::NO_SCALE {
@@ -317,7 +335,11 @@ fn emit_fmul(c: &mut Ctx, fp: I, scale: MultiplyScale, mut a: OperandId, b: Oper
         }
         a = c.fp_multiply(a, scale_const, fp);
     }
-    let m = c.fp_multiply(a, b, fp);
+    let mut m = c.fp_multiply(a, b, fp);
+    if fmz && fp == I::FP32 {
+        let z = c.const_f(0.0);
+        m = zero_product(c, a, b, z, m, fp);
+    }
     let res = c.fp_saturate_if(m, sat, fp);
     set_dest(c, res, rd, fp64);
     set_fp_zn_flags(c, res, write_cc, fp);
