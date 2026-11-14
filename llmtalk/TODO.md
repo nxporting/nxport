@@ -47,8 +47,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 13. **The 32 GB memory use (fixed, 664d61a):** the Mac pipeline archives stored shader functions, and opening them cost
     ~23x their size (10 archives: 23 GB before the first frame). Archives are pipelines only now (2.9 GB in play, same
     archive hits). A Mac app built before this has the bad archives: rebuild it. run_supervised.sh now kills on the
-    footprint, not RSS alone. Not done: a Metal cache build with win-worker's FMZ and zero-init translator changes
-    (a20058f's BFE/SHF part built and ran fine in the Depths).
+    footprint, not RSS alone. Win-worker's translator changes (BFE/SHF, FMZ, zero-init): full Metal cache builds
+    (25255 / 25257, the usual 2 failures), the Depths (totk-depths-prelit slot 04) renders within run-to-run noise of
+    the old cache.
 
 ## Open (unclaimed)
 
