@@ -28,6 +28,18 @@ use std::sync::Mutex;
 
 const PAGE: usize = 0x4000;
 const MAGIC: &[u8; 8] = b"NXAOTIM1";
+/// Where the header page holds the build id of the main module the image was made from (hex, zero-padded; all zeros in
+/// images from before it): an app made for another version of the game is named as that, not as a mismatched region.
+const BUILD_ID_AT: usize = PAGE - 64;
+
+/// "1.1.2 (main 9A10ED94)" for a main build id, or the id alone for a version without a profile.
+fn version_named(id: &str) -> String {
+    let short = id.get(..8).unwrap_or(id);
+    match crate::profile::active().match_version(id) {
+        Some(v) => format!("{} (main {short})", v.version_string),
+        None => format!("main {short}"),
+    }
+}
 
 #[derive(Clone, PartialEq)]
 pub enum Mode {
@@ -429,6 +441,10 @@ fn dump(to: &DumpTo, regions: &[Region]) -> Result<(), String> {
     let head = 2 * PAGE;
     let mut header = vec![0u8; head];
     header[..8].copy_from_slice(MAGIC);
+    if let Some(id) = crate::profile::main_build_id() {
+        let id = id.as_bytes();
+        header[BUILD_ID_AT..BUILD_ID_AT + id.len().min(64)].copy_from_slice(&id[..id.len().min(64)]);
+    }
     header[8..16].copy_from_slice(&(regions.len() as u64).to_le_bytes());
     header[PAGE..PAGE + 8].copy_from_slice(&(pages.len() as u64).to_le_bytes());
     let mut body = Vec::new();
@@ -555,6 +571,15 @@ unsafe fn load(path: &str, regions: &[Region]) -> Result<(), String> {
         return Err("AOT image section is not a 16 KiB-aligned guest image (rebuild it)".into());
     }
     let img = &file[sect..];
+    // Made from another version of the game than the one in this app's game files: say that, before any region differs.
+    let made_for: String = img[BUILD_ID_AT..BUILD_ID_AT + 64].iter().take_while(|&&b| b != 0).map(|&b| b as char).collect();
+    if let Some(here) = crate::profile::main_build_id().filter(|h| !made_for.is_empty() && !h.eq_ignore_ascii_case(&made_for)) {
+        return Err(format!(
+            "this app was built for {} of the game, but the game files here are {}: build the app from these game files",
+            version_named(&made_for),
+            version_named(here)
+        ));
+    }
     let count = u64::from_le_bytes(img[8..16].try_into().unwrap()) as usize;
     let mut entries = std::collections::HashMap::new();
     for i in 0..count {
