@@ -72,6 +72,49 @@ pub unsafe fn alloc_on_demand(size: usize) -> io::Result<*mut u8> {
     imp::alloc_on_demand(size)
 }
 
+/// An unlinked sparse file of `size` bytes in `dir`, for map_file / punch_hole.
+#[cfg(unix)]
+pub fn sparse_file(size: usize, dir: &std::path::Path) -> io::Result<std::fs::File> {
+    let path = dir.join(format!("nxport-arena-{}-{size:x}", std::process::id()));
+    let f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
+    let _ = std::fs::remove_file(&path);
+    f.set_len(size as u64)?;
+    Ok(f)
+}
+
+/// Maps [offset, offset + size) of `fd` read-write and shared over [addr, addr + size) (reserved by us).
+#[cfg(unix)]
+pub unsafe fn map_file(addr: usize, size: usize, fd: i32, offset: usize) -> io::Result<()> {
+    let p = libc::mmap(
+        addr as *mut libc::c_void,
+        size,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_FIXED | libc::MAP_SHARED,
+        fd,
+        offset as libc::off_t,
+    );
+    if p == libc::MAP_FAILED {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Frees the file's blocks in [offset, offset + size): they read zero again and take no disk space.
+#[cfg(target_vendor = "apple")]
+pub unsafe fn punch_hole(fd: i32, offset: usize, size: usize) {
+    #[repr(C)]
+    struct FPunchhole {
+        fp_flags: u32,
+        reserved: u32,
+        fp_offset: libc::off_t,
+        fp_length: libc::off_t,
+    }
+    const F_PUNCHHOLE: libc::c_int = 99;
+    let a = FPunchhole { fp_flags: 0, reserved: 0, fp_offset: offset as libc::off_t, fp_length: size as libc::off_t };
+    libc::fcntl(fd, F_PUNCHHOLE, &a);
+}
+
 /// alloc_on_demand backed by an unlinked sparse file in `dir` instead of anonymous memory: its written pages are file
 /// pages the kernel can write out, not anonymous memory counted whole against the process's limit (iOS ends an app whose
 /// footprint reaches it). Pages read zero until written, as anonymous ones do.

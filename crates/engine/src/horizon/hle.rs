@@ -2701,6 +2701,9 @@ const REGION_ALIGN: usize = 0x10000; // Horizon requires 64KB alignment for addr
 struct RegionArena {
     base: usize,
     size: usize,
+    /// --file-backed-memory: the arena's pages come from this sparse file, at their offset from `base`.
+    #[cfg(target_vendor = "apple")]
+    file: Option<std::fs::File>,
     /// Free ranges: start -> size (coalesced, 64KB granular).
     free: std::collections::BTreeMap<usize, usize>,
 }
@@ -2727,13 +2730,40 @@ fn region_arena() -> &'static StdMutex<RegionArena> {
             println!("[!] HLE: could not reserve the address region arena; regions are reserved one by one");
             (0, 0)
         };
-        StdMutex::new(RegionArena { base, size, free })
+        #[cfg(target_vendor = "apple")]
+        let file = (size != 0 && crate::settings::get().guest.file_backed_memory)
+            .then(|| crate::os::sparse_file(size, &std::env::temp_dir()))
+            .and_then(|f| f.map_err(|e| eprintln!("[!] HLE: file-backed region arena failed ({e}); anonymous instead")).ok());
+        StdMutex::new(RegionArena {
+            base,
+            size,
+            free,
+            #[cfg(target_vendor = "apple")]
+            file,
+        })
     })
 }
 
 fn in_region_arena(addr: usize) -> bool {
     let a = region_arena().lock().unwrap();
     a.base != 0 && addr >= a.base && addr < a.base + a.size
+}
+
+/// The arena's file and `addr`'s offset in it (--file-backed-memory).
+#[cfg(target_vendor = "apple")]
+fn arena_file(addr: usize) -> Option<(i32, usize)> {
+    use std::os::unix::io::AsRawFd;
+    let a = region_arena().lock().unwrap();
+    a.file.as_ref().map(|f| (f.as_raw_fd(), addr - a.base))
+}
+
+/// Commits a range of the arena: from its file when it has one.
+unsafe fn region_arena_commit(addr: usize, size: usize) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    if let Some((fd, off)) = arena_file(addr) {
+        return crate::os::map_file(addr, size, fd, off);
+    }
+    crate::os::commit(addr, size, crate::os::Prot::ReadWrite)
 }
 
 /// First fit; `size` is 64KB aligned.
@@ -2769,6 +2799,11 @@ pub(crate) unsafe fn release_address_region(addr: usize, size: usize) {
     if in_region_arena(addr) {
         // Back to reserved: drops the pages but keeps the arena contiguous.
         crate::os::decommit(addr, size);
+        // File-backed: the pages read zero when the range is handed out again.
+        #[cfg(target_vendor = "apple")]
+        if let Some((fd, off)) = arena_file(addr) {
+            crate::os::punch_hole(fd, off, size);
+        }
         region_arena_free(addr, size);
     } else {
         crate::os::release(addr, size);
@@ -2783,7 +2818,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateAddressRegion(
     let aligned_size = (size + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
     let aligned_addr = match region_arena_alloc(aligned_size) {
         Some(addr) => {
-            if crate::os::commit(addr, aligned_size, crate::os::Prot::ReadWrite).is_err() {
+            if region_arena_commit(addr, aligned_size).is_err() {
                 region_arena_free(addr, aligned_size);
                 println!(
                     "[!] HLE: nn::os::AllocateAddressRegion(size={}) FAILED",
@@ -2900,6 +2935,13 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryPages(address: usize, size: usize) 
         let base = host * per_host;
         if (base..base + per_host).all(|p| !mapped.contains(&p)) {
             crate::os::discard(host * HOST_PAGE, HOST_PAGE);
+            // File-backed: the file's block goes too (madvise leaves file pages in place).
+            #[cfg(target_vendor = "apple")]
+            if in_region_arena(host * HOST_PAGE) {
+                if let Some((fd, off)) = arena_file(host * HOST_PAGE) {
+                    crate::os::punch_hole(fd, off, HOST_PAGE);
+                }
+            }
             released += 1;
         }
     }
