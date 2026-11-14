@@ -81,6 +81,7 @@ fn stdout_variable() -> usize {
 }
 
 mod base;
+mod v0_12;
 mod v15_3;
 mod v4_4;
 mod v7_3;
@@ -107,7 +108,7 @@ pub struct Layer {
 }
 
 /// Version layers, oldest first.
-static LAYERS: &[&Layer] = &[&v4_4::LAYER, &v7_3::LAYER, &v15_3::LAYER];
+static LAYERS: &[&Layer] = &[&v0_12::LAYER, &v4_4::LAYER, &v7_3::LAYER, &v15_3::LAYER];
 
 static BASE: &Layer = &base::LAYER;
 
