@@ -902,7 +902,8 @@ pub fn pack_source(msl_dir: &Path, list: Option<&Path>, out: &Path, arg_variants
     Ok((n, std::fs::metadata(&pack).map_or(0, |m| m.len())))
 }
 
-/// Runs `f` over `items` on `jobs` threads, results in input order.
+/// Runs `f` over `items` on `jobs` threads, results in input order. The threads get 64 MiB stacks (reserved, used as
+/// needed): translating a shader to MSL recurses deeper than the default 2 MiB allows in a debug build.
 fn parallel_progress<T: Sync, R: Send>(
     items: &[T],
     jobs: usize,

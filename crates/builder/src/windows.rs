@@ -16,8 +16,9 @@ use nxport::settings::SettingsPatch;
 
 use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step};
 
-/// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile).
-pub const PRECOMPILES_SHADERS: bool = true;
+/// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile), where Vulkan runs: on Windows.
+/// Built elsewhere, the app translates and compiles shaders as the game loads them.
+pub const PRECOMPILES_SHADERS: bool = cfg!(windows);
 
 /// Sets the running step's sub-step to `done` of `total`, which is that share of the step.
 fn progress(job: &Mutex<Job>, sub: String, done: usize, total: usize) {
@@ -39,7 +40,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         steps.push((
             "Getting the C compiler".into(),
             Box::new(move || {
-                let cc = nxport_build::zig::cc(&toolchains, &move |done, total| {
+                let cc = nxport_build::zig::windows_cc(&toolchains, &move |done, total| {
                     let mb = |b: u64| (b >> 20) as usize;
                     progress(&job, format!("Downloading zig {}", nxport_build::zig::VERSION), mb(done), mb(total));
                 })?;
@@ -235,7 +236,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             Box::new(move || {
                 let mods = app_mods.lock().unwrap().clone();
                 if has_plugin_mods(mods.as_deref(), title_id) {
-                    nxport_build::zig::copy_into_app(&toolchains, &app)?;
+                    nxport_build::zig::copy_into_app(&toolchains, &app, &|_, _| {})?;
                 } else {
                     let _ = std::fs::remove_dir_all(app.join("zig"));
                 }
@@ -252,6 +253,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
 /// compiles the first time the game uses each. The same source serves both systems, so both apps share the pack (its
 /// folder keeps the name it had when only the .ipa took it). Built again when the stages, the translator or the list
 /// change; returns the cache folder the app takes.
+#[cfg(windows)]
 pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
     let (work, dump, title_id) = (&r.work, &r.dump, r.title_id);
     let (stages, ios_cache) = (work.join("stages"), work.join("shader_cache_ios_source"));
@@ -305,6 +307,7 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
 }
 
 /// The .ipa built in a worker (ios.rs): the guest image it patches is set up once per process.
+#[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ipa_in_worker(
     job: &Arc<Mutex<Job>>,
@@ -387,7 +390,7 @@ fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, 
 /// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt), optimised by `profile`. A
 /// profile the compiler cannot read costs the optimisation, not the build.
 fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Option<&Path>, no_inline: bool, job: &Arc<Mutex<Job>>) -> Result<(), String> {
-    let mut cc = nxport_build::zig::cc(toolchains, &|_, _| {})?;
+    let mut cc = nxport_build::zig::windows_cc(toolchains, &|_, _| {})?;
     if no_inline {
         cc.push("-DNX_NO_INLINE".into());
     }

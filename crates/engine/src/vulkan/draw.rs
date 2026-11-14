@@ -660,7 +660,14 @@ impl Ctx {
                         layout,
                         cache,
                     };
-                    match crate::vulkan::async_pipe::query_async_pipeline(hash(&desc), job) {
+                    let key = hash(&desc);
+                    let mut r = crate::vulkan::async_pipe::query_async_pipeline(key, job);
+                    // Still compiling: skipped only where its pass's targets are drawn every frame (the next frame draws
+                    // it); a target drawn now and then may never be drawn again, so its draw waits.
+                    if matches!(r, crate::vulkan::async_pipe::AsyncPipe::Pending) && !self.targets_recur() {
+                        r = crate::vulkan::async_pipe::wait_async_pipeline(key);
+                    }
+                    match r {
                         crate::vulkan::async_pipe::AsyncPipe::Ready(p) => {
                             crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -54,6 +54,11 @@ static WAIT_NS: AtomicU64 = AtomicU64::new(0);
 /// GPU time of the submits (timestamps around each one's commands).
 static GPU_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_GPU_NS: AtomicU64 = AtomicU64::new(0);
+/// GPU time of the submits completed since the last present, for the performance overlay: the frame's busy time (each
+/// submit's own span, so the GPU's idle gaps between them do not count).
+pub(super) static OVERLAY_GPU_NS: AtomicU64 = AtomicU64::new(0);
+/// Time spent waiting for the GPU since the last present, for the performance overlay (LAST_WAIT_NS is one submit's).
+pub(super) static OVERLAY_WAIT_NS: AtomicU64 = AtomicU64::new(0);
 /// GPU time per pass of the last submit (when profiling passes): (ns, description).
 static PASS_PROFILE: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
 static LAST_RECORD_NS: AtomicU64 = AtomicU64::new(0);
@@ -249,14 +254,18 @@ impl Backend for Vulkan {
         if n == 1 && crate::settings::get().display.perf_overlay {
             crate::host::overlay::set_overlay_enabled(true);
         }
+        // Taken at every present, so turning the overlay on does not show what piled up while it was off.
+        let frame_ms = |ns: &AtomicU64| ns.swap(0, Ordering::Relaxed) as f32 / 1e6;
+        let (gpu_ms, wait_ms) = (frame_ms(&OVERLAY_GPU_NS), frame_ms(&OVERLAY_WAIT_NS));
+        #[cfg(not(windows))]
+        let _ = (gpu_ms, wait_ms);
         #[cfg(windows)]
         if crate::host::overlay::is_overlay_enabled() {
             static LAST_SLEEP_US: AtomicU64 = AtomicU64::new(0);
             let sleep = crate::nvn::api::ACQUIRE_SLEEP_US.load(Ordering::Relaxed);
-            let ms = |ns: &AtomicU64| ns.load(Ordering::Relaxed) as f32 / 1e6;
             crate::host::overlay::record_present(
-                ms(&LAST_GPU_NS),
-                ms(&LAST_WAIT_NS),
+                gpu_ms,
+                wait_ms,
                 sleep.saturating_sub(LAST_SLEEP_US.swap(sleep, Ordering::Relaxed)) as f32 / 1000.0,
                 OVERLAY_SUBMITS.swap(0, Ordering::Relaxed),
                 OVERLAY_DRAWS.swap(0, Ordering::Relaxed),

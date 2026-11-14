@@ -40,6 +40,10 @@ pub static SITES: Sites = Sites {
     cloth: None, // 1.1.2 leaves that clock unset
     short_cut_bg: Some((0x462cb20, 0x19af400, 0xc5a4_9707)),
     equip_cooldown: Some((0xa02330, 0xa0232c)),
+    rotate_check: Some((0x2134264, 0x10b34c0, 0x2134454)), // the update main+0x2134244 (vtable main+0x4593ed8 + 0x110)
+    // The map screen's update main+0xf1bdbc: the stick at [x27], the old x in w25.
+    map_pan: Some((0xf1d64c, frame_time::map_pan_code(0xbd40_0361, 0xbd40_0762, 0x1e27_0320, 0xbd47_0904, 0xd001_4788))),
+    gyro_pitch: Some((0x1d49fac, 0xbd44_3ac9, 0x1d49eb4)), // the aim update main+0x1d49e24; ldr s9, [x22, #0x438]
 };
 
 /// Screen shapes other than 16:9 (aspect.rs, hud.rs).

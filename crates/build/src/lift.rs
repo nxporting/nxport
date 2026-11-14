@@ -75,7 +75,7 @@ pub fn write_base_code(s: nxport::settings::Settings, out: &Path) -> Result<(), 
 }
 
 /// (module, code start, code) of a base_code.bin.
-#[cfg(windows)]
+#[cfg(any(target_vendor = "apple", windows))]
 fn read_base_code(path: &Path) -> Result<Vec<(String, u64, Vec<u8>)>, Box<dyn std::error::Error>> {
     let d = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (mut p, mut out) = (0, Vec::new());
@@ -94,7 +94,7 @@ fn read_base_code(path: &Path) -> Result<Vec<(String, u64, Vec<u8>)>, Box<dyn st
 /// Lifts what mods change against `base_library` (a guest library of the game without them, its base_code.bin beside
 /// it), into `out_dir`: the modules the base does not have, whole, and of those it has only the functions that differ
 /// (as `ov_<module>`). The engine points the base's functions at these (--guest-overlay). `patched` as lift_game's.
-#[cfg(windows)]
+#[cfg(any(target_vendor = "apple", windows))]
 pub fn lift_overlay(
     s: nxport::settings::Settings,
     patched: Option<&Path>,
@@ -103,7 +103,7 @@ pub fn lift_overlay(
 ) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
     let run_game_subsdk = s.guest.run_game_subsdk;
     let base = read_base_code(&base_library.with_file_name(BASE_CODE_FILE))?;
-    let library = nxport::os::Library::open(base_library)?;
+    let mut library = crate::pe_exports::PeFile::open(base_library)?;
     let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
     let modules = nxport::guest_modules(s, image.as_deref())?;
     let seeds = cross_module_seeds(&modules);
@@ -124,12 +124,10 @@ pub fn lift_overlay(
             return Err(format!("{}: the base library holds other code ({start:#x}+{:#x}, now {:#x}+{:#x})", m.name, code.len(), m.text.start, now.len()).into());
         }
         let changed: Vec<u64> = now.chunks(4).zip(code.chunks(4)).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| *start + i as u64 * 4).collect();
-        let count = library.symbol(&format!("{}_fn_count", m.name));
-        let addrs = library.symbol(&format!("{}_fn_addrs", m.name));
-        if count.is_null() || addrs.is_null() {
-            return Err(format!("{}: {} has no table for it", m.name, base_library.display()).into());
-        }
-        let base_starts: BTreeSet<u64> = unsafe { std::slice::from_raw_parts(addrs as *const u64, *(count as *const u64) as usize) }.iter().copied().collect();
+        let no_table = || format!("{}: {} has no table for it", m.name, base_library.display());
+        let count = library.symbol_u64(&format!("{}_fn_count", m.name))?.ok_or_else(no_table)?;
+        let addrs = library.symbol_bytes(&format!("{}_fn_addrs", m.name), count as usize * 8)?.ok_or_else(no_table)?;
+        let base_starts: BTreeSet<u64> = addrs.chunks(8).map(|a| u64::from_le_bytes(a.try_into().unwrap())).collect();
         if changed.is_empty() && seeds.iter().all(|a| !m.text.contains(a) || base_starts.contains(a)) {
             println!("[+] {}: same as the base", m.name);
             continue;
@@ -303,13 +301,18 @@ pub fn compile(
     let rsp = obj_dir.join("link.rsp");
     let quoted: String = objects.iter().map(|o| format!("\"{}\"\n", o.display().to_string().replace('\\', "/"))).collect();
     std::fs::write(&rsp, quoted)?;
-    let o = command(prog)
-        .args(pre)
-        .arg("-shared")
-        .arg("-o")
-        .arg(out)
-        .arg(format!("@{}", rsp.display()))
-        .output()?;
+    let link = || command(prog).args(pre).arg("-shared").arg("-o").arg(out).arg(format!("@{}", rsp.display())).output();
+    let mut o = link()?;
+    // A build cut off while zig wrote its cache (a power cut) can leave a broken runtime library there, and every later
+    // link then fails (seen: an empty compiler_rt.lib, "undefined symbol: ___chkstk_ms"). The cache holds only what zig
+    // can make again, so the link is tried once more without it.
+    if !o.status.success() {
+        if let Some(dir) = cache.filter(|d| d.is_dir()) {
+            println!("  Linking failed; trying again with zig's cache ({}) cleared", dir.display());
+            let _ = std::fs::remove_dir_all(dir);
+            o = link()?;
+        }
+    }
     if !o.status.success() {
         return Err(format!("linking {}: {}", out.display(), String::from_utf8_lossy(&o.stderr)).into());
     }

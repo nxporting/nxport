@@ -1,6 +1,7 @@
-// The guest process image: executable formats, module loading and relocation, code mods, and write tracking of guest
-// memory.
+// The guest process image: executable formats, module loading and relocation, code mods and cheats, and write tracking
+// of guest memory.
 
+pub mod cheats;
 pub mod dirty_track;
 pub mod loader;
 pub mod mod_patches;

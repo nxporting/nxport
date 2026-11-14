@@ -172,8 +172,8 @@ struct OpenFile {
 
 static OPEN_FILES: Mutex<Vec<Option<OpenFile>>> = Mutex::new(Vec::new());
 
-/// A mod's `romfs` or `exefs` folder, whatever its case: mods ship both `romfs` and `RomFS`, and iOS's file system is
-/// case sensitive.
+/// A mod's `romfs`, `exefs` or `cheats` folder, whatever its case: mods ship both `romfs` and `RomFS`, and iOS's file
+/// system is case sensitive.
 pub fn mod_subdir(dir: &Path, name: &str) -> PathBuf {
     let exact = dir.join(name);
     if exact.is_dir() {
@@ -200,7 +200,7 @@ pub fn has_exefs_nsp(dir: &Path) -> bool {
 }
 
 pub fn is_mod_dir(dir: &Path) -> bool {
-    mod_subdir(dir, "romfs").is_dir() || mod_subdir(dir, "exefs").is_dir() || mod_file(dir, "romfs.bin").is_some() || has_exefs_nsp(dir)
+    ["romfs", "exefs", "cheats"].iter().any(|d| mod_subdir(dir, d).is_dir()) || mod_file(dir, "romfs.bin").is_some() || has_exefs_nsp(dir)
 }
 
 /// Folders mods are packaged in on the way to their contents: `atmosphere/contents/<title id>/`, Ryujinx's
@@ -248,7 +248,7 @@ pub fn discover_mods(root: &Path, title: Option<u64>) -> Vec<(String, PathBuf)> 
             }
         } else {
             if name != "exefs_patches" {
-                println!("[!] Mods: '{name}' has no romfs or exefs folder; ignored");
+                println!("[!] Mods: '{name}' has no romfs, exefs or cheats folder; ignored");
             }
         }
     }
@@ -414,8 +414,9 @@ fn rom_mount_rel(clean_path: &str) -> Option<&str> {
 }
 
 /// Enabled mods, highest priority first: (name, mod directory). A mod directory has the Ryujinx / Atmosphere layout
-/// (`romfs/` replaces or adds game files; `exefs/` holds code mods). Mods come from --mods-dir (a directory of mod
-/// folders, one mod, or Atmosphere's or Ryujinx's tree: discover_mods), else ./mods if it exists; --no-mods disables them.
+/// (`romfs/` replaces or adds game files; `exefs/` holds code mods; `cheats/` Atmosphère cheats, guest/cheats). Mods
+/// come from --mods-dir (a directory of mod folders, one mod, or Atmosphere's or Ryujinx's tree: discover_mods), else
+/// ./mods if it exists; --no-mods disables them.
 /// Priority is alphabetical (that is why mods use names like "!!!TOTK Optimizer"). A mod whose exefs/main.npdm names
 /// another program is made for another game and skipped.
 pub fn mods() -> &'static [(String, PathBuf)] {
@@ -432,7 +433,8 @@ pub fn mods() -> &'static [(String, PathBuf)] {
         let mut v = discover_mods(&root, crate::game::title_id());
         v.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, path) in &v {
-            println!("[+] Mods: '{}' ({}{})", name, if mod_subdir(path, "romfs").is_dir() { "romfs " } else { "" }, if mod_subdir(path, "exefs").is_dir() { "exefs" } else { "" });
+            let parts: Vec<&str> = ["romfs", "exefs", "cheats"].into_iter().filter(|d| mod_subdir(path, d).is_dir()).collect();
+            println!("[+] Mods: '{}' ({})", name, parts.join(" "));
             for packed in ["romfs.bin", "exefs.nsp"] {
                 if mod_file(path, packed).is_some() {
                     println!("[+] Mods: '{name}': {packed}");

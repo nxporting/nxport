@@ -442,6 +442,10 @@ fn guest_chain(
     }
     unsafe { horizon::hle::hle_nn_os_GetCurrentThread() };
 
+    // Atmosphère cheats run from before the game's first instruction (dmnt attaches as the game starts), once the
+    // engine has finished rewriting main's code.
+    guest::cheats::start(mem_space.base_ptr as usize, mem_space.bss_off + mem_space.bss_size, mem_space.text_size);
+
     // 5. Execute DT_INIT (main's first initialization function)
     if mem_space.dynamic.init != 0 {
         println!(

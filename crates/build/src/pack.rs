@@ -76,10 +76,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(mods) = opts.mods_dir {
         if mods.is_dir() {
             let dest_mods = resources.join("Mods");
-            let is_single_mod = mods.join("romfs").is_dir()
-                || mods.join("exefs").is_dir()
-                || mods.join("ExeFS").is_dir()
-                || mods.join("RomFS").is_dir();
+            let is_single_mod = nxport::mods::is_mod_dir(mods);
 
             let matches_game = |p: &Path| -> bool {
                 let other = nxport::game::is_other_title_dir(p, tid);

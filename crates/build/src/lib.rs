@@ -24,6 +24,7 @@ pub use nxport::metal::msl_specialize;
 // The macOS app, packed on any host (PARITY #1).
 #[cfg(any(target_os = "macos", windows))]
 pub mod pack;
+pub mod pe_exports;
 #[cfg(target_os = "macos")]
 pub mod pipeline_archive;
 pub mod ppm2png;
@@ -34,11 +35,9 @@ pub mod tiny_kernels;
 pub mod translation;
 #[cfg(nx_runtime)]
 pub mod vulkan_precompile;
-// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on Windows hosts;
-// there too, the engines for iOS and macOS, built from source without Apple's tools.
+// The engines for iOS and macOS, cross-built on Windows without Apple's tools.
 #[cfg(windows)]
 pub mod apple_engine;
-#[cfg(windows)]
+// The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on any host.
 pub mod winapp;
-#[cfg(windows)]
 pub mod zig;

@@ -190,10 +190,7 @@ impl Target {
             // On a Mac as compiled metallibs; on Windows (no Metal compiler) as packed Metal source the app compiles as the
             // game first uses each stage, without translating it.
             Target::MacApp | Target::Ipa => true,
-            #[cfg(windows)]
             Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
-            #[cfg(not(windows))]
-            Target::WindowsApp => false,
         }
     }
 }
@@ -607,7 +604,7 @@ impl Builder {
             let dir = PathBuf::from(self.mods.trim());
             let list = if dir.is_dir() { mods_in(&dir) } else { Vec::new() };
             if list.is_empty() {
-                detail(ui, WARN, &format!("no romfs/ or exefs/ under {}", dir.display()));
+                detail(ui, WARN, &format!("no romfs/, exefs/ or cheats/ under {}", dir.display()));
             }
             for (name, k) in list {
                 let mut parts = Vec::new();
@@ -620,7 +617,10 @@ impl Builder {
                 if k.plugin {
                     parts.push(if lifted { "exefs/subsdk plugin (lifted)" } else { "exefs/subsdk plugin" });
                 }
-                let parts = if parts.is_empty() { "no romfs/ or exefs/".to_string() } else { parts.join(", ") };
+                if k.cheats {
+                    parts.push("cheats/");
+                }
+                let parts = if parts.is_empty() { "no romfs/, exefs/ or cheats/".to_string() } else { parts.join(", ") };
                 detail(ui, MUTED, &format!("{name}: {parts}"));
             }
         }
@@ -1010,15 +1010,12 @@ impl Builder {
             job: job.clone(),
         };
         let mut steps: Vec<Step> = Vec::new();
-        // The iOS and macOS apps have one list of steps on every host (ios.rs, apple.rs); the Windows app is Windows'.
+        // Each target has one list of steps, whatever the host that makes it (ios.rs, apple.rs, windows.rs).
         #[cfg(any(target_os = "macos", windows))]
         let result = match req.target {
             Target::Ipa => crate::ios::steps(req, &mut steps),
             Target::MacApp => crate::apple::steps(req, &mut steps),
-            #[cfg(windows)]
             Target::WindowsApp => crate::windows::steps(req, &mut steps),
-            #[cfg(not(windows))]
-            Target::WindowsApp => crate::apple::steps(req, &mut steps),
         };
         #[cfg(not(any(target_os = "macos", windows)))]
         let result = {
@@ -1143,6 +1140,7 @@ struct ModKinds {
     romfs: bool,
     patches: bool,
     plugin: bool,
+    cheats: bool,
 }
 
 fn mod_kinds(dir: &Path) -> ModKinds {
@@ -1160,12 +1158,13 @@ fn mod_kinds(dir: &Path) -> ModKinds {
         romfs: sub(&["romfs", "RomFS"]).is_some(),
         patches: files.iter().any(|f| f.ends_with(".ips") || f.ends_with(".pchtxt")),
         plugin: files.iter().any(|f| f.starts_with("subsdk")),
+        cheats: nxport::mods::mod_subdir(dir, "cheats").is_dir(),
     }
 }
 
-/// The mods in `dir`: one folder each, or a single mod's romfs / exefs at the top.
+/// The mods in `dir`: one folder each, or a single mod's romfs / exefs / cheats at the top.
 fn mods_in(dir: &Path) -> Vec<(String, ModKinds)> {
-    if ["romfs", "RomFS", "exefs", "ExeFS"].iter().any(|n| dir.join(n).is_dir()) {
+    if nxport::mods::is_mod_dir(dir) {
         let name = dir.file_name().map_or_else(|| "Mod".into(), |n| n.to_string_lossy().into_owned());
         return vec![(name, mod_kinds(dir))];
     }
@@ -1310,12 +1309,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         e.exit()
     });
     let Args { command, dump, snapshot, expand, height, build, target, preset, out, mods, worker } = args;
-    #[cfg(windows)]
     if let Some(file) = worker {
         return crate::windows::worker(&file).map_err(Into::into);
     }
-    #[cfg(not(windows))]
-    let _ = worker;
     #[cfg(windows)]
     attach_console();
     if let Some(command) = command {

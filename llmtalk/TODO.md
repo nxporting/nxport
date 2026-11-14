@@ -8,13 +8,49 @@ and update this file when you finish or drop it.
 
 ## Open (unclaimed)
 
-- **Release blocker: TotK's hosted PGO profiles no longer match (2026-11-13 night).** Profiles are keyed
+- **A power cut while the builder links can leave zig's cache broken (2026-11-13, win-worker).** After an outage during
+  "Lifting and compiling" (link step), every rebuild failed: lld-link "undefined symbol: ___chkstk_ms" from main_034.o,
+  because zig's cache held a 1 KB compiler_rt.lib (the good one is 1.2 MB). Deleting that one entry did not help; deleting
+  the whole zig-cache (in nxport's data folder, beside builds/) did. A player hitting this sees a link error with no hint.
+  **Fixed the same day:** a failed link is tried once more with zig's cache cleared (lift::compile), and says so.
+
+- **A debug builder overflows its stack translating shaders (seen 2026-11-13 by a win-worker subagent). Fixed the same
+  day:** parallel_progress threads get 64 MiB stacks (reproduced and checked with a debug macOS source pack; the
+  Vulkan path never overflowed). A debug
+  build of nxport-builder doing a macOS app's shader translation (25,218 stages, the Windows source-pack path) died
+  with "thread has overflowed its stack"; the release build does not. Not checked whether new, nor which stage or
+  thread: debug frames are larger, so a deep recursion in sass2spv (or a thread spawned with a small stack) is the
+  likely place. Release builds are unaffected; matters for debugging only.
+
+- **TotK PGO profiles: trained for 1.0.0 and 1.1.2 (2026-11-13), waiting to be published.** (Was: "hosted profiles no
+  longer match"; there were none hosted.) Profiles are keyed
   <main build id>-<lift::lifted_hash> (hash of the lifted C). The night's changes alter the lifted C for TotK 1.0.0 and
   1.1.2: the equipment-cooldown patch (dcddb9e, game code patched before lifting), the lifter's yield/wfe pause
   (63306e6), and the high-fps gameplay fixes in progress. Without a matching profile a Windows build loses PGO (6-12% a
   frame, and cold code compiled for size). After the night's lifter-output changes are all in: retrain both versions'
   profiles (the play-folder PGO procedure, "PGO in the play folder" below) and publish them where the builder fetches
   them. Publishing is outward-facing: the user's call (left for the morning).
+  **2026-11-13 morning, win-worker:** 1.0.0 could be trained now (mac-worker's 2ccaf73 / 187179d leave its lifted C
+  alone), but the training kit is gone: nxport-build is empty (prof_ctl.c, LLVM 22.1.8's clang_rt.profile lib and the
+  merged profiles of 11-05 are no longer there), and no 1.0.0 dump is mounted since the power cut. Question for the
+  user: where did the kit go (deleted on purpose?), and should the builder learn to make profiles itself (zig's own
+  -fprofile-generate plus a profile runtime it builds), so training needs no separate LLVM?
+  **Done the same day (win-worker): 1.0.0 trained, kit rebuilt.** Correction first: nothing was ever published (the builder
+  found no profile online for 1.0.0 or 1.1.2), and published profiles are named by main's build id alone; functions
+  changed later are built without it, so a profile stays useful across lifter changes. New kit, nxport-build/pgo-kit:
+  prof.a = compiler-rt 22.1.8 lib/profile (13 C files + the .cpp, sources beside it) compiled with zig 0.17.1
+  (`zig cc -O2 -c -Iinclude -DCOMPILER_RT_HAS_ATOMICS=1`, `zig ar rcs`); llvm-profdata from the official LLVM 22.1.8
+  Windows package at nxport-build/llvm22 (LLVM 23's refuses raw version 10). Steps: `nxport-builder lift-game --out c
+  <dump>`; `compile-guest --cc "<zig> cc -fprofile-generate -mllvm -enable-name-compression=false" --out app/guest.dll
+  c` (objects compile; the link fails on the runtime, as compile cannot take a library); then link by hand: `<zig> cc
+  -fprofile-generate -mllvm -enable-name-compression=false -shared -o app/guest.dll @c/obj/link.rsp prof.a`; app folder =
+  that dll + modules.txt + the same commit's nxport.exe + SDL3.dll + settings; runs with LLVM_PROFILE_FILE=...un-%p.profraw
+  (written at exit; 90 MB each); `llvm-profdata merge -o <main id>.profdata raw/*`. TotK 1.0.0 (main
+  082CE09B06E33A12...): 3 runs at the user's save (5200, 9000, 9000 frames), every function matched, A/B 3 valid pairs
+  100.2 / 110.5 / 102.4 against 95.9 / 98.2 / 93.5 fps (~7%). Ready to publish: pgo-kit/profiles/<id>.profdata.gz (16 MB),
+  the user's call. **1.1.2 trained too** (main 9A10ED9435C06733..., same steps and runs): every function matched, A/B 3
+  valid pairs 108.5 / 99.8 / 109.0 against 99.0 / 98.2 / 97.5 fps (~10%); mac-worker's 2ccaf73 leaves its 3 changed
+  files' functions unprofiled, the rest still matches. Both in pgo-kit/profiles, gzipped, named as the builder fetches.
 
 - **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
   28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
@@ -24,6 +60,10 @@ and update this file when you finish or drop it.
   the shader bar is gone? Candidates: hardware VP9 through VideoToolbox (check that iOS lets apps decode VP9 in
   hardware, and which devices), decoding ahead of the presentation time (helps spikes, not a sustained deficit).
   Measure on the phone before choosing (the log has the movie's timing if the HLE logs it; else add that).
+  **QoS ruled out on a Mac (mac-worker, 2026-11-13):** a decode loop of DmT_OP_GanonWakeUp (1080p30, M4 idle) takes
+  7.8 ms a frame (p95 15.2, max ~18) at every QoS of the calling thread, even BACKGROUND. On the phone the suspect is
+  contention (the first movies play while the pipeline list compiles) and fewer, slower cores: needs on-device numbers
+  (--log-movie: empty acquire attempts, decode ms per frame).
   **Researched 2026-11-12 (subagent, primary sources):** VideoToolbox VP9 is not usable by a sideloaded iOS app:
   VTIsHardwareDecodeSupported(VP9) is false for third-party apps (Apple forums 664770, 722933: iPhone 11 Pro, 13, 15
   Pro); Safari gets it through the private com.apple.developer.coremedia.allow-alternate-video-decoder-selection
@@ -291,7 +331,7 @@ and update this file when you finish or drop it.
     1. Measure first, in a full build: time per step (lift, compile, link, base code, shaders), per file times, and clang's -ftime-trace on the slowest files, to split parsing from optimising from code generation. Also: is the lifted C byte for byte the same across an engine change? That decides step 2's size. A few build cycles.
     **Step 2 checked 2026-11-07 night: not needed as planned.** A fresh lift of TotK with the user's mods by that night's main gave the same 325 C files and headers, byte for byte, as the user's 16:27 build of the evening, across that day's engine changes. zig cc keeps its own global object cache by content (%LOCALAPPDATA%\zig, repeats came back in 5 s in the compile experiments), so unchanged C already recompiles from it; what an engine change costs is the lift (150 s) and the link. The real problem found instead: that cache is never trimmed, 27 GB on this machine (much of it from experiments), each new flag set adding ~0.4 GB per game. **Bounded 2026-11-08 night (decided while the user was away; easy to change):** the builder points zig at <data>/zig-cache (one folder for all games, not per game) and empties it before a compile once past 4 GB (zig.rs CACHE_CAP); the CLI keeps zig's default. Checked with a real builder run on empty data folders: 0.42 GB in zig-cache after TotK's base, %LOCALAPPDATA%\zig never made, and the largest file (main_table.c, 38 MB) recompiled from it in 0.5 s. For the user: the old %LOCALAPPDATA%\zig (27 GB here) is no longer used by the builder and can be deleted by hand; left alone, as it is theirs to decide. Question: is 4 GB the right cap?
     2. Reuse objects by content: keep objects in a cache named by the hash of the C file, runtime headers, flags and compiler, and drop the executable hash from the key. An engine change that leaves the C alone then costs a lift and a link. No effect on the game's speed, as the objects are the same bytes. Link-time inputs must still be checked: an exe needs its matching guest.dll (trampoline counts). Limit the cache's size. Likely the largest win for anyone updating.
-    3. Cold code optimised for size, with no per-game profile: 20-24 minutes became 9.6 with a profile at no loss. Ship profiles for known games (the PGO hosting item), and for others try predicting cold code, such as marking functions by a heuristic. Needs a frame time comparison; an option if it costs anything.
+    3. Cold code optimised for size, with no per-game profile: 20-24 minutes became 9.6 with a profile at no loss. Ship profiles for known games (the PGO hosting item), [2026-11-13: TotK 1.0.0 and 1.1.2 profiles trained, waiting to be published; that covers this step for TotK], and for others try predicting cold code, such as marking functions by a heuristic. Needs a frame time comparison; an option if it costs anything.
     4. Smaller cuts, each only if step 1 shows the time is there: precompiled runtime headers; calling clang directly rather than through zig's cache layer; chunk size (40,000 instructions now); one library for both plain and code mods builds, which ends the second compile but the user doubted noinline for everything, and a small cost was not ruled out, so it needs their call.
     5. Shaders are stamped apart already; look only if step 1 shows they matter. Same for jobs (cores minus 2).
     Each step: a before and after on the same machine, and the compiled game's frame times compared where the code changes.
