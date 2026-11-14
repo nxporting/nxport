@@ -96,8 +96,7 @@ fn app(r: Request, cache: Option<PathBuf>, steps: &mut Vec<Step>) -> Output {
                 out_app: Some(&app2),
                 settings: Some(&settings_file),
                 symlink_assets: false,
-                // A Mac app made on Windows carries the game: a Windows path to the dump means nothing on the Mac.
-                bundle_game: bundle_game || cfg!(windows),
+                bundle_game,
             })
             .map_err(|e| e.to_string())
         }),

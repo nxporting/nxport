@@ -116,7 +116,13 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     if !any_mods {
         settings.files.no_mods = Some(true);
     }
-    if o.bundle_game {
+    // Made on another OS (a Mac): this host's paths mean nothing on the PC the app runs on, so the game goes in and
+    // host paths (system data) stay out.
+    let cross = !cfg!(windows);
+    if cross {
+        settings.files.system_data_dir = None;
+    }
+    if o.bundle_game || cross {
         println!("  Copying the game files (ExeFS, RomFS)");
         for d in ["ExeFS", "RomFS"] {
             if o.dump.join(d).is_dir() {
