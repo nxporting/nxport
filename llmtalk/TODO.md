@@ -6,6 +6,36 @@ and update this file when you finish or drop it.
 ## Claimed: S41L0R Windows Machine
 
 
+## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)
+
+Everything is on main (9c53805+: both agents' work, ios-shader-cache-windows merged). Windows: workspace check clean,
+209 unit tests pass, GitHub CI green. Mac: builder tests pass; a Mac app built from main runs from its bundle at ~59 fps
+and peaks at ~3 GB (the 32 GB archive bug, 664d61a, is fixed).
+
+Must do, in order:
+1. Run the release dry run: GitHub > Actions > Release > Run workflow, on main, no tag (neither agent has gh or a token).
+   Check the three jobs pass: windows (zip with ios/nxport, macos/nxport, notices), macos, macos-with-windows (adds
+   windows/nxport.exe, checks the file list).
+2. Give the agents the dry run's archives (or download them and point us at the folder): mac-worker checks the
+   macos-with-windows builder starts on the Mac and builds a Windows app; win-worker checks the Windows zip.
+3. Rebuild your own Mac app with the new builder (old apps have the 32 GB archives) and play a few minutes: menus,
+   window resize changes the aspect, mouse aim (camera and bow), Cmd-O overlay, memory in Activity Monitor ~3 GB.
+4. iPhone: install a Mac-built .ipa (pipeline archive now real, 165 MB) and, if you can, a Windows-built one; play a
+   few minutes; the screen should not auto-lock; send log.txt if anything is off.
+5. Tag v<version> to publish (publishing is your call), with the release text (security warnings on first launch).
+
+Your call, optional for the first release:
+6. Upload TotK's Windows PGO profiles (nxport-build/pgo-kit/profiles/*.profdata.gz on the Windows PC) to the
+   nxporting/profiles release: +7% (1.0.0) / +10% (1.1.2) on Windows; builds work without them.
+7. Licensing review of symphonia (MPL-2.0) and the H.264 / AAC patent question (noted on 2026-11-06).
+8. Defaults to decide: --tile-feedback (decals read the tile: fewer passes on the phone, slightly different cliff
+   decals) and --file-backed-memory (iPhone memory kills: 4.8 -> 2.3 GB on the Mac) are off; turn either on after a
+   phone test.
+
+After the release (not blocking): the remaining morning items below (cheats with a real data cheat, a movie to the end,
+macOS Game Mode A/B, Ultrahand / Fuse effects after the D16 fix), win-worker's parked TXD gradient fix (branch
+txd-gradients).
+
 ## For the user's morning: Mac and iOS (mac-worker, 2026-11-13 night)
 
 Local, unpushed commits on the Mac's main (push is your call): 1cf4baf present pacing caches its per-thread decision;
