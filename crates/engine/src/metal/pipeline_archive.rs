@@ -95,11 +95,13 @@ pub(super) fn load(device: &Device) -> bool {
             if list.is_empty() {
                 return None;
             }
+            // An archive serves only the GPU it was compiled for (the builder's iPhone choice): this GPU's name.
             println!(
-                "[+] Pipelines: {} binary archives ({} MB) loaded in {:.1} s",
+                "[+] Pipelines: {} binary archives ({} MB) loaded in {:.1} s, for this GPU: {}",
                 list.len(),
                 bytes >> 20,
-                t0.elapsed().as_secs_f64()
+                t0.elapsed().as_secs_f64(),
+                device.architecture().name()
             );
             Some(Archives(NSArray::from_retained_slice(&list)))
         })
