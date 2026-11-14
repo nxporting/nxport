@@ -478,7 +478,7 @@ fn plain_swizzle(t: &Tex, n: usize) -> bool {
 /// single-sample view.
 fn single_2d(t: &Tex) -> Option<(usize, usize)> {
     (t.textureType() == MTLTextureType::Type2D && t.mipmapLevelCount() == 1 && t.sampleCount() == 1)
-        .then(|| unsafe { (t.parentRelativeLevel(), t.parentRelativeSlice()) })
+        .then(|| (t.parentRelativeLevel(), t.parentRelativeSlice()))
 }
 
 /// Whether the bound texture `t` is exactly colour attachment `a` (at `level` / `layer` of it), read the same way.
@@ -491,7 +491,7 @@ pub(super) fn same_pixels(t: &Tex, a: &Tex, level: usize, layer: usize) -> bool 
         return false;
     }
     let Some(sub) = single_2d(t) else { return false };
-    let att = unsafe { (a.parentRelativeLevel() + level, a.parentRelativeSlice() + layer) };
+    let att = (a.parentRelativeLevel() + level, a.parentRelativeSlice() + layer);
     // Same root (the caller checked) and the same level and slice of it.
     sub == att && t.width() == a.width() >> level.min(31) && t.height() == a.height() >> level.min(31)
 }
