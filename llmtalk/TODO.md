@@ -31,8 +31,9 @@ left out); 2ccaf73 TotK exact mouse aim on 1.1.2 and on native engines. To check
    perf overlay (Cmd-O) still draws (2f61d11); every menu item and key as before (c5e0bc2, compared in code only).
 9. iPhone: the screen no longer auto-locks mid-game (e99e1a6); log.txt has "Device: thermal state ..." lines (9689895).
 10. App sizes (7bb682a, de77ce6): the TotK .ipa's metallibs 1479 -> 1010 MB and the Mac app's shader cache 4.0 -> 2.0 GB.
-    The next build of each game re-translates its shaders once (the translation fingerprint changed). The Mac app still
-    copies the whole game dump (17 GB) into itself: your call whether it should point at the dump instead.
+    The next build of each game re-translates its shaders once (the translation fingerprint changed). The Mac app no longer
+    copies the 17 GB game dump by default (20ed41f): like the Windows app, its settings.toml names the dump, which must
+    stay where it is; "Include game files" in the builder turns copying back on.
 Also unpushed from the Mac: 9878ced (Metal waits for a compiling pipeline unless its targets are drawn every frame,
 async compilation only), 187179d (a Mac lifts the game to the same C as Windows: PARITY #2's loader side).
 Found tonight, not regressions: the frame capture misses some lighting input (replay vs live 18-26% of pixels in sun,
@@ -88,7 +89,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   <dump>`; `compile-guest --cc "<zig> cc -fprofile-generate -mllvm -enable-name-compression=false" --out app/guest.dll
   c` (objects compile; the link fails on the runtime, as compile cannot take a library); then link by hand: `<zig> cc
   -fprofile-generate -mllvm -enable-name-compression=false -shared -o app/guest.dll @c/obj/link.rsp prof.a`; app folder =
-  that dll + modules.txt + the same commit's nxport.exe + SDL3.dll + settings; runs with LLVM_PROFILE_FILE=...un-%p.profraw
+  that dll + modules.txt + the same commit's nxport.exe + SDL3.dll + settings; runs with LLVM_PROFILE_FILE=...
+un-%p.profraw
   (written at exit; 90 MB each); `llvm-profdata merge -o <main id>.profdata raw/*`. TotK 1.0.0 (main
   082CE09B06E33A12...): 3 runs at the user's save (5200, 9000, 9000 frames), every function matched, A/B 3 valid pairs
   100.2 / 110.5 / 102.4 against 95.9 / 98.2 / 93.5 fps (~7%). Ready to publish: pgo-kit/profiles/<id>.profdata.gz (16 MB),
