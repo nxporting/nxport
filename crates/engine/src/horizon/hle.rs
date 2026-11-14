@@ -2732,7 +2732,8 @@ fn region_arena() -> &'static StdMutex<RegionArena> {
         };
         #[cfg(target_vendor = "apple")]
         let file = (size != 0 && crate::settings::get().guest.file_backed_memory)
-            .then(|| crate::os::sparse_file(size, &std::env::temp_dir()))
+            // The arena is a reservation; regions in use are what the disk must hold. 2 GB covers TotK's.
+            .then(|| crate::os::sparse_file_with_room(size, 3 << 30, &std::env::temp_dir()))
             .and_then(|f| f.map_err(|e| eprintln!("[!] HLE: file-backed region arena failed ({e}); anonymous instead")).ok());
         StdMutex::new(RegionArena {
             base,
