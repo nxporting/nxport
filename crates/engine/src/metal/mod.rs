@@ -1228,7 +1228,7 @@ impl Gfx {
                                 MTLLoadAction::Load
                             });
                             d.setStoreAction(MTLStoreAction::Store);
-                            d.setClearDepth(depth.unwrap_or(0.0) as f64);
+                            d.setClearDepth(clear_depth_value(pf, depth.unwrap_or(0.0)));
                         }
                         if matches!(
                             pf,
@@ -3707,8 +3707,8 @@ impl Gfx {
         // clear of layer 0 / level 0 only left the others at their initial 0.0, so their LESS-tested casters never drew.
         let (level, slice) = (rt.level as usize, rt.layer as usize);
         if tracing_frame() {
-            println!("[ftrace] CLEAR DEPTH nvn {:#x} -> mtl {:?} {}x{} arr{} lvls{} parent={} | level {} slice {} | depth {} mask {} stencil {} smask {}",
-                rt.texture, tex.textureType(), tex.width(), tex.height(), tex.arrayLength(), tex.mipmapLevelCount(), tex.parentTexture().is_some(),
+            println!("[ftrace] CLEAR DEPTH nvn {:#x} -> mtl {:?} {:?} {}x{} arr{} lvls{} parent={} | level {} slice {} | depth {} mask {} stencil {} smask {}",
+                rt.texture, tex.textureType(), tex.pixelFormat(), tex.width(), tex.height(), tex.arrayLength(), tex.mipmapLevelCount(), tex.parentTexture().is_some(),
                 level, slice, depth, depth_mask, stencil, stencil_mask);
         }
         let depth = (has_depth && depth_mask).then_some(depth);
@@ -5934,6 +5934,20 @@ pub(super) struct PendingClear {
     /// Array slice, or depth plane of a 3D texture.
     pub(super) layer: usize,
     pub(super) kind: ClearKind,
+}
+
+/// The clear depth Metal is given for `depth` on a target of format `pf`. On Apple GPUs a Depth16Unorm clear truncates
+/// (0.5 stores 32767) while rasterized depth rounds (0.5 stores 32768), so a draw at the cleared depth failed an EQUAL test
+/// against it. TotK clears two D16 targets to 0.5 each frame and then selects regions with EQUAL tests; with the clear
+/// truncated, pixels left at the cleared depth fail them (blocks in Ultrahand / Fuse effects, totk-mobile PRs 5 and 9). Given the f32 the game passes,
+/// rounded half up as the rasterizer does (a standalone Metal test on the M4: all 201 values 0..1 match a draw at that
+/// depth, against 4 of 5 failing before), then nudged into the step so the truncation keeps it.
+pub(super) fn clear_depth_value(pf: MTLPixelFormat, depth: f32) -> f64 {
+    if pf != MTLPixelFormat::Depth16Unorm {
+        return depth as f64;
+    }
+    let k = (depth.clamp(0.0, 1.0) as f64 * 65535.0).round();
+    ((k + 0.25) / 65535.0).min(1.0)
 }
 
 #[derive(Clone, Copy)]
