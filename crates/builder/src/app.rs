@@ -1408,11 +1408,11 @@ mod tests {
         let a = parse(&["dump", "--build", "--target", "ios"]).unwrap();
         assert_eq!(a.target, Some(Target::Ipa));
         assert!(parse(&["dump", "--build", "--target", "wii"]).is_err());
-        // Only with --build; every target this host makes is taken, and one only another host makes (the Windows app on
-        // a Mac) is refused.
+        // Only with --build; every target this host offers now is taken, others refused (the Windows app on a Mac needs
+        // the Windows engine beside the builder).
         assert!(parse(&["dump", "--target", "ios"]).is_err());
         for (name, t) in [("windows", Target::WindowsApp), ("mac", Target::MacApp), ("ios", Target::Ipa)] {
-            assert_eq!(parse(&["dump", "--build", "--target", name]).is_ok(), Target::ALL.contains(&t), "{name}");
+            assert_eq!(parse(&["dump", "--build", "--target", name]).is_ok(), t.offered(), "{name}");
         }
     }
 
