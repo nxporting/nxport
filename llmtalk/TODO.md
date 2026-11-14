@@ -95,12 +95,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
-- **BotW 1.0.0 crashes on Windows before its first frame (2026-11-14, win-worker).** Built from the user's base NSP
-  (main 2094f152...): guest-main reads [0 + 0x20] in f_7000b21a78 (main+0xa21a78), called from f_7000afeb38, which
-  loads a global object pointer through the pointer table at 0x700237df98 and finds it still null; the crash comes right
-  after NVN setup, as the game starts its "Prepare Thread". Not yet found: what should have created that object (a
-  singleton set elsewhere, maybe by the Prepare Thread or an HLE call that returned without doing its part). BotW 1.5.0
-  runs on the Mac, so it may be 1.0.0-specific or Windows-specific; a 1.9.0 dump (pending a title key) would tell.
+- **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Built from the user's base NSP
+  (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
+  sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0; pending
+  commit after an SMO check). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
+  crashes in f_7000f52794 (main+0xe52794, after f_7000f51cc8 returns): the singleton at 0x70023ebee0 (made by
+  main+0xe52fac, 0x40 bytes) still has +0x38 null, which only main+0xdbeb3c sets (called from main+0x7ae8f0, called
+  from main+0x7b7b54). Same in every run (not a race). Next: find why main+0x7b7b54 has not run by then: a probe in
+  the lifted C (--trace is native only), or the same path in 1.5.0 on the Mac.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
