@@ -98,20 +98,53 @@ fn emit_bfe(c: &mut Ctx, mut a: OperandId, b: OperandId, rd: i32, bit_reverse: b
     if bit_reverse {
         a = c.bitfield_reverse(a);
     }
-    let m = c.const_i(0xff);
-    let position = c.bitwise_and(b, m);
-    let (k8, k8b) = (c.const_i(8), c.const_i(8));
-    let size = c.bitfield_extract_u32(b, k8, k8b);
+    let (position, size) = field(c, b);
+    let (position, size) = clamp_field(c, position, size, signed);
     let res = if signed { c.bitfield_extract_s32(a, position, size) } else { c.bitfield_extract_u32(a, position, size) };
     let d = get_dest(c, rd);
     c.copy_to(d, res);
 }
 
-fn emit_bfi(c: &mut Ctx, a: OperandId, b: OperandId, s: OperandId, rd: i32) {
+/// A BFE / BFI field operand: position in bits 0-7, size in bits 8-15.
+fn field(c: &mut Ctx, b: OperandId) -> (OperandId, OperandId) {
     let m = c.const_i(0xff);
     let position = c.bitwise_and(b, m);
     let (k8, k8b) = (c.const_i(8), c.const_i(8));
     let size = c.bitfield_extract_u32(b, k8, k8b);
+    (position, size)
+}
+
+/// Maxwell's fields as PTX bfe / bfi define them: a field running past bit 31 is cut there, one starting past it is
+/// empty (a signed extract then repeats bit 31). SPIR-V's and Metal's bitfield operations are undefined past bit 31, and
+/// AMD takes offset and width modulo 32 (TotK's Depths terrain shaders compute positions up to 248). Gives an offset and
+/// count within the word: a signed extract past bit 31 becomes bit 31 alone.
+fn clamp_field(c: &mut Ctx, position: OperandId, size: OperandId, signed: bool) -> (OperandId, OperandId) {
+    let k31 = c.const_i(31);
+    let past = c.icompare_greater_unsigned(position, k31);
+    let k32 = c.const_i(32);
+    let room = c.isubtract(k32, position);
+    let inside = c.iminimum_u32(size, room);
+    if signed {
+        let p31 = c.const_i(31);
+        let pos = c.conditional_select(past, p31, position);
+        // Past bit 31: bit 31 repeated, unless the field is empty.
+        let z = c.const_i(0);
+        let empty = c.icompare_equal(size, z);
+        let (z, one) = (c.const_i(0), c.const_i(1));
+        let bit31 = c.conditional_select(empty, z, one);
+        let count = c.conditional_select(past, bit31, inside);
+        (pos, count)
+    } else {
+        let (z, z2) = (c.const_i(0), c.const_i(0));
+        let pos = c.conditional_select(past, z, position);
+        let count = c.conditional_select(past, z2, inside);
+        (pos, count)
+    }
+}
+
+fn emit_bfi(c: &mut Ctx, a: OperandId, b: OperandId, s: OperandId, rd: i32) {
+    let (position, size) = field(c, b);
+    let (position, size) = clamp_field(c, position, size, false);
     let res = c.bitfield_insert(s, a, position, size);
     let d = get_dest(c, rd);
     c.copy_to(d, res);
@@ -230,6 +263,7 @@ fn emit_shf(c: &mut Ctx, max_shift: MaxShift, a: OperandId, mut b: OperandId, s:
         let k32 = c.const_i(32);
         let sub = c.isubtract(k32, b);
         let sh = c.shift_right_u32(a, sub);
+        let sh = zero_when_unshifted(c, b, sh);
         res = c.bitwise_or(res, sh);
         if long_shift {
             // res = B >= 32 ? A << (B - 32) : res
@@ -246,6 +280,7 @@ fn emit_shf(c: &mut Ctx, max_shift: MaxShift, a: OperandId, mut b: OperandId, s:
         let k32 = c.const_i(32);
         let sub = c.isubtract(k32, b);
         let sh = c.shift_left(s, sub);
+        let sh = zero_when_unshifted(c, b, sh);
         res = c.bitwise_or(res, sh);
         if long_shift {
             // res = B >= 32 ? C >> (B - 32) : res
@@ -269,6 +304,15 @@ fn emit_shf(c: &mut Ctx, max_shift: MaxShift, a: OperandId, mut b: OperandId, s:
     if write_cc {
         set_zn_flags(c, res, write_cc, false);
     }
+}
+
+/// The other word's share of a funnel shift by `b`, which shifts it by 32 - b: none when b is 0 (Maxwell gives the
+/// unshifted word). A shift by 32 is undefined in SPIR-V and Metal; AMD takes the low 5 bits, giving A | C.
+fn zero_when_unshifted(c: &mut Ctx, b: OperandId, share: OperandId) -> OperandId {
+    let z = c.const_i(0);
+    let unshifted = c.icompare_equal(b, z);
+    let z = c.const_i(0);
+    c.conditional_select(unshifted, z, share)
 }
 
 fn emit_shl(c: &mut Ctx, a: OperandId, mut b: OperandId, rd: i32, mask: bool) {
