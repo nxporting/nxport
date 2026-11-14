@@ -623,11 +623,19 @@ fn emit_txd(c: &mut Ctx, dimensions: TexDim, imm: i32, component_mask: i32, mut 
         let m = c.const_i(0xffff);
         sources.push(c.bitwise_and(packed_params, m));
     }
-    // Derivatives (X and Y).
-    for _ in 0..2 * coords_count {
-        sources.push(next_reg(c, &mut src_b));
-        if is_1d_to_2d {
-            sources.push(c.const_f(0.0));
+    // Derivatives (X and Y). A 2D TXD's registers hold them per coordinate: du/dx, du/dy, dv/dx, dv/dy (TotK's terrain;
+    // yuzu samples with (x, z) and (y, w)), where the sample takes dP/dx then dP/dy, so the inner two swap. Taken in
+    // register order, the level came from the wrong derivatives: too sharp on faces turned across the screen, and
+    // patches crawled as the camera moved (totk-pc-recomp docs/maxwell.md 2.13). 3D and cube layouts are not known.
+    let regs: Vec<OperandId> = (0..2 * coords_count).map(|_| next_reg(c, &mut src_b)).collect();
+    if coords_count == 2 {
+        sources.extend([regs[0], regs[2], regs[1], regs[3]]);
+    } else {
+        for r in regs {
+            sources.push(r);
+            if is_1d_to_2d {
+                sources.push(c.const_f(0.0));
+            }
         }
     }
     if has_offset {
