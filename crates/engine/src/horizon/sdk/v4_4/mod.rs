@@ -1,7 +1,7 @@
 // SDK 4.4 (Mario Kart 8 Deluxe 3.0.4, Breath of the Wild): what differs from the base layer.
 
-mod movie;
-mod os;
+pub(super) mod movie;
+pub(super) mod os;
 
 use super::{Layer, SdkVersion};
 
