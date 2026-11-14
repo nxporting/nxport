@@ -95,6 +95,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
+  .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
+  1.0.0 files (a 1.0.0 image needs 0x2d8000, measured on Windows). Fix for the user: build the .ipa from the version on
+  the phone. Better message (suggested to mac-worker): compare the image's main build id with the running main's first
+  and name both versions.
+
 - **TXD gradient order (maxwell.md 2.13), branch txd-gradients, held for after the release (2026-11-14).** A 2D TXD's
   gradient registers are per coordinate (du/dx, du/dy, dv/dx, dv/dy); our port of Ryujinx took them as (dPdx, dPdy):
   terrain mip levels from the wrong derivatives, patches crawling in the Depths (totk-pc-recomp, 1.4.3). Checked here: a
