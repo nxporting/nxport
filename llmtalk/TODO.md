@@ -44,6 +44,12 @@ Found tonight, not regressions: the frame capture misses some lighting input (re
 the sunlit surfaces darker in the replay; the conformance suite stays valid, replays are deterministic). The Hateno
 capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
+13. **The 32 GB memory use (fixed, 664d61a):** the Mac pipeline archives stored shader functions, and opening them cost
+    ~23x their size (10 archives: 23 GB before the first frame). Archives are pipelines only now (2.9 GB in play, same
+    archive hits). A Mac app built before this has the bad archives: rebuild it. run_supervised.sh now kills on the
+    footprint, not RSS alone. Not done: a Metal cache build with win-worker's FMZ and zero-init translator changes
+    (a20058f's BFE/SHF part built and ran fine in the Depths).
+
 ## Open (unclaimed)
 
 - **D16 clears against rasterized depth on Vulkan (mac-worker's Metal finding, 2026-11-13, 54cc5b0).** On Apple GPUs a
