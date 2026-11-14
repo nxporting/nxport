@@ -72,6 +72,29 @@ pub unsafe fn alloc_on_demand(size: usize) -> io::Result<*mut u8> {
     imp::alloc_on_demand(size)
 }
 
+/// Bytes free for this user on the file system holding `dir`.
+#[cfg(unix)]
+pub fn free_space(dir: &std::path::Path) -> io::Result<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(s.f_bavail as u64 * s.f_frsize as u64)
+}
+
+/// An unlinked sparse file of `size` bytes in `dir`, for map_file / punch_hole. Refused when the file system has less
+/// free space than `need`: its blocks are taken as the guest writes, and a full disk would fail those writes.
+#[cfg(unix)]
+pub fn sparse_file_with_room(size: usize, need: u64, dir: &std::path::Path) -> io::Result<std::fs::File> {
+    let free = free_space(dir)?;
+    if free < need {
+        return Err(io::Error::other(format!("{} MB free, {} MB needed", free >> 20, need >> 20)));
+    }
+    sparse_file(size, dir)
+}
+
 /// An unlinked sparse file of `size` bytes in `dir`, for map_file / punch_hole.
 #[cfg(unix)]
 pub fn sparse_file(size: usize, dir: &std::path::Path) -> io::Result<std::fs::File> {
@@ -121,10 +144,8 @@ pub unsafe fn punch_hole(fd: i32, offset: usize, size: usize) {
 #[cfg(unix)]
 pub unsafe fn alloc_file_backed(size: usize, dir: &std::path::Path) -> io::Result<*mut u8> {
     use std::os::unix::io::AsRawFd;
-    let path = dir.join(format!("nxport-guest-{}-{size:x}", std::process::id()));
-    let f = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-    let _ = std::fs::remove_file(&path);
-    f.set_len(size as u64)?;
+    // Room for every page of the block, plus 1 GB for the rest of the system.
+    let f = sparse_file_with_room(size, size as u64 + (1 << 30), dir)?;
     let p = libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0);
     if p == libc::MAP_FAILED {
         Err(io::Error::last_os_error())
