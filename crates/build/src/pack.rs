@@ -69,7 +69,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     let dest_exefs = bundle_dump.join("ExeFS");
     let dest_romfs = bundle_dump.join("RomFS");
 
-    if opts.bundle_game || !cfg!(target_os = "macos") {
+    if opts.bundle_game {
         fs::create_dir_all(&bundle_dump)?;
         println!("  {} ExeFS and RomFS...", if opts.symlink_assets { "Linking" } else { "Copying" });
         place(&exefs, &dest_exefs, opts.symlink_assets)?;
@@ -129,9 +129,13 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if !packaged_any_mods {
         app_settings.files.no_mods = Some(true);
     }
-    // Made on another OS (Windows): a host path means nothing on the Mac the app runs on.
+    // Made on another OS (Windows): a host path means nothing on the Mac the app runs on; the app asks for the game by
+    // its title (host/game_files.rs).
     if !cfg!(target_os = "macos") {
         app_settings.files.system_data_dir = None;
+    }
+    if let Some(tid) = game.title_id {
+        app_settings.files.title_id = Some(format!("{tid:016x}"));
     }
     if !opts.bundle_game && cfg!(target_os = "macos") {
         app_settings.files.game_dir = Some(fs::canonicalize(opts.dump_dir).or_else(|_| std::path::absolute(opts.dump_dir))?);

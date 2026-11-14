@@ -35,6 +35,11 @@ pub fn game_settings(title_id: u64) -> Option<crate::settings::SettingsPatch> {
 #[cfg(nx_runtime)]
 pub fn remember(change: impl FnOnce(&mut crate::settings::SettingsPatch)) {
     let Some(tid) = crate::game::title_id() else { return };
+    remember_for(tid, change);
+}
+
+/// remember for game `tid`, before its files are loaded (the folder picked for an app without them).
+pub fn remember_for(tid: u64, change: impl FnOnce(&mut crate::settings::SettingsPatch)) {
     let Some(file) = game_settings_file(tid) else { return };
     let mut p = game_settings(tid).unwrap_or_default();
     change(&mut p);

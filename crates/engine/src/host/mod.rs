@@ -8,6 +8,7 @@ pub mod display;
 #[cfg(target_os = "ios")]
 #[path = "display_ios.rs"]
 pub mod display;
+pub mod game_files;
 pub mod input;
 #[cfg(target_os = "macos")]
 pub mod menu;
