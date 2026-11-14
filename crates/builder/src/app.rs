@@ -339,6 +339,20 @@ fn default_out_dir(target: Target) -> String {
     }
 }
 
+/// The builder's own defaults for every game and target (settings.toml in its data directory, a preset file), under
+/// what each game remembers: e.g. graphics share-pipelines = true for every app this builder makes. Edits, so they go
+/// into the app.
+fn user_defaults() -> SettingsPatch {
+    let file = data_dir().join("settings.toml");
+    if !file.is_file() {
+        return SettingsPatch::default();
+    }
+    settings::load_preset(&file).unwrap_or_else(|e| {
+        eprintln!("[!] {e}");
+        SettingsPatch::default()
+    })
+}
+
 /// A game's presets: `games/<title id>/presets/*.toml` in the builder's data directory.
 fn game_presets_dir(title_id: u64) -> PathBuf {
     data_dir().join("games").join(format!("{title_id:016x}")).join("presets")
@@ -452,7 +466,7 @@ impl Builder {
             }
         }
         self.base = settings::resolve(self.base_layers());
-        self.settings = settings::resolve(self.base_layers().into_iter().chain([edits]));
+        self.settings = settings::resolve(self.base_layers().into_iter().chain([user_defaults(), edits]));
     }
 
     /// Remembers the preset for this game, and the mods folder, bundle ID, and settings for this game and target.
@@ -460,7 +474,12 @@ impl Builder {
         let Some(g) = &self.game else { return Ok(()) };
         let mut mem = GameMemory::load(g.title_id);
         let some = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
-        let edits = self.edits();
+        // What differs from the builder's defaults too: those stay in their own file, not copied into every game.
+        let mut edits = self.settings.clone().into_patch_by_diff(settings::resolve(self.base_layers().into_iter().chain([user_defaults()])));
+        nxport::profile::keep_own_options(self.game.as_ref().and_then(|g| g.profile), &mut edits);
+        if !self.system_data.trim().is_empty() {
+            edits.files.system_data_dir = Some(PathBuf::from(self.system_data.trim()));
+        }
         // Only a preset that exists: a name typed but never saved is not a selection.
         mem.preset = self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(self.preset_name.trim())).map(|p| p.name.clone());
         *mem.target(self.target) = Some(TargetMemory {
@@ -811,7 +830,7 @@ impl Builder {
             }
         }
         self.rebase();
-        self.settings = settings::resolve(self.base_layers().into_iter().chain([patch]));
+        self.settings = settings::resolve(self.base_layers().into_iter().chain([user_defaults(), patch]));
         Ok(())
     }
 
