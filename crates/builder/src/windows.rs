@@ -261,6 +261,8 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
     let extract = extract_stages_step(&r.job, dump, &stages);
     steps.push((extract.0, Box::new(move || stamp.run("The shader stages are those of the last build", extract.1))));
 
+    // The stages's argument-buffer variants only when the app's settings use them (graphics.arg_buffers, off by default).
+    let arg_variants = r.edits.graphics.arg_buffers.unwrap_or(false);
     let (cache, build_dir, job) = (ios_cache.clone(), work.join("shader_build_ios"), r.job.clone());
     let stamp_file = work.join("shader_cache_ios_source.from");
     steps.push((
@@ -272,7 +274,7 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
             let listed = std::fs::read(&list).map_or(0, |b| nxport::vulkan::stage_cache::fnv1a64(&b));
             let stamp = Stamp {
                 file: stamp_file,
-                inputs: format!("main {main}\ntranslator {}\npipelines {listed:016x}\n", nxport::vulkan::stage_cache::translator()),
+                inputs: format!("main {main}\ntranslator {}\npipelines {listed:016x}\narg variants {arg_variants}\n", nxport::vulkan::stage_cache::translator()),
                 output: cache.join("source"),
             };
             stamp.run("The translated shaders are those of the last build", || {
@@ -291,7 +293,7 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
                     index_only: false,
                     on_progress: Some(Arc::new(cb)),
                 })?;
-                let (n, bytes) = nxport_build::shader_cache_build::pack_source(&msl, list.is_file().then_some(list.as_path()), &cache)?;
+                let (n, bytes) = nxport_build::shader_cache_build::pack_source(&msl, list.is_file().then_some(list.as_path()), &cache, arg_variants)?;
                 println!("  {n} shader stages packed as source ({} MB)", bytes >> 20);
                 // The loose source is ~1 GB for TotK: only the pack is kept.
                 let _ = std::fs::remove_dir_all(&msl);
