@@ -40,12 +40,17 @@ enum Sym {
 }
 
 const WINDOW: u64 = 24;
+
+/// The instructions that may have set register `r` last before `pc`, following the function's branches back (None: one
+/// is out of sight). Lets a base register set before a loop be read at a jump inside it, past the loop's back branch
+/// (BotW 1.0.0's SDK printf: `adrp x28; add x28, #0xf80` before the loop over the format, `add x12, x8, x28; br x12` in it).
+pub type Defs<'a> = &'a dyn Fn(u64, u32) -> Option<Vec<u64>>;
 const MAX_ENTRIES: u64 = 4096;
 
 /// The targets of a jump through register `r` holding its value just before `pc` (a `br` there, or the instruction
 /// after one that sets it), in the function starting at `entry`; None if it is not a recognised table.
-pub fn resolve(mem: &dyn Memory, entry: u64, pc: u64, r: u32) -> Option<Vec<u64>> {
-    let Sym::Target { base, load: Load { table, idx, size, signed, scale, at }, shift } = value(mem, entry, pc, r, 0)?
+pub fn resolve(mem: &dyn Memory, defs: Defs, entry: u64, pc: u64, r: u32) -> Option<Vec<u64>> {
+    let Sym::Target { base, load: Load { table, idx, size, signed, scale, at }, shift } = value(mem, defs, entry, pc, r, 0)?
     else {
         return None;
     };
@@ -77,30 +82,46 @@ pub fn resolve(mem: &dyn Memory, entry: u64, pc: u64, r: u32) -> Option<Vec<u64>
 /// For a jump (as `resolve`) with the shape of a table (`base + (entry << shift)`) that `resolve` cannot read (the
 /// table address or its bounds check is out of sight), the range every target lies in: any entry the load's size can
 /// hold.
-pub fn reach(mem: &dyn Memory, entry: u64, pc: u64, r: u32) -> Option<std::ops::RangeInclusive<u64>> {
-    let Sym::Target { base, load, shift } = value(mem, entry, pc, r, 0)? else { return None };
+pub fn reach(mem: &dyn Memory, defs: Defs, entry: u64, pc: u64, r: u32) -> Option<std::ops::RangeInclusive<u64>> {
+    let Sym::Target { base, load, shift } = value(mem, defs, entry, pc, r, 0)? else { return None };
     let bits = load.size as u64 * 8;
     let (lo, hi) = if load.signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
     Some(base.wrapping_add((lo << shift) as u64)..=base.wrapping_add((hi << shift) as u64))
 }
 
 /// The symbolic value of register `r` just before `pc`, from the closest instruction before it that writes it.
-fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sym> {
+fn value(mem: &dyn Memory, defs: Defs, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sym> {
     if depth > 4 || r == 31 {
         return None;
     }
+    // Out of sight of the instructions just before: the same constant from every definition that reaches `pc`.
+    let reached = || -> Option<Sym> {
+        let ds = defs(pc, r)?;
+        let mut out = None;
+        for d in ds {
+            let v = match value(mem, defs, entry, d + 4, r, depth + 1)? {
+                Sym::Const(v) => v,
+                _ => return None,
+            };
+            if out.is_some_and(|o| o != v) {
+                return None;
+            }
+            out = Some(v);
+        }
+        out.map(Sym::Const)
+    };
     let mut a = pc;
     while a > entry && pc - a < WINDOW * 4 {
         a -= 4;
         let w = mem.word(a)?;
         if is_branch(w) && !is_bcond(w) && !(is_call(w) && callee_saved(r)) {
-            return None;
+            return reached();
         }
         if !writes(w, r) {
             continue;
         }
         if let Some(src) = mov_reg(w) {
-            return value(mem, entry, a, src, depth + 1);
+            return value(mem, defs, entry, a, src, depth + 1);
         }
         if w & 0x9f00_0000 == 0x9000_0000 {
             // adrp
@@ -115,7 +136,7 @@ fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sy
         if w & 0xff80_0000 == 0x9100_0000 {
             // add xd, xn, #imm (64-bit, no flags)
             let imm = (bits(w, 10, 12) as u64) << if bits(w, 22, 1) == 1 { 12 } else { 0 };
-            let Sym::Const(b) = value(mem, entry, a, bits(w, 5, 5), depth + 1)? else { return None };
+            let Sym::Const(b) = value(mem, defs, entry, a, bits(w, 5, 5), depth + 1)? else { return None };
             return Some(Sym::Const(b.wrapping_add(imm)));
         }
         if w & 0x3f20_0000 == 0x3820_0000 && bits(w, 10, 2) == 2 && bits(w, 26, 1) == 0 {
@@ -125,7 +146,7 @@ fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sy
             if opc == 0 || size == 3 || (size == 2 && opc == 3) || !matches!(option, 2 | 3 | 6 | 7) {
                 return None;
             }
-            let table = match value(mem, entry, a, bits(w, 5, 5), depth + 1) {
+            let table = match value(mem, defs, entry, a, bits(w, 5, 5), depth + 1) {
                 Some(Sym::Const(t)) => Some(t),
                 _ => None,
             };
@@ -139,7 +160,7 @@ fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sy
                 return None;
             }
             let shift = if ext { bits(w, 10, 3) } else { bits(w, 10, 6) };
-            let (n, m) = (value(mem, entry, a, bits(w, 5, 5), depth + 1), value(mem, entry, a, bits(w, 16, 5), depth + 1));
+            let (n, m) = (value(mem, defs, entry, a, bits(w, 5, 5), depth + 1), value(mem, defs, entry, a, bits(w, 16, 5), depth + 1));
             return match (n, m) {
                 (Some(Sym::Const(base)), Some(Sym::Load(load))) => {
                     // An extend narrower than the entry would truncate it; the usual sxtb/sxth/sxtw match the load.
@@ -156,7 +177,7 @@ fn value(mem: &dyn Memory, entry: u64, pc: u64, r: u32, depth: u32) -> Option<Sy
         }
         return None;
     }
-    None
+    reached()
 }
 
 /// The number of table entries, from the bounds check of register `idx` before the table load at `load_pc` (following
@@ -282,7 +303,7 @@ mod tests {
         }
         data[0x100..0x104].copy_from_slice(&[0, 1, 2, 4]); // targets 0x1020, 0x1024, 0x1028, 0x1030
         let img = Img { base: 0x1000, data };
-        assert_eq!(resolve(&img, 0x1000, 0x101c, 11), Some(vec![0x1020, 0x1024, 0x1028, 0x1030]));
+        assert_eq!(resolve(&img, &|_, _| None, 0x1000, 0x101c, 11), Some(vec![0x1020, 0x1024, 0x1028, 0x1030]));
     }
 
     #[test]
@@ -300,7 +321,7 @@ mod tests {
             data[0x100 + 4 * i..0x104 + 4 * i].copy_from_slice(&off.to_le_bytes());
         }
         let img = Img { base: 0x2000, data };
-        assert_eq!(resolve(&img, 0x2000, 0x201c, 8), Some(vec![0x2020, 0x2028, 0x2030, 0x2038, 0x2040, 0x2048]));
+        assert_eq!(resolve(&img, &|_, _| None, 0x2000, 0x201c, 8), Some(vec![0x2020, 0x2028, 0x2030, 0x2038, 0x2040, 0x2048]));
     }
 
     #[test]
@@ -328,6 +349,6 @@ mod tests {
             data[0x100 + 2 * i..0x102 + 2 * i].copy_from_slice(&e.to_le_bytes());
         }
         let img = Img { base: 0x3000, data };
-        assert_eq!(resolve(&img, 0x3000, 0x3024, 9), Some(vec![0x3028, 0x302c, 0x3034]));
+        assert_eq!(resolve(&img, &|_, _| None, 0x3000, 0x3024, 9), Some(vec![0x3028, 0x302c, 0x3034]));
     }
 }
