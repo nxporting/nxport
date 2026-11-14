@@ -4,7 +4,10 @@
 use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
 #[cfg(target_os = "macos")]
-use nxport_build::{msl_specialize, pack, shader_cache_build, translation};
+use nxport_build::{msl_specialize, pack};
+// The shader cache build translates on Windows too (its Metal compile needs Apple's compiler).
+#[cfg(any(target_os = "macos", windows))]
+use nxport_build::{shader_cache_build, translation};
 #[cfg(any(target_os = "macos", windows))]
 use nxport_build::{ipa, macho};
 
@@ -23,6 +26,9 @@ pub enum Command {
     /// Build the engine for iOS from this checkout, without Apple's tools (needs LLVM and the Rust target)
     #[cfg(windows)]
     IosEngine,
+    /// Build the engine for macOS from this checkout, without Apple's tools (needs LLVM and the Rust target)
+    #[cfg(windows)]
+    MacosEngine,
     #[cfg(any(target_os = "macos", windows))]
     /// Build an iOS app (.ipa) for a game dump
     Ipa {
@@ -254,7 +260,19 @@ pub enum Shaders {
         #[arg(long)]
         ctrl_out: Option<PathBuf>,
     },
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
+    /// Pack a translate-only build's MSL (build --msl-out) as the cache's source: <out>/source.pack and source/index.txt
+    PackSource {
+        /// The --msl-out folder (index.txt and <entry>.metal)
+        msl: PathBuf,
+        /// A pipeline list: only the stages it uses go in
+        #[arg(long)]
+        list: Option<PathBuf>,
+        /// The shader cache folder to write into
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    #[cfg(any(target_os = "macos", windows))]
     /// Build the Metal shader cache from stage dumps (incremental: stages translated before are reused)
     Build {
         /// Stage dump directories (*.code)
@@ -363,7 +381,12 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
             extract_shaders::extract_all(&romfs, &out, &dirs, ctrl_out.as_deref(), None)?;
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
+        Command::Shaders(Shaders::PackSource { msl, list, out }) => {
+            let (n, bytes) = shader_cache_build::pack_source(&msl, list.as_deref(), &out, true)?;
+            println!("[+] {n} stages packed: {} ({} KB)", out.join("source.pack").display(), bytes / 1024);
+        }
+        #[cfg(any(target_os = "macos", windows))]
         Command::Shaders(Shaders::Build { dumps, out, ctrl_dir, msl_out, index_only, j, translation }) => {
             translation::install(translation);
             // A third of the cores by default: the build is thousands of short tool launches.
@@ -455,9 +478,11 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
             println!("    Output cache directory: {}", stats.cache_dir.display());
         }
         #[cfg(windows)]
-        Command::IosEngine => {
+        Command::IosEngine | Command::MacosEngine => {
+            use nxport_build::apple_engine::{build, Os};
+            let os = if matches!(command, Command::IosEngine) { Os::Ios } else { Os::MacOs };
             let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
-            println!("[+] {}", nxport_build::ios_engine::build(&toolchains)?.display());
+            println!("[+] {}", build(os, &toolchains, &|name| println!("  compiling {name}"))?.display());
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {

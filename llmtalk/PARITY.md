@@ -11,7 +11,7 @@ iOS Metal.
 
 |              | Windows app        | macOS app          | iOS .ipa                                       |
 |--------------|--------------------|--------------------|------------------------------------------------|
-| Windows host | yes (lifted, zig)  | **no**             | yes; shaders as Metal source (branch ios-shader-cache-windows) |
+| Windows host | yes (lifted, zig)  | built, not yet run on a Mac (branch parity1-macos-on-windows); a .zip | yes; shaders as Metal source (branch ios-shader-cache-windows) |
 | Mac host     | **no**             | yes                | yes; shaders as compiled metallibs             |
 
 ## Rules (from bugs that broke parity)
@@ -27,10 +27,10 @@ iOS Metal.
 
 ## Gaps
 
-1. **Windows host cannot make the macOS app.** Pieces that exist: the source pack (the Mac engine reads it as iOS does:
-   metal/shader_cache.rs source_set), adhoc_sign (Rust), the image crate for icons; missing: the macOS engine
-   cross-built from Windows (as ios_engine.rs does for iOS, aarch64-apple-darwin), .icns written without iconutil
-   (a simple container of PNGs), pack.rs off macOS. Unclaimed.
+1. **Windows host makes the macOS app: built, not yet run on a Mac.** One list of steps in builder/src/apple.rs: on
+   Windows the engine cross-built (build/src/apple_engine.rs, Os::MacOs: stub .tbd libraries, ld64.lld,
+   LC_BUILD_VERSION macos 11.0 sdk 12.0 so x18 is kept), shaders packed as Metal source (shared with the .ipa), the
+   bundle sealed by adhoc_sign and zipped with Unix modes.
    **Done on branch ios-shader-cache-windows (win-worker, 2026-11-13):** build/src/apple_engine.rs cross-builds the
    macOS engine too (`nxport-builder macos-engine`), app_icon.rs writes .icns, the release ships macos/nxport beside
    the Windows builder. Not yet run on a Mac: the zip the Windows builder makes needs a Mac to open it.

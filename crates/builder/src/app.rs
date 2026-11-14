@@ -147,7 +147,7 @@ impl Target {
     #[cfg(target_os = "macos")]
     pub const ALL: &'static [Target] = &[Target::MacApp, Target::Ipa, Target::WindowsApp];
     #[cfg(windows)]
-    pub const ALL: &'static [Target] = &[Target::WindowsApp, Target::Ipa];
+    pub const ALL: &'static [Target] = &[Target::WindowsApp, Target::MacApp, Target::Ipa];
     #[cfg(not(any(target_os = "macos", windows)))]
     pub const ALL: &'static [Target] = &[];
 
@@ -160,7 +160,7 @@ impl Target {
             return None;
         }
         Some(match self {
-            Target::MacApp | Target::Ipa => "Builds on a macOS host: the Metal shader compiler, actool / iconutil and codesign.",
+            Target::MacApp | Target::Ipa => "Builds on a macOS host (Apple's Metal shader compiler and codesign), or on Windows (the engine built from source with LLVM).",
             Target::WindowsApp if cfg!(target_os = "macos") => {
                 "Needs the Windows engine beside the builder (windows/nxport.exe): a release of the builder carries it."
             }
@@ -192,9 +192,9 @@ impl Target {
     /// Whether the app's shaders can be translated when it is built (Windows: windows::PRECOMPILES_SHADERS).
     pub fn prebuilds_shaders(self) -> bool {
         match self {
-            Target::MacApp => true,
-            // The Metal shader compiler is Apple's: on Windows the iOS app translates shaders as the game loads them.
-            Target::Ipa => cfg!(target_os = "macos"),
+            // On a Mac as compiled metallibs; on Windows (no Metal compiler) as packed Metal source the app compiles as the
+            // game first uses each stage, without translating it.
+            Target::MacApp | Target::Ipa => true,
             Target::WindowsApp => crate::windows::PRECOMPILES_SHADERS,
         }
     }
@@ -247,6 +247,19 @@ pub fn progress(job: &Mutex<Job>, sub: impl Into<String>, done: usize, total: us
     j.sub_done = done;
     j.sub_total = total;
     j.sub_frac = j.sub_frac.max(frac.min(1.0));
+}
+
+/// Sets the running step's sub-step for a build of `phases` phases in order: `done` of `total` in phase `phase`.
+#[allow(dead_code)]
+pub fn phase_progress(job: &Mutex<Job>, sub: String, phase: usize, phases: usize, done: usize, total: usize) {
+    let in_phase = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
+    progress(job, sub, done, total, (phase as f32 + in_phase) / phases.max(1) as f32);
+}
+
+/// Threads a shader cache build uses: all but two of the CPU's, at least two.
+#[allow(dead_code)]
+pub fn shader_jobs() -> usize {
+    std::thread::available_parallelism().map_or(6, |n| n.get()).saturating_sub(2).max(2)
 }
 
 /// Stop after the running step.
@@ -318,6 +331,8 @@ pub fn data_dir() -> PathBuf {
 fn default_out_dir(target: Target) -> String {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
     match target {
+        // On Windows the app's zip, to carry to the Mac.
+        Target::MacApp if cfg!(windows) => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
         Target::MacApp => home.map(|h| h.join("Applications").display().to_string()).unwrap_or_default(),
         Target::Ipa => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
         Target::WindowsApp => home.map(|h| h.join("Desktop").display().to_string()).unwrap_or_default(),
@@ -1000,18 +1015,17 @@ impl Builder {
             job: job.clone(),
         };
         let mut steps: Vec<Step> = Vec::new();
-        // The Windows app's steps are the same on every host; the others are the host's.
-        let result = if req.target == Target::WindowsApp || cfg!(windows) {
-            crate::windows::steps(req, &mut steps)
-        } else {
-            #[cfg(target_os = "macos")]
-            let result = crate::apple::steps(req, &mut steps);
-            #[cfg(not(target_os = "macos"))]
-            let result = {
-                let _ = req;
-                Arc::new(Mutex::new(None))
-            };
-            result
+        // Each target has one list of steps, whatever the host that makes it (ios.rs, apple.rs, windows.rs).
+        #[cfg(any(target_os = "macos", windows))]
+        let result = match req.target {
+            Target::Ipa => crate::ios::steps(req, &mut steps),
+            Target::MacApp => crate::apple::steps(req, &mut steps),
+            Target::WindowsApp => crate::windows::steps(req, &mut steps),
+        };
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let result = {
+            let _ = req;
+            Arc::new(Mutex::new(None))
         };
 
         job.lock().unwrap().steps = steps.len();
@@ -1394,10 +1408,12 @@ mod tests {
         let a = parse(&["dump", "--build", "--target", "ios"]).unwrap();
         assert_eq!(a.target, Some(Target::Ipa));
         assert!(parse(&["dump", "--build", "--target", "wii"]).is_err());
-        // Only with --build; and a target another host makes is refused here.
+        // Only with --build; every target this host makes is taken, and one only another host makes (the Windows app on
+        // a Mac) is refused.
         assert!(parse(&["dump", "--target", "ios"]).is_err());
-        let other = if cfg!(target_os = "macos") { "windows" } else { "mac" };
-        assert!(parse(&["dump", "--build", "--target", other]).is_err());
+        for (name, t) in [("windows", Target::WindowsApp), ("mac", Target::MacApp), ("ios", Target::Ipa)] {
+            assert_eq!(parse(&["dump", "--build", "--target", name]).is_ok(), Target::ALL.contains(&t), "{name}");
+        }
     }
 
     #[test]

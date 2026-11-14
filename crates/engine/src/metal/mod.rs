@@ -37,6 +37,7 @@ mod issuer;
 pub mod msl_specialize;
 mod pass_graph;
 mod pass_plan;
+pub mod source_pack;
 mod pass_prof;
 pub(crate) mod pipeline_archive;
 mod programs;

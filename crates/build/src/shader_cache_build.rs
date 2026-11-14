@@ -25,7 +25,7 @@ use crate::msl_specialize::{early_fragment_tests, specialize, uses_cbuf_limits};
 use regex::Regex;
 use sass2spv::ShaderStage;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -214,10 +214,44 @@ struct ChildGuard(u32, std::sync::Arc<std::sync::atomic::AtomicBool>);
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if !self.1.load(std::sync::atomic::Ordering::Relaxed) {
-            unsafe {
-                libc::kill(self.0 as i32, libc::SIGKILL);
-            }
+            kill_pid(self.0);
         }
+    }
+}
+
+/// Ends process `pid` at once.
+fn kill_pid(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    unsafe {
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+            fn TerminateProcess(h: isize, code: u32) -> i32;
+            fn CloseHandle(h: isize) -> i32;
+        }
+        // PROCESS_TERMINATE
+        let h = OpenProcess(0x0001, 0, pid);
+        if h != 0 {
+            TerminateProcess(h, 1);
+            CloseHandle(h);
+        }
+    }
+}
+
+/// Resident set of process `pid` in KB (0 where it is not read: on Windows only the timeout applies).
+fn rss_kb(pid: u32) -> u64 {
+    #[cfg(unix)]
+    {
+        let rss = Command::new("ps").args(["-o", "rss=", "-p", &pid.to_string()]).output().ok();
+        rss.and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok()).unwrap_or(0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        0
     }
 }
 
@@ -249,14 +283,13 @@ fn run_timeout(mut cmd: Command, max_rss_mb: u64, timeout_secs: u64) -> Result<O
                 }
                 if start.elapsed().as_secs() >= timeout_secs {
                     *timed_out.lock().unwrap() = true;
-                    unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+                    kill_pid(pid);
                     return;
                 }
-                let rss = Command::new("ps").args(["-o", "rss=", "-p", &pid.to_string()]).output().ok();
-                let kb = rss.and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok()).unwrap_or(0);
+                let kb = rss_kb(pid);
                 if kb / 1024 > max_rss_mb {
                     *killed.lock().unwrap() = Some(kb / 1024);
-                    unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+                    kill_pid(pid);
                     return;
                 }
             }
@@ -808,6 +841,67 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
     std::fs::write(path, f)
 }
 
+/// The shader cache as source (an app built without Apple's Metal compiler): from a translate-only build's output in
+/// `msl_dir` (its index.txt and <entry>.metal files), the stages `list` names (a pipeline list; all without one) go into
+/// `out`/source.pack (nxport::metal::source_pack) and their records into `out`/source/index.txt. Returns (stages
+/// packed, pack bytes).
+/// `arg_variants`: keep each stage's argument-buffer variants (crate::arg_kernels, appended last), which only an app with
+/// the arg-buffers setting on uses: without them the pack is about a third smaller.
+pub fn pack_source(msl_dir: &Path, list: Option<&Path>, out: &Path, arg_variants: bool) -> Result<(usize, u64), String> {
+    let used: Option<HashSet<String>> = list.map(|l| {
+        let text = std::fs::read_to_string(l).unwrap_or_default();
+        text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter(|w| w.len() == 18 && w.starts_with("s_"))
+            .map(str::to_string)
+            .collect()
+    });
+    let index = std::fs::read_to_string(msl_dir.join("index.txt")).map_err(|e| format!("{}: {e}", msl_dir.display()))?;
+    let mut kept = String::from("# nxport shader cache index v1\n");
+    let mut sources: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut record: Vec<&str> = Vec::new();
+    for line in index.lines().filter(|l| !l.starts_with('#')) {
+        record.push(line);
+        if line != "E" {
+            continue;
+        }
+        // S <weak> <size> <full> <stage> <instance id>: the entry point is s_<full>.
+        let entry = record.first().and_then(|s| s.split(' ').nth(3)).map(|full| format!("s_{full}"));
+        if let Some(entry) = entry.filter(|e| used.as_ref().is_none_or(|u| u.contains(e))) {
+            let cut = |mut s: Vec<u8>| {
+                if !arg_variants {
+                    let m = crate::arg_kernels::MARKER.as_bytes();
+                    if let Some(i) = s.windows(m.len()).position(|w| w == m) {
+                        s.truncate(i);
+                    }
+                }
+                s
+            };
+            let have = sources.contains_key(&entry)
+                || std::fs::read(msl_dir.join(format!("{entry}.metal"))).map(|s| sources.insert(entry.clone(), cut(s))).is_ok();
+            if have {
+                for l in &record {
+                    kept.push_str(l);
+                    kept.push('\n');
+                }
+            }
+        }
+        record.clear();
+    }
+    let dir = out.join("source");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::write(dir.join("index.txt"), kept).map_err(|e| e.to_string())?;
+    let mut stages: Vec<(String, Vec<u8>)> = sources.into_iter().collect();
+    let n = stages.len();
+    let pack = out.join("source.pack");
+    nxport::metal::source_pack::write(&pack, &mut stages)?;
+    // Read back whole before it goes into an app: a stage the app cannot read would be translated again on the phone.
+    let read = nxport::metal::source_pack::Pack::open(&pack).ok_or_else(|| format!("{}: unreadable", pack.display()))?;
+    if let Some((name, _)) = stages.iter().find(|(name, src)| read.source(name).is_none_or(|s| s.as_bytes() != src.as_slice())) {
+        return Err(format!("{}: {name} does not read back", pack.display()));
+    }
+    Ok((n, std::fs::metadata(&pack).map_or(0, |m| m.len())))
+}
+
 /// Runs `f` over `items` on `jobs` threads, results in input order. The threads get 64 MiB stacks (reserved, used as
 /// needed): translating a shader to MSL recurses deeper than the default 2 MiB allows in a debug build.
 fn parallel_progress<T: Sync, R: Send>(
@@ -1014,7 +1108,11 @@ pub fn build(o: &Options) -> Result<(), String> {
             let src = stage_metal_path(&work, tag);
             let _ = std::fs::rename(src, msl_out.join(format!("{}.metal", rec.entry)));
         }
-        println!("[+] wrote {} MSL files to {}", prepared.len(), msl_out.display());
+        // With its index, the set is a source cache: the engine compiles a stage from it the first time the game uses
+        // the stage (an app built without Apple's Metal compiler, e.g. an .ipa built on Windows).
+        let recs: Vec<&StageRecord> = prepared.iter().map(|(_, _, rec, _)| rec).collect();
+        write_index(&msl_out.join("index.txt"), &recs).map_err(|e| e.to_string())?;
+        println!("[+] wrote {} MSL files and their index to {}", prepared.len(), msl_out.display());
         return Ok(());
     }
     println!("[+] MSL prepared for {} stages ({:.0}s), compiling Metal in batches of {COMPILE_BATCH}", prepared.len(), t0.elapsed().as_secs_f64());

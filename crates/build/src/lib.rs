@@ -3,9 +3,9 @@
 // (lift, compiled with zig cc on Windows).
 
 // Kernels the Metal shader cache build appends (shader_cache_build), on the hosts that build it.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod arg_kernels;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 mod batch_kernels;
 /// The app icon from the dump, for every target.
 pub mod app_icon;
@@ -29,15 +29,15 @@ pub mod pe_exports;
 pub mod pipeline_archive;
 pub mod ppm2png;
 mod sarc;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub mod shader_cache_build;
 pub mod tiny_kernels;
 pub mod translation;
 #[cfg(nx_runtime)]
 pub mod vulkan_precompile;
-// The iOS engine cross-built on Windows.
+// The engines for iOS and macOS, cross-built on Windows without Apple's tools.
 #[cfg(windows)]
-pub mod ios_engine;
+pub mod apple_engine;
 // The Windows app (an app folder with the lifted guest library) and the C compiler it is built with, on any host.
 pub mod winapp;
 pub mod zig;
