@@ -630,7 +630,7 @@ impl Builder {
             ui.checkbox("Precompile shaders", &mut self.prebuild_shaders);
             tip(ui, "Translates the game's shader stages into the app's shader cache now, and compiles its listed pipelines, so the game does not stall the first time it draws with them. Off, the app translates them as it meets them, and keeps them.");
         }
-        if matches!(self.target, Target::WindowsApp | Target::Ipa) {
+        {
             next(ui);
             ui.checkbox("Include game files", &mut self.bundle_game);
             let off = if self.target == Target::Ipa { "they are copied into the app's Documents/Game." } else { "settings.toml names the dump, which must stay where it is." };
@@ -825,7 +825,7 @@ impl Builder {
         let build = BuildPreset {
             target: Some(self.target),
             out: if self.out_dir.trim().is_empty() { None } else { Some(self.out_dir.trim().to_string()) },
-            bundle_game: if self.target == Target::Ipa || self.target == Target::WindowsApp { Some(self.bundle_game) } else { None },
+            bundle_game: Some(self.bundle_game),
             entitlements: if self.target == Target::Ipa { Some(self.entitlements) } else { None },
             prebuild_shaders: Some(self.prebuild_shaders),
         };
