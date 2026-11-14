@@ -83,6 +83,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **TXD gradient order (maxwell.md 2.13), branch txd-gradients, held for after the release (2026-11-14).** A 2D TXD's
+  gradient registers are per coordinate (du/dx, du/dy, dv/dx, dv/dy); our port of Ryujinx took them as (dPdx, dPdy):
+  terrain mip levels from the wrong derivatives, patches crawling in the Depths (totk-pc-recomp, 1.4.3). Checked here: a
+  capture of the user's save (surface, frame 4500) replays to the identical final image with and without the fix, so no
+  regression there and no effect either. To merge it: a Depths capture, replayed with both (gpu-replay --record with
+  one, --all with the other), and the Depths by eye (mac-worker has a Depths save).
+
 - **D16 clears against rasterized depth on Vulkan (mac-worker's Metal finding, 2026-11-13, 54cc5b0).** On Apple GPUs a
   Depth16Unorm clear truncates (0.5 -> 32767) while rasterized depth rounds (32768), so an EQUAL draw at the cleared z
   fails; TotK clears two D16 targets to 0.5 every frame in Hateno and selects regions with EQUAL (tied to blocks in
