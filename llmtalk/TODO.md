@@ -30,6 +30,9 @@ left out); 2ccaf73 TotK exact mouse aim on 1.1.2 and on native engines. To check
    (Metal and Vulkan, e91df2e); the shader progress bar shows with async shaders on and an empty pipeline cache, and the
    perf overlay (Cmd-O) still draws (2f61d11); every menu item and key as before (c5e0bc2, compared in code only).
 9. iPhone: the screen no longer auto-locks mid-game (e99e1a6); log.txt has "Device: thermal state ..." lines (9689895).
+10. App sizes (7bb682a, de77ce6): the TotK .ipa's metallibs 1479 -> 1010 MB and the Mac app's shader cache 4.0 -> 2.0 GB.
+    The next build of each game re-translates its shaders once (the translation fingerprint changed). The Mac app still
+    copies the whole game dump (17 GB) into itself: your call whether it should point at the dump instead.
 Also unpushed from the Mac: 9878ced (Metal waits for a compiling pipeline unless its targets are drawn every frame,
 async compilation only), 187179d (a Mac lifts the game to the same C as Windows: PARITY #2's loader side).
 Found tonight, not regressions: the frame capture misses some lighting input (replay vs live 18-26% of pixels in sun,
