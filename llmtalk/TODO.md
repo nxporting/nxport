@@ -22,17 +22,27 @@ Must do, in order:
    window resize changes the aspect, mouse aim (camera and bow), Cmd-O overlay, memory in Activity Monitor ~3 GB.
 4. iPhone: install a Mac-built .ipa (pipeline archive now real, 165 MB) and, if you can, a Windows-built one; play a
    few minutes; the screen should not auto-lock; send log.txt if anything is off.
-5. Tag v<version> to publish (publishing is your call), with the release text (security warnings on first launch).
+5. Release text before tagging (win-worker): Windows may warn (unsigned exes; Defender has flagged nxport.exe as
+   Trojan:Win32/Bearfoos.A!ml before, a machine-learning false positive): say so, and how to report one
+   (https://www.microsoft.com/wdsi/filesubmission, "Incorrectly detected"); no exclusions or binary tricks. macOS: the
+   archive is unsigned and not notarized; the text already gives xattr -dr com.apple.quarantine.
+6. Tag v<version> to publish (publishing is your call). No secrets or repo settings needed: release.yml uses only
+   GITHUB_TOKEN, contents: write in the publish job alone.
 
 Your call, optional for the first release:
-6. Upload TotK's Windows PGO profiles (nxport-build/pgo-kit/profiles/*.profdata.gz on the Windows PC) to the
+7. Upload TotK's Windows PGO profiles (nxport-build/pgo-kit/profiles/*.profdata.gz on the Windows PC) to the
    nxporting/profiles release: +7% (1.0.0) / +10% (1.1.2) on Windows; builds work without them.
-7. Licensing review of symphonia (MPL-2.0) and the H.264 / AAC patent question (noted on 2026-11-06).
-8. Defaults to decide: --tile-feedback (decals read the tile: fewer passes on the phone, slightly different cliff
+8. Licences (your call; the agents' notes, not legal advice): symphonia is MPL-2.0, fine with its texts shipped (they
+   are, .github/notices). openh264 is built from source by openh264-rs, so Cisco's patent licence (their binaries only)
+   does not cover it: the H.264 patent question is yours to weigh; AAC the same if decoded. Skim the dry run's
+   THIRD_PARTY_LICENSES.txt (generated for all three targets).
+9. Code signing for Windows (SignPath or a certificate): after the release.
+10. Defaults to decide: --tile-feedback (decals read the tile: fewer passes on the phone, slightly different cliff
    decals) and --file-backed-memory (iPhone memory kills: 4.8 -> 2.3 GB on the Mac) are off; turn either on after a
    phone test.
 
-After the release (not blocking): the remaining morning items below (cheats with a real data cheat, a movie to the end,
+After the release (not blocking): cheats with a data-writing cheat plus the Cheats menu in a window (Windows or Mac),
+the remaining morning items below (a movie to the end,
 macOS Game Mode A/B, Ultrahand / Fuse effects after the D16 fix), win-worker's parked TXD gradient fix (branch
 txd-gradients).
 
