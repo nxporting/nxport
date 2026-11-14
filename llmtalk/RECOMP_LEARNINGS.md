@@ -51,6 +51,7 @@ No fix for the 1.0.0 map stamp flicker (they support 1.1.0 and later).
 
 ## 3. Other niceties
 
+- **Taken 2026-11-13 (win-worker):** maxwell.md 3.10 (BFE / BFI past bit 31, a20058f), 3.11 (SHF by 0, a20058f), 3.2 (FMZ, cb3df4c). Checked on NVIDIA only; mac-worker compares the Depths on Metal. Still to check from that table: 3.4 (warp size: no required subgroup size on AMD), 3.5 (discard as demote), 3.12 (registers read before written: zero-init on Mesa drivers only).
 - Bug-hunting references: `docs/agents/symptoms.md` (symptom -> cause -> first check); `docs/maxwell.md` (Maxwell/NVN vs Vulkan and known TotK bugs: gather rounding on AMD, D16 clear / EQUAL squares, 0.5 border colour for grass, BFE past bit 31, SHF by 0); translator patches `tools/xlate/patches/0012, 0013, 0016` (undefined SPIR-V, Depths terrain): check sass2spv against them.
 - Frame critical-path recorder (`TOTK_CRIT`, `tools/crit_path.py`): walks back from each present through the wake chain, charges each interval to a thread and state; fits our CPU-bound hand-off problem.
 - Sched trace (sleep asked vs taken), flight recorder, crash reports naming driver frames and C++ exceptions, replay state self-checks.
