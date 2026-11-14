@@ -178,6 +178,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
             || n == "pipelines.txt"
             || (n.starts_with("shaders_") && n.ends_with(".metallib"))
             || (n.starts_with("pipelines") && n.ends_with(".metalar"))
+            || n == crate::pipeline_archive::SDK_FILE
             || n == "source.pack"
         {
             copy(&e.path(), &app.join("shader_cache").join(&n))?;
@@ -280,6 +281,9 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     if !packaged_any_mods {
         edits.files.no_mods = Some(true);
     }
+    // iOS ends an app at its memory limit; written pages of file-backed guest memory can be written out instead
+    // (TotK on the Mac: footprint 4.8 -> 2.3 GB). On unless the build chose otherwise.
+    edits.guest.file_backed_memory.get_or_insert(true);
     if app.join("fonts").is_dir() {
         edits.files.shared_fonts = Some(PathBuf::from("fonts"));
     }
