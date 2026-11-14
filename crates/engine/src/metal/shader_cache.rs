@@ -562,6 +562,14 @@ pub unsafe fn lookup(data: u64) -> Option<&'static CachedStage> {
     Some(st)
 }
 
+/// The compute stages of the cache index (entry names, each once): their pipelines need no draw state, so all of them
+/// can be made before the game dispatches them (translated::queue_compute).
+pub fn compute_entries() -> Vec<&'static str> {
+    let Some(idx) = index() else { return Vec::new() };
+    let mut seen = std::collections::HashSet::new();
+    idx.stages.iter().filter(|s| s.kind == StageKind::Compute && seen.insert(s.entry.as_str())).map(|s| s.entry.as_str()).collect()
+}
+
 /// A stage of the cache index by its entry name (`s_<hash>`).
 pub fn by_entry(entry: &str) -> Option<&'static CachedStage> {
     static M: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
