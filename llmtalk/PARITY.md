@@ -27,14 +27,26 @@ iOS Metal.
 
 ## Gaps
 
-1. **Windows host makes the macOS app: built, not yet run on a Mac** (branch parity1-macos-on-windows). One list of
-   steps in builder/src/apple.rs: on Windows the engine cross-built (build/src/apple_engine.rs, Os::MacOs: stub .tbd
-   libraries, ld64.lld, LC_BUILD_VERSION macos 11.0 sdk 12.0 so x18 is kept), shaders packed as Metal source (shared
-   with the .ipa), the bundle sealed by adhoc_sign (Contents/ layout) and zipped with Unix modes. Left: launch the zip's
-   app on a Mac (unzip, xattr -d com.apple.quarantine if downloaded, open); ship macos/nxport in the Windows release
-   archive (release.yml builds only the iOS engine; pack.rs finds a release engine only as nxport beside the builder).
+1. **Windows host makes the macOS app: built, not yet run on a Mac.** One list of steps in builder/src/apple.rs: on
+   Windows the engine cross-built (build/src/apple_engine.rs, Os::MacOs: stub .tbd libraries, ld64.lld,
+   LC_BUILD_VERSION macos 11.0 sdk 12.0 so x18 is kept), shaders packed as Metal source (shared with the .ipa), the
+   bundle sealed by adhoc_sign and zipped with Unix modes.
+   **Done on branch ios-shader-cache-windows (win-worker, 2026-11-13):** build/src/apple_engine.rs cross-builds the
+   macOS engine too (`nxport-builder macos-engine`), app_icon.rs writes .icns, the release ships macos/nxport beside
+   the Windows builder. Not yet run on a Mac: the zip the Windows builder makes needs a Mac to open it.
 2. **Mac host cannot make the Windows app.** Missing: the lift on a Mac host (lift.rs needs the engine's nx_runtime
    loader there), zig cc targeting x86_64-windows from macOS, the Windows engine exe cross-built. Unclaimed.
+   **Started 2026-11-13 (win-worker, 8b18693):** zig for a macOS host compiling for Windows (zig::windows_cc), winapp
+   takes windows/nxport.exe beside the builder and carries SDL3.dll; both modules build on every host. Left:
+   (1) lifting on a Mac must patch as Windows does: native_rewrites() is `cfg!(nx_native) || FOR_NATIVE`, so a Mac lift
+   gets the native rewrites (asked mac-worker to take the loader side; check: its lifted C hashes equal Windows');
+   (2) done: lift_overlay reads the base library's tables from the file (pe_exports.rs); (3) builder/src/windows.rs compiled on every host with the Vulkan
+   precompile (and the Windows-host .ipa steps) Windows-only, the engine hash in the lift's inputs taken from
+   winapp::engine(), and WindowsApp added to the Mac's Target::ALL; (4) release.yml: the macOS archive gets
+   windows/nxport.exe (the Windows job's builder; on branch ios-shader-cache-windows, which already reworks that file).
+   **Status the same night:** (1) mac-worker 187179d, Mac lift equal to Windows' but for its 1.1.2 hook files; (3) done
+   here, the Mac offers the target in mac-worker's 79e2adb; (4) done on the branch (aa00b93, job macos-with-windows).
+   Left: an end-to-end run on a Mac from a dry-run archive.
 3. **TotK exact mouse aim is Windows-only, but the Mac menu shows it.** camera_angles' install_decision and
    install_aim (camera-input test, bow aim) are compiled only into the lifted engine; native gets the yaw hook only, so
    the item does little on a Mac. They call into the engine from the middle of a guest function, which a lifted host
@@ -42,6 +54,8 @@ iOS Metal.
    that keeps the caller-saved registers. Then they go into native images too (native_rewrites decides).
    Also mac-worker: 1.1.2 logs "the camera's angle code was not found" (the finder targets 1.0.0). Suggest mac-worker
    (needs a Mac run).
+   **Done by mac-worker, 2ccaf73 (waiting for the user's push):** native blocks that save the caller-saved registers;
+   1.1.2 sites found by masked patterns. Windows to check 1.1.2 lifted once it is on main.
 4. **The menu tree is declared twice** (host/display.rs for AppKit, host/menu_win.rs for Win32) though state and
    commands are shared (host/menu.rs). Already drifted: "Reset Controls to Defaults" vs "Reset to Defaults", Controls
    a window on Mac and a submenu on Windows. **Done, c5e0bc2 (win-worker):** menu::bar() is the tree as data; both hosts
@@ -62,6 +76,19 @@ iOS Metal.
   needed on a phone: window size, full screen, title-bar fps, mute and volume (the phone's own), mouse look, touch
   with mouse, the folder and log items. Unclaimed: add the missing ones to Settings.plist and read them in ios_env.rs
   (the same setting names as the desktop menus' live switches, host/live.rs), or decide which a phone should not have.
+  **Done 4057d51:** Frame Rate Limit, Low Latency, Vibration, Vibration Strength, and TotK's two in a game group.
 - Input: controls window / bindings on each host; mouse look on Mac.
+  **Checked 2026-11-13 (win-worker, by reading):** one set of bindings (input::bindings, controls.cfg) on both; the Mac
+  edits them in a Controls window, Windows in an Input > Controls submenu (one tree, menu::bar). Mouse look is the same
+  on both: input::mouse_look_moved from relative mouse motion, F8 frees or holds the mouse, the window takes it again on
+  focus. "Reset to Defaults" sits inside the Windows submenu, so it drops the word Controls the Mac's item needs.
 - Tools: frame history (F9), perf overlay (F10), capture flags, log locations.
+  **Checked 2026-11-13 (win-worker, by reading):** F10 overlay and F8 (free the mouse) are the same on both. F9 captures
+  on both (the Mac's request_capture picks the backend's capture; Windows the frame history). Mac only: space captures
+  too when no game input is bound to it, and F6 switches display pacing (a Metal switch). Windows only: F11 / Alt+Enter
+  full screen (the Mac's is its menu shortcut). Space now captures on Windows too (same rule, display_sdl.rs).
+  Logs: Windows and macOS apps write log.txt (and log.prev.txt) in the game's data folder (nxport > Open Game Data
+  Folder); iOS writes Documents/log.txt, reachable in the Files app (UIFileSharingEnabled).
 - Mods: which kinds work per target (IPS/pchtxt, romfs, exlaunch plugins: not on iOS by decision).
+  Cheats (2026-11-13): data cheats everywhere; code-writing cheats on Windows (live patches) and macOS (a second
+  writable mapping), not on iOS (signed code). Run on Windows in TotK only.

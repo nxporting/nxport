@@ -61,6 +61,10 @@ pub static SITES: Sites = Sites {
     cloth: Some((0x4666ff8, &CLOTH)), // the last words of the page after .bss
     short_cut_bg: Some((0x45596a8, 0x196dee8, 0xc5a4_9707)),
     equip_cooldown: Some((0x6a9834, 0x6a9828)),
+    rotate_check: Some((0x20c31d8, 0xf8de28, 0x20c33c8)), // the update main+0x20c31b8 (vtable main+0x44c2258 + 0x110)
+    // The map screen's update main+0xf15364: the stick at [x20 + 0x120], the old x in w24.
+    map_pan: Some((0xf16b18, frame_time::map_pan_code(0xbd41_2281, 0xbd41_2682, 0x1e27_0300, 0xbd47_3504, 0x9001_4308))),
+    gyro_pitch: Some((0x1ce7038, 0xbd44_32c9, 0x1ce6f40)), // the aim update main+0x1ce6eb0; ldr s9, [x22, #0x430]
 };
 
 /// Screen shapes other than 16:9: 1.1.2's sites at their 1.0.0 addresses (the code matches apart from pc-relative

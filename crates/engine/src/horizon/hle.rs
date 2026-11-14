@@ -992,6 +992,7 @@ pub unsafe extern "C" fn hle_nn_os_SetMemoryHeapSize(size: usize) -> i32 {
         size
     );
     MEMORY_HEAP_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
+    crate::horizon::heap_layout::set_size(size);
     0
 }
 
@@ -1011,6 +1012,7 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
     let mut b = MEMORY_BLOCKS.lock().unwrap();
     if let Some(i) = b.iter().position(|&(a, _)| a == addr) {
         b.remove(i);
+        crate::horizon::heap_layout::freed(addr);
         crate::guest::dirty_track::release(addr, size);
         crate::os::free(addr as *mut u8, size);
     }
@@ -1035,6 +1037,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, siz
         *out_addr = ptr as usize;
     }
     MEMORY_BLOCKS.lock().unwrap().push((ptr as usize, size));
+    crate::horizon::heap_layout::allocated(ptr as usize, size);
     println!(
         "[+] HLE: nn::os::AllocateMemoryBlock({} MB) allocated at {:p}",
         size / (1024 * 1024),

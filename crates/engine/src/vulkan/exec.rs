@@ -187,6 +187,11 @@ pub struct Ctx {
     /// present of the frame that drew them (the Metal backend's writeback_pass waits one more frame for its GPU work;
     /// submits here complete before they return). Last frame each storage was rendered in; this frame's candidates.
     rt_history: HashMap<usize, u64>,
+    /// The last two frames each render target (by storage address) was drawn in, the latest first: whether a pass's
+    /// targets are drawn every frame (targets_recur).
+    rt_frames: HashMap<usize, (u64, u64)>,
+    /// The frame rt_frames was last pruned in.
+    rt_frames_pruned: u64,
     writeback_rts: Vec<NvnTexture>,
     /// Candidates of presented frames, read by the next submit; that submit's reads (texture, level, copy, bytes) and
     /// the images whose guest bytes it rewrites (settled again once it completed).
@@ -702,6 +707,8 @@ impl Ctx {
             bc_proxies: Default::default(),
             bc_pending: Vec::new(),
             rt_history: Default::default(),
+            rt_frames: Default::default(),
+            rt_frames_pruned: 0,
             writeback_rts: Vec::new(),
             pending_rt_reads: Vec::new(),
             rt_reads: Vec::new(),
@@ -1108,6 +1115,16 @@ impl Ctx {
         if self.rt_history.len() > 1 << 14 {
             self.rt_history.retain(|_, &mut v| v + 600 > f);
         }
+    }
+
+    /// Whether one of the current pass's targets was drawn in the previous frame as well: a target drawn every frame,
+    /// where a draw skipped while its pipeline compiles is drawn again next frame. A target drawn now and then (an item
+    /// icon, a cloud or fog layer made once) may never be drawn again: its draws wait for their pipeline (draw.rs).
+    pub(super) fn targets_recur(&self) -> bool {
+        let Some(pass) = self.pass.as_ref() else { return false };
+        let f = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed) + 1;
+        let drawn_last_frame = |storage: usize| self.rt_frames.get(&storage).is_some_and(|&(last, before)| last + 1 == f || (last == f && before + 1 == f));
+        pass.color_targets.iter().flatten().map(|t| t.0.storage).chain(pass.depth_target.iter().map(|t| t.0.storage)).any(drawn_last_frame)
     }
 
     /// At a present: this frame's write-back candidates are read by the next submit (when this frame's GPU work is
@@ -1607,6 +1624,19 @@ impl Ctx {
         let color_targets: Vec<_> = color_targets.into_iter().take(n).map(|t| t.map(whole)).collect();
         let depth_target = depth_target.map(whole);
         self.pass_gen += 1;
+        let f = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed) + 1;
+        for storage in color_targets.iter().flatten().map(|t| t.0.storage).chain(depth_target.iter().map(|t| t.0.storage)) {
+            let e = self.rt_frames.entry(storage).or_insert((0, 0));
+            if e.0 != f {
+                *e = (f, e.0);
+            }
+        }
+        // Once a frame: targets_recur reads only this frame and the one before, so older entries go (a cap pruned on
+        // every pass cost ~5% of the frame once the game had cycled through more targets than it).
+        if self.rt_frames_pruned != f {
+            self.rt_frames_pruned = f;
+            self.rt_frames.retain(|_, v| v.0 + 1 >= f);
+        }
         self.pass = Some(Pass {
             color_targets,
             depth_target,
