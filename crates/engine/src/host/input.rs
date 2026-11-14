@@ -1505,9 +1505,150 @@ pub fn modifier_down(code: u16, flags: usize) -> Option<bool> {
     Some(flags & bit != 0)
 }
 
+// Motion (nn::hid six-axis sensor states): a controller's gyroscope and accelerometer, fused into an orientation. Hosts
+// feed readings in the Switch's axes (the controller flat in front of the player: X right, Y forward, Z up out of its
+// face): acceleration in G (flat: 0, 0, -1), the gyroscope in radians per second. The gyroscope turns the orientation,
+// and the accelerometer, when it reads about 1 G (the controller not being shaken), pulls its tilt toward gravity a
+// little each reading, so the tilt does not drift. Yaw has nothing to correct it, as on the Switch.
+
+/// How much of the tilt error one accelerometer reading corrects (a tuning number; the gyroscope leads).
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+const TILT_CORRECTION: f64 = 0.02;
+
+#[derive(Clone, Copy)]
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+struct Motion {
+    /// The controller's orientation (w, x, y, z): its axes into the world's (Z up).
+    q: [f64; 4],
+    /// The newest gyroscope reading (rad/s) and accelerometer reading (G).
+    gyro: [f64; 3],
+    acc: [f64; 3],
+    /// The gyroscope's turn summed, in turns.
+    angle: [f64; 3],
+    /// The newest gyroscope reading's time, ns.
+    gyro_ns: u64,
+}
+
+static MOTION: [Mutex<Option<Motion>>; MAX_PLAYERS] = [const { Mutex::new(None) }; MAX_PLAYERS];
+
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+fn qmul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+fn qnorm(q: [f64; 4]) -> [f64; 4] {
+    let n = q.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if n > 0.0 { q.map(|v| v / n) } else { [1.0, 0.0, 0.0, 0.0] }
+}
+
+/// The rotation by rotation vector `v` (axis times angle, radians).
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+fn qrot(v: [f64; 3]) -> [f64; 4] {
+    let a = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if a < 1e-12 {
+        return [1.0, 0.0, 0.0, 0.0];
+    }
+    let s = (a / 2.0).sin() / a;
+    [(a / 2.0).cos(), v[0] * s, v[1] * s, v[2] * s]
+}
+
+/// The rotation matrix of `q`: from the controller's axes into the world's (its columns are the controller's X, Y and
+/// Z axes in the world).
+fn qmat(q: [f64; 4]) -> [[f64; 3]; 3] {
+    let [w, x, y, z] = q;
+    [
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
+        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
+        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
+    ]
+}
+
+/// A gyroscope reading for `player` at `ns`: rad/s in the Switch's axes.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+pub fn motion_gyro(player: usize, w: [f64; 3], ns: u64) {
+    let Some(slot) = MOTION.get(player) else { return };
+    let mut g = slot.lock().unwrap();
+    let m = g.get_or_insert(Motion { q: [1.0, 0.0, 0.0, 0.0], gyro: [0.0; 3], acc: [0.0, 0.0, -1.0], angle: [0.0; 3], gyro_ns: ns });
+    let dt = if ns > m.gyro_ns { ((ns - m.gyro_ns) as f64 / 1e9).min(0.1) } else { 0.0 };
+    m.gyro_ns = ns;
+    m.gyro = w;
+    m.q = qnorm(qmul(m.q, qrot(w.map(|v| v * dt))));
+    for i in 0..3 {
+        m.angle[i] += w[i] * dt / std::f64::consts::TAU;
+    }
+}
+
+/// An accelerometer reading for `player`: G in the Switch's axes.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+pub fn motion_accel(player: usize, a: [f64; 3]) {
+    let Some(slot) = MOTION.get(player) else { return };
+    let mut g = slot.lock().unwrap();
+    let Some(m) = g.as_mut() else { return };
+    m.acc = a;
+    let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    if !(0.9..1.1).contains(&n) {
+        return;
+    }
+    // Gravity where the orientation says it is, in the controller's axes, against where the accelerometer reads it:
+    // turn by a share of the angle between them.
+    let r = qmat(m.q);
+    let down = [-r[2][0], -r[2][1], -r[2][2]];
+    let meas = a.map(|v| v / n);
+    let axis = [meas[1] * down[2] - meas[2] * down[1], meas[2] * down[0] - meas[0] * down[2], meas[0] * down[1] - meas[1] * down[0]];
+    m.q = qnorm(qmul(m.q, qrot(axis.map(|v| v * TILT_CORRECTION))));
+}
+
+/// A controller with motion went away.
+#[cfg_attr(target_vendor = "apple", allow(dead_code))]
+pub fn motion_clear(player: usize) {
+    if let Some(slot) = MOTION.get(player) {
+        *slot.lock().unwrap() = None;
+    }
+}
+
+/// `player`'s motion as nn::hid's SixAxisSensorState has it: acceleration (G), angular velocity (turns per second),
+/// angle (turns), direction (the controller's X, Y and Z axes in the world, Z up). None without a motion source.
+pub fn motion_state(player: usize) -> Option<([f32; 3], [f32; 3], [f32; 3], [f32; 9])> {
+    let m = (*MOTION.get(player)?.lock().unwrap())?;
+    let r = qmat(m.q);
+    let dir = [r[0][0], r[1][0], r[2][0], r[0][1], r[1][1], r[2][1], r[0][2], r[1][2], r[2][2]].map(|v| v as f32);
+    Some((m.acc.map(|v| v as f32), m.gyro.map(|v| (v / std::f64::consts::TAU) as f32), m.angle.map(|v| v as f32), dir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn motion_turns_with_the_gyroscope_and_levels_with_gravity() {
+        // A quarter turn about up (Z) in one second, in 200 readings: the controller's X axis points along the world's Y.
+        let p = 7;
+        motion_clear(p);
+        let w = std::f64::consts::FRAC_PI_2;
+        for i in 0..=200u64 {
+            motion_gyro(p, [0.0, 0.0, w], i * 5_000_000);
+        }
+        let (_, gyro, angle, dir) = motion_state(p).unwrap();
+        assert!((gyro[2] - 0.25).abs() < 1e-6, "{gyro:?}");
+        assert!((angle[2] - 0.25).abs() < 1e-3, "{angle:?}");
+        assert!(dir[0].abs() < 1e-3 && (dir[1] - 1.0).abs() < 1e-3, "{dir:?}");
+        // Tilted 30 degrees about X while the accelerometer reads flat: the tilt goes, the yaw stays.
+        motion_gyro(p, [0.5236, 0.0, 0.0], 1_005_000_000 + 1_000_000_000);
+        for _ in 0..1000 {
+            motion_accel(p, [0.0, 0.0, -1.0]);
+        }
+        let (_, _, _, dir) = motion_state(p).unwrap();
+        // The controller's Z axis back to the world's up.
+        assert!((dir[8] - 1.0).abs() < 1e-3, "{dir:?}");
+        assert!((dir[1] - 1.0).abs() < 1e-2, "{dir:?}");
+        motion_clear(p);
+    }
 
     /// A touch's start and release each reach the game on exactly one read, however long apart the reads are.
     #[test]

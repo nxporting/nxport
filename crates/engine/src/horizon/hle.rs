@@ -1771,6 +1771,16 @@ impl Default for SixAxisSensorState {
     }
 }
 
+/// The first player's controller motion (host/input.rs), when it has a gyroscope; otherwise the default: flat and still.
+fn with_motion(state: &mut SixAxisSensorState) {
+    if let Some((acc, w, angle, dir)) = crate::host::input::motion_state(0) {
+        state.acceleration = acc;
+        state.angular_velocity = w;
+        state.angle = angle;
+        state.direction = dir;
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorState(out: *mut u8, _handle: *const u32) {
     if out.is_null() {
@@ -1779,6 +1789,7 @@ pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorState(out: *mut u8, _handle:
     let samp = (hle_nn_os_GetSystemTick() / 96_000) as i64; // ~5ms ticks at 19.2MHz
     let mut state = SixAxisSensorState::default();
     state.sampling_number = samp;
+    with_motion(&mut state);
     std::ptr::copy_nonoverlapping(&state, out as *mut SixAxisSensorState, 1);
 }
 
@@ -1797,6 +1808,7 @@ pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorStates(
     for i in 0..n {
         let mut state = SixAxisSensorState::default();
         state.sampling_number = samp - i as i64;
+        with_motion(&mut state);
         std::ptr::copy_nonoverlapping(&state, states_ptr.add(i), 1);
     }
     n as i32
