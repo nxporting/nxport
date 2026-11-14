@@ -1793,7 +1793,7 @@ mod tests {
         let text = words.as_mut_ptr();
         let island_at = unsafe { text.add(16) } as usize;
         let mut island = TrampolineIsland::new(island_at, island_words * 4).unwrap();
-        unsafe { island.patch_text(text, 16 * 4, text as usize + 16 * 4) }.unwrap();
+        island.patch_text(text, 16 * 4, text as usize + 16 * 4).unwrap();
         let used = island.next_offset / 4;
         let stub = &words[16..16 + used];
         let brk = stub.iter().position(|&w| w == BRK_JT).expect("no slow path");
@@ -1828,7 +1828,7 @@ mod tests {
             buf[at..at + code.len()].copy_from_slice(&code);
             let text = unsafe { buf.as_mut_ptr().add(at) };
             let mut island = TrampolineIsland::new(unsafe { text.add(16) } as usize, island_words * 4).unwrap();
-            unsafe { island.patch_text(text, 16 * 4, text as usize + 16 * 4) }.unwrap();
+            island.patch_text(text, 16 * 4, text as usize + 16 * 4).unwrap();
             let used = island.next_offset / 4;
             buf[at + 16..at + 16 + used].to_vec()
         };
