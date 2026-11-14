@@ -931,10 +931,15 @@ struct Decoder {
     decode_slow: u64,
 }
 /// One line on how fast a movie decoded, so a stutter can be told apart from a decoder that cannot keep up.
+/// Printed every 300 frames too (so far), so a log cut short by quitting mid-movie still has it.
 fn report_decode(d: &mut Decoder) {
+    print_decode(d, "");
+    (d.decodes, d.decode_us, d.decode_max_us, d.decode_slow) = (0, 0, 0, 0);
+}
+fn print_decode(d: &Decoder, so_far: &str) {
     if d.is_video && d.decodes > 0 {
         println!(
-            "[+] movie: {} video frames ({}x{}) decoded in {:.1} ms on average, the longest {:.1} ms, {} over 33.3 ms",
+            "[+] movie{so_far}: {} video frames ({}x{}) decoded in {:.1} ms on average, the longest {:.1} ms, {} over 33.3 ms",
             d.decodes,
             d.width,
             d.height,
@@ -943,7 +948,6 @@ fn report_decode(d: &mut Decoder) {
             d.decode_slow
         );
     }
-    (d.decodes, d.decode_us, d.decode_max_us, d.decode_slow) = (0, 0, 0, 0);
 }
 /// The implementation, or None after the destructor ran (methods then return Status_NullDecoder).
 unsafe fn dec<'a>(this: *mut usize) -> Option<&'a mut Decoder> {
@@ -1306,6 +1310,9 @@ unsafe extern "C" fn d_send_input(
             d.decode_us += us;
             d.decode_max_us = d.decode_max_us.max(us);
             d.decode_slow += (us > 33_333) as u64;
+            if d.decodes % 300 == 0 {
+                print_decode(d, " (so far)");
+            }
         }
     }
     d.n_in += 1;
