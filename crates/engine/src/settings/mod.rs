@@ -103,6 +103,8 @@ group! {
     Files "Files" {
         /// Game dump: a directory with ExeFS/ and RomFS/
         game_dir: Option<PathBuf> = None,
+        /// The game an app was built for (16 hex digits): without its files, the app asks for them and remembers them
+        title_id: Option<String> = None,
         /// Mods in Ryujinx layout (romfs/, exefs/) (default: the game's data directory's mods/)
         mods_dir: Option<PathBuf> = None,
         /// Load no mods

@@ -227,7 +227,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
 /// Runs a game: resolves the settings from `layers` (above the platform's, the installation's and the game's profiles),
 /// loads and patches its code, then runs it. Must be called on the main thread; returns only on failure.
 pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    let s = resolve_settings(layers);
+    let s = with_game_files(layers)?;
     if s.graphics.gpu == settings::GpuBackend::Null {
         return Err("--gpu=null: only where guest code is lifted".into());
     }
@@ -629,6 +629,30 @@ fn guest_chain(
     Ok(())
 }
 
+#[cfg(nx_native)]
+/// The settings of a run; when they name no folder with the game's files (an app built without them, on another
+/// computer, or the folder moved) the player is asked for one (host/game_files.rs), remembered for the game.
+fn with_game_files(mut layers: Vec<settings::SettingsPatch>) -> Result<settings::Settings, String> {
+    let s = resolve_settings(layers.clone());
+    let title = s.files.title_id.as_deref().and_then(|t| u64::from_str_radix(t, 16).ok());
+    if s.files.game_dir.as_deref().is_some_and(|d| host::game_files::holds(d, title)) {
+        return Ok(s);
+    }
+    let missing = || match &s.files.game_dir {
+        Some(d) => format!("no game files at {} (a folder with ExeFS and RomFS)", d.display()),
+        None => "no game files: --game-dir=<a folder with ExeFS and RomFS>".into(),
+    };
+    let asked = if s.display.headless { None } else { host::game_files::ask(title, "") };
+    let Some(dir) = asked else { return Err(missing()) };
+    if let Some(t) = game::title_id_of(&dir) {
+        config::remember_for(t, |p| p.files.game_dir = Some(dir.clone()));
+    }
+    let mut picked = settings::SettingsPatch::default();
+    picked.files.game_dir = Some(dir);
+    layers.push(picked);
+    Ok(resolve_settings(layers))
+}
+
 #[cfg(nx_runtime)]
 /// The settings a run with `layers` uses: the platform's profile, where the program is installed, the game's profile
 /// (found from the dump the other layers name), then above it the settings the app was built with or the iOS Settings
@@ -655,7 +679,10 @@ fn resolve_settings(layers: Vec<settings::SettingsPatch>) -> settings::Settings 
             .chain(user.iter().cloned())
             .chain(layers.iter().cloned()),
     );
-    let title_id = provisional.files.game_dir.as_deref().and_then(game::title_id_of);
+    // From the game's files; else the title an app was built for (its files picked later, remembered per title).
+    let title_id = provisional.files.game_dir.as_deref().and_then(game::title_id_of).or_else(|| {
+        provisional.files.title_id.as_deref().and_then(|t| u64::from_str_radix(t, 16).ok())
+    });
     let game_layers = title_id
         .and_then(profile::for_title)
         .map(|p| profile::layers(p, PLATFORM))

@@ -116,20 +116,21 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     if !any_mods {
         settings.files.no_mods = Some(true);
     }
-    // Made on another OS (a Mac): this host's paths mean nothing on the PC the app runs on, so the game goes in and
-    // host paths (system data) stay out.
+    // Without its files the app asks for them by this (host/game_files.rs).
+    settings.files.title_id = Some(format!("{tid:016x}"));
+    // Made on another OS (a Mac): this host's paths mean nothing on the PC the app runs on; the app asks for the game.
     let cross = !cfg!(windows);
     if cross {
         settings.files.system_data_dir = None;
     }
-    if o.bundle_game || cross {
+    if o.bundle_game {
         println!("  Copying the game files (ExeFS, RomFS)");
         for d in ["ExeFS", "RomFS"] {
             if o.dump.join(d).is_dir() {
                 copy_tree(&o.dump.join(d), &o.app.join("Dump").join(d))?;
             }
         }
-    } else {
+    } else if !cross {
         // Some mounted file systems cannot give a final path (ERROR_UNRECOGNIZED_VOLUME), though they read as any other.
         let dump = std::fs::canonicalize(o.dump)
             .or_else(|_| std::path::absolute(o.dump))
