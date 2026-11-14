@@ -95,13 +95,15 @@ pub(super) fn load(device: &Device) -> bool {
             if list.is_empty() {
                 return None;
             }
-            // An archive serves only the GPU it was compiled for (the builder's iPhone choice): this GPU's name.
+            // An archive serves only the GPU and the OS's shader compiler it was made for (the builder's iPhone choice
+            // and its Xcode): this GPU's name and the OS version.
             println!(
-                "[+] Pipelines: {} binary archives ({} MB) loaded in {:.1} s, for this GPU: {}",
+                "[+] Pipelines: {} binary archives ({} MB) loaded in {:.1} s, for this GPU: {}, OS {}",
                 list.len(),
                 bytes >> 20,
                 t0.elapsed().as_secs_f64(),
-                device.architecture().name()
+                device.architecture().name(),
+                os_version()
             );
             Some(Archives(NSArray::from_retained_slice(&list)))
         })
@@ -128,6 +130,17 @@ unsafe impl Send for SendArchive {}
 struct SendDevice(Device);
 // SAFETY: MTLDevice is thread-safe.
 unsafe impl Send for SendDevice {}
+
+/// The OS's product version (kern.osproductversion), e.g. "18.4".
+fn os_version() -> String {
+    let mut buf = [0u8; 32];
+    let mut len = buf.len();
+    let r = unsafe { libc::sysctlbyname(c"kern.osproductversion".as_ptr(), buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) };
+    if r != 0 {
+        return "?".into();
+    }
+    String::from_utf8_lossy(&buf[..len.saturating_sub(1)]).into_owned()
+}
 
 /// A library function specialised with `constants`, from the archives when they have it.
 pub(super) fn function(

@@ -147,9 +147,41 @@ pub(super) static ASYNC_WAITED_US: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// Pipeline thread work: pipelines draws wait for, then the pipeline list's (pipeline_list::precompile).
+type ComputePipe = Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>;
+type ComputeCell = std::sync::Arc<OnceLock<Result<ComputePipe, String>>>;
+
+/// The compute pipeline of a kernel, shared by dispatches and the precompile: whoever comes first makes it, the other
+/// waits for it.
+fn compute_cell(entry: &str) -> ComputeCell {
+    static M: OnceLock<Mutex<HashMap<String, ComputeCell>>> = OnceLock::new();
+    M.get_or_init(Default::default).lock().unwrap().entry(entry.to_string()).or_default().clone()
+}
+
+/// Queues every compute kernel of the shader cache on the pipeline threads, ahead of the listed render pipelines: they
+/// need no draw state, and the game dispatches many while it loads (a first launch on the iPhone otherwise compiled
+/// them in the middle of loading the world).
+fn queue_compute() {
+    let entries = super::shader_cache::compute_entries();
+    if entries.is_empty() {
+        return;
+    }
+    let (q, cv) = pipe_queue();
+    let mut g = q.lock().unwrap();
+    g.compute_n += entries.len();
+    crate::gpu::pipeline_list::listed_queued(entries.len());
+    g.compute.extend(entries);
+    drop(g);
+    cv.notify_all();
+}
+
 #[derive(Default)]
 struct PipeQueue {
     draws: std::collections::VecDeque<SendJob>,
+    /// Compute kernels to make (queue_compute), before the listed render pipelines.
+    compute: std::collections::VecDeque<&'static str>,
+    compute_n: usize,
+    compute_done: usize,
+    compute_ns: u64,
     listed: std::collections::VecDeque<SendJob>,
     /// Listed pipelines queued and built, failures, compile time (for the summary when the list is done).
     listed_n: usize,
@@ -172,6 +204,12 @@ fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
                         loop {
                             if let Some(j) = g.draws.pop_front() {
                                 break (j, false);
+                            }
+                            if let Some(entry) = g.compute.pop_front() {
+                                drop(g);
+                                build_compute(entry);
+                                g = q.lock().unwrap();
+                                continue;
                             }
                             if let Some(j) = g.listed.pop_front() {
                                 break (j, true);
@@ -222,6 +260,23 @@ fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
         }
         (Mutex::new(PipeQueue::default()), std::sync::Condvar::new())
     })
+}
+
+/// Makes one queued compute kernel's pipeline (or finds it made by a dispatch).
+fn build_compute(entry: &str) {
+    let t0 = std::time::Instant::now();
+    if let Some(g) = super::GFX.get() {
+        if let Some(lib) = g.shader_lib.as_ref() {
+            let _ = compute_cell(entry).get_or_init(|| g.make_compute(lib, entry));
+        }
+    }
+    crate::gpu::pipeline_list::listed_done();
+    let mut q = pipe_queue().0.lock().unwrap();
+    q.compute_done += 1;
+    q.compute_ns += t0.elapsed().as_nanos() as u64;
+    if q.compute_done == q.compute_n {
+        println!("[+] Pipelines: {} compute kernels made before their first dispatch, {:.1} s of compile time", q.compute_done, q.compute_ns as f64 / 1e9);
+    }
 }
 
 fn build_job(j: &PipeJob) -> Option<Retained<ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>>> {
@@ -280,6 +335,7 @@ fn compile_listed(entries: Vec<crate::gpu::pipeline_list::Entry>) {
     if let Some(g) = super::GFX.get() {
         super::pipeline_archive::load(&g.device);
     }
+    queue_compute();
     let (mut queued, mut skipped) = (0, 0);
     for e in &entries {
         if queue_precompile(e) {
@@ -3192,6 +3248,14 @@ impl Gfx {
     }
 
     /// Runs one draw with the translated shaders. Returns false when it can't (caller falls back).
+    /// The compute pipeline of kernel `entry` (no function constants).
+    fn make_compute(&self, lib: &ShaderLibs, entry: &str) -> Result<ComputePipe, String> {
+        let f = lib.function(entry, &MTLFunctionConstantValues::new()).map_err(|e| format!("compute function {entry}: {e}"))?;
+        self.device
+            .newComputePipelineStateWithFunction_error(&f)
+            .map_err(|e| format!("compute pipeline {entry}: {}", e.localizedDescription()))
+    }
+
     /// nvnCommandBufferDispatchCompute: runs the bound compute program's translated kernel.
     ///
     /// The NVN driver cbuf (c0) of a compute stage holds {u64 address, u32 size} descriptors of the bound uniform
@@ -3240,30 +3304,15 @@ impl Gfx {
         let pipe = match st.compute_pipelines.get(&cached.entry) {
             Some(p) => p.clone(),
             None => {
-                let f = match lib.function(&cached.entry, &MTLFunctionConstantValues::new()) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        warn_once(
-                            format!("kfn-{}", cached.entry),
-                            format!("compute function {}: {}", cached.entry, e),
-                        );
-                        return;
-                    }
-                };
-                match self.device.newComputePipelineStateWithFunction_error(&f) {
+                // Made here, or by the precompile (a dispatch waits for one being made there).
+                let made = compute_cell(&cached.entry).get_or_init(|| self.make_compute(lib, &cached.entry)).clone();
+                match made {
                     Ok(p) => {
                         st.compute_pipelines.insert(cached.entry.clone(), p.clone());
                         p
                     }
                     Err(e) => {
-                        warn_once(
-                            format!("kpipe-{}", cached.entry),
-                            format!(
-                                "compute pipeline {}: {}",
-                                cached.entry,
-                                e.localizedDescription()
-                            ),
-                        );
+                        warn_once(format!("kpipe-{}", cached.entry), e);
                         return;
                     }
                 }
