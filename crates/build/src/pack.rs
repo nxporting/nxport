@@ -132,7 +132,25 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(shader_cache) = opts.shader_cache_dir.filter(|d| d.is_dir()) {
         let dest_cache = resources.join("shader_cache");
         clean_path(&dest_cache)?;
-        place(shader_cache, &dest_cache, opts.symlink_assets)?;
+        if opts.symlink_assets {
+            place(shader_cache, &dest_cache, true)?;
+        } else {
+            // The libraries, index and pipeline archives; not work/, the build's own MSL and AIR (2 GB for TotK), which
+            // the engine never reads.
+            fs::create_dir_all(&dest_cache)?;
+            for entry in fs::read_dir(shader_cache)? {
+                let entry = entry?;
+                if entry.file_name() == "work" {
+                    continue;
+                }
+                let dest = dest_cache.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_dir_recursive(&entry.path(), &dest)?;
+                } else {
+                    copy_file_robust(&entry.path(), &dest)?;
+                }
+            }
+        }
         println!("  Included shader cache from {}", shader_cache.display());
     }
 

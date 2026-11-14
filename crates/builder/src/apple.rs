@@ -15,12 +15,15 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     if prebuild {
         steps.push(extract_stages_step(&job, &dump, &stages));
         let batch_enabled = resolved.graphics.batch;
+        // The argument-buffer variants only for an app that draws through them (about a third of the libraries).
+        let args_enabled = resolved.graphics.arg_buffers;
         {
             let (stages, cache) = (stages.clone(), cache.clone());
             let job = job.clone();
             steps.push(("Building the shader cache".into(), Box::new(move || {
                 let mut translation = nxport_build::translation::get();
                 translation.no_batch_kernels = !batch_enabled;
+                translation.no_arg_kernels = !args_enabled;
                 nxport_build::translation::install(translation);
 
                 let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
