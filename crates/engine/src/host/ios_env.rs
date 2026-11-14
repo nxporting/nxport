@@ -115,8 +115,8 @@ pub fn setup() -> (
     (env, built.into_iter().chain([preferences()]).collect())
 }
 
-/// The Settings app's choices (registered defaults first: Default Mode handheld, on-screen controls on, no swaps, the
-/// display aspect the app was built with).
+/// The Settings app's choices (registered defaults first: Default Mode handheld, on-screen controls on, no swaps). The
+/// screen's shape is fixed: whether a game fills it is the game's own switch (TotK: Dynamic Aspect Ratio).
 fn preferences() -> crate::settings::SettingsPatch {
     let mut prefs = crate::settings::SettingsPatch::default();
     unsafe {
@@ -153,29 +153,8 @@ fn preferences() -> crate::settings::SettingsPatch {
             let _: () = objc2::msg_send![dict, setObject: num_no, forKey: &*k];
         }
 
-        // Display aspect (config::display_aspect): the app's built-in default comes from Info.plist NxportDisplayAspect
-        // (the aspect the app was built with, for an aspect ratio mod), else the game's own aspect.
-        let k_aspect = objc2_foundation::NSString::from_str("display_aspect");
-        let built_aspect = objc2::runtime::AnyClass::get(c"NSBundle").and_then(|cls| {
-            let main: *mut objc2::runtime::AnyObject = objc2::msg_send![cls, mainBundle];
-            if main.is_null() {
-                return None;
-            }
-            let key = objc2_foundation::NSString::from_str("NxportDisplayAspect");
-            let v: *mut objc2::runtime::AnyObject =
-                objc2::msg_send![main, objectForInfoDictionaryKey: &*key];
-            ns_string(v)
-        });
-        let v_aspect =
-            objc2_foundation::NSString::from_str(built_aspect.as_deref().unwrap_or("off"));
-        let _: () = objc2::msg_send![dict, setObject: &*v_aspect, forKey: &*k_aspect];
-
         let _: () = objc2::msg_send![defaults, registerDefaults: dict];
 
-        let val: *mut objc2::runtime::AnyObject =
-            objc2::msg_send![defaults, stringForKey: &*k_aspect];
-        // "off": the game's own aspect.
-        prefs.display.launch_aspect = ns_string(val).and_then(|a| a.parse().ok());
         let val: *mut objc2::runtime::AnyObject =
             objc2::msg_send![defaults, stringForKey: &*k_mode];
         prefs.system.handheld =

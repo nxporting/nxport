@@ -288,13 +288,13 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     }
     settings::save_preset(&app.join("settings.toml"), &edits)?;
     let icons = icons(o.dump, tid, &app)?;
-    let aspect = s.display.launch_aspect.map_or_else(|| "off".to_string(), |a| a.to_string());
-    write(&app.join("Info.plist"), &app_plist(&name, &bundle_id, icons, &aspect))?;
+    write(&app.join("Info.plist"), &app_plist(&name, &bundle_id, icons))?;
     mkdir(&app.join("Settings.bundle/en.lproj"))?;
     write(&app.join("Settings.bundle/en.lproj/Root.strings"), "")?;
     // The Settings app's page: the switches every game has, then the running game's own (host/ios_env.rs reads them).
     let game_settings = if id.profile.is_some_and(|p| p.is_totk()) { include_str!("ipa_files/SettingsTotK.plist") } else { "" };
-    write(&app.join("Settings.bundle/Root.plist"), &include_str!("ipa_files/Settings.plist").replace("<!-- game -->", game_settings.trim_start()))?;
+    let page = include_str!("ipa_files/Settings.plist").replace("<!-- game -->", game_settings.trim_start());
+    write(&app.join("Settings.bundle/Root.plist"), &settings_page_defaults(&page, &s))?;
 
     log(IpaBuildPhase::SigningApp);
     macho::sign(&fw, None)?;
@@ -436,7 +436,39 @@ fn framework_plist(bundle_id: &str) -> String {
     )
 }
 
-fn app_plist(name: &str, bundle_id: &str, icons: String, aspect: &str) -> String {
+/// The Settings page with each choice's default set to what the app is built with. iOS keeps no value for a choice the
+/// player never changed, and the engine then takes the app's own setting (host/ios_env.rs), so a default that differs
+/// would show one thing and do another (the page said 60 fps and Asynchronous Shaders on; the app ran at 30, async off).
+fn settings_page_defaults(page: &str, s: &settings::Settings) -> String {
+    let flag = |on: bool| if on { "<true/>".to_string() } else { "<false/>".to_string() };
+    let fps = if s.system.fps == settings::FpsMode::Stock30 {
+        "30".to_string()
+    } else {
+        // The page's choices: 60, 90 or 120 (none: 60).
+        [60u32, 90, 120].into_iter().find(|&f| f == s.display.frame_limit).unwrap_or(60).to_string()
+    };
+    let defaults = [
+        ("vsync", flag(!s.display.no_vsync)),
+        ("async_shaders", flag(s.graphics.async_pipelines)),
+        ("perf_overlay", flag(s.display.perf_overlay)),
+        ("low_latency", flag(s.display.low_latency)),
+        ("vibration", flag(!s.input.no_rumble)),
+        ("frame_limit", format!("<string>{fps}</string>")),
+        ("totk_dynamic_fps", flag(s.totk.enhancements.dynamic_fps)),
+        ("totk_dynamic_aspect", flag(s.totk.enhancements.dynamic_aspect_ratio)),
+    ];
+    let mut out = page.to_string();
+    for (key, value) in defaults {
+        let re = regex::Regex::new(&format!(
+            r"(<key>Key</key>\s*<string>{key}</string>\s*<key>DefaultValue</key>\s*)(<true/>|<false/>|<string>[^<]*</string>)"
+        ))
+        .unwrap();
+        out = re.replace(&out, |c: &regex::Captures| format!("{}{value}", &c[1])).into_owned();
+    }
+    out
+}
+
+fn app_plist(name: &str, bundle_id: &str, icons: String) -> String {
     format!(
         "{PLIST_HEAD}<key>CFBundleExecutable</key><string>{EXECUTABLE}</string>
 <key>CFBundleIdentifier</key><string>{id}</string>
@@ -460,13 +492,11 @@ fn app_plist(name: &str, bundle_id: &str, icons: String, aspect: &str) -> String
 <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
 <key>GCSupportsGameMode</key><true/>
 <key>LSSupportsGameMode</key><true/>
-<key>NxportDisplayAspect</key><string>{aspect}</string>
 <key>GCSupportedGameControllers</key><array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
 </dict></plist>
 ",
         id = xml(bundle_id),
         name = xml(name),
-        aspect = xml(aspect),
     )
 }
 
@@ -487,4 +517,33 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
 
 fn mod_matches_tid(p: &Path, tid: u64) -> bool {
     !nxport::game::is_other_title_dir(p, tid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_page_shows_what_the_app_does() {
+        let page = format!("{}{}", include_str!("ipa_files/Settings.plist"), include_str!("ipa_files/SettingsTotK.plist"));
+        let default_of = |page: &str, key: &str| {
+            let re = regex::Regex::new(&format!(r"<string>{key}</string>\s*<key>DefaultValue</key>\s*(<true/>|<false/>|<string>[^<]*</string>)")).unwrap();
+            re.captures(page).map(|c| c[1].to_string()).unwrap_or_default()
+        };
+        let mut s = Settings::default();
+        s.system.fps = settings::FpsMode::Stock30;
+        s.graphics.async_pipelines = false;
+        s.totk.enhancements.dynamic_fps = false;
+        let out = settings_page_defaults(&page, &s);
+        assert_eq!(default_of(&out, "frame_limit"), "<string>30</string>");
+        assert_eq!(default_of(&out, "async_shaders"), "<false/>");
+        assert_eq!(default_of(&out, "vsync"), "<true/>");
+        assert_eq!(default_of(&out, "totk_dynamic_fps"), "<false/>");
+        s.system.fps = settings::FpsMode::Unlocked;
+        s.display.frame_limit = 120;
+        s.graphics.async_pipelines = true;
+        let out = settings_page_defaults(&page, &s);
+        assert_eq!(default_of(&out, "frame_limit"), "<string>120</string>");
+        assert_eq!(default_of(&out, "async_shaders"), "<true/>");
+    }
 }

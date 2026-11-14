@@ -34,30 +34,6 @@
         </dict>
         <dict>
             <key>Type</key>
-            <string>PSMultiValueSpecifier</string>
-            <key>Title</key>
-            <string>Display Aspect</string>
-            <key>Key</key>
-            <string>display_aspect</string>
-            <key>DefaultValue</key>
-            <string>off</string>
-            <key>Titles</key>
-            <array>
-                <string>Game (16:9)</string>
-                <string>19.5:9 (aspect ratio mod)</string>
-                <string>20:9 (aspect ratio mod)</string>
-                <string>21:9 (aspect ratio mod)</string>
-            </array>
-            <key>Values</key>
-            <array>
-                <string>off</string>
-                <string>19.5:9</string>
-                <string>20:9</string>
-                <string>21:9</string>
-            </array>
-        </dict>
-        <dict>
-            <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
             <string>Performance Overlay</string>
