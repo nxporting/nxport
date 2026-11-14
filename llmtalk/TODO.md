@@ -37,7 +37,7 @@ left out); 2ccaf73 TotK exact mouse aim on 1.1.2 and on native engines. To check
 11. D16 depth clears (54cc5b0): Ultrahand / Fuse effects should no longer show rectangular blocks (totk-mobile's report;
     the scene was not checked here, only Hateno and a standalone Metal test).
 12. iPhone memory kills: an .ipa with Guest > "file-backed memory" on (bb0b111, off by default). On the Mac it cuts
-    TotK's footprint 4.8 -> 3.5 GB at the same speed; whether it keeps the phone from being killed needs your device.
+    TotK's footprint 4.8 -> 2.3 GB at the same speed (main block and region arena, bb0b111 + 8bc769b); whether it keeps the phone from being killed needs your device.
 Also unpushed from the Mac: 9878ced (Metal waits for a compiling pipeline unless its targets are drawn every frame,
 async compilation only), 187179d (a Mac lifts the game to the same C as Windows: PARITY #2's loader side).
 Found tonight, not regressions: the frame capture misses some lighting input (replay vs live 18-26% of pixels in sun,
