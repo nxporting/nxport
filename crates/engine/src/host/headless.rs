@@ -21,6 +21,11 @@ pub mod live;
 #[path = "menu.rs"]
 pub mod menu;
 
+// Asking for a folder before the window exists (an app built without its game's files).
+#[cfg(windows)]
+#[path = "ask_folder_win.rs"]
+pub mod ask_folder;
+
 
 pub mod overlay {
     pub use crate::perf_stats::*;
