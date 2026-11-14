@@ -376,7 +376,7 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::Shaders(Shaders::PackSource { msl, list, out }) => {
-            let (n, bytes) = shader_cache_build::pack_source(&msl, list.as_deref(), &out)?;
+            let (n, bytes) = shader_cache_build::pack_source(&msl, list.as_deref(), &out, true)?;
             println!("[+] {n} stages packed: {} ({} KB)", out.join("source.pack").display(), bytes / 1024);
         }
         #[cfg(any(target_os = "macos", windows))]

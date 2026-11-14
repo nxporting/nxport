@@ -845,7 +845,9 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
 /// `msl_dir` (its index.txt and <entry>.metal files), the stages `list` names (a pipeline list; all without one) go into
 /// `out`/source.pack (nxport::metal::source_pack) and their records into `out`/source/index.txt. Returns (stages
 /// packed, pack bytes).
-pub fn pack_source(msl_dir: &Path, list: Option<&Path>, out: &Path) -> Result<(usize, u64), String> {
+/// `arg_variants`: keep each stage's argument-buffer variants (crate::arg_kernels, appended last), which only an app with
+/// the arg-buffers setting on uses: without them the pack is about a third smaller.
+pub fn pack_source(msl_dir: &Path, list: Option<&Path>, out: &Path, arg_variants: bool) -> Result<(usize, u64), String> {
     let used: Option<HashSet<String>> = list.map(|l| {
         let text = std::fs::read_to_string(l).unwrap_or_default();
         text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
@@ -865,8 +867,17 @@ pub fn pack_source(msl_dir: &Path, list: Option<&Path>, out: &Path) -> Result<(u
         // S <weak> <size> <full> <stage> <instance id>: the entry point is s_<full>.
         let entry = record.first().and_then(|s| s.split(' ').nth(3)).map(|full| format!("s_{full}"));
         if let Some(entry) = entry.filter(|e| used.as_ref().is_none_or(|u| u.contains(e))) {
+            let cut = |mut s: Vec<u8>| {
+                if !arg_variants {
+                    let m = crate::arg_kernels::MARKER.as_bytes();
+                    if let Some(i) = s.windows(m.len()).position(|w| w == m) {
+                        s.truncate(i);
+                    }
+                }
+                s
+            };
             let have = sources.contains_key(&entry)
-                || std::fs::read(msl_dir.join(format!("{entry}.metal"))).map(|s| sources.insert(entry.clone(), s)).is_ok();
+                || std::fs::read(msl_dir.join(format!("{entry}.metal"))).map(|s| sources.insert(entry.clone(), cut(s))).is_ok();
             if have {
                 for l in &record {
                     kept.push_str(l);
