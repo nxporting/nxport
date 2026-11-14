@@ -23,13 +23,9 @@ Must do, in order:
 4. iPhone: install a Mac-built .ipa (ready: target/release_ipa/The Legend of Zelda - Tears of the Kingdom.ipa, built
    from main 0affe02's code, 689 MB, pipeline archive 165 MB for A18) and, if you can, a Windows-built one; play a
    few minutes; the screen should not auto-lock; send log.txt if anything is off.
-5. Release text (done in dcaa10d, check the wording): Windows may warn (unsigned exes; Defender has flagged nxport.exe as
-   Trojan:Win32/Bearfoos.A!ml before, a machine-learning false positive): say so, and how to report one
-   (https://www.microsoft.com/wdsi/filesubmission, "Incorrectly detected"); no exclusions or binary tricks. macOS: the
-   archive is unsigned and not notarized; the text already gives xattr -dr com.apple.quarantine.
-6. Tag v<version> to publish (publishing is your call). If your iPhone test of a Windows-built .ipa passed, first drop
-   "iOS apps built on Windows have not been run on a device yet" from the notes in release.yml. No secrets or repo settings needed: release.yml uses only
-   GITHUB_TOKEN, contents: write in the publish job alone.
+5. Release text: yours. The publish job creates a draft with an empty body (d78b011); agents write no release notes.
+6. Tag v<version>: the release is created as a draft; write its text and publish it on GitHub. No secrets or repo
+   settings needed: release.yml uses only GITHUB_TOKEN, contents: write in the publish job alone.
 
 Your call, optional for the first release:
 7. Upload TotK's Windows PGO profiles (nxport-build/pgo-kit/profiles/*.profdata.gz on the Windows PC) to the
