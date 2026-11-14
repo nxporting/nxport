@@ -30,7 +30,10 @@ pub fn declare_locals(c: &mut CodeGenContext, func_index: usize) -> R<()> {
     for &local in info.functions[func_index].locals.iter() {
         let t = c.get_type(info.ast.opnd(local).var_type, 1)?;
         let pointer_type = c.m.type_pointer(StorageClass::FUNCTION, &t, false);
-        let spv_local = c.m.variable(&pointer_type, StorageClass::FUNCTION, None);
+        // Registers start at 0, as on the Switch (its driver zeroes them): a register read before any write on some path
+        // is otherwise undefined, which drivers may fold into anything (totk-pc-recomp docs/maxwell.md 3.12).
+        let zero = c.m.constant_null(&t);
+        let spv_local = c.m.variable(&pointer_type, StorageClass::FUNCTION, Some(&zero));
         c.m.add_local_variable(&spv_local);
         c.declare_local(local, spv_local)?;
     }
