@@ -15,6 +15,9 @@ and update this file when you finish or drop it.
   D16 with the same rounding as rasterization is untested. Test: clear a D16 image to z, draw a full-screen quad at z
   with EQUAL, count passing pixels (0.5, 0.25, 0.3, 0.1, 0.75), on each vendor we can reach; apply mac-worker's
   clear_depth_value rule only where it fails.
+  **NVIDIA checked 2026-11-13 (RTX 4080, scratch Vulkan program):** a render-pass clear and an ALWAYS draw at the same z
+  store the same D16 value at all 201 depths in 0..1 (0.5 -> 32767 both: NVIDIA rounds both down at .5), so EQUAL
+  passes; nothing to change on NVIDIA. AMD and Intel unchecked (no hardware here).
 
 - **A power cut while the builder links can leave zig's cache broken (2026-11-13, win-worker).** After an outage during
   "Lifting and compiling" (link step), every rebuild failed: lld-link "undefined symbol: ___chkstk_ms" from main_034.o,
