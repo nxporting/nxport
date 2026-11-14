@@ -98,8 +98,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 - **An SDK layer for every SDK release (user, 2026-11-14).** Source lists: titledb.nintendo-research.com/switch/main.html
   and subsdks.html there (the SDK versions of the extra modules, subsdk0..n, which can differ from the sdk module's);
   the tables load /data/switch/main.json and /data/switch/subsdks.json (rows: name, av, sdk.version, nvn.version, and
-  the other libraries' versions). 123 distinct SDK versions, 0.12.12 to 22.2.0, in 8 majors before 9.x and one per
-  release after. Ours there: BotW 0.12.14 (v0), 7.3.2 (av 12); SMO 3.5.1 (v0), 7.3.2 (av 4); MK8D 0.12.16 (v0), 4.4.0;
+  the other libraries' versions). 123 distinct SDK versions, 0.12.12 to 22.2.0.
+  Ours there: BotW 0.12.14 (v0), 7.3.2 (av 12); SMO 3.5.1 (v0), 7.3.2 (av 4); MK8D 0.12.16 (v0), 4.4.0;
   SSBU 5.4.180 (v0), 8.2.1; TotK 15.3.1.
   (or a more complete list if one turns up). Today a version between layers takes the closest older one, which broke SMO
   1.0.0 once (c0ea1b4). Each layer should carry only what is known for that release: the NVN version from a game's own
