@@ -232,6 +232,9 @@ pub struct PackArgs {
     /// Link the game files instead of copying them
     #[arg(long)]
     symlink: bool,
+    /// Leave the game files out: the app's settings name the dump, which must stay where it is
+    #[arg(long)]
+    no_game: bool,
 }
 
 #[derive(Subcommand)]
@@ -352,6 +355,7 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 out_app: a.out.as_deref(),
                 settings: a.settings.as_deref(),
                 symlink_assets: a.symlink,
+                bundle_game: !a.no_game,
             })?;
         }
         Command::Shaders(Shaders::Extract { romfs, out, dirs, ctrl_out }) => {

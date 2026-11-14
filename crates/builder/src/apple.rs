@@ -88,6 +88,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                     out_app: Some(&app2),
                     settings: Some(&settings_file),
                     symlink_assets: false,
+                    bundle_game,
                 })
                 .map_err(|e| e.to_string())
             })));
