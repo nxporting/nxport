@@ -78,6 +78,7 @@ pub static ASPECT_SITES: aspect::Sites = aspect::Sites {
     camera: [0xc7e528, 0x1233e78],
     fovy: 0x1a13d1c, // in sead::PerspectiveProjection::setFovy_ (main+0x1a13cdc)
     layout: [0x74f344, 0x40ea8], // in main+0x74f330 and main+0x40e94
+    movie: [0x2402770, 0x24027a0], // in the event movie's draw (1.1.2 main+0x247dc40)
 };
 
 #[cfg(nx_runtime)]

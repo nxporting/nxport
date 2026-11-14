@@ -56,6 +56,7 @@ pub static ASPECT_SITES: aspect::Sites = aspect::Sites {
     camera: [0xccbcb8, 0x1255594],
     fovy: 0x1a61bd4, // in sead::PerspectiveProjection::setFovy_ (main+0x1a61b94)
     layout: [0x79d818, 0x40e38], // in main+0x79d804 and main+0x40e24
+    movie: [0x247dd54, 0x247dd84], // in main+0x247dc40, the event movie's draw
 };
 
 /// --log-draw-items: main+0x763718 takes (renderer, item, ...), keeps the item at [x29 - 0x20] and calls the renderer's
