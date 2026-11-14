@@ -20,7 +20,8 @@ Must do, in order:
    macos-with-windows builder starts on the Mac and builds a Windows app; win-worker checks the Windows zip.
 3. Rebuild your own Mac app with the new builder (old apps have the 32 GB archives) and play a few minutes: menus,
    window resize changes the aspect, mouse aim (camera and bow), Cmd-O overlay, memory in Activity Monitor ~3 GB.
-4. iPhone: install a Mac-built .ipa (pipeline archive now real, 165 MB) and, if you can, a Windows-built one; play a
+4. iPhone: install a Mac-built .ipa (ready: target/release_ipa/The Legend of Zelda - Tears of the Kingdom.ipa, built
+   from main 0affe02's code, 689 MB, pipeline archive 165 MB for A18) and, if you can, a Windows-built one; play a
    few minutes; the screen should not auto-lock; send log.txt if anything is off.
 5. Release text before tagging (win-worker): Windows may warn (unsigned exes; Defender has flagged nxport.exe as
    Trojan:Win32/Bearfoos.A!ml before, a machine-learning false positive): say so, and how to report one
