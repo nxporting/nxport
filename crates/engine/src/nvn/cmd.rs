@@ -737,6 +737,18 @@ pub unsafe extern "C" fn hle_nvnCommandBufferClearDepthStencil(
         }
     );
 }
+thread_local! {
+    /// The last viewport set on a command buffer by this thread: (command buffer, x, y, w, h). A game hook that draws
+    /// into part of the current viewport reads it (profile/totk/aspect.rs, movies).
+    static LAST_VIEWPORT: std::cell::Cell<(usize, [c_int; 4])> = const { std::cell::Cell::new((0, [0; 4])) };
+}
+
+/// The last viewport this thread set on command buffer `cmd`.
+pub fn last_viewport(cmd: usize) -> Option<[c_int; 4]> {
+    let (c, v) = LAST_VIEWPORT.with(|l| l.get());
+    (c == cmd && cmd != 0).then_some(v)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferSetViewport(
     cmd: usize,
@@ -745,6 +757,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetViewport(
     w: c_int,
     h: c_int,
 ) {
+    LAST_VIEWPORT.with(|l| l.set((cmd, [x, y, w, h])));
     rec!(
         "nvnCommandBufferSetViewport",
         cmd,
@@ -763,6 +776,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferSetViewports(
         let y = (*ranges.add(1)).round() as i32;
         let w = (*ranges.add(2)).round() as i32;
         let h = (*ranges.add(3)).round() as i32;
+        LAST_VIEWPORT.with(|l| l.set((cmd, [x, y, w, h])));
         rec!(
             "nvnCommandBufferSetViewports",
             cmd,

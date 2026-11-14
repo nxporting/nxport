@@ -13,6 +13,8 @@
 //   Link): Vert+.
 // - Five places put a HUD pane at a point in 16:9 layout units: the point is scaled (x wider, y narrower).
 // - Every layout calculation first adjusts the layout's panes (hud.rs).
+// - Pre-rendered movies (Event/Movie, 16:9 video) are copied over the whole screen buffer: around that copy the target
+//   is cleared black and the copy kept to a centred 16:9 rectangle (movie_apply / movie_restore).
 // Projections the game stops updating (all of them while a menu is open) keep the aspect of their last update: the hooks
 // record the projections they see, and set_aspect gives those still at the previous aspect the new one.
 //
@@ -46,6 +48,9 @@ pub struct Sites {
     pub fovy: usize,
     /// Layout calculations after their prologue (`ldr x8, [x0, #0x18]`): the library's, and the game's layout class's.
     pub layout: [usize; 2],
+    /// The event movie's draw: the `bl` that applies the movie's graphics state right before its frame is copied over
+    /// the whole screen buffer, and the `bl` right after that copy (movie_apply / movie_restore).
+    pub movie: [usize; 2],
 }
 
 const ASPECT_GAME: u32 = 0x3fe3_8e3b;
@@ -231,6 +236,68 @@ pub unsafe extern "C" fn floor_point(src: *const f32) -> crate::hle_abi::F32Pair
 pub unsafe extern "C" fn layout_calculate(layout: usize, arg: u64) -> crate::hle_abi::U64Pair {
     super::hud::calculate(layout);
     crate::hle_abi::U64Pair(*((layout + LAYOUT_ROOT) as *const usize) as u64, arg)
+}
+
+// The draw context's NVN command buffer (the context VideoRenderer records its copies into).
+const CTX_COMMAND_BUFFER: usize = 0xb8;
+/// The functions the movie sites called (absolute), and the viewport movie_apply replaced: (command buffer, x, y, w, h).
+static MOVIE_APPLY_TO: AtomicUsize = AtomicUsize::new(0);
+static MOVIE_RESTORE_TO: AtomicUsize = AtomicUsize::new(0);
+static MOVIE_SAVED: std::sync::Mutex<Option<(usize, [i32; 4])>> = std::sync::Mutex::new(None);
+
+/// Before a movie frame is copied over the screen buffer: the game's call (the movie's graphics state, `gfx` into the
+/// draw context `ctx`), then, when the current viewport is not 16:9, the target cleared black and the copy kept to a
+/// centred 16:9 rectangle of it (the video is 16:9; stretched across a wider picture otherwise).
+#[cfg(nx_runtime)]
+pub unsafe extern "C" fn movie_apply(gfx: usize, ctx: usize) {
+    crate::guest::call(MOVIE_APPLY_TO.load(Ordering::Relaxed), &[gfx as u64, ctx as u64]);
+    if ctx == 0 || !readable(ctx + CTX_COMMAND_BUFFER, 8) {
+        return;
+    }
+    let cmd = *((ctx + CTX_COMMAND_BUFFER) as *const usize);
+    let Some([x, y, w, h]) = crate::nvn::cmd::last_viewport(cmd) else { return };
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let video = 16.0 / 9.0;
+    let shape = w as f64 / h as f64;
+    let (rx, ry, rw, rh) = if shape > video * 1.001 {
+        let rw = (h as f64 * video).round() as i32;
+        (x + (w - rw) / 2, y, rw, h)
+    } else if shape < video / 1.001 {
+        let rh = (w as f64 / video).round() as i32;
+        (x, y + (h - rh) / 2, w, rh)
+    } else {
+        return;
+    };
+    use crate::nvn::cmd::{hle_nvnCommandBufferClearColor, hle_nvnCommandBufferSetScissor, hle_nvnCommandBufferSetViewport};
+    hle_nvnCommandBufferSetScissor(cmd, x, y, w, h);
+    hle_nvnCommandBufferClearColor(cmd, 0, [0.0f32, 0.0, 0.0, 1.0].as_ptr(), 0xf);
+    hle_nvnCommandBufferSetViewport(cmd, rx, ry, rw, rh);
+    hle_nvnCommandBufferSetScissor(cmd, rx, ry, rw, rh);
+    *MOVIE_SAVED.lock().unwrap() = Some((cmd, [x, y, w, h]));
+}
+
+/// After the movie frame's copy: the game's call, then the viewport and scissor movie_apply replaced.
+#[cfg(nx_runtime)]
+pub unsafe extern "C" fn movie_restore(x0: usize) {
+    crate::guest::call(MOVIE_RESTORE_TO.load(Ordering::Relaxed), &[x0 as u64]);
+    if let Some((cmd, [x, y, w, h])) = MOVIE_SAVED.lock().unwrap().take() {
+        crate::nvn::cmd::hle_nvnCommandBufferSetViewport(cmd, x, y, w, h);
+        crate::nvn::cmd::hle_nvnCommandBufferSetScissor(cmd, x, y, w, h);
+    }
+}
+
+/// The movie sites: `ldr x1, [x19, #0x58]; mov x0, x22; bl` (the graphics state) and `add x0, x21, #0xea; bl` (after
+/// the copy). The `bl`s are rewritten.
+const MOVIE_APPLY_CODE: [u32; 3] = [0xf940_2e61, 0xaa16_03e0, 0x9400_0000];
+const MOVIE_RESTORE_CODE: [u32; 2] = [0x9103_aaa0, 0x9400_0000];
+
+/// Where the `bl` at main offset `at` goes (absolute).
+#[cfg(nx_runtime)]
+fn bl_target(base: usize, at: usize, w: u32) -> usize {
+    let imm = ((w & 0x03ff_ffff) << 6) as i32 >> 6;
+    (base as i64 + at as i64 + 4 * imm as i64) as usize
 }
 
 /// What a rewritten site holds: instructions, and one `bl` to the site's HLE trampoline.
@@ -470,6 +537,16 @@ unsafe fn plan(base: usize, s: &Sites) -> Result<Vec<Patch>, String> {
         let w = check(base, at, &LAYOUT_CODE_B)?;
         let code = vec![W(w[2]), W(w[3]), W(w[6]), Call, W(cbz_x0(&w, at, 4)?), W(w[4]), W(w[5])];
         patches.push(Patch { at, code, hle: crate::hle!(layout_calculate(_, _)) });
+    }
+    {
+        let at = s.movie[0];
+        let w = check(base, at, &MOVIE_APPLY_CODE)?;
+        MOVIE_APPLY_TO.store(bl_target(base, at + 8, w[2]), Ordering::Relaxed);
+        patches.push(Patch { at: at + 8, code: vec![Call], hle: crate::hle!(movie_apply(_, _)) });
+        let at = s.movie[1];
+        let w = check(base, at, &MOVIE_RESTORE_CODE)?;
+        MOVIE_RESTORE_TO.store(bl_target(base, at + 4, w[1]), Ordering::Relaxed);
+        patches.push(Patch { at: at + 4, code: vec![Call], hle: crate::hle!(movie_restore(_)) });
     }
     Ok(patches)
 }
