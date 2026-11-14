@@ -95,6 +95,17 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **ExeFS mods installed after the app is built (user, 2026-11-14; Mac and Windows).** Today a code mod (exefs: IPS,
+  pchtxt, plugin subsdk) must be chosen in the builder, because its code is patched or lifted into the app at build time.
+  Make it possible to add exefs mods to a built app afterwards (as romfs mods already can be), e.g. dropped into the app's
+  mods folder and applied at launch (Mac: patch at load as native code already allows; Windows: the overlay lift at
+  launch, as live_patch does for plugin mods; iOS stays build-time, its code is signed). Then rename the builder's mods
+  choice to say it is for mods built into the app (compile-time mods).
+- **Later (after the first release): our own game patches as ordinary exefs mods (user, 2026-11-14).** Every patch of
+  ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
+  lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
+  share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
+
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
   1.0.0 files (a 1.0.0 image needs 0x2d8000, measured on Windows). Fix for the user: build the .ipa from the version on
