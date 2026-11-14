@@ -238,7 +238,53 @@ struct Response {
 }
 
 /// An HTTP request (`body` as text/plain; `if_none_match`: the ETag of the copy we have); Err when no response came.
-#[cfg(not(target_vendor = "apple"))]
+/// Windows: through curl.exe, which ships with Windows 10 1803 and later (the builder downloads with it too).
+#[cfg(windows)]
+fn request(method: &str, url: &str, body: Option<&[u8]>, if_none_match: Option<&str>) -> Result<Response, String> {
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // The body goes to a file of its own: stdout carries the headers, then the status code curl writes after them.
+    let out = std::env::temp_dir().join(format!("nxport-http-{}-{:x}", std::process::id(), {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
+    let mut c = std::process::Command::new("curl.exe");
+    c.creation_flags(CREATE_NO_WINDOW)
+        .args(["-sSL", "--max-time", "30", "-X", method, "-D", "-", "-w", "\n%{http_code}", "-o"])
+        .arg(&out)
+        .arg(url)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(tag) = if_none_match {
+        c.args(["-H", &format!("If-None-Match: {tag}")]);
+    }
+    if body.is_some() {
+        c.args(["-H", "Content-Type: text/plain", "--data-binary", "@-"]).stdin(std::process::Stdio::piped());
+    }
+    let mut child = c.spawn().map_err(|e| format!("curl.exe: {e}"))?;
+    if let (Some(b), Some(mut stdin)) = (body, child.stdin.take()) {
+        stdin.write_all(b).map_err(|e| format!("curl.exe: {e}"))?;
+    }
+    let o = child.wait_with_output().map_err(|e| format!("curl.exe: {e}"))?;
+    let got = std::fs::read(&out).unwrap_or_default();
+    let _ = std::fs::remove_file(&out);
+    let text = String::from_utf8_lossy(&o.stdout);
+    let status: isize = text.lines().last().and_then(|l| l.trim().parse().ok()).unwrap_or(0);
+    if !o.status.success() || status == 0 {
+        return Err(format!("curl.exe: {}", String::from_utf8_lossy(&o.stderr).trim()));
+    }
+    // The last header block's ETag (an interim 100 Continue comes first).
+    let etag = text
+        .split("\r\n\r\n")
+        .filter(|b| b.starts_with("HTTP/"))
+        .last()
+        .and_then(|b| b.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("etag")).map(|(_, v)| v.trim().to_string())));
+    Ok(Response { status, body: got, etag })
+}
+
+/// An HTTP request: none on this host.
+#[cfg(not(any(windows, target_vendor = "apple")))]
 fn request(_method: &str, _url: &str, _body: Option<&[u8]>, _if_none_match: Option<&str>) -> Result<Response, String> {
     Err("no HTTP client on this host".into())
 }
