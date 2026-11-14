@@ -929,6 +929,9 @@ struct Decoder {
     decode_us: u64,
     decode_max_us: u64,
     decode_slow: u64,
+    /// Video: when the first frame since the start or a flush was handed out, and its presentation time. Later frames
+    /// are handed out once their time has come (d_acquire_output).
+    clock: Option<(std::time::Instant, i64)>,
 }
 /// One line on how fast a movie decoded, so a stutter can be told apart from a decoder that cannot keep up.
 /// Printed every 300 frames too (so far), so a log cut short by quitting mid-movie still has it.
@@ -963,6 +966,53 @@ fn signal_input(d: &Decoder) {
         signal(d, 0);
     }
 }
+/// Decoders alive (their boxes), so the movie clock never signals one that is gone. Taken under DECODER_LOCK.
+static LIVE: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+/// Held-back video frames: (decoder box, when it is due), and the thread that signals "output available" then.
+static DUE: (std::sync::Mutex<Vec<(usize, std::time::Instant)>>, std::sync::Condvar) =
+    (std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new());
+
+/// Signals output available for decoder `d` at `at` (the game's player waits for that signal, then asks again).
+fn signal_output_at(d: &Decoder, at: std::time::Instant) {
+    static THREAD: std::sync::Once = std::sync::Once::new();
+    THREAD.call_once(|| {
+        std::thread::Builder::new().name("movie-clock".into()).spawn(movie_clock).expect("spawn movie clock thread");
+    });
+    let mut due = DUE.0.lock().unwrap();
+    let key = d as *const Decoder as usize;
+    if !due.iter().any(|&(k, t)| k == key && t <= at) {
+        due.push((key, at));
+        DUE.1.notify_one();
+    }
+}
+
+fn movie_clock() {
+    let mut due = DUE.0.lock().unwrap();
+    loop {
+        let now = std::time::Instant::now();
+        let ready: Vec<usize> = due.iter().filter(|&&(_, t)| t <= now).map(|&(k, _)| k).collect();
+        due.retain(|&(_, t)| t > now);
+        if !ready.is_empty() {
+            drop(due);
+            let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let live = LIVE.lock().unwrap();
+            for k in ready {
+                if live.contains(&k) {
+                    signal(unsafe { &*(k as *const Decoder) }, 1);
+                }
+            }
+            drop(live);
+            drop(_guard);
+            due = DUE.0.lock().unwrap();
+            continue;
+        }
+        due = match due.iter().map(|&(_, t)| t).min() {
+            Some(t) => DUE.1.wait_timeout(due, t.saturating_duration_since(now)).unwrap().0,
+            None => DUE.1.wait(due).unwrap(),
+        };
+    }
+}
+
 /// Signals one of the game's events. A stopped decoder signals nothing: the game tears down the threads that handle
 /// them after Stop.
 fn signal(d: &Decoder, which: usize) {
@@ -985,6 +1035,7 @@ unsafe extern "C" fn d_dtor(this: *mut usize) {
     }
     let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if *this.add(1) != 0 {
+        LIVE.lock().unwrap().retain(|&k| k != *this.add(1));
         let mut d = Box::from_raw(*this.add(1) as *mut Decoder);
         report_decode(&mut d);
         if d.dec != 0 {
@@ -1100,6 +1151,7 @@ unsafe extern "C" fn d_start(this: *mut usize) -> u32 {
         return NULL_DECODER;
     };
     d.started = true;
+    d.clock = None;
     signal_input(d);
     OK
 }
@@ -1109,6 +1161,7 @@ unsafe extern "C" fn d_stop(this: *mut usize) -> u32 {
         return NULL_DECODER;
     };
     d.started = false;
+    d.clock = None;
     OK
 }
 unsafe extern "C" fn d_flush(this: *mut usize) -> u32 {
@@ -1131,6 +1184,7 @@ unsafe extern "C" fn d_flush(this: *mut usize) -> u32 {
     d.outputs.iter_mut().for_each(|o| *o = None);
     d.ready.clear();
     d.pending.clear();
+    d.clock = None;
     d.eos_in = false;
     d.eos_out = false;
     signal_input(d);
@@ -1343,6 +1397,24 @@ unsafe extern "C" fn d_acquire_output(
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
+    // A video frame is handed out once its presentation time has come, counted from the first one. The game's player
+    // shows the newest frame it has each time it draws (TotK: one per draw, so its movies played at the draw rate,
+    // twice as fast at 60 fps); the console draws them at the video's 30. Without a new frame the player keeps showing
+    // the last one.
+    if d.is_video {
+        if let Some(&slot) = d.ready.front() {
+            let pts = d.outputs[slot].as_ref().map_or(0, |f| f.pts);
+            match d.clock {
+                None => d.clock = Some((std::time::Instant::now(), pts)),
+                Some((t0, p0)) if (t0.elapsed().as_micros() as i64) < pts - p0 => {
+                    d.n_empty += 1;
+                    signal_output_at(d, t0 + std::time::Duration::from_micros((pts - p0) as u64));
+                    return OUTPUT_NOT_AVAILABLE;
+                }
+                Some(_) => {}
+            }
+        }
+    }
     let Some(slot) = d.ready.pop_front() else {
         d.n_empty += 1;
         return OUTPUT_NOT_AVAILABLE;
@@ -1536,8 +1608,14 @@ unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
         decode_us: 0,
         decode_max_us: 0,
         decode_slow: 0,
+        clock: None,
     };
-    *this.add(1) = Box::into_raw(Box::new(d)) as usize;
+    let ptr = Box::into_raw(Box::new(d)) as usize;
+    {
+        let _guard = DECODER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        LIVE.lock().unwrap().push(ptr);
+    }
+    *this.add(1) = ptr;
 }
 
 unsafe extern "C" fn thread_priority() -> i32 {
