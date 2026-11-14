@@ -530,9 +530,8 @@ impl Ctx {
                         return;
                     }
                 };
-                let info = vk::ComputePipelineCreateInfo::default()
-                    .stage(vk::PipelineShaderStageCreateInfo::default().stage(vk::ShaderStageFlags::COMPUTE).module(module.module).name(c"main"))
-                    .layout(layout);
+                let mut req = Default::default();
+                let info = vk::ComputePipelineCreateInfo::default().stage(module.stage(vk::ShaderStageFlags::COMPUTE, &mut req)).layout(layout);
                 let cache = self.pipeline_cache();
                 crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
