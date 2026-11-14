@@ -23,7 +23,7 @@ Must do, in order:
 4. iPhone: install a Mac-built .ipa (ready: target/release_ipa/The Legend of Zelda - Tears of the Kingdom.ipa, built
    from main 0affe02's code, 689 MB, pipeline archive 165 MB for A18) and, if you can, a Windows-built one; play a
    few minutes; the screen should not auto-lock; send log.txt if anything is off.
-5. Release text before tagging (win-worker): Windows may warn (unsigned exes; Defender has flagged nxport.exe as
+5. Release text (done in dcaa10d, check the wording): Windows may warn (unsigned exes; Defender has flagged nxport.exe as
    Trojan:Win32/Bearfoos.A!ml before, a machine-learning false positive): say so, and how to report one
    (https://www.microsoft.com/wdsi/filesubmission, "Incorrectly detected"); no exclusions or binary tricks. macOS: the
    archive is unsigned and not notarized; the text already gives xattr -dr com.apple.quarantine.
