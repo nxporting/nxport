@@ -190,7 +190,7 @@ jobs:
         run: |
           cd dist
           sha256sum -- * > SHA256SUMS.txt
-          notes="Windows: unpack and run nxport-builder.exe. macOS: unpack, then run xattr -dr com.apple.quarantine on the folder (not signed or notarized). iOS apps built on Windows have not been run on a device yet."
+          notes="Windows: unpack and run nxport-builder.exe. The programs are not code signed: SmartScreen may warn (More info, Run anyway), and Windows Defender has flagged earlier builds of nxport.exe by mistake (a machine-learning false positive); report one at https://www.microsoft.com/wdsi/filesubmission as incorrectly detected. macOS: unpack, then run xattr -dr com.apple.quarantine on the folder (not signed or notarized). iOS apps built on Windows have not been run on a device yet."
           if [ "$MACOS_RESULT" != success ]; then
             notes="$notes
 
