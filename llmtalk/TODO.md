@@ -20,7 +20,8 @@ Must do, in order:
    macos-with-windows builder starts on the Mac and builds a Windows app; win-worker checks the Windows zip.
 3. Rebuild your own Mac app with the new builder (old apps have the 32 GB archives) and play a few minutes: menus,
    window resize changes the aspect, mouse aim (camera and bow), Cmd-O overlay, memory in Activity Monitor ~3 GB.
-4. iPhone: install the Mac-built .ipa target/release_ipa_hwvp9/TotK hw-vp9.ipa (TotK 1.1.2 files, f37eb96, 2026-11-15:
+4. iPhone: install the Mac-built .ipa target/release_ipa_hwvp9_100/The Legend of Zelda - Tears of the Kingdom.ipa (TotK
+   1.0.0 files as on the phone; target/release_ipa_hwvp9 has a 1.1.2 one), built at 9218b2a, 2026-11-15:
    movies decoded by the video hardware on iOS 26.2+, log.txt should say "VP9 1920x1080 decoded by the video hardware";
    the 1.0.0 one, target/release_ipa_100, is from before that: movies at their own speed with a clock that restarts after a late frame (1fe6fe0), movie 16:9 on
    the phone's screen, ability wheel background at any frame rate (19e6891), file-backed memory on, the pipeline
