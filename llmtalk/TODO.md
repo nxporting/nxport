@@ -119,8 +119,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   waits (the setter path runs only after the job), and priority-ordered guest cores (branch guest-cores-priority,
   parked) do not change the crash. So on the console this job must not reach that read: an earlier condition differs
   in 1.0.0 (pre-launch SDK 0.12; the first ActorCreate thread also returns right after it starts, then is restarted).
-  Next: what the job at lr main+0xf3960c tests before calling main+0xe52794, and why the first ActorCreate thread
-  returns (its loop's wait).
+  Correction (later run of the same probe, 70 ms wait): the setter path (main+0x7b7b54 -> 0x7ae8f0 -> 0xdbeb3c) runs on
+  another ActorCreate thread: the job at lr main+0xf3960c creates "EmergencyHeap" (string at main+0x1bbb094) and needs
+  an actor another ActorCreate job creates first. With the job made to wait, the game runs to frame 1200, then makes a
+  virtual call (vtable slot 0x50, main+0x14bf514) to main+0x14befa8, 0x28 into f_70015bef80 and in no relocation: a
+  wrong object, so damage from something earlier. On the console the first job must always finish first; here the
+  core-0 ActorCreate thread also returns once and is restarted, which may shift that order. Next: why that first
+  ActorCreate thread returns (its loop's wait), and whether the order holds once it does not.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
