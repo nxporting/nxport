@@ -134,7 +134,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   wrong object, so damage from something earlier. On the console the first job must always finish first; here the
   core-0 ActorCreate thread also returns once and is restarted, which may shift that order. That return is
   sead's own: run_ (main+0xa1e30c) pops its queue (main+0xa33e94) until the quit message, so the game told it to quit
-  (a worker reset), not a broken wait. Next: the frame-1200 object (caller main+0x14bf514).
+  (a worker reset), not a broken wait. Narrowed: main+0xe52794 runs from a heap-creation
+  listener (main+0x1039560 area): any thread creating a heap named "EmergencyHeap" (main+0xceb2f4, sead heap create,
+  5 MB) calls it when the singleton and its +0x28 are set; it then needs +0x38, which main+0xdbeb3c stores together
+  with the same object into several other singletons. So the console sets +0x28 and +0x38 close together; here an
+  EmergencyHeap is created in the gap (about 70 ms). Next: what sets +0x28 (a method store through this, not the slot),
+  and what the setter's thread does between the two that takes so long here.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
