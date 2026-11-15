@@ -686,7 +686,7 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
     }
     // Jump tables lie in the module's rodata: the image reaches past the code. Only what the lifter asks for is read.
     let image = unsafe { std::slice::from_raw_parts(func as *const u8, IMAGE_SPAN) };
-    let module = nxport_lifter::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone() };
+    let module = nxport_lifter::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone(), functions: std::collections::BTreeSet::new() };
     let out = nxport_lifter::lift_module(&module, &Default::default());
     // The cache name hashes the function's bytes, and some differ from run to run without changing the lifted code (a
     // plugin's trampoline area holds this run's pointers, read at run time): 6 of a start's compiles with UltraCam were

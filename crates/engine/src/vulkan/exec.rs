@@ -899,6 +899,8 @@ impl Ctx {
             let pool = self.timestamps;
             self.rec.cmd(move |d, cb| d.device.cmd_write_timestamp(cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, 1));
         }
+        // The linear render targets this submit drew (note_rendered): copied back as it ends.
+        self.record_rt_reads();
         // On discrete GPUs written shadow slots are copied into host-cached memory for the watcher to write back: they
         // are in the BAR window, which the CPU reads at a few MB/s (173 KB a frame took the watcher 12 ms on Great Sky
         // Island). With unified memory the watcher reads the slots.
@@ -1109,7 +1111,16 @@ impl Ctx {
         let f = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed) + 1;
         let prev = self.rt_history.insert(t.storage, f);
         let is_small = t.size > 0 && t.size <= 65536;
-        if (is_small || prev.is_none_or(|p| p + 4 < f)) && !self.writeback_rts.iter().any(|w| w.storage == t.storage) {
+        // Linear render targets are how NVN lets the CPU read what the GPU drew (BotW: the height tiles its collision
+        // reads, the 8x8 sky its fog and ambient colours come from): every one goes back, however large or often drawn.
+        let linear = t.flags & crate::nvn::layout::NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT != 0;
+        // They go back with this submit (copied at its end, written when it completes), so a wait on the game's fence for
+        // it finds them in guest memory, as on the console, where the GPU writes that memory itself.
+        if linear {
+            if !self.pending_rt_reads.iter().any(|w| w.storage == t.storage) {
+                self.pending_rt_reads.push(*t);
+            }
+        } else if (is_small || prev.is_none_or(|p| p + 4 < f)) && !self.writeback_rts.iter().any(|w| w.storage == t.storage) {
             self.writeback_rts.push(*t);
         }
         if self.rt_history.len() > 1 << 14 {
