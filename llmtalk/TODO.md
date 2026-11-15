@@ -95,6 +95,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **DLC (add-on content) is not supported (2026-11-14, win-worker; Savage Wind parity).** nn::aoc::ListAddOnContent
+  reports none (horizon/sdk/base/aoc.rs). Savage Wind serves each add-on content's RomFS from its own folder
+  (services/fs.c: extracted/aoc<index>, data id = (program id & ~0xfff) + 0x1000 + index, IStorage through the aoc
+  service) and, when a dump has the DLC merged into the game's RomFS (System/AocVersion.txt or Pack/AocMainField.pack
+  present), grows each RSTB entry to its Aoc/0010/<path> entry (else a white screen after "Open your eyes"). Needs: the
+  builder taking a DLC NSP (mounted beside the game) into the app's files, nn::aoc Count / List / Mount, and the merged
+  case. Blocked on a test: BotW's DLC wants an update the base 1.0.0 lacks; no DLC dump on this PC (asked in PROGRESS).
+
 - **An SDK layer for every SDK release (user, 2026-11-14).** Source lists: titledb.nintendo-research.com/switch/main.html
   and subsdks.html there (the SDK versions of the extra modules, subsdk0..n, which can differ from the sdk module's);
   the tables load /data/switch/main.json and /data/switch/subsdks.json (rows: name, av, sdk.version, nvn.version, and
