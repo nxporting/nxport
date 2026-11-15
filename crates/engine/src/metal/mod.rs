@@ -7650,7 +7650,7 @@ fn dump_any(tex: &Tex, path: &str) -> String {
         MTLPixelFormat::RGBA32Float | MTLPixelFormat::RGBA32Uint | MTLPixelFormat::RGBA32Sint => 16,
         MTLPixelFormat::RG32Float | MTLPixelFormat::RG32Uint | MTLPixelFormat::RG32Sint => 8,
         MTLPixelFormat::R8Unorm => 1,
-        MTLPixelFormat::RG8Unorm | MTLPixelFormat::R16Float => 2,
+        MTLPixelFormat::RG8Unorm | MTLPixelFormat::R16Float | MTLPixelFormat::R16Unorm => 2,
         MTLPixelFormat::RG16Float | MTLPixelFormat::R32Float => 4,
         _ => 4,
     };
@@ -7709,6 +7709,15 @@ fn dump_any(tex: &Tex, path: &str) -> String {
                 [v, v, v]
             }
             MTLPixelFormat::RG8Unorm => [px[0] as f32 / 255.0, px[1] as f32 / 255.0, 0.0],
+            MTLPixelFormat::R16Unorm => {
+                let v = u16::from_le_bytes([px[0], px[1]]) as f32 / 65535.0;
+                [v, v, v]
+            }
+            MTLPixelFormat::RG16Unorm => [
+                u16::from_le_bytes([px[0], px[1]]) as f32 / 65535.0,
+                u16::from_le_bytes([px[2], px[3]]) as f32 / 65535.0,
+                0.0,
+            ],
             MTLPixelFormat::RGB10A2Unorm => {
                 let v = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
                 [
