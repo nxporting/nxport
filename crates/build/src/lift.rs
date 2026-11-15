@@ -23,7 +23,7 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
     }
     let text = base + n.text.mem_off as u64..base + (n.text.mem_off + n.text.data.len()) as u64;
     let out = lift_image(name, base, &img, text, n.dynamic().ok(), BTreeSet::new(), None);
-    write_files(out_dir, &[&out])?;
+    write_files(out_dir, &[&out], false)?;
     Ok(out)
 }
 
@@ -49,7 +49,7 @@ pub fn lift_game(
         let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
         lifted.push((m.name, out));
     }
-    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
+    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>(), true)?;
     let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
     std::fs::write(out_dir.join(MODULES_FILE), names)?;
     Ok(lifted)
@@ -138,7 +138,7 @@ pub fn lift_overlay(
         let out = lift_image(&name, m.base, &m.image, m.text, dynamic, seeds, Some(Overlay { base_starts, changed }));
         lifted.push((name, out));
     }
-    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>())?;
+    write_files(out_dir, &lifted.iter().map(|(_, o)| o).collect::<Vec<_>>(), true)?;
     let names: String = lifted.iter().map(|(n, _)| format!("{n}\n")).collect();
     std::fs::write(out_dir.join(MODULES_FILE), names)?;
     Ok(lifted)
@@ -427,7 +427,9 @@ fn outside_git(dir: &Path) -> std::io::Result<()> {
 }
 
 /// Writes the C files, leaving those whose contents did not change untouched: compile reuses their objects.
-fn write_files(out_dir: &Path, outputs: &[&Output]) -> std::io::Result<()> {
+/// `whole`: these are all of the folder's modules (lift_game, lift_overlay), so any other C file goes; otherwise only
+/// files of the modules written (lift_nso, one module, which a folder may hold beside others).
+fn write_files(out_dir: &Path, outputs: &[&Output], whole: bool) -> std::io::Result<()> {
     outside_git(out_dir)?;
     std::fs::create_dir_all(out_dir)?;
     let write = |file: &str, body: &str| -> std::io::Result<()> {
@@ -442,6 +444,19 @@ fn write_files(out_dir: &Path, outputs: &[&Output]) -> std::io::Result<()> {
     }
     for (file, body) in outputs.iter().flat_map(|o| &o.files) {
         write(file, body)?;
+    }
+    // C files an earlier lift left that this one did not write: compile takes every .c here, so one left by a lift of
+    // another game version (more modules or files) linked calls to functions this code does not have (BotW 1.0.0 after
+    // 1.6.0: 751 undefined symbols).
+    let written: std::collections::HashSet<&str> =
+        nxport_lifter::RUNTIME_FILES.iter().map(|(f, _)| *f).chain(outputs.iter().flat_map(|o| o.files.iter().map(|(f, _)| f.as_str()))).collect();
+    for e in std::fs::read_dir(out_dir)?.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let ours = whole || written.iter().any(|w| w.rsplit_once('_').zip(name.rsplit_once('_')).is_some_and(|((m, _), (n, _))| m == n));
+        if name.ends_with(".c") && ours && !written.contains(name.as_ref()) {
+            std::fs::remove_file(e.path())?;
+        }
     }
     Ok(())
 }

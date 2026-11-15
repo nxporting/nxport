@@ -244,12 +244,13 @@ fn branch_table(
     br_pc: u64,
 ) -> Option<Table> {
     let r = bits(jt::Memory::word(l.m, br_pc)?, 5, 5);
+    let defs_of = |pc: u64, r: u32| reaching_defs(l, entry, preds, pc, r);
     let (mut known, mut reach, mut blocks) = (BTreeSet::new(), Vec::new(), false);
     let Some(defs) = reaching_defs(l, entry, preds, br_pc, r) else {
         // A definition is out of sight (before the function, or past a call): the instructions just before the `br`.
-        return if let Some(targets) = jt::resolve(l.m, entry, br_pc, r) {
+        return if let Some(targets) = jt::resolve(l.m, &defs_of, entry, br_pc, r) {
             Some(Table::Cases(targets))
-        } else if let Some(range) = jt::reach(l.m, entry, br_pc, r) {
+        } else if let Some(range) = jt::reach(l.m, &defs_of, entry, br_pc, r) {
             Some(Table::All { known: Vec::new(), reach: vec![range], blocks: false })
         } else if computed(l, entry, br_pc) {
             Some(Table::All { known: Vec::new(), reach: Vec::new(), blocks: true })
@@ -261,11 +262,11 @@ fn branch_table(
     };
     for d in defs {
         let w = jt::Memory::word(l.m, d).unwrap_or(0);
-        if let Some(targets) = jt::resolve(l.m, entry, d + 4, r) {
+        if let Some(targets) = jt::resolve(l.m, &defs_of, entry, d + 4, r) {
             known.extend(targets);
         } else if w & 0x9f00_0000 == 0x1000_0000 {
             known.insert(d.wrapping_add(sext(((bits(w, 5, 19) << 2) | bits(w, 29, 2)) as u64, 21) as u64));
-        } else if let Some(range) = jt::reach(l.m, entry, d + 4, r) {
+        } else if let Some(range) = jt::reach(l.m, &defs_of, entry, d + 4, r) {
             reach.push(range);
         } else if w & 0x1f00_0000 == 0x0b00_0000 {
             blocks = true; // add/sub (register)

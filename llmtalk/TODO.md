@@ -101,6 +101,30 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
   share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
+- **An SDK layer for every SDK release (user, 2026-11-14).** Source lists: titledb.nintendo-research.com/switch/main.html
+  and subsdks.html there (the SDK versions of the extra modules, subsdk0..n, which can differ from the sdk module's);
+  the tables load /data/switch/main.json and /data/switch/subsdks.json (rows: name, av, sdk.version, nvn.version, and
+  the other libraries' versions). 123 distinct SDK versions, 0.12.12 to 22.2.0.
+  Ours there: BotW 0.12.14 (v0), 7.3.2 (av 12); SMO 3.5.1 (v0), 7.3.2 (av 4); MK8D 0.12.16 (v0), 4.4.0;
+  SSBU 5.4.180 (v0), 8.2.1; TotK 15.3.1.
+  (or a more complete list if one turns up). Today a version between layers takes the closest older one, which broke SMO
+  1.0.0 once (c0ea1b4). Each layer should carry only what is known for that release: the NVN version from a game's own
+  check or the release's headers, the thread layout from a game that runs on it, and the functions it changed. Layers
+  with nothing verified still help: the log then says exactly which release a game uses.
+
+- **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Built from the user's base NSP
+  (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
+  sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
+  checked on SMO 1.0.0 to its title menu and TotK 1.0.0 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
+  crashes in f_7000f52794 (main+0xe52794, after f_7000f51cc8 returns): the singleton at 0x70023ebee0 (made by
+  main+0xe52fac, 0x40 bytes) still has +0x38 null, which only main+0xdbeb3c sets (called from main+0x7ae8f0, called
+  from main+0x7b7b54). Same in every run, but it is an ordering between threads: a probe (fprintf at those
+  functions in the lifted C) shows the ActorCreate job (main+0xe52794, from lr main+0xf3960c) run once and crash
+  before another thread runs main+0x7b7b54 -> 0x7ae8f0 -> 0xdbeb3c (from lr main+0x103bddc); later runs of the job
+  pass. The ActorCreate thread that crashes is the core-0 one (affinity 0x1, prio 20). Hypothesis: on Horizon a core
+  runs only its highest-priority ready thread, so this job could not run while the setter's thread held core 0;
+  nxport runs every thread at once. Next: which thread calls main+0x7b7b54 (and its core and priority), and what
+  orders it before the job on the console.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
