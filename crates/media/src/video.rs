@@ -45,8 +45,16 @@ impl Vp9 {
 impl Decode for Vp9 {
     fn decode(&mut self, data: &[u8], pts_us: i64, out: &mut VecDeque<Decoded>) -> Result<(), String> {
         self.dec.push(data, Some(pts_us)).map_err(|e| format!("vp9: {e:?}"))?;
-        // VP9 does not reorder: a sample shows at most one picture (a superframe's hidden frames show none).
-        while let Ok(p) = self.dec.next_picture() {
+        // VP9 does not reorder: a sample shows at most one picture (a superframe's hidden frames show none). The decoder
+        // decodes one coded frame per call and answers Again after a hidden one while the shown frame is still pending:
+        // stopping there left it for the next sample, which then gave two pictures with that sample's pts.
+        loop {
+            let p = match self.dec.next_picture() {
+                Ok(p) => p,
+                Err(vp9_mt::Error::Again) if self.dec.pending() > 0 => continue,
+                Err(_) => break,
+            };
+            let pts_us = p.pts.unwrap_or(pts_us);
             let shift = p.bit_depth().saturating_sub(8);
             let to8 = |i: usize| -> (Vec<u8>, usize, usize, usize) {
                 let (d, stride) = p.plane(i);
