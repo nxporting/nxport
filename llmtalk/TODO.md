@@ -163,6 +163,26 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   draw the maps (a99b7a48, 8bd2523a, f4c0e5d3; translated cleanly, trivial): R is the .x of a 256x256 RGBA8 linear
   render target (tera::ImageResourceMgr, made by GPU draws; Metal contents = guest bytes). mac-worker is tracing which
   draws write those RGBA8 tiles. Vulkan loads guest bytes before a partial draw into a re-made target (refresh(first)).
+- **BotW black-blob flicker on Vulkan (open, win-worker, 2026-11-15).** User's save at the Great Plateau lookout: about
+  1 frame in 6 a large black region covers the distant terrain (sky and the near platform unaffected; Link inside it
+  only a dark silhouette), and about 1 in 8 frames is brighter overall. The same at 30 and 120 fps. Measure with the
+  history: mean of the 640x360 crop (270,150,330x130) is 158 normally, 33 blob, 208 bright. Not changed by
+  --frames-in-flight 1, immediate write-back of non-linear targets, --no-host-import, --gpu-timestamps on/off, the
+  colour-to-depth-twin copy for R16 shadow compares, or dropping the shadow-compare draws (fs 4fd2c98945781bbc).
+  Occlusion reads in the scene are all 0. Not yet checked on Metal at this spot (mac-worker has no save there).
+  Found (same day): dropping draws of fragment 350d46621557f806 (a full-screen depth-only draw into a D16 target)
+  removes the flicker. Every blob frame is one where that standalone depth write renders into one Vulkan D16 image
+  (an 800x450 descriptor) while the lighting passes after it test against another (the 1600x900 descriptor);
+  in clean frames both are the same image. Depth images are left out of both overlap routes in vulkan/texture.rs
+  (rebuild_on_gpu skips depth targets; the CPU route's upload leaves depth as it is), so a depth write through one
+  descriptor never reaches another over the same memory. But they do NOT share storage (journal pass lines now print
+  the depth target's storage and size): two 800x450 D16 buffers 0x120000 apart, the usual one in ~85% of uses. In
+  blob frames the game writes its downsampled depth into the other buffer while the lighting passes test against the
+  usual one (old depth). The game's pick looks like a transient render-target allocator; it varies with timing (the
+  per-pass dump's extra GPU work never showed it). Not fixed by --guest-cores; the game makes almost no nvnSyncWait
+  calls (1 per run), so the allocator's "is it free" test is something else (a GPU-written value, a report?).
+  Next: find the allocator (log the guest call chain of SetRenderTargets for the 800x450 D16 targets,
+  --log-rt-caller-size=800x450) and what it reads to decide.
 - **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
   line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
   pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the

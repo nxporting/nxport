@@ -167,6 +167,12 @@ pub struct Ctx {
     /// barrier that invalidates textures and at a draw of another program after one that rendered to an attachment
     /// copied in it: games read what the draws before rendered without a barrier between (TotK's shrine floors blend
     /// into the ground drawn just before them, and blended into black). Copies by texture description, with their epoch.
+    /// Depth comparison of GPU-drawn colour textures (draw.rs twin_from_colour): when each image was last rendered to
+    /// (pass serial), when each depth twin was last copied from its colour image, and the buffer the copy goes through.
+    pub(super) pass_serial: u64,
+    pub(super) rendered_at: rustc_hash::FxHashMap<vk::Image, u64>,
+    pub(super) twin_copied: rustc_hash::FxHashMap<texture::Desc, u64>,
+    pub(super) twin_buf: Option<super::device::HostBuffer>,
     fb_snaps: rustc_hash::FxHashMap<texture::Desc, (u64, texture::Image)>,
     fb_epoch: u64,
     /// The attachments copied in this feedback epoch.
@@ -700,6 +706,10 @@ impl Ctx {
             vcache: Default::default(),
             gpu_dirty: Ranges::default(),
             inflight_dirty: Vec::new(),
+            pass_serial: 0,
+            rendered_at: Default::default(),
+            twin_copied: Default::default(),
+            twin_buf: None,
             fb_snaps: Default::default(),
             fb_taken: Vec::new(),
             fb_dirty: None,
@@ -1555,6 +1565,7 @@ impl Ctx {
         }
         self.profile_mark(|| "(between passes: dispatches, copies, refreshes)".to_string());
         self.fb_paused.clear();
+        self.pass_serial += 1;
         let mut colors = Vec::new();
         let mut nvn_colors = [(0u32, 0u32); 8];
         let mut nvn_depth = (0u32, 0u32);
@@ -1571,6 +1582,7 @@ impl Ctx {
             match self.target(&r) {
                 Some((t, view, fmt, e, s, image)) => {
                     self.note_rendered(&t);
+                    self.rendered_at.insert(image, self.pass_serial);
                     extent = (extent.0.min(e.0), extent.1.min(e.1));
                     samples = s;
                     images.push(image);
@@ -1628,6 +1640,9 @@ impl Ctx {
             }
             if depth.is_some() {
                 l += &format!(" d {:x}:{}", images.last().map_or(0, |i| vk::Handle::as_raw(*i)), nvn_depth.0);
+                if let Some((dd, _, _)) = depth_target.as_ref() {
+                    l += &format!(" @{:#x} {}x{}", dd.storage, dd.params.width, dd.params.height);
+                }
             }
             crate::gpu::history::journal(|| l);
         }
