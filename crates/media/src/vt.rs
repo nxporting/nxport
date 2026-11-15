@@ -579,3 +579,22 @@ fn h264_reorder_depth(sps: &[u8]) -> Option<usize> {
     }
     Some(ue(b)? as usize) // max_num_reorder_frames
 }
+
+#[cfg(test)]
+mod tests {
+    use super::h264_reorder_depth;
+
+    #[test]
+    fn reorder_depth_from_sps() {
+        // libx264 Main profile, 2 B-frames (ffprobe reports has_b_frames=2). The parser walks the VUI to
+        // max_num_reorder_frames; a wrong field width anywhere before it would give a different answer.
+        let sps = [
+            0x67, 0x4d, 0x40, 0x28, 0xec, 0xa0, 0x3c, 0x01, 0x13, 0xf2, 0xc2, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00,
+            0x00, 0x03, 0x00, 0x78, 0x1e, 0x30, 0x63, 0x2c,
+        ];
+        assert_eq!(h264_reorder_depth(&sps), Some(2));
+        // A truncated SPS must not panic.
+        assert_eq!(h264_reorder_depth(&sps[..6]), None);
+        assert_eq!(h264_reorder_depth(&[]), None);
+    }
+}
