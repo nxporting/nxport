@@ -16,7 +16,17 @@ fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest.parent().and_then(Path::parent).unwrap().to_path_buf();
     let target_dir = root.join("target/engines");
-    for p in ["crates/engine/src", "crates/engine/build.rs", "crates/engine/Cargo.toml", "crates/sass2spv/src", "Cargo.lock"] {
+    // The engine's source and its in-repo dependencies (a change in any of them changes the engine).
+    for p in [
+        "crates/engine/src",
+        "crates/engine/build.rs",
+        "crates/engine/Cargo.toml",
+        "crates/sass2spv/src",
+        "crates/media/src",
+        "crates/pipelines/src",
+        "crates/lifter/src",
+        "Cargo.lock",
+    ] {
         println!("cargo:rerun-if-changed={}", root.join(p).display());
     }
     // The Apple engines link against Apple SDKs, so only a macOS host builds them; elsewhere the paths are empty and
