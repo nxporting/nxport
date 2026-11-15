@@ -140,6 +140,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   with the same object into several other singletons. So the console sets +0x28 and +0x38 close together; here an
   EmergencyHeap is created in the gap (about 70 ms). Next: what sets +0x28 (a method store through this, not the slot),
   and what the setter's thread does between the two that takes so long here.
+  Timestamped probe (2026-11-14): main creates the first EmergencyHeap (main+0xceb2f4) at T, before the singleton (listener
+  skips); main makes the singleton at T+1.57 s, and +0x28 is set by its constructor (it points at singleton+0x40), so
+  that check only means "the singleton exists"; at T+3.21 s an ActorCreate thread creates another heap named
+  EmergencyHeap (not through main+0xceb2f4) and crashes, +0x38 still null. On the console the actor whose creation runs
+  main+0x7b7b54 (and sets +0x38) must come before any ActorCreate job makes an EmergencyHeap: find which job makes that
+  heap and what queues it after that actor.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
