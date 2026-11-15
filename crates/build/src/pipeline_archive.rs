@@ -121,7 +121,7 @@ pub fn build_ios(ios_cache: &Path, work: &Path, arch: &str) -> Result<(), String
 }
 
 /// Beside pipelines.metalar: the iOS SDK version whose compiler made it (the app uses it only on that iOS release).
-pub const SDK_FILE: &str = "pipelines.metalar.sdk";
+pub const SDK_FILE: &str = crate::ipa::ARCHIVE_SDK_FILE;
 
 /// The iOS SDK's version, when Xcode has the SDK and metal-tt.
 fn ios_sdk_version() -> Option<String> {
