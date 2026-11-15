@@ -9,6 +9,10 @@ use nxport::settings::{self, Settings, SettingsPatch};
 
 use crate::macho;
 
+/// The file beside the pipeline archive naming the Xcode SDK it was compiled with (crate::pipeline_archive, macOS only;
+/// copied into an .ipa from whatever host builds it).
+pub const ARCHIVE_SDK_FILE: &str = "pipelines.metalar.sdk";
+
 pub const GUEST_INSTALL_NAME: &str = "@rpath/NxportGuest.framework/NxportGuest";
 
 const EXECUTABLE: &str = "nxport";
@@ -178,7 +182,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
             || n == "pipelines.txt"
             || (n.starts_with("shaders_") && n.ends_with(".metallib"))
             || (n.starts_with("pipelines") && n.ends_with(".metalar"))
-            || n == crate::pipeline_archive::SDK_FILE
+            || n == ARCHIVE_SDK_FILE
             || n == "source.pack"
         {
             copy(&e.path(), &app.join("shader_cache").join(&n))?;
