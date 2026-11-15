@@ -239,6 +239,8 @@ group! {
         translated_shaders: bool = false,
         /// Attempt runtime in-process compilation of missing shaders
         dynamic_shaders: bool = true,
+        /// Decode movies on the video hardware where the system has a decoder for them (VP9 on Apple GPUs)
+        hw_video: bool = true,
         /// Compile new shaders in the background instead of pausing the game. Smoother, but for now everything
         /// waiting on a compile is skipped until it is ready, which can cause visual glitches (missing objects or
         /// passes, flashes) the first time something is drawn.

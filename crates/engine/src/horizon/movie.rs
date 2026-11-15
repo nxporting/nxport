@@ -68,6 +68,7 @@ fn media() -> &'static Media {
     }
     static MEDIA: Media = Media {
         open: |path, n| unsafe {
+            nxport_media::set_hardware_video(crate::settings::get().graphics.hw_video);
             let p = CStr::from_ptr(path).to_string_lossy().into_owned();
             match Source::open(std::path::Path::new(&p)) {
                 Ok(s) => {

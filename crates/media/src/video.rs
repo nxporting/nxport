@@ -34,16 +34,44 @@ fn planes(
 
 pub(crate) struct Vp9 {
     dec: vp9_mt::Vp9Decoder,
+    /// The video hardware's decoder, chosen at the stream's first sample when it is a key frame and one exists.
+    #[cfg(target_vendor = "apple")]
+    hw: Option<crate::vt::Session>,
+    decided: bool,
 }
 
 impl Vp9 {
     pub(crate) fn new() -> Vp9 {
-        Vp9 { dec: vp9_mt::Vp9Decoder::with_threads(0) }
+        Vp9 {
+            dec: vp9_mt::Vp9Decoder::with_threads(0),
+            #[cfg(target_vendor = "apple")]
+            hw: None,
+            decided: false,
+        }
     }
 }
 
 impl Decode for Vp9 {
     fn decode(&mut self, data: &[u8], pts_us: i64, out: &mut VecDeque<Decoded>) -> Result<(), String> {
+        if !self.decided {
+            self.decided = true;
+            #[cfg(target_vendor = "apple")]
+            match crate::vt::key_frame(data) {
+                Some(k) if crate::hardware_video() => match crate::vt::Session::new(&k) {
+                    Ok(s) => {
+                        println!("[+] movie: VP9 {}x{} decoded by the video hardware (VideoToolbox)", k.width, k.height);
+                        self.hw = Some(s);
+                    }
+                    Err(e) => println!("[+] movie: VP9 {}x{} decoded in software: {e}", k.width, k.height),
+                },
+                Some(_) => println!("[+] movie: VP9 decoded in software (hardware video decoding is off)"),
+                None => println!("[+] movie: VP9 decoded in software (the stream does not start with a key frame)"),
+            }
+        }
+        #[cfg(target_vendor = "apple")]
+        if let Some(hw) = &mut self.hw {
+            return hw.decode(data, pts_us, out);
+        }
         self.dec.push(data, Some(pts_us)).map_err(|e| format!("vp9: {e:?}"))?;
         // VP9 does not reorder: a sample shows at most one picture (a superframe's hidden frames show none). The decoder
         // decodes one coded frame per call and answers Again after a hidden one while the shown frame is still pending:
