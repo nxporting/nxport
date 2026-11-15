@@ -233,7 +233,7 @@ impl Gfx {
                 let Some(tex) = self.texture(&mut st.tc, dst.texture) else {
                     return;
                 };
-                st.tc.gpu_written.insert(super::storage_id(&tex)); // contents now differ from guest memory
+                st.tc.mark_gpu_written(super::storage_id(&tex)); // contents now differ from guest memory
                 let Some((_, t)) = tex_info(dst.texture) else {
                     return;
                 };
@@ -329,7 +329,7 @@ impl Gfx {
                 ) else {
                     return;
                 };
-                st.tc.gpu_written.insert(super::storage_id(&dtex)); // contents now differ from guest memory
+                st.tc.mark_gpu_written(super::storage_id(&dtex)); // contents now differ from guest memory
                 let (Some((_, st_)), Some((_, dt_))) =
                     (tex_info(src.texture), tex_info(dst.texture))
                 else {
@@ -367,7 +367,7 @@ impl Gfx {
                 let Some(tex) = self.texture(&mut st.tc, dst.texture) else {
                     return;
                 };
-                st.tc.gpu_written.insert(super::storage_id(&tex)); // contents now differ from guest memory
+                st.tc.mark_gpu_written(super::storage_id(&tex)); // contents now differ from guest memory
                 let Some((_, t)) = tex_info(dst.texture) else {
                     return;
                 };
