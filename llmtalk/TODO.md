@@ -152,6 +152,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   cause is memory: an actor's heap too small or missing here (RSTB sizes, heap sizes from the system, as Savage Wind's
   RSTB fixes), and the fallback path needs setup that is not done yet. Next: probe the allocation that falls back
   (its heap, size, caller) on that ActorCreate job.
+  Correction (allocation probe at main+0xacbc24): no failed allocation; the job allocates 0x10-0x60 bytes straight from a
+  heap (0x...aa68) that the listener is then handed, so that heap is itself named EmergencyHeap, made by a create path
+  other than main+0xa0913c. Not memory, back to order: this job uses its EmergencyHeap before the setup that sets
+  singleton+0x38. Next: the create path of that heap (heap constructors / FrameHeap) and the job that owns it.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
