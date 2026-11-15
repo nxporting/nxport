@@ -12,4 +12,5 @@ pub(super) static LAYER: Layer = Layer {
     nvn_api: Some((53, 13)),
     // The 4.4 thread layout, which it ran with.
     thread_tail_shift: Some(8),
+    audio_handle_state: None,
 };

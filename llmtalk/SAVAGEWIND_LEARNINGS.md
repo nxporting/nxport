@@ -88,7 +88,7 @@ Still broken there above 30 fps (docs, FAQ): #425 is their catch-all; Game Over 
 | Mouse bow aiming: right button draws, left fires (ZR released 140 ms) | `pc_bow.h` | Input timing only | TotK: exact bow aim |
 | Per-action bindings: the game's isHold / isTrig over a 41-action mask table | `_act_query`, `hle/bindings.c` | Yes | - |
 | Mouse pointer in menus, map, shops, Divine Beast map | `pc_cursor*`, `pc_map_focus*`, `beast_*` sites, `pc_cursor.c` | Mostly exact, large | - |
-| Radial stick dead zone: the game's menus mute a stick until it is within 1% of centre | `hle/input.c` | Yes (the console's input service has one) | Check ours |
+| Radial stick dead zone: the game's menus mute a stick until it is within 1% of centre | `hle/input.c` | Yes (the console's input service has one) | Have: radial, rescaled (host/display_sdl.rs dead_zone) |
 
 ### 2d. Crashes, completion, memory
 
@@ -113,10 +113,10 @@ what it took above 30 fps.
 | Depth clamp for the sun cascades (without it the cliff over the Shrine of Resurrection cast no shadow; lit fog) | `CMD_SET_DEPTH_CLAMP` | Have (Vulkan, Metal) |
 | IPA multiply for soft particles (w / clip.w: tiled "fog" in the shrine); noperspective HUD colours (black minimap) | `nvn/maxwell/translate.c` | sass2spv handles IPA MULTIPLY; check the w/clip.w case |
 | IADD3.RS / .LS shift (#147, beach sprites) | `translate.c` | Have (Lrs) |
-| R16 shadow copy sampled with depth comparison: a depth twin made where the format lacks it (water, terrain shadows; AMD #59) | `exec.c depth_twin_*` | Check |
+| R16 shadow copy sampled with depth comparison: a depth twin made where the format lacks it (water, terrain shadows; AMD #59) | `exec.c depth_twin_*` | Have: vulkan/draw.rs depth twins (layout::depth_twin) |
 | Occlusion results read on time with GPU overlap (Kakariko's morning fog went out) | `exec.c` | Check with our overlap |
 | Sampler and texture descriptors: samplers copied by value (shared descriptions), textures resolved at record time (the exposure chain re-initialises one NVNtexture inside a command buffer), BindTexturesDeferred, cube maps as cube arrays | `objects.c`, `cmdbuf.c` | Likely have; not checked |
-| Vertex data the CPU rewrites each frame copied before the GPU reads it (#620: rain and torch particles stretched) | `exec.c` | Check with our overlap |
+| Vertex data the CPU rewrites each frame copied before the GPU reads it (#620: rain and torch particles stretched) | `exec.c` | Not needed as far as read: rewritten ranges are read in place (vulkan/vcache.rs) and nvnQueueFenceSync signals only once all work submitted before it completed, so the game's own double buffering holds; recheck if BotW rain / torches stretch |
 | Kernel: timed condvar wait returns without the mutex; yield after unlock | docs | Likely have (TotK runs) |
 | Native Yaz0 stream decoder, checked byte for byte against the game's code (`SAVAGEWIND_YAZ0=2`): Hyrule Castle frames were the main thread waiting for it | `hle/yaz0.c`, `_yaz0_stream` | None; measure first |
 | Guest setjmp / longjmp (libjpeg errors in the autosave thumbnail) | `hle/setjmp.c` | Lifter has longjmp support; check |

@@ -46,6 +46,7 @@ pub(super) static LAYER: Layer = Layer {
     tables: TABLES,
     nvn_api: None,
     thread_tail_shift: None,
+    audio_handle_state: None,
 };
 
 static TABLES: &[&[Entry]] = &[

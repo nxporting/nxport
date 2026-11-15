@@ -240,7 +240,7 @@ static mut SERVICE: ServiceObject = ServiceObject {
 };
 
 /// Guest-callable trampolines (x18 / tpidr_el0 restored on return) for the vtable entries.
-static TRAMPOLINES: Mutex<(usize, usize)> = Mutex::new((0, 0));
+static TRAMPOLINES: Mutex<(usize, usize, usize)> = Mutex::new((0, 0, 0));
 
 pub fn request_update_fn() -> *const () {
     crate::hle!(request_update(_, _, _, _))
@@ -248,8 +248,18 @@ pub fn request_update_fn() -> *const () {
 pub fn unexpected_call_fn() -> *const () {
     crate::hle!(unexpected_service_call())
 }
-pub fn set_trampolines(request_update: usize, unexpected: usize) {
-    *TRAMPOLINES.lock().unwrap() = (request_update, unexpected);
+pub fn stored_parameter_fn() -> *const () {
+    crate::hle!(stored_parameter())
+}
+pub fn set_trampolines(request_update: usize, unexpected: usize, stored: usize) {
+    *TRAMPOLINES.lock().unwrap() = (request_update, unexpected, stored);
+}
+
+/// IAudioRenderer::SetRenderingTimeLimit (command 8, slot 12) and SetVoiceDropParameter (command 12, slot 16): the
+/// client keeps the value in its state block (SDK 20.5: AudioRendererHandle's second word) and the service stores it
+/// for the DSP's overload handling. This renderer is never overloaded and drops no voices, so storing is all there is.
+unsafe extern "C" fn stored_parameter() -> u32 {
+    0
 }
 
 unsafe extern "C" fn unexpected_service_call() -> u32 {
@@ -303,12 +313,14 @@ pub unsafe fn open(param: *const u32) -> usize {
         updates: 0,
     });
     let svc = &mut *std::ptr::addr_of_mut!(SERVICE);
-    let (tramp_update, tramp_unexpected) = *TRAMPOLINES.lock().unwrap();
+    let (tramp_update, tramp_unexpected, tramp_stored) = *TRAMPOLINES.lock().unwrap();
     let pick = |t: usize, f: *const ()| if t != 0 { t } else { f as usize };
     for s in svc.slots.iter_mut() {
         *s = pick(tramp_unexpected, crate::hle!(unexpected_service_call()));
     }
     svc.slots[8] = pick(tramp_update, crate::hle!(request_update(_, _, _, _)));
+    svc.slots[12] = pick(tramp_stored, crate::hle!(stored_parameter()));
+    svc.slots[16] = pick(tramp_stored, crate::hle!(stored_parameter()));
     svc.vtable = svc.slots.as_ptr();
     svc as *mut ServiceObject as usize
 }

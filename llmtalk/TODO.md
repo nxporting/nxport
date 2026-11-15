@@ -94,9 +94,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
-- BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9 (on
-  origin/main, not merged here yet: main has unpushed commits, merging is the user's call). Needs a run with the V1_9_0
-  profile (profile/botw.rs). Win-worker's Vulkan change (every LINEAR_RENDER_TARGET written back at the end of its
+- BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
+  (merged on the Mac). Needs a run with the V1_9_0 profile (profile/botw.rs): the 1.9.0 update NSP is in
+  ~/Downloads (not mounted yet). Win-worker's Vulkan change (every LINEAR_RENDER_TARGET written back at the end of its
   submit) needs no Metal mirror: rt_guard holds CPU-pool targets and writes them back on the first CPU touch. 1.9.0
   physics reports (boxes pinned to walls, Link floating, water) may be the open 1.5.0 water bug (AGENTS.md 5b2).
   Flicker in 1.9.0 on Windows: not described yet.
@@ -111,6 +111,43 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
   share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
+- **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15).** Seen: boxes pinned to walls and floating, Link
+  floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
+  render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
+  exposure); nxport wrote back only targets <= 64 KiB or not drawn in the last 4 frames, a frame late. Uncommitted (in
+  the user's test build): every linear render target goes back, copied at the end of the submit that drew it
+  (vulkan/exec.rs note_rendered / record_rt_reads), so a wait on that submit's fence finds it. Waiting for the user's
+  test; then TotK / SMO checks (with the lifter changes) before committing. Flicker: not described yet (asked).
+- **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
+  line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
+  pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
+  sead controller step, arrow_gravity, snd_frame_floor, phys_solver_steps, phys_tick(_mt) / phys_motion_tick (Havok
+  deactivation at the console's pace), kf_angle. Our rule (no heuristics): take their exact ones (frame wait, GUI speed,
+  controller step, arrows, sound floor, kf_angle, deactivation derived from the game's counts), not their tuned ones
+  (solver steps 6/sqrt(df), the VFR step smoothing, shield-surf grace, event lists). Find each by pattern as TotK's
+  profile does, and check against KNOWN.
+
+- **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
+  virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
+  stores its second argument, a callback object, at [sp+0x28]) goes to main+0x15e264, 0x28 into f_700025e23c: the
+  object (x0) is a stack address and its "vtable" pointer is another stack address, so the object was never built or
+  was reused. 0x700025e264 is in no relocation, no ADRP/ADD and no ADR, and the instruction before it is not a call
+  (not a return address). Not today's lifter change: an A/B build with 00dc372 reverted stops the same. 1.0.0 hits
+  the same routine (main+0x14bf514 -> 0x14befa8, +0x28). Next: who calls main+0x15db24 and with which second argument
+  (a probe at its entry), and whether that object comes from an HLE call.
+  Probe (entry of main+0x15db24): called once, from main+0x1a3378 (f_70002a3240); its x1 (stored at [sp+0x28]) is a
+  sound object (vtable main+0x1b8f7c8). The bad object is the third argument instead: the prologue stores x4, x2 at
+  [sp+8], [sp+0x10], and the call at main+0x15e790 reads [sp+0x10]. The caller passes x2 = [x20] (f_70002a3240 loads it
+  at main+0x1a32c0 and main+0x1a3304). Next: print x2, [x2] at that call and find what fills [x20].
+
+- **DLC (add-on content) is not supported (2026-11-14, win-worker; Savage Wind parity).** nn::aoc::ListAddOnContent
+  reports none (horizon/sdk/base/aoc.rs). Savage Wind serves each add-on content's RomFS from its own folder
+  (services/fs.c: extracted/aoc<index>, data id = (program id & ~0xfff) + 0x1000 + index, IStorage through the aoc
+  service) and, when a dump has the DLC merged into the game's RomFS (System/AocVersion.txt or Pack/AocMainField.pack
+  present), grows each RSTB entry to its Aoc/0010/<path> entry (else a white screen after "Open your eyes"). Needs: the
+  builder taking a DLC NSP (mounted beside the game) into the app's files, nn::aoc Count / List / Mount, and the merged
+  case. Blocked on a test: BotW's DLC wants an update the base 1.0.0 lacks; no DLC dump on this PC (asked in PROGRESS).
+
 - **An SDK layer for every SDK release (user, 2026-11-14).** Source lists: titledb.nintendo-research.com/switch/main.html
   and subsdks.html there (the SDK versions of the extra modules, subsdk0..n, which can differ from the sdk module's);
   the tables load /data/switch/main.json and /data/switch/subsdks.json (rows: name, av, sdk.version, nvn.version, and
@@ -125,16 +162,45 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 - **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
-  checked on SMO 1.0.0 to its title menu and TotK 1.0.0 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
+  checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
   crashes in f_7000f52794 (main+0xe52794, after f_7000f51cc8 returns): the singleton at 0x70023ebee0 (made by
   main+0xe52fac, 0x40 bytes) still has +0x38 null, which only main+0xdbeb3c sets (called from main+0x7ae8f0, called
   from main+0x7b7b54). Same in every run, but it is an ordering between threads: a probe (fprintf at those
   functions in the lifted C) shows the ActorCreate job (main+0xe52794, from lr main+0xf3960c) run once and crash
   before another thread runs main+0x7b7b54 -> 0x7ae8f0 -> 0xdbeb3c (from lr main+0x103bddc); later runs of the job
-  pass. The ActorCreate thread that crashes is the core-0 one (affinity 0x1, prio 20). Hypothesis: on Horizon a core
-  runs only its highest-priority ready thread, so this job could not run while the setter's thread held core 0;
-  nxport runs every thread at once. Next: which thread calls main+0x7b7b54 (and its core and priority), and what
-  orders it before the job on the console.
+  pass. Not an ordering problem after all: with the job made to wait for +0x38 (probe), nothing sets it while it
+  waits (the setter path runs only after the job), and priority-ordered guest cores (branch guest-cores-priority,
+  parked) do not change the crash. So on the console this job must not reach that read: an earlier condition differs
+  in 1.0.0 (pre-launch SDK 0.12; the first ActorCreate thread also returns right after it starts, then is restarted).
+  Correction (later run of the same probe, 70 ms wait): the setter path (main+0x7b7b54 -> 0x7ae8f0 -> 0xdbeb3c) runs on
+  another ActorCreate thread: the job at lr main+0xf3960c creates "EmergencyHeap" (string at main+0x1bbb094) and needs
+  an actor another ActorCreate job creates first. With the job made to wait, the game runs to frame 1200, then makes a
+  virtual call (vtable slot 0x50, main+0x14bf514) to main+0x14befa8, 0x28 into f_70015bef80 and in no relocation: a
+  wrong object, so damage from something earlier. On the console the first job must always finish first; here the
+  core-0 ActorCreate thread also returns once and is restarted, which may shift that order. That return is
+  sead's own: run_ (main+0xa1e30c) pops its queue (main+0xa33e94) until the quit message, so the game told it to quit
+  (a worker reset), not a broken wait. Narrowed: main+0xe52794 runs from a heap-creation
+  listener (main+0x1039560 area): any thread creating a heap named "EmergencyHeap" (main+0xceb2f4, sead heap create,
+  5 MB) calls it when the singleton and its +0x28 are set; it then needs +0x38, which main+0xdbeb3c stores together
+  with the same object into several other singletons. So the console sets +0x28 and +0x38 close together; here an
+  EmergencyHeap is created in the gap (about 70 ms). Next: what sets +0x28 (a method store through this, not the slot),
+  and what the setter's thread does between the two that takes so long here.
+  Timestamped probe (2026-11-14): main creates the first EmergencyHeap (main+0xceb2f4) at T, before the singleton (listener
+  skips); main makes the singleton at T+1.57 s, and +0x28 is set by its constructor (it points at singleton+0x40), so
+  that check only means "the singleton exists"; at T+3.21 s an ActorCreate thread creates another heap named
+  EmergencyHeap (not through main+0xceb2f4) and crashes, +0x38 still null. On the console the actor whose creation runs
+  main+0x7b7b54 (and sets +0x38) must come before any ActorCreate job makes an EmergencyHeap: find which job makes that
+  heap and what queues it after that actor.
+  Correction (heap-create probe, frames from x29): only one heap named EmergencyHeap is ever made, by main at startup
+  (call chain main+0xbcb340 <- 0xdb94d4 <- 0x726f64 <- 0x9fef7c ...). The ActorCreate listener is handed that existing
+  heap: in sead an allocation falls back to the emergency heap when its own heap is full or not found. So the likely
+  cause is memory: an actor's heap too small or missing here (RSTB sizes, heap sizes from the system, as Savage Wind's
+  RSTB fixes), and the fallback path needs setup that is not done yet. Next: probe the allocation that falls back
+  (its heap, size, caller) on that ActorCreate job.
+  Correction (allocation probe at main+0xacbc24): no failed allocation; the job allocates 0x10-0x60 bytes straight from a
+  heap (0x...aa68) that the listener is then handed, so that heap is itself named EmergencyHeap, made by a create path
+  other than main+0xa0913c. Not memory, back to order: this job uses its EmergencyHeap before the setup that sets
+  singleton+0x38. Next: the create path of that heap (heap constructors / FrameHeap) and the job that owns it.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's

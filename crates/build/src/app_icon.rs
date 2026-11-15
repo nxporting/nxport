@@ -116,6 +116,95 @@ pub fn set_exe_icon(exe: &Path, ico: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+
+/// The version resource of an app's nxport.exe (RT_VERSION 1, VS_VERSIONINFO): the game's name as its description and
+/// product, so Task Manager, Explorer and the taskbar show the game rather than the builder's own description (the engine
+/// is a copy of the builder). `version`: the game's display version, if known.
+pub fn version_resource(game: &str, version: Option<&str>) -> Vec<u8> {
+    fn utf16z(s: &str) -> Vec<u8> {
+        s.encode_utf16().chain([0]).flat_map(|c| c.to_le_bytes()).collect()
+    }
+    fn pad4(v: &mut Vec<u8>) {
+        while v.len() % 4 != 0 {
+            v.push(0);
+        }
+    }
+    // A node: wLength, wValueLength (words for text), wType (1 text, 0 binary), the key, padding, the value, padding,
+    // the children.
+    fn node(key: &str, value: &[u8], text: bool, children: &[Vec<u8>]) -> Vec<u8> {
+        let mut v = vec![0u8; 6];
+        v.extend(utf16z(key));
+        pad4(&mut v);
+        v.extend_from_slice(value);
+        let value_len = if text { value.len() / 2 } else { value.len() } as u16;
+        for c in children {
+            pad4(&mut v);
+            v.extend_from_slice(c);
+        }
+        let len = v.len() as u16;
+        v[0..2].copy_from_slice(&len.to_le_bytes());
+        v[2..4].copy_from_slice(&value_len.to_le_bytes());
+        v[4..6].copy_from_slice(&(text as u16).to_le_bytes());
+        v
+    }
+    let s = |k: &str, val: &str| node(k, &utf16z(val), true, &[]);
+    let mut strings = vec![
+        s("FileDescription", game),
+        s("ProductName", game),
+        s("CompanyName", "The nxport contributors"),
+        s("OriginalFilename", "nxport.exe"),
+        s("Comments", "Made with nxport, https://github.com/nxporting/nxport"),
+    ];
+    if let Some(ver) = version {
+        strings.push(s("ProductVersion", ver));
+    }
+    let table = node("040904B0", &[], true, &strings);
+    let string_info = node("StringFileInfo", &[], true, &[table]);
+    let translation = node("Translation", &[0x09, 0x04, 0xB0, 0x04], false, &[]);
+    let var_info = node("VarFileInfo", &[], true, &[translation]);
+    // VS_FIXEDFILEINFO: signature, struct version, file and product versions 0, flags mask 0x3f, flags 0, OS
+    // VOS_NT_WINDOWS32, type VFT_APP, subtype and date 0.
+    let mut fixed = Vec::new();
+    for w in [0xFEEF04BDu32, 0x0001_0000, 0, 0, 0, 0, 0x3f, 0, 0x0004_0004, 1, 0, 0, 0] {
+        fixed.extend(w.to_le_bytes());
+    }
+    let mut root = node("VS_VERSION_INFO", &fixed, false, &[string_info, var_info]);
+    // wValueLength of the root is the fixed info's size in bytes.
+    root[2..4].copy_from_slice(&(fixed.len() as u16).to_le_bytes());
+    root
+}
+
+/// Writes `res` (version_resource) into the program `exe` as its version resource.
+#[cfg(windows)]
+pub fn set_exe_version(exe: &Path, res: &[u8]) -> Result<(), String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    extern "system" {
+        fn BeginUpdateResourceW(file: *const u16, delete_existing: i32) -> *mut c_void;
+        fn UpdateResourceW(h: *mut c_void, kind: *const u16, name: *const u16, lang: u16, data: *const c_void, size: u32) -> i32;
+        fn EndUpdateResourceW(h: *mut c_void, discard: i32) -> i32;
+    }
+    const RT_VERSION: usize = 16;
+    // The builder's own resource is US English (rc.exe's default): replaced in place.
+    const LANG_EN_US: u16 = 0x409;
+    let path: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+    let err = |what: &str| format!("{}: {what}: {}", exe.display(), std::io::Error::last_os_error());
+    unsafe {
+        let h = BeginUpdateResourceW(path.as_ptr(), 0);
+        if h.is_null() {
+            return Err(err("BeginUpdateResource"));
+        }
+        if UpdateResourceW(h, RT_VERSION as *const u16, 1 as *const u16, LANG_EN_US, res.as_ptr() as *const c_void, res.len() as u32) == 0 {
+            EndUpdateResourceW(h, 1);
+            return Err(err("UpdateResource (version)"));
+        }
+        if EndUpdateResourceW(h, 0) == 0 {
+            return Err(err("EndUpdateResource"));
+        }
+    }
+    Ok(())
+}
+
 /// Writes `src` (JPEG or PNG, told apart by its bytes: the control icon's name ends in .dat) scaled to `px` square
 /// pixels as the PNG `out`.
 pub fn scaled_png(src: &Path, px: u32, out: &Path) -> Result<(), String> {
@@ -128,6 +217,40 @@ pub fn scaled_png(src: &Path, px: u32, out: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    /// The version resource as Windows reads it back from a program: its description and product are the game.
+    #[cfg(windows)]
+    #[test]
+    fn version_resource_reads_back() {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "version")]
+        extern "system" {
+            fn GetFileVersionInfoSizeW(file: *const u16, handle: *mut u32) -> u32;
+            fn GetFileVersionInfoW(file: *const u16, handle: u32, len: u32, data: *mut u8) -> i32;
+            fn VerQueryValueW(block: *const u8, sub: *const u16, out: *mut *const u16, len: *mut u32) -> i32;
+        }
+        let exe = std::env::temp_dir().join(format!("nxport-ver-{}.exe", std::process::id()));
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        super::set_exe_version(&exe, &super::version_resource("Some Game", Some("1.9.0"))).unwrap();
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let path: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
+        let read = |key: &str| unsafe {
+            let n = GetFileVersionInfoSizeW(path.as_ptr(), std::ptr::null_mut());
+            assert!(n > 0, "no version info");
+            let mut data = vec![0u8; n as usize];
+            assert!(GetFileVersionInfoW(path.as_ptr(), 0, n, data.as_mut_ptr()) != 0);
+            let (mut p, mut len) = (std::ptr::null(), 0u32);
+            if VerQueryValueW(data.as_ptr(), wide(&format!(r"\StringFileInfo\040904B0\{key}")).as_ptr(), &mut p, &mut len) == 0 {
+                return None;
+            }
+            Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, len as usize)).trim_end_matches(char::from(0)).to_string())
+        };
+        let (desc, product, ver) = (read("FileDescription"), read("ProductName"), read("ProductVersion"));
+        let _ = std::fs::remove_file(&exe);
+        assert_eq!(desc.as_deref(), Some("Some Game"));
+        assert_eq!(product.as_deref(), Some("Some Game"));
+        assert_eq!(ver.as_deref(), Some("1.9.0"));
+    }
+
     #[test]
     fn scales_a_jpeg_named_dat_into_a_png() {
         let dir = std::env::temp_dir().join(format!("nxport-icon-{}", std::process::id()));
