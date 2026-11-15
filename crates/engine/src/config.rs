@@ -75,7 +75,10 @@ pub fn app_bundle_layer() -> crate::settings::SettingsPatch {
         .filter(|d| d.join("ExeFS").is_dir() || d.join("exefs").is_dir())
         .or_else(|| (resources.join("ExeFS").is_dir() || resources.join("exefs").is_dir()).then(|| resources.clone()));
     p.files.mods_dir = dir(&["Mods", "mods"]);
-    if p.files.mods_dir.is_none() {
+    // Without mods of its own, a Mac app takes the game's data directory's mods folder (games/<title id>/mods): mods a
+    // player adds after the build, code mods included, as native code is patched at load. A Windows app runs lifted code,
+    // which only the builder's overlay changes.
+    if p.files.mods_dir.is_none() && cfg!(windows) {
         p.files.no_mods = Some(true);
     }
     p.files.shader_cache = dir(&["shader_cache"]);
