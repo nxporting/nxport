@@ -2293,8 +2293,8 @@ pub unsafe extern "C" fn hle_nn_os_CreateThread(
     priority: i32,
 ) -> i32 {
     println!(
-        "[+] HLE: nn::os::CreateThread(thread={:p}, stack={:p}, size={}, prio={})",
-        thread, stack, stack_size, priority
+        "[+] HLE: nn::os::CreateThread(thread={:p}, entry={:#x}, arg={:p}, stack={:p}, size={}, prio={})",
+        thread, entry as usize, arg, stack, stack_size, priority
     );
     if !stack.is_null() && stack_size > 0 {
         libc::memset(stack as *mut libc::c_void, 0, stack_size);
@@ -2447,7 +2447,7 @@ pub unsafe extern "C" fn hle_nn_os_StartThread(thread: *mut NnThreadType) {
             }
             setup_horizon_tpidrro(thread_ptr);
             super::thread_stack::run(stack_lo, stack_hi, entry_usize, arg_usize);
-            println!("[+] HLE: Guest thread '{}' returned", name_str);
+            println!("[+] HLE: Guest thread '{}' ({:p}) returned", name_str, thread_ptr);
             (*thread_ptr).state = THREAD_STATE_EXITED;
             let (done, cv) = &*exit;
             *done.lock().unwrap_or_else(|e| e.into_inner()) = true;

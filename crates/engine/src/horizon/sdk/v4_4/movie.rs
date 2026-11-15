@@ -1,6 +1,6 @@
 use super::super::Entry;
 
-pub(super) static TABLE: &[Entry] = &[
+pub(in crate::horizon::sdk) static TABLE: &[Entry] = &[
     // The movie library's Decoder constructor before it took a trailing int (MK8D's subsdk0).
     Entry(
         "_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeE",

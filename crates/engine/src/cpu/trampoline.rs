@@ -1754,7 +1754,7 @@ unsafe fn jump_table_of(text: *const u32, i: usize, text_size: usize, image_end:
     // allows: 65536 per halfword table filled the island on the iPhone.
     let mem = ImageMemory { text: text as usize, text_end: text as usize + text_size, end: image_end };
     let pc = text.add(i) as u64;
-    let landings = nxport_lifter::jt::resolve(&mem, text as u64, pc, 18)
+    let landings = nxport_lifter::jt::resolve(&mem, &|_, _| None, text as u64, pc, 18)
         .and_then(|targets| targets.iter().map(|&t| t.checked_sub(base as u64).map(|d| d / 4 + 1)).max().flatten())
         .map_or(width, |n| (n as usize).min(width));
     Some((base, landings))
