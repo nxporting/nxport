@@ -152,6 +152,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   composite shader that turns the .water.extm tiles into the 64x64 RGBA16 water maps (sass2spv translates for both
   backends), or how the CPU reads those maps. mac-worker is watching the water maps; the split test: compare a map's
   texels with the .water.extm heights for that tile.
+  Narrowed (2026-11-15 night, both workers): the CPU's water height is R of the 64x64 RGBA16 maps
+  (uking getWaterHeight main+0x72c494 -> 0x110aa5c, 1.5.0); at a still pond R jumps between neighbours. Three shaders
+  draw the maps (a99b7a48, 8bd2523a, f4c0e5d3; translated cleanly, trivial): R is the .x of a 256x256 RGBA8 linear
+  render target (tera::ImageResourceMgr, made by GPU draws; Metal contents = guest bytes). mac-worker is tracing which
+  draws write those RGBA8 tiles. Vulkan loads guest bytes before a partial draw into a re-made target (refresh(first)).
 - **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
   line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
   pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
