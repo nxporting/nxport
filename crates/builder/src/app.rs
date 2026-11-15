@@ -690,7 +690,7 @@ impl Builder {
                         }
                     }
                 }
-                tip(ui, "Compiles the listed pipelines into a binary archive for this GPU (metal-tt, Xcode), so the app does not compile them at first draw; other devices compile them as before.");
+                tip(ui, "Compiles the listed pipelines into a binary archive for this GPU with Xcode's metal-tt, so the app does not compile them at first draw. The archive serves only phones on the iOS release of Xcode's iOS SDK; other phones and GPUs compile the list at first launch. Without Xcode the step is skipped.");
             }
             let default_id = self.game.as_ref().map_or_else(String::new, |g| nxport::profile::bundle_id(g.title_id, g.profile));
             label(ui, "Bundle ID", "CFBundleIdentifier (empty: the default shown).");
