@@ -978,6 +978,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         horizon::audio::renderer::set_trampolines(
             mem_space.make_hle_trampoline(horizon::audio::renderer::request_update_fn()) as usize,
             mem_space.make_hle_trampoline(horizon::audio::renderer::unexpected_call_fn()) as usize,
+            mem_space.make_hle_trampoline(horizon::audio::renderer::stored_parameter_fn()) as usize,
         );
         horizon::movie::set_trampolines(&mut |f| mem_space.make_hle_trampoline(f) as usize);
         let images = [
