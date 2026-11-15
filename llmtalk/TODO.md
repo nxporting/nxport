@@ -115,10 +115,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   from main+0x7b7b54). Same in every run, but it is an ordering between threads: a probe (fprintf at those
   functions in the lifted C) shows the ActorCreate job (main+0xe52794, from lr main+0xf3960c) run once and crash
   before another thread runs main+0x7b7b54 -> 0x7ae8f0 -> 0xdbeb3c (from lr main+0x103bddc); later runs of the job
-  pass. The ActorCreate thread that crashes is the core-0 one (affinity 0x1, prio 20). Hypothesis: on Horizon a core
-  runs only its highest-priority ready thread, so this job could not run while the setter's thread held core 0;
-  nxport runs every thread at once. Next: which thread calls main+0x7b7b54 (and its core and priority), and what
-  orders it before the job on the console.
+  pass. Not an ordering problem after all: with the job made to wait for +0x38 (probe), nothing sets it while it
+  waits (the setter path runs only after the job), and priority-ordered guest cores (branch guest-cores-priority,
+  parked) do not change the crash. So on the console this job must not reach that read: an earlier condition differs
+  in 1.0.0 (pre-launch SDK 0.12; the first ActorCreate thread also returns right after it starts, then is restarted).
+  Next: what the job at lr main+0xf3960c tests before calling main+0xe52794, and why the first ActorCreate thread
+  returns (its loop's wait).
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
