@@ -107,6 +107,9 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
             crate::guest::dirty_track::write_unseen(t.storage, total, || {
                 crate::nvn::api::guest_write_level(t, *level as usize, std::slice::from_raw_parts(*src as *const u8, *len));
             });
+            // What memory holds right after the write-back: a CPU write before the submit retires shows as a difference
+            // (texture.rs resettle).
+            super::texture::note_written_back(t.storage, std::slice::from_raw_parts(t.storage as *const u8, total));
         }
     }
     if ok && d.timestamps != vk::QueryPool::null() {

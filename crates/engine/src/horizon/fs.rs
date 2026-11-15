@@ -10,11 +10,25 @@ use std::sync::Mutex;
 use super::packed_mods::{self, ImageDirEntry, RomfsImage};
 
 /// pread: reads at `off` (Windows also moves the file position, which nothing here uses).
+/// Reads `buf.len()` bytes at `off`, or up to the end of the file: as nn::fs::ReadFile does. One pread / ReadFile may return
+/// fewer bytes than asked without being at the end (a mounted image, a FUSE or WinFsp file system, a large request), and
+/// the game's reads without a byte count take the rest of the buffer as file data.
 fn read_at(f: &File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
-    #[cfg(unix)]
-    return std::os::unix::fs::FileExt::read_at(f, buf, off);
-    #[cfg(windows)]
-    return std::os::windows::fs::FileExt::seek_read(f, buf, off);
+    let mut done = 0;
+    while done < buf.len() {
+        #[cfg(unix)]
+        let n = std::os::unix::fs::FileExt::read_at(f, &mut buf[done..], off + done as u64);
+        #[cfg(windows)]
+        let n = std::os::windows::fs::FileExt::seek_read(f, &mut buf[done..], off + done as u64);
+        match n {
+            Ok(0) => break,
+            Ok(n) => done += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            // The caller retries a buffer fault from the start (horizon/fs.rs ReadFile).
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(done)
 }
 
 /// pwrite, as `read_at`.
