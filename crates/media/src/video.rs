@@ -43,10 +43,10 @@ pub(crate) struct Vp9 {
 impl Vp9 {
     pub(crate) fn new() -> Vp9 {
         Vp9 {
-            // Two threads: TotK's 1080p opening movie (4 tile columns) on an M4 took 12.6 ms a picture on 1 thread, 8.0
-            // on 2, 6.3 on 4 or more, while the CPU time spent grew to ~25 ms at 4 and ~38 at 6. Movies play beside
-            // the game, and every core decoding left the iPhone's game threads short and the phone hot.
-            dec: vp9_mt::Vp9Decoder::with_threads(2),
+            // Four threads: TotK's 1080p opening movie (4 tile columns) on an M4 took 12.6 ms a picture on 1 thread, 8.0
+            // on 2, 6.3 on 4 or more, the CPU time spent growing with each thread (~38 ms at 6). On the iPhone 16e (no
+            // VP9 hardware) all 6 cores gave 11.5-13 ms, 2 threads 19-23 ms with 15% of pictures over 33 ms.
+            dec: vp9_mt::Vp9Decoder::with_threads(4),
             #[cfg(target_vendor = "apple")]
             hw: None,
             decided: false,
