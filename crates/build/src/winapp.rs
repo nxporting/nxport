@@ -82,6 +82,14 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
         }
         None => println!("  [!] No icon in the dump (control/icon_*.dat or Logo/{tid:016x}.png): the app keeps the default"),
     }
+    // The game's name as the program's description: what Task Manager and Explorer show for it (the engine is the builder,
+    // whose own description says what the builder does).
+    if let Some(control) = nxport::game::control_of(o.dump).filter(|c| c.title.is_some()) {
+        #[cfg(windows)]
+        crate::app_icon::set_exe_version(&exe, &crate::app_icon::version_resource(control.title.as_deref().unwrap_or_default(), control.version.as_deref()))?;
+        #[cfg(not(windows))]
+        let _ = control;
+    }
     let copied = copy(&exe, &o.app.join("nxport.exe"));
     let _ = std::fs::remove_file(&exe);
     copied?;
