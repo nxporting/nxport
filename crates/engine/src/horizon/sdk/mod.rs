@@ -81,6 +81,7 @@ fn stdout_variable() -> usize {
 }
 
 mod base;
+mod releases;
 mod v0_12;
 mod v3_5;
 mod v15_3;
@@ -150,9 +151,14 @@ fn chain() -> &'static Chain {
             Some(v) if LAYERS[start].from.0 == v.0 && LAYERS[start].from.1 == v.1 => {
                 println!("[+] SDK {v}: {}", names.join(" > "))
             }
+            Some(v) if releases::RELEASES.contains(&v) => println!(
+                "[!] SDK {v}: a known release without a layer of its own (nothing recorded for it yet); the closest: {} (a \
+                 function this release changed may behave as in an older one)",
+                names.join(" > ")
+            ),
             Some(v) => println!(
-                "[!] SDK {v}: no layer for this version; closest: {} (a function this version changed may behave as in an \
-                 older one)",
+                "[!] SDK {v}: not a known release, no layer for it; the closest: {} (a function this version changed may \
+                 behave as in an older one)",
                 names.join(" > ")
             ),
             None => println!("[!] SDK version unknown: {}", names.join(" > ")),
