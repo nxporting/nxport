@@ -112,6 +112,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   screen-spanning, maybe lighting (the user); candidates: the 1x1 / 3x3 lighting targets, or the same feedback issue.
   Ruled out since: memory sizes (svcGetInfo pool 3285 MB, as the console), the play log (no failed loads or shader
   translations). Next: a repro: a copy of the user's save at the pond (asked where), frame capture there.
+  The user (2026-11-15 night): in random places Link floats miles into the air "as if the water was pulled up that
+  high", without visible water; more often near real bodies of water; water looks white (Savage Wind #362: tiny
+  lighting read-backs late after a load). So the CPU's water height query returns a huge / garbage value somewhere.
 - **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
   line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
   pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
