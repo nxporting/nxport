@@ -103,6 +103,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   (not a return address). Not today's lifter change: an A/B build with 00dc372 reverted stops the same. 1.0.0 hits
   the same routine (main+0x14bf514 -> 0x14befa8, +0x28). Next: who calls main+0x15db24 and with which second argument
   (a probe at its entry), and whether that object comes from an HLE call.
+  Probe (entry of main+0x15db24): called once, from main+0x1a3378 (f_70002a3240); its x1 (stored at [sp+0x28]) is a
+  sound object (vtable main+0x1b8f7c8). The bad object is the third argument instead: the prologue stores x4, x2 at
+  [sp+8], [sp+0x10], and the call at main+0x15e790 reads [sp+0x10]. The caller passes x2 = [x20] (f_70002a3240 loads it
+  at main+0x1a32c0 and main+0x1a3304). Next: print x2, [x2] at that call and find what fills [x20].
 
 - **DLC (add-on content) is not supported (2026-11-14, win-worker; Savage Wind parity).** nn::aoc::ListAddOnContent
   reports none (horizon/sdk/base/aoc.rs). Savage Wind serves each add-on content's RomFS from its own folder
