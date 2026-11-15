@@ -142,6 +142,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   so a CPU write before the submit retires is uploaded, not absorbed (audit item 2); fs reads loop until filled or EOF.
   Later, general fix: hold GPU-result pages (linear write-backs, copy destinations) unreadable until written, so the
   overlap can stay on (early-fence-strict is declared but unused on Vulkan).
+  mac-worker, same night: on Metal (1.5.0) the early fence, tiny compute, rt_guard and write-back on or off change
+  nothing; the water is too HIGH there too (lily pads high above the pond, Link on its empty floor). The R16 height tiles
+  are fine (a "half-filled tiles" sighting was a Metal dump-tool bug, 0e65aac). So the cause is shared: candidates the
+  composite shader that turns the .water.extm tiles into the 64x64 RGBA16 water maps (sass2spv translates for both
+  backends), or how the CPU reads those maps. mac-worker is watching the water maps; the split test: compare a map's
+  texels with the .water.extm heights for that tile.
 - **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
   line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
   pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
