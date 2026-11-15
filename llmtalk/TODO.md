@@ -165,6 +165,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   controller step, arrows, sound floor, kf_angle, deactivation derived from the game's counts), not their tuned ones
   (solver steps 6/sqrt(df), the VFR step smoothing, shield-surf grace, event lists). Find each by pattern as TotK's
   profile does, and check against KNOWN.
+  Concrete for 1.9.0 (Savage Wind's main is at 0x7000000000, ours at 0x7000100000, same offsets): frame_wait main+0xe9487c
+  (first word 0xa9bd7bfd, stp x29,x30,[sp,#-0x30]!: skip the vsync wait, our present pacer paces); vfr_ratio main+0x151d494
+  (0xb9407a68, ldr w8,[x19,#0x78] in VFR::updateInterval, x19 = the VFR instance); VFR fields +0x28 changed, +0x29
+  override, +0x30 new ratio, +0x34 interval, +0x3c ratio (1.0 at 30 fps); gui_speed main+0x1280ee8 (str s0,[x8,#0xb20]);
+  pause state u32 at main+0x1d1611c (0 playing, 2 menu / map); controller step pointer at main+0x1cad0e0. Exact rule as
+  TotK's time_step: ratio = real seconds since the last update x 30, whole refreshes under vsync with the remainder
+  carried; interval = the present interval the engine gives. Their smoothing (5% average, 3% a frame, 2% payback) and
+  0.05 s cap are tuning, not to copy.
 
 - **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
   virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
