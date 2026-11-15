@@ -76,8 +76,9 @@ pub(super) fn load(device: &Device) -> bool {
                 let (sdk, os) = (sdk.trim().to_string(), os_version());
                 if sdk.split('.').next() != os.split('.').next() {
                     println!(
-                        "[+] Pipelines: the binary archive was compiled with the iOS {sdk} SDK, this is iOS {os}: not used, \
-                         the listed pipelines compile here"
+                        "[+] Pipelines: the binary archive was compiled with the iOS {sdk} SDK, this system is {} {os}: not used, \
+                         the listed pipelines compile here",
+                        if cfg!(target_os = "ios") { "iOS" } else { "macOS" }
                     );
                     return None;
                 }
