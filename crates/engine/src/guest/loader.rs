@@ -278,6 +278,17 @@ impl GuestMemorySpace {
         let (plt_start, plt_end) = (base + d.jmprel, base + d.jmprel + d.pltrelsz);
         let (dyn_start, dyn_end) = (base + d.rela, base + d.rela + d.relasz);
         let mut applied = 0;
+        // DT_RELR (SDK 20 and later): each slot holds its addend.
+        if d.relr != 0 {
+            let table = unsafe { std::slice::from_raw_parts(self.base_ptr.add(d.relr), d.relrsz) }.to_vec();
+            for off in super::nso::relr_slots(&table) {
+                unsafe {
+                    let p = self.base_ptr.add(off) as *mut usize;
+                    p.write_unaligned(base + p.read_unaligned());
+                }
+                applied += 1;
+            }
+        }
         for (r_offset, r_info, r_addend) in self.rela_entries() {
             let r_type = (r_info & 0xFFFFFFFF) as u32;
             let r_sym = (r_info >> 32) as usize;

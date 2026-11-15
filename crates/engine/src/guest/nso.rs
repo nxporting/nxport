@@ -28,6 +28,31 @@ pub struct Dynamic {
     pub init: usize,
     pub init_array: usize,
     pub init_arraysz: usize,
+    /// DT_RELR / DT_RELRSZ: relative relocations packed as an address then bitmaps (SDK 20 and later).
+    pub relr: usize,
+    pub relrsz: usize,
+}
+
+/// The module offsets of the slots a DT_RELR table (`table`, little-endian u64 entries) relocates: an even entry is a
+/// slot's offset; an odd one is a bitmap whose bit i (1..=63) marks the slot (i - 1) words after the last slot
+/// handled, which then moves on by 63 words. Each slot holds its addend: `*slot = base + *slot`.
+pub fn relr_slots(table: &[u8]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut next = 0usize;
+    for e in table.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())) {
+        if e & 1 == 0 {
+            out.push(e as usize);
+            next = e as usize + 8;
+        } else {
+            for i in 0..63 {
+                if (e >> (i + 1)) & 1 != 0 {
+                    out.push(next + i * 8);
+                }
+            }
+            next += 63 * 8;
+        }
+    }
+    out
 }
 
 /// The build id (32 bytes) of an NSO file, as uppercase hex.
@@ -147,6 +172,8 @@ fn parse_dynamic<'a>(
             23 => d.jmprel = val,
             25 => d.init_array = val,
             27 => d.init_arraysz = val,
+            35 => d.relrsz = val,
+            36 => d.relr = val,
             _ => {}
         }
     }
@@ -159,6 +186,14 @@ fn parse_dynamic<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An address entry, then a bitmap (bits 1 and 3: the first and third words after it), then a second bitmap (bit 1:
+    /// 63 words further on).
+    #[test]
+    fn relr_slots_decodes_addresses_and_bitmaps() {
+        let table: Vec<u8> = [0x10000u64, 0b1011, 0b11].iter().flat_map(|e| e.to_le_bytes()).collect();
+        assert_eq!(relr_slots(&table), vec![0x10000, 0x10008, 0x10018, 0x10008 + 63 * 8]);
+    }
 
     /// TotK 1.1.2's main against the layout the loader used to hard-code. Needs a dump: NXPORT_TEST_GAME_DIR names it
     /// (skipped without).

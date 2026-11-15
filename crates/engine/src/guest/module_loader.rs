@@ -314,6 +314,16 @@ pub unsafe fn load(
         if let (Some(&jmprel), Some(&sz)) = (tags.get(&23), tags.get(&2)) {
             apply_table(jmprel, sz);
         }
+        // DT_RELR (SDK 20 and later): each slot holds its addend.
+        if let (Some(&relr), Some(&sz)) = (tags.get(&36), tags.get(&35)) {
+            let table = std::slice::from_raw_parts((base + relr) as *const u8, sz).to_vec();
+            for off in super::nso::relr_slots(&table) {
+                if off + 8 <= image_size {
+                    let p = (base + off) as *mut usize;
+                    p.write_unaligned(base + p.read_unaligned());
+                }
+            }
+        }
         for n in missing.iter().take(8) {
             println!(
                 "[!] Module {}: import {} is not available; calls go to a logging stub",

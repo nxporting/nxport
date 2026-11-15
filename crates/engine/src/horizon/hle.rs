@@ -4530,10 +4530,33 @@ pub unsafe extern "C" fn hle_nn_audio_OpenAudioRenderer(
     }
     if !handle.is_null() {
         *handle = crate::horizon::audio::renderer::open(param as *const u32);
+        if crate::horizon::sdk::audio_handle_state() {
+            *handle.add(1) = audio_renderer_state(param as *const u32, event as u64);
+        }
     }
     NN_AUDIO_RENDERER_STATE.store(1, std::sync::atomic::Ordering::SeqCst);
     println!("[+] HLE: nn::audio::OpenAudioRenderer -> audren service object (timing only, no audio output)");
     NN_RESULT_SUCCESS
+}
+/// The client state block SDK 20.5's OpenAudioRenderer (BotW 1.9.0 sdk+0x221580) puts in the handle's second word, filled
+/// as it fills it: +0x08 / +0x0c / +0x10 sample rate, sample count and mix buffer count from the parameter; +0x14 1;
+/// +0x18 the rendering time limit, 100 (%); +0x1c / +0x20 the parameter's words at +0x2c / +0x30; +0x24 the voice drop
+/// parameter, 1.0; +0x00 the system event; the rest 0. Lives as long as the process (one renderer).
+unsafe fn audio_renderer_state(param: *const u32, event: u64) -> usize {
+    let s: &'static mut [u32; 12] = Box::leak(Box::new([0u32; 12]));
+    // +0x00: the system event (the five-argument OpenAudioRenderer stores it there after the four-argument one).
+    s[0] = event as u32;
+    s[1] = (event >> 32) as u32;
+    let p = |i: usize| if param.is_null() { 0 } else { *param.add(i) };
+    s[2] = p(0);
+    s[3] = p(1);
+    s[4] = p(2);
+    s[5] = 1;
+    s[6] = 100;
+    s[7] = p(0x2c / 4);
+    s[8] = p(0x30 / 4);
+    s[9] = 1.0f32.to_bits();
+    s.as_mut_ptr() as usize
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_audio_StartAudioRenderer(_handle: usize) -> u32 {

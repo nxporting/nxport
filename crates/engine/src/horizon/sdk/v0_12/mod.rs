@@ -13,4 +13,5 @@ pub(super) static LAYER: Layer = Layer {
     nvn_api: Some((52, 32)),
     // Thread names read at the 4.4 layout ('Prepare Thread' comes out whole).
     thread_tail_shift: Some(8),
+    audio_handle_state: None,
 };

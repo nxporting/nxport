@@ -435,46 +435,13 @@ pub fn load_sdk(
     //   text[8..12] = "MOD0" magic (when text[4..8] == 8)
     //   text[12..16]= i32 dynamic_offset (self-relative: from &text[12] to DT_DYNAMIC)
     //
+    // MOD0 is read from the loaded module, not .text alone: newer SDKs (20.x) place it in .rodata.
     let mod0_off = r_u32(&text_raw, 4) as usize;
-
-    if mod0_off + 8 > text_raw.len() || &text_raw[mod0_off..mod0_off + 4] != b"MOD0" {
-        // Scan first 256 bytes as fallback
-        let mut found = None;
-        for off in (0..text_raw.len().min(256)).step_by(4) {
-            if &text_raw[off..off + 4] == b"MOD0" {
-                found = Some(off);
-                break;
-            }
-        }
-        if let Some(off) = found {
-            eprintln!(
-                "[!] SDK MOD0 offset field said 0x{:x}, but found MOD0 at text+0x{:x} via scan",
-                mod0_off, off
-            );
-            apply_relocations_from_mod0(
-                base,
-                total_aligned,
-                text_mo,
-                off,
-                &text_raw,
-                dynsym_host,
-                dynstr_host,
-                mem_space,
-            );
-        } else {
-            eprintln!("[!] SDK MOD0 not found — relying on pre-relocated SDK or symbol-only mode");
-        }
+    let image = unsafe { std::slice::from_raw_parts((base + text_mo) as *const u8, total_aligned - text_mo) };
+    if image.get(mod0_off..mod0_off + 4) == Some(b"MOD0".as_slice()) {
+        apply_relocations_from_mod0(base, total_aligned, text_mo, mod0_off, image, dynsym_host, dynstr_host, mem_space);
     } else {
-        apply_relocations_from_mod0(
-            base,
-            total_aligned,
-            text_mo,
-            mod0_off,
-            &text_raw,
-            dynsym_host,
-            dynstr_host,
-            mem_space,
-        );
+        eprintln!("[!] SDK MOD0 not found at text+0x{mod0_off:x}: SDK relocations not applied");
     }
 
     // x18 uses stay as they are here: macOS preserves x18 for this process, elsewhere main.rs rewrites them
@@ -590,6 +557,7 @@ fn apply_relocations_from_mod0(
     );
 
     let (mut rela, mut relasz, mut jmprel, mut pltrelsz) = (None, 0usize, None, 0usize);
+    let (mut relr, mut relrsz) = (None, 0usize);
     let mut i = 0usize;
     while i < 4096 && dyn_va + (i + 1) * 16 <= total_size {
         let entry = dyn_addr + i * 16;
@@ -601,6 +569,8 @@ fn apply_relocations_from_mod0(
             7 => rela = Some(val),
             8 => relasz = val,
             23 => jmprel = Some(val),
+            35 => relrsz = val,
+            36 => relr = Some(val),
             _ => {}
         }
         i += 1;
@@ -612,6 +582,21 @@ fn apply_relocations_from_mod0(
     if rela.is_none() && jmprel.is_none() {
         eprintln!("[!] SDK: no DT_RELA / DT_JMPREL in DT_DYNAMIC");
         return;
+    }
+
+    // DT_RELR (SDK 20 and later): each slot holds its addend.
+    if let Some(off) = relr.filter(|o| o.saturating_add(relrsz) <= total_size) {
+        let table = unsafe { std::slice::from_raw_parts((base + off) as *const u8, relrsz) }.to_vec();
+        let slots = super::nso::relr_slots(&table);
+        for s in &slots {
+            if s + 8 <= total_size {
+                unsafe {
+                    let p = (base + s) as *mut usize;
+                    p.write_unaligned(base + p.read_unaligned());
+                }
+            }
+        }
+        println!("[+] SDK: applied {} RELR relocations", slots.len());
     }
 
     // Copy the tables before applying them: some entries target .rodata (vtables), which would corrupt entries not

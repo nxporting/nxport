@@ -588,6 +588,13 @@ fn lift_image(
                 seeds.insert(base.wrapping_add(addend));
             }
         }
+        // DT_RELR (SDK 20 and later): each slot holds its addend, or the address already where the image was loaded.
+        if let Some(table) = img.get(d.relr..d.relr + d.relrsz).filter(|_| d.relr != 0) {
+            for o in nxport::nso::relr_slots(table) {
+                let Some(v) = u64_at(o) else { continue };
+                seeds.insert(if v < img.len() as u64 { base.wrapping_add(v) } else { v });
+            }
+        }
     }
     let m = Module { name: name.to_string(), base, image: img, text, seeds };
     lift_module(&m, &Options { overlay, ..Options::default() })
