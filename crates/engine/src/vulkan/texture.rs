@@ -1045,6 +1045,16 @@ impl Textures {
         if let Some(img) = self.images.get_mut(d) {
             if img.gpu_written {
                 Self::settle_one(d, img);
+                // The CPU wrote this memory between the write-back and now (BotW fills its height tiles itself): the new
+                // baseline must not take those bytes for the image's own, or they would never be uploaded and the next
+                // write-back would overwrite them. Left changed, the image takes guest memory before its next use.
+                if let Some(h) = WRITTEN_BACK.lock().unwrap().remove(&d.storage) {
+                    let len = layout::compute_layout(&d.params).total as usize;
+                    if hash_bytes(std::slice::from_raw_parts(d.storage as *const u8, len)) != h {
+                        img.token = None;
+                        img.hash = 0;
+                    }
+                }
             }
         }
     }
@@ -1792,6 +1802,14 @@ unsafe fn baseline_hash(start: usize, len: usize, tracked: bool) -> u64 {
     let tail_at = at + n;
     let tail = hash_bytes(std::slice::from_raw_parts(tail_at as *const u8, start + len - tail_at));
     head.rotate_left(1) ^ tail
+}
+
+/// Guest bytes as each render-target write-back left them (by storage), for resettle.
+static WRITTEN_BACK: std::sync::Mutex<rustc_hash::FxHashMap<usize, u64>> = std::sync::Mutex::new(rustc_hash::FxHashMap::with_hasher(rustc_hash::FxBuildHasher));
+
+/// Records what a write-back left in guest memory at `storage` (the watcher, right after writing).
+pub(super) fn note_written_back(storage: usize, bytes: &[u8]) {
+    WRITTEN_BACK.lock().unwrap().insert(storage, hash_bytes(bytes));
 }
 
 /// A content hash of guest bytes (change detection): four independent lanes over 32-byte steps.
