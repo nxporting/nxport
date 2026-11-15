@@ -264,9 +264,11 @@ pub(crate) fn writes(w: u32, r: u32) -> bool {
         return bits(w, 26, 5) == 0b00101 && bits(w, 31, 1) == 1 && r == 30;
     }
     if op0 & 0b0111 == 0b0111 {
-        // floating point and SIMD: only conversions to and from integers (fmov w, s; fcvtzs ..) and umov / smov /
-        // dup (general) have a general register as Rd
-        let to_general = w & 0x7f20_fc00 == 0x1e20_0000 || w & 0xbfe0_8400 == 0x0e00_0400;
+        // floating point and SIMD: only conversions to integers (fmov w, s; fcvtzs ..) and smov / umov (imm4 0101 /
+        // 0111) have a general register as Rd. dup and ins, in the same copy group, write a vector register (BotW 1.9.0
+        // main+0x1440a4, dup v25: taken for a write of x25, it hid a jump table's base).
+        let to_general =
+            w & 0x7f20_fc00 == 0x1e20_0000 || (w & 0xbfe0_8400 == 0x0e00_0400 && matches!(bits(w, 11, 4), 0b0101 | 0b0111));
         return to_general && bits(w, 0, 5) == r;
     }
     bits(w, 0, 5) == r
@@ -275,6 +277,13 @@ pub(crate) fn writes(w: u32, r: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// dup v25.4h, v25.h[1] writes a vector register; umov w0, v1.s[0] a general one.
+    #[test]
+    fn copy_group_writes_general_only_for_smov_umov() {
+        assert!(!writes(0x0e0c_0739, 25));
+        assert!(writes(0x0e04_3c20, 0));
+    }
 
     struct Img {
         base: u64,
