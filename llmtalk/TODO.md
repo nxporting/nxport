@@ -102,6 +102,16 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the user's test build): every linear render target goes back, copied at the end of the submit that drew it
   (vulkan/exec.rs note_rendered / record_rt_reads), so a wait on that submit's fence finds it. Waiting for the user's
   test; then TotK / SMO checks (with the lifter changes) before committing. Flicker: not described yet (asked).
+  **2026-11-15 update:** still broken after the write-back change (the user played it). BotW draws 33 linear render
+  targets (1x1 / 3x3 lighting and exposure, 64x64, R16 192x192 / 256x256 height tiles); all go back now, in plain rows
+  (write_texels_2d follows the linear layout). mac-worker: BotW 1.5.0 has the same water bug on the Mac (stands on the
+  pond floor where Ryujinx swims) with its exact page-trap read-back on or off, so it is shared engine code. Lead from
+  Savage Wind (exec.c ~4255): the terrain fills layer n of its height and water arrays from layer n-1, sampling the
+  array it renders into; a snapshot that missed those layers left the height array 0 there. Check our feedback copies
+  for array layers (vulkan/draw.rs feedback_view: a copy kept per barrier epoch) with a capture near water. Flicker:
+  screen-spanning, maybe lighting (the user); candidates: the 1x1 / 3x3 lighting targets, or the same feedback issue.
+  Ruled out since: memory sizes (svcGetInfo pool 3285 MB, as the console), the play log (no failed loads or shader
+  translations). Next: a repro: a copy of the user's save at the pond (asked where), frame capture there.
 - **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
   line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
   pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
