@@ -22,6 +22,9 @@ pub struct Module<'a> {
     pub text: std::ops::Range<u64>,
     /// Known function starts (symbols, .eh_frame, code pointers in data, the entry point, HLE-bound functions).
     pub seeds: BTreeSet<u64>,
+    /// Function starts known exactly (.eh_frame, symbols), among the seeds: the bounds of the real functions. Pieces the
+    /// lifter splits a function into (at targets of other code, or block starts of unresolved branches) are not in it.
+    pub functions: BTreeSet<u64>,
 }
 
 /// The lifted module: C sources and what was not lifted.
@@ -244,7 +247,19 @@ fn branch_table(
     br_pc: u64,
 ) -> Option<Table> {
     let r = bits(jt::Memory::word(l.m, br_pc)?, 5, 5);
-    let defs_of = |pc: u64, r: u32| reaching_defs(l, entry, preds, pc, r);
+    // The definitions reaching `pc`: in this piece, else, when the piece is part of a real function (Module::functions)
+    // that starts earlier, in that function (BotW 1.9.0 main+0x15dbfc: the table base x22 is set in the function's first
+    // piece, before a loop the lifter split into pieces).
+    let defs_of = |pc: u64, r: u32| {
+        reaching_defs(l, entry, preds, pc, r).or_else(|| {
+            let start = *l.m.functions.range(..=pc).next_back()?;
+            if start >= entry {
+                return None;
+            }
+            let end = l.m.functions.range(pc + 1..).next().copied().unwrap_or(l.m.text.end);
+            reaching_defs(l, start, &preds_in(l, start, end), pc, r)
+        })
+    };
     let (mut known, mut reach, mut blocks) = (BTreeSet::new(), Vec::new(), false);
     let Some(defs) = reaching_defs(l, entry, preds, br_pc, r) else {
         // A definition is out of sight (before the function, or past a call): the instructions just before the `br`.
@@ -279,6 +294,21 @@ fn branch_table(
     Some(Table::All { known, reach, blocks })
 }
 
+/// The direct branches to each address in [entry, end) from inside it (as scan builds them).
+fn preds_in(l: &Lifted, entry: u64, end: u64) -> BTreeMap<u64, Vec<u64>> {
+    let mut preds: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    let mut a = entry;
+    while a < end {
+        if let Insn::B(t) | Insn::BCond(_, t) = l.at(a) {
+            if (entry..end).contains(t) {
+                preds.entry(*t).or_default().push(a);
+            }
+        }
+        a += 4;
+    }
+    preds
+}
+
 /// The instructions in the function that may have set register `r` last before `pc`, following its branches back
 /// (`preds`: the branches to each address); None if one is out of sight: a path reaches the function's start, or a
 /// call that does not preserve `r`, or the search grows too large.
@@ -300,7 +330,9 @@ fn reaching_defs(l: &Lifted, entry: u64, preds: &BTreeMap<u64, Vec<u64>>, pc: u6
         if !seen.insert(a) {
             continue;
         }
-        if seen.len() > 512 {
+        // A bound on the work, not on the answer (past it the definitions are unknown): 512 was too small for a table
+        // base set before a loop of a ~1000-instruction function (BotW 1.9.0 main+0x15db24).
+        if seen.len() > 8192 {
             return None;
         }
         let w = jt::Memory::word(l.m, a)?;
@@ -1294,7 +1326,7 @@ mod tests {
     #[test]
     fn sample_module() {
         let (base, img, text) = sample_image();
-        let m = Module { name: "t".into(), base, image: &img, text, seeds: BTreeSet::from([base]) };
+        let m = Module { name: "t".into(), base, image: &img, text, seeds: BTreeSet::from([base]), functions: BTreeSet::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!(out.functions, 3); // main, fact, switchy
         assert_eq!(out.jump_tables, 1);
@@ -1389,7 +1421,7 @@ mod tests {
         for w in [0x1e212000u32, 0x5400004c, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1010, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1010, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert!(body.contains("if (cc_s(c, (*(saf32 *)&gv0), (*(saf32 *)&gv1), FCC_GT))"), "{body}");
         assert!(!body.contains("nzcv"), "{body}");
@@ -1412,7 +1444,7 @@ mod tests {
         for w in [0x1e220820u32, 0x1e232800, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x100c, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x100c, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert!(body.contains("u128 gv0; u128 gv1 = c->v[1]; u128 gv2 = c->v[2]; u128 gv3 = c->v[3];"), "{body}");
         assert!(body.contains("(gv0 = fb_s(op_s(c, FOP_ADD, (*(saf32 *)&gv0), (*(saf32 *)&gv3), 0)))"), "{body}");
@@ -1426,7 +1458,7 @@ mod tests {
         for w in [0xb9400001u32, 0xb9400008, 0x7100051f, 0x54ffffc0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert_eq!(body.matches("LDV32(").count(), 1, "{body}");
         assert_eq!(body.matches(" LD32(").count() + body.matches("(LD32(").count(), 1, "{body}");
@@ -1439,7 +1471,7 @@ mod tests {
         for w in [0x7100041fu32, 0x5400006b, 0xb1000421, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert!(body.contains("if ((((int32_t)((uint32_t)((uint32_t)gx0))) < ((int32_t)((uint32_t)(0x1ull))))) { goto L_1010; }"), "{body}");
         assert!(!body.contains("subs32(c,") && !body.contains("COND_"));
@@ -1453,7 +1485,7 @@ mod tests {
         for w in [0x10000093u32, 0xb4000040, 0x10000073, 0xd61f0260, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (1, 0));
         let body = &out.files[0].1;
@@ -1468,7 +1500,7 @@ mod tests {
         for w in [0x10000089u32, 0x8b000929, 0xd61f0120, 0xd65f03c0, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (4, 1)); // a function per block
         let body = &out.files[0].1;
@@ -1483,7 +1515,7 @@ mod tests {
         for w in [0x10000089u32, 0x3860682a, 0x8b0a0929, 0xd61f0120, 0xd2800020, 0xd2800040, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x101c, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x101c, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (4, 1)); // a start at each instruction a byte reaches
         assert!(out.files[0].1.contains("RT_FN void f_1014(Cpu *c) {"));
@@ -1500,7 +1532,7 @@ mod tests {
         ] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1028, seeds: BTreeSet::from([0x1000]) };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1028, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (1, 0));
         let body = &out.files[0].1;
