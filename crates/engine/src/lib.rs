@@ -1501,6 +1501,13 @@ fn lifted_handlers() -> lifted::Handlers {
         for (i, r) in cpu.x.chunks(4).enumerate() {
             eprintln!("    x{:<2} {:#018x} {:#018x} {:#018x} {:#018x}", i * 4, r[0], r[1], r[2], r[3]);
         }
+        // The lifted functions on the host stack (guest.pdb names them f_<address>): which one dispatched the branch. An
+        // unresolved computed branch hands its target to its caller to dispatch, so pc and lr alone do not say.
+        let bt = std::backtrace::Backtrace::force_capture().to_string();
+        let lifted: Vec<&str> = bt.lines().filter(|l| l.contains(": f_")).map(str::trim).take(12).collect();
+        if !lifted.is_empty() {
+            eprintln!("    lifted functions on the host stack, innermost first: {}", lifted.join(" < "));
+        }
         std::process::exit(1);
     }
     fn trap(cpu: &mut nxport_lifter::abi::Cpu, kind: u32, imm: u32, pc: u64) -> ! {
