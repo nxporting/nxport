@@ -95,7 +95,7 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
-- **BotW 1.9.0 stops at frame ~1200 on Windows (2026-11-14, win-worker); the same as 1.0.0's frame-1200 stop.** A
+- **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
   virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
   stores its second argument, a callback object, at [sp+0x28]) goes to main+0x15e264, 0x28 into f_700025e23c: the
   object (x0) is a stack address and its "vtable" pointer is another stack address, so the object was never built or
