@@ -38,7 +38,6 @@ pub static SITES: Sites = Sites {
     camera_rate: Some((0x1d3675c, 0xc54)),
     ground_carry: Some((0xbbb4b4, 0xf940_0348)), // ldr x8, [x26]
     cloth: None, // 1.1.2 leaves that clock unset
-    short_cut_bg: Some((0x462cb20, 0x19af400, 0xc5a4_9707)),
     equip_cooldown: Some((0xa02330, 0xa0232c)),
     rotate_check: Some((0x2134264, 0x10b34c0, 0x2134454)), // the update main+0x2134244 (vtable main+0x4593ed8 + 0x110)
     // The map screen's update main+0xf1bdbc: the stick at [x27], the old x in w25.

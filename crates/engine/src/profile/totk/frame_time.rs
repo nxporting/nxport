@@ -60,9 +60,6 @@ pub struct Sites {
     /// The hair and cloth clock: two words in main's mapping that time_step keeps at {step seconds, step frames}, and
     /// the instructions that read them in place of the 1/30 s constant (cloth_clock).
     pub cloth: Option<(usize, &'static [ClothSite])>,
-    /// The screen behind the ability wheel and the quick menus (open_short_cut_bg): where the UI manager's pointer is, the
-    /// function that finds a screen by its hash, the hash.
-    pub short_cut_bg: Option<(usize, usize, u64)>,
     /// The equipment-switch cooldown's step test (equip_cooldown), where known: its `fmov s1, w8` (FLT_EPSILON), and the
     /// `ldr s0, [x19, #0x109c]` that loads the cooldown before it (1.0.0 has an add and the constant between them).
     pub equip_cooldown: Option<(usize, usize)>,
@@ -205,7 +202,6 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     LAST_INTERVAL.store(interval.max(1) as u32, Ordering::Relaxed);
     // Real-time game speed off (the menu): the stock step, from the interval the game picked.
     let dt = if crate::host::live::real_time_speed() { dt } else { interval.max(1) as f32 / 60.0 };
-    open_short_cut_bg();
     *((timer + 8) as *mut f32) = dt * 30.0;
     *((timer + 0xc) as *mut f32) = dt;
     let cloth = CLOTH.load(Ordering::Relaxed) as usize;
@@ -220,37 +216,73 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
     }
 }
 
-/// main's base and Sites::short_cut_bg.
-static SHORT_CUT_BG: std::sync::OnceLock<(usize, usize, usize, u64)> = std::sync::OnceLock::new();
+/// The ability wheel's background (layout ShortCutBG_00) is a capture of the screen behind it: capture panes take the
+/// picture the first time they are drawn, and its opening animation (In) shows them with visibility steps at frame 1.
+/// The sequence that opens it (ShortCutPauseOn) pauses the world a fixed number of updates later. At 30 fps frame 1 is
+/// the first update after opening; with shorter steps it came after the world stopped being drawn, and the background
+/// was black. The steps move to just after frame 0 in the loaded animation: the panes show on the first update the
+/// animation advances, as at 30 fps, and the rest of the animation keeps its timing. Called before each layout
+/// calculation (aspect.rs's hook).
+pub unsafe fn short_cut_bg_keys(layout: usize) {
+    const NAME: &[u8] = b"ShortCutBG_00\0";
+    let name = *((layout + 0x30) as *const usize);
+    if name == 0 || std::slice::from_raw_parts(name as *const u8, NAME.len()) != NAME {
+        return;
+    }
+    // nn::ui2d::Layout: the animation list's head at +8 (prev, next); an AnimTransform's link is at +8, its resource
+    // (the pai1 block) at +0x18.
+    let head = layout + 8;
+    let mut node = *((head + 8) as *const usize);
+    let mut guard = 0;
+    while node != 0 && node != head && guard < 64 {
+        let res = *((node - 8 + 0x18) as *const usize);
+        if res != 0 && patch_visibility_steps(res) {
+            static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED.swap(true, Ordering::Relaxed) {
+                println!("[+] Ability wheel: its background is captured on the first update after opening, at any frame rate");
+            }
+        }
+        node = *((node + 8) as *const usize);
+        guard += 1;
+    }
+}
 
-/// The ability wheel captures the world for its background when its opening animation has reached frame 1, and the world
-/// stops being drawn 4 rendered frames after it starts opening, however long a frame is. The capture lands 3 rendered
-/// frames after the animation's frame reaches 1, so with steps under a whole game frame it came after the world stopped
-/// and the background was black (at a held step: 2.0 and 1.0 right, 0.99, 0.5 and 0.25 black). So the opening animation
-/// starts at frame 1 of its 6.
-unsafe fn open_short_cut_bg() {
-    let Some(&(base, manager, find, hash)) = SHORT_CUT_BG.get() else { return };
-    let manager = *((base + manager) as *const usize);
-    let manager = if manager != 0 { *(manager as *const usize) } else { 0 };
-    if manager == 0 {
-        return;
+/// Moves visibility steps from frame 1 to just after frame 0 in an animation block (nn::ui2d ResAnimationBlock):
+/// curves with the keys (0, hidden), (1, shown). Whether any changed.
+unsafe fn patch_visibility_steps(res: usize) -> bool {
+    const AFTER_ZERO: f32 = 1.0 / 64.0;
+    let rd32 = |a: usize| std::ptr::read_unaligned(a as *const u32);
+    if rd32(res) != u32::from_le_bytes(*b"pai1") {
+        return false;
     }
-    let screen = crate::guest::call(base + find, &[manager as u64, hash]) as usize;
-    if screen == 0 || *((screen + 0x16e) as *const u8) != 1 {
-        return;
+    let contents = std::ptr::read_unaligned((res + 14) as *const u16) as usize;
+    let table = res + rd32(res + 16) as usize;
+    let mut changed = false;
+    for c in 0..contents.min(256) {
+        let content = res + rd32(table + 4 * c) as usize;
+        let infos = *((content + 28) as *const u8) as usize;
+        for i in 0..infos {
+            let info = content + rd32(content + 32 + 4 * i) as usize;
+            if rd32(info) != u32::from_le_bytes(*b"FLVI") {
+                continue;
+            }
+            let targets = *((info + 4) as *const u8) as usize;
+            for t in 0..targets {
+                let target = info + rd32(info + 8 + 4 * t) as usize;
+                let (curve, keys) = (*((target + 2) as *const u8), std::ptr::read_unaligned((target + 4) as *const u16));
+                if curve != 1 || keys != 2 {
+                    continue;
+                }
+                let k = target + rd32(target + 8) as usize;
+                let key = |n: usize| (f32::from_bits(rd32(k + 8 * n)), std::ptr::read_unaligned((k + 8 * n + 4) as *const u16));
+                if key(0) == (0.0, 0) && key(1) == (1.0, 1) {
+                    std::ptr::write_unaligned((k + 8) as *mut u32, AFTER_ZERO.to_bits());
+                    changed = true;
+                }
+            }
+        }
     }
-    let layout = *((screen + 0x28) as *const usize);
-    if layout == 0 {
-        return;
-    }
-    let animation = match *((layout + 0x60) as *const usize) {
-        0 => *((layout + 0x68) as *const usize),
-        a => a,
-    };
-    if animation != 0 {
-        let frame = (animation + 0x20) as *mut f32;
-        *frame = (*frame).max(1.0);
-    }
+    changed
 }
 
 /// With vsync, the display's refresh period when the swapchain paces frames: the frame-rate limit is at or above the
@@ -374,9 +406,6 @@ unsafe fn install_time_step(base: usize, mem_space: &mut crate::guest::loader::G
 /// Game time from real time, and the pacer free to run at any interval (the engine caps it while the game runs).
 #[cfg(nx_runtime)]
 pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) {
-    if let Some((manager, find, hash)) = s.short_cut_bg {
-        let _ = SHORT_CUT_BG.set((base, manager, find, hash));
-    }
     match install_time_step(base, mem_space, s) {
         Ok(()) => {
             INSTALLED.store(true, Ordering::Relaxed);

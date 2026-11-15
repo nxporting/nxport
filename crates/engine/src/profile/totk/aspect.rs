@@ -231,9 +231,10 @@ pub unsafe extern "C" fn floor_point(src: *const f32) -> crate::hle_abi::F32Pair
     crate::hle_abi::F32Pair(floor(*src * fx), floor(*src.add(1) * fy))
 }
 
-/// A layout calculation's start: hud.rs adjusts the layout's panes. Returns its root pane (the game's code checks it
+/// A layout calculation's start: the ability wheel's capture keys (frame_time.rs), and hud.rs adjusts the layout's panes. Returns its root pane (the game's code checks it
 /// next) and the calculation's second argument (x1, which the code passes on after the call).
 pub unsafe extern "C" fn layout_calculate(layout: usize, arg: u64) -> crate::hle_abi::U64Pair {
+    super::frame_time::short_cut_bg_keys(layout);
     super::hud::calculate(layout);
     crate::hle_abi::U64Pair(*((layout + LAYOUT_ROOT) as *const usize) as u64, arg)
 }

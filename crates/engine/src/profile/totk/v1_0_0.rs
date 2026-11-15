@@ -59,7 +59,6 @@ pub static SITES: Sites = Sites {
     camera_rate: Some((0x1cd3678, 0xc2c)),
     ground_carry: Some((0xce3fe0, 0xf940_0328)), // ldr x8, [x25]
     cloth: Some((0x4666ff8, &CLOTH)), // the last words of the page after .bss
-    short_cut_bg: Some((0x45596a8, 0x196dee8, 0xc5a4_9707)),
     equip_cooldown: Some((0x6a9834, 0x6a9828)),
     rotate_check: Some((0x20c31d8, 0xf8de28, 0x20c33c8)), // the update main+0x20c31b8 (vtable main+0x44c2258 + 0x110)
     // The map screen's update main+0xf15364: the stick at [x20 + 0x120], the old x in w24.
