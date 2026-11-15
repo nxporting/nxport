@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use objc2::rc::Retained;
-use objc2::Message;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSString, NSURL};
 use objc2_metal::{
