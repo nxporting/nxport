@@ -107,6 +107,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   mods folder and applied at launch (Mac: patch at load as native code already allows; Windows: the overlay lift at
   launch, as live_patch does for plugin mods; iOS stays build-time, its code is signed). Then rename the builder's mods
   choice to say it is for mods built into the app (compile-time mods).
+  Mac state (mac-worker, 2026-11-15, read in config.rs app_bundle_layer): a Mac app reads Contents/Resources/mods at
+  launch and runs native code, so exefs mods dropped there are applied already (IPS / pchtxt / subsdk at load); an app
+  built without mods has no such folder and the engine sets no_mods. Left: a mods folder players can reach (the data
+  directory's games/<title id>/mods layered over the app's), Windows' overlay lift at launch, the builder wording.
 - **Later (after the first release): our own game patches as ordinary exefs mods (user, 2026-11-14).** Every patch of
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
