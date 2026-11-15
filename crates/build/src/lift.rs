@@ -548,10 +548,13 @@ fn lift_image(
 ) -> Output {
     let mut seeds = BTreeSet::from([text.start]);
     seeds.extend(extra_seeds);
+    // Exact function starts (.eh_frame, function symbols): the real functions' bounds (Module::functions).
+    let mut functions = BTreeSet::new();
     // Both found through MOD0, which a bare code region has none of.
     if let Some(d) = dynamic {
         if let Some(hdr) = ehframe::mod0_eh_frame_hdr(img) {
-            seeds.extend(ehframe::hdr_functions(img, base, hdr));
+            functions.extend(ehframe::hdr_functions(img, base, hdr));
+            seeds.extend(functions.iter().copied());
         }
         let u64_at = |o: usize| img.get(o..o + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
         // The module's initialisers: DT_INIT (the runtime calls a mod's), and DT_INIT_ARRAY's entries, which a load has
@@ -578,6 +581,7 @@ fn lift_image(
                 };
                 if info & 0xf == STT_FUNC && shndx != [0, 0] {
                     seeds.insert(base + value);
+                    functions.insert(base + value);
                 }
             }
         }
@@ -596,7 +600,7 @@ fn lift_image(
             }
         }
     }
-    let m = Module { name: name.to_string(), base, image: img, text, seeds };
+    let m = Module { name: name.to_string(), base, image: img, text, seeds, functions };
     lift_module(&m, &Options { overlay, ..Options::default() })
 }
 
