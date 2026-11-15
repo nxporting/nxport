@@ -94,6 +94,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9 (on
+  origin/main, not merged here yet: main has unpushed commits, merging is the user's call). Needs a run with the V1_9_0
+  profile (profile/botw.rs). Win-worker's Vulkan change (every LINEAR_RENDER_TARGET written back at the end of its
+  submit) needs no Metal mirror: rt_guard holds CPU-pool targets and writes them back on the first CPU touch. 1.9.0
+  physics reports (boxes pinned to walls, Link floating, water) may be the open 1.5.0 water bug (AGENTS.md 5b2).
+  Flicker in 1.9.0 on Windows: not described yet.
+
 - **ExeFS mods installed after the app is built (user, 2026-11-14; Mac and Windows).** Today a code mod (exefs: IPS,
   pchtxt, plugin subsdk) must be chosen in the builder, because its code is patched or lifted into the app at build time.
   Make it possible to add exefs mods to a built app afterwards (as romfs mods already can be), e.g. dropped into the app's
