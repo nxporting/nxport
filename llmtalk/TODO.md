@@ -95,6 +95,15 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **BotW 1.9.0 stops at frame ~1200 on Windows (2026-11-14, win-worker); the same as 1.0.0's frame-1200 stop.** A
+  virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
+  stores its second argument, a callback object, at [sp+0x28]) goes to main+0x15e264, 0x28 into f_700025e23c: the
+  object (x0) is a stack address and its "vtable" pointer is another stack address, so the object was never built or
+  was reused. 0x700025e264 is in no relocation, no ADRP/ADD and no ADR, and the instruction before it is not a call
+  (not a return address). Not today's lifter change: an A/B build with 00dc372 reverted stops the same. 1.0.0 hits
+  the same routine (main+0x14bf514 -> 0x14befa8, +0x28). Next: who calls main+0x15db24 and with which second argument
+  (a probe at its entry), and whether that object comes from an HLE call.
+
 - **DLC (add-on content) is not supported (2026-11-14, win-worker; Savage Wind parity).** nn::aoc::ListAddOnContent
   reports none (horizon/sdk/base/aoc.rs). Savage Wind serves each add-on content's RomFS from its own folder
   (services/fs.c: extracted/aoc<index>, data id = (program id & ~0xfff) + 0x1000 + index, IStorage through the aoc
