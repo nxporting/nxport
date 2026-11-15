@@ -1542,6 +1542,7 @@ impl Ctx {
                 multisample: self.st.multisample,
                 depth_clamp: self.st.depth_clamp,
             }),
+            tiny: false,
         }
         .normalized();
         let back = crate::vulkan::listed::desc(&self.dev, &e, vstage, fstage);

@@ -174,11 +174,95 @@ fn queue_compute() {
     cv.notify_all();
 }
 
+type TinyCell = std::sync::Arc<OnceLock<Result<ComputePipe, String>>>;
+
+/// A tiny-pass kernel, shared by draws and the precompile like compute_cell; true when the key is new.
+fn tiny_cell(entry: &str, key: &[i64]) -> (TinyCell, bool) {
+    static M: OnceLock<Mutex<HashMap<(String, Vec<i64>), TinyCell>>> = OnceLock::new();
+    let mut m = M.get_or_init(Default::default).lock().unwrap();
+    if let Some(c) = m.get(&(entry.to_string(), key.to_vec())) {
+        return (c.clone(), false);
+    }
+    let c = TinyCell::default();
+    m.insert((entry.to_string(), key.to_vec()), c.clone());
+    (c, true)
+}
+
+/// The keys of a draw's two tiny-pass kernels: [0, depth_gl, y_negate, point size bits, (location, attribute kind)..]
+/// for the vertex kernel, [1, (location, colour output kind).., (100 + location, the vertex stage writes it)..] for the
+/// fragment kernel (Gfx::make_tiny turns them into function constants).
+fn tiny_keys(
+    vs: &CachedStage,
+    fs: &CachedStage,
+    attr_descs: &[(u32, MTLVertexFormat, usize, usize, i32)],
+    depth_gl: bool,
+    point_size: f32,
+    color_pfs: &[MTLPixelFormat],
+) -> (Vec<i64>, Vec<i64>) {
+    let mut vkey: Vec<i64> = vec![0, depth_gl as i64, y_negate() as i64, point_size.to_bits() as i64];
+    for (loc, _, _, _, kind) in attr_descs {
+        vkey.extend([*loc as i64, *kind as i64]);
+    }
+    let mut fkey: Vec<i64> = vec![1];
+    for &loc in &fs.colors {
+        fkey.extend([loc as i64, pf_kind(color_pfs.get(loc as usize).copied().unwrap_or(MTLPixelFormat::Invalid)) as i64]);
+    }
+    for &loc in &fs.varyings {
+        fkey.extend([100 + loc as i64, vs.varyings.contains(&loc) as i64]);
+    }
+    (vkey, fkey)
+}
+
+/// Queues the tiny-pass kernels a listed pipeline's draws would run (when its stages have them), so a first launch
+/// does not make them at the draw.
+fn queue_tiny(
+    vs: &'static CachedStage,
+    fs: Option<&'static CachedStage>,
+    attr_descs: &[(u32, MTLVertexFormat, usize, usize, i32)],
+    depth_gl: bool,
+    point_size: f32,
+    color_pfs: &[MTLPixelFormat],
+) {
+    let Some(fs) = fs else { return };
+    let heap_samplers = |c: &CachedStage| c.texture_heap && !c.textures.is_empty() && !c.tiny_samplers;
+    if !tiny_enabled() || !vs.tiny_kernel || !fs.tiny_kernel || heap_samplers(vs) || heap_samplers(fs) {
+        return;
+    }
+    let (vkey, fkey) = tiny_keys(vs, fs, attr_descs, depth_gl, point_size, color_pfs);
+    let jobs: Vec<_> = [(vs, vkey), (fs, fkey)]
+        .into_iter()
+        .filter_map(|(st, k)| tiny_cell(&st.entry, &k).1.then_some((st.entry.as_str(), k)))
+        .collect();
+    if jobs.is_empty() {
+        return;
+    }
+    let (q, cv) = pipe_queue();
+    let mut g = q.lock().unwrap();
+    g.compute_n += jobs.len();
+    crate::gpu::pipeline_list::listed_queued(jobs.len());
+    g.tiny.extend(jobs);
+    drop(g);
+    cv.notify_all();
+}
+
+/// Makes one queued tiny-pass kernel (or finds it made by a draw).
+fn build_tiny(entry: &str, key: &[i64]) {
+    let t0 = std::time::Instant::now();
+    if let Some(g) = super::GFX.get() {
+        if let Some(lib) = g.shader_lib.as_ref() {
+            let _ = tiny_cell(entry, key).0.get_or_init(|| g.make_tiny(lib, entry, key));
+        }
+    }
+    kernel_done(t0);
+}
+
 #[derive(Default)]
 struct PipeQueue {
     draws: std::collections::VecDeque<SendJob>,
     /// Compute kernels to make (queue_compute), before the listed render pipelines.
     compute: std::collections::VecDeque<&'static str>,
+    /// Tiny-pass kernels to make (queue_tiny), counted with the compute kernels.
+    tiny: std::collections::VecDeque<(&'static str, Vec<i64>)>,
     compute_n: usize,
     compute_done: usize,
     compute_ns: u64,
@@ -208,6 +292,12 @@ fn pipe_queue() -> &'static (Mutex<PipeQueue>, std::sync::Condvar) {
                             if let Some(entry) = g.compute.pop_front() {
                                 drop(g);
                                 build_compute(entry);
+                                g = q.lock().unwrap();
+                                continue;
+                            }
+                            if let Some((entry, key)) = g.tiny.pop_front() {
+                                drop(g);
+                                build_tiny(entry, &key);
                                 g = q.lock().unwrap();
                                 continue;
                             }
@@ -270,12 +360,20 @@ fn build_compute(entry: &str) {
             let _ = compute_cell(entry).get_or_init(|| g.make_compute(lib, entry));
         }
     }
+    kernel_done(t0);
+}
+
+fn kernel_done(t0: std::time::Instant) {
     crate::gpu::pipeline_list::listed_done();
     let mut q = pipe_queue().0.lock().unwrap();
     q.compute_done += 1;
     q.compute_ns += t0.elapsed().as_nanos() as u64;
-    if q.compute_done == q.compute_n {
-        println!("[+] Pipelines: {} compute kernels made before their first dispatch, {:.1} s of compile time", q.compute_done, q.compute_ns as f64 / 1e9);
+    if q.compute_done == q.compute_n && q.compute.is_empty() && q.tiny.is_empty() {
+        println!(
+            "[+] Pipelines: {} compute and tiny-pass kernels made before their first use, {:.1} s of compile time",
+            q.compute_done,
+            q.compute_ns as f64 / 1e9
+        );
     }
 }
 
@@ -370,6 +468,9 @@ pub(super) fn queue_precompile(e: &crate::gpu::pipeline_list::Entry) -> bool {
     };
     let point_size = f32::from_bits(e.point_size);
     let l = derive_layout(vs, &e.attr_bits, &e.streams);
+    if e.tiny {
+        queue_tiny(vs, fs, &l.attr_descs, e.depth_gl, point_size, &color_pfs);
+    }
     let key = pipeline_key(
         point_size,
         vs,
@@ -1465,6 +1566,7 @@ fn record_pipeline(
     point_size: f32,
     depth_gl: bool,
     blends: &[u64; 8],
+    tiny: bool,
 ) {
     let (colors, depth, samples) = p.nvn_targets;
     // The formats a list entry gives back must be the ones drawn with, or listed pipelines are never the drawn ones.
@@ -1500,6 +1602,7 @@ fn record_pipeline(
                 multisample: p.multisample,
                 depth_clamp: p.depth_clamp,
             }),
+            tiny,
         }
         .normalized(),
     );
@@ -3256,6 +3359,39 @@ impl Gfx {
             .map_err(|e| format!("compute pipeline {entry}: {}", e.localizedDescription()))
     }
 
+    /// A tiny-pass kernel (tkv_ / tkf_ of `entry`) with the function constants its key (tiny_keys) stands for.
+    fn make_tiny(&self, lib: &ShaderLibs, entry: &str, key: &[i64]) -> Result<ComputePipe, String> {
+        let cv = MTLFunctionConstantValues::new();
+        // SAFETY: each value lives across its call and has the size of `ty`.
+        let set = |id: usize, ty: MTLDataType, v: *const libc::c_void| unsafe {
+            cv.setConstantValue_type_atIndex(std::ptr::NonNull::new(v as *mut libc::c_void).unwrap(), ty, id)
+        };
+        let set_int = |id: usize, v: i32| set(id, MTLDataType::Int, &v as *const i32 as _);
+        let set_bool = |id: usize, v: bool| set(id, MTLDataType::Bool, &v as *const bool as _);
+        let name = if key[0] == 0 {
+            set_bool(40, key[1] != 0);
+            set_bool(41, key[2] != 0);
+            let point_size = f32::from_bits(key[3] as u32);
+            set(42, MTLDataType::Float, &point_size as *const f32 as _);
+            for kv in key[4..].chunks(2) {
+                set_int(kv[0] as usize, kv[1] as i32);
+            }
+            format!("tkv_{entry}")
+        } else {
+            set_bool(43, false);
+            for kv in key[1..].chunks(2) {
+                if kv[0] < 100 {
+                    set_int(32 + kv[0] as usize, kv[1] as i32);
+                } else {
+                    set_bool(48 + (kv[0] - 100) as usize, kv[1] != 0);
+                }
+            }
+            format!("tkf_{entry}")
+        };
+        let f = lib.kernel(entry, &name, &cv)?;
+        self.device.newComputePipelineStateWithFunction_error(&f).map_err(|e| e.localizedDescription().to_string())
+    }
+
     /// nvnCommandBufferDispatchCompute: runs the bound compute program's translated kernel.
     ///
     /// The NVN driver cbuf (c0) of a compute stage holds {u64 address, u32 size} descriptors of the bound uniform
@@ -4288,95 +4424,22 @@ impl Gfx {
             );
             false
         };
-        // Pipelines: the kernels with the function constants the render pipeline would get.
-        let set_int = |cv: &MTLFunctionConstantValues, id: usize, v: i32| {
-            cv.setConstantValue_type_atIndex(
-                std::ptr::NonNull::new(&v as *const i32 as *mut libc::c_void).unwrap(),
-                MTLDataType::Int,
-                id,
-            );
-        };
-        let set_bool = |cv: &MTLFunctionConstantValues, id: usize, v: bool| {
-            cv.setConstantValue_type_atIndex(
-                std::ptr::NonNull::new(&v as *const bool as *mut libc::c_void).unwrap(),
-                MTLDataType::Bool,
-                id,
-            );
-        };
-        // Pipelines: the kernels with the function constants the render pipeline would get; the constant values are
-        // only built when a pipeline is missing (keys: stage + the constants' inputs).
-        let mut vkey: Vec<i64> = vec![
-            0,
-            depth_gl as i64,
-            y_negate() as i64,
-            point_size.to_bits() as i64,
-        ];
-        for (loc, _, _, _, kind) in attr_descs {
-            vkey.extend([*loc as i64, *kind as i64]);
+        // Pipelines: the kernels with the function constants the render pipeline would get (keys: tiny_keys).
+        let (vkey, fkey) = tiny_keys(vs, fs, attr_descs, depth_gl, point_size, &p.color_pfs);
+        // A kernel this thread has not made yet: list the draw's pipeline as one that runs as a tiny pass, so the next
+        // session (and other players) make its kernels before the draw (queue_tiny).
+        let vk = (vs as *const CachedStage as usize, vkey.clone());
+        let fk = (fs as *const CachedStage as usize, fkey.clone());
+        if !env.sh.tiny_pipes.contains_key(&vk) || !env.sh.tiny_pipes.contains_key(&fk) {
+            let blends = p.blend_states.map(|b| if b == 0 { DEFAULT_BLEND_STATE } else { b });
+            record_pipeline(vs, Some(fs), p, point_size, depth_gl, &blends, true);
         }
-        let mut fkey: Vec<i64> = vec![1];
-        for &loc in &fs.colors {
-            fkey.extend([
-                loc as i64,
-                pf_kind(
-                    p.color_pfs
-                        .get(loc as usize)
-                        .copied()
-                        .unwrap_or(MTLPixelFormat::Invalid),
-                ) as i64,
-            ]);
-        }
-        for &loc in &fs.varyings {
-            fkey.extend([100 + loc as i64, vs.varyings.contains(&loc) as i64]);
-        }
-        let pipe = |sh: &mut SharedCaches,
-                    stage: &CachedStage,
-                    key: Vec<i64>|
-         -> Result<
-            Retained<ProtocolObject<dyn objc2_metal::MTLComputePipelineState>>,
-            String,
-        > {
+        let pipe = |sh: &mut SharedCaches, stage: &CachedStage, key: Vec<i64>| -> Result<ComputePipe, String> {
             let k = (stage as *const CachedStage as usize, key);
             if let Some(p) = sh.tiny_pipes.get(&k) {
                 return Ok(p.clone());
             }
-            let cv = MTLFunctionConstantValues::new();
-            let name = if k.1[0] == 0 {
-                for (loc, _, _, _, kind) in attr_descs {
-                    set_int(&cv, *loc as usize, *kind);
-                }
-                set_bool(&cv, 40, depth_gl);
-                set_bool(&cv, 41, y_negate());
-                cv.setConstantValue_type_atIndex(
-                    std::ptr::NonNull::new(&point_size as *const f32 as *mut libc::c_void).unwrap(),
-                    MTLDataType::Float,
-                    42,
-                );
-                format!("tkv_{}", stage.entry)
-            } else {
-                for &loc in &fs.colors {
-                    set_int(
-                        &cv,
-                        32 + loc as usize,
-                        pf_kind(
-                            p.color_pfs
-                                .get(loc as usize)
-                                .copied()
-                                .unwrap_or(MTLPixelFormat::Invalid),
-                        ),
-                    );
-                }
-                set_bool(&cv, 43, false);
-                for &loc in &fs.varyings {
-                    set_bool(&cv, 48 + loc as usize, vs.varyings.contains(&loc));
-                }
-                format!("tkf_{}", stage.entry)
-            };
-            let f = lib.kernel(&stage.entry, &name, &cv)?;
-            let p = self
-                .device
-                .newComputePipelineStateWithFunction_error(&f)
-                .map_err(|e| e.localizedDescription().to_string())?;
+            let p = tiny_cell(&stage.entry, &k.1).0.get_or_init(|| self.make_tiny(lib, &stage.entry, &k.1)).clone()?;
             sh.tiny_pipes.insert(k, p.clone());
             Ok(p)
         };
@@ -5791,7 +5854,7 @@ impl Gfx {
                             env.sh
                                 .translated_pipelines
                                 .insert(key.to_vec(), pipe.clone());
-                            record_pipeline(vs, fs, p, point_size, depth_gl, &blends);
+                            record_pipeline(vs, fs, p, point_size, depth_gl, &blends, false);
                             register_batchable(
                                 &pipe,
                                 &key,
@@ -5868,7 +5931,7 @@ impl Gfx {
                         };
                     };
                     env.sh.translated_pipelines.insert(key.to_vec(), pl.clone());
-                    record_pipeline(vs, fs, p, point_size, depth_gl, &blends);
+                    record_pipeline(vs, fs, p, point_size, depth_gl, &blends, false);
                     register_batchable(
                         &pl,
                         &key,

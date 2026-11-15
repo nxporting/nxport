@@ -12,6 +12,8 @@
 //      <samples> <draw mode> <restart> <polygon bits> <depth-stencil bits> <multisample bits> <depth clamp>
 //      <8 blend states> <attribute bits> <stream bits>
 // where a format is <texture format>:<view format> (NVN format numbers, 0 = none / the texture's own).
+// Either kind may end in ` t`: the pipeline's draws ran as tiny passes (compute kernels the engine makes from the
+// entry), so its kernels are made ahead too. A merged list keeps only the marked one of two otherwise equal entries.
 // A list starts with `# nxport pipelines title <title id> build <main build id>`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -32,6 +34,8 @@ pub struct Entry {
     pub streams: Vec<u64>,
     /// p2: the game's formats and the other draw state (then `depth_pf` and `color_pfs` are 0).
     pub nvn: Option<Nvn>,
+    /// The pipeline's draws ran as tiny passes (` t`).
+    pub tiny: bool,
 }
 
 /// What a p2 entry adds: targets by NVN format (texture, view; 0 = none / the texture's own) and draw state as NVN bits.
@@ -125,6 +129,14 @@ impl Entry {
     }
 
     pub fn line(&self) -> String {
+        let mut l = self.line_without_mark();
+        if self.tiny {
+            l += " t";
+        }
+        l
+    }
+
+    fn line_without_mark(&self) -> String {
         if let Some(n) = &self.nvn {
             return format!(
                 "p2 {} {} {:x} {} {} {:x} {:x} {} {} {:x} {:x} {} {:x} {:x} {:x} {} {} {} {}",
@@ -167,7 +179,11 @@ impl Entry {
     }
 
     pub fn parse(line: &str) -> Option<Entry> {
-        let f: Vec<&str> = line.split_whitespace().collect();
+        let mut f: Vec<&str> = line.split_whitespace().collect();
+        let tiny = f.last() == Some(&"t");
+        if tiny {
+            f.pop();
+        }
         let name = |s: &str| is_entry_name(s).then(|| s.to_string());
         let flag = |s: &str| match s {
             "0" => Some(false),
@@ -208,6 +224,7 @@ impl Entry {
                     multisample: hex(ms)?,
                     depth_clamp: flag(clamp)?,
                 }),
+                tiny,
             });
         }
         let ["p1", vs, fs, ps, dg, yn, cs, cm, dpf, cpfs, blends, attrs, streams] = f.as_slice() else {
@@ -227,6 +244,7 @@ impl Entry {
             attr_bits: attr_list(attrs)?,
             streams: parse_list(streams, hex)?,
             nvn: None,
+            tiny,
         })
     }
 
@@ -377,6 +395,10 @@ pub fn merge(keep: &[&str], sources: &[&str], o: &MergeOptions) -> Merged {
             m.pending += 1;
         }
     }
+    let marked: Vec<Entry> = m.entries.iter().filter(|e| e.tiny).map(|e| Entry { tiny: false, ..e.clone() }).collect();
+    for e in marked {
+        m.entries.remove(&e);
+    }
     m.build = if builds.len() == 1 { builds.into_iter().next().unwrap() } else { "-".into() };
     m
 }
@@ -400,6 +422,7 @@ mod tests {
             attr_bits: vec![Some(0x520), None],
             streams: vec![],
             nvn: None,
+            tiny: false,
         }
     }
 
@@ -425,6 +448,20 @@ mod tests {
         assert_eq!(Entry::parse(&e.line()), Some(e));
         assert!(Entry::parse("p1 s_x - 0").is_none());
         assert!(Entry::parse(&entry().line().replace("s_7db8", "s_7DB8")).is_none());
+    }
+
+    #[test]
+    fn tiny_mark() {
+        let mut e = entry();
+        e.tiny = true;
+        assert!(e.line().ends_with(" t"));
+        assert_eq!(Entry::parse(&e.line()), Some(e.clone()));
+        assert!(Entry::parse(&format!("{} t t", entry().line())).is_none());
+        let h = header(0x0100f2c0115b6000, "ab");
+        let a = format!("{h}\n{}\n", entry().line());
+        let b = format!("{h}\n{}\n", e.line());
+        let m = merge(&[&a], &[&b], &MergeOptions::default());
+        assert_eq!(m.entries.into_iter().collect::<Vec<_>>(), vec![e]);
     }
 
     #[test]
