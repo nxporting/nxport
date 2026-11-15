@@ -146,6 +146,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   EmergencyHeap (not through main+0xceb2f4) and crashes, +0x38 still null. On the console the actor whose creation runs
   main+0x7b7b54 (and sets +0x38) must come before any ActorCreate job makes an EmergencyHeap: find which job makes that
   heap and what queues it after that actor.
+  Correction (heap-create probe, frames from x29): only one heap named EmergencyHeap is ever made, by main at startup
+  (call chain main+0xbcb340 <- 0xdb94d4 <- 0x726f64 <- 0x9fef7c ...). The ActorCreate listener is handed that existing
+  heap: in sead an allocation falls back to the emergency heap when its own heap is full or not found. So the likely
+  cause is memory: an actor's heap too small or missing here (RSTB sizes, heap sizes from the system, as Savage Wind's
+  RSTB fixes), and the fallback path needs setup that is not done yet. Next: probe the allocation that falls back
+  (its heap, size, caller) on that ActorCreate job.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
