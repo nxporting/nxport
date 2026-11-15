@@ -102,6 +102,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the user's test build): every linear render target goes back, copied at the end of the submit that drew it
   (vulkan/exec.rs note_rendered / record_rt_reads), so a wait on that submit's fence finds it. Waiting for the user's
   test; then TotK / SMO checks (with the lifter changes) before committing. Flicker: not described yet (asked).
+- **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
+  line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
+  pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
+  sead controller step, arrow_gravity, snd_frame_floor, phys_solver_steps, phys_tick(_mt) / phys_motion_tick (Havok
+  deactivation at the console's pace), kf_angle. Our rule (no heuristics): take their exact ones (frame wait, GUI speed,
+  controller step, arrows, sound floor, kf_angle, deactivation derived from the game's counts), not their tuned ones
+  (solver steps 6/sqrt(df), the VFR step smoothing, shield-surf grace, event lists). Find each by pattern as TotK's
+  profile does, and check against KNOWN.
 
 - **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
   virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
