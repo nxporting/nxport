@@ -20,13 +20,12 @@ Must do, in order:
    macos-with-windows builder starts on the Mac and builds a Windows app; win-worker checks the Windows zip.
 3. Rebuild your own Mac app with the new builder (old apps have the 32 GB archives) and play a few minutes: menus,
    window resize changes the aspect, mouse aim (camera and bow), Cmd-O overlay, memory in Activity Monitor ~3 GB.
-4. iPhone: install the Mac-built .ipa target/release_ipa_hwvp9_100/The Legend of Zelda - Tears of the Kingdom.ipa (TotK
-   1.0.0 files as on the phone; target/release_ipa_hwvp9 has a 1.1.2 one), built at 9218b2a, 2026-11-15:
-   movies decoded by the video hardware on iOS 26.2+, log.txt should say "VP9 1920x1080 decoded by the video hardware";
-   the 1.0.0 one, target/release_ipa_100, is from before that: movies at their own speed with a clock that restarts after a late frame (1fe6fe0), movie 16:9 on
-   the phone's screen, ability wheel background at any frame rate (19e6891), file-backed memory on, the pipeline
-   archive tagged with its iOS 18.4 SDK so an iOS 27 phone compiles the list itself (197beb7)) and, if you can, a
-   Windows-built one; play a few minutes; the screen should not auto-lock; send log.txt if anything is off.
+4. iPhone: install target/release_ipa_morning/The Legend of Zelda - Tears of the Kingdom.ipa (TotK 1.0.0, as the phone's
+   files; built 2026-11-15 night). Since the last one: file-backed memory off again (a4f9b72: the phone ran 9-17 fps for
+   minutes after loading a save and loaded slowly with it on), tiny-pass kernels made before their first draw (9af2558).
+   Movies are decoded by the video hardware (f37eb96: log.txt "VP9 1920x1080 decoded by the video hardware", checked on
+   the phone 2026-11-15; a few drops remain where the game loads behind the movie). Play a few minutes, load a save
+   from a fresh launch; send log.txt if anything is off.
 5. Release text: yours. The publish job creates a draft with an empty body (d78b011); agents write no release notes.
 6. Tag v<version>: the release is created as a draft; write its text and publish it on GitHub. No secrets or repo
    settings needed: release.yml uses only GITHUB_TOKEN, contents: write in the publish job alone.
@@ -40,7 +39,8 @@ Your call, optional for the first release:
    THIRD_PARTY_LICENSES.txt (generated for all three targets).
 9. Code signing for Windows (SignPath or a certificate): after the release.
 10. Defaults to decide: --tile-feedback (decals read the tile: fewer passes on the phone, slightly different cliff
-   decals) is off. --file-backed-memory is on for .ipa builds (197beb7; user, 2026-11-14), off elsewhere.
+   decals) is off. --file-backed-memory is off everywhere again (a4f9b72, 2026-11-15: slow loads and slow first minutes on the phone;
+   the increased-memory-limit entitlement covers the memory).
 
 After the release (not blocking): cheats with a data-writing cheat plus the Cheats menu in a window (Windows or Mac),
 the remaining morning items below (a movie to the end,
