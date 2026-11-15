@@ -1214,16 +1214,24 @@ impl Ctx {
         let (tex_id, sampler_id) = ((h & 0xFFFFF) as i32, ((h >> 20) & 0xFFF) as i32);
         let mut image = vk::Image::null();
         let mut feedback = false;
+        let mut twin = false;
         let view = crate::nvn::api::lookup_pool_texture(tex_id).and_then(|(obj, view)| {
             let (_, mut t) = crate::nvn::api::texture_snapshot(obj)?;
             // Depth comparison of a colour texture: its memory read as depth (layout::depth_twin), which is what the
             // console compares; a depth texture over the same memory is that image.
+            let mut colour = None;
             if shadow {
                 if let Some(f) = crate::nvn::layout::depth_twin(t.format) {
+                    colour = Some(t);
                     t.format = f;
                     let (d, _, _) = self.tex.locate(&t);
                     self.tex.depth_twins.insert(d);
                 }
+            }
+            self.tex.get(&self.dev, &t)?;
+            if let Some(c) = colour {
+                twin = true;
+                self.twin_from_colour(&c, &t);
             }
             let img = &self.tex.get(&self.dev, &t)?.0;
             if shadow && !super::format::aspects(img.format).contains(vk::ImageAspectFlags::DEPTH) {
@@ -1241,7 +1249,8 @@ impl Ctx {
         });
         let sampler = crate::nvn::api::lookup_pool_sampler(sampler_id).and_then(|d| self.tex.sampler(&self.dev, &d));
         let r = (view.unwrap_or(vk::ImageView::null()), sampler.unwrap_or(self.default_sampler));
-        if !feedback {
+        // A depth twin is checked at each binding: its colour image may be drawn again between two draws.
+        if !feedback && !twin {
             self.bindings.insert(key, (image, r.0, r.1));
             if let Some((ms, mk)) = memo {
                 self.tex_memo[ms][mk] = TexMemo { gen: self.bindings_gen, handle: hq, declared, shadow, image, view: r.0, sampler: r.1 };
@@ -1409,6 +1418,70 @@ impl Ctx {
         }
         let (_, snap) = self.fb_snaps.get_mut(&d)?;
         Textures::sampled_view_of(&self.dev, snap, (level, layer), t, view, declared)
+    }
+
+    /// Depth comparison of a colour texture the GPU drew (BotW's 448x448 R16 shadow array, drawn and compared every
+    /// frame): the depth twin (layout::depth_twin) is made from guest memory, which a block-linear target the GPU drew
+    /// does not hold. When the colour image was rendered since the twin last took it, its texels are copied into the twin
+    /// (colour -> buffer -> depth: the same bytes, D16 / D32F read as the console's comparison does).
+    unsafe fn twin_from_colour(&mut self, colour: &NvnTexture, twin: &NvnTexture) {
+        let (cd, _, _) = self.tex.locate(colour);
+        let (td, _, _) = self.tex.locate(twin);
+        let Some(src) = self.tex.images.get(&cd) else { return };
+        let Some(&drawn) = self.rendered_at.get(&src.image) else { return };
+        if self.twin_copied.get(&td).is_some_and(|&c| c >= drawn) {
+            return;
+        }
+        let Some(dst) = self.tex.images.get(&td) else { return };
+        let (Some(ci), Some(ti)) = (crate::nvn::layout::format_info(colour.format), crate::nvn::layout::format_info(twin.format)) else { return };
+        if ci.bytes != ti.bytes || ci.block_w != 1 || src.samples != vk::SampleCountFlags::TYPE_1 || (src.extent.width, src.extent.height, src.extent.depth) != (dst.extent.width, dst.extent.height, dst.extent.depth) {
+            return;
+        }
+        let (levels, layers) = (src.levels.min(dst.levels), src.layers.min(dst.layers));
+        let (mut colour_regions, mut depth_regions) = (Vec::new(), Vec::new());
+        let mut offset = 0u64;
+        for l in 0..levels {
+            let extent = vk::Extent3D { width: (src.extent.width >> l).max(1), height: (src.extent.height >> l).max(1), depth: (src.extent.depth >> l).max(1) };
+            let region = |aspect| {
+                vk::BufferImageCopy::default()
+                    .buffer_offset(offset)
+                    .image_subresource(vk::ImageSubresourceLayers::default().aspect_mask(aspect).mip_level(l).layer_count(layers))
+                    .image_extent(extent)
+            };
+            colour_regions.push(region(vk::ImageAspectFlags::COLOR));
+            depth_regions.push(region(vk::ImageAspectFlags::DEPTH));
+            offset += extent.width as u64 * extent.height as u64 * extent.depth as u64 * layers as u64 * ci.bytes as u64;
+            offset = (offset + 15) & !15;
+        }
+        if self.twin_buf.as_ref().is_none_or(|b| b.size < offset) {
+            if let Some(old) = self.twin_buf.take() {
+                // Earlier submits may still copy through it.
+                let _ = self.dev.device.device_wait_idle();
+                self.dev.free_host_buffer(&old);
+            }
+            let usage = vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST;
+            let Ok(b) = self.dev.mapped_device_buffer(offset.next_power_of_two(), usage) else { return };
+            self.twin_buf = Some(b);
+        }
+        let buf = self.twin_buf.as_ref().unwrap().buffer;
+        let (si, di) = (src.image, dst.image);
+        let paused = self.pass.as_ref().map_or_else(|| std::mem::take(&mut self.fb_paused), |p| p.images.clone());
+        self.end_pass();
+        self.fb_paused = paused;
+        self.barrier();
+        crate::gpu::history::journal_fmt(format_args!("  depth twin {:x} from colour {:x}", vk::Handle::as_raw(di), vk::Handle::as_raw(si)));
+        self.rec.cmd(move |d, cb| {
+            d.device.cmd_copy_image_to_buffer(cb, si, vk::ImageLayout::GENERAL, buf, &colour_regions);
+            let mb = vk::MemoryBarrier::default().src_access_mask(vk::AccessFlags::TRANSFER_WRITE).dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+            d.device.cmd_pipeline_barrier(cb, vk::PipelineStageFlags::TRANSFER, vk::PipelineStageFlags::TRANSFER, vk::DependencyFlags::empty(), &[mb], &[], &[]);
+            d.device.cmd_copy_buffer_to_image(cb, buf, di, vk::ImageLayout::GENERAL, &depth_regions);
+        });
+        self.barrier();
+        self.twin_copied.insert(td, drawn);
+        if self.rendered_at.len() > 1 << 16 {
+            let keep = self.pass_serial.saturating_sub(1 << 16);
+            self.rendered_at.retain(|_, s| *s > keep);
+        }
     }
 
     unsafe fn image_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType) -> vk::ImageView {
