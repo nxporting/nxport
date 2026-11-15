@@ -119,8 +119,21 @@ extern "C" {
     fn VTDecompressionSessionWaitForAsynchronousFrames(s: CFTypeRef) -> OSStatus;
     fn VTDecompressionSessionFinishDelayedFrames(s: CFTypeRef) -> OSStatus;
     fn VTDecompressionSessionInvalidate(s: CFTypeRef);
-    #[cfg(target_os = "macos")]
-    fn VTRegisterSupplementalVideoDecoderIfAvailable(codec: u32);
+    fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
+}
+
+/// Register the supplemental VP9 decoder so VideoToolbox will vend it. The SDK marks the call macOS-only, but iOS 26.2+
+/// exports it and then allows VP9 without the private entitlement (confirmed on an iPhone 16e, iOS 27.3), so it is
+/// resolved at runtime. A no-op where the symbol is absent (older iOS), leaving the caller to fall back to software.
+unsafe fn register_vp9() {
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    REGISTER.call_once(|| {
+        let rtld_default = -2isize as *mut c_void; // Darwin RTLD_DEFAULT: normal load order (VideoToolbox is loaded).
+        let f = dlsym(rtld_default, c"VTRegisterSupplementalVideoDecoderIfAvailable".as_ptr());
+        if !f.is_null() {
+            std::mem::transmute::<_, extern "C" fn(u32)>(f)(VP09);
+        }
+    });
 }
 
 const VP09: u32 = u32::from_be_bytes(*b"vp09");
@@ -249,11 +262,7 @@ impl Session {
     /// A hardware VP9 session for the stream `key` starts, or why there is none.
     pub(crate) fn new(key: &KeyFrame) -> Result<Session, String> {
         unsafe {
-            #[cfg(target_os = "macos")]
-            {
-                static REGISTER: std::sync::Once = std::sync::Once::new();
-                REGISTER.call_once(|| VTRegisterSupplementalVideoDecoderIfAvailable(VP09));
-            }
+            register_vp9();
             // vpcC (VP Codec ISO Media File Format Binding 2.2): version 1, flags 0, profile, level, bit depth << 4 |
             // chroma subsampling (1: 4:2:0 co-located) << 1 | full range, primaries / transfer / matrix (2: unspecified),
             // no initialization data.
