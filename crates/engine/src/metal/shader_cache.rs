@@ -572,17 +572,32 @@ pub fn compute_entries() -> Vec<&'static str> {
 
 /// A stage of the cache index by its entry name (`s_<hash>`).
 pub fn by_entry(entry: &str) -> Option<&'static CachedStage> {
-    static M: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
-    let idx = index()?;
     // The first of duplicate entries, as lookup finds it (pipeline keys hold the stage's address).
-    let m = M.get_or_init(|| {
-        let mut m = HashMap::new();
-        for (i, s) in idx.stages.iter().enumerate() {
-            m.entry(s.entry.as_str()).or_insert(i);
+    fn first(idx: &'static Index, map: &'static OnceLock<HashMap<&'static str, usize>>, entry: &str) -> Option<&'static CachedStage> {
+        let m = map.get_or_init(|| {
+            let mut m = HashMap::new();
+            for (i, s) in idx.stages.iter().enumerate() {
+                m.entry(s.entry.as_str()).or_insert(i);
+            }
+            m
+        });
+        m.get(entry).map(|&i| &idx.stages[i])
+    }
+    static M: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    static S: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    static R: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+    if let Some(st) = index().and_then(|idx| first(idx, &M, entry)) {
+        return Some(st);
+    }
+    // As lookup goes on: the source set, then the stages translated on earlier starts, their libraries compiled here, so
+    // listed pipelines that use them are made ahead too (they were left out as "missing shaders" and compiled again at
+    // every start where the game first drew them).
+    if let Some((idx, pack)) = source_set() {
+        if let Some(st) = first(idx, &S, entry) {
+            return compiled_stage(st, || pack.source(&st.entry));
         }
-        m
-    });
-    m.get(entry).map(|&i| &idx.stages[i])
+    }
+    runtime_stage(first(runtime_index()?, &R, entry)?)
 }
 
 fn stage_kind_str(k: StageKind) -> &'static str {
