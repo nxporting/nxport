@@ -108,7 +108,7 @@ what it took above 30 fps.
 
 | Item | Where | nxport |
 |---|---|---|
-| **nvnTextureCompare compares state, not addresses.** Cuttable trees keep a texture pool slot when the rebuilt texture compares equal; by address each rebuild freed the slot and the trunks bound whatever took it (#16: trees "thrown across the sky") | `nvn/objects.c` | **Gap**: `hle_nvnTextureCompare` (nvn/api.rs) compares pointers |
+| **nvnTextureCompare compares state, not addresses.** Cuttable trees keep a texture pool slot when the rebuilt texture compares equal; by address each rebuild freed the slot and the trunks bound whatever took it (#16: trees "thrown across the sky") | `nvn/objects.c` | Have (c3e2b19): compares what the textures describe |
 | **Linear render targets go back to guest memory.** The sky is sampled into an 8x8 RGBA32F linear target and read by the CPU for **fog and ambient colours**; 1x1 / 3x3 for exposure. The first ~30 tiny reads after a loading screen are waited for, or the water stayed milky white (#362) | `nvn/vulkan/exec.c` readbacks | We write back targets <= 64 KB one frame late (vulkan/exec.rs write_back_rts); check the sky and exposure reads |
 | Depth clamp for the sun cascades (without it the cliff over the Shrine of Resurrection cast no shadow; lit fog) | `CMD_SET_DEPTH_CLAMP` | Have (Vulkan, Metal) |
 | IPA multiply for soft particles (w / clip.w: tiled "fog" in the shrine); noperspective HUD colours (black minimap) | `nvn/maxwell/translate.c` | sass2spv handles IPA MULTIPLY; check the w/clip.w case |
