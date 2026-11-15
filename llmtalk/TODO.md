@@ -173,6 +173,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   TotK's time_step: ratio = real seconds since the last update x 30, whole refreshes under vsync with the remainder
   carried; interval = the present interval the engine gives. Their smoothing (5% average, 3% a frame, 2% payback) and
   0.05 s cap are tuning, not to copy.
+  Done in code (2026-11-15, win-worker; profile/botw/frame_time.rs, shared step profile/frame_step.rs): VFR ratio hook at
+  main+0x151d484, GUI speed main+0x1280ecc, controller step float main+0x1dad0e0 (GOT main+0x1d6e9e0; the 0x1cad0e0
+  above was wrong by 0x100000, and pause state is main+0x1e1611c), frame wait -> ret; profile::real_time() covers BotW
+  so the pacer lifts the 30 fps cap. The game keeps its own interval (+0x34) and its override (+0x29). Still to do:
+  arrow gravity, sound frame floor, kf_angle, Havok deactivation pace; other versions by pattern.
 
 - **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
   virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
