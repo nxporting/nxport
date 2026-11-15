@@ -135,6 +135,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   The user (2026-11-15 night): in random places Link floats miles into the air "as if the water was pulled up that
   high", without visible water; more often near real bodies of water; water looks white (Savage Wind #362: tiny
   lighting read-backs late after a load). So the CPU's water height query returns a huge / garbage value somewhere.
+  Audit (llmtalk/BOTW_WATER_AUDIT.md, a subagent comparing Savage Wind, 2026-11-15): top lead is the early fence
+  (graphics.early-fence, on by default): guest-main's frame-fence wait returns with the frame still on the GPU, and
+  nothing holds the GPU's results from the CPU (guard.rs: "the game reads such results a frame late", TotK's case, not
+  BotW's). Done, in the user's next build: BotW's profile turns it off; a write-back's bytes are hashed by the watcher
+  so a CPU write before the submit retires is uploaded, not absorbed (audit item 2); fs reads loop until filled or EOF.
+  Later, general fix: hold GPU-result pages (linear write-backs, copy destinations) unreadable until written, so the
+  overlap can stay on (early-fence-strict is declared but unused on Vulkan).
 - **BotW 1.9.0 above 30 fps (next, after the physics test).** Savage Wind's sites for 1.9.0 (tools/game_sites.py, KNOWN at
   line ~419; main offset = address - 0x7000000000, ours = main+offset): frame_wait 0xe9487c (skip the vsync wait; our
   pacer paces), vfr_ratio 0x151d494 (the game clock: ratio = step x 30, interval 1/2/3), gui_speed 0x1280ee8, the
