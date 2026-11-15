@@ -76,10 +76,8 @@ fn app(r: Request, cache: Option<PathBuf>, steps: &mut Vec<Step>) -> Output {
     steps.push((
         "Packaging the app".into(),
         Box::new(move || {
-            let mut edits = edits.clone();
-            if mods.is_none() {
-                edits.files.no_mods = Some(true);
-            }
+            // Without mods of its own the app takes the game's data directory's mods folder (mods added after the build).
+            let edits = edits.clone();
             if settings_file.exists() || settings_file.is_symlink() {
                 let _ = nxport_build::pack::ensure_writable(&settings_file);
                 let _ = std::fs::remove_file(&settings_file);

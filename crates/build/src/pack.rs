@@ -126,9 +126,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         nxport::settings::SettingsPatch::default()
     };
-    if !packaged_any_mods {
-        app_settings.files.no_mods = Some(true);
-    }
+    // Without packaged mods the app takes the game's data directory's mods folder (mods added after the build).
     // Made on another OS (Windows): a host path means nothing on the Mac the app runs on; the app asks for the game by
     // its title (host/game_files.rs).
     if !cfg!(target_os = "macos") {
