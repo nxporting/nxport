@@ -27,6 +27,14 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2oe28SetResumeNotificationEnabledEb", func!(crate::horizon::hle::hle_nn_oe_SetResumeNotificationEnabled(_))),
     // Tells the system how to rotate captured screenshots (IPC to the applet manager); there is none to tell.
     Entry("_ZN2nn2oe29SetScreenShotImageOrientationENS_5album16ImageOrientationE", func!(crate::horizon::nn::noop_void())),
+    // Screenshot and video capture switches (IPC to the applet manager, newer SDKs call some natively): there is no capture
+    // to switch. BotW 1.9.0 calls EnableRecording right after its first frame.
+    Entry("_ZN2nn2oe15EnableRecordingEv", func!(crate::horizon::nn::noop_void())),
+    Entry("_ZN2nn2oe16DisableRecordingEv", func!(crate::horizon::nn::noop_void())),
+    Entry("_ZN2nn2oe13MuteRecordingEv", func!(crate::horizon::nn::noop_void())),
+    Entry("_ZN2nn2oe15UnmuteRecordingEv", func!(crate::horizon::nn::noop_void())),
+    Entry("_ZN2nn2oe22PauseGamePlayRecordingEv", func!(crate::horizon::nn::noop_void())),
+    Entry("_ZN2nn2oe24RestartGamePlayRecordingEv", func!(crate::horizon::nn::noop_void())),
     Entry("_ZN2nn2oe31EnterExitRequestHandlingSectionEv", func!(crate::horizon::nn::oe_enter_exit_request_handling_section())),
     Entry("_ZN2nn2oe31LeaveExitRequestHandlingSectionEv", func!(crate::horizon::nn::oe_leave_exit_request_handling_section())),
     Entry("_ZN2nn2oe38SetUserInactivityDetectionTimeExtendedEb", func!(crate::horizon::hle::hle_nn_oe_SetUserInactivityDetectionTimeExtended(_))),

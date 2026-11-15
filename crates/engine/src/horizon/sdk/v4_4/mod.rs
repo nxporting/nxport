@@ -14,4 +14,5 @@ pub(super) static LAYER: Layer = Layer {
     // The thread object has a lock history word after its fiber pointers (BotW sdk+0x96efc, the internal lock
     // takes the owner handle from +0x1b8; newer SDKs read it at +0x1b0).
     thread_tail_shift: Some(8),
+    audio_handle_state: None,
 };

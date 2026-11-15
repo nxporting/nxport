@@ -834,7 +834,22 @@ pub(crate) unsafe extern "C" fn pl_get_shared_font_address(ty: i32) -> *const u8
         font.as_ptr()
     }
 }
-pub(crate) unsafe extern "C" fn pl_vr_mode() {}
+/// VR mode as the game set it (nn::pl::BeginVrMode / EndVrMode): the system only records it here; the game draws its own
+/// split image.
+static VR_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) unsafe extern "C" fn pl_begin_vr_mode() {
+    VR_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+pub(crate) unsafe extern "C" fn pl_end_vr_mode() {
+    VR_MODE.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+pub(crate) unsafe extern "C" fn pl_is_vr_mode() -> bool {
+    VR_MODE.load(std::sync::atomic::Ordering::Relaxed)
+}
+/// nn::pl::IsRunningOnOunce: whether the console is a Switch 2. The engine presents the original Switch.
+pub(crate) unsafe extern "C" fn pl_is_running_on_ounce() -> bool {
+    false
+}
 pub(crate) unsafe extern "C" fn account_get_user_existence(out: *mut bool, _uid: *const u8) -> u32 {
     if !out.is_null() {
         *out = true;

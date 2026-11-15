@@ -68,9 +68,27 @@ pub fn control_of(dir: &Path) -> Option<Control> {
         (!t.is_empty()).then_some(t)
     };
     // 16 language entries of 0x300 bytes (name 0x200, publisher 0x100; American English first), then the display
-    // version at 0x3060.
+    // version at 0x3060. Newer control data may store the titles compressed (TitleCompression, the byte at 0x3215, 1):
+    // the title area then holds a little-endian u16 length and that many bytes of raw deflate, which inflate to 32
+    // entries (as LibHac reads them; BotW 1.9.0).
+    let inflated = (d.get(0x3215) == Some(&1)).then(|| {
+        let len = u16::from_le_bytes([*d.first()?, *d.get(1)?]) as usize;
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(d.get(2..2 + len)?), &mut out).ok()?;
+        Some(out)
+    }).flatten();
+    let title_text = |b: &[u8], at: usize| {
+        let b = b.get(at..at + 0x200)?;
+        let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+        let t = String::from_utf8_lossy(&b[..end]).trim().to_string();
+        (!t.is_empty()).then_some(t)
+    };
+    let title = match &inflated {
+        Some(t) => (0..t.len() / 0x300).find_map(|i| title_text(t, i * 0x300)),
+        None => (0..16).find_map(|i| text(i * 0x300, 0x200)),
+    };
     Some(Control {
-        title: (0..16).find_map(|i| text(i * 0x300, 0x200)),
+        title,
         version: text(0x3060, 0x10),
     })
 }

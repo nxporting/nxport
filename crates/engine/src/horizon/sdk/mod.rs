@@ -84,6 +84,7 @@ mod base;
 mod v0_12;
 mod v3_5;
 mod v15_3;
+mod v20_5;
 mod v4_4;
 mod v7_3;
 
@@ -106,10 +107,13 @@ pub struct Layer {
     /// Bytes by which the thread object's fields after its fiber pointers (TLS values, name, lock, handle) lie further
     /// than in the newest layout, and the object is longer.
     pub thread_tail_shift: Option<usize>,
+    /// Whether nn::audio::AudioRendererHandle is two words, the service object and the client state block its inline
+    /// functions read (rendering time limit, voice drop), rather than the service object alone.
+    pub audio_handle_state: Option<bool>,
 }
 
 /// Version layers, oldest first.
-static LAYERS: &[&Layer] = &[&v0_12::LAYER, &v3_5::LAYER, &v4_4::LAYER, &v7_3::LAYER, &v15_3::LAYER];
+static LAYERS: &[&Layer] = &[&v0_12::LAYER, &v3_5::LAYER, &v4_4::LAYER, &v7_3::LAYER, &v15_3::LAYER, &v20_5::LAYER];
 
 static BASE: &Layer = &base::LAYER;
 
@@ -199,6 +203,12 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 }
 
 /// thread_tail_shift of this game's SDK (the newest layer that knows it; 0 for an unknown version).
+/// audio_handle_state of this game's SDK (the newest layer that knows it; one word for an unknown version).
+pub fn audio_handle_state() -> bool {
+    static S: OnceLock<bool> = OnceLock::new();
+    *S.get_or_init(|| chain().layers.iter().find_map(|l| l.audio_handle_state).unwrap_or(false))
+}
+
 pub fn thread_tail_shift() -> usize {
     static S: OnceLock<usize> = OnceLock::new();
     *S.get_or_init(|| chain().layers.iter().find_map(|l| l.thread_tail_shift).unwrap_or(0))
