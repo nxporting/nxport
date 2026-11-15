@@ -95,8 +95,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 ## Open (unclaimed)
 
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
-  (merged on the Mac). Needs a run with the V1_9_0 profile (profile/botw.rs): the 1.9.0 update NSP is in
-  ~/Downloads (not mounted yet). Win-worker's Vulkan change (every LINEAR_RENDER_TARGET written back at the end of its
+  (merged on the Mac). Runs on Metal (2026-11-15, BotW19 1.9.0, builder-made cache,
+  botw-pool save): profile 1.9.0, no errors, 30 fps; the same water bug as 1.5.0 (lily pads in the sky over the pond)
+  with da752b5's early fence off, so not the fence. Win-worker's Vulkan change (every LINEAR_RENDER_TARGET written back at the end of its
   submit) needs no Metal mirror: rt_guard holds CPU-pool targets and writes them back on the first CPU touch. 1.9.0
   physics reports (boxes pinned to walls, Link floating, water) may be the open 1.5.0 water bug (AGENTS.md 5b2).
   Flicker in 1.9.0 on Windows: not described yet.
