@@ -95,6 +95,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15).** Seen: boxes pinned to walls and floating, Link
+  floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
+  render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
+  exposure); nxport wrote back only targets <= 64 KiB or not drawn in the last 4 frames, a frame late. Uncommitted (in
+  the user's test build): every linear render target goes back, copied at the end of the submit that drew it
+  (vulkan/exec.rs note_rendered / record_rt_reads), so a wait on that submit's fence finds it. Waiting for the user's
+  test; then TotK / SMO checks (with the lifter changes) before committing. Flicker: not described yet (asked).
+
 - **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
   virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
   stores its second argument, a callback object, at [sp+0x28]) goes to main+0x15e264, 0x28 into f_700025e23c: the
