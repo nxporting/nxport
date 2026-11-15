@@ -2,6 +2,7 @@
 // and matches the version via the main NSO module Build ID.
 
 pub mod botw;
+pub mod frame_step;
 pub mod kirby;
 pub mod smo;
 pub mod totk;
@@ -294,6 +295,7 @@ pub fn app_title() -> &'static str {
 pub fn real_time() -> bool {
     match active().kind {
         GameKind::TotK => totk::frame_time::real_time(),
+        GameKind::BotW => botw::frame_time::real_time(),
         _ => false,
     }
 }
