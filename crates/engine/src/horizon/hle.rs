@@ -2537,6 +2537,7 @@ pub unsafe extern "C" fn hle_nn_os_GetThreadId(thread: *const NnThreadType) -> u
 pub unsafe extern "C" fn hle_nn_os_ChangeThreadPriority(thread: *mut NnThreadType, prio: i32) {
     if !thread.is_null() {
         (*thread).base_priority = prio;
+        super::cores::PRIO_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

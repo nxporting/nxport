@@ -315,7 +315,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .stack_size(256 * 1024 * 1024)
         .spawn(move || {
             cpu::tls::mark_guest_thread();
-            guest_chain.run().map_err(|e| e.to_string())
+            horizon::cores::run_guest(|| guest_chain.run()).map_err(|e| e.to_string())
         })
         .expect("spawn guest-main");
 
@@ -1371,9 +1371,9 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     let s = settings::install(s);
     #[cfg(windows)]
     config::app_log();
-    // horizon/cores.rs schedules native code only (the HLE entry stub); lifted code runs every thread at once.
+    // One guest thread per core at a time (horizon/cores.rs): lifted code lends the core at its engine calls (lifted.rs).
     if s.guest.guest_cores {
-        println!("[!] --guest-cores has no effect here: guest cores are scheduled for native code (macOS / iOS) only");
+        horizon::cores::enable();
     }
     // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (cpu::crash_handler).
     #[cfg(windows)]
@@ -1449,7 +1449,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
             let chain = AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, dump_after_mods));
             move || {
                 guest::tls::mark_guest_thread();
-                chain.run().map_err(|e| e.to_string())
+                horizon::cores::run_guest(|| chain.run()).map_err(|e| e.to_string())
             }
         })?;
     if host::display::headless() {

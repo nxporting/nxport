@@ -57,10 +57,10 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
     let hooked = crate::live_patch::enabled() && crate::live_patch::hle_hooked(c.pc);
     #[cfg(not(windows))]
     let hooked = false;
-    match crate::hle_abi::entry(c.pc).filter(|_| !hooked) {
+    crate::horizon::cores::engine(|| match crate::hle_abi::entry(c.pc).filter(|_| !hooked) {
         Some(h) => h.call(c),
         None => (handlers().unknown)(c),
-    }
+    });
     CURRENT.with(|cur| cur.set(prev));
 }
 
@@ -78,11 +78,11 @@ unsafe extern "C" fn host_call_hle(h: *const crate::hle_abi::Hle, c: *mut Cpu) {
     // The dispatcher's cache keeps what it resolved: a mod may have hooked this trampoline since.
     #[cfg(windows)]
     if crate::live_patch::enabled() && crate::live_patch::hle_hooked((*c).pc) {
-        (handlers().unknown)(&mut *c);
+        crate::horizon::cores::engine(|| (handlers().unknown)(&mut *c));
         CURRENT.with(|cur| cur.set(prev));
         return;
     }
-    (*h).call(&mut *c);
+    crate::horizon::cores::engine(|| (*h).call(&mut *c));
     CURRENT.with(|cur| cur.set(prev));
 }
 
@@ -99,7 +99,7 @@ unsafe extern "C" fn host_code_changed(addr: u64) {
 }
 
 unsafe extern "C" fn host_svc(c: *mut Cpu, imm: u32, pc: u64) {
-    (handlers().svc)(&mut *c, imm, pc)
+    crate::horizon::cores::engine(|| (handlers().svc)(&mut *c, imm, pc))
 }
 
 unsafe extern "C" fn host_trap(c: *mut Cpu, kind: u32, imm: u32, pc: u64) {
@@ -132,7 +132,7 @@ static OVERLAY_CODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 #[cfg(windows)]
 pub unsafe fn call_hle(h: crate::hle_abi::Hle, c: &mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
-    h.call(c);
+    crate::horizon::cores::engine(|| h.call(c));
     CURRENT.with(|cur| cur.set(prev));
 }
 
