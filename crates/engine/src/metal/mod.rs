@@ -303,6 +303,15 @@ pub(super) struct TexCache {
     /// Storage identities (see `storage_id`) the GPU has rendered or cleared into: their content lives in Metal, so
     /// they are never refreshed from guest memory.
     pub(super) gpu_written: rustc_hash::FxHashSet<u64>,
+    /// Per storage identity: the serial of its last GPU write (mark_gpu_written), and the counter they come from.
+    pub(super) gpu_write_seq: rustc_hash::FxHashMap<u64, u64>,
+    pub(super) gpu_write_counter: u64,
+    /// Depth twins of GPU-written colour textures (translated::depth_twin): the twin and the write serial it holds.
+    pub(super) gpu_twins: rustc_hash::FxHashMap<u64, (Tex, u64)>,
+    /// Twins a texture resolution found out of date: (source, twin, storage identity), copied before the draw.
+    pub(super) twin_pending: Vec<(Tex, Tex, u64)>,
+    /// Resolutions that returned such a twin: they are neither memoized nor reused (the twin may need a copy first).
+    pub(super) twin_uses: u64,
     /// alias_view's views by (root, format, type, levels, slices).
     pub(super) alias_views:
         HashMap<(usize, usize, usize, usize, usize, usize, usize), (Tex, Tex, u64)>,
@@ -333,7 +342,21 @@ impl Default for TexCache {
             view_cache: HashMap::default(),
             tex_check_budget_used: 0,
             gpu_written: Default::default(),
+            gpu_write_seq: Default::default(),
+            gpu_write_counter: 0,
+            gpu_twins: Default::default(),
+            twin_pending: Vec::new(),
+            twin_uses: 0,
         }
+    }
+}
+
+impl TexCache {
+    /// The GPU wrote the storage `id`: its contents live in Metal (gpu_written), newer than any depth twin of it.
+    pub(super) fn mark_gpu_written(&mut self, id: u64) {
+        self.gpu_written.insert(id);
+        self.gpu_write_counter += 1;
+        self.gpu_write_seq.insert(id, self.gpu_write_counter);
     }
 }
 
@@ -1387,7 +1410,7 @@ impl Gfx {
                     );
                 }
             }
-            st.tc.gpu_written.insert(storage_id(&target));
+            st.tc.mark_gpu_written(storage_id(&target));
         }
         blit.endEncoding();
     }
@@ -1868,7 +1891,7 @@ impl Gfx {
         let t0 = std::time::Instant::now();
         let h = if stale_rt {
             // Treated like a GPU-rendered texture: its guest bytes are never compared.
-            tc.gpu_written.insert(storage_id(&tex));
+            tc.mark_gpu_written(storage_id(&tex));
             0
         } else {
             guest_bytes_hash(t)
@@ -3629,7 +3652,7 @@ impl Gfx {
                 rgba
             );
         }
-        st.tc.gpu_written.insert(storage_id(&tex));
+        st.tc.mark_gpu_written(storage_id(&tex));
         if !is_color_renderable(&tex) {
             return; // e.g. a compressed or depth texture named as a color target; Metal would abort
         }
@@ -3691,7 +3714,7 @@ impl Gfx {
         let Some(tex) = self.texture(&mut st.tc, rt.texture) else {
             return;
         };
-        st.tc.gpu_written.insert(storage_id(&tex));
+        st.tc.mark_gpu_written(storage_id(&tex));
         if !tex.usage().contains(MTLTextureUsage::RenderTarget) {
             return;
         }

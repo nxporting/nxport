@@ -2982,17 +2982,98 @@ impl Gfx {
     /// from guest memory (shared storage, as a CPU-written texture is), again when the object's generation changes. None
     /// for other formats, or a colour texture the GPU wrote (guest memory does not hold its contents: the caller binds
     /// a dummy, as before).
+    /// Copies GPU-written colour textures into their depth twins (depth_twin) that newer writes left out of date, between
+    /// passes: R16Unorm / R32Float hold the bytes of Depth16Unorm / Depth32Float, and Metal blits colour into depth only
+    /// through a buffer.
+    unsafe fn refresh_depth_twins(&self, st: &mut State) {
+        use objc2_metal::MTLBlitCommandEncoder;
+        let pending = std::mem::take(&mut st.tc.twin_pending);
+        let Some(cb) = st.cur_cb.clone() else { return };
+        if st.enc.is_some() {
+            self.end_encoder_keep_clears(st);
+        }
+        st.issuer.sync(); // other command-buffer use: queued encoder ops first (metal/issuer.rs)
+        let Some(blit) = cb.blitCommandEncoder() else { return };
+        objc2_metal::MTLCommandEncoder::setLabel(&*blit, Some(&objc2_foundation::NSString::from_str("depth twin copy")));
+        for (src, twin, key) in pending {
+            let bpp = match src.pixelFormat() {
+                MTLPixelFormat::R16Unorm => 2,
+                MTLPixelFormat::R32Float => 4,
+                _ => continue,
+            };
+            if (src.width(), src.height(), src.arrayLength(), src.mipmapLevelCount(), src.textureType())
+                != (twin.width(), twin.height(), twin.arrayLength(), twin.mipmapLevelCount(), twin.textureType())
+            {
+                continue;
+            }
+            let slices = src.arrayLength().max(1)
+                * if matches!(src.textureType(), MTLTextureType::TypeCube | MTLTextureType::TypeCubeArray) { 6 } else { 1 };
+            let levels = src.mipmapLevelCount().max(1);
+            let dims = |l: usize| ((src.width() >> l).max(1), (src.height() >> l).max(1));
+            let total: usize = (0..levels).map(|l| dims(l).0 * dims(l).1 * bpp * slices).sum();
+            let Some(buf) = self.device.newBufferWithLength_options(total, MTLResourceOptions::StorageModePrivate) else {
+                continue;
+            };
+            let mut off = 0;
+            for level in 0..levels {
+                let (w, h) = dims(level);
+                let (row, image) = (w * bpp, w * h * bpp);
+                for slice in 0..slices {
+                    let size = MTLSize { width: w, height: h, depth: 1 };
+                    let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                        &src, slice, level, origin, size, &buf, off, row, image,
+                    );
+                    blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                        &buf, off, row, image, size, &twin, slice, level, origin,
+                    );
+                    off += image;
+                }
+            }
+            let seq = st.tc.gpu_write_seq.get(&key).copied().unwrap_or(0);
+            if let Some(e) = st.tc.gpu_twins.get_mut(&key) {
+                e.1 = seq;
+            }
+        }
+        blit.endEncoding();
+    }
+
     unsafe fn depth_twin(&self, tc: &mut TexCache, t: &Tex, v: &Tex, gen: u64, snap: &crate::nvn::api::NvnTexture) -> Option<Tex> {
         let pf = match crate::nvn::layout::depth_twin(snap.format) {
             Some(52) => MTLPixelFormat::Depth32Float,
             Some(50) => MTLPixelFormat::Depth16Unorm,
             _ => return None,
         };
-        if tc.gpu_written.contains(&super::storage_id(t)) {
-            return None;
-        }
         let key = super::storage_id(t);
-        let twin = match tc.depth_twins.get(&key) {
+        let twin = if tc.gpu_written.contains(&key) {
+            // GPU-written: guest memory does not hold it, so the twin is a GPU copy of it (refresh_depth_twins), made
+            // again before a draw that samples it after newer writes.
+            let seq = tc.gpu_write_seq.get(&key).copied().unwrap_or(0);
+            let tw = match tc.gpu_twins.get(&key) {
+                Some((tw, _)) => tw.clone(),
+                None => {
+                    let desc = MTLTextureDescriptor::new();
+                    desc.setTextureType(t.textureType());
+                    desc.setPixelFormat(pf);
+                    desc.setWidth(t.width());
+                    desc.setHeight(t.height());
+                    desc.setDepth(t.depth());
+                    desc.setArrayLength(t.arrayLength());
+                    desc.setMipmapLevelCount(t.mipmapLevelCount());
+                    desc.setUsage(MTLTextureUsage::ShaderRead);
+                    desc.setStorageMode(MTLStorageMode::Private);
+                    let tw = self.device.newTextureWithDescriptor(&desc)?;
+                    tc.gpu_twins.insert(key, (tw.clone(), u64::MAX));
+                    tw
+                }
+            };
+            if tc.gpu_twins.get(&key).is_some_and(|(_, s)| *s != seq) && !tc.twin_pending.iter().any(|p| p.2 == key) {
+                tc.twin_pending.push((t.clone(), tw.clone(), key));
+            }
+            tc.twin_uses += 1;
+            tw
+        } else {
+            match tc.depth_twins.get(&key) {
             Some((tw, g)) if *g == gen => tw.clone(),
             _ => {
                 let desc = MTLTextureDescriptor::new();
@@ -3009,6 +3090,7 @@ impl Gfx {
                 self.upload_texture(&tw, snap);
                 tc.depth_twins.insert(key, (tw.clone(), gen));
                 tw
+            }
             }
         };
         // The binding's levels and layers of the twin.
@@ -3269,6 +3351,7 @@ impl Gfx {
         }
         let dirty_before = crate::nvn::api::texture_dirty_gen();
         let epoch_before = super::tex_epoch();
+        let twins_before = tca.with(|tc| tc.twin_uses);
         let (resolved, alias_root) = tca.with(|tc| {
             let resolved = pool.and_then(|(tex_addr, view)| {
                 let t = self.texture(tc, tex_addr)?;
@@ -3310,6 +3393,7 @@ impl Gfx {
                 // Only a resolution made without side effects on the cache can be replayed.
                 if super::tex_epoch() == epoch_before
                     && crate::nvn::api::texture_dirty_gen() == dirty_before
+                    && tca.with(|tc| tc.twin_uses) == twins_before
                 {
                     let entry = super::BindMemo {
                         tex_addr,
@@ -3760,7 +3844,7 @@ impl Gfx {
                 );
                 continue;
             };
-            st.tc.gpu_written.insert(super::storage_id(&tex)); // contents now differ from guest memory
+            st.tc.mark_gpu_written(super::storage_id(&tex)); // contents now differ from guest memory
             if want_notes {
                 notes.push(format!(
                     "img b{} unit {} -> {:?} {}x{}x{} {:?}",
@@ -4374,7 +4458,7 @@ impl Gfx {
         self.flush_clears_matching(st, |c| touched.contains(&c.root));
         let cb = st.cur_cb.clone().unwrap_or(cb);
         for (_, t) in &outputs {
-            st.tc.gpu_written.insert(super::storage_id(t));
+            st.tc.mark_gpu_written(super::storage_id(t));
         }
         super::TINY_COMPUTE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Some(TinyPlan {
@@ -5097,6 +5181,7 @@ impl Gfx {
             resolved = st.tex_reuse.as_ref().unwrap().1.clone();
             TEX_REUSE_STATS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         } else {
+            let twins_before = st.tc.twin_uses;
             for (nvn_stage, cached) in [(STAGE_VERTEX, Some(vs)), (STAGE_FRAGMENT, fs)] {
                 let Some(cached) = cached else { continue };
                 for tb in &cached.textures {
@@ -5112,7 +5197,11 @@ impl Gfx {
                 crate::nvn::api::texture_dirty_gen(),
                 super::presented_frames(),
             ];
-            st.tex_reuse = Some((key, resolved.clone()));
+            // A depth twin of a GPU-written texture may need a copy before a later draw: resolve those every time.
+            st.tex_reuse = (st.tc.twin_uses == twins_before).then(|| (key, resolved.clone()));
+        }
+        if !st.tc.twin_pending.is_empty() {
+            self.refresh_depth_twins(st);
         }
         // A draw whose samples of its pass's colour targets are all at its own pixel reads them from the tile with a
         // variant of its fragment stage (tile_feedback.rs): its pass stays open.
@@ -5432,10 +5521,10 @@ impl Gfx {
             self.note_encoder(st, format!("translated pass {}", shape_label));
             // Every draw of the pass has these targets (the pass key compares them): marked once per pass.
             for (_, t, _) in color_texs.iter() {
-                st.tc.gpu_written.insert(super::storage_id(t));
+                st.tc.mark_gpu_written(super::storage_id(t));
             }
             if let Some((t, _)) = &depth_tex {
-                st.tc.gpu_written.insert(super::storage_id(t));
+                st.tc.mark_gpu_written(super::storage_id(t));
             }
         }
         if st.cached_rts.is_none() && targetless.is_none() && st.enc.is_some() {
