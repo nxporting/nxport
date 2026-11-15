@@ -94,6 +94,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **Source code reorganization (user, 2026-11-15): everything in a super sensible place.** First a written target layout
+  (module map by layer: guest / horizon / nvn / gpu backends (metal, vulkan) / host / profile; split metal/translated.rs,
+  metal/mod.rs, nvn/api.rs, horizon/hle.rs along what they do; SDK replacements named for what they do), agreed with the
+  user; then behaviour-neutral moves, one area per commit, each built on both hosts and checked (Hateno shot, BotW / SMO
+  boot). Moves touch files both agents edit: claim an area here before moving it. mac-worker drafts the layout.
+
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
   (merged on the Mac). Runs on Metal (2026-11-15, BotW19 1.9.0, builder-made cache,
   botw-pool save): profile 1.9.0, no errors, 30 fps; the same water bug as 1.5.0 (lily pads in the sky over the pond)
