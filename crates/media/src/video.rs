@@ -121,6 +121,9 @@ pub(crate) struct Avc {
     /// Presentation times of samples sent and not yet shown: pictures come out in presentation order, so each takes the
     /// earliest.
     pending: BinaryHeap<Reverse<i64>>,
+    /// The video hardware's decoder, when the samples carry length-prefixed NAL units (mp4) and one exists.
+    #[cfg(target_vendor = "apple")]
+    hw: Option<crate::vt::Session>,
 }
 
 const START: [u8; 4] = [0, 0, 0, 1];
@@ -138,6 +141,7 @@ fn new_h264() -> Result<openh264::decoder::Decoder, openh264::Error> {
 impl Avc {
     pub(crate) fn new(avcc: &[u8]) -> Result<Avc, String> {
         let mut header = Vec::new();
+        let mut raw: Vec<&[u8]> = Vec::new();
         let mut nal_len = 0;
         if avcc.len() >= 7 && avcc[0] == 1 {
             nal_len = (avcc[4] & 3) as usize + 1;
@@ -154,6 +158,7 @@ impl Avc {
                     }
                     header.extend_from_slice(&START);
                     header.extend_from_slice(&avcc[*o..*o + n]);
+                    raw.push(&avcc[*o..*o + n]);
                     *o += n;
                 }
             };
@@ -167,7 +172,31 @@ impl Avc {
             }
         }
         let dec = new_h264().map_err(|e| format!("h264: {e}"))?;
-        Ok(Avc { dec, nal_len, header, sent_header: false, pending: BinaryHeap::new() })
+        #[cfg(target_vendor = "apple")]
+        let hw = if nal_len > 0 && !raw.is_empty() && crate::hardware_video() {
+            match crate::vt::Session::new_h264(&raw, nal_len) {
+                Ok(s) => {
+                    println!("[+] movie: H.264 decoded by the video hardware (VideoToolbox)");
+                    Some(s)
+                }
+                Err(e) => {
+                    println!("[+] movie: H.264 decoded in software: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let _ = &raw;
+        Ok(Avc {
+            dec,
+            nal_len,
+            header,
+            sent_header: false,
+            pending: BinaryHeap::new(),
+            #[cfg(target_vendor = "apple")]
+            hw,
+        })
     }
 
     fn picture(yuv: &openh264::decoder::DecodedYUV<'_>, pts_us: i64) -> Decoded {
@@ -181,6 +210,10 @@ impl Avc {
 
 impl Decode for Avc {
     fn decode(&mut self, data: &[u8], pts_us: i64, out: &mut VecDeque<Decoded>) -> Result<(), String> {
+        #[cfg(target_vendor = "apple")]
+        if let Some(hw) = &mut self.hw {
+            return hw.decode(data, pts_us, out);
+        }
         let mut buf = Vec::with_capacity(data.len() + self.header.len() + 16);
         if !self.sent_header {
             buf.extend_from_slice(&self.header);
@@ -214,6 +247,10 @@ impl Decode for Avc {
     }
 
     fn drain(&mut self, out: &mut VecDeque<Decoded>) {
+        #[cfg(target_vendor = "apple")]
+        if let Some(hw) = &mut self.hw {
+            return hw.drain(out);
+        }
         if let Ok(frames) = self.dec.flush_remaining() {
             for yuv in &frames {
                 let pts = self.pending.pop().map_or(0, |Reverse(p)| p);
@@ -224,6 +261,11 @@ impl Decode for Avc {
     }
 
     fn reset(&mut self) {
+        // Pictures held back for presentation order belong to the old position.
+        #[cfg(target_vendor = "apple")]
+        if let Some(hw) = &mut self.hw {
+            hw.drain(&mut VecDeque::new());
+        }
         if let Ok(d) = new_h264() {
             self.dec = d;
         }
