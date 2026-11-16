@@ -13,45 +13,45 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
-use crate::horizon::hle::{hle_nn_os_GetCurrentThread, hle_system_event_register_addr};
+use crate::horizon::hle::hle_system_event_register_addr;
 
 const RESULT_SUCCESS: u32 = 0;
 
 // ── global sync state ────────────────────────────────────────────────────────────────────────
 #[derive(Default)]
-struct EventSt {
-    signaled: bool,
-    auto_clear: bool,
+pub(crate) struct EventSt {
+    pub(crate) signaled: bool,
+    pub(crate) auto_clear: bool,
     /// Signals so far: a manual-clear waiter returns once one arrived after it began, even if cleared again since.
-    signals: u64,
+    pub(crate) signals: u64,
 }
 
 #[derive(Default)]
-struct MsgQ {
-    cap: usize,
-    q: VecDeque<u64>,
+pub(crate) struct MsgQ {
+    pub(crate) cap: usize,
+    pub(crate) q: VecDeque<u64>,
 }
 
 #[derive(Default)]
-struct RwSt {
+pub(crate) struct RwSt {
     readers: u32,
     writer: usize, // owning thread token, 0 = none
     write_depth: u32,
 }
 
 #[derive(Default)]
-struct Sync {
-    events: HashMap<usize, EventSt>,
-    holders: HashMap<usize, usize>, // holder addr -> event addr
-    multiwaits: HashMap<usize, Vec<usize>>, // multiwait addr -> ordered holder addrs
-    msgqs: HashMap<usize, MsgQ>,
-    rwlocks: HashMap<usize, RwSt>,
+pub(crate) struct Sync {
+    pub(crate) events: HashMap<usize, EventSt>,
+    pub(crate) holders: HashMap<usize, usize>, // holder addr -> event addr
+    pub(crate) multiwaits: HashMap<usize, Vec<usize>>, // multiwait addr -> ordered holder addrs
+    pub(crate) msgqs: HashMap<usize, MsgQ>,
+    pub(crate) rwlocks: HashMap<usize, RwSt>,
 }
 
 static SYNC: Mutex<Option<Sync>> = Mutex::new(None);
-static SYNC_CV: Condvar = Condvar::new();
+pub(crate) static SYNC_CV: Condvar = Condvar::new();
 
-fn lock() -> MutexGuard<'static, Option<Sync>> {
+pub(crate) fn lock() -> MutexGuard<'static, Option<Sync>> {
     let mut g = SYNC.lock().unwrap();
     if g.is_none() {
         *g = Some(Sync::default());
@@ -60,47 +60,17 @@ fn lock() -> MutexGuard<'static, Option<Sync>> {
 }
 
 fn me() -> usize {
-    unsafe { hle_nn_os_GetCurrentThread() as usize }
+    unsafe { crate::horizon::os::get_current_thread() as usize }
 }
 
-// ── nn::os::Event ────────────────────────────────────────────────────────────────────────────
-// EventClearMode: 0 = ManualClear, 1 = AutoClear.
-pub unsafe extern "C" fn os_initialize_event(ev: *mut u8, initially_signaled: bool, clear_mode: i32) {
-    let mut g = lock();
-    g.as_mut().unwrap().events.insert(
-        ev as usize,
-        EventSt {
-            signaled: initially_signaled,
-            auto_clear: clear_mode == 1,
-            signals: 0,
-        },
-    );
-}
-pub unsafe extern "C" fn os_finalize_event(ev: *mut u8) {
-    lock().as_mut().unwrap().events.remove(&(ev as usize));
-}
 /// Signals an nn::os::EventType the game initialised through the HLE (for HLE'd libraries that report to the game).
 pub(crate) fn signal_event(ev: usize) {
-    unsafe { os_signal_event(ev as *mut u8) }
-}
-pub unsafe extern "C" fn os_signal_event(ev: *mut u8) {
-    let mut g = lock();
-    if let Some(e) = g.as_mut().unwrap().events.get_mut(&(ev as usize)) {
-        e.signaled = true;
-        e.signals += 1;
-    }
-    drop(g);
-    SYNC_CV.notify_all();
-}
-pub unsafe extern "C" fn os_clear_event(ev: *mut u8) {
-    if let Some(e) = lock().as_mut().unwrap().events.get_mut(&(ev as usize)) {
-        e.signaled = false;
-    }
+    unsafe { crate::horizon::os::signal_event(ev as *mut u8) }
 }
 
 /// Waits for the event; a signaled auto-clear event is consumed. `deadline` None = forever. Returns whether it was
 /// signaled. An event nothing initialised (no side-table entry) never signals.
-fn event_wait(ev: usize, deadline: Option<std::time::Instant>) -> bool {
+pub(crate) fn event_wait(ev: usize, deadline: Option<std::time::Instant>) -> bool {
     let mut g = lock();
     let signals0 = g.as_ref().unwrap().events.get(&ev).map(|e| e.signals);
     loop {
@@ -127,159 +97,14 @@ fn event_wait(ev: usize, deadline: Option<std::time::Instant>) -> bool {
         }
     }
 }
-pub unsafe extern "C" fn os_wait_event(ev: *mut u8) {
-    event_wait(ev as usize, None);
-}
-pub(crate) unsafe extern "C" fn os_try_wait_event(ev: *mut u8) -> bool {
-    event_wait(ev as usize, Some(std::time::Instant::now()))
-}
-pub(crate) unsafe extern "C" fn os_timed_wait_event(ev: *mut u8, timeout_ns: i64) -> bool {
-    event_wait(
-        ev as usize,
-        Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64)),
-    )
-}
 
-// ── nn::os::MultiWait ────────────────────────────────────────────────────────────────────────
-pub(crate) unsafe extern "C" fn os_initialize_multiwait(mw: *mut u8) {
-    lock()
-        .as_mut()
-        .unwrap()
-        .multiwaits
-        .insert(mw as usize, Vec::new());
-}
-pub(crate) unsafe extern "C" fn os_finalize_multiwait(mw: *mut u8) {
-    lock().as_mut().unwrap().multiwaits.remove(&(mw as usize));
-}
-pub(crate) unsafe extern "C" fn os_initialize_multiwait_holder_event(holder: *mut u8, ev: *mut u8) {
-    lock()
-        .as_mut()
-        .unwrap()
-        .holders
-        .insert(holder as usize, ev as usize);
-}
-pub(crate) unsafe extern "C" fn os_finalize_multiwait_holder(holder: *mut u8) {
-    let mut g = lock();
-    let s = g.as_mut().unwrap();
-    s.holders.remove(&(holder as usize));
-    for v in s.multiwaits.values_mut() {
-        v.retain(|h| *h != holder as usize);
-    }
-}
-pub(crate) unsafe extern "C" fn os_link_multiwait_holder(mw: *mut u8, holder: *mut u8) {
-    let mut g = lock();
-    g.as_mut()
-        .unwrap()
-        .multiwaits
-        .entry(mw as usize)
-        .or_default()
-        .push(holder as usize);
-    drop(g);
-    SYNC_CV.notify_all(); // a waiter may be blocked on a list that just grew
-}
 /// MultiWaitHolder user data: an opaque value the caller attaches to a holder.
-static HOLDER_USER_DATA: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
-pub(crate) unsafe extern "C" fn os_set_multiwait_holder_user_data(holder: *mut u8, data: usize) {
-    HOLDER_USER_DATA
-        .lock()
-        .unwrap()
-        .get_or_insert_with(HashMap::new)
-        .insert(holder as usize, data);
-}
-pub(crate) unsafe extern "C" fn os_get_multiwait_holder_user_data(holder: *const u8) -> usize {
-    HOLDER_USER_DATA
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.get(&(holder as usize)).copied())
-        .unwrap_or(0)
-}
-pub(crate) unsafe extern "C" fn os_unlink_multiwait_holder(holder: *mut u8) {
-    let mut g = lock();
-    for v in g.as_mut().unwrap().multiwaits.values_mut() {
-        v.retain(|h| *h != holder as usize);
-    }
-}
-/// Blocks until any linked holder's event is signaled; returns that holder (auto-clear events are consumed).
-pub(crate) unsafe extern "C" fn os_wait_any(mw: *mut u8) -> *mut u8 {
-    let mut g = lock();
-    loop {
-        let s = g.as_mut().unwrap();
-        let holders: Vec<usize> = s
-            .multiwaits
-            .get(&(mw as usize))
-            .cloned()
-            .unwrap_or_default();
-        for h in holders {
-            if let Some(&ev) = s.holders.get(&h) {
-                if let Some(e) = s.events.get_mut(&ev) {
-                    if e.signaled {
-                        if e.auto_clear {
-                            e.signaled = false;
-                        }
-                        return h as *mut u8;
-                    }
-                }
-            }
-        }
-        g = SYNC_CV.wait(g).unwrap();
-    }
-}
+pub(crate) static HOLDER_USER_DATA: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
 
-// ── nn::os::MessageQueue ─────────────────────────────────────────────────────────────────────
-pub(crate) unsafe extern "C" fn os_initialize_message_queue(mq: *mut u8, _buf: *mut u64, count: usize) {
-    lock().as_mut().unwrap().msgqs.insert(
-        mq as usize,
-        MsgQ {
-            cap: count.max(1),
-            q: VecDeque::new(),
-        },
-    );
-}
-pub(crate) unsafe extern "C" fn os_finalize_message_queue(mq: *mut u8) {
-    lock().as_mut().unwrap().msgqs.remove(&(mq as usize));
-}
-pub(crate) unsafe extern "C" fn os_send_message_queue(mq: *mut u8, data: u64) {
-    let mut g = lock();
-    loop {
-        let s = g.as_mut().unwrap();
-        match s.msgqs.get_mut(&(mq as usize)) {
-            Some(q) if q.q.len() >= q.cap => {}
-            Some(q) => {
-                q.q.push_back(data);
-                drop(g);
-                SYNC_CV.notify_all();
-                return;
-            }
-            None => return,
-        }
-        g = SYNC_CV.wait(g).unwrap();
-    }
-}
-pub(crate) unsafe extern "C" fn os_receive_message_queue(out: *mut u64, mq: *mut u8) {
-    let mut g = lock();
-    loop {
-        let s = g.as_mut().unwrap();
-        match s.msgqs.get_mut(&(mq as usize)) {
-            Some(q) => {
-                if let Some(v) = q.q.pop_front() {
-                    if !out.is_null() {
-                        *out = v;
-                    }
-                    drop(g);
-                    SYNC_CV.notify_all();
-                    return;
-                }
-            }
-            None => return,
-        }
-        g = SYNC_CV.wait(g).unwrap();
-    }
-}
 
 /// Message queue operations with a deadline (None = block forever, Some(now) = try once). `front` jams the value at the
 /// head instead of the tail. Returns false on timeout; an unknown queue fails at once.
-fn mq_send(mq: usize, data: u64, front: bool, deadline: Option<std::time::Instant>) -> bool {
+pub(crate) fn mq_send(mq: usize, data: u64, front: bool, deadline: Option<std::time::Instant>) -> bool {
     let mut g = lock();
     loop {
         match g.as_mut().unwrap().msgqs.get_mut(&mq) {
@@ -309,7 +134,7 @@ fn mq_send(mq: usize, data: u64, front: bool, deadline: Option<std::time::Instan
     }
 }
 /// `peek`: read the head without removing it.
-fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::Instant>, peek: bool) -> bool {
+pub(crate) fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::Instant>, peek: bool) -> bool {
     let mut g = lock();
     loop {
         match g.as_mut().unwrap().msgqs.get_mut(&mq) {
@@ -338,47 +163,8 @@ fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::Instant>, pe
         };
     }
 }
-pub(crate) unsafe extern "C" fn os_try_send_message_queue(mq: *mut u8, data: u64) -> bool {
-    mq_send(mq as usize, data, false, Some(std::time::Instant::now()))
-}
-pub(crate) unsafe extern "C" fn os_jam_message_queue(mq: *mut u8, data: u64) {
-    mq_send(mq as usize, data, true, None);
-}
-pub(crate) unsafe extern "C" fn os_try_receive_message_queue(out: *mut u64, mq: *mut u8) -> bool {
-    mq_receive(out, mq as usize, Some(std::time::Instant::now()), false)
-}
-pub(crate) unsafe extern "C" fn os_timed_receive_message_queue(
-    out: *mut u64,
-    mq: *mut u8,
-    timeout_ns: i64,
-) -> bool {
-    mq_receive(
-        out,
-        mq as usize,
-        Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64)),
-        false,
-    )
-}
-fn deadline_ns(timeout_ns: i64) -> Option<std::time::Instant> {
+pub(crate) fn deadline_ns(timeout_ns: i64) -> Option<std::time::Instant> {
     Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64))
-}
-pub(crate) unsafe extern "C" fn os_peek_message_queue(out: *mut u64, mq: *const u8) {
-    mq_receive(out, mq as usize, None, true);
-}
-pub(crate) unsafe extern "C" fn os_try_peek_message_queue(out: *mut u64, mq: *const u8) -> bool {
-    mq_receive(out, mq as usize, Some(std::time::Instant::now()), true)
-}
-pub(crate) unsafe extern "C" fn os_timed_peek_message_queue(out: *mut u64, mq: *const u8, timeout_ns: i64) -> bool {
-    mq_receive(out, mq as usize, deadline_ns(timeout_ns), true)
-}
-pub(crate) unsafe extern "C" fn os_try_jam_message_queue(mq: *mut u8, data: u64) -> bool {
-    mq_send(mq as usize, data, true, Some(std::time::Instant::now()))
-}
-pub(crate) unsafe extern "C" fn os_timed_send_message_queue(mq: *mut u8, data: u64, timeout_ns: i64) -> bool {
-    mq_send(mq as usize, data, false, deadline_ns(timeout_ns))
-}
-pub(crate) unsafe extern "C" fn os_timed_jam_message_queue(mq: *mut u8, data: u64, timeout_ns: i64) -> bool {
-    mq_send(mq as usize, data, true, deadline_ns(timeout_ns))
 }
 
 // ── nn::os::ReaderWriterLock (real exclusion) ────────────────────────────────────────────────
@@ -478,28 +264,7 @@ pub fn rw_write_held_by_me(addr: usize) -> bool {
         .map(|r| r.writer == t)
         .unwrap_or(false)
 }
-pub(crate) unsafe extern "C" fn os_try_acquire_write_lock(rw: *mut u8) -> bool {
-    rw_try_acquire_write(rw as usize)
-}
-pub(crate) unsafe extern "C" fn os_try_acquire_read_lock(rw: *mut u8) -> bool {
-    rw_try_acquire_read(rw as usize)
-}
 
-// ── misc nn::os ──────────────────────────────────────────────────────────────────────────────
-pub(crate) unsafe extern "C" fn os_set_dying_message_region(_addr: usize, _size: usize) {}
-/// nn::os::GetCurrentFiber: ThreadType::_currentFiber, which the SDK's native SwitchToFiber maintains.
-pub(crate) unsafe extern "C" fn os_get_current_fiber() -> *mut u8 {
-    let t = crate::horizon::hle::hle_nn_os_GetCurrentThread();
-    if t.is_null() {
-        std::ptr::null_mut()
-    } else {
-        (*t).current_fiber as *mut u8
-    }
-}
-/// nn::os::ConvertToTick(TimeSpan) -> Tick, consistent with GetSystemTick (host mach ticks).
-pub(crate) unsafe extern "C" fn os_convert_to_tick(ns: i64) -> i64 {
-    crate::platform::clock::ns_to_ticks(ns.max(0) as u64) as i64
-}
 
 // ── nn::time ─────────────────────────────────────────────────────────────────────────────────
 fn unix_now() -> i64 {

@@ -429,7 +429,7 @@ fn guest_chain(
         guest::exec::trampoline::init_worker_thread_x18();
         horizon::hle::register_main_sample_target();
     }
-    unsafe { horizon::hle::hle_nn_os_GetCurrentThread() };
+    unsafe { horizon::os::get_current_thread() };
 
     // Atmosphère cheats run from before the game's first instruction (dmnt attaches as the game starts), once the
     // engine has finished rewriting main's code.
@@ -604,7 +604,7 @@ fn guest_chain(
     // On its own stack, like the game's other threads (horizon/thread_stack.rs).
     let (stack_lo, stack_hi) = horizon::thread_stack::allocate(8 << 20);
     unsafe {
-        let t = horizon::hle::hle_nn_os_GetCurrentThread();
+        let t = horizon::os::get_current_thread();
         (*t).stack = stack_lo as *mut ();
         (*t).original_stack = (*t).stack;
         (*t).stack_size = stack_hi - stack_lo;
