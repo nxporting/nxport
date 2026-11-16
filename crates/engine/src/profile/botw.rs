@@ -43,6 +43,18 @@ pub static V1_5_0: VersionProfile = VersionProfile {
     draw_item: None,
 };
 
+fn options() -> crate::settings::SettingsPatch {
+    let mut s = crate::settings::SettingsPatch::default();
+    // BotW reads two tiny linear render targets it draws every frame (the 1x1 / 3x3 lighting and exposure values) right
+    // after its frame fence. The early fence returns before the GPU wrote them, so the game read last frame's values;
+    // in the first frames after a start or a load those are not there yet, and the water stayed milky white until the
+    // next load (Savage Wind #362 and #332, with the same overlap). Waiting for those reads is waiting for the frame, so
+    // the fence waits for the frame. (Turned off once before, da752b5, for the water height and flicker, which 8a35540
+    // fixed instead; turned on again in bf93f40.)
+    s.graphics.early_fence = Some(false);
+    s
+}
+
 pub static PROFILE: GameProfile = GameProfile {
     kind: GameKind::BotW,
     name: "The Legend of Zelda: Breath of the Wild",
@@ -52,7 +64,7 @@ pub static PROFILE: GameProfile = GameProfile {
     compute_has_preamble: true,
     versions: &[V1_0_0, V1_5_0, V1_6_0, V1_9_0],
     shader_dirs: &["Pack", "Effect", "UI", "Layout", "System", "Model"],
-    options: None,
+    options: Some(options),
     platform_options: None,
     presets: &[],
     module_patches: &[],
