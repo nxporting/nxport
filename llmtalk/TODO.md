@@ -99,6 +99,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   metal/mod.rs, nvn/api.rs, horizon/hle.rs along what they do; SDK replacements named for what they do), agreed with the
   user; then behaviour-neutral moves, one area per commit, each built on both hosts and checked (Hateno shot, BotW / SMO
   boot). Moves touch files both agents edit: claim an area here before moving it. mac-worker drafts the layout.
+  2026-11-15: the user approved the plan (work/notes/REORG_PLAN.md on the Mac; GPU backends go under gpu/metal and
+  gpu/vulkan). CLAIMED by mac-worker now: step 1, top-level files into layers: os.rs + clock.rs -> platform/; cpu/ +
+  lifted.rs + live_patch.rs + hle_abi.rs -> guest/exec/; ui_sdl.rs + sdl_library.rs -> host/. Paths and `use` lines
+  only. win-worker: please build Windows after each of these pushes (live_patch / ui_sdl / sdl_library are Windows-only).
 
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
   (merged on the Mac). Runs on Metal (2026-11-15, nsmount BotW19 = cartridge + 1.9.0 update, builder-made cache,
