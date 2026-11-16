@@ -132,6 +132,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the user's test build): every linear render target goes back, copied at the end of the submit that drew it
   (vulkan/exec.rs note_rendered / record_rt_reads), so a wait on that submit's fence finds it. Waiting for the user's
   test; then TotK / SMO checks (with the lifter changes) before committing. Flicker: not described yet (asked).
+  Water (mac-worker, 8a35540): fixed in the NVN layer for both backends. nvnTextureFinalize dropped the old snapshot
+  generation, so all eight water-map passes drew into the last map; Link now swims at Ryujinx's height at the pond.
   **2026-11-15 update:** still broken after the write-back change (the user played it). BotW draws 33 linear render
   targets (1x1 / 3x3 lighting and exposure, 64x64, R16 192x192 / 256x256 height tiles); all go back now, in plain rows
   (write_texels_2d follows the linear layout). mac-worker: BotW 1.5.0 has the same water bug on the Mac (stands on the
