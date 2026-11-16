@@ -90,6 +90,7 @@ const IOS_FRAMEWORKS: &[(&str, &str)] = &[
     ("CoreHaptics", ""),
     ("CoreImage", ""),
     ("CoreLocation", ""),
+    ("CoreMedia", ""),
     ("CoreText", ""),
     ("CoreVideo", ""),
     ("Foundation", ""),
@@ -99,6 +100,7 @@ const IOS_FRAMEWORKS: &[(&str, &str)] = &[
     ("Security", ""),
     ("UIKit", ""),
     ("UserNotifications", ""),
+    ("VideoToolbox", ""),
 ];
 
 /// What the engine built natively on a Mac loads (otool -L).
@@ -111,12 +113,14 @@ const MACOS_FRAMEWORKS: &[(&str, &str)] = &[
     ("CoreGraphics", "Versions/A/"),
     ("CoreHaptics", "Versions/A/"),
     ("CoreImage", "Versions/A/"),
+    ("CoreMedia", "Versions/A/"),
     ("CoreText", "Versions/A/"),
     ("CoreVideo", "Versions/A/"),
     ("Foundation", "Versions/C/"),
     ("GameController", "Versions/A/"),
     ("Metal", "Versions/A/"),
     ("QuartzCore", "Versions/A/"),
+    ("VideoToolbox", "Versions/A/"),
 ];
 
 /// The checkout this program was built from, if it is still there.
