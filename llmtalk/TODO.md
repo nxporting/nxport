@@ -458,7 +458,9 @@ un-%p.profraw
   of 33 ms; vsync off, 12-20 ms. So nothing to fix in this scene; the user's 11-07 impression needs a scene where it
   shows (or was the blue frames, fixed in bcd2174).
 - **Super Mario Odyssey: a frame of solid blue / white / cyan blocks every few hundred frames (the user, 2026-11-11):
-  fixed by taking out the GPU-only-memory rebuild of b1c163c; its exact defect is still open.** Repro: the Odyssey app
+  fixed by taking out the GPU-only-memory rebuild of b1c163c; its exact defect is still open.** Not the texture-generation bug either
+  (2026-11-15, win-worker): with 8a35540 in and the rebuild restored (temporary switch), 3 of 3 runs still flash (3-5
+  frames each, ~339k outlier pixels), 2 controls without it clean. Repro: the Odyssey app
   built from main, the user's save (Cap Kingdom), headless, walking frames 2700-3500, 600 frames of history: the 3D
   scene is replaced by solid blocks for one frame (HUD fine), 1-3 times per run. Bisect (engine exe swapped, same
   guest.dll): 902b48b and a5ee0e3 clean (5 runs), b1c163c and 61b2bc3 flash, the user's 11-06 build clean. b1c163c's
