@@ -498,9 +498,9 @@ pub fn hle_sleep_ns(ns: u64) {
 
 
 // 6. NVN Graphics Bootstrap Loader & NV / VI Subsystems
-static mut DUMMY_DISPLAY: usize = 0x1000;
-static mut DUMMY_LAYER: usize = 0x2000;
-static mut DUMMY_WINDOW: usize = 0x3000;
+pub(crate) static mut DUMMY_DISPLAY: usize = 0x1000;
+pub(crate) static mut DUMMY_LAYER: usize = 0x2000;
+pub(crate) static mut DUMMY_WINDOW: usize = 0x3000;
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nv_SetGraphicsAllocator(
@@ -532,56 +532,12 @@ pub unsafe extern "C" fn hle_nv_SetGraphicsDevtoolsAllocator(
     println!("[+] HLE: nv::SetGraphicsDevtoolsAllocator called");
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_vi_Initialize() -> i32 {
-    println!("[+] HLE: nn::vi::Initialize() called");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_vi_OpenDefaultDisplay(out_display: *mut *mut usize) -> i32 {
-    println!("[+] HLE: nn::vi::OpenDefaultDisplay called");
-    if !out_display.is_null() {
-        *out_display = &raw mut DUMMY_DISPLAY;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_vi_CreateLayer(
-    out_layer: *mut *mut usize,
-    _display: *mut usize,
-) -> i32 {
-    println!("[+] HLE: nn::vi::CreateLayer called");
-    if !out_layer.is_null() {
-        *out_layer = &raw mut DUMMY_LAYER;
-    }
-    0
-}
 
-/// The layers are the engine's (CreateLayer): the presenter scales the game's image to the window whatever the mode.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_vi_SetLayerScalingMode(_layer: *mut usize, mode: i32) -> i32 {
-    println!("[+] HLE: nn::vi::SetLayerScalingMode({mode})");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_vi_GetDisplayVsyncEvent(
-    out_event: *mut u8,
-    _display: *mut usize,
-) -> i32 {
-    println!("[+] HLE: nn::vi::GetDisplayVsyncEvent called");
-    if !out_event.is_null() {
-        // The vsync event is an auto-clear readable event signaled once per refresh (60Hz).
-        // Register it in the SystemEvent table so Wait/TryWait work, and drive it from a pacer.
-        let ev = hle_system_event_register(out_event as usize);
-        nn_vi_start_vsync_pacer(ev);
-    }
-    0
-}
 
-fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
+pub(crate) fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
     static EVENTS: StdMutex<Vec<std::sync::Arc<HleSystemEvent>>> = StdMutex::new(Vec::new());
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     EVENTS.lock().unwrap().push(ev);
@@ -607,17 +563,6 @@ fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
         .expect("spawn vsync pacer");
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_vi_GetNativeWindow(
-    out_window: *mut *mut usize,
-    _layer: *mut usize,
-) -> i32 {
-    println!("[+] HLE: nn::vi::GetNativeWindow called");
-    if !out_window.is_null() {
-        *out_window = &raw mut DUMMY_WINDOW;
-    }
-    0
-}
 
 // Global, always-on HLE call-history ring buffer. Every NVN HLE function
 // (both the real implementations and the labeled-stub pool) reports here on
@@ -847,12 +792,6 @@ pub fn dump_hle_call_history() {
     }
 }
 
-// 7. Horizon Memory & Heap Management
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetCpuBoostMode(mode: u32) -> i32 {
-    println!("[+] HLE: nn::oe::SetCpuBoostMode(mode={})", mode);
-    0
-}
 
 
 /// nn::os memory heap bookkeeping for QueryMemoryInfo: the size SetMemoryHeapSize set, and the blocks allocated from it
@@ -874,311 +813,28 @@ pub(crate) static MEMORY_BLOCKS: StdMutex<Vec<(usize, usize)>> = StdMutex::new(V
 // so that all TotK-visible objects stay in guest memory (not macOS malloc).
 // Free is intentionally a no-op: the pool lives for the process lifetime and
 // the TotK heap system does its own internal free-list management on top.
-pub struct PoolState {
-    pub base: usize,
-    pub size: usize,
-    pub cursor: std::sync::atomic::AtomicUsize,
-}
 
-static POOL_ALLOCATORS: OnceLock<StdMutex<rustc_hash::FxHashMap<usize, PoolState>>> =
-    OnceLock::new();
 
-pub fn pool_allocators() -> &'static StdMutex<rustc_hash::FxHashMap<usize, PoolState>> {
-    POOL_ALLOCATORS.get_or_init(|| StdMutex::new(rustc_hash::FxHashMap::default()))
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_ctor(_this: *mut ()) {}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_Initialize(
-    _this: *mut (),
-    addr: *mut (),
-    size: usize,
-    _cache: bool,
-) {
-    println!(
-        "[+] HLE: nn::mem::StandardAllocator::Initialize(this={:p}, pool={:p}, size={} MB)",
-        _this,
-        addr,
-        size / (1024 * 1024)
-    );
-    let key = _this as usize;
-    {
-        let mut map = pool_allocators().lock().unwrap();
-        map.entry(key).or_insert_with(|| PoolState {
-            base: addr as usize,
-            size,
-            cursor: std::sync::atomic::AtomicUsize::new(0),
-        });
-    }
-    // Watch the page that will contain the inner-allocator object.
-    // Observed across runs: inner_alloc is placed at pool_base + 0x17000920.
-    // Watching that page tells us exactly which instruction writes pool_base
-    // to [inner_alloc+0] instead of the correct sead vtable pointer.
-    // NOTE: do NOT watch pool_base itself here — bump_alloc will memset it
-    // during AllocateAligned, which would fault on a read-only page.
-    #[cfg(nx_native)]
-    {
-        let pool_base = addr as usize;
-        let inner_alloc_page = (pool_base + 0x17000920) & !0xfff;
-        crate::guest::exec::crash_handler::add_watchpoint(inner_alloc_page);
-    }
-}
 
-fn bump_alloc(this: *mut (), size: usize, align: usize) -> *mut u8 {
-    if size == 0 {
-        return std::ptr::null_mut();
-    }
-    let align = align.max(16);
-    let map = pool_allocators().lock().unwrap();
-    if let Some(pool) = map.get(&(this as usize)) {
-        loop {
-            let cur = pool.cursor.load(std::sync::atomic::Ordering::Relaxed);
-            let aligned = (pool.base + cur + align - 1) & !(align - 1);
-            let end = aligned + size;
-            if end > pool.base + pool.size {
-                eprintln!(
-                    "[!] HLE: StandardAllocator pool exhausted (this={:p}, size={}, align={})",
-                    this, size, align
-                );
-                return std::ptr::null_mut();
-            }
-            let new_cursor = end - pool.base;
-            if pool
-                .cursor
-                .compare_exchange(
-                    cur,
-                    new_cursor,
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                )
-                .is_ok()
-            {
-                // Zero the allocation (mmap gives zero pages but re-used ranges may not be)
-                unsafe {
-                    libc::memset(aligned as *mut libc::c_void, 0, size);
-                }
-                return aligned as *mut u8;
-            }
-        }
-    }
-    // Fallback: no pool registered for this allocator (shouldn't happen after Initialize)
-    eprintln!(
-        "[!] HLE: StandardAllocator::Allocate called without prior Initialize (this={:p})",
-        this
-    );
-    unsafe {
-        let ptr = libc::malloc(size) as *mut u8;
-        if !ptr.is_null() {
-            libc::memset(ptr as *mut libc::c_void, 0, size);
-        }
-        ptr
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_Allocate(
-    _this: *mut (),
-    size: usize,
-) -> *mut u8 {
-    let ptr = bump_alloc(_this, size, 16);
-    println!(
-        "[+] HLE: StandardAllocator::Allocate(this={:p}, size={:#x}) -> {:p}",
-        _this, size, ptr
-    );
-    ptr
-}
 
 // Flag so we only install the pool-page watchpoint once (after first bump alloc).
-static POOL_PAGE_WATCHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_AllocateAligned(
-    _this: *mut (),
-    size: usize,
-    alignment: usize,
-) -> *mut u8 {
-    // x17 holds the guest LR saved by the trampoline (mov x17, x30 before blr).
-    let guest_lr = crate::guest_reg!(x17);
-    // bump_alloc zeroes the allocation with memset before returning.
-    let ptr = bump_alloc(_this, size, alignment);
-    println!("[+] HLE: StandardAllocator::AllocateAligned(this={:p}, size={:#x}, align={}) -> {:p} [guest_caller=0x{:x}]",
-        _this, size, alignment, ptr, guest_lr);
-    // After the first allocation the page is already zero (memset done).
-    // Protect it now so we catch what TotK writes to it next (vtable, inner_alloc).
-    if !ptr.is_null()
-        && POOL_PAGE_WATCHED
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_ok()
-    {
-        #[cfg(nx_native)]
-        crate::guest::exec::crash_handler::add_watchpoint(ptr as usize);
-    }
-    ptr
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_Free(_this: *mut (), _ptr: *mut ()) {
-    // Intentional no-op: bump allocator does not support per-object free.
-    // TotK's own heap layer (sead::ExpHeap) manages its free-list within the pool.
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_Reallocate(
-    _this: *mut (),
-    ptr: *mut (),
-    new_size: usize,
-) -> *mut u8 {
-    // Allocate new region from the pool and copy old data.
-    // We don't know the old size so we copy new_size bytes (conservative for grow, truncates for shrink).
-    let new_ptr = bump_alloc(_this, new_size, 16);
-    if !new_ptr.is_null() && !ptr.is_null() {
-        libc::memcpy(
-            new_ptr as *mut libc::c_void,
-            ptr as *const libc::c_void,
-            new_size,
-        );
-    }
-    new_ptr
-}
 
-// 7b. Service Manager (nn::sm) & Diagnostic Abort
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_sm_Initialize() -> i32 {
-    println!("[+] HLE: nn::sm::Initialize() called -> returning ResultSuccess (0)");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_sm_Finalize() {
-    println!("[+] HLE: nn::sm::Finalize() called");
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_sm_GetServiceHandle(
-    handle_out: *mut u32,
-    service_name: *const libc::c_char,
-    _len: usize,
-) -> i32 {
-    let name_str = if service_name.is_null() {
-        ""
-    } else {
-        std::ffi::CStr::from_ptr(service_name)
-            .to_str()
-            .unwrap_or("?")
-    };
-    println!(
-        "[+] HLE: nn::sm::GetServiceHandle('{}') called -> returning handle 0x5001",
-        name_str
-    );
-    // The SDK only asks for a service handle when it is about to talk to that service itself. That IPC is not emulated:
-    // its request is written to the thread's Horizon IPC buffer, which on this host is Darwin's TLS (thread-specific
-    // data; the MIG reply port in slot 2 gets overwritten and later Mach calls fail). The fix is HLE of the nn:: API
-    // that led here (symbolize the caller below).
-    let fp = crate::guest_reg!(x29);
-    // Our frame's return address is the HLE trampoline; the guest's frames follow through the frame-pointer chain.
-    let mut chain = Vec::new();
-    let mut f = fp;
-    for _ in 0..4 {
-        if f <= 0x10000 || f & 7 != 0 {
-            break;
-        }
-        chain.push(*((f + 8) as *const usize));
-        f = *(f as *const usize);
-    }
-    eprintln!("[!] SDK opens service '{}' itself (return addresses {:x?}): its IPC is not emulated and would corrupt this thread's TLS", name_str, chain);
-    if !handle_out.is_null() {
-        *handle_out = 0x5001;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_diag_IsDebuggerAttached() -> bool {
-    false
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_diag_detail_Abort(res: *const u32) -> ! {
-    sanitize_darwin_tpidrro();
-    let code = if res.is_null() { 0 } else { *res };
-    let module = code & 0x1ff;
-    let desc = (code >> 9) & 0x1fff;
-    eprintln!("[!] ========================================================");
-    eprintln!("[!] CRITICAL ABORT: nn::diag::detail::Abort called!");
-    eprintln!(
-        "[!] Result code: 0x{:08X} (Module: {}, Description: {})",
-        code, module, desc
-    );
-    let mut fp = crate::guest_reg!(x29);
-    eprintln!("[!] Call trace for Abort:");
-    for frame_idx in 0..15 {
-        if fp < 0x10000 || (fp & 7) != 0 {
-            break;
-        }
-        let next_fp = *(fp as *const usize);
-        let lr = *((fp + 8) as *const usize);
-        let (lib, sym) = crate::platform::os::address_owner(lr);
-        let (sname, dname) = (sym.unwrap_or_else(|| "?".into()), lib.unwrap_or_else(|| "?".into()));
-        eprintln!(
-            "    Frame #{:02}: FP={:#x} LR={:#x} <{} in {}>",
-            frame_idx, fp, lr, sname, dname
-        );
-        if next_fp <= fp {
-            break;
-        }
-        fp = next_fp;
-    }
-    eprintln!("[!] ========================================================");
-    eprintln!("[!] Abort called — terminating process with exit code 1.");
-    std::process::exit(1);
-}
 
-// 8. Operation Environment (nn::oe) and Account
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_Initialize() {
-    println!("[+] HLE: nn::oe::Initialize() called");
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetFocusHandlingMode(mode: i32) {
-    println!("[+] HLE: nn::oe::SetFocusHandlingMode(mode={})", mode);
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetPerformanceConfiguration(mode: i32, config: i32) {
-    println!(
-        "[+] HLE: nn::oe::SetPerformanceConfiguration(mode={}, config={})",
-        mode, config
-    );
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetResumeNotificationEnabled(enabled: bool) {
-    println!("[+] HLE: nn::oe::SetResumeNotificationEnabled({})", enabled);
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetOperationModeChangedNotificationEnabled(enabled: bool) {
-    println!(
-        "[+] HLE: nn::oe::SetOperationModeChangedNotificationEnabled({})",
-        enabled
-    );
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetPerformanceModeChangedNotificationEnabled(enabled: bool) {
-    println!(
-        "[+] HLE: nn::oe::SetPerformanceModeChangedNotificationEnabled({})",
-        enabled
-    );
-}
 
 static HANDHELD_OVERRIDE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
 
@@ -1187,8 +843,8 @@ pub fn set_handheld(handheld: bool) {
         if handheld { 1 } else { 0 },
         std::sync::atomic::Ordering::Release,
     );
-    crate::horizon::nn::oe_push_notification_message(0x1e); // MessageOperationModeChanged
-    crate::horizon::nn::oe_push_notification_message(0x1f); // MessagePerformanceModeChanged
+    crate::horizon::oe::push_notification_message(0x1e); // MessageOperationModeChanged
+    crate::horizon::oe::push_notification_message(0x1f); // MessagePerformanceModeChanged
     #[cfg(target_os = "macos")]
     crate::host::display::update_handheld_drawable(handheld);
     if handheld {
@@ -1221,42 +877,9 @@ pub fn is_handheld() -> bool {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_GetOperationMode() -> i32 {
-    if is_handheld() {
-        0 // Handheld mode
-    } else {
-        1 // Docked mode
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_GetPerformanceMode() -> i32 {
-    if is_handheld() {
-        0 // Normal / Handheld 720p
-    } else {
-        1 // Boosted / Docked 1080p
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_GetPerformanceConfiguration(mode: i32) -> u32 {
-    let config = if mode == 1 {
-        0x00010001
-    } else {
-        0x00020003
-    };
-    println!(
-        "[+] HLE: nn::oe::GetPerformanceConfiguration(mode={}) -> 0x{:08x}",
-        mode, config
-    );
-    config
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_GetCurrentFocusState() -> i32 {
-    1 // InFocus
-}
 
 #[repr(C)]
 pub struct NnAccountUid {
@@ -1264,75 +887,12 @@ pub struct NnAccountUid {
     pub low: u64,
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_Initialize() -> i32 {
-    println!("[+] HLE: nn::account::Initialize() called");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_TryOpenPreselectedUser(out_handle: *mut u128) -> bool {
-    println!("[+] HLE: nn::account::TryOpenPreselectedUser called");
-    if !out_handle.is_null() {
-        *out_handle = 1;
-    }
-    true
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_OpenPreselectedUser(out_handle: *mut u128) -> i32 {
-    println!("[+] HLE: nn::account::OpenPreselectedUser called");
-    if !out_handle.is_null() {
-        *out_handle = 1;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_GetUserId(
-    out_uid: *mut NnAccountUid,
-    _handle: *const (),
-) -> i32 {
-    println!("[+] HLE: nn::account::GetUserId called");
-    if !out_uid.is_null() {
-        (*out_uid).high = 0x0123456789ABCDEF;
-        (*out_uid).low = 0xFEDCBA9876543210;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_GetLastOpenedUser(out_uid: *mut NnAccountUid) -> i32 {
-    println!("[+] HLE: nn::account::GetLastOpenedUser called");
-    if !out_uid.is_null() {
-        (*out_uid).high = 0x0123456789ABCDEF;
-        (*out_uid).low = 0xFEDCBA9876543210;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_GetNickname(
-    out_nick: *mut [u8; 32],
-    _uid: *const NnAccountUid,
-) -> i32 {
-    println!("[+] HLE: nn::account::GetNickname called");
-    if !out_nick.is_null() {
-        let name = b"Link\0";
-        libc::memset(out_nick as *mut libc::c_void, 0, 32);
-        libc::memcpy(
-            out_nick as *mut libc::c_void,
-            name.as_ptr() as *const libc::c_void,
-            name.len(),
-        );
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_account_CloseUser(_handle: *const ()) {
-    println!("[+] HLE: nn::account::CloseUser called");
-}
 
 // 9. Threading & TLS Management
 pub(crate) static NEXT_TLS_SLOT: AtomicU32 = AtomicU32::new(0);
@@ -1576,8 +1136,6 @@ pub(crate) fn send_vibration(handle: u32, v: [f32; 4]) {
 
 
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_SetUserInactivityDetectionTimeExtended(_extended: bool) {}
 
 
 
@@ -1884,19 +1442,7 @@ mod printf_tests {
 
 
 
-#[repr(C)]
-pub struct NnBitArray {
-    pub bits: *mut u32,
-    pub bit_count: i32,
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_util_BitArray_reset(this: *mut NnBitArray) {
-    if !this.is_null() && !(*this).bits.is_null() && (*this).bit_count > 0 {
-        let words = ((*this).bit_count as usize + 31) / 32;
-        libc::memset((*this).bits as *mut libc::c_void, 0, words * 4);
-    }
-}
 
 // Reader-writer lock: real exclusion, tracked in a side table keyed by the lock's address
 // (horizon/nn.rs).
@@ -1913,10 +1459,6 @@ pub struct NnReaderWriterLock {
 
 
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_oe_GetDesiredLanguage() -> u64 {
-    u64::from_le_bytes(*b"en-US\0\0\0")
-}
 
 // nn::os::LightMessageQueue: a bounded, blocking SPSC/MPMC queue. Real hardware backs
 // it with the guest-supplied buffer; we keep the actual
@@ -2441,9 +1983,9 @@ pub static mut NVN_PRIVATE0: [u64; 64] = [0; 64];
 // Set*/Get*/Acquire*/Add* on AudioRendererConfig) still run in the sdk module
 // against the work buffers the game hands us; only the IPC edge is replaced.
 // There's no audio backend yet: updates are accepted and nothing is mixed.
-const NN_RESULT_SUCCESS: u32 = 0;
+pub(crate) const NN_RESULT_SUCCESS: u32 = 0;
 
-fn audio_align_up(v: usize, a: usize) -> usize {
+pub(crate) fn audio_align_up(v: usize, a: usize) -> usize {
     (v + a - 1) & !(a - 1)
 }
 
@@ -2497,7 +2039,7 @@ pub fn hle_system_event_register_signaled(addr: usize) {
     ev.cv.notify_all();
 }
 
-fn hle_system_event_register(addr: usize) -> std::sync::Arc<HleSystemEvent> {
+pub(crate) fn hle_system_event_register(addr: usize) -> std::sync::Arc<HleSystemEvent> {
     let ev = std::sync::Arc::new(HleSystemEvent {
         signaled: StdMutex::new(false),
         cv: std::sync::Condvar::new(),
@@ -2650,136 +2192,32 @@ pub unsafe extern "C" fn hle_nn_audio_AcquireAudioDeviceNotificationForOutput(ev
 // the SDK's software Opus decoder (zero external dependencies), falling back to libopus
 // (horizon/audio/opus.rs), or silence with correct accounting;
 // nn::codec::GetOpusPacketSize is pure CPU and stays in the sdk module.
-static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new()); // (addr, rate, channels)
+pub(crate) static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new()); // (addr, rate, channels)
 // The SDK's own Opus functions are guest code: they run through guest::call (natively a call, lifted through the guest
 // library), never as host function pointers.
 /// Address of guest decoder -> (software decoder buffer address, is_multistream)
-static SOFT_OPUS_MAP: StdMutex<Option<std::collections::HashMap<usize, (usize, bool)>>> = StdMutex::new(None);
+pub(crate) static SOFT_OPUS_MAP: StdMutex<Option<std::collections::HashMap<usize, (usize, bool)>>> = StdMutex::new(None);
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize(
-    rate: i32,
-    channels: i32,
-    _streams: i32,
-) -> usize {
-    record_hle_call("hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize");
-    if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii") {
-        return crate::guest::call(sym, &[rate as u64, channels as u64]) as usize;
-    }
-    audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
-}
-/// GetHardwareOpusDecoderWorkBufferSize(sampleRate, channelCount): the overload without the stream count.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize2(
-    rate: i32,
-    channels: i32,
-) -> usize {
-    hle_nn_codec_GetHardwareOpusDecoderWorkBufferSize(rate, channels, 1)
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusDecoder(
-    dec: *mut (),
-    rate: i32,
-    channels: i32,
-    _work: *mut (),
-    _work_size: usize,
-    _extra: i32,
-) -> u32 {
-    record_hle_call("hle_nn_codec_InitializeHardwareOpusDecoder");
-    if !dec.is_null() {
-        if OPUS_HANDLE.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-            OPUS_HANDLE.store(
-                Box::into_raw(Box::new(OPUS_HANDLE_VTABLE.as_ptr() as usize)) as usize,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-        std::ptr::write(
-            dec as *mut OpusDecoderType,
-            OpusDecoderType {
-                handle: OPUS_HANDLE.load(std::sync::atomic::Ordering::Relaxed),
-                buffer: _work as usize,
-                size: _work_size,
-                sample_rate: rate,
-                channel_count: channels,
-                perf: 0,
-                reset_requested: false,
-            },
-        );
-    }
-
-    if let Some(init_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec21InitializeOpusDecoderEPNS0_15OpusDecoderTypeEiiPvm") {
-        let soft_buf = Box::into_raw(vec![0u8; 512].into_boxed_slice()) as *mut u8 as usize;
-        let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
-        let map = map_guard.get_or_insert_with(std::collections::HashMap::new);
-        if let Some((old_buf, _)) = map.insert(dec as usize, (soft_buf, false)) {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(old_buf as *mut u8, 512)));
-        }
-        let res = crate::guest::call(init_sym, &[soft_buf as u64, rate as u64, channels as u64, _work as u64, _work_size as u64]) as u32;
-        let mut t = HLE_OPUS_DECODERS.lock().unwrap();
-        t.retain(|(a, _, _)| *a != dec as usize);
-        t.push((dec as usize, rate, channels));
-        return res;
-    }
-
-    crate::horizon::audio::opus::destroy(dec as usize); // re-initialized: a fresh libopus decoder on the next decode
-    let mut t = HLE_OPUS_DECODERS.lock().unwrap();
-    t.retain(|(a, _, _)| *a != dec as usize);
-    t.push((dec as usize, rate, channels));
-    NN_RESULT_SUCCESS
-}
-/// nn::codec::HardwareOpusDecoder::Finalize(this): the class holds its HardwareOpusDecoderType at this+8 (its other
-/// methods are short thunks onto the C API with this+8 and run natively).
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_HardwareOpusDecoder_Finalize(this: *mut u8) {
-    hle_nn_codec_FinalizeHardwareOpusDecoder(this.add(8) as *mut ());
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_HardwareOpusDecoder_Ctor(this: *mut u8, _option: i32) {
-    if let Some(ctor) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec11OpusDecoderC1Ev") {
-        crate::guest::call(ctor, &[this as u64]);
-    }
-}
 /// Stand-in for the decoder's service object (HardwareOpusDecoderType::_handle): code that releases it calls
 /// through its vtable, so every entry is a no-op.
 unsafe extern "C" fn opus_handle_noop() -> u32 {
     0
 }
-static OPUS_HANDLE_VTABLE: [unsafe extern "C" fn() -> u32; 16] = [opus_handle_noop; 16];
-static OPUS_HANDLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static OPUS_HANDLE_VTABLE: [unsafe extern "C" fn() -> u32; 16] = [opus_handle_noop; 16];
+pub(crate) static OPUS_HANDLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// HardwareOpusDecoderType: _handle, _buffer, _size, _sampleRate, _channelCount,
 /// _perf, _isResetRequested. Inline getters read these fields.
 #[repr(C)]
-struct OpusDecoderType {
-    handle: usize,
-    buffer: usize,
-    size: usize,
-    sample_rate: i32,
-    channel_count: i32,
-    perf: i64,
-    reset_requested: bool,
+pub(crate) struct OpusDecoderType {
+    pub(crate) handle: usize,
+    pub(crate) buffer: usize,
+    pub(crate) size: usize,
+    pub(crate) sample_rate: i32,
+    pub(crate) channel_count: i32,
+    pub(crate) perf: i64,
+    pub(crate) reset_requested: bool,
 }
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_FinalizeHardwareOpusDecoder(dec: *mut ()) {
-    record_hle_call("hle_nn_codec_FinalizeHardwareOpusDecoder");
-    let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some(map) = map_guard.as_mut() {
-        if let Some((soft_buf, _)) = map.remove(&(dec as usize)) {
-            if let Some(fini_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec19FinalizeOpusDecoderEPNS0_15OpusDecoderTypeE") {
-                crate::guest::call(fini_sym, &[soft_buf as u64]);
-            }
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(soft_buf as *mut u8, 512)));
-        }
-    }
-    crate::horizon::audio::opus::destroy(dec as usize);
-    HLE_OPUS_DECODERS
-        .lock()
-        .unwrap()
-        .retain(|(a, _, _)| *a != dec as usize);
-    if !dec.is_null() {
-        std::ptr::write_bytes(dec as *mut OpusDecoderType, 0, 1);
-    }
-}
-fn hle_opus_decoder(dec: usize) -> Option<(i32, i32)> {
+pub(crate) fn hle_opus_decoder(dec: usize) -> Option<(i32, i32)> {
     HLE_OPUS_DECODERS
         .lock()
         .unwrap()
@@ -2787,42 +2225,8 @@ fn hle_opus_decoder(dec: usize) -> Option<(i32, i32)> {
         .find(|(a, _, _)| *a == dec)
         .map(|(_, r, c)| (*r, *c))
 }
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderSampleRate(dec: *const ()) -> i32 {
-    record_hle_call("hle_nn_codec_GetHardwareOpusDecoderSampleRate");
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec24GetOpusDecoderSampleRateEPKNS0_15OpusDecoderTypeE") {
-            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
-        }
-    }
-    hle_opus_decoder(dec as usize).map(|(r, _)| r).unwrap_or(0)
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusDecoderChannelCount(dec: *const ()) -> i32 {
-    record_hle_call("hle_nn_codec_GetHardwareOpusDecoderChannelCount");
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec26GetOpusDecoderChannelCountEPKNS0_15OpusDecoderTypeE") {
-            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
-        }
-    }
-    hle_opus_decoder(dec as usize).map(|(_, c)| c).unwrap_or(0)
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_ResetHardwareOpusDecoder(dec: *mut ()) {
-    record_hle_call("hle_nn_codec_ResetHardwareOpusDecoder");
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec16ResetOpusDecoderEPNS0_15OpusDecoderTypeE") {
-            crate::guest::call(sym, &[*soft_buf as u64]);
-            return;
-        }
-    }
-    crate::horizon::audio::opus::reset(dec as usize);
-}
 /// Samples per channel in one Opus packet at `rate`, from the TOC byte (RFC 6716 §3.1).
-fn opus_packet_samples(pkt: &[u8], rate: i32) -> usize {
+pub(crate) fn opus_packet_samples(pkt: &[u8], rate: i32) -> usize {
     let Some(&toc) = pkt.first() else { return 0 };
     let cfg = toc >> 3;
     let frame_us: u32 = match cfg {
@@ -2837,225 +2241,18 @@ fn opus_packet_samples(pkt: &[u8], rate: i32) -> usize {
     };
     (frame_us as u64 * frames as u64 * rate.max(0) as u64 / 1_000_000) as usize
 }
-/// nn::codec::DecodeOpusInterleavedWithHardware(type*, size_t* outConsumed, int* outSamples,
-///     int16_t* outBuf, size_t outBufSize, const void* in, size_t inSize)
-/// Input is Switch hwopus framing: BE u32 packet size, BE u32 final range, then the Opus packet.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_DecodeOpusInterleavedWithHardware(
-    dec: *mut (),
-    out_consumed: *mut usize,
-    out_samples: *mut i32,
-    out_buf: *mut i16,
-    out_buf_size: usize,
-    input: *const u8,
-    input_size: usize,
-) -> u32 {
-    record_hle_call("hle_nn_codec_DecodeOpusInterleavedWithHardware");
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, false)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec21DecodeOpusInterleavedEPNS0_15OpusDecoderTypeEPmPiPsmPKvm") {
-            return crate::guest::call(sym, &[*soft_buf as u64, out_consumed as u64, out_samples as u64, out_buf as u64, out_buf_size as u64, input as u64, input_size as u64]) as u32;
-        }
-    }
-    drop(map_guard);
 
-    let Some((rate, channels)) = hle_opus_decoder(dec as usize) else {
-        return 0x4E;
-    };
-    if input.is_null() || input_size < 8 {
-        return 0x4E;
-    }
-    let inp = std::slice::from_raw_parts(input, input_size);
-    let pkt_size = u32::from_be_bytes([inp[0], inp[1], inp[2], inp[3]]) as usize;
-    if 8 + pkt_size > input_size {
-        return 0x4E;
-    }
-    let mut samples = opus_packet_samples(&inp[8..8 + pkt_size], rate);
-    let frame_bytes = channels.max(1) as usize * 2;
-    let bytes = samples * frame_bytes;
-    if bytes > out_buf_size {
-        return 0x4E;
-    }
-    // Real decoding (horizon/audio/opus.rs); silence with the same accounting for what it cannot decode.
-    match (!out_buf.is_null())
-        .then(|| {
-            crate::horizon::audio::opus::decode(
-                dec as usize,
-                rate,
-                channels,
-                &inp[8..8 + pkt_size],
-                out_buf,
-                out_buf_size / frame_bytes,
-            )
-        })
-        .flatten()
-    {
-        Some(n) => samples = n,
-        None => {
-            if !out_buf.is_null() {
-                std::ptr::write_bytes(out_buf as *mut u8, 0, bytes);
-            }
-        }
-    }
-    if !out_consumed.is_null() {
-        *out_consumed = 8 + pkt_size;
-    }
-    if !out_samples.is_null() {
-        *out_samples = samples as i32;
-    }
-    NN_RESULT_SUCCESS
-}
 
-// ── nn::codec HardwareOpusMultiStreamDecoder ────────────────────────────────
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_HardwareOpusMultiStreamDecoder_Ctor(this: *mut u8, _option: i32) {
-    if let Some(ctor) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec22OpusMultiStreamDecoderC1Ev") {
-        crate::guest::call(ctor, &[this as u64]);
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBufferSize(
-    rate: i32,
-    channels: i32,
-    streams: i32,
-    stereo: i32,
-) -> usize {
-    if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec39GetOpusMultiStreamDecoderWorkBufferSizeEiiii") {
-        return crate::guest::call(sym, &[rate as u64, channels as u64, streams as u64, stereo as u64]) as usize;
-    }
-    audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBufferSize5(
-    rate: i32,
-    channels: i32,
-    streams: i32,
-    stereo: i32,
-    _option: i32,
-) -> usize {
-    hle_nn_codec_GetHardwareOpusMultiStreamDecoderWorkBufferSize(rate, channels, streams, stereo)
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_InitializeHardwareOpusMultiStreamDecoder(
-    dec: *mut (),
-    rate: i32,
-    channels: i32,
-    streams: i32,
-    stereo: i32,
-    mapping: *const u8,
-    work: *mut (),
-    work_size: usize,
-    _option: i32,
-) -> u32 {
-    record_hle_call("hle_nn_codec_InitializeHardwareOpusMultiStreamDecoder");
-    if let Some(init_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec32InitializeOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeEiiiiPKhPvm") {
-        let soft_buf = Box::into_raw(vec![0u8; 512].into_boxed_slice()) as *mut u8 as usize;
-        let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
-        let map = map_guard.get_or_insert_with(std::collections::HashMap::new);
-        if let Some((old_buf, _)) = map.insert(dec as usize, (soft_buf, true)) {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(old_buf as *mut u8, 512)));
-        }
-        return crate::guest::call(init_sym, &[soft_buf as u64, rate as u64, channels as u64, streams as u64, stereo as u64, mapping as u64, work as usize as u64, work_size as u64]) as u32;
-    }
-    NN_RESULT_SUCCESS
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_FinalizeHardwareOpusMultiStreamDecoder(dec: *mut ()) {
-    record_hle_call("hle_nn_codec_FinalizeHardwareOpusMultiStreamDecoder");
-    let mut map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some(map) = map_guard.as_mut() {
-        if let Some((soft_buf, _)) = map.remove(&(dec as usize)) {
-            if let Some(fini_sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec30FinalizeOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeE") {
-                crate::guest::call(fini_sym, &[soft_buf as u64]);
-            }
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(soft_buf as *mut u8, 512)));
-        }
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderSampleRate(dec: *const ()) -> i32 {
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec35GetOpusMultiStreamDecoderSampleRateEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
-        }
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderChannelCount(dec: *const ()) -> i32 {
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec37GetOpusMultiStreamDecoderChannelCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
-        }
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderTotalStreamCount(dec: *const ()) -> i32 {
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec41GetOpusMultiStreamDecoderTotalStreamCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
-        }
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderStereoStreamCount(dec: *const ()) -> i32 {
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec42GetOpusMultiStreamDecoderStereoStreamCountEPKNS0_26OpusMultiStreamDecoderTypeE") {
-            return crate::guest::call(sym, &[*soft_buf as u64]) as i32;
-        }
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_ResetHardwareOpusMultiStreamDecoder(dec: *mut ()) {
-    record_hle_call("hle_nn_codec_ResetHardwareOpusMultiStreamDecoder");
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec27ResetOpusMultiStreamDecoderEPNS0_26OpusMultiStreamDecoderTypeE") {
-            crate::guest::call(sym, &[*soft_buf as u64]);
-        }
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_DecodeOpusMultiStreamInterleavedWithHardware(
-    dec: *mut (),
-    out_consumed: *mut usize,
-    out_samples: *mut i32,
-    out_buf: *mut i16,
-    out_buf_size: usize,
-    input: *const u8,
-    input_size: usize,
-) -> u32 {
-    record_hle_call("hle_nn_codec_DecodeOpusMultiStreamInterleavedWithHardware");
-    let map_guard = SOFT_OPUS_MAP.lock().unwrap();
-    if let Some((soft_buf, _)) = map_guard.as_ref().and_then(|m| m.get(&(dec as usize))) {
-        if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec32DecodeOpusMultiStreamInterleavedEPNS0_26OpusMultiStreamDecoderTypeEPmPiPsmPKvm") {
-            return crate::guest::call(sym, &[*soft_buf as u64, out_consumed as u64, out_samples as u64, out_buf as u64, out_buf_size as u64, input as u64, input_size as u64]) as u32;
-        }
-    }
-    0x4E
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_codec_GetHardwareOpusMultiStreamDecoderProcessingTime(_dec: *const ()) -> i64 {
-    0
-}
 
 // ── Guest-main sampler (--sample-main=<seconds>) ──────────────────────────────────────────────
 // Suspends the guest-main thread every few ms, reads its register state and walks the frame-pointer chain, then

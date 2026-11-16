@@ -9,7 +9,7 @@
 //
 // Code that hands out an HLE function's address (to a trampoline, a symbol table, a vtable) takes it through `hle`,
 // which records the function's adapter under its address; the parameter count is written as placeholders:
-//     hle(hle_nn_sm_GetServiceHandle as unsafe extern "C" fn(_, _, _) -> _)
+//     hle(crate::horizon::sm::get_service_handle as unsafe extern "C" fn(_, _, _) -> _)
 // A runtime that cannot call the address directly finds the adapter with `adapter`. Native trampolines check that one
 // exists (GuestMemorySpace::make_hle_trampoline), so a native run shows any binding that would be missing.
 

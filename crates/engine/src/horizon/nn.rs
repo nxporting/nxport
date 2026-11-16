@@ -15,7 +15,7 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 
 use crate::horizon::hle::hle_system_event_register_addr;
 
-const RESULT_SUCCESS: u32 = 0;
+pub(crate) const RESULT_SUCCESS: u32 = 0;
 
 // ── global sync state ────────────────────────────────────────────────────────────────────────
 #[derive(Default)]
@@ -385,66 +385,10 @@ pub(crate) unsafe extern "C" fn time_to_posix_time_from_utc(cal: *const u8) -> i
     crate::platform::os::from_utc_time(&mut tm)
 }
 
-// ── nn::oe / nn::pl / nn::account / nn::err ──────────────────────────────────────────────────
-pub(crate) unsafe extern "C" fn oe_get_expected_volume_balance(app: *mut f32, sdk: *mut f32) {
-    if !app.is_null() {
-        *app = 1.0;
-    }
-    if !sdk.is_null() {
-        *sdk = 1.0;
-    }
-}
-pub(crate) unsafe extern "C" fn oe_set_expected_volume_balance(_app: f32, _sdk: f32) {}
-pub(crate) unsafe extern "C" fn oe_finish_startup_logo() {}
-/// Asks the system to deliver MessageExitRequest instead of terminating the program; no exit
-/// requests are generated here (quitting the window ends the process), so entering / leaving the section changes nothing.
-pub(crate) unsafe extern "C" fn oe_enter_exit_request_handling_section() {}
-pub(crate) unsafe extern "C" fn oe_leave_exit_request_handling_section() {}
 /// Notification messages for the application. After launch the system reports the focus
 /// state once (MessageFocusStateChanged = 15; GetCurrentFocusState then says InFocus), as Ryujinx's applet state
 /// manager does. Kirby and the Forgotten Land (FocusHandlingMode_SuspendAndNotify) ignored all input without it.
-static OE_MESSAGES: Mutex<Option<VecDeque<u32>>> = Mutex::new(None);
-pub fn oe_push_notification_message(msg: u32) {
-    let mut g = OE_MESSAGES.lock().unwrap();
-    let q = g.get_or_insert_with(|| VecDeque::from([15u32]));
-    q.push_back(msg);
-}
-fn oe_pop() -> Option<u32> {
-    OE_MESSAGES
-        .lock()
-        .unwrap()
-        .get_or_insert_with(|| VecDeque::from([15u32]))
-        .pop_front()
-}
-/// The launch parameter channel: a game started normally has none (the native call reached the applet manager's
-/// storage objects, which do not exist here, and read through null).
-pub(crate) unsafe extern "C" fn oe_try_pop_launch_parameter(out_size: *mut usize, _buf: *mut u8, _cap: usize) -> bool {
-    if !out_size.is_null() {
-        *out_size = 0;
-    }
-    false
-}
-pub(crate) unsafe extern "C" fn oe_try_pop_notification_message(out: *mut u32) -> bool {
-    match oe_pop() {
-        Some(m) => {
-            if !out.is_null() {
-                *out = m;
-            }
-            true
-        }
-        None => false,
-    }
-}
-pub(crate) unsafe extern "C" fn oe_pop_notification_message() -> u32 {
-    oe_pop().unwrap_or(0)
-}
-pub(crate) unsafe extern "C" fn oe_get_program_total_active_time() -> i64 {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    START
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
-        .as_nanos() as i64
-}
+pub(crate) static OE_MESSAGES: Mutex<Option<VecDeque<u32>>> = Mutex::new(None);
 // ── nn::pl shared fonts ──────────────────────────────────────────────────────────────────────
 // The system's shared fonts (Super Mario Odyssey renders its text with them; TotK ships its own). They are read from
 // --shared-fonts (a .app's Resources/fonts), named by type: FontStandard.ttf, FontChineseSimplified.ttf,
@@ -614,12 +558,6 @@ pub(crate) unsafe extern "C" fn pl_is_vr_mode() -> bool {
 /// nn::pl::IsRunningOnOunce: whether the console is a Switch 2. The engine presents the original Switch.
 pub(crate) unsafe extern "C" fn pl_is_running_on_ounce() -> bool {
     false
-}
-pub(crate) unsafe extern "C" fn account_get_user_existence(out: *mut bool, _uid: *const u8) -> u32 {
-    if !out.is_null() {
-        *out = true;
-    }
-    RESULT_SUCCESS
 }
 // ── nn::friends: an offline user with an empty friend list (the SDK's own Initialize opens friend:u itself, whose IPC
 // is not emulated: Super Mario Bros. Wonder aborted there at boot) ──────────────────────────────────────────────────────
@@ -795,52 +733,7 @@ pub(crate) unsafe extern "C" fn ldn_make_network(ip: u32, mask: u32) -> u32 {
 }
 
 // ── nn::account: one local user (the uid TryOpenPreselectedUser / GetUserId report, horizon/hle.rs), no network account ──────
-const USER_UID: [u64; 2] = [0x0123456789ABCDEF, 0xFEDCBA9876543210];
-pub(crate) unsafe extern "C" fn account_list_users(out_count: *mut i32, out: *mut [u64; 2], max: i32) -> u32 {
-    let n = if max > 0 && !out.is_null() {
-        *out = USER_UID;
-        1
-    } else {
-        0
-    };
-    if !out_count.is_null() {
-        *out_count = n;
-    }
-    RESULT_SUCCESS
-}
-pub(crate) unsafe extern "C" fn account_get_user_count(out: *mut i32) -> u32 {
-    if !out.is_null() {
-        *out = 1;
-    }
-    RESULT_SUCCESS
-}
-pub(crate) unsafe extern "C" fn account_open_user(out_handle: *mut u128, _uid: *const u8) -> u32 {
-    if !out_handle.is_null() {
-        *out_handle = 1; // as TryOpenPreselectedUser
-    }
-    RESULT_SUCCESS
-}
-pub(crate) unsafe extern "C" fn account_show_user_selector(
-    out_uid: *mut [u64; 2],
-    _settings: *const u8,
-) -> u32 {
-    if !out_uid.is_null() {
-        *out_uid = USER_UID;
-    }
-    RESULT_SUCCESS
-}
-pub(crate) unsafe extern "C" fn account_out_false(out: *mut bool) -> u32 {
-    if !out.is_null() {
-        *out = false;
-    }
-    RESULT_SUCCESS
-}
-pub(crate) unsafe extern "C" fn account_load_profile_image(out_size: *mut usize) -> u32 {
-    if !out_size.is_null() {
-        *out_size = 0;
-    }
-    124 | (100 << 9) // an account-module failure: the user has no profile image
-}
+pub(crate) const USER_UID: [u64; 2] = [0x0123456789ABCDEF, 0xFEDCBA9876543210];
 pub(crate) unsafe extern "C" fn fs_is_save_data_existing(_uid: *const u8) -> bool {
     true // saves live in the save directory (horizon/fs.rs); EnsureSaveData / MountSaveData create it
 }
@@ -853,13 +746,6 @@ pub(crate) unsafe extern "C" fn time_get_device_location_name(out: *mut u8) {
     }
 }
 
-/// nn::oe::GetPseudoDeviceId(nn::util::Uuid*): a fixed id (the SDK's own asks a service).
-pub(crate) unsafe extern "C" fn oe_get_pseudo_device_id(out: *mut u8) {
-    if !out.is_null() {
-        let id: [u8; 16] = *b"nxport-device-id";
-        std::ptr::copy_nonoverlapping(id.as_ptr(), out, 16);
-    }
-}
 
 // ── nn::ngc::ProfanityFilter: every word checks clean (ngc:u is not emulated; the SDK's Initialize opens it) ──────────
 pub(crate) unsafe extern "C" fn ngc_ok() -> u32 {
@@ -887,50 +773,6 @@ pub(crate) unsafe extern "C" fn err_show_error(result: u32) {
     );
 }
 
-// ── nn::diag ─────────────────────────────────────────────────────────────────────────────────
-pub(crate) unsafe extern "C" fn diag_get_symbol_name(buf: *mut u8, size: usize, _addr: usize) -> usize {
-    if !buf.is_null() && size > 0 {
-        *buf = 0;
-    }
-    0
-}
-pub(crate) unsafe extern "C" fn diag_get_backtrace(_out: *mut usize, _count: i32) -> i32 {
-    0
-}
-/// nn::diag::detail::PutImpl(const LogMetaData&, const char* msg, size_t len): the game's log sink.
-pub(crate) unsafe extern "C" fn diag_put_impl(_meta: *const u8, msg: *const u8, len: usize) {
-    if !msg.is_null() && len > 0 && len < 0x10000 {
-        let s = String::from_utf8_lossy(std::slice::from_raw_parts(msg, len));
-        println!("[nn::diag] {}", s.trim_end());
-    }
-}
-pub(crate) unsafe extern "C" fn diag_abort_impl_noargs() {
-    // The HLE trampoline leaves the guest's return address in x17; x29 still holds the guest frame chain.
-    let (lr, fp) = (crate::guest_reg!(x17), crate::guest_reg!(x29));
-    let base = crate::guest::loader::main_base();
-    let rel = |a: usize| {
-        if a >= base && a < base + (256 << 20) {
-            format!("main+{:#x}", a - base)
-        } else {
-            format!("{:#x}", a)
-        }
-    };
-    let mut chain = vec![rel(lr)];
-    let mut f = fp;
-    for _ in 0..12 {
-        if f < 0x10000 || f & 7 != 0 {
-            break;
-        }
-        let ret = *((f + 8) as *const usize);
-        chain.push(rel(ret));
-        f = *(f as *const usize);
-    }
-    eprintln!(
-        "[!] CRITICAL ABORT: nn::diag::detail::AbortImpl() called from {}",
-        chain.join(" <- ")
-    );
-    std::process::abort();
-}
 pub(crate) unsafe extern "C" fn detail_unexpected_default_impl() {
     eprintln!(
         "[!] CRITICAL ABORT: nn::detail::UnexpectedDefaultImpl() (a switch default was reached)"
@@ -1239,45 +1081,7 @@ pub(crate) unsafe extern "C" fn ec_show_shop_product_details(ns_uid: u64, _user:
 // nn::account network service account: the user has none linked / no network,
 // ResultNetworkServiceAccountUnavailable (module 124, description 200). An AsyncContext the
 // failed calls never started reports done with that result; its event is signaled.
-const ACCOUNT_NSA_UNAVAILABLE: u32 = 124 | (200 << 9);
-pub(crate) unsafe extern "C" fn account_nsa_unavailable_1(_a: *mut u8) -> u32 {
-    ACCOUNT_NSA_UNAVAILABLE
-}
-pub(crate) unsafe extern "C" fn account_nsa_unavailable_2(_a: *mut u8, _b: *const u8) -> u32 {
-    ACCOUNT_NSA_UNAVAILABLE
-}
-pub(crate) unsafe extern "C" fn account_nsa_unavailable_4(_a: *mut u8, _b: *const u8, _c: *mut u8, _d: usize) -> u32 {
-    ACCOUNT_NSA_UNAVAILABLE
-}
-pub(crate) unsafe extern "C" fn account_load_nsa_id_token_cache(
-    out_size: *mut usize,
-    _buf: *mut u8,
-    _size: usize,
-    _user: *const u8,
-) -> u32 {
-    if !out_size.is_null() {
-        *out_size = 0;
-    }
-    ACCOUNT_NSA_UNAVAILABLE
-}
-pub(crate) unsafe extern "C" fn account_async_has_done(_this: *mut u8, out: *mut bool) -> u32 {
-    if !out.is_null() {
-        *out = true;
-    }
-    0
-}
-pub(crate) unsafe extern "C" fn account_async_get_result(_this: *mut u8) -> u32 {
-    ACCOUNT_NSA_UNAVAILABLE
-}
-pub(crate) unsafe extern "C" fn account_async_cancel(_this: *mut u8) -> u32 {
-    0
-}
-pub(crate) unsafe extern "C" fn account_async_get_system_event(_this: *mut u8, out_event: *mut u8) -> u32 {
-    if !out_event.is_null() {
-        crate::horizon::hle::hle_system_event_register_signaled(out_event as usize);
-    }
-    0
-}
+pub(crate) const ACCOUNT_NSA_UNAVAILABLE: u32 = 124 | (200 << 9);
 
 /// nn::pdm::QueryApplicationPlayStatistics(out, uid, appIds, count) -> number of entries written: no play records.
 pub(crate) unsafe extern "C" fn pdm_query_application_play_statistics(
