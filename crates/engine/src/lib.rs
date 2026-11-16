@@ -846,7 +846,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     // (confirmed by disassembly: it only calls the SDK's own internal
     // memset, no svc, no external dependency) -- let it run for real instead
     // of the Rust stand-in, same reasoning as StandardAllocator below.
-    // bind_import!("_ZN2nn4util8BitArray5resetEv", guest::loader::JUMP_SLOT, horizon::hle::hle_nn_util_BitArray_reset);
+    // bind_import!("_ZN2nn4util8BitArray5resetEv", guest::loader::JUMP_SLOT, horizon::crate::horizon::util::bit_array_reset);
 
     // Bind Horizon Heap & Allocator routines
 
