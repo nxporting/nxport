@@ -11,6 +11,7 @@ pub mod sdk;
 pub mod movie;
 pub mod nn;
 pub mod os;
+pub mod hid;
 mod packed_mods;
 pub mod svc;
 pub mod sync;
