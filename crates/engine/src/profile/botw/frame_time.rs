@@ -32,7 +32,9 @@
 //   for some steps and caught up at once (Link hopped on it). kf_angle gives 2 atan2(|xyz|, |w|), the same angle
 //   without the rounding.
 //
-// All found by Savage Wind (#144, #145, #209).
+// - Havok's deactivation checks (phys_world_tick, phys_body_tick) count console frames, not physics steps.
+//
+// All found by Savage Wind (#144, #145, #209, #398).
 //
 // The hooks rewrite instructions and branch to HLE trampolines, so they apply natively and to the image that is lifted.
 
@@ -58,6 +60,10 @@ pub struct Sites {
     pub snd_floor: Option<usize>,
     /// The keyframed body's `bl hkQuaternion::getAngle` (x0 = the quaternion), and the function it calls.
     pub kf_angle: Option<(usize, usize)>,
+    /// Havok's deactivation: the world step's counter update (PHYS_WORLD_TICK_CODE, x8 = the hkpWorld), in the step and
+    /// in the multithreaded step, and each body's check counter (PHYS_BODY_TICK_CODE with the body's register).
+    pub phys_world_tick: [usize; 2],
+    pub phys_body_tick: [(usize, u32); 2],
 }
 
 pub const STP_FRAME_WAIT: u32 = 0xa9bd_7bfd;
@@ -147,6 +153,117 @@ pub unsafe extern "C" fn snd_floor() -> f32 {
     0.5 * frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed))
 }
 
+/// The world step's deactivation counter update (hkpWorld +0x3ef, flags at +0x3ed / +0x3ee), 21 words from the counter's
+/// load to its reset; branches inside it only.
+pub const PHYS_WORLD_TICK_CODE: [u32; 21] = [
+    0x394f_bd0a, 0x1100_0549, 0x1100_154a, 0x390f_bd09, 0x1200_094a, 0x3500_008a, 0x394f_b50a, 0x5200_014a, 0x390f_b50a,
+    0x1200_092a, 0x3500_008a, 0x394f_b50a, 0x521f_014a, 0x390f_b50a, 0x1200_0d29, 0x3500_00c9, 0x394f_b909, 0x3200_03ea,
+    0x4b09_0149, 0x390f_b909, 0x390f_bd1f,
+];
+
+/// A body's deactivation check counter (hkpMotion +0xd): ldrb w8, [xM, #0xd]; add w8, w8, #1; strb w8, [xM, #0xd];
+/// and w9, w8, #3 (cbnz w9, <no check this step> follows).
+pub const fn phys_body_tick_code(motion: u32) -> [u32; 4] {
+    [0x3940_3408 | motion << 5, 0x1100_0508, 0x3900_3408 | motion << 5, 0x1200_0509]
+}
+
+/// Whether the latest world step completes a console frame (phys_world_tick): only those count a deactivation check.
+static PHYS_TICKED: AtomicBool = AtomicBool::new(true);
+
+/// Per world: console frames stepped and not yet counted, the deactivation classes' values as the game set them and as
+/// given for the step length last used.
+struct PhysWorld {
+    frames: f32,
+    game: [[f32; 2]; 6],
+    put: [[f32; 2]; 6],
+    put_r: f32,
+}
+static PHYS_WORLDS: std::sync::Mutex<Vec<(usize, PhysWorld)>> = std::sync::Mutex::new(Vec::new());
+const PHYS_CLASSES: usize = 0x314;
+
+/// Havok's deactivation at the console's pace (Savage Wind #398). Havok judges whether a body came to rest once per
+/// physics step, and the game takes one step a frame: a body still for 24 steps (0.8 s at 30 fps) puts its island to
+/// sleep, 0.07 s at 360 fps, and Ree Dahee Shrine's ball fell asleep on its ramp for good above ~120 fps. Only the steps
+/// that complete a console frame (1/30 s of the frame's step, slow motion left out as on the console) run the world's
+/// and the bodies' check counters; every step at 30 fps and slower. In every step the solver slows a body under its
+/// deactivation class's speed by a multiplier and stops it under the class's sleep speed (hkpWorld +0x314, 0x20 a
+/// class: +8, +0xc): a step adds speed in proportion to its length r (console frames, at most 1), so the multiplier
+/// becomes multiplier^r and the sleep speed sleep speed x r: as much slowing a second as on the console.
+/// Replaces the counter update (x0 = the hkpWorld).
+pub unsafe extern "C" fn phys_world_tick(world: usize) {
+    if world == 0 {
+        return;
+    }
+    let r = frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed)).min(1.0);
+    let r = if r > 0.0 { r } else { 1.0 };
+    let mut worlds = PHYS_WORLDS.lock().unwrap();
+    let i = match worlds.iter().position(|(w, _)| *w == world) {
+        Some(i) => i,
+        None => {
+            if worlds.len() >= 16 {
+                worlds.remove(0);
+            }
+            worlds.push((world, PhysWorld { frames: 0.0, game: [[0.0; 2]; 6], put: [[f32::NAN; 2]; 6], put_r: 0.0 }));
+            worlds.len() - 1
+        }
+    };
+    let p = &mut worlds[i].1;
+    // Steps of 1/n console frame add up to 1 within float rounding.
+    p.frames += r;
+    let tick = p.frames >= 1.0 - 1e-4;
+    if tick {
+        p.frames = (p.frames - 1.0).max(0.0);
+    }
+    PHYS_TICKED.store(tick, Ordering::Relaxed);
+    for c in 0..6 {
+        let m = (world + PHYS_CLASSES + 0x20 * c + 8) as *mut [f32; 2];
+        let now = *m;
+        if now != p.put[c] {
+            p.game[c] = now;
+            p.put_r = 0.0;
+        }
+    }
+    if r != p.put_r {
+        for c in 0..6 {
+            let m = (world + PHYS_CLASSES + 0x20 * c + 8) as *mut [f32; 2];
+            let g = p.game[c];
+            let v = if r == 1.0 { g } else { [g[0].powf(r), g[1] * r] };
+            *m = v;
+            p.put[c] = v;
+        }
+        p.put_r = r;
+    }
+    if !tick {
+        return;
+    }
+    // The game's own update.
+    let b = |o: usize| (world + o) as *mut u8;
+    let v = *b(0x3ef) as u32;
+    let (w9, w10) = (v + 1, v + 5);
+    *b(0x3ef) = w9 as u8;
+    if w10 & 7 == 0 {
+        *b(0x3ed) ^= 1;
+    }
+    if w9 & 7 == 0 {
+        *b(0x3ed) ^= 2;
+    }
+    if w9 & 0xf == 0 {
+        *b(0x3ee) = 1u8.wrapping_sub(*b(0x3ee));
+        *b(0x3ef) = 0;
+    }
+}
+
+/// A body's check counter (x0 = its hkpMotion): incremented and returned when the world's step completes a console frame;
+/// otherwise 1, which skips the check (the counter is left as it was).
+pub unsafe extern "C" fn phys_body_tick(motion: usize) -> u32 {
+    if motion == 0 || !PHYS_TICKED.load(Ordering::Relaxed) {
+        return 1;
+    }
+    let c = *((motion + 0xd) as *const u8) as u32 + 1;
+    *((motion + 0xd) as *mut u8) = c as u8;
+    c
+}
+
 /// The angle of a turn (x0 = its quaternion x, y, z, w): 2 atan2(|xyz|, |w|).
 pub unsafe extern "C" fn kf_angle(q: usize) -> f32 {
     let v = std::slice::from_raw_parts(q as *const f32, 4);
@@ -206,6 +323,27 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
             Ok(()) => println!("[+] Sound: its frame follows the frame's step"),
             Err(e) => println!("[!] Sound: main+{at:#x}: {e}; its frame stays at least half a 30 fps frame"),
         }
+    }
+    // Havok's deactivation: mov x0, x8; bl <phys_world_tick>; b <past the update> (the rest stays, unreached), and in each
+    // body: mov x0, xM; bl <phys_body_tick>; mov w8, w0; and w9, w8, #3 (its cbnz follows).
+    let mut phys = 0;
+    for at in s.phys_world_tick {
+        let mut code = PHYS_WORLD_TICK_CODE.to_vec();
+        code[..3].copy_from_slice(&[0xaa08_03e0, BL, 0x1400_0000 | (0x54 - 8) / 4]);
+        match replace_with_call(base, mem_space, at, &PHYS_WORLD_TICK_CODE, code, 1, crate::hle!(phys_world_tick(_))) {
+            Ok(()) => phys += 1,
+            Err(e) => println!("[!] Physics: main+{at:#x}: {e}; the world's deactivation counts every step"),
+        }
+    }
+    for (at, motion) in s.phys_body_tick {
+        let code = vec![0xaa00_03e0 | motion << 16, BL, 0x2a00_03e8, 0x1200_0509];
+        match replace_with_call(base, mem_space, at, &phys_body_tick_code(motion), code, 1, crate::hle!(phys_body_tick(_))) {
+            Ok(()) => phys += 1,
+            Err(e) => println!("[!] Physics: main+{at:#x}: {e}; bodies' deactivation counts every step"),
+        }
+    }
+    if phys == 4 {
+        println!("[+] Physics: deactivation checks at the console's pace");
     }
     if let Some((at, get_angle)) = s.kf_angle {
         // bl <getAngle> -> bl <kf_angle> (same argument and result).

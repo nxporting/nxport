@@ -80,6 +80,8 @@ pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
     arrow: Some((0x5ee6d0, 0xb325c0, 0x5ee734)),
     snd_floor: Some(0x1551004),
     kf_angle: Some((0x12d57fc, 0xb06d4)),
+    phys_world_tick: [0xf5e20, 0x12644c],
+    phys_body_tick: [(0x11f95c, 20), (0x1207cc, 26)],
 };
 
 #[cfg(nx_runtime)]
