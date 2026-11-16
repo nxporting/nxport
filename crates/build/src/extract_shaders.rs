@@ -401,25 +401,41 @@ impl std::fmt::Display for ShaderExtractPhase {
     }
 }
 
-fn has_existing_stages(dir: &Path) -> bool {
-    if dir.join(".extracted").is_file() {
-        return true;
+/// The scanned files' relative paths and sizes, hashed: stages extracted from other game files (another version) differ.
+fn files_identity(romfs: &Path, lists: &[(&str, Vec<PathBuf>)]) -> u64 {
+    let mut entries: Vec<(String, u64)> = lists
+        .iter()
+        .flat_map(|(_, files)| files.iter())
+        .map(|f| {
+            let rel = f.strip_prefix(romfs).unwrap_or(f).to_string_lossy().into_owned();
+            (rel, std::fs::metadata(f).map_or(0, |m| m.len()))
+        })
+        .collect();
+    entries.sort();
+    let mut bytes = Vec::new();
+    for (rel, len) in entries {
+        bytes.extend(rel.as_bytes());
+        bytes.push(0);
+        bytes.extend(len.to_le_bytes());
     }
-    // Backward compatibility for existing stages directories:
-    // If the directory exists and has at least 50 .code files, consider it already extracted.
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        let mut count = 0;
-        for entry in entries.flatten() {
-            if entry.path().extension().map_or(false, |ext| ext == "code") {
-                count += 1;
-                if count >= 50 {
-                    let _ = std::fs::write(dir.join(".extracted"), format!("count: {count}\n"));
-                    return true;
-                }
-            }
+    fnv1a64(&bytes)
+}
+
+/// Whether `dir` holds the stages of the game files with `identity` (its marker names them).
+fn has_existing_stages(dir: &Path, identity: u64) -> bool {
+    std::fs::read_to_string(dir.join(".extracted"))
+        .is_ok_and(|m| m.lines().any(|l| l == format!("files: {identity:016x}")))
+}
+
+/// Removes stages extracted from other game files (only the files extraction writes: `dir` may be the user's).
+fn remove_stale_stages(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(".extracted"));
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "code" || x == "ctrl") {
+            let _ = std::fs::remove_file(p);
         }
     }
-    false
 }
 
 pub fn extract_all(
@@ -429,15 +445,6 @@ pub fn extract_all(
     ctrl_out: Option<&Path>,
     on_progress: Option<&(dyn Fn(ShaderExtractPhase, usize, usize) + Sync)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let force = std::env::var("NXPORT_FORCE_EXTRACT").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"));
-    if !force && has_existing_stages(out_dir) {
-        println!("[+] Shader stages already extracted in {}. Skipping RomFS scan.", out_dir.display());
-        if let Some(cb) = on_progress {
-            cb(ShaderExtractPhase::ExtractingStages, 1, 1);
-        }
-        return Ok(());
-    }
-
     println!("[+] Extracting shaders from RomFS: {}", romfs.display());
     println!("    Output directory: {}", out_dir.display());
 
@@ -473,6 +480,19 @@ pub fn extract_all(
             total_files += files.len();
             dir_file_lists.push((dir_name, files));
         }
+    }
+    let identity = files_identity(romfs, &dir_file_lists);
+    let force = std::env::var("NXPORT_FORCE_EXTRACT").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"));
+    if !force && has_existing_stages(out_dir, identity) {
+        println!("[+] Shader stages already extracted from these game files in {}.", out_dir.display());
+        if let Some(cb) = on_progress {
+            cb(ShaderExtractPhase::ExtractingStages, 1, 1);
+        }
+        return Ok(());
+    }
+    if out_dir.join(".extracted").exists() {
+        println!("[+] Stages in {} come from other game files (or an older build): extracting again.", out_dir.display());
+        remove_stale_stages(out_dir);
     }
     if let Some(cb) = on_progress {
         cb(ShaderExtractPhase::ExtractingStages, 0, total_files);
@@ -591,7 +611,7 @@ pub fn extract_all(
     }
 
     let marker_content = format!(
-        "romfs: {}\ntotal_stages: {}\n",
+        "romfs: {}\nfiles: {identity:016x}\ntotal_stages: {}\n",
         romfs.display(),
         st.total_stages
     );
