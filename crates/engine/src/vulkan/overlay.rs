@@ -434,7 +434,7 @@ pub(super) unsafe fn record(dev: &Dev, cb: vk::CommandBuffer, image: vk::Image, 
     // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
     let progress = crate::gpu::pipeline_list::take_frame_progress();
     let perf = crate::host::overlay::is_overlay_enabled();
-    if (!perf && progress.is_none()) || FAILED.with(|f| f.get()) {
+    if (!perf && !matches!(progress, Some(Some(_)))) || FAILED.with(|f| f.get()) {
         return false;
     }
     STATE.with(|st| {
@@ -459,10 +459,10 @@ pub(super) unsafe fn record(dev: &Dev, cb: vk::CommandBuffer, image: vk::Image, 
         io.set_delta_time(stats.frame_time_ms.max(1.0) / 1000.0);
         let frame = o.ctx.begin_frame();
         if perf {
-            crate::host::overlay::draw_window(frame.ui(), w, &stats, &times[..count]);
+            crate::host::overlay::draw_window(frame.ui(), w, &stats, &times[..count], progress == Some(None));
         }
-        if let Some(listed) = progress {
-            crate::perf_stats::draw_shader_progress(frame.ui(), w, h, listed);
+        if let Some(Some((done, total))) = progress {
+            crate::perf_stats::draw_shader_progress(frame.ui(), w, h, done, total);
         }
         let pending = frame.render(&o.consumer);
         let result = o.gpu.textures(dev, cb, pending).and_then(|rendered| o.gpu.draw(dev, cb, image, extent, slot, rendered.draw_data()));

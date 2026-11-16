@@ -164,7 +164,8 @@ pub fn snapshot() -> (FrameStats, [f32; HISTORY_LEN], usize) {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
-pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32]) {
+/// `compiling`: the frame skipped draws whose pipelines are still compiling.
+pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32], compiling: bool) {
     let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.78]);
     let _border = ui.push_style_color(imgui::StyleColor::Border, [0.35, 0.35, 0.45, 0.6]);
     let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(6.0));
@@ -225,14 +226,17 @@ pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32]) {
                 "Submits: {}   Draws: {}   Passes: {}   Memory: {} MB",
                 stats.submits, stats.draws, stats.passes, stats.memory_mb
             ));
+            if compiling {
+                ui.text_colored([0.95, 0.85, 0.2, 1.0], "Compiling shaders");
+            }
         });
 }
 
 
-/// While the picture waits on shaders (gpu::pipeline_list::take_frame_progress): a bar at the bottom of the screen with
-/// the listed pipelines compiled so far, or, when the shaders waited for are not on the list, the words alone.
+/// While listed pipelines are still compiling (gpu::pipeline_list::take_frame_progress): a bar at the bottom of the
+/// screen with how many are done. Draws skipped for other compiling pipelines show in the performance window instead.
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
-pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, listed: Option<(usize, usize)>) {
+pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, done: usize, total: usize) {
     let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.85]);
     let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(6.0));
     let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([14.0, 10.0]));
@@ -256,12 +260,9 @@ pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, listed: Option<(usiz
                 | imgui::WindowFlags::NO_NAV_FOCUS
                 | imgui::WindowFlags::NO_MOUSE_INPUTS,
         )
-        .build(|| match listed {
-            Some((done, total)) => {
-                ui.text(format!("Compiling shaders: {done} of {total}"));
-                let width = (w * 0.4).clamp(220.0, 520.0);
-                ui.progress_bar(done as f32 / total.max(1) as f32).size([width, 0.0]).overlay_text("").build();
-            }
-            None => ui.text("Compiling shaders"),
+        .build(|| {
+            ui.text(format!("Compiling shaders: {done} of {total}"));
+            let width = (w * 0.4).clamp(220.0, 520.0);
+            ui.progress_bar(done as f32 / total.max(1) as f32).size([width, 0.0]).overlay_text("").build();
         });
 }
