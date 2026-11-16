@@ -139,7 +139,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   applied at load that the library was not lifted with go to live patches (mod_patches::take_not_lifted ->
   live_patch::code_written once enabled). Checked: a pchtxt in the data directory with an undefined instruction in
   main+0x151d518 made that function recompile and stop at that instruction. Plugin (subsdk) mods added after the build:
-  not checked. Builder wording done (the choice is "Built-in mods", its help names both folders). Layering done
+  refused with a clear message (checked with UltraCam in the data folder: plugins work only as built-in mods on
+  Windows; lifting a plugin at launch would need the C compiler with the app). Builder wording done (the choice is "Built-in mods", its help names both folders). Layering done
   (horizon::fs::mod_roots): an app with built-in mods takes the data folder's too; checked on Windows with a built-in
   pchtxt (in the overlay, not live-patched) and a data-folder one (live-patched, ran).
 - **Later (after the first release): our own game patches as ordinary exefs mods (user, 2026-11-14).** Every patch of

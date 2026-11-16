@@ -1397,6 +1397,18 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     // A plugin mod's code runs only if the library was lifted with it (and with its patches: nxport-builder lift-game
     // --patched-image, or the builder).
     if let Some((label, ..)) = mod_modules.iter().find(|(label, ..)| !modules.iter().chain(&overlay_modules).any(|m| *m == mod_module_name(label).as_str())) {
+        // A plugin added to the game's data folder after the build: its code was never lifted, and patches are all live
+        // patching can take on (no new modules).
+        let mod_name = label.split('/').next().unwrap_or(label);
+        let dir = horizon::fs::mods().iter().find(|(n, _)| n == mod_name).map(|(_, d)| d.clone());
+        if let Some(dir) = dir.filter(|d| !horizon::fs::built_in_mod(d)) {
+            return Err(format!(
+                "The mod '{mod_name}' has a plugin ({label}). Plugins cannot be added to a Windows app after it is built: \
+                 their code is compiled with the game's. Build the app again with it under Built-in mods, or remove it from {}.",
+                dir.parent().unwrap_or(&dir).display()
+            )
+            .into());
+        }
         return Err(format!(
             "{label} is a plugin mod, and {} was lifted without it: lift and compile the game again with its mods (the builder does)",
             lib.display()
