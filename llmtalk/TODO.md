@@ -255,7 +255,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   check or the release's headers, the thread layout from a game that runs on it, and the functions it changed. Layers
   with nothing verified still help: the log then says exactly which release a game uses.
 
-- **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Built from the user's base NSP
+- **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Retested 2026-11-15 on main (bf93f40 +):
+  same crash in f_7000f52794 (the EmergencyHeap listener), now before the first frame. Base-only mount for tests:
+  (host build note redacted)
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
