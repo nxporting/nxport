@@ -277,7 +277,7 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
         0x1A => arbitrate_lock(r),
         0x1B => arbitrate_unlock(r),
         0x1E => {
-            r[0] = crate::horizon::hle::hle_nn_os_GetSystemTick();
+            r[0] = crate::horizon::os::get_system_tick();
             return;
         }
         0x26 => {
