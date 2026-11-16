@@ -603,7 +603,10 @@ un-%p.profraw
 - **TotK map flashes: the bad draw is a capture's content drawn in the composite (2026-11-10 evening).** Still there on main at
   fc14c0a (2026-11-16, win-worker: the user's mods, slot_00, the zoom script, 144 fps; 4 of 4 runs, bad frames at the
   zoom steps f7283 / 7383 / 7483, white streaks, a missing frame border, a yellow block), so not the texture-generation
-  bug 8a35540 fixed. Repro script: scratchpad map_run.ps1 (A = an app built from main with the user's Mods). Established:
+  bug 8a35540 fixed. Repro script: scratchpad map_run.ps1 (A = an app built from main with the user's Mods).
+  Not the vertex cache either (temporary switch reading vertex / index data in place: same bad frames). With this
+  script the bad frames are deterministic: the same frames (f7283 / 7383 / 7483 and their neighbours) with nearly the
+  same outlier counts in all 7 runs, so a pass dump at a known frame (--history-dump-at=7482) should catch one. Established:
   (1) Main from before 11-09 and today's main both flash on the repro (123-355k outlier pixels at f7282-7284); any
   probe that adds work on the game's recording or layout threads in those frames hides it (watch probe, list probe,
   heavy entry probes), so it is a timing race. Light probes keep it. (2) Every UI layout has its own draw info; a
