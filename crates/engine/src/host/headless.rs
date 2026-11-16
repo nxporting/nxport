@@ -90,3 +90,13 @@ pub mod overlay {
         !ASYNC_SHADERS.fetch_not(Relaxed)
     }
 }
+
+/// Dear ImGui windows over SDL3 on Windows: the builder's and the game's settings window (re-exported as crate::ui_sdl).
+#[cfg(windows)]
+#[path = "ui_sdl.rs"]
+pub mod ui_sdl;
+
+/// SDL3.dll carried in the program, for the builder (a single file; re-exported as crate::sdl_library).
+#[cfg(windows)]
+#[path = "sdl_library.rs"]
+pub mod sdl_library;

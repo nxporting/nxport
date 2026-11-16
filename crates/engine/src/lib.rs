@@ -46,12 +46,10 @@ mod nvn;
 pub mod vulkan;
 pub mod profile;
 pub mod settings;
-/// Dear ImGui windows over SDL3 on Windows: the builder's and the game's settings window.
+/// Dear ImGui windows over SDL3 on Windows (the builder's and the game's settings window), and the SDL3.dll the
+/// builder carries: host/ui_sdl.rs, host/sdl_library.rs, kept at these paths for the builder.
 #[cfg(windows)]
-pub mod ui_sdl;
-/// SDL3.dll carried in the program, for the builder (a single file).
-#[cfg(windows)]
-pub mod sdl_library;
+pub use host::{sdl_library, ui_sdl};
 
 #[cfg(nx_native)]
 use std::thread;
