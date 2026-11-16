@@ -262,7 +262,12 @@ impl GuestLibrary {
                 if !asked && for_cheats && dispatcher.is_null() {
                     println!("[!] Cheats: {} is too old for live patches (no nx_rt_dispatcher): cheats that write code do nothing", path.display());
                 }
-                Some(dispatcher).filter(|d| !d.is_null() && (asked || for_cheats))
+                // Code mods patched at load that the library was not lifted with (mods added after the build).
+                let for_mods = crate::guest::mod_patches::any_not_lifted();
+                if !asked && for_mods && dispatcher.is_null() {
+                    println!("[!] Mods: {} is too old for live patches (no nx_rt_dispatcher): code mods added after the build do nothing", path.display());
+                }
+                Some(dispatcher).filter(|d| !d.is_null() && (asked || for_cheats || for_mods))
             };
             #[cfg(windows)]
             if let Some(dispatcher) = live {
@@ -284,6 +289,9 @@ impl GuestLibrary {
                     adds.push(add_of(l, p)?);
                 }
                 crate::live_patch::enable(tables, get(), adds, host as *const RtHost as usize)?;
+                for (start, len) in crate::guest::mod_patches::take_not_lifted() {
+                    crate::live_patch::code_written(start, len);
+                }
             }
             if let Some((l, _, p)) = &over {
                 register(l, p)?;

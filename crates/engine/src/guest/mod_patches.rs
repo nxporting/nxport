@@ -300,8 +300,27 @@ pub unsafe fn apply(
     applied
 }
 
+/// Code patched at load that the guest library was not lifted with: an app without mods of its own lifts none, so mods
+/// added to the data directory after the build reach lifted code only through live patches (crate::live_patch), which
+/// take these ranges once they are enabled. (start, len)
+static NOT_LIFTED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// The code ranges patched at load that the guest library does not have (taken once).
+pub fn take_not_lifted() -> Vec<(usize, usize)> {
+    std::mem::take(&mut *NOT_LIFTED.lock().unwrap())
+}
+
+/// Whether code was patched at load that the guest library does not have.
+pub fn any_not_lifted() -> bool {
+    !NOT_LIFTED.lock().unwrap().is_empty()
+}
+
 unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: crate::os::Prot) {
     let in_text = addr < text.0 + text.1 && addr + bytes.len() > text.0;
+    // A guest library with no overlay of the app's mods was lifted from the unpatched code.
+    if in_text && crate::settings::get().files.guest_library.is_some() && crate::settings::get().files.guest_overlay.is_none() {
+        NOT_LIFTED.lock().unwrap().push((addr, bytes.len()));
+    }
     let page = addr & !0x3fff;
     let span = ((addr + bytes.len() + 0x3fff) & !0x3fff) - page;
     if in_text {

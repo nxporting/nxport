@@ -120,10 +120,9 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
         }
     }
 
+    // Without mods of its own the app takes the game's data directory's mods folder (mods added after the build; code
+    // mods reach the lifted code through live patches).
     let mut settings = o.edits.clone();
-    if !any_mods {
-        settings.files.no_mods = Some(true);
-    }
     // Without its files the app asks for them by this (host/game_files.rs).
     settings.files.title_id = Some(format!("{tid:016x}"));
     // Made on another OS (a Mac): this host's paths mean nothing on the PC the app runs on; the app asks for the game.
