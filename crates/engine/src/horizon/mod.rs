@@ -10,6 +10,7 @@ pub mod mii;
 pub mod sdk;
 pub mod movie;
 pub mod nn;
+pub mod os;
 mod packed_mods;
 pub mod svc;
 pub mod sync;

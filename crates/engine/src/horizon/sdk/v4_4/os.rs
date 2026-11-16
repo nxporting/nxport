@@ -5,7 +5,7 @@ pub(in crate::horizon::sdk) static TABLE: &[Entry] = &[
     Entry(
         "_ZN2nn2os16ReleaseSemaphoreEPNS0_13SemaphoreTypeE",
         adapt!(fn(sem: *mut ()) {
-            crate::horizon::hle::hle_nn_os_ReleaseSemaphore(sem, 1)
+            crate::horizon::os::release_semaphore(sem, 1)
         }),
     ),
 ];
