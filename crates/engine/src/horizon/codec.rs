@@ -11,7 +11,7 @@ pub(crate) unsafe extern "C" fn get_hardware_opus_decoder_work_buffer_size(
     if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec28GetOpusDecoderWorkBufferSizeEii") {
         return crate::guest::call(sym, &[rate as u64, channels as u64]) as usize;
     }
-    audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
+    crate::horizon::audio::api::align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
 }
 
 /// GetHardwareOpusDecoderWorkBufferSize(sampleRate, channelCount): the overload without the stream count.
@@ -224,7 +224,7 @@ pub(crate) unsafe extern "C" fn get_hardware_opus_multi_stream_decoder_work_buff
     if let Some(sym) = crate::guest::sdk_loader::sdk_symbol("_ZN2nn5codec39GetOpusMultiStreamDecoderWorkBufferSizeEiiii") {
         return crate::guest::call(sym, &[rate as u64, channels as u64, streams as u64, stereo as u64]) as usize;
     }
-    audio_align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
+    crate::horizon::audio::api::align_up(0x10000 + 0x4000 * channels.max(1) as usize, 0x1000)
 }
 
 pub(crate) unsafe extern "C" fn get_hardware_opus_multi_stream_decoder_work_buffer_size5(

@@ -1,5 +1,6 @@
 // Audio services: the audio renderer and its effects, audio out, and the hardware Opus decoder.
 
+pub mod api;
 pub mod fx;
 pub mod opus;
 pub mod out;
