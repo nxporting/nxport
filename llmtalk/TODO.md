@@ -103,6 +103,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   gpu/vulkan). CLAIMED by mac-worker now: step 1, top-level files into layers: os.rs + clock.rs -> platform/; cpu/ +
   lifted.rs + live_patch.rs + hle_abi.rs -> guest/exec/; ui_sdl.rs + sdl_library.rs -> host/. Paths and `use` lines
   only. win-worker: please build Windows after each of these pushes (live_patch / ui_sdl / sdl_library are Windows-only).
+  2026-11-16: step 1 done (with win-worker's 610dd82); metal/mod.rs split (debug, replay, present, frame_stats, fence,
+  inflight, occlusion, submit, encoders, textures, commands). CLAIMED by mac-worker now (user request): NVN's
+  nvnDeviceGetProcAddress name tables (nvn/api.rs resolve_proc match, nvn::state::lookup, nvn::cmd::lookup) move into
+  horizon/sdk as an NVN table with version layers; implementations stay in nvn/. Then "nicer SDK layering" (one folder
+  per version layer, one file per library, evidence headers). Hold edits to horizon/sdk and those lookups.
 
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
   (merged on the Mac). Runs on Metal (2026-11-15, BotW19 1.9.0, builder-made cache,
