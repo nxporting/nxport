@@ -839,7 +839,8 @@ pub unsafe extern "C" fn hle_nvnDeviceGetInteger(_device: *const (), pname: i32,
             // NVN_DEVICE_INFO_SUPPORTS_CONSERVATIVE_RASTER (second-generation Maxwell or newer; the X1 is one).
             50 => 1,
             ZCULL_SAVE_RESTORE_ALIGNMENT => 0x20,
-            LINEAR_TEXTURE_STRIDE_ALIGNMENT | LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT => 0x20,
+            LINEAR_TEXTURE_STRIDE_ALIGNMENT => crate::nvn::layout::LINEAR_TEXTURE_STRIDE_ALIGNMENT as i32,
+            LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT => crate::nvn::layout::LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT as i32,
             other => {
                 println!("[!] nvnDeviceGetInteger: unmapped pname {} (0x{:x}), returning 256 as a generic default", other, other);
                 256
