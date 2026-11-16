@@ -619,11 +619,11 @@ impl Builder {
 
         let lifted = self.target == Target::WindowsApp;
         let mods_help = if lifted {
-            "Mods in Atmosphère layout: a folder of mods (one folder each) or one mod's folder. romfs/ is read while the game runs; exefs/ (IPS / pchtxt patches, subsdk plugins) changes the game's code, which is lifted into the app: changing it needs a new build."
+            "Mods built into the app, in Atmosphère layout: a folder of mods (one folder each) or one mod's folder. Their exefs/ code (IPS / pchtxt patches, subsdk plugins) is lifted with the game's, so it runs at full speed from the first start. An app built without mods takes mods from the game's data folder (games/<title id>/mods) instead, added any time; their code is compiled while the game runs."
         } else {
-            "Mods in Atmosphère layout: a folder of mods (one folder each) or one mod's folder, copied into the app."
+            "Mods built into the app, in Atmosphère layout: a folder of mods (one folder each) or one mod's folder, copied into the app. A Mac app built without mods takes mods from the game's data folder (games/<title id>/mods) instead, added any time; an iPhone app has only the mods built in."
         };
-        row(ui, "mods", "Mods", &mut self.mods, "none", mods_help);
+        row(ui, "mods", "Built-in mods", &mut self.mods, "none", mods_help);
         if !self.mods.trim().is_empty() {
             let dir = PathBuf::from(self.mods.trim());
             let list = if dir.is_dir() { mods_in(&dir) } else { Vec::new() };
