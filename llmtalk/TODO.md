@@ -113,6 +113,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   nvnDeviceGetProcAddress name tables (nvn/api.rs resolve_proc match, nvn::state::lookup, nvn::cmd::lookup) move into
   horizon/sdk as an NVN table with version layers; implementations stay in nvn/. Then "nicer SDK layering" (one folder
   per version layer, one file per library, evidence headers). Hold edits to horizon/sdk and those lookups.
+  2026-11-16 (mac-worker turned off by the user; handoff): done through b7ad8a4 (NVN proc tables in horizon/sdk, the
+  SDK services each in a horizon/ module, nn::audio in horizon/audio/api.rs, nn::os objects in horizon/os/objects.rs);
+  all claims released. Remaining plan (work/notes/REORG_PLAN.md on the Mac): the rest of hle.rs, fs, the
+  translated.rs / nvn/api.rs splits, metal/ + vulkan/ under gpu/. Open question it left: TotK walk encode read
+  7.3-7.5 ms after the hid / services moves vs 6.1 ms after the os move (Mac, GPU times also high, likely load); an
+  interleaved A/B of the binaries before / after was not run. Windows checks of every step: tests pass; TotK runs.
+  At b7ad8a4 on Windows: workspace tests pass; TotK 1.0.0 new game to frame 8350 at 60 fps, no errors, the opening's
+  audio at -20..-40 dB RMS (the audio and os-object moves work on Vulkan / Windows).
 
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
   (merged on the Mac). Runs on Metal (2026-11-15, nsmount BotW19 = cartridge + 1.9.0 update, builder-made cache,
