@@ -309,7 +309,7 @@ pub unsafe fn install(main_base: usize, main_build_id: &str) {
             let cut_addr = (main_base + target.cut_offset) as *mut u32;
             let original_insn = *cut_addr;
             *cut_addr = 0xd503_201f; // NOP
-            crate::os::flush_icache(cut_addr as usize, 4);
+            crate::platform::os::flush_icache(cut_addr as usize, 4);
 
             // 2. Clone the original vtable into our host vtable
             let src_vt = (main_base + target.vtable_offset) as *const *const c_void;

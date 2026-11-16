@@ -28,7 +28,7 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
                 if open_page != usize::MAX {
                     crate::cpu::aot::protect_rx(open_page, 0x4000);
                 }
-                let _ = crate::os::protect(page, 0x4000, crate::os::Prot::ReadWrite);
+                let _ = crate::platform::os::protect(page, 0x4000, crate::platform::os::Prot::ReadWrite);
                 open_page = page;
             }
             *p = w | ACQUIRE;
@@ -37,7 +37,7 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
         if open_page != usize::MAX {
             crate::cpu::aot::protect_rx(open_page, 0x4000);
         }
-        crate::os::flush_icache(start, len);
+        crate::platform::os::flush_icache(start, len);
     }
     n
 }

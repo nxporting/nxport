@@ -7,8 +7,6 @@
 // backend). Other hosts get the platform-independent parts the builder and the command line use.
 #[cfg(nx_runtime)]
 pub mod capture;
-#[cfg(nx_runtime)]
-mod clock;
 pub mod config;
 #[cfg(nx_runtime)]
 mod cpu;
@@ -17,7 +15,7 @@ pub mod hle_abi;
 pub mod lifted;
 #[cfg(all(nx_runtime, windows))]
 mod live_patch;
-pub mod os;
+pub mod platform;
 #[cfg(nx_runtime)]
 mod gpu;
 #[cfg(nx_runtime)]
@@ -832,7 +830,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 base,
                 image,
                 (base, mem_space.text_size),
-                os::Prot::ReadWrite,
+                platform::os::Prot::ReadWrite,
             );
             horizon::uemalloc::install(base, &id);
         }
@@ -845,7 +843,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 sdk_mod.base,
                 sdk_mod.total_size,
                 (sdk_mod.text_start, sdk_mod.text_size),
-                os::Prot::ReadExec,
+                platform::os::Prot::ReadExec,
             );
         }
     }
@@ -868,7 +866,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     // Bind Threading, TLS, and System GOT symbols
     // GetSystemTick / GetSystemTickFrequency / ConvertToTimeSpan need no kernel, but the sdk module's frequency is the
     // Switch's fixed 19.2 MHz while its tick would read the host counter: all three are HLE'd so they agree
-    // (crate::clock).
+    // (crate::platform::clock).
     // The SDK-internal variant (Super Mario Bros. Wonder's static constructors): the SDK's own walks its thread list,
     // which is empty under the HLE threads.
 
@@ -921,7 +919,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         if let Some(sdk_mod) = sdk.as_ref() {
             // The SDK's text is already read+execute (sdk_loader): writable while it is rewritten, then registered again.
             let pages = (sdk_mod.text_size + 0x3fff) & !0x3fff;
-            let _ = unsafe { os::protect(sdk_mod.text_start, pages, os::Prot::ReadWrite) };
+            let _ = unsafe { platform::os::protect(sdk_mod.text_start, pages, platform::os::Prot::ReadWrite) };
             unsafe {
                 cpu::trampoline::rewrite_module("sdk", sdk_mod.text_start, sdk_mod.text_size, sdk_mod.base + sdk_mod.image_size)
             }
@@ -1013,7 +1011,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             // A placeholder rtld module below main (exlaunch counts modules from rtld = 0, main = 1).
             // Its slot was reserved directly below main in GuestMemorySpace::allocate.
             let p = guest::loader::rtld_slot();
-            if p != 0 && crate::os::commit(p, 0x4000, crate::os::Prot::ReadWrite).is_ok() {
+            if p != 0 && crate::platform::os::commit(p, 0x4000, crate::platform::os::Prot::ReadWrite).is_ok() {
                 *(p as *mut u32) = 0xD65F03C0; // ret
                 cpu::aot::make_exec("rtld.placeholder", p, 0x4000);
                 // text, rodata and data like a real module (exlaunch reads the two regions after each text).
@@ -1378,9 +1376,9 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     }
     // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (cpu::crash_handler).
     #[cfg(windows)]
-    os::on_access_fault(lifted_access_fault);
+    platform::os::on_access_fault(lifted_access_fault);
     #[cfg(windows)]
-    os::report_crashes();
+    platform::os::report_crashes();
     if !null {
         vulkan::init(s.debug.validate)?;
     }
@@ -1425,11 +1423,11 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
     // --report-guard waits only for faults from guest code.
     #[cfg(windows)]
-    if let Some((start, end)) = os::image_range(lifted::library().entry()) {
+    if let Some((start, end)) = platform::os::image_range(lifted::library().entry()) {
         gpu::report_guard::set_guest_code_range(start, end);
     }
     #[cfg(windows)]
-    if let Some((start, end)) = lifted::overlay_code().and_then(os::image_range) {
+    if let Some((start, end)) = lifted::overlay_code().and_then(platform::os::image_range) {
         gpu::report_guard::set_overlay_code_range(start, end);
     }
     // --aot-dump: the code as plugin mods patch it, for the lift that holds their patches (guest_modules). Their

@@ -79,7 +79,7 @@ fn log() -> bool {
 pub fn register_domain(base: usize, len: usize) {
     let base = base & !(PAGE - 1);
     let pages = (len + PAGE - 1) / PAGE;
-    let map = |bytes: usize| unsafe { crate::os::alloc(bytes, crate::os::Prot::ReadWrite) };
+    let map = |bytes: usize| unsafe { crate::platform::os::alloc(bytes, crate::platform::os::Prot::ReadWrite) };
     let (Ok(g), Ok(f)) = (map(pages * 4), map(pages)) else {
         return;
     };
@@ -261,7 +261,7 @@ pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
         }
     }
 
-    let r = crate::os::protect(page0, end - page0, crate::os::Prot::Read);
+    let r = crate::platform::os::protect(page0, end - page0, crate::platform::os::Prot::Read);
     crate::gpu::backend().pages_reprotected(page0, end - page0);
     if r.is_err() {
         for p in first..=last {
@@ -324,7 +324,7 @@ pub unsafe fn handle_fault(addr: usize) -> bool {
         let next = (cur & !STATE_MASK) | PG_BUSY;
         if f[p].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
             let page_addr = addr & !(PAGE - 1);
-            let _ = crate::os::protect(page_addr, PAGE, crate::os::Prot::ReadWrite);
+            let _ = crate::platform::os::protect(page_addr, PAGE, crate::platform::os::Prot::ReadWrite);
             crate::gpu::backend().pages_reprotected(page_addr, PAGE);
             g[p].fetch_add(1, Ordering::AcqRel);
             FAULTS.fetch_add(1, Ordering::Relaxed);
@@ -358,7 +358,7 @@ pub unsafe fn reprotect_held(start: usize, len: usize) {
             p += 1;
         }
         let at = (start & !(PAGE - 1)) + (run - first) * PAGE;
-        let _ = crate::os::protect(at, (p - run) * PAGE, crate::os::Prot::Read);
+        let _ = crate::platform::os::protect(at, (p - run) * PAGE, crate::platform::os::Prot::Read);
         for q in run..p {
             let cur = f[q].load(Ordering::Acquire);
             f[q].store((cur & !STATE_MASK) | PG_PROT, Ordering::Release);
@@ -405,7 +405,7 @@ unsafe fn unprotect_pages(
             if run_end > p {
                 let at = base + p * PAGE;
                 let count = run_end - p;
-                let _ = crate::os::protect(at, count * PAGE, crate::os::Prot::ReadWrite);
+                let _ = crate::platform::os::protect(at, count * PAGE, crate::platform::os::Prot::ReadWrite);
                 crate::gpu::backend().pages_reprotected(at, count * PAGE);
                 for q in p..run_end {
                     g[q].fetch_add(1, Ordering::AcqRel);
@@ -438,7 +438,7 @@ pub unsafe fn write_unseen(start: usize, len: usize, write: impl FnOnce()) {
                 PG_PROT => {
                     if f[p].compare_exchange_weak(cur, (cur & !STATE_MASK) | PG_BUSY, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                         let at = page0 + (p - first) * PAGE;
-                        let _ = crate::os::protect(at, PAGE, crate::os::Prot::ReadWrite);
+                        let _ = crate::platform::os::protect(at, PAGE, crate::platform::os::Prot::ReadWrite);
                         crate::gpu::backend().pages_reprotected(at, PAGE);
                         claimed.push(p);
                         break;
@@ -456,7 +456,7 @@ pub unsafe fn write_unseen(start: usize, len: usize, write: impl FnOnce()) {
     write();
     for p in claimed {
         let at = page0 + (p - first) * PAGE;
-        let _ = crate::os::protect(at, PAGE, crate::os::Prot::Read);
+        let _ = crate::platform::os::protect(at, PAGE, crate::platform::os::Prot::Read);
         crate::gpu::backend().pages_reprotected(at, PAGE);
         let cur = f[p].load(Ordering::Acquire);
         f[p].store((cur & !STATE_MASK) | PG_PROT, Ordering::Release);
@@ -532,7 +532,7 @@ mod tests {
         let _ = crate::settings::try_install(crate::settings::resolve([]));
         let _ = std::panic::catch_unwind(|| crate::gpu::install(&crate::gpu::null::NULL));
         let len = 4 * PAGE;
-        let base = unsafe { crate::os::alloc(len, crate::os::Prot::ReadWrite) }.unwrap() as usize;
+        let base = unsafe { crate::platform::os::alloc(len, crate::platform::os::Prot::ReadWrite) }.unwrap() as usize;
         register_domain(base, len);
         let (at, n) = (base + PAGE, 2 * PAGE);
         let before = generations(at, n);

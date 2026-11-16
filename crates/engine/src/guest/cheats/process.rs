@@ -78,7 +78,7 @@ impl GuestProcess {
             if unsafe { !native::write_through_alias(addr, data) } {
                 return false;
             }
-            crate::os::flush_icache(addr, data.len());
+            crate::platform::os::flush_icache(addr, data.len());
         }
         #[cfg(windows)]
         {
@@ -127,7 +127,7 @@ impl Process for GuestProcess {
                 // Main's code may be writable natively (no AOT image, before a module's code is sealed); instruction
                 // fetch must see it either way.
                 if self.in_main_text(addr, data.len()) {
-                    crate::os::flush_icache(addr, data.len());
+                    crate::platform::os::flush_icache(addr, data.len());
                     #[cfg(windows)]
                     crate::live_patch::code_written(addr, data.len());
                 }
@@ -167,14 +167,14 @@ fn readable(addr: usize, len: usize) -> bool {
     #[cfg(nx_native)]
     return unsafe { crate::cpu::crash_handler::readable_len(addr, len) } == len;
     #[cfg(windows)]
-    return crate::os::readable_len(addr, len) == len;
+    return crate::platform::os::readable_len(addr, len) == len;
 }
 
 fn writable(addr: usize, len: usize) -> bool {
     #[cfg(nx_native)]
     return native::writable(addr, len);
     #[cfg(windows)]
-    return crate::os::writable_len(addr, len) == len;
+    return crate::platform::os::writable_len(addr, len) == len;
 }
 
 #[cfg(nx_native)]

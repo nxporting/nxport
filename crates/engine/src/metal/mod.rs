@@ -4066,7 +4066,7 @@ fn write_counter(counter: i32, addr: u64, value: Option<u64>) {
         GUEST_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     // Same clock as nvnDeviceGetTimestampInNanoseconds (horizon/hle.rs): mach ticks converted to nanoseconds.
-    let now = crate::clock::now_ns();
+    let now = crate::platform::clock::now_ns();
     // TIMESTAMP (0) reports the time as the counter; TIMESTAMP_TOP (0x10) writes zero there (games use it to reset
     // markers for SetRenderEnableConditional); ZCULL_STATS (0xF) is four 32-bit words and no timestamp.
     let counter_value = value.unwrap_or(match counter {
@@ -5002,7 +5002,7 @@ static TAIL_CBS: Mutex<TailCbs> = Mutex::new(TailCbs(Vec::new()));
 static TAIL_PREV: Mutex<Option<(u64, TailCbs)>> = Mutex::new(None);
 
 fn host_secs() -> f64 {
-    crate::clock::now_secs()
+    crate::platform::clock::now_secs()
 }
 
 /// Unlocked frame rates (present interval 0): the game measures each frame's time step from one frame start to the

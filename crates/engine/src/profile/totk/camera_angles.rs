@@ -199,7 +199,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         };
         std::ptr::write(block as *mut u32, mov_x(2, 19));
         std::ptr::write((block + 4) as *mut u32, b);
-        crate::os::flush_icache(block, 8);
+        crate::platform::os::flush_icache(block, 8);
         block
     } else {
         mem_space.make_hle_trampoline(crate::hle!(camera_angles(_, _))) as usize
@@ -242,7 +242,7 @@ unsafe fn install_decision(
     }
     // b.gt and cbnz w0 keep their 19-bit offset in the same bits.
     std::ptr::write((base + at + 4) as *mut u32, 0x3500_0000 | (bgt & 0x00ff_ffe0));
-    crate::os::flush_icache(base + at, 8);
+    crate::platform::os::flush_icache(base + at, 8);
     true
 }
 
@@ -257,7 +257,7 @@ fn branch(from: usize, to: usize, link: bool) -> Option<u32> {
 unsafe fn branch_to(base: usize, at: usize, tramp: usize) -> bool {
     let Some(bl) = branch(base + at, tramp, true) else { return false };
     std::ptr::write((base + at) as *mut u32, bl);
-    crate::os::flush_icache(base + at, 4);
+    crate::platform::os::flush_icache(base + at, 4);
     true
 }
 
@@ -323,7 +323,7 @@ unsafe fn preserving_block(
     for (k, w) in code.iter().enumerate() {
         std::ptr::write((block as *mut u32).add(k), *w);
     }
-    crate::os::flush_icache(block, 4 * code.len());
+    crate::platform::os::flush_icache(block, 4 * code.len());
     Some(block)
 }
 
@@ -365,7 +365,7 @@ unsafe fn install_aim(base: usize, text: &[u8], mem_space: &mut crate::guest::lo
     }
     // b.ne and cbnz w0 keep their 19-bit offset in the same bits.
     std::ptr::write((base + bne_at) as *mut u32, 0x3500_0000 | (bne & 0x00ff_ffe0));
-    crate::os::flush_icache(base + bne_at, 4);
+    crate::platform::os::flush_icache(base + bne_at, 4);
     AIM_HOOKED.store(true, Ordering::Release);
     println!("[+] TotK: mouse movement turns the bow's aim directly (main+{yaw:#x}, main+{pitch:#x})");
 }

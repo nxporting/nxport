@@ -5636,7 +5636,7 @@ pub unsafe extern "C" fn hle_nvnDeviceGetWindowOriginMode(_device: usize) -> i32
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnDeviceGetCurrentTimestampInNanoseconds(_device: usize) -> u64 {
     // Same clock the executor writes into timestamp counters (metal::write_counter).
-    crate::clock::now_ns()
+    crate::platform::clock::now_ns()
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnDeviceBuilderGetFlags(b: *const [u8; 0x40]) -> i32 {
@@ -6501,7 +6501,7 @@ pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) 
         2
     };
     if log_timestamps() {
-        let now = crate::clock::now_ms();
+        let now = crate::platform::clock::now_ms();
         println!(
             "[ts] syncwait for submit {} (latest {}) {:.1} ms, ended t {:.3} ms thread {:?}",
             serial,

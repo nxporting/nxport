@@ -204,9 +204,9 @@ pub unsafe fn load(
     let alloc_base = if fixed {
         hint
     } else {
-        crate::os::reserve(crate::os::At::Near(hint), total).map_err(|e| format!("reserve: {e}"))?
+        crate::platform::os::reserve(crate::platform::os::At::Near(hint), total).map_err(|e| format!("reserve: {e}"))?
     };
-    crate::os::commit(alloc_base, total, crate::os::Prot::ReadWrite).map_err(|e| format!("commit: {e}"))?;
+    crate::platform::os::commit(alloc_base, total, crate::platform::os::Prot::ReadWrite).map_err(|e| format!("commit: {e}"))?;
     if !fixed {
         println!(
             "[!] Mods: {} does not fit the reserved module gap; mapped at {:#x} (hint {:#x})",
@@ -369,8 +369,8 @@ pub unsafe fn load(
         .collect();
     crate::cpu::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
     crate::cpu::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
-    crate::os::flush_icache(((base + text_mo)) as usize, text_len);
-    crate::os::flush_icache(stubs as usize, STUB_AREA);
+    crate::platform::os::flush_icache(((base + text_mo)) as usize, text_len);
+    crate::platform::os::flush_icache(stubs as usize, STUB_AREA);
 
     // Horizon reports each segment exactly (NSO segments are 4 KiB aligned): text, rodata, data+bss back to back.
     let _ = ro_len;
@@ -896,9 +896,9 @@ pub unsafe extern "C" fn sys_exit(code: i32) {
 }
 
 /// The mods' thread-local keys: small indices onto host keys.
-static TLS_KEYS: std::sync::Mutex<Vec<crate::os::TlsKey>> = std::sync::Mutex::new(Vec::new());
+static TLS_KEYS: std::sync::Mutex<Vec<crate::platform::os::TlsKey>> = std::sync::Mutex::new(Vec::new());
 
-fn tls_key(key: i32) -> Option<crate::os::TlsKey> {
+fn tls_key(key: i32) -> Option<crate::platform::os::TlsKey> {
     usize::try_from(key)
         .ok()
         .and_then(|i| TLS_KEYS.lock().unwrap().get(i).copied())
@@ -915,7 +915,7 @@ pub unsafe extern "C" fn sys_tls_create(
         let _ = dtor;
         None
     };
-    let Ok(k) = crate::os::tls_create(dtor) else {
+    let Ok(k) = crate::platform::os::tls_create(dtor) else {
         return -1;
     };
     let mut keys = TLS_KEYS.lock().unwrap();
@@ -928,16 +928,16 @@ pub unsafe extern "C" fn sys_tls_create(
 
 pub unsafe extern "C" fn sys_tls_delete(key: i32) {
     if let Some(k) = tls_key(key) {
-        crate::os::tls_delete(k);
+        crate::platform::os::tls_delete(k);
     }
 }
 
 pub unsafe extern "C" fn sys_tls_get(key: i32) -> *mut libc::c_void {
-    tls_key(key).map_or(std::ptr::null_mut(), crate::os::tls_get)
+    tls_key(key).map_or(std::ptr::null_mut(), crate::platform::os::tls_get)
 }
 
 pub unsafe extern "C" fn sys_tls_set(key: i32, val: *mut libc::c_void) -> i32 {
-    tls_key(key).map_or(-1, |k| crate::os::tls_set(k, val).map_or(-1, |()| 0))
+    tls_key(key).map_or(-1, |k| crate::platform::os::tls_set(k, val).map_or(-1, |()| 0))
 }
 
 pub static SEAD_QUAT_UNIT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];

@@ -219,7 +219,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     match std::ptr::read(p) {
         STP_FRAME_WAIT => {
             std::ptr::write(p, RET);
-            crate::os::flush_icache(p as usize, 4);
+            crate::platform::os::flush_icache(p as usize, 4);
             println!("[+] Frame loop: its vsync wait is left to the present pacer");
         }
         RET => {}
@@ -247,7 +247,7 @@ unsafe fn install_arrow(base: usize, mem_space: &mut crate::guest::loader::Guest
     match replace_with_call(base, mem_space, dead, &expected, code, 1, crate::hle!(arrow_gravity(_))) {
         Ok(()) => {
             std::ptr::write(p, FMOV_S1_S4);
-            crate::os::flush_icache(p as usize, 4);
+            crate::platform::os::flush_icache(p as usize, 4);
             println!("[+] Arrows: their fall follows the frame's step");
         }
         Err(e) => println!("[!] Arrows: main+{dead:#x}: {e}; their gravity stays per frame"),

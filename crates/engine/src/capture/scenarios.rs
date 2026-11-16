@@ -54,9 +54,9 @@ struct Env {
 
 impl Env {
     unsafe fn new() -> Result<Env, String> {
-        crate::os::reserve(crate::os::At::Exactly(BASE), OBJECTS + POOL)
+        crate::platform::os::reserve(crate::platform::os::At::Exactly(BASE), OBJECTS + POOL)
             .map_err(|e| format!("scenario memory at {BASE:#x}: {e}"))?;
-        crate::os::commit(BASE, OBJECTS + POOL, crate::os::Prot::ReadWrite).map_err(|e| e.to_string())?;
+        crate::platform::os::commit(BASE, OBJECTS + POOL, crate::platform::os::Prot::ReadWrite).map_err(|e| e.to_string())?;
         let mut e = Env {
             next: BASE,
             pool_next: 0,

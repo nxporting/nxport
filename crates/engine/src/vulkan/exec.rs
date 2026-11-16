@@ -354,7 +354,7 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
         return;
     }
     super::guard::note_write(a, 16);
-    let time = if timestamp { crate::clock::now_ns() } else { 0 };
+    let time = if timestamp { crate::platform::clock::now_ns() } else { 0 };
     let mut report = [0u8; 16];
     report[..8].copy_from_slice(&value.to_le_bytes());
     report[8..].copy_from_slice(&time.to_le_bytes());
@@ -1497,7 +1497,7 @@ impl Ctx {
                 if *counter == 1 {
                     self.occlusion_report(*addr);
                 } else {
-                    let v = if *counter == 0 { crate::clock::now_ns() } else { 0 };
+                    let v = if *counter == 0 { crate::platform::clock::now_ns() } else { 0 };
                     self.ubo_epoch += 1;
                     let a = report_overwriting(self.ubo_epoch, *addr);
                     self.ubo_wrote(a, 16);

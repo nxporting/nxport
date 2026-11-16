@@ -121,7 +121,7 @@ fn readable(p: usize, len: usize) -> bool {
     #[cfg(nx_native)]
     return unsafe { crate::cpu::crash_handler::readable_len(p, len) } == len;
     #[cfg(windows)]
-    return crate::os::readable_len(p, len) == len;
+    return crate::platform::os::readable_len(p, len) == len;
     #[cfg(not(any(nx_native, windows)))]
     {
         let _ = (p, len);
@@ -600,7 +600,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
             };
             std::ptr::write((site + 4 * i) as *mut u32, w);
         }
-        crate::os::flush_icache(site, 4 * p.code.len());
+        crate::platform::os::flush_icache(site, 4 * p.code.len());
     }
     let settings = crate::settings::get();
     if settings.totk.enhancements.dynamic_aspect_ratio {

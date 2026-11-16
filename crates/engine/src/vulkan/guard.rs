@@ -65,8 +65,8 @@ unsafe fn set_prot(a: usize, len: usize, write: bool) -> bool {
     if !write && crate::guest::dirty_track::imported(a, len) {
         return false;
     }
-    let prot = if write { crate::os::Prot::ReadWrite } else { crate::os::Prot::Read };
-    let ok = crate::os::protect(a, len, prot).is_ok();
+    let prot = if write { crate::platform::os::Prot::ReadWrite } else { crate::platform::os::Prot::Read };
+    let ok = crate::platform::os::protect(a, len, prot).is_ok();
     if write {
         crate::guest::dirty_track::reprotect_held(a, len);
     }
@@ -132,7 +132,7 @@ pub(super) fn hold_hot() {
             continue;
         }
         unsafe {
-            let _ = crate::os::protect(a, b - a, crate::os::Prot::Read);
+            let _ = crate::platform::os::protect(a, b - a, crate::platform::os::Prot::Read);
             crate::gpu::report_guard::reprotect_held(a, b - a);
         }
     }
@@ -493,7 +493,7 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
         if t.released[i].load(Ordering::Acquire) == 0 {
             let (x, y) = (s.max(addr & !(PAGE - 1)), e.min((addr + len + PAGE - 1) & !(PAGE - 1)));
             if x < y && !crate::guest::dirty_track::imported(x, y - x) {
-                let _ = crate::os::protect(x, y - x, crate::os::Prot::Read);
+                let _ = crate::platform::os::protect(x, y - x, crate::platform::os::Prot::Read);
                 // Released meanwhile (release_slot made it writable before this mprotect): writable again.
                 if t.released[i].load(Ordering::Acquire) != 0 {
                     set_prot(x, y - x, true);
@@ -518,7 +518,7 @@ pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
         let n = (page + PAGE).min(addr + len) - at;
         let held = enabled() && holds(at);
         if held {
-            let _ = crate::os::protect(page, PAGE, crate::os::Prot::ReadWrite);
+            let _ = crate::platform::os::protect(page, PAGE, crate::platform::os::Prot::ReadWrite);
         }
         std::ptr::copy_nonoverlapping(src.add(at - addr), at as *mut u8, n);
         // Unless a fault released it meanwhile (it stays open then, as release_slot left it). A release between the
@@ -526,7 +526,7 @@ pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
         // again. Left read-only with the slot released, no rebuild opened it, and once no table held it every write to
         // it faulted forever (the watcher's next write-back copy spun, the game stopped).
         if held && holds(at) {
-            let _ = crate::os::protect(page, PAGE, crate::os::Prot::Read);
+            let _ = crate::platform::os::protect(page, PAGE, crate::platform::os::Prot::Read);
             if !holds(at) {
                 set_prot(page, PAGE, true);
             }

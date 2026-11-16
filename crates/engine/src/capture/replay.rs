@@ -275,9 +275,9 @@ fn map_memory(dir: &Path) -> Result<(usize, u64), String> {
         |start, len| unsafe {
             lo = lo.min(start);
             hi = hi.max(start + len);
-            crate::os::reserve(crate::os::At::Exactly(start as usize), len as usize)
+            crate::platform::os::reserve(crate::platform::os::At::Exactly(start as usize), len as usize)
                 .map_err(|e| format!("memory at {start:#x} (+{len:#x}): {e}"))?;
-            crate::os::commit(start as usize, len as usize, crate::os::Prot::ReadWrite)
+            crate::platform::os::commit(start as usize, len as usize, crate::platform::os::Prot::ReadWrite)
                 .map_err(|e| format!("memory at {start:#x} (+{len:#x}): {e}"))?;
             ranges += 1;
             Ok(())
