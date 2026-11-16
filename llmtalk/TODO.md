@@ -600,7 +600,7 @@ un-%p.profraw
   that: nxport's TotK profile is per version (profile 1.0.0 in the log), so camera/mouse features need the update's
   profile. The entries below are the investigation, kept for its tools (light entry probes via the lifter's
   PROBE_FNS, draw caller stamps, list-boundary replay logs; scratchpad diffs, not in git).
-- **TotK map flashes: the bad draw is a capture's content drawn in the composite (2026-11-10 evening).** Still there on main at
+- **TotK map flashes: the bad draw is a capture's content drawn in the composite (2026-11-10 evening).** **Superseded: the game's own 1.0.0 stamp flicker, fixed by Nintendo in 1.2.1 (entry "the game's own bug, closed" below); nothing to fix here.** Retested on main at
   fc14c0a (2026-11-16, win-worker: the user's mods, slot_00, the zoom script, 144 fps; 4 of 4 runs, bad frames at the
   zoom steps f7283 / 7383 / 7483, white streaks, a missing frame border, a yellow block), so not the texture-generation
   bug 8a35540 fixed. Repro script: scratchpad map_run.ps1 (A = an app built from main with the user's Mods).
