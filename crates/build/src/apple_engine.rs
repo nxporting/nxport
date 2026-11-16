@@ -59,7 +59,7 @@ impl Os {
 
     /// The linker's flags beyond the stubs. macOS: the platform and SDK versions a native build records
     /// (.cargo/config.toml, written for clang as the linker driver, so this build replaces it): an SDK below 13 makes the
-    /// kernel preserve x18 (cpu/trampoline.rs own_build_version).
+    /// kernel preserve x18 (guest/exec/trampoline.rs own_build_version).
     fn link_args(self) -> &'static [&'static str] {
         match self {
             Os::Ios => &[],
