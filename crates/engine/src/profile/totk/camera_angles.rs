@@ -190,7 +190,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     SCALE.store(scale.to_bits(), Ordering::Relaxed);
     // Natively (and in an image made for a native engine, which must hold exactly that engine's patches: cpu/aot.rs
     // checks them page by page) the camera goes as a third argument: the site is a call, so nothing caller-saved is live.
-    let native = crate::cpu::aot::native_rewrites();
+    let native = crate::guest::exec::aot::native_rewrites();
     let target = if native {
         let tramp = mem_space.make_hle_trampoline(crate::hle!(camera_angles_native(_, _, _))) as usize;
         let block = mem_space.make_code_block(2) as usize;
@@ -378,7 +378,7 @@ static AIMED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::n
 /// The aim camera's input test: the game's own (the stick's sideways value, s0, not 0) or mouse degrees waiting. Runs
 /// every frame the aim camera turns, so it also marks the camera running for the pause rule.
 pub unsafe extern "C" fn aim_input() -> u64 {
-    let cpu = crate::lifted::current();
+    let cpu = crate::guest::exec::lifted::current();
     if cpu.is_null() {
         return 0;
     }
@@ -400,7 +400,7 @@ pub unsafe extern "C" fn aim_yaw(turn: f32, yaw: f32) -> f32 {
 /// The aim pitch step, in place of `fcsel s0, s0, s1, gt` after `fcmp s9, #0.0`: the turn the game picks (`s0` when s9 is
 /// above 0, else `s1`, as gt is false for NaN too) plus the mouse's vertical degrees.
 pub unsafe extern "C" fn aim_pitch(s0: f32, s1: f32) -> f32 {
-    let cpu = crate::lifted::current();
+    let cpu = crate::guest::exec::lifted::current();
     let s9 = if cpu.is_null() { 0.0 } else { f32::from_bits((*cpu).v[9] as u32) };
     aim_pitch_native(s0, s1, s9)
 }
@@ -417,7 +417,7 @@ const AIM_PITCH_SIGN: f32 = 1.0;
 
 /// The camera-input test: the game's own (s14, the right stick's strength, above 0) or mouse movement waiting.
 pub unsafe extern "C" fn camera_input() -> u64 {
-    let cpu = crate::lifted::current();
+    let cpu = crate::guest::exec::lifted::current();
     if cpu.is_null() {
         return 0;
     }
@@ -457,7 +457,7 @@ fn wrap(a: f32) -> f32 {
 /// The distance, pitch and yaw of `v` (x, y, z: the camera's position minus the point it looks at) into `out`, as the
 /// game's function computes them; yaw and pitch also go to mouse aiming.
 pub unsafe extern "C" fn camera_angles(out: *mut f32, v: *const f32) -> usize {
-    let cpu = crate::lifted::current();
+    let cpu = crate::guest::exec::lifted::current();
     let camera = if cpu.is_null() { 0 } else { (*cpu).x[19] as usize };
     camera_angles_native(out, v, camera)
 }

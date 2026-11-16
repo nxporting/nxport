@@ -869,7 +869,7 @@ pub(super) fn frame_end(frame: u64) {
     }
     let (seen, n_now) = (WAIT_LOG_SEEN.swap(WAIT_LOG_N.load(Ordering::Relaxed), Ordering::Relaxed), WAIT_LOG_N.load(Ordering::Relaxed));
     if n_now > seen {
-        let base = crate::cpu::crash_handler::get_guest_base();
+        let base = crate::guest::exec::crash_handler::get_guest_base();
         for k in seen.max(n_now.saturating_sub(WAIT_LOG as u64))..n_now {
             let k = k as usize % WAIT_LOG;
             let pc = WAIT_LOG_PC[k].load(Ordering::Relaxed);
@@ -910,7 +910,7 @@ pub(super) fn frame_end(frame: u64) {
         fn _dyld_get_image_vmaddr_slide(image_index: u32) -> isize;
     }
     let slide = unsafe { _dyld_get_image_vmaddr_slide(0) } as usize;
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::exec::crash_handler::get_guest_base();
     let n = (HOST_RELEASES.load(Ordering::Relaxed) as usize).min(RELEASE_LOG);
     for k in 0..n {
         let mut name = [0u8; 16];

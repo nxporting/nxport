@@ -176,7 +176,7 @@ impl State {
         if self.is_start(pc) {
             return self.patched.read().unwrap().contains(&pc);
         }
-        if crate::hle_abi::entry(pc).is_some() {
+        if crate::guest::exec::hle_abi::entry(pc).is_some() {
             return hle_hooked(pc);
         }
         true
@@ -221,8 +221,8 @@ unsafe fn run_hle(c: &mut Cpu) {
     c.x[30] = std::ptr::read((sp + 8) as *const u64);
     c.sp = sp + 16;
     let f = c.x[16] as *const ();
-    match crate::hle_abi::adapter(f) {
-        Some(h) => crate::lifted::call_hle(h, c),
+    match crate::guest::exec::hle_abi::adapter(f) {
+        Some(h) => crate::guest::exec::lifted::call_hle(h, c),
         None => {
             eprintln!("[-] Live patches: {f:p} is not an HLE function");
             std::process::abort();
@@ -293,7 +293,7 @@ unsafe fn interpret_inner(c: &mut Cpu) -> bool {
                 // svc: as lifted code does it.
                 if w & 0xFFE0_001F == 0xD400_0001 {
                     let pc = c.pc;
-                    (crate::lifted::svc_handler())(c, (w >> 5) & 0xffff, pc);
+                    (crate::guest::exec::lifted::svc_handler())(c, (w >> 5) & 0xffff, pc);
                     c.pc = pc + 4;
                     if !state.interpreted(c.pc) {
                         return true;
@@ -1005,7 +1005,7 @@ pub fn empty_present_layer() {
     unsafe {
         let _ = crate::platform::os::protect(page, span, crate::platform::os::Prot::ReadWrite);
         std::ptr::copy_nonoverlapping(EMPTY_FUNCTION.as_ptr(), addr as *mut u32, EMPTY_FUNCTION.len());
-        crate::cpu::aot::protect_rx(page, span);
+        crate::guest::exec::aot::protect_rx(page, span);
     }
     code_written(addr, len);
     QUEUE_BUFFER.store(addr, Ordering::Release);

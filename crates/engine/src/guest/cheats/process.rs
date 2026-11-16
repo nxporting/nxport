@@ -67,7 +67,7 @@ impl GuestProcess {
     fn write_read_only(&mut self, addr: usize, data: &[u8]) -> bool {
         #[cfg(nx_native)]
         {
-            if crate::cpu::aot::loading() && crate::cpu::aot::in_region(addr, data.len()) {
+            if crate::guest::exec::aot::loading() && crate::guest::exec::aot::in_region(addr, data.len()) {
                 self.say_once(format!(
                     "[!] Cheats: a cheat writes main's code at main+{:#x}, which comes from the signed code image here: not \
                      applied",
@@ -86,14 +86,14 @@ impl GuestProcess {
                 return false;
             }
             if self.in_main_text(addr, data.len()) {
-                if !crate::live_patch::enabled() {
+                if !crate::guest::exec::live_patch::enabled() {
                     self.say_once(format!(
                         "[!] Cheats: a cheat writes main's code at main+{:#x}, which the lifted code does not see without \
                          live patches",
                         addr - self.main
                     ));
                 }
-                crate::live_patch::code_written(addr, data.len());
+                crate::guest::exec::live_patch::code_written(addr, data.len());
             }
         }
         true
@@ -129,7 +129,7 @@ impl Process for GuestProcess {
                 if self.in_main_text(addr, data.len()) {
                     crate::platform::os::flush_icache(addr, data.len());
                     #[cfg(windows)]
-                    crate::live_patch::code_written(addr, data.len());
+                    crate::guest::exec::live_patch::code_written(addr, data.len());
                 }
                 return None;
             }
@@ -165,7 +165,7 @@ fn readable(addr: usize, len: usize) -> bool {
         return false;
     }
     #[cfg(nx_native)]
-    return unsafe { crate::cpu::crash_handler::readable_len(addr, len) } == len;
+    return unsafe { crate::guest::exec::crash_handler::readable_len(addr, len) } == len;
     #[cfg(windows)]
     return crate::platform::os::readable_len(addr, len) == len;
 }
@@ -203,7 +203,7 @@ mod native {
     pub fn writable(addr: usize, len: usize) -> bool {
         let mut page = addr & !(PAGE - 1);
         while page < addr + len {
-            match unsafe { crate::cpu::crash_handler::vm_region(page) } {
+            match unsafe { crate::guest::exec::crash_handler::vm_region(page) } {
                 Some((start, end, prot)) if start <= page && prot & 2 != 0 => page = end,
                 _ => return false,
             }

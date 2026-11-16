@@ -8,22 +8,11 @@
 #[cfg(nx_runtime)]
 pub mod capture;
 pub mod config;
-#[cfg(nx_runtime)]
-mod cpu;
 pub mod game;
-pub mod hle_abi;
-pub mod lifted;
-#[cfg(all(nx_runtime, windows))]
-mod live_patch;
 pub mod platform;
 #[cfg(nx_runtime)]
 mod gpu;
-#[cfg(nx_runtime)]
 mod guest;
-#[cfg(not(nx_runtime))]
-mod guest {
-    pub mod nso;
-}
 /// NSO parsing, for tools that read a game's modules (the lifter in nxport-build).
 pub use guest::nso;
 #[cfg(nx_runtime)]
@@ -76,20 +65,20 @@ use guest::loader::GuestMemorySpace;
 /// lifts. Plugin mods (exefs/subsdkN modules) patch code from their initialisers, so an image with them needs those to
 /// run: not done here. Once per process.
 pub fn guest_image(s: settings::Settings) -> Result<Vec<u8>, String> {
-    cpu::aot::capture_image()?;
+    guest::exec::aot::capture_image()?;
     settings::try_install(s)?;
     let l = load().map_err(|e| e.to_string())?;
     if let Some((label, _)) = l.mod_inits.first() {
         return Err(format!("{label} is a plugin mod: its initialiser patches the game's code, so the image needs it run"));
     }
-    unsafe { cpu::aot::finalize() }?;
-    cpu::aot::take_image().ok_or_else(|| "no image was built".to_string())
+    unsafe { guest::exec::aot::finalize() }?;
+    guest::exec::aot::take_image().ok_or_else(|| "no image was built".to_string())
 }
 
 /// guest_image for a host that runs guest code natively (iOS), made on one that does not.
 #[cfg(all(nx_runtime, windows))]
 pub fn guest_image_for_native(s: settings::Settings) -> Result<Vec<u8>, String> {
-    cpu::aot::patch_for_native();
+    guest::exec::aot::patch_for_native();
     guest_image(s)
 }
 
@@ -122,7 +111,7 @@ fn mod_module_name(label: &str) -> String {
 
 /// The game's code loaded and patched with `settings` (as guest_image), as modules to lift: main, the sdk module, the
 /// plugin mods' modules, then every other code region the load made (islands, stubs), except the HLE trampolines,
-/// which lifted code reaches through the host (lifted::host_call). The guest sits at its fixed base, so the addresses
+/// which lifted code reaches through the host (guest::exec::lifted::host_call). The guest sits at its fixed base, so the addresses
 /// hold in the run that uses the lifted code. Once per process.
 ///
 /// Plugin mods patch the game's code from their initialisers and early hooks, so a load does not hold their patches: a
@@ -131,7 +120,7 @@ fn mod_module_name(label: &str) -> String {
 #[cfg(nx_runtime)]
 pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Vec<GuestModule>, String> {
     // The C a lift makes must not depend on the host: patched as a lifted runtime patches, on a Mac too.
-    cpu::aot::patch_for_lifted();
+    guest::exec::aot::patch_for_lifted();
     settings::try_install(s)?;
     let l = load().map_err(|e| e.to_string())?;
     if let (Some((label, _)), None) = (l.mod_inits.first(), patched) {
@@ -168,7 +157,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
         });
     }
     let covered = |a: usize| modules.iter().any(|m| m.text.contains(&(a as u64)));
-    let regions = cpu::aot::regions();
+    let regions = guest::exec::aot::regions();
     let extra: Vec<GuestModule> = regions
         .iter()
         .filter(|(name, start, _)| name != "hle.trampolines" && !covered(*start))
@@ -185,7 +174,7 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
     if let Some(img) = patched {
         // The image's regions carry the names this load registered (the same modules at the same fixed addresses).
         let mut changed = 0;
-        for (name, bytes) in cpu::aot::image_regions(img)? {
+        for (name, bytes) in guest::exec::aot::image_regions(img)? {
             let Some(&(_, start, len)) = regions.iter().find(|(n, ..)| *n == name) else {
                 println!("[!] patched image: region {name} is not in this load; skipped");
                 continue;
@@ -237,7 +226,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     }
     let s = settings::install(s);
     // Write-tracked pages fault on writes (guest/dirty_track.rs), ours included.
-    unsafe { cpu::crash_handler::install_signal_handlers() };
+    unsafe { guest::exec::crash_handler::install_signal_handlers() };
     if vulkan {
         vulkan::init(s.debug.validate)?;
     }
@@ -275,15 +264,15 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     // 5'. AOT images (cpu/aot.rs): write the patched code out (--aot-dump), or swap in a signed copy (--aot-image).
     //     With mods a dump run writes the image after their initialisers patched the code (step 7b).
     let dump_after_mods =
-        matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !mod_inits.is_empty();
+        matches!(guest::exec::aot::mode(), guest::exec::aot::Mode::Dump(_)) && !mod_inits.is_empty();
     if dump_after_mods {
-        cpu::aot::defer_dump();
+        guest::exec::aot::defer_dump();
     }
-    if let Err(e) = unsafe { cpu::aot::finalize() } {
+    if let Err(e) = unsafe { guest::exec::aot::finalize() } {
         eprintln!("[!!] AOT: {}", e);
         std::process::exit(1);
     }
-    if let cpu::aot::Mode::Dump(_) = cpu::aot::mode() {
+    if let guest::exec::aot::Mode::Dump(_) = guest::exec::aot::mode() {
         if !dump_after_mods {
             println!("[+] AOT: image written; exiting (--aot-dump)");
             std::process::exit(0);
@@ -312,7 +301,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .name("guest-main".into())
         .stack_size(256 * 1024 * 1024)
         .spawn(move || {
-            cpu::tls::mark_guest_thread();
+            guest::exec::tls::mark_guest_thread();
             guest_chain.run().map_err(|e| e.to_string())
         })
         .expect("spawn guest-main");
@@ -433,11 +422,11 @@ fn guest_chain(
     game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
     dump_after_mods: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // 5a. Install TPIDR_EL0 (thread-local storage pointer) for this thread (lifted: its Cpu has it, lifted::thread_cpu).
+    // 5a. Install TPIDR_EL0 (thread-local storage pointer) for this thread (lifted: its Cpu has it, guest::exec::lifted::thread_cpu).
     #[cfg(nx_native)]
     unsafe {
-        cpu::tls::install_guest_tls();
-        cpu::trampoline::init_worker_thread_x18();
+        guest::exec::tls::install_guest_tls();
+        guest::exec::trampoline::init_worker_thread_x18();
         horizon::hle::register_main_sample_target();
     }
     unsafe { horizon::hle::hle_nn_os_GetCurrentThread() };
@@ -490,11 +479,11 @@ fn guest_chain(
     macro_rules! run_mod_inits {
         () => {
     if dump_after_mods {
-        cpu::aot::snapshot_premod();
+        guest::exec::aot::snapshot_premod();
     }
     #[cfg(all(nx_runtime, windows))]
     if !mod_inits.is_empty() {
-        live_patch::empty_present_layer();
+        guest::exec::live_patch::empty_present_layer();
     }
     horizon::fs::seed_sd_card();
     for (label, init) in &mod_inits {
@@ -504,9 +493,9 @@ fn guest_chain(
         println!("[+] Mods: {} init returned ({} code pages written through its views)", label, pages);
     }
     if dump_after_mods {
-        println!("[+] AOT: mods initialised; the image is written at frame {} (gfx present)", cpu::aot::deferred_dump_frame().unwrap_or(0));
+        println!("[+] AOT: mods initialised; the image is written at frame {} (gfx present)", guest::exec::aot::deferred_dump_frame().unwrap_or(0));
     }
-    if cpu::aot::loading() && !mod_inits.is_empty() {
+    if guest::exec::aot::loading() && !mod_inits.is_empty() {
         // Expected: the bytes of patches mods remove again (the dump run's "kept" count).
         let n = horizon::svc::IMAGE_MISMATCH.load(std::sync::atomic::Ordering::Relaxed);
         println!("[+] Mods: initialised; {} bytes of their code writes differ from the AOT image so far (dropped)", n);
@@ -721,10 +710,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     #[cfg(nx_native)]
     {
         let _ = (
-            cpu::tls::guest_tls_offset(),
-            cpu::tls::errno_save_offset(),
-            cpu::tls::x18_slot_offset(),
-            cpu::tls::hle_stack_offset(),
+            guest::exec::tls::guest_tls_offset(),
+            guest::exec::tls::errno_save_offset(),
+            guest::exec::tls::x18_slot_offset(),
+            guest::exec::tls::hle_stack_offset(),
         );
         unsafe {
             horizon::hle::capture_darwin_tsd_shadow();
@@ -736,13 +725,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 2. Install native Darwin crash & trap handler
     #[cfg(nx_native)]
-    unsafe { cpu::crash_handler::install_signal_handlers() };
+    unsafe { guest::exec::crash_handler::install_signal_handlers() };
 
     mem_space.load_sections()?;
     #[cfg(nx_native)]
-    cpu::crash_handler::set_main_size(mem_space.bss_off + mem_space.bss_size);
+    guest::exec::crash_handler::set_main_size(mem_space.bss_off + mem_space.bss_size);
 
-    // 2a. Guest x18 starts at 0: guest code uses it as an ordinary register (cpu::trampoline), macOS preserves
+    // 2a. Guest x18 starts at 0: guest code uses it as an ordinary register (guest::exec::trampoline), macOS preserves
     // it, and the HLE trampolines reload this value after each call. (It used to point at a 32 KiB block whose every
     // slot pointed into it, from an x9 <-> x18 register swap removed on 2026-10-08, so stray loads through x18 could not
     // fault; booting to gameplay without it changed nothing, 2026-10-15.)
@@ -897,18 +886,18 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //    and the SDK is rewritten into an island of stubs that keep the value in a TSD slot. Before the SDK
     //    interposition and the tpidr rewrite, so `mrs x18, tpidr_el0` sites are handled by the x18 stubs.
     #[cfg(any(nx_native, windows))]
-    if !cpu::aot::native_rewrites() {
+    if !guest::exec::aot::native_rewrites() {
         // Lifted code keeps x18 in its Cpu.
-    } else if cpu::trampoline::x18_trampolines() {
-        let island = cpu::trampoline::TrampolineIsland::new(
+    } else if guest::exec::trampoline::x18_trampolines() {
+        let island = guest::exec::trampoline::TrampolineIsland::new(
             guest::loader::x18_island_area(),
             guest::loader::X18_ISLAND_SIZE,
         )
         .map_err(|e| format!("x18 island: {e}"))?;
         island.set_current_thread_x18(x18_ctx_ptr);
-        *cpu::trampoline::ISLAND.lock().unwrap() = Some(island);
+        *guest::exec::trampoline::ISLAND.lock().unwrap() = Some(island);
         unsafe {
-            cpu::trampoline::rewrite_module(
+            guest::exec::trampoline::rewrite_module(
                 "main",
                 mem_space.base_ptr as usize,
                 mem_space.text_size,
@@ -921,10 +910,10 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             let pages = (sdk_mod.text_size + 0x3fff) & !0x3fff;
             let _ = unsafe { platform::os::protect(sdk_mod.text_start, pages, platform::os::Prot::ReadWrite) };
             unsafe {
-                cpu::trampoline::rewrite_module("sdk", sdk_mod.text_start, sdk_mod.text_size, sdk_mod.base + sdk_mod.image_size)
+                guest::exec::trampoline::rewrite_module("sdk", sdk_mod.text_start, sdk_mod.text_size, sdk_mod.base + sdk_mod.image_size)
             }
             .map_err(|e| format!("x18: {e}"))?;
-            unsafe { cpu::aot::make_exec("sdk.text", sdk_mod.text_start, pages) };
+            unsafe { guest::exec::aot::make_exec("sdk.text", sdk_mod.text_start, pages) };
         }
     } else {
         println!("[+] x18: preserved by the kernel for this process; guest x18 uses run unchanged");
@@ -937,7 +926,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     if let Some(sdk_mod) = sdk.as_ref() {
         let default_stub = mem_space.default_stub_ptr;
         #[cfg(all(nx_runtime, windows))]
-        live_patch::set_sdk(
+        guest::exec::live_patch::set_sdk(
             sdk_mod.base + sdk_mod.ro_off,
             sdk_mod.base + sdk_mod.image_size,
             sdk_mod.text_start,
@@ -1013,7 +1002,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             let p = guest::loader::rtld_slot();
             if p != 0 && crate::platform::os::commit(p, 0x4000, crate::platform::os::Prot::ReadWrite).is_ok() {
                 *(p as *mut u32) = 0xD65F03C0; // ret
-                cpu::aot::make_exec("rtld.placeholder", p, 0x4000);
+                guest::exec::aot::make_exec("rtld.placeholder", p, 0x4000);
                 // text, rodata and data like a real module (exlaunch reads the two regions after each text).
                 add_region(Region {
                     start: p,
@@ -1247,13 +1236,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     // 4a'. Guest reads of tpidr_el0 get XNU's per-CPU value after a reschedule; point them at the stable
     //      copy of the guest TLS pointer (cpu/tpidr_rewrite.rs). Main text is still writable here; the SDK's is R-X.
     #[cfg(any(nx_native, windows))]
-    if cpu::aot::native_rewrites() {
+    if guest::exec::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
         if let Some(sdk_mod) = sdk.as_ref() {
             ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
         }
         match unsafe {
-            cpu::tpidr_rewrite::rewrite(
+            guest::exec::tpidr_rewrite::rewrite(
                 &ranges,
                 (mem_space.island_slot, guest::loader::ISLAND_SLOT_SIZE),
             )
@@ -1267,12 +1256,12 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // Plain load-exclusives become acquire loads (cpu/exclusive_rewrite.rs).
     #[cfg(any(nx_native, windows))]
-    if cpu::aot::native_rewrites() {
+    if guest::exec::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
         if let Some(sdk_mod) = sdk.as_ref() {
             ranges.push((sdk_mod.text_start, sdk_mod.text_size, true));
         }
-        let n = unsafe { cpu::exclusive_rewrite::rewrite(&ranges) };
+        let n = unsafe { guest::exec::exclusive_rewrite::rewrite(&ranges) };
         println!("[+] load-exclusive rewrite: {n} sites now acquire");
     }
 
@@ -1292,17 +1281,17 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     #[cfg(nx_native)]
     // Debug tracer: --trace=0x2b2120,0xcb228c logs registers each time those guest instructions execute (see
-    // cpu::crash_handler::install_trace_point; settings::TracePoint for dumping memory at a register).
+    // guest::exec::crash_handler::install_trace_point; settings::TracePoint for dumping memory at a register).
     {
         for tp in &crate::settings::get().trace.trace {
             let (rel, dump_reg, off_part) = (tp.rel, tp.reg.map(usize::from), tp.deref);
             let pc = mem_space.base_ptr as usize + rel;
             // --trace-from-frame=N: arm when frame N is presented (tracing is slow; skips startup).
             if crate::settings::get().trace.trace_from_frame.is_some() {
-                cpu::crash_handler::defer_trace_point(pc, dump_reg, off_part);
+                guest::exec::crash_handler::defer_trace_point(pc, dump_reg, off_part);
                 continue;
             }
-            if unsafe { cpu::crash_handler::install_trace_point(pc, dump_reg, off_part) } {
+            if unsafe { guest::exec::crash_handler::install_trace_point(pc, dump_reg, off_part) } {
                 println!("[+] TRACE point installed at guest+{:#x}", rel);
             }
         }
@@ -1311,7 +1300,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     // 4c. Finalize trampolines (W^X + icache flush) before marking .text exec.
     mem_space.finalize_trampoline_pool();
     #[cfg(any(nx_native, windows))]
-    if let Some(island) = cpu::trampoline::ISLAND.lock().unwrap().as_ref() {
+    if let Some(island) = guest::exec::trampoline::ISLAND.lock().unwrap().as_ref() {
         island.finalize().map_err(|e| format!("x18 island: {e}"))?;
     }
 
@@ -1374,7 +1363,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     if s.guest.guest_cores {
         println!("[!] --guest-cores has no effect here: guest cores are scheduled for native code (macOS / iOS) only");
     }
-    // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (cpu::crash_handler).
+    // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (guest::exec::crash_handler).
     #[cfg(windows)]
     platform::os::on_access_fault(lifted_access_fault);
     #[cfg(windows)]
@@ -1414,30 +1403,30 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         )
         .into());
     }
-    lifted::install(&lib, &modules, overlay.as_deref().map(|o| (o, overlay_modules.as_slice())), lifted_handlers())?;
+    guest::exec::lifted::install(&lib, &modules, overlay.as_deref().map(|o| (o, overlay_modules.as_slice())), lifted_handlers())?;
     #[cfg(windows)]
     {
         let (start, len) = mem_space.trampoline_range();
-        live_patch::set_hle_pool(start, len);
+        guest::exec::live_patch::set_hle_pool(start, len);
     }
     println!("[+] Lifted: {} ({})", lib.display(), modules.join(", "));
     // --report-guard waits only for faults from guest code.
     #[cfg(windows)]
-    if let Some((start, end)) = platform::os::image_range(lifted::library().entry()) {
+    if let Some((start, end)) = platform::os::image_range(guest::exec::lifted::library().entry()) {
         gpu::report_guard::set_guest_code_range(start, end);
     }
     #[cfg(windows)]
-    if let Some((start, end)) = lifted::overlay_code().and_then(platform::os::image_range) {
+    if let Some((start, end)) = guest::exec::lifted::overlay_code().and_then(platform::os::image_range) {
         gpu::report_guard::set_overlay_code_range(start, end);
     }
     // --aot-dump: the code as plugin mods patch it, for the lift that holds their patches (guest_modules). Their
     // initialisers and early hooks write it while the game runs; the image is written at --aot-dump-frame.
-    let dump_after_mods = matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !mod_inits.is_empty();
+    let dump_after_mods = matches!(guest::exec::aot::mode(), guest::exec::aot::Mode::Dump(_)) && !mod_inits.is_empty();
     if dump_after_mods {
-        cpu::aot::defer_dump();
+        guest::exec::aot::defer_dump();
     }
-    unsafe { cpu::aot::finalize() }?;
-    if matches!(cpu::aot::mode(), cpu::aot::Mode::Dump(_)) && !dump_after_mods {
+    unsafe { guest::exec::aot::finalize() }?;
+    if matches!(guest::exec::aot::mode(), guest::exec::aot::Mode::Dump(_)) && !dump_after_mods {
         println!("[+] AOT: image written; exiting (--aot-dump, no plugin mods)");
         std::process::exit(0);
     }
@@ -1475,7 +1464,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     host::display::run_main_thread()
 }
 
-/// A fault on a page the GPU backend or write tracking protects, in the order cpu::crash_handler asks them. The
+/// A fault on a page the GPU backend or write tracking protects, in the order guest::exec::crash_handler asks them. The
 /// guest's lr and fp are in its Cpu, not in the faulting host context: the Fault leaves them 0.
 #[cfg(all(nx_runtime, not(nx_native), windows))]
 unsafe fn lifted_access_fault(addr: usize, write: bool, pc: usize) -> bool {
@@ -1486,7 +1475,7 @@ unsafe fn lifted_access_fault(addr: usize, write: bool, pc: usize) -> bool {
 /// What lifted code hands the host: supervisor calls (exlaunch mods' runtimes) go to horizon::svc as natively, the
 /// counter is lifted_ticks, and traps and branches to code nothing lifted stop the process with the guest's state.
 #[cfg(all(nx_runtime, not(nx_native)))]
-fn lifted_handlers() -> lifted::Handlers {
+fn lifted_handlers() -> guest::exec::lifted::Handlers {
     fn svc(cpu: &mut nxport_lifter::abi::Cpu, imm: u32, _pc: u64) {
         let mut regs: [u64; 8] = cpu.x[..8].try_into().unwrap();
         unsafe { horizon::svc::svc_dispatch(&mut regs, imm as u64) };
@@ -1514,10 +1503,10 @@ fn lifted_handlers() -> lifted::Handlers {
     }
     fn unknown(cpu: &mut nxport_lifter::abi::Cpu) {
         #[cfg(windows)]
-        if live_patch::run_unknown(cpu) {
+        if guest::exec::live_patch::run_unknown(cpu) {
             return;
         }
         stop(cpu, "a branch to code that was not lifted")
     }
-    lifted::Handlers { svc, trap, unknown, ticks: guest::regs::lifted_ticks }
+    guest::exec::lifted::Handlers { svc, trap, unknown, ticks: guest::regs::lifted_ticks }
 }

@@ -103,7 +103,7 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
             }
             unsafe {
                 // Stages near the end of a mapping: a fixed 64 KiB window would read past it.
-                let code = std::slice::from_raw_parts(st.data as *const u8, crate::cpu::crash_handler::readable_len(st.data as usize, 0x10000));
+                let code = std::slice::from_raw_parts(st.data as *const u8, crate::guest::exec::crash_handler::readable_len(st.data as usize, 0x10000));
                 let ctrl = std::slice::from_raw_parts(
                     st.control as *const u8,
                     control_section_len(st.control as usize),
@@ -169,7 +169,7 @@ fn dump_missing(st: &StageCode, index: usize) {
         }
         let _ = std::fs::create_dir_all(dir);
         // Stages near the end of a mapping: a fixed 64 KiB window would read past it.
-        let code = std::slice::from_raw_parts(st.data as *const u8, crate::cpu::crash_handler::readable_len(st.data as usize, 0x10000));
+        let code = std::slice::from_raw_parts(st.data as *const u8, crate::guest::exec::crash_handler::readable_len(st.data as usize, 0x10000));
         let ctrl = std::slice::from_raw_parts(
             st.control as *const u8,
             control_section_len(st.control as usize),

@@ -62,7 +62,7 @@ pub static ASPECT_SITES: aspect::Sites = aspect::Sites {
 /// draw callback (return address main+0x763798); most of the frame's draws come through it.
 #[cfg(nx_native)]
 unsafe fn draw_item() -> u32 {
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::exec::crash_handler::get_guest_base();
     let mut fp: usize;
     std::arch::asm!("mov {}, x29", out(reg) fp, options(nomem, nostack));
     for _ in 0..16 {
@@ -105,7 +105,7 @@ pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::lo
         crate::horizon::hle::pace_to_present("PlacementMgr");
     }
     #[cfg(nx_native)]
-    if crate::cpu::aot::native_rewrites() {
+    if crate::guest::exec::aot::native_rewrites() {
         install_native_hooks(base, mem_space);
     }
 }

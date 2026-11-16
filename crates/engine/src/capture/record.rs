@@ -225,7 +225,7 @@ pub(crate) fn write_capture(
         mw.begin_range(s, e - s)?;
         for p in (s..e).step_by(PAGE) {
             #[cfg(nx_native)]
-            let ok = unsafe { crate::cpu::crash_handler::readable_len(p as usize, PAGE) } == PAGE;
+            let ok = unsafe { crate::guest::exec::crash_handler::readable_len(p as usize, PAGE) } == PAGE;
             #[cfg(not(nx_native))]
             let ok = crate::platform::os::readable_len(p as usize, PAGE) == PAGE;
             if ok {

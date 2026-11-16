@@ -4,7 +4,7 @@
 //
 // Natively these are the host's own registers, which still hold the guest's values in an HLE function, so
 // `guest_reg!` reads them in place (a function would read its own frame). Lifted code keeps them in the Cpu of the
-// host call the thread is in (crate::lifted::current); outside one they read as 0.
+// host call the thread is in (crate::guest::exec::lifted::current); outside one they read as 0.
 
 /// `guest_reg!(x29)`: guest register x16, x17, x29 or x30 as usize.
 #[cfg(nx_native)]
@@ -39,7 +39,7 @@ macro_rules! guest_reg {
 
 #[cfg(not(nx_native))]
 pub fn lifted_x(n: usize) -> usize {
-    let c = crate::lifted::current();
+    let c = crate::guest::exec::lifted::current();
     if c.is_null() {
         0
     } else {
@@ -90,7 +90,7 @@ pub fn tpidrro() -> usize {
     }
     #[cfg(not(nx_native))]
     {
-        let c = crate::lifted::current();
+        let c = crate::guest::exec::lifted::current();
         if c.is_null() {
             0
         } else {

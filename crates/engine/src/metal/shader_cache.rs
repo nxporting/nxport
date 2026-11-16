@@ -689,7 +689,7 @@ pub(super) unsafe fn translate_runtime(data: u64, control: u64, stage_index: usi
     };
 
     // Stages near the end of a mapping: a fixed 64 KiB window would read past it.
-    let code_slice = std::slice::from_raw_parts(data as *const u8, crate::cpu::crash_handler::readable_len(data as usize, 0x10000));
+    let code_slice = std::slice::from_raw_parts(data as *const u8, crate::guest::exec::crash_handler::readable_len(data as usize, 0x10000));
     let target = sass2spv::Target::Msl(sass2spv::MSL_ENTRY_PLACEHOLDER.into());
     let (msl, info, size) = match sass2spv::translate_stage_to(code_slice, stage_hint, cb1, compute_fields, &target) {
         Ok(p) if !p.msl.is_empty() => {

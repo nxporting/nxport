@@ -945,7 +945,7 @@ unsafe fn record_hit(pc: usize, lr: usize, addr: usize, len: usize, write: bool,
             Ordering::Relaxed,
         );
     }
-    let guest = crate::cpu::tls::get_current_guest_tls_block() >= 0x10000;
+    let guest = crate::guest::exec::tls::get_current_guest_tls_block() >= 0x10000;
     for (j, v) in [
         pc,
         lr,
@@ -1025,7 +1025,7 @@ pub(super) fn frame_end(frame: u64) {
     {
         return;
     }
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::exec::crash_handler::get_guest_base();
     let slide = unsafe { _dyld_get_image_vmaddr_slide(0) } as usize;
     for k in 0..n {
         let v: Vec<usize> = (0..5).map(|j| HIT[k][j].load(Ordering::Acquire)).collect();

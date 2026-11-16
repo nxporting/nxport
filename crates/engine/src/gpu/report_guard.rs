@@ -97,7 +97,7 @@ pub(crate) fn in_hle_stubs(addr: usize) -> bool {
 /// the submit producing the reports needs (the gfx state lock), which deadlocked until the timeout at gameplay start
 /// (2026-10-15).
 pub(crate) fn may_wait(pc: usize, lr: usize) -> bool {
-    crate::cpu::tls::is_guest_thread()
+    crate::guest::exec::tls::is_guest_thread()
         && !IN_ENGINE.with(|e| e.get())
         && ((pc >= CODE_START.load(Ordering::Acquire) && pc < CODE_END.load(Ordering::Acquire))
             || (within(&STUBS, lr) && !within(&ENGINE_TEXT, pc)))
@@ -593,7 +593,7 @@ pub(crate) fn frame_end(frame: u64) {
         println!("[report-guard] last 300 frames: {} guarded submits, {} waits ({:.2} ms per frame, longest {:.2} ms), host releases {}, \
             timeouts {}, overflows {}, alias failures {}, repairs {}, late faults retried {}",
             s, w, us as f64 / 300_000.0, take(&MAX_WAIT_US) as f64 / 1000.0, take(&HOST_RELEASES), take(&TIMEOUTS), take(&OVERFLOW),
-            take(&ALIAS_FAILS), take(&REPAIRS), crate::cpu::crash_handler::LATE_RETRIES.load(Ordering::Relaxed));
+            take(&ALIAS_FAILS), take(&REPAIRS), crate::guest::exec::crash_handler::LATE_RETRIES.load(Ordering::Relaxed));
     }
 }
 
@@ -601,7 +601,7 @@ unsafe fn print_hits(frame: u64, n: usize) {
     extern "C" {
         fn _dyld_get_image_vmaddr_slide(image_index: u32) -> isize;
     }
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::exec::crash_handler::get_guest_base();
     let slide = _dyld_get_image_vmaddr_slide(0) as usize;
     for k in 0..n {
         let pc = HIT[k].0.load(Ordering::Acquire);
