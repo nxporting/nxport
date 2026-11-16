@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub enum Bind {
-    /// An extern "C" function, called through an HLE trampoline (or its adapter: crate::hle_abi).
-    Func(crate::hle_abi::Hle),
+    /// An extern "C" function, called through an HLE trampoline (or its adapter: crate::guest::exec::hle_abi).
+    Func(crate::guest::exec::hle_abi::Hle),
     /// The address of a data symbol.
     Data(fn() -> usize),
 }
@@ -24,7 +24,7 @@ pub struct Entry(pub &'static str, pub Bind);
 /// What a name resolves to.
 #[derive(Clone, Copy, Debug)]
 pub enum Target {
-    /// Its address, and which function it is (crate::hle_abi::Hle::id).
+    /// Its address, and which function it is (crate::guest::exec::hle_abi::Hle::id).
     Func(usize, &'static str),
     Data(usize),
 }
@@ -32,7 +32,7 @@ pub enum Target {
 /// `func!(path(_, _))`: function `path` (two parameters), as `crate::hle!` takes it.
 macro_rules! func {
     ($($f:ident)::+ ($($a:tt),*)) => {
-        $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
+        $crate::horizon::sdk::Bind::Func($crate::guest::exec::hle_abi::Hle::of_const(
             $($f)::+ as unsafe extern "C" fn($($a),*) -> _,
             $($f)::+ as *const (),
             stringify!($($f)::+),
@@ -45,7 +45,7 @@ macro_rules! func {
 macro_rules! adapt {
     (fn($($a:ident: $t:ty),*) $(-> $r:ty)? $b:block) => {{
         unsafe extern "C" fn adapter($($a: $t),*) $(-> $r)? $b
-        $crate::horizon::sdk::Bind::Func($crate::hle_abi::Hle::of_const(
+        $crate::horizon::sdk::Bind::Func($crate::guest::exec::hle_abi::Hle::of_const(
             adapter as unsafe extern "C" fn($($t),*) $(-> $r)?,
             adapter as *const (),
             concat!(file!(), ":", line!(), ":", column!()),
@@ -178,7 +178,7 @@ fn chain() -> &'static Chain {
 
 fn target(b: &Bind) -> Target {
     match b {
-        Bind::Func(h) => Target::Func(crate::hle_abi::record(*h) as usize, h.id()),
+        Bind::Func(h) => Target::Func(crate::guest::exec::hle_abi::record(*h) as usize, h.id()),
         Bind::Data(d) => Target::Data(d()),
     }
 }

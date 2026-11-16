@@ -61,7 +61,7 @@ pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     let tsd: *mut u8;
     std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tsd);
     super::cores::run_guest(|| {
-        nxport_call_on_stack(arg, entry, hi & !15, tsd.add(crate::cpu::tls::hle_stack_offset()) as *mut usize)
+        nxport_call_on_stack(arg, entry, hi & !15, tsd.add(crate::guest::exec::tls::hle_stack_offset()) as *mut usize)
     });
     BOUNDS.with(|b| b.set((0, 0)));
 }
@@ -70,10 +70,10 @@ pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
 #[cfg(not(nx_native))]
 pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     BOUNDS.with(|b| b.set((lo, hi)));
-    let cpu = crate::lifted::thread_cpu();
+    let cpu = crate::guest::exec::lifted::thread_cpu();
     let saved_sp = cpu.sp;
     cpu.sp = (hi & !15) as u64;
-    crate::lifted::library().call(cpu, entry as u64, &[arg as u64]);
+    crate::guest::exec::lifted::library().call(cpu, entry as u64, &[arg as u64]);
     cpu.sp = saved_sp;
     BOUNDS.with(|b| b.set((0, 0)));
 }

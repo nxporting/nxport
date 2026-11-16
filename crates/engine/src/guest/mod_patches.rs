@@ -304,7 +304,7 @@ pub unsafe fn apply(
 }
 
 /// Code patched at load that the guest library was not lifted with: an app without mods of its own lifts none, so mods
-/// added to the data directory after the build reach lifted code only through live patches (crate::live_patch), which
+/// added to the data directory after the build reach lifted code only through live patches (crate::guest::exec::live_patch), which
 /// take these ranges once they are enabled. (start, len)
 static NOT_LIFTED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
 

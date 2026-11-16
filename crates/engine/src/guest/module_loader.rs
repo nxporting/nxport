@@ -12,7 +12,7 @@
 // the module's DT_INIT (exlaunch's module entry) before the game's nnMain.
 
 #[cfg(any(nx_native, windows))]
-use crate::cpu::aot::encode_b;
+use crate::guest::exec::aot::encode_b;
 use crate::horizon::svc::{self, Region};
 use std::ptr;
 
@@ -47,8 +47,8 @@ fn r_u32(d: &[u8], off: usize) -> u32 {
 /// load-exclusives into acquire forms. Returns what was rewritten, for the log.
 #[cfg(any(nx_native, windows))]
 unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, image_end: usize, stubs: usize, svc_entry: usize) -> Result<String, String> {
-    if crate::cpu::trampoline::x18_trampolines() {
-        crate::cpu::trampoline::rewrite_module(name, text, text_len, image_end).map_err(|e| e.to_string())?;
+    if crate::guest::exec::trampoline::x18_trampolines() {
+        crate::guest::exec::trampoline::rewrite_module(name, text, text_len, image_end).map_err(|e| e.to_string())?;
     }
     let mut next = stubs;
     let (mut n_svc, mut n_tp, mut n_tpro) = (0, 0, 0);
@@ -99,7 +99,7 @@ unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, image_end: u
             stub_words = vec![
                 MRS_TPIDRRO | rt,
                 0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (((crate::guest::exec::tls::guest_tls_offset() / 8) as u32) << 10)
                     | (rt << 5)
                     | rt,
                 back,
@@ -107,12 +107,12 @@ unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, image_end: u
             n_tp += 1;
         } else if w & 0xFFFF_FFE0 == MRS_TPIDRRO && w & 0x1f != 31 {
             let rt = w & 0x1f;
-            let slot = crate::cpu::tls::FAKE_TLR_SLOT as u32;
+            let slot = crate::guest::exec::tls::FAKE_TLR_SLOT as u32;
             let back = encode_b(next + 12, site + 4).ok_or("stub out of branch range")?;
             stub_words = vec![
                 MRS_TPIDRRO | rt,
                 0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (((crate::guest::exec::tls::guest_tls_offset() / 8) as u32) << 10)
                     | (rt << 5)
                     | rt, // guest TLS block
                 0xF940_0000 | ((slot / 8) << 10) | (rt << 5) | rt, // its fake thread-local region
@@ -149,7 +149,7 @@ unsafe fn native_rewrites(name: &str, text: usize, text_len: usize, image_end: u
         );
         next = start + stub_words.len() * 4;
     }
-    let n_ldx = crate::cpu::exclusive_rewrite::rewrite(&[(text, text_len, false)]);
+    let n_ldx = crate::guest::exec::exclusive_rewrite::rewrite(&[(text, text_len, false)]);
     Ok(format!("{n_svc} svc, {n_tp} tpidr_el0, {n_tpro} tpidrro_el0, {n_ldx} load-exclusive sites"))
 }
 
@@ -346,7 +346,7 @@ pub unsafe fn load(
 
     // ── make the code runnable here ──
     #[cfg(any(nx_native, windows))]
-    let rewritten = if crate::cpu::aot::native_rewrites() {
+    let rewritten = if crate::guest::exec::aot::native_rewrites() {
         native_rewrites(name, base + text_mo, text_len, base + image_size, stubs, svc_entry)?
     } else {
         // Lifted code handles svc, the system registers and exclusives itself.
@@ -367,8 +367,8 @@ pub unsafe fn load(
         .into_iter()
         .rev()
         .collect();
-    crate::cpu::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
-    crate::cpu::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
+    crate::guest::exec::aot::make_exec(&format!("{}.t", short), base + text_mo, text_pages);
+    crate::guest::exec::aot::make_exec(&format!("{}.s", short), stubs, STUB_AREA);
     crate::platform::os::flush_icache(((base + text_mo)) as usize, text_len);
     crate::platform::os::flush_icache(stubs as usize, STUB_AREA);
 

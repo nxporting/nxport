@@ -119,7 +119,7 @@ pub fn set_aspect(aspect: f64) {
 
 fn readable(p: usize, len: usize) -> bool {
     #[cfg(nx_native)]
-    return unsafe { crate::cpu::crash_handler::readable_len(p, len) } == len;
+    return unsafe { crate::guest::exec::crash_handler::readable_len(p, len) } == len;
     #[cfg(windows)]
     return crate::platform::os::readable_len(p, len) == len;
     #[cfg(not(any(nx_native, windows)))]
@@ -222,21 +222,21 @@ pub unsafe extern "C" fn pane_move_to(pane: usize, src: *const f32) -> f32 {
 
 /// The point at `src`, scaled, each coordinate rounded down as the game's code does (fcvtzs, less one when negative and
 /// not whole). Returned in s0, s1.
-pub unsafe extern "C" fn floor_point(src: *const f32) -> crate::hle_abi::F32Pair {
+pub unsafe extern "C" fn floor_point(src: *const f32) -> crate::guest::exec::hle_abi::F32Pair {
     let floor = |v: f32| {
         let t = v as i32;
         t.wrapping_sub((v < 0.0 && t as f32 != v) as i32) as f32
     };
     let (fx, fy) = factors();
-    crate::hle_abi::F32Pair(floor(*src * fx), floor(*src.add(1) * fy))
+    crate::guest::exec::hle_abi::F32Pair(floor(*src * fx), floor(*src.add(1) * fy))
 }
 
 /// A layout calculation's start: the ability wheel's capture keys (frame_time.rs), and hud.rs adjusts the layout's panes. Returns its root pane (the game's code checks it
 /// next) and the calculation's second argument (x1, which the code passes on after the call).
-pub unsafe extern "C" fn layout_calculate(layout: usize, arg: u64) -> crate::hle_abi::U64Pair {
+pub unsafe extern "C" fn layout_calculate(layout: usize, arg: u64) -> crate::guest::exec::hle_abi::U64Pair {
     super::frame_time::short_cut_bg_keys(layout);
     super::hud::calculate(layout);
-    crate::hle_abi::U64Pair(*((layout + LAYOUT_ROOT) as *const usize) as u64, arg)
+    crate::guest::exec::hle_abi::U64Pair(*((layout + LAYOUT_ROOT) as *const usize) as u64, arg)
 }
 
 // The draw context's NVN command buffer (the context VideoRenderer records its copies into).

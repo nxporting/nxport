@@ -26,7 +26,7 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
             let page = (p as usize) & !0x3fff;
             if executable && page != open_page {
                 if open_page != usize::MAX {
-                    crate::cpu::aot::protect_rx(open_page, 0x4000);
+                    crate::guest::exec::aot::protect_rx(open_page, 0x4000);
                 }
                 let _ = crate::platform::os::protect(page, 0x4000, crate::platform::os::Prot::ReadWrite);
                 open_page = page;
@@ -35,7 +35,7 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
             n += 1;
         }
         if open_page != usize::MAX {
-            crate::cpu::aot::protect_rx(open_page, 0x4000);
+            crate::guest::exec::aot::protect_rx(open_page, 0x4000);
         }
         crate::platform::os::flush_icache(start, len);
     }

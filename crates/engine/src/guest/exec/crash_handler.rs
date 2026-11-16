@@ -404,7 +404,7 @@ unsafe extern "C" fn handle_signal(
         if !mc.is_null() {
             let ss = &mut (*mc).__ss;
             if let Some((target, x16, x17, sp)) =
-                crate::cpu::trampoline::jump_table_trap(ss.__pc as usize, ss.__x[17], ss.__sp)
+                crate::guest::exec::trampoline::jump_table_trap(ss.__pc as usize, ss.__x[17], ss.__sp)
             {
                 ss.__x[16] = x16;
                 ss.__x[17] = x17;

@@ -1,14 +1,23 @@
 // The guest process image: executable formats, module loading and relocation, code mods and cheats, and write tracking
 // of guest memory.
 
+#[cfg(nx_runtime)]
 pub mod cheats;
+#[cfg(nx_runtime)]
 pub mod dirty_track;
+pub mod exec;
+#[cfg(nx_runtime)]
 pub mod loader;
+#[cfg(nx_runtime)]
 pub mod mod_patches;
+#[cfg(nx_runtime)]
 pub mod module_loader;
 pub mod nso;
+#[cfg(nx_runtime)]
 pub mod regs;
+#[cfg(nx_runtime)]
 pub mod tls;
+#[cfg(nx_runtime)]
 pub mod sdk_loader;
 
 /// Calls the guest function at `addr` with up to eight integer or pointer arguments, on the calling thread's current
@@ -46,11 +55,11 @@ pub unsafe fn call(addr: usize, args: &[u64]) -> u64 {
 
 /// `call` on a lifted host: through the calling thread's lifted CPU state, on the guest stack it is using (inside an
 /// HLE call: the caller's), or on one of the thread's own the first time.
-#[cfg(not(nx_native))]
+#[cfg(all(nx_runtime, not(nx_native)))]
 pub unsafe fn call(addr: usize, args: &[u64]) -> u64 {
-    let cpu = crate::lifted::thread_cpu();
+    let cpu = crate::guest::exec::lifted::thread_cpu();
     if cpu.sp == 0 {
         cpu.sp = (crate::horizon::thread_stack::allocate(8 << 20).1 & !15) as u64;
     }
-    crate::lifted::library().call(cpu, addr as u64, args)
+    crate::guest::exec::lifted::library().call(cpu, addr as u64, args)
 }

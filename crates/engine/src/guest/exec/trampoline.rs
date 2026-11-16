@@ -67,7 +67,7 @@ pub fn set_thread_x18(val: usize) {
     #[cfg(nx_native)]
     if x18_trampolines() {
         unsafe {
-            libc::pthread_setspecific(crate::cpu::tls::x18_key(), val as *mut libc::c_void);
+            libc::pthread_setspecific(crate::guest::exec::tls::x18_key(), val as *mut libc::c_void);
         }
     }
 }
@@ -154,7 +154,7 @@ impl TrampolineIsland {
             return Err("no memory for the x18 island");
         }
         let ptr = base as *mut libc::c_void;
-        let key = crate::cpu::tls::x18_key();
+        let key = crate::guest::exec::tls::x18_key();
         let pthread_key_offset = (key as usize) * 8;
         println!("[+] Trampoline Island allocated at {:p} (capacity: {} KB), pthread_key={} (offset: {} bytes from tpidrro_el0)",
                  ptr, capacity_bytes / 1024, key, pthread_key_offset);
@@ -1107,7 +1107,7 @@ impl TrampolineIsland {
             words.push(0xD53B_D060 | repl_idx); // mrs repl, tpidrro_el0
             words.push(
                 0xF940_0000
-                    | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+                    | (((crate::guest::exec::tls::guest_tls_offset() / 8) as u32) << 10)
                     | (repl_idx << 5)
                     | repl_idx,
             );
@@ -1309,7 +1309,7 @@ impl TrampolineIsland {
     pub fn finalize(&self) -> Result<(), &'static str> {
         // Only the used part becomes code (and goes into AOT images).
         let used = (self.next_offset.max(4) + 0x3fff) & !0x3fff;
-        let res = unsafe { crate::cpu::aot::make_exec("x18.island", self.base_ptr as usize, used) };
+        let res = unsafe { crate::guest::exec::aot::make_exec("x18.island", self.base_ptr as usize, used) };
         if res != 0 {
             return Err("Failed to protect trampoline island as executable");
         }

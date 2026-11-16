@@ -4726,7 +4726,7 @@ fn early_fence_retrap(serial: u64) {
         }
     }
     let n = TRAP_HIT_N.swap(0, Ordering::AcqRel).min(TRAP_HITS.len());
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::exec::crash_handler::get_guest_base();
     let slide = unsafe { _dyld_get_image_vmaddr_slide(0) } as usize;
     for ((h, c), race) in TRAP_HITS[..n]
         .iter()
@@ -6119,7 +6119,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             static FROM: OnceLock<Option<u64>> = OnceLock::new();
             if let Some(n) = *FROM.get_or_init(|| crate::settings::get().trace.trace_from_frame) {
                 if presented_frames() == n {
-                    unsafe { crate::cpu::crash_handler::install_deferred_trace_points() };
+                    unsafe { crate::guest::exec::crash_handler::install_deferred_trace_points() };
                 }
             }
         }
@@ -6284,8 +6284,8 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
         static P: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let pn = P.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         // AOT dump run with mods (cpu/aot.rs): write the image once mods finished patching code, then stop.
-        if crate::cpu::aot::deferred_dump_frame() == Some(pn) {
-            if let Err(e) = unsafe { crate::cpu::aot::dump_after_mods() } {
+        if crate::guest::exec::aot::deferred_dump_frame() == Some(pn) {
+            if let Err(e) = unsafe { crate::guest::exec::aot::dump_after_mods() } {
                 eprintln!("[!!] AOT: {}", e);
                 std::process::exit(1);
             }
@@ -8446,7 +8446,7 @@ fn dump_main_image() {
     if presented_frames() != *frame {
         return;
     }
-    let base = crate::cpu::crash_handler::get_guest_base();
+    let base = crate::guest::exec::crash_handler::get_guest_base();
     // .text at 0, .rodata at 0x2B18000, .data at 0x41A7000, .bss at 0x466D000 (guest/loader.rs).
     let bytes = unsafe { std::slice::from_raw_parts(base as *const u8, 0x0466_D000 + 761_888) };
     match std::fs::write(path, bytes) {

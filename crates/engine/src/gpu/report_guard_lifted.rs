@@ -84,7 +84,7 @@ pub(crate) fn set_overlay_code_range(start: usize, end: usize) {
 fn live_guest_code(pc: usize) -> bool {
     #[cfg(windows)]
     {
-        crate::live_patch::is_guest_code(pc)
+        crate::guest::exec::live_patch::is_guest_code(pc)
     }
     #[cfg(not(windows))]
     {

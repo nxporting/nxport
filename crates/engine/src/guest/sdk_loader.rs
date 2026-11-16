@@ -81,12 +81,12 @@ impl SdkModule {
             let p = addr as *mut u32;
             // The target comes from a literal (data), not the code: patched code must be the same on every launch
             // (AOT images, cpu/aot.rs).
-            let [adrp, ldr] = crate::cpu::aot::adrp_ldr(addr, crate::cpu::aot::literal(target), 16);
+            let [adrp, ldr] = crate::guest::exec::aot::adrp_ldr(addr, crate::guest::exec::aot::literal(target), 16);
             ptr::write(p, adrp);
             ptr::write(p.add(1), ldr);
             ptr::write(p.add(2), 0xD61F_0200); // br x16
             ptr::write(p.add(3), 0xD503_201F); // nop
-            crate::cpu::aot::protect_rx(page, span);
+            crate::guest::exec::aot::protect_rx(page, span);
             crate::platform::os::flush_icache(addr as usize, 16);
         }
         true
@@ -127,24 +127,24 @@ impl SdkModule {
             g.1 += 16;
             s
         };
-        let Some(b) = crate::cpu::aot::encode_b(addr, stub) else {
+        let Some(b) = crate::guest::exec::aot::encode_b(addr, stub) else {
             return false;
         };
         // Stub: adrp x16; ldr x16, <literal: target>; br x16; nop
         let page = stub & !0x3fff;
         let _ = crate::platform::os::protect(page as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
         let p = stub as *mut u32;
-        let [adrp, ldr] = crate::cpu::aot::adrp_ldr(stub, crate::cpu::aot::literal(target), 16);
+        let [adrp, ldr] = crate::guest::exec::aot::adrp_ldr(stub, crate::guest::exec::aot::literal(target), 16);
         ptr::write(p, adrp);
         ptr::write(p.add(1), ldr);
         ptr::write(p.add(2), 0xD61F_0200);
         ptr::write(p.add(3), 0xD503_201F);
-        crate::cpu::aot::make_exec("sdk.short_island", page, 0x4000);
+        crate::guest::exec::aot::make_exec("sdk.short_island", page, 0x4000);
         crate::platform::os::flush_icache(stub as usize, 16);
         let fpage = addr & !0x3fff;
         let _ = crate::platform::os::protect(fpage as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
         ptr::write(addr as *mut u32, b);
-        crate::cpu::aot::protect_rx(fpage, 0x4000);
+        crate::guest::exec::aot::protect_rx(fpage, 0x4000);
         crate::platform::os::flush_icache(addr as usize, 4);
         true
     }
@@ -500,7 +500,7 @@ pub fn load_sdk(
 
     // ── mprotect SDK .text ──────────────────────────────────────────────────
     let text_pages = (text_ds + 0x3FFF) & !0x3FFF;
-    let rc = unsafe { crate::cpu::aot::make_exec("sdk.text", base + text_mo, text_pages) };
+    let rc = unsafe { crate::guest::exec::aot::make_exec("sdk.text", base + text_mo, text_pages) };
     if rc != 0 {
         eprintln!(
             "[!] SDK: mprotect text failed: {} (base {:#x} text +{:#x} len {:#x})",

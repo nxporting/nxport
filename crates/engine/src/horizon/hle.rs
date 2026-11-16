@@ -316,11 +316,11 @@ pub unsafe fn setup_horizon_tpidrro(thread_ptr: *mut NnThreadType) {
             *(tp.add(0x1f0) as *mut usize) = thread_ptr as usize;
             let current_errno_ptr = *(tp.add(8) as *const usize);
             if current_errno_ptr >= (tp as usize) && current_errno_ptr < (tp as usize) + 0x1000 {
-                *(tp.add(crate::cpu::tls::errno_save_offset()) as *mut usize) = current_errno_ptr;
+                *(tp.add(crate::guest::exec::tls::errno_save_offset()) as *mut usize) = current_errno_ptr;
             }
-            let guest_tls = crate::cpu::tls::get_current_guest_tls_block();
+            let guest_tls = crate::guest::exec::tls::get_current_guest_tls_block();
             if guest_tls >= 0x10000 {
-                *(tp.add(crate::cpu::tls::guest_tls_offset()) as *mut usize) = guest_tls;
+                *(tp.add(crate::guest::exec::tls::guest_tls_offset()) as *mut usize) = guest_tls;
                 std::arch::asm!("msr tpidr_el0, {0}", in(reg) guest_tls);
             }
         }
@@ -348,12 +348,12 @@ pub unsafe fn sanitize_darwin_tpidrro() {
         let tp: *mut u8;
         std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tp);
         if (tp as usize) >= 0x10000 {
-            let saved = *(tp.add(crate::cpu::tls::errno_save_offset()) as *const usize);
+            let saved = *(tp.add(crate::guest::exec::tls::errno_save_offset()) as *const usize);
             let current = *(tp.add(8) as *const usize);
             if saved != 0 && (current < (tp as usize) || current >= (tp as usize) + 0x1000) {
                 *(tp.add(8) as *mut usize) = saved;
             }
-            let guest_tls = *(tp.add(crate::cpu::tls::guest_tls_offset()) as *const usize);
+            let guest_tls = *(tp.add(crate::guest::exec::tls::guest_tls_offset()) as *const usize);
             if guest_tls >= 0x10000 {
                 std::arch::asm!("msr tpidr_el0, {0}", in(reg) guest_tls);
             }
@@ -1066,10 +1066,10 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, siz
     );
     crate::guest::dirty_track::register_domain(ptr as usize, size);
     #[cfg(nx_native)]
-    let focus = crate::cpu::crash_handler::watch_focus();
+    let focus = crate::guest::exec::crash_handler::watch_focus();
     #[cfg(nx_native)]
     if focus >= ptr as usize && focus < ptr as usize + size {
-        crate::cpu::crash_handler::add_watchpoint(focus);
+        crate::guest::exec::crash_handler::add_watchpoint(focus);
     }
     0
 }
@@ -1135,7 +1135,7 @@ pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_Initialize(
     {
         let pool_base = addr as usize;
         let inner_alloc_page = (pool_base + 0x17000920) & !0xfff;
-        crate::cpu::crash_handler::add_watchpoint(inner_alloc_page);
+        crate::guest::exec::crash_handler::add_watchpoint(inner_alloc_page);
     }
 }
 
@@ -1231,7 +1231,7 @@ pub unsafe extern "C" fn hle_nn_mem_StandardAllocator_AllocateAligned(
             .is_ok()
     {
         #[cfg(nx_native)]
-        crate::cpu::crash_handler::add_watchpoint(ptr as usize);
+        crate::guest::exec::crash_handler::add_watchpoint(ptr as usize);
     }
     ptr
 }
@@ -2420,15 +2420,15 @@ pub unsafe extern "C" fn hle_nn_os_StartThread(thread: *mut NnThreadType) {
                 );
             }
             #[cfg(nx_native)]
-            crate::cpu::crash_handler::ensure_altstack();
+            crate::guest::exec::crash_handler::ensure_altstack();
             // Every guest thread reads tpidr_el0 directly for thread_local /
             // SDK per-thread state -- must be installed before any guest code
             // (including code reached indirectly through HLE calls below) runs
             // on this OS thread. See cpu/tls.rs.
             #[cfg(nx_native)]
             {
-                crate::cpu::tls::install_guest_tls();
-                crate::cpu::trampoline::init_worker_thread_x18();
+                crate::guest::exec::tls::install_guest_tls();
+                crate::guest::exec::trampoline::init_worker_thread_x18();
             }
             let thread_ptr = thread_usize as *mut NnThreadType;
             // Initialize this thread's TLS self-pointer

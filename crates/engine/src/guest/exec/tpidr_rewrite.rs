@@ -8,7 +8,7 @@
 // Every read site is redirected to a stub in a code island next to the guest modules:
 //     mrs Xt, tpidrro_el0 ; ldr Xt, [Xt, #slot] ; b <site + 4>
 
-use crate::cpu::aot::encode_b;
+use crate::guest::exec::aot::encode_b;
 
 const MRS_TPIDR_MASK: u32 = 0xFFFF_FFE0;
 const MRS_TPIDR: u32 = 0xD53B_D040;
@@ -125,7 +125,7 @@ pub unsafe fn rewrite(
         let s = stub as *mut u32;
         *s = MRS_TPIDRRO | rt;
         *s.add(1) = 0xF940_0000
-            | (((crate::cpu::tls::guest_tls_offset() / 8) as u32) << 10)
+            | (((crate::guest::exec::tls::guest_tls_offset() / 8) as u32) << 10)
             | (rt << 5)
             | rt; // ldr Xt, [Xt, #guest TLS slot]
         *s.add(2) = back;
@@ -135,11 +135,11 @@ pub unsafe fn rewrite(
         }
         *(site as *mut u32) = to_stub;
         if executable {
-            crate::cpu::aot::protect_rx(page, 0x4000);
+            crate::guest::exec::aot::protect_rx(page, 0x4000);
         }
         written += 1;
     }
-    crate::cpu::aot::make_exec("tpidr.island", island, island_len);
+    crate::guest::exec::aot::make_exec("tpidr.island", island, island_len);
     crate::platform::os::flush_icache(island as usize, island_len);
     for &(s, l, _) in ranges {
         crate::platform::os::flush_icache(s as usize, l);

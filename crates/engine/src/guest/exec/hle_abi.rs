@@ -368,7 +368,7 @@ pub fn entry_ref(addr: u64) -> Option<&'static Hle> {
 #[macro_export]
 macro_rules! hle {
     ($($f:ident)::+ ($($a:tt),*)) => {
-        $crate::hle_abi::hle($($f)::+ as unsafe extern "C" fn($($a),*) -> _)
+        $crate::guest::exec::hle_abi::hle($($f)::+ as unsafe extern "C" fn($($a),*) -> _)
     };
 }
 

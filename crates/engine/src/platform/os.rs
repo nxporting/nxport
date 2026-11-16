@@ -1101,7 +1101,7 @@ mod imp {
     /// The crashing thread's guest registers as of its last call between lifted functions, and what looks like guest
     /// code on its guest stack, newest first. An exlaunch plugin that gives up writes its result to 0x6969696969696969.
     unsafe fn guest_state(pc: usize) {
-        let cpu = crate::lifted::existing_thread_cpu();
+        let cpu = crate::guest::exec::lifted::existing_thread_cpu();
         if cpu.is_null() {
             return;
         }

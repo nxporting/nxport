@@ -133,8 +133,8 @@ impl GuestMemorySpace {
         // code, so the guest must sit at the same address in the run that dumps the image (macOS) and the runs that load
         // it (iOS). A fixed spot both address spaces leave free; any other run lets the kernel choose.
         // Lifted code (docs/windows-port.md) has the guest addresses it was lifted at built in: always fixed there.
-        let fixed = !crate::cpu::aot::native_rewrites()
-            || (crate::cpu::aot::active()
+        let fixed = !crate::guest::exec::aot::native_rewrites()
+            || (crate::guest::exec::aot::active()
                 && crate::horizon::fs::mods().iter().any(|(_, d)| crate::horizon::fs::mod_has_plugin(d)))
             || crate::settings::get().guest.fixed_guest_base;
 
@@ -176,7 +176,7 @@ impl GuestMemorySpace {
             return Err("Failed to allocate guest virtual memory space".into());
         }
         GEN_AREA.store(gen, std::sync::atomic::Ordering::Relaxed);
-        crate::cpu::aot::set_literal_pool(gen + GEN_LITERALS, GEN_LITERALS_SIZE);
+        crate::guest::exec::aot::set_literal_pool(gen + GEN_LITERALS, GEN_LITERALS_SIZE);
         MOD_GAP.store(gap, std::sync::atomic::Ordering::Relaxed);
         MOD_GAP_END.store(after_gap, std::sync::atomic::Ordering::Relaxed);
 
@@ -486,7 +486,7 @@ impl GuestMemorySpace {
         // The arm64 entry code the trampolines branch to. A lifted runtime never runs trampolines: it recognises their
         // addresses and calls the function's adapter (hle_abi).
         #[cfg(any(nx_native, windows))]
-        if crate::cpu::aot::native_rewrites() {
+        if crate::guest::exec::aot::native_rewrites() {
             unsafe { self.write_hle_entry_stub() };
         }
         self.trampoline_next = HLE_STUB_ENTRIES;
@@ -528,8 +528,8 @@ impl GuestMemorySpace {
         let lit = gen_area() + GEN_TRAMPOLINE_LITERALS;
         ptr::write((lit + 8) as *mut usize, self.guest_x9_value);
         let slot = |off: usize| ((off / 8) as u32) << 10;
-        let hle = slot(crate::cpu::tls::hle_stack_offset());
-        let tls = slot(crate::cpu::tls::guest_tls_offset());
+        let hle = slot(crate::guest::exec::tls::hle_stack_offset());
+        let tls = slot(crate::guest::exec::tls::guest_tls_offset());
         // A literal, not code: an image made elsewhere does not hold it.
         #[cfg(nx_native)]
         ptr::write((lit + 16) as *mut usize, crate::horizon::cores::entry() as usize);
@@ -562,8 +562,8 @@ impl GuestMemorySpace {
         for (k, w) in code.iter().enumerate() {
             ptr::write(base.add(k), *w);
         }
-        ptr::write(base.add(8), crate::cpu::aot::ldr_literal(base.add(8) as usize, lit + 16, 17));
-        ptr::write(base.add(20), crate::cpu::aot::ldr_literal(base.add(20) as usize, lit + 8, 18));
+        ptr::write(base.add(8), crate::guest::exec::aot::ldr_literal(base.add(8) as usize, lit + 16, 17));
+        ptr::write(base.add(20), crate::guest::exec::aot::ldr_literal(base.add(20) as usize, lit + 8, 18));
         for k in code.len()..HLE_STUB_ENTRIES * TRAMPOLINE_WORDS {
             ptr::write(base.add(k), 0xD420_0000u32); // brk #0
         }
@@ -595,10 +595,10 @@ impl GuestMemorySpace {
     pub fn make_hle_trampoline(&mut self, rust_fn: *const ()) -> *const () {
         // A runtime without arm64 trampolines calls the function through its adapter (hle_abi): every function bound
         // here needs one.
-        if crate::hle_abi::adapter(rust_fn).is_none() {
+        if crate::guest::exec::hle_abi::adapter(rust_fn).is_none() {
             eprintln!("[!] HLE: {rust_fn:p} has no adapter (take its address through hle_abi::hle)");
         }
-        crate::hle_abi::bind_entry(
+        crate::guest::exec::hle_abi::bind_entry(
             unsafe { self.trampoline_pool.add(self.trampoline_next * TRAMPOLINE_WORDS) } as u64,
             rust_fn,
         );
@@ -612,7 +612,7 @@ impl GuestMemorySpace {
         unsafe {
             ptr::write(lit as *mut usize, rust_fn as usize);
             ptr::write(base.add(0), 0xA9BF7BFDu32); // stp x29, x30, [sp, #-16]!
-            ptr::write(base.add(1), crate::cpu::aot::ldr_literal(base.add(1) as usize, lit, 16));
+            ptr::write(base.add(1), crate::guest::exec::aot::ldr_literal(base.add(1) as usize, lit, 16));
             let back = (self.trampoline_pool as isize - base.add(2) as isize) / 4;
             ptr::write(base.add(2), 0x1400_0000 | (back as u32 & 0x03FF_FFFF)); // b <entry stub>
             for w in 3..TRAMPOLINE_WORDS {
@@ -648,7 +648,7 @@ impl GuestMemorySpace {
         }
         let pool_bytes = self.trampoline_capacity * TRAMPOLINE_WORDS * 4;
         unsafe {
-            crate::cpu::aot::make_exec(
+            crate::guest::exec::aot::make_exec(
                 "hle.trampolines",
                 self.trampoline_pool as usize,
                 pool_bytes,
@@ -689,7 +689,7 @@ impl GuestMemorySpace {
         let aligned_text_size = (self.text_size + page_size - 1) & !(page_size - 1);
 
         let res = unsafe {
-            crate::cpu::aot::make_exec("main.text", self.base_ptr as usize, aligned_text_size)
+            crate::guest::exec::aot::make_exec("main.text", self.base_ptr as usize, aligned_text_size)
         };
 
         if res != 0 {

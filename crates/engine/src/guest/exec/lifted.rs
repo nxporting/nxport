@@ -31,8 +31,8 @@ struct RtHost {
     svc: unsafe extern "C" fn(*mut Cpu, u32, u64),
     trap: unsafe extern "C" fn(*mut Cpu, u32, u32, u64),
     ticks: unsafe extern "C" fn() -> u64,
-    resolve_hle: unsafe extern "C" fn(u64) -> *const crate::hle_abi::Hle,
-    call_hle: unsafe extern "C" fn(*const crate::hle_abi::Hle, *mut Cpu),
+    resolve_hle: unsafe extern "C" fn(u64) -> *const crate::guest::exec::hle_abi::Hle,
+    call_hle: unsafe extern "C" fn(*const crate::guest::exec::hle_abi::Hle, *mut Cpu),
     code_changed: unsafe extern "C" fn(u64),
 }
 
@@ -54,10 +54,10 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
     let c = &mut *c;
     #[cfg(windows)]
-    let hooked = crate::live_patch::enabled() && crate::live_patch::hle_hooked(c.pc);
+    let hooked = crate::guest::exec::live_patch::enabled() && crate::guest::exec::live_patch::hle_hooked(c.pc);
     #[cfg(not(windows))]
     let hooked = false;
-    match crate::hle_abi::entry(c.pc).filter(|_| !hooked) {
+    match crate::guest::exec::hle_abi::entry(c.pc).filter(|_| !hooked) {
         Some(h) => h.call(c),
         None => (handlers().unknown)(c),
     }
@@ -65,19 +65,19 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
 }
 
 /// The dispatcher's cache of HLE targets (runtime/rt.c): what `host_call` would find for `pc`.
-unsafe extern "C" fn host_resolve_hle(pc: u64) -> *const crate::hle_abi::Hle {
+unsafe extern "C" fn host_resolve_hle(pc: u64) -> *const crate::guest::exec::hle_abi::Hle {
     #[cfg(windows)]
-    if crate::live_patch::enabled() && crate::live_patch::hle_hooked(pc) {
+    if crate::guest::exec::live_patch::enabled() && crate::guest::exec::live_patch::hle_hooked(pc) {
         return std::ptr::null();
     }
-    crate::hle_abi::entry_ref(pc).map_or(std::ptr::null(), |h| h as *const _)
+    crate::guest::exec::hle_abi::entry_ref(pc).map_or(std::ptr::null(), |h| h as *const _)
 }
 
-unsafe extern "C" fn host_call_hle(h: *const crate::hle_abi::Hle, c: *mut Cpu) {
+unsafe extern "C" fn host_call_hle(h: *const crate::guest::exec::hle_abi::Hle, c: *mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
     // The dispatcher's cache keeps what it resolved: a mod may have hooked this trampoline since.
     #[cfg(windows)]
-    if crate::live_patch::enabled() && crate::live_patch::hle_hooked((*c).pc) {
+    if crate::guest::exec::live_patch::enabled() && crate::guest::exec::live_patch::hle_hooked((*c).pc) {
         (handlers().unknown)(&mut *c);
         CURRENT.with(|cur| cur.set(prev));
         return;
@@ -90,7 +90,7 @@ unsafe extern "C" fn host_call_hle(h: *const crate::hle_abi::Hle, c: *mut Cpu) {
 unsafe extern "C" fn host_code_changed(addr: u64) {
     let _ = addr;
     #[cfg(windows)]
-    if crate::live_patch::enabled() {
+    if crate::guest::exec::live_patch::enabled() {
         let pages = crate::horizon::svc::flush_code_view_at(addr as usize);
         if pages > 0 {
             println!("[+] Live patches: {pages} code pages written, seen at a cache flush");
@@ -130,7 +130,7 @@ static OVERLAY_CODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 
 /// Calls an HLE function for code outside the guest library, as host_call_hle does.
 #[cfg(windows)]
-pub unsafe fn call_hle(h: crate::hle_abi::Hle, c: &mut Cpu) {
+pub unsafe fn call_hle(h: crate::guest::exec::hle_abi::Hle, c: &mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
     h.call(c);
     CURRENT.with(|cur| cur.set(prev));
@@ -275,22 +275,22 @@ impl GuestLibrary {
                 let names = overlay.map_or(&[][..], |(_, n)| n).iter().chain(modules);
                 let tables = over_tables.iter().chain(&base_tables).zip(names).map(|(t, name)| {
                     let (addrs, fns) = t.entries();
-                    crate::live_patch::Table {
+                    crate::guest::exec::live_patch::Table {
                         addrs: std::slice::from_raw_parts(addrs.as_ptr(), addrs.len()),
                         fns: std::slice::from_raw_parts(fns.as_ptr(), fns.len()),
                         scattered: name.starts_with("ov_"),
                     }
                 }).collect();
-                let add_of = |l: &crate::platform::os::Library, p: &std::path::Path| -> Result<crate::live_patch::AddModule, String> {
+                let add_of = |l: &crate::platform::os::Library, p: &std::path::Path| -> Result<crate::guest::exec::live_patch::AddModule, String> {
                     Ok(std::mem::transmute(sym(l, p, "nx_rt_add_module")?))
                 };
                 let mut adds = vec![add_of(&lib, path)?];
                 if let Some((l, _, p)) = &over {
                     adds.push(add_of(l, p)?);
                 }
-                crate::live_patch::enable(tables, get(), adds, host as *const RtHost as usize)?;
+                crate::guest::exec::live_patch::enable(tables, get(), adds, host as *const RtHost as usize)?;
                 for (start, len) in crate::guest::mod_patches::take_not_lifted() {
-                    crate::live_patch::code_written(start, len);
+                    crate::guest::exec::live_patch::code_written(start, len);
                 }
             }
             if let Some((l, _, p)) = &over {

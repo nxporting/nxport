@@ -7064,7 +7064,7 @@ impl Gfx {
                     let verify = if super::verify_tex_enabled() {
                         let upl = super::upload_record(super::storage_id(&tex));
                         let cur = super::current_guest_hash(a);
-                        let nz = if t.storage > 0x10000 && crate::cpu::crash_handler::readable(t.storage as usize, 0x4000) { std::slice::from_raw_parts(t.storage as *const u8, 0x4000).iter().filter(|&&x| x != 0).count() } else { 0 };
+                        let nz = if t.storage > 0x10000 && crate::guest::exec::crash_handler::readable(t.storage as usize, 0x4000) { std::slice::from_raw_parts(t.storage as *const u8, 0x4000).iter().filter(|&&x| x != 0).count() } else { 0 };
                         format!(" verify: guest_nonzero16k={} snap_storage={:x?} upload={:x?} {}", nz, cur.map(|c| c.0), upl,
                             match (cur, upl) { (Some(c), Some(u)) if c.0 == u.0 && c.1 == u.1 => "OK", (Some(c), Some(u)) if c.0 != u.0 => "FOREIGN", (Some(_), Some(_)) => "STALE", _ => "?" })
                     } else { String::new() };
@@ -9061,18 +9061,18 @@ unsafe fn ubo_content_probe(pkt: &DrawPacket, vs: &'static CachedStage) {
         addr_lag: [0; 5],
     });
     let writers = crate::settings::get().log.log_ubo_writers;
-    if writers && !crate::cpu::crash_handler::WRITER_LOG.load(std::sync::atomic::Ordering::Relaxed)
+    if writers && !crate::guest::exec::crash_handler::WRITER_LOG.load(std::sync::atomic::Ordering::Relaxed)
     {
-        crate::cpu::crash_handler::WRITER_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::guest::exec::crash_handler::WRITER_LOG.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let frame = super::presented_frames();
     if frame != p.frame {
         if writers {
             // Faults since the last frame change: those on pages this frame's uniforms sat on name their writers.
-            let base = crate::cpu::crash_handler::get_guest_base() as u64;
+            let base = crate::guest::exec::crash_handler::get_guest_base() as u64;
             let end =
-                crate::cpu::crash_handler::WRITER_IDX.load(std::sync::atomic::Ordering::Relaxed);
-            let ring = &crate::cpu::crash_handler::WRITER_RING;
+                crate::guest::exec::crash_handler::WRITER_IDX.load(std::sync::atomic::Ordering::Relaxed);
+            let ring = &crate::guest::exec::crash_handler::WRITER_RING;
             let start = p.ring_pos.max(end.saturating_sub(ring.len()));
             for i in start..end {
                 let e = &ring[i % ring.len()];
@@ -9096,10 +9096,10 @@ unsafe fn ubo_content_probe(pkt: &DrawPacket, vs: &'static CachedStage) {
             // Arm the pages of the frame just planned: the game's next writes to them are logged.
             for &pg in &p.pages {
                 let k = pg as usize;
-                if k < crate::cpu::crash_handler::WRITER_PAGES.len() * 64 {
-                    crate::cpu::crash_handler::WRITER_ARMED[k / 64]
+                if k < crate::guest::exec::crash_handler::WRITER_PAGES.len() * 64 {
+                    crate::guest::exec::crash_handler::WRITER_ARMED[k / 64]
                         .fetch_or(1 << (k % 64), std::sync::atomic::Ordering::Relaxed);
-                    crate::cpu::crash_handler::WRITER_PAGES[k / 64]
+                    crate::guest::exec::crash_handler::WRITER_PAGES[k / 64]
                         .fetch_or(1 << (k % 64), std::sync::atomic::Ordering::Relaxed);
                     libc::mprotect((pg << 14) as *mut libc::c_void, 1 << 14, libc::PROT_READ);
                 }

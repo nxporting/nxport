@@ -638,8 +638,8 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
     const PAGE: usize = 0x4000;
     // Image code (cpu/aot.rs): always a copy, so writes reach the code only at flushes, where a dump run records each
     // page's new content and a loading run maps the matching signed version.
-    let in_image = crate::cpu::aot::active() && crate::cpu::aot::in_region(src, size);
-    let image = in_image && crate::cpu::aot::loading();
+    let in_image = crate::guest::exec::aot::active() && crate::guest::exec::aot::in_region(src, size);
+    let image = in_image && crate::guest::exec::aot::loading();
     // A real alias where the page offsets agree and the host can make one; a copy otherwise.
     if cfg!(nx_native) && dst % PAGE == src % PAGE && !in_image {
         #[cfg(nx_native)]
@@ -765,7 +765,7 @@ unsafe fn flush_range(v: &mut Shadow, start: usize, end: usize) -> usize {
                 std::ptr::copy_nonoverlapping(view.as_ptr(), (v.src + off) as *mut u8, n);
                 #[cfg(windows)]
                 for a in changed {
-                    crate::live_patch::code_written(a, 4);
+                    crate::guest::exec::live_patch::code_written(a, 4);
                 }
                 let _ = crate::platform::os::protect(page as usize, span, crate::platform::os::Prot::ReadExec);
                 crate::platform::os::flush_icache(((v.src + off)) as usize, n);
@@ -779,7 +779,7 @@ unsafe fn flush_range(v: &mut Shadow, start: usize, end: usize) -> usize {
         off += n;
     }
     for page in touched {
-        crate::cpu::aot::record_page(page);
+        crate::guest::exec::aot::record_page(page);
     }
     written
 }
@@ -857,8 +857,8 @@ unsafe fn start_thread(r: &mut [u64; 8]) -> u64 {
             crate::guest::tls::mark_guest_thread();
             #[cfg(nx_native)]
             {
-                crate::cpu::tls::install_guest_tls();
-                crate::cpu::trampoline::init_worker_thread_x18();
+                crate::guest::exec::tls::install_guest_tls();
+                crate::guest::exec::trampoline::init_worker_thread_x18();
             }
             CURRENT_SVC_THREAD_DONE.with(|c| *c.borrow_mut() = Some(done.clone()));
             crate::guest::call(entry, &[arg as u64]);

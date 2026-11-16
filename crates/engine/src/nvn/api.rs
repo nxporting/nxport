@@ -742,7 +742,7 @@ static NVN_LABELED_STUB_TABLE: [NvnStubFn; NVN_LABELED_STUB_POOL_SIZE] = [
 
 fn resolve_unimplemented_nvn(name: &str) -> *const () {
     match nvn_stub_index_for_name(name) {
-        Some(idx) => crate::hle_abi::hle(NVN_LABELED_STUB_TABLE[idx]),
+        Some(idx) => crate::guest::exec::hle_abi::hle(NVN_LABELED_STUB_TABLE[idx]),
         None => crate::hle!(hle_nvn_generic_stub()),
     }
 }
@@ -5324,7 +5324,7 @@ pub fn present_interval() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interval: i32) {
     #[cfg(all(nx_runtime, windows))]
-    crate::live_patch::present_interval_set(interval);
+    crate::guest::exec::live_patch::present_interval_set(interval);
     // Debug: --log-pacing prints the inputs of TotK's frame-pacing decision (guest+0x8f6670): the measured frame
     // duration in ticks at obj+0x118, the tick frequency it divides by, and the state at obj+0x248 (max, min, bias,
     // current interval). obj is the caller's saved x19 (stored at its frame pointer + 0x38).
@@ -6703,7 +6703,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             }
             // A mod's own interval, which vsync holds a Switch to. The game goes on seeing the one it asked for.
             #[cfg(all(nx_runtime, windows))]
-            if let Some(forced) = crate::live_patch::forced_interval() {
+            if let Some(forced) = crate::guest::exec::live_patch::forced_interval() {
                 if !is_stock30 {
                     fps = fps.min(60 / forced as u32);
                 }
@@ -7028,8 +7028,8 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
         // A dump run with plugin mods (lifted hosts; natively the Metal backend does this): the image of the code as the
         // mods patched it, then nothing more to do.
         #[cfg(not(nx_native))]
-        if crate::cpu::aot::deferred_dump_frame() == Some(f) {
-            match unsafe { crate::cpu::aot::dump_after_mods() } {
+        if crate::guest::exec::aot::deferred_dump_frame() == Some(f) {
+            match unsafe { crate::guest::exec::aot::dump_after_mods() } {
                 Ok(()) => {
                     println!("[+] AOT: image written at frame {f}; exiting (--aot-dump)");
                     std::process::exit(0);
@@ -7050,7 +7050,7 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
         }
     }
     #[cfg(all(nx_runtime, windows))]
-    crate::live_patch::presented();
+    crate::guest::exec::live_patch::presented();
 }
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnQueueWaitSync(_queue: *mut NvnQueue, _sync: usize) -> u8 {
