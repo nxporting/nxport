@@ -606,7 +606,11 @@ un-%p.profraw
   bug 8a35540 fixed. Repro script: scratchpad map_run.ps1 (A = an app built from main with the user's Mods).
   Not the vertex cache either (temporary switch reading vertex / index data in place: same bad frames). With this
   script the bad frames are deterministic: the same frames (f7283 / 7383 / 7483 and their neighbours) with nearly the
-  same outlier counts in all 7 runs, so a pass dump at a known frame (--history-dump-at=7482) should catch one. Established:
+  same outlier counts in all 7 runs, so a pass dump at a known frame (--history-dump-at=7482) should catch one.
+  Caught (pass dump of f7483, which shows the bad frame): the scene passes (1920x1080 B10G11R11, 217-252) are clean
+  where the bad block shows; it appears in the last pass, 253 (1920x1080 RGBA8 SRGB, the UI composite), as the 11-10
+  analysis said. Next: a per-draw dump of pass 253 in f7483 (the 11-10 per-draw split probe) to name the draw again
+  and compare its inputs with f7482's. Established:
   (1) Main from before 11-09 and today's main both flash on the repro (123-355k outlier pixels at f7282-7284); any
   probe that adds work on the game's recording or layout threads in those frames hides it (watch probe, list probe,
   heavy entry probes), so it is a timing race. Light probes keep it. (2) Every UI layout has its own draw info; a
