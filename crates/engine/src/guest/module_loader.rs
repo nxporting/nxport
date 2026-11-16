@@ -3,8 +3,8 @@
 // Like rtld: decompress and map the module, apply its relocations (imports resolved by name through `resolve`, the
 // same targets the game's own imports got, so a mod calling nn::fs::OpenFile reaches the engine's HLE), then make it
 // runnable on macOS the way the engine treats the game's code:
-//   - x18 uses are rewritten when the kernel does not preserve x18 (cpu/trampoline.rs)
-//   - `mrs xN, tpidr_el0` loads the guest TLS pointer (as cpu/tpidr_rewrite.rs does for main/SDK)
+//   - x18 uses are rewritten when the kernel does not preserve x18 (guest/exec/trampoline.rs)
+//   - `mrs xN, tpidr_el0` loads the guest TLS pointer (as guest/exec/tpidr_rewrite.rs does for main/SDK)
 //   - `mrs xN, tpidrro_el0` loads the thread's fake Horizon thread-local region (IPC buffer; cpu::tls::FAKE_TLR_SLOT)
 //     instead of Darwin's TSD
 //   - `svc #n` branches to a stub that calls svc::svc_dispatch with the saved x0-x7
@@ -358,7 +358,7 @@ pub unsafe fn load(
         "no sites"
     };
     let text_pages = (text_len + 0x3fff) & !0x3fff;
-    // Code regions go through cpu/aot.rs: on iOS they come from the signed image (mods included, cpu/aot.rs).
+    // Code regions go through guest/exec/aot.rs: on iOS they come from the signed image (mods included, guest/exec/aot.rs).
     let short: String = name
         .chars()
         .rev()

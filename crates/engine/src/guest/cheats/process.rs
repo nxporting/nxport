@@ -14,7 +14,7 @@
 //   prepared, so the write counts as the CPU write it is;
 // - into main's read-only pages (code and read-only data) as a debugger does. Natively through a second, writable
 //   mapping of the page, so the code stays executable for the threads running it; code mapped from a signed image
-//   (iOS: cpu/aot.rs) cannot change, and such writes are dropped. On Windows through WriteProcessMemory, and code there
+//   (iOS: guest/exec/aot.rs) cannot change, and such writes are dropped. On Windows through WriteProcessMemory, and code there
 //   is lifted: a write to main's code goes through live_patch, which runs the changed functions in the interpreter
 //   from then on;
 // - a write that leaves memory as it was is skipped (nothing changes, and guarded pages stay guarded).

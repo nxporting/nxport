@@ -80,7 +80,7 @@ impl SdkModule {
             let _ = crate::platform::os::protect(page as usize, span, crate::platform::os::Prot::ReadWrite);
             let p = addr as *mut u32;
             // The target comes from a literal (data), not the code: patched code must be the same on every launch
-            // (AOT images, cpu/aot.rs).
+            // (AOT images, guest/exec/aot.rs).
             let [adrp, ldr] = crate::guest::exec::aot::adrp_ldr(addr, crate::guest::exec::aot::literal(target), 16);
             ptr::write(p, adrp);
             ptr::write(p.add(1), ldr);
@@ -445,7 +445,7 @@ pub fn load_sdk(
     }
 
     // x18 uses stay as they are here: macOS preserves x18 for this process, elsewhere main.rs rewrites them
-    // (cpu/trampoline.rs).
+    // (guest/exec/trampoline.rs).
 
     // ── Patch AddressRegionManager node area ─────────────────────────────────
     // In newer Nintendo SDKs (e.g. SDK 15+ used by TotK), AddressRegionManager reserves

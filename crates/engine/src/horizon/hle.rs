@@ -129,7 +129,7 @@ pub unsafe extern "C" fn hle_nnmusl_init_dso(
     // linker symbol that arrives relocated: module base + alignment; x0 is the base), x6..x7 the
     // zero-filled part (.tbss) (TotK: no .tdata, 8 bytes of .tbss; Super Mario Bros. Wonder: 16 bytes of .tdata, an
     // owner sentinel of -1 its allocator checks before using a per-thread arena). Every guest thread's block starts
-    // with this template (cpu/tls.rs), as nnmusl gives each thread a copy.
+    // with this template (guest/exec/tls.rs), as nnmusl gives each thread a copy.
     let align = align_sym.wrapping_sub(base);
     let align = if align.is_power_of_two() && align <= 0x1000 {
         align

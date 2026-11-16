@@ -415,7 +415,7 @@ pub(crate) unsafe extern "C" fn start_thread(thread: *mut NnThreadType) {
             // Every guest thread reads tpidr_el0 directly for thread_local /
             // SDK per-thread state -- must be installed before any guest code
             // (including code reached indirectly through HLE calls below) runs
-            // on this OS thread. See cpu/tls.rs.
+            // on this OS thread. See guest/exec/tls.rs.
             #[cfg(nx_native)]
             {
                 crate::guest::exec::tls::install_guest_tls();

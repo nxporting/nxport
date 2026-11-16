@@ -80,7 +80,7 @@ pub static ISLAND: std::sync::Mutex<Option<TrampolineIsland>> = std::sync::Mutex
 pub const JT_LANDINGS: usize = 4096;
 /// The slow path of a jump table stub past its landings: `brk #0x7a2`, followed by BASE as its distance from the brk
 /// (two words, signed): code holds no absolute address, so an image made at one address matches a run at another
-/// (cpu/aot.rs).
+/// (guest/exec/aot.rs).
 pub const BRK_JT: u32 = 0xD420_F440;
 
 /// The signal handler's half of a jump table stub's slow path, at its `brk` (`pc`): x17 holds 4 * offset and the stub's
@@ -148,7 +148,7 @@ unsafe impl Send for TrampolineIsland {}
 
 impl TrampolineIsland {
     /// An island in writable memory the caller reserved (guest::loader::x18_island_area: a fixed place, so the stubs are the
-    /// same on every launch, see cpu/aot.rs). The x18 slot is the fixed TSD key cpu::tls::x18_key.
+    /// same on every launch, see guest/exec/aot.rs). The x18 slot is the fixed TSD key cpu::tls::x18_key.
     pub fn new(base: usize, capacity_bytes: usize) -> Result<Self, &'static str> {
         if base == 0 {
             return Err("no memory for the x18 island");
@@ -799,7 +799,7 @@ impl TrampolineIsland {
             words.push(0xD53BD060u32 | 17); // mrs x17, tpidrro_el0 (x17: free at a call, see BR above)
             words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (17 << 5) | 17); // ldr x17, [x17, #x18 slot]
                                                                                        // Call; the callee returns here and we branch back. (The return address used to be an absolute literal,
-                                                                                       // which made the stub differ per launch; see cpu/aot.rs.)
+                                                                                       // which made the stub differ per launch; see guest/exec/aot.rs.)
             words.push(0xD63F0220u32); // blr x17
             let current_stub_pc = stub_addr + (words.len() * 4);
             let return_diff = ((original_pc + 4) as i64) - (current_stub_pc as i64);
@@ -816,7 +816,7 @@ impl TrampolineIsland {
             // stp scratch, repl, [sp, #-16]!
             words.push(0xA9BF03E0u32 | (repl_idx << 10) | scratch_idx);
             // repl = target_val, computed from this stub's own address (adrp + add): no absolute literal, so the
-            // stub is the same on every launch (cpu/aot.rs).
+            // stub is the same on every launch (guest/exec/aot.rs).
             let here = stub_addr + words.len() * 4;
             let pages = ((target_val & !0xfff) as i64 - (here & !0xfff) as i64) >> 12;
             words.push(
@@ -1101,7 +1101,7 @@ impl TrampolineIsland {
             return Ok(words.len());
         }
 
-        // `mrs x18, tpidr_el0`: the guest's thread pointer (cpu/tpidr_rewrite.rs handles every other register; it only scans
+        // `mrs x18, tpidr_el0`: the guest's thread pointer (guest/exec/tpidr_rewrite.rs handles every other register; it only scans
         // module text, so moved here the instruction would read Darwin's TPIDR_EL0).
         if original_word == 0xD53B_D040 | 18 {
             words.push(0xD53B_D060 | repl_idx); // mrs repl, tpidrro_el0
@@ -1815,7 +1815,7 @@ mod tests {
 
     #[test]
     fn jump_table_stub_is_the_same_wherever_the_code_sits() {
-        // An image is made with the guest at one address and checked against a run that loads it at another (cpu/aot.rs):
+        // An image is made with the guest at one address and checked against a run that loads it at another (guest/exec/aot.rs):
         // the island's words must not depend on where text and island sit, as long as they move together by whole pages.
         let _ = crate::settings::try_install(Default::default());
         let code = [0x7100_091fu32, 0x5400_0148, 0x1000_00b2, 0x1000_01a9, 0x7868_7928, 0x8b08_0a52, 0xd61f_0240];
