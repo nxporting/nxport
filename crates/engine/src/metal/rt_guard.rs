@@ -705,6 +705,18 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
     wake();
     let t0 = std::time::Instant::now();
     while held(page) {
+        // Holds made on this page after the fault (another target sharing it, rendered again meanwhile) keep it
+        // inaccessible too: request their write-back as well, or the wait runs into the timeout.
+        let n = HIGH.load(Ordering::Acquire).min(SLOTS);
+        let mut asked = false;
+        for i in 0..n {
+            if covers(i, page) && REQ[i].swap(1, Ordering::AcqRel) == 0 {
+                asked = true;
+            }
+        }
+        if asked {
+            wake();
+        }
         if t0.elapsed().as_secs() >= 2 {
             TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             for i in 0..n {
