@@ -4059,7 +4059,7 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
     // new generation: the game may free the object while pool slots registered from it stay in use (NVN copied the
     // descriptor into the pool), and those slots must resolve to their registered state, not to whatever reuses the
     // memory (Super Mario Odyssey's opening demo read heap data as texture dimensions and allocated gigabytes).
-    if let Some((_, t)) = texture_snapshot(tex as usize) {
+    if let Some((og, t)) = texture_snapshot(tex as usize) {
         if let Some(idx) = TEX_BY_STORAGE.lock().unwrap().as_mut() {
             unindex_texture(idx, tex as usize, t.storage);
             log_index_change(t.storage, texture_span(&t));
@@ -4068,6 +4068,9 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
         if let Some(s) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
             s.insert(tex as usize, (gen, t));
         }
+        // Commands recorded before the finalize name the old generation (BotW initializes one object for each of its
+        // water maps, records a pass into it and finalizes it again: without this every pass drew into the last map).
+        remember_snapshot(og, t);
         bump_tex_table_epoch();
     }
     if !tex.is_null() {
