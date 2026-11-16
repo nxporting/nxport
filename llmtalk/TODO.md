@@ -542,6 +542,14 @@ un-%p.profraw
   yet compiled or run (2026-11-12, session scratchpad rb_timing_probe.diff): rb_all_probe plus `[rb-skip]` lines for
   refreshes skipped while the image's own write is in flight, and serial / own submit / each writer's submit and
   settled state on `[rb]` lines; run as before with NX_ANYPOOL_ONLY=400x228f37 and the frame history.
+  **Run 2026-11-16 (win-worker):** 3 of 3 runs flash with the rule limited to 400x228f37 (main at 6ee6f52, 8a35540
+  in). The probe's lines are the same in the flash frame (f3304) and its neighbours: every frame two 400x228f37 images
+  are rebuilt incrementally (from_image, self) from the previous submit's 1600x900f37 scene image (settled), at
+  offsets 0 and -0x90000. No refresh of them is skipped. So the route, writers and settled states do not vary with
+  the flash. Also checked by reading: every vkQueueSubmit (exec, history, window) goes to the one queue under the
+  context lock, and the rebuild is fully barriered (start, after the copies, between moves, before and after the copy
+  back). Left: what the GPU reads in the rebuild in a flash frame (dump scratch and the 1600x900 image at the rebuild
+  for a flash frame vs a neighbour), or what the passes after it do with the 400x228 images.
 - **An .ipa built on Windows has no shader cache (the user, 2026-11-11).** By design so far (builder/src/windows.rs:251,
   ipa build with `cache: None`): the iOS cache is .metallib built with `xcrun metal`, Mac-only, so the iPhone translates
   every shader as the game first uses it. Apple's Metal Developer Tools for Windows (metal.exe -> .air, metallib.exe ->
