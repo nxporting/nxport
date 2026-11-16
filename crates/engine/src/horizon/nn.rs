@@ -11,54 +11,18 @@
 // need to match sizeof/offsets) and makes cross-object waits (MultiWait) trivial.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::Mutex;
 
 
 pub(crate) const RESULT_SUCCESS: u32 = 0;
 
-// ── global sync state ────────────────────────────────────────────────────────────────────────
-#[derive(Default)]
-pub(crate) struct EventSt {
-    pub(crate) signaled: bool,
-    pub(crate) auto_clear: bool,
-    /// Signals so far: a manual-clear waiter returns once one arrived after it began, even if cleared again since.
-    pub(crate) signals: u64,
-}
 
-#[derive(Default)]
-pub(crate) struct MsgQ {
-    pub(crate) cap: usize,
-    pub(crate) q: VecDeque<u64>,
-}
 
-#[derive(Default)]
-pub(crate) struct RwSt {
-    readers: u32,
-    writer: usize, // owning thread token, 0 = none
-    write_depth: u32,
-}
 
-#[derive(Default)]
-pub(crate) struct Sync {
-    pub(crate) events: HashMap<usize, EventSt>,
-    pub(crate) holders: HashMap<usize, usize>, // holder addr -> event addr
-    pub(crate) multiwaits: HashMap<usize, Vec<usize>>, // multiwait addr -> ordered holder addrs
-    pub(crate) msgqs: HashMap<usize, MsgQ>,
-    pub(crate) rwlocks: HashMap<usize, RwSt>,
-}
 
-static SYNC: Mutex<Option<Sync>> = Mutex::new(None);
-pub(crate) static SYNC_CV: Condvar = Condvar::new();
 
-pub(crate) fn lock() -> MutexGuard<'static, Option<Sync>> {
-    let mut g = SYNC.lock().unwrap();
-    if g.is_none() {
-        *g = Some(Sync::default());
-    }
-    g
-}
 
-fn me() -> usize {
+pub(crate) fn me() -> usize {
     unsafe { crate::horizon::os::get_current_thread() as usize }
 }
 
@@ -67,202 +31,15 @@ pub(crate) fn signal_event(ev: usize) {
     unsafe { crate::horizon::os::signal_event(ev as *mut u8) }
 }
 
-/// Waits for the event; a signaled auto-clear event is consumed. `deadline` None = forever. Returns whether it was
-/// signaled. An event nothing initialised (no side-table entry) never signals.
-pub(crate) fn event_wait(ev: usize, deadline: Option<std::time::Instant>) -> bool {
-    let mut g = lock();
-    let signals0 = g.as_ref().unwrap().events.get(&ev).map(|e| e.signals);
-    loop {
-        if let Some(e) = g.as_mut().unwrap().events.get_mut(&ev) {
-            if e.signaled {
-                if e.auto_clear {
-                    e.signaled = false;
-                }
-                return true;
-            }
-            if !e.auto_clear && signals0.is_some_and(|n| n != e.signals) {
-                return true;
-            }
-        }
-        match deadline {
-            None => g = SYNC_CV.wait(g).unwrap(),
-            Some(d) => {
-                let now = std::time::Instant::now();
-                if now >= d {
-                    return false;
-                }
-                g = SYNC_CV.wait_timeout(g, d - now).unwrap().0;
-            }
-        }
-    }
-}
 
 /// MultiWaitHolder user data: an opaque value the caller attaches to a holder.
 pub(crate) static HOLDER_USER_DATA: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
 
 
-/// Message queue operations with a deadline (None = block forever, Some(now) = try once). `front` jams the value at the
-/// head instead of the tail. Returns false on timeout; an unknown queue fails at once.
-pub(crate) fn mq_send(mq: usize, data: u64, front: bool, deadline: Option<std::time::Instant>) -> bool {
-    let mut g = lock();
-    loop {
-        match g.as_mut().unwrap().msgqs.get_mut(&mq) {
-            Some(q) if q.q.len() < q.cap => {
-                if front {
-                    q.q.push_front(data)
-                } else {
-                    q.q.push_back(data)
-                }
-                drop(g);
-                SYNC_CV.notify_all();
-                return true;
-            }
-            Some(_) => {}
-            None => return false,
-        }
-        g = match deadline {
-            None => SYNC_CV.wait(g).unwrap(),
-            Some(d) => {
-                let now = std::time::Instant::now();
-                if now >= d {
-                    return false;
-                }
-                SYNC_CV.wait_timeout(g, d - now).unwrap().0
-            }
-        };
-    }
-}
-/// `peek`: read the head without removing it.
-pub(crate) fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::Instant>, peek: bool) -> bool {
-    let mut g = lock();
-    loop {
-        match g.as_mut().unwrap().msgqs.get_mut(&mq) {
-            Some(q) => {
-                let v = if peek { q.q.front().copied() } else { q.q.pop_front() };
-                if let Some(v) = v {
-                    if !out.is_null() {
-                        unsafe { *out = v };
-                    }
-                    drop(g);
-                    SYNC_CV.notify_all();
-                    return true;
-                }
-            }
-            None => return false,
-        }
-        g = match deadline {
-            None => SYNC_CV.wait(g).unwrap(),
-            Some(d) => {
-                let now = std::time::Instant::now();
-                if now >= d {
-                    return false;
-                }
-                SYNC_CV.wait_timeout(g, d - now).unwrap().0
-            }
-        };
-    }
-}
 pub(crate) fn deadline_ns(timeout_ns: i64) -> Option<std::time::Instant> {
     Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64))
 }
 
-// ── nn::os::ReaderWriterLock (real exclusion) ────────────────────────────────────────────────
-pub fn rw_init(addr: usize) {
-    lock()
-        .as_mut()
-        .unwrap()
-        .rwlocks
-        .insert(addr, RwSt::default());
-}
-pub fn rw_acquire_write(addr: usize) {
-    let t = me();
-    let mut g = lock();
-    loop {
-        let r = g.as_mut().unwrap().rwlocks.entry(addr).or_default();
-        if r.writer == t {
-            r.write_depth += 1;
-            return;
-        }
-        if r.writer == 0 && r.readers == 0 {
-            r.writer = t;
-            r.write_depth = 1;
-            return;
-        }
-        g = SYNC_CV.wait(g).unwrap();
-    }
-}
-pub fn rw_try_acquire_write(addr: usize) -> bool {
-    let t = me();
-    let mut g = lock();
-    let r = g.as_mut().unwrap().rwlocks.entry(addr).or_default();
-    if r.writer == t {
-        r.write_depth += 1;
-        true
-    } else if r.writer == 0 && r.readers == 0 {
-        r.writer = t;
-        r.write_depth = 1;
-        true
-    } else {
-        false
-    }
-}
-pub fn rw_release_write(addr: usize) {
-    let t = me();
-    let mut g = lock();
-    let r = g.as_mut().unwrap().rwlocks.entry(addr).or_default();
-    if r.writer == t && r.write_depth > 0 {
-        r.write_depth -= 1;
-        if r.write_depth == 0 {
-            r.writer = 0;
-            drop(g);
-            SYNC_CV.notify_all();
-        }
-    }
-}
-pub fn rw_acquire_read(addr: usize) {
-    let t = me();
-    let mut g = lock();
-    loop {
-        let r = g.as_mut().unwrap().rwlocks.entry(addr).or_default();
-        if r.writer == 0 || r.writer == t {
-            r.readers += 1;
-            return;
-        }
-        g = SYNC_CV.wait(g).unwrap();
-    }
-}
-pub fn rw_try_acquire_read(addr: usize) -> bool {
-    let t = me();
-    let mut g = lock();
-    let r = g.as_mut().unwrap().rwlocks.entry(addr).or_default();
-    if r.writer == 0 || r.writer == t {
-        r.readers += 1;
-        true
-    } else {
-        false
-    }
-}
-pub fn rw_release_read(addr: usize) {
-    let mut g = lock();
-    let r = g.as_mut().unwrap().rwlocks.entry(addr).or_default();
-    if r.readers > 0 {
-        r.readers -= 1;
-        if r.readers == 0 {
-            drop(g);
-            SYNC_CV.notify_all();
-        }
-    }
-}
-pub fn rw_write_held_by_me(addr: usize) -> bool {
-    let t = me();
-    lock()
-        .as_mut()
-        .unwrap()
-        .rwlocks
-        .get(&addr)
-        .map(|r| r.writer == t)
-        .unwrap_or(false)
-}
 
 
 // ── nn::time ─────────────────────────────────────────────────────────────────────────────────

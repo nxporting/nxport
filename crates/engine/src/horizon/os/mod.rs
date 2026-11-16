@@ -1,8 +1,10 @@
 // nn::os as the game calls it: threads, synchronization (mutexes, events, semaphores, condition variables, message
 // queues), TLS, memory and time.
 
-use super::hle::*;
-use super::nn::*;
+use crate::horizon::hle::*;
+use crate::horizon::nn::*;
+pub(crate) mod objects;
+use objects::*;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -751,7 +753,7 @@ pub(crate) unsafe extern "C" fn get_current_stack_info(
 
 pub(crate) unsafe extern "C" fn initialize_reader_writer_lock(rwlock: *mut NnReaderWriterLock) {
     if !rwlock.is_null() {
-        crate::horizon::nn::rw_init(rwlock as usize);
+        crate::horizon::os::objects::rw_init(rwlock as usize);
     }
 }
 
@@ -759,32 +761,32 @@ pub(crate) unsafe extern "C" fn finalize_reader_writer_lock(_rwlock: *mut NnRead
 
 pub(crate) unsafe extern "C" fn acquire_write_lock(rwlock: *mut NnReaderWriterLock) {
     if !rwlock.is_null() {
-        crate::horizon::nn::rw_acquire_write(rwlock as usize);
+        crate::horizon::os::objects::rw_acquire_write(rwlock as usize);
     }
 }
 
 pub(crate) unsafe extern "C" fn release_write_lock(rwlock: *mut NnReaderWriterLock) {
     if !rwlock.is_null() {
-        crate::horizon::nn::rw_release_write(rwlock as usize);
+        crate::horizon::os::objects::rw_release_write(rwlock as usize);
     }
 }
 
 pub(crate) unsafe extern "C" fn acquire_read_lock(rwlock: *mut NnReaderWriterLock) {
     if !rwlock.is_null() {
-        crate::horizon::nn::rw_acquire_read(rwlock as usize);
+        crate::horizon::os::objects::rw_acquire_read(rwlock as usize);
     }
 }
 
 pub(crate) unsafe extern "C" fn release_read_lock(rwlock: *mut NnReaderWriterLock) {
     if !rwlock.is_null() {
-        crate::horizon::nn::rw_release_read(rwlock as usize);
+        crate::horizon::os::objects::rw_release_read(rwlock as usize);
     }
 }
 
 pub(crate) unsafe extern "C" fn is_write_lock_held_by_current_thread(
     rwlock: *const NnReaderWriterLock,
 ) -> bool {
-    !rwlock.is_null() && crate::horizon::nn::rw_write_held_by_me(rwlock as usize)
+    !rwlock.is_null() && crate::horizon::os::objects::rw_write_held_by_me(rwlock as usize)
 }
 
 pub(crate) unsafe extern "C" fn initialize_light_message_queue(
