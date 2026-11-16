@@ -18,10 +18,25 @@
 //   console.
 // - The frame loop's vsync wait (it waits for vblanks until interval / 60 s have passed; only the first frames after
 //   start-up reach it) returns at once: the engine's present pacer paces.
+// - Arrows: once in their fall, an arrow adds its gravity (0, ArrowGravity, 0) to its velocity once per update, with no
+//   step (the straight part before it scales by the delta frame): above 30 fps they fell 2 or 4 times as fast and landed
+//   short. The gravity is scaled by the frame's step in frames at 30 fps (slow motion left out, as on the console).
+//   The code calls a function that always returns 0 just before (the branch it guards is never taken); that call and
+//   its dead branch make room for the call that scales it.
+// - The sound system's frame: the game hands it the delta frame, at least 0.5 (a 60 fps frame), and every sound timer
+//   and fade steps by it: above 60 fps the sound's clock ran ahead of the game's (the field battle music started each
+//   segment over the last). The floor is 0.5 x the frame's step in frames at 30 fps: the console's at 30 fps.
+// - Keyframed bodies (lifts, gates, a Divine Beast tilting) get each physics step the angular velocity that takes them to
+//   their target, from the angle of the turn left: 2 acos(|w|) of its quaternion (hkQuaternion::getAngle), which rounds
+//   to 0 below about a milliradian. The smaller turns of shorter steps read as none, and a tilting floor stood still
+//   for some steps and caught up at once (Link hopped on it). kf_angle gives 2 atan2(|xyz|, |w|), the same angle
+//   without the rounding.
+//
+// All found by Savage Wind (#144, #145, #209).
 //
 // The hooks rewrite instructions and branch to HLE trampolines, so they apply natively and to the image that is lifted.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Where one version's clock code is (offsets in main), and the code expected there.
 pub struct Sites {
@@ -36,6 +51,13 @@ pub struct Sites {
     /// The controllers' step: code that loads it (adrp x8; mov x21, xzr; ldr x8, [x8, #<slot>]; mov w22, #1;
     /// ldr s8, [x8]), and the float's offset in main the GOT slot holds.
     pub controller_step: (usize, usize),
+    /// Arrows: the dead call `bl <returns 0>; tbz w0, #0, +0x1c` (and the four words after it) at arrow.0, the function it
+    /// calls at arrow.1, and the gravity's load `ldr s1, [x20, #0x108]` at arrow.2.
+    pub arrow: Option<(usize, usize, usize)>,
+    /// The sound frame's floor: fmov s1, #0.5; fcmp s0, s1; fcsel s8, s1, s0, mi (s0 = the delta frame).
+    pub snd_floor: Option<usize>,
+    /// The keyframed body's `bl hkQuaternion::getAngle` (x0 = the quaternion), and the function it calls.
+    pub kf_angle: Option<(usize, usize)>,
 }
 
 pub const STP_FRAME_WAIT: u32 = 0xa9bd_7bfd;
@@ -69,6 +91,8 @@ const BL: u32 = 0x9400_0000;
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// The controllers' step float (guest address; 0: not found).
 static CONTROLLER_STEP: AtomicU64 = AtomicU64::new(0);
+/// The interval VFR held at its last update (the stock step, with real-time game speed off).
+static LAST_INTERVAL: AtomicU32 = AtomicU32::new(2);
 
 /// Whether the game steps by real time now: then it may run at any frame rate without running fast or slow.
 pub fn real_time() -> bool {
@@ -93,6 +117,7 @@ pub unsafe extern "C" fn vfr_update(vfr: usize) {
     const INTERVAL: usize = 0x34;
     const RATIO: usize = 0x3c;
     let interval = *((vfr + INTERVAL) as *const u32);
+    LAST_INTERVAL.store(interval, Ordering::Relaxed);
     let dt = crate::profile::frame_step::step_seconds(interval as i32);
     if crate::host::live::real_time_speed() && *((vfr + OVERRIDE) as *const u8) == 0 {
         *((vfr + RATIO) as *mut f32) = dt * 30.0;
@@ -110,6 +135,22 @@ pub unsafe extern "C" fn vfr_update(vfr: usize) {
 /// The GUI speed (w0 = the frame loop's interval): the frame's step in frames at 30 fps.
 pub unsafe extern "C" fn gui_speed(interval: u32) -> f32 {
     frames_at_30(interval)
+}
+
+/// A falling arrow's gravity (x0 = the arrow): per frame at 30 fps, scaled to the frame's step.
+pub unsafe extern "C" fn arrow_gravity(arrow: usize) -> f32 {
+    *((arrow + 0x108) as *const f32) * frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed))
+}
+
+/// The floor of the sound system's frame: half a frame at 30 fps, times the frame's step.
+pub unsafe extern "C" fn snd_floor() -> f32 {
+    0.5 * frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed))
+}
+
+/// The angle of a turn (x0 = its quaternion x, y, z, w): 2 atan2(|xyz|, |w|).
+pub unsafe extern "C" fn kf_angle(q: usize) -> f32 {
+    let v = std::slice::from_raw_parts(q as *const f32, 4);
+    2.0 * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().atan2(v[3].abs())
 }
 
 #[cfg(nx_runtime)]
@@ -154,6 +195,26 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         Ok(()) => println!("[+] Menus: their speed follows the frame's step"),
         Err(e) => println!("[!] Menus: main+{:#x}: {e}; their speed stays tied to the present interval", s.gui_speed),
     }
+    if let Some((dead, zero, load)) = s.arrow {
+        install_arrow(base, mem_space, dead, zero, load);
+    }
+    if let Some(at) = s.snd_floor {
+        // fmov s1, #0.5; fcmp s0, s1; fcsel s8, s1, s0, mi -> fmov s8, s0; bl <snd_floor>; fmax s8, s8, s0
+        // (max(delta frame, floor), NaN as fcsel gave it).
+        const CODE: [u32; 3] = [0x1e2c_1001, 0x1e21_2000, 0x1e20_4c28];
+        match replace_with_call(base, mem_space, at, &CODE, vec![0x1e20_4008, BL, 0x1e20_4908], 1, crate::hle!(snd_floor())) {
+            Ok(()) => println!("[+] Sound: its frame follows the frame's step"),
+            Err(e) => println!("[!] Sound: main+{at:#x}: {e}; its frame stays at least half a 30 fps frame"),
+        }
+    }
+    if let Some((at, get_angle)) = s.kf_angle {
+        // bl <getAngle> -> bl <kf_angle> (same argument and result).
+        let expected = BL | ((get_angle as i64 - at as i64) >> 2) as u32 & 0x03ff_ffff;
+        match replace_with_call(base, mem_space, at, &[expected], vec![BL], 0, crate::hle!(kf_angle(_))) {
+            Ok(()) => println!("[+] Keyframed bodies: small turns are kept at any frame rate"),
+            Err(e) => println!("[!] Keyframed bodies: main+{at:#x}: {e}; not patched"),
+        }
+    }
     let p = (base + s.frame_wait) as *mut u32;
     match std::ptr::read(p) {
         STP_FRAME_WAIT => {
@@ -163,5 +224,32 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         }
         RET => {}
         w => println!("[!] Frame loop: unexpected instruction {w:#010x} at main+{:#x}; its vsync wait stays", s.frame_wait),
+    }
+}
+
+/// Arrows' gravity: the dead call (`bl <mov w0, wzr; ret>`, `tbz w0, #0, +0x1c` and the four words of its branch)
+/// becomes `mov x0, x20; bl <arrow_gravity>; fmov s4, s0; b +0x14`, and the gravity's load `ldr s1, [x20, #0x108]`
+/// becomes `fmov s1, s4` (s4 is not touched between them).
+#[cfg(nx_runtime)]
+unsafe fn install_arrow(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, dead: usize, zero: usize, load: usize) {
+    use crate::profile::totk::frame_time::replace_with_call;
+    const LDR_GRAVITY: u32 = 0xbd41_0a81; // ldr s1, [x20, #0x108]
+    const FMOV_S1_S4: u32 = 0x1e20_4081;
+    let returns_zero = std::slice::from_raw_parts((base + zero) as *const u32, 2) == [0x2a1f_03e0, RET];
+    let bl_zero = BL | ((zero as i64 - dead as i64) >> 2) as u32 & 0x03ff_ffff;
+    let expected = [bl_zero, 0x3600_00e0, 0xf940_4288, 0x2d40_0500]; // bl; tbz w0, #0, +0x1c; ldr x8, [x20, #0x80]; ldp s0, s1, [x8]
+    let p = (base + load) as *mut u32;
+    if !returns_zero || std::ptr::read(p) != LDR_GRAVITY {
+        println!("[!] Arrows: unexpected code at main+{zero:#x} / main+{load:#x}; their gravity stays per frame");
+        return;
+    }
+    let code = vec![0xaa14_03e0, BL, 0x1e20_4004, 0x1400_0005];
+    match replace_with_call(base, mem_space, dead, &expected, code, 1, crate::hle!(arrow_gravity(_))) {
+        Ok(()) => {
+            std::ptr::write(p, FMOV_S1_S4);
+            crate::os::flush_icache(p as usize, 4);
+            println!("[+] Arrows: their fall follows the frame's step");
+        }
+        Err(e) => println!("[!] Arrows: main+{dead:#x}: {e}; their gravity stays per frame"),
     }
 }

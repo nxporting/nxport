@@ -75,6 +75,9 @@ pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
     gui_speed: 0x1280ecc,
     gui_speed_code: frame_time::gui_speed_code(0xf000_5db3, 0x9112_e273), // adrp x19, main+0x1e37000; add x19, #0x4b8
     controller_step: (0xeb0f78, 0x1dad0e0),
+    arrow: Some((0x5ee6d0, 0xb325c0, 0x5ee734)),
+    snd_floor: Some(0x1551004),
+    kf_angle: Some((0x12d57fc, 0xb06d4)),
 };
 
 #[cfg(nx_runtime)]
