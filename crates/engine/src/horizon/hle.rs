@@ -1371,73 +1371,16 @@ pub struct NpadFullKeyState {
 
 static SAMPLING_COUNTER: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeNpad() {
-    println!("[+] HLE: nn::hid::InitializeNpad() called");
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_SetSupportedNpadIdType(_npad_ids: *const u32, count: usize) {
-    println!(
-        "[+] HLE: nn::hid::SetSupportedNpadIdType(count={}) called",
-        count
-    );
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_SetSupportedNpadStyleSet(style_set: u32) {
-    println!(
-        "[+] HLE: nn::hid::SetSupportedNpadStyleSet(0x{:X}) called",
-        style_set
-    );
-    HID_SUPPORTED_STYLES.store(style_set, std::sync::atomic::Ordering::Relaxed);
-}
-static HID_SUPPORTED_STYLES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub(crate) static HID_SUPPORTED_STYLES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// NpadJoyHoldType: Vertical = 0 (the default), Horizontal = 1.
-static HID_HOLD_TYPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetSupportedNpadStyleSet() -> u32 {
-    HID_SUPPORTED_STYLES.load(std::sync::atomic::Ordering::Relaxed)
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetNpadJoyHoldType() -> i32 {
-    HID_HOLD_TYPE.load(std::sync::atomic::Ordering::Relaxed)
-}
-/// NpadJoyAssignmentMode: Dual = 0 (one Npad, both Joy-Con or a full controller), which is what the input layer reports.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetNpadJoyAssignment(_id: *const u32) -> i32 {
-    0
-}
-/// Assignment-mode and LR-assignment changes, Joy-Con swaps and the strap guide applet: one fixed controller layout.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_assignment_noop() {}
-/// GetTouchScreenState<16>: {i64 samplingNumber, i32 count, reserved[4], TouchState touches[N]},
-/// TouchState (0x28): {i64 deltaTime, u32 attributes (bit 0 Start, bit 1 End), i32 fingerId, i32 x, i32 y,
-/// i32 diameterX, i32 diameterY, i32 rotationAngle, reserved[4]}, coordinates in the 1280x720 panel. The capacity N is
-/// part of the imported symbol: only the <16> instantiation is bound to this function.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetTouchScreenState(out: *mut u8) {
-    static FIRST: std::sync::Once = std::sync::Once::new();
-    FIRST.call_once(|| println!("[+] HLE: nn::hid::GetTouchScreenState<16> polled (window mouse / touches are the touch screen)"));
-    write_touch_screen_state(out, 16);
-}
+pub(crate) static HID_HOLD_TYPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetTouchScreenState1(out: *mut u8) {
-    static FIRST: std::sync::Once = std::sync::Once::new();
-    FIRST.call_once(|| println!("[+] HLE: nn::hid::GetTouchScreenState<1> polled (window mouse / touches are the touch screen)"));
-    write_touch_screen_state(out, 1);
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetTouchScreenState5(out: *mut u8) {
-    static FIRST: std::sync::Once = std::sync::Once::new();
-    FIRST.call_once(|| println!("[+] HLE: nn::hid::GetTouchScreenState<5> polled (window mouse / touches are the touch screen)"));
-    write_touch_screen_state(out, 5);
-}
 
 /// Fills a TouchScreenState<n> from the window's contacts (host::input::touches).
-unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
+pub(crate) unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
     if out.is_null() {
         return;
     }
@@ -1502,7 +1445,7 @@ impl Default for SixAxisSensorState {
 }
 
 /// The first player's controller motion (host/input.rs), when it has a gyroscope; otherwise the default: flat and still.
-fn with_motion(state: &mut SixAxisSensorState) {
+pub(crate) fn with_motion(state: &mut SixAxisSensorState) {
     if let Some((acc, w, angle, dir)) = crate::host::input::motion_state(0) {
         state.acceleration = acc;
         state.angular_velocity = w;
@@ -1511,84 +1454,15 @@ fn with_motion(state: &mut SixAxisSensorState) {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorState(out: *mut u8, _handle: *const u32) {
-    if out.is_null() {
-        return;
-    }
-    let samp = (crate::horizon::os::get_system_tick() / 96_000) as i64; // ~5ms ticks at 19.2MHz
-    let mut state = SixAxisSensorState::default();
-    state.sampling_number = samp;
-    with_motion(&mut state);
-    std::ptr::copy_nonoverlapping(&state, out as *mut SixAxisSensorState, 1);
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorStates(
-    out: *mut u8,
-    count: i32,
-    _handle: *const u32,
-) -> i32 {
-    if out.is_null() || count <= 0 {
-        return 0;
-    }
-    let n = count.min(16) as usize;
-    let samp = (crate::horizon::os::get_system_tick() / 96_000) as i64;
-    let states_ptr = out as *mut SixAxisSensorState;
-    for i in 0..n {
-        let mut state = SixAxisSensorState::default();
-        state.sampling_number = samp - i as i64;
-        with_motion(&mut state);
-        std::ptr::copy_nonoverlapping(&state, states_ptr.add(i), 1);
-    }
-    n as i32
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_IsSixAxisSensorAtRest(_handle: *const u32) -> bool {
-    true
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetNpadStyleSet(_npad_id: *const u32) -> u32 {
-    let id = if _npad_id.is_null() {
-        u32::MAX
-    } else {
-        *_npad_id
-    };
-    crate::host::input::log_hid("GetNpadStyleSet", id, 0);
-    // NpadId: No1..No8 (0..7), Handheld (0x20).
-    // In docked/standard setup, players 0..7 report FullKey (bit 0 = 1) if their controller is connected.
-    // Handheld (0x20) reports 0 to preserve docked Pro Controller behavior for games like TotK / MK8D.
-    if id < 8 && crate::host::input::is_player_connected(id as usize) {
-        1
-    } else {
-        0
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetNpadStates(
-    states: *mut NpadFullKeyState,
-    count: i32,
-    _npad_id: *const u32,
-) -> i32 {
-    crate::host::input::log_hid(
-        "GetNpadStates(FullKey)",
-        if _npad_id.is_null() {
-            u32::MAX
-        } else {
-            *_npad_id
-        },
-        count,
-    );
-    npad_states(states, count, _npad_id, 0)
-}
 
 /// The shared body of the GetNpadStates overloads (all state structs have the NpadFullKeyState layout).
 /// Supports up to 8 players (NpadId No1..No8, plus Handheld mapped to player 0);
 /// `extra_attributes` adds style-specific attribute bits (JoyDual: IsLeftConnected | IsRightConnected).
-unsafe fn npad_states(
+pub(crate) unsafe fn npad_states(
     states: *mut NpadFullKeyState,
     count: i32,
     _npad_id: *const u32,
@@ -1660,355 +1534,47 @@ unsafe fn npad_states(
 }
 
 
-/// GetTouchScreenStates<16>(states, count): the latest state only.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetTouchScreenStates(out: *mut u8, count: i32) -> i32 {
-    if count < 1 {
-        return 0;
-    }
-    write_touch_screen_state(out, 16);
-    1
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetNpadJoyDualStates(
-    states: *mut NpadFullKeyState,
-    count: i32,
-    npad_id: *const u32,
-) -> i32 {
-    crate::host::input::log_hid(
-        "GetNpadStates(JoyDual)",
-        if npad_id.is_null() {
-            u32::MAX
-        } else {
-            *npad_id
-        },
-        count,
-    );
-    npad_states(states, count, npad_id, (1 << 2) | (1 << 4)) // IsLeftConnected | IsRightConnected
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetNpadHandheldStates(
-    states: *mut NpadFullKeyState,
-    count: i32,
-    npad_id: *const u32,
-) -> i32 {
-    crate::host::input::log_hid(
-        "GetNpadStates(Handheld)",
-        if npad_id.is_null() {
-            u32::MAX
-        } else {
-            *npad_id
-        },
-        count,
-    );
-    npad_states(states, count, npad_id, (1 << 2) | (1 << 4))
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetSixAxisSensorHandles(
-    handles: *mut u32,
-    count: i32,
-    _npad_id: *const u32,
-    style: u32,
-) -> i32 {
-    // Returns the number of handles obtained, which depends on the style (count is only the
-    // buffer's capacity). Per style as in Ryujinx's Npad: FullKey 1, Handheld 2 (both Joy-Con), JoyDual 2, JoyLeft /
-    // JoyRight 1. Returning `count` (8) made Kirby loop over eight sensors and overwrite the controller state it had
-    // just read on its stack: every button press was lost.
-    let sensors = if style & 0b0110 != 0 { 2 } else { 1 }; // Handheld (bit 1) / JoyDual (bit 2)
-    let n = sensors.min(count.max(0));
-    if !handles.is_null() {
-        for i in 0..n {
-            *handles.add(i as usize) = (i + 1) as u32;
-        }
-    }
-    n
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetVibrationDeviceHandles(
-    handles: *mut u32,
-    count: i32,
-    _npad_id: *const u32,
-    style: u32,
-) -> i32 {
-    // Like GetSixAxisSensorHandles: the number of vibration devices the style has (one per motor: Pro Controller,
-    // handheld and Joy-Con pair 2; a single Joy-Con 1), not the buffer's capacity.
-    let devices = if style & 0b11000 != 0 && style & 0b00111 == 0 {
-        1
-    } else {
-        2
-    }; // JoyLeft (bit 3) / JoyRight (bit 4)
-    let n = devices.min(count.max(0));
-    if !handles.is_null() {
-        for i in 0..n {
-            *handles.add(i as usize) = (i + 1) as u32;
-        }
-    }
-    n
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_StartSixAxisSensor(_handle: *const u32) -> i32 {
-    println!("[+] HLE: nn::hid::StartSixAxisSensor called -> returning 0");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_StopSixAxisSensor(_handle: *const u32) -> i32 {
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeVibrationDevice(_handle: *const u32) -> i32 {
-    println!("[+] HLE: nn::hid::InitializeVibrationDevice called -> returning 0");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_SetNpadJoyHoldType(_hold_type: i32) {
-    HID_HOLD_TYPE.store(_hold_type, std::sync::atomic::Ordering::Relaxed);
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_SendVibrationValue(
-    handle: *const u32,
-    val: *const [f32; 4],
-) -> i32 {
-    // nn::hid::VibrationValue: amplitudeLow, frequencyLow, amplitudeHigh, frequencyHigh (host/rumble.rs plays it).
-    if !handle.is_null() && !val.is_null() {
-        send_vibration(*handle, std::ptr::read_unaligned(val));
-    }
-    0
-}
 
 /// The last vibration value sent to each motor handle.
-static VIBRATION_SENT: StdMutex<Option<rustc_hash::FxHashMap<u32, [f32; 4]>>> = StdMutex::new(None);
+pub(crate) static VIBRATION_SENT: StdMutex<Option<rustc_hash::FxHashMap<u32, [f32; 4]>>> = StdMutex::new(None);
 
-fn send_vibration(handle: u32, v: [f32; 4]) {
+pub(crate) fn send_vibration(handle: u32, v: [f32; 4]) {
     VIBRATION_SENT.lock().unwrap().get_or_insert_with(Default::default).insert(handle, v);
     crate::host::rumble::set(handle, v);
 }
 
-/// The value a motor is vibrating with: the last one sent to it, or the neutral value (no amplitude at the 160 / 320 Hz
-/// resonance frequencies) before any.
-pub(crate) unsafe extern "C" fn hid_current_vibration(out: *mut [f32; 4], handle: *const u32) -> i32 {
-    if !out.is_null() {
-        let sent = if handle.is_null() {
-            None
-        } else {
-            VIBRATION_SENT.lock().unwrap().as_ref().and_then(|m| m.get(&*handle).copied())
-        };
-        std::ptr::write_unaligned(out, sent.unwrap_or([0.0, 160.0, 0.0, 320.0]));
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_SendVibrationValues(
-    handles: *const u32,
-    vals: *const [f32; 4],
-    count: i32,
-) -> i32 {
-    if !handles.is_null() && !vals.is_null() {
-        for i in 0..count.max(0) as usize {
-            send_vibration(*handles.add(i), std::ptr::read_unaligned(vals.add(i)));
-        }
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_IsVibrationPermitted(out_permitted: *mut bool) -> i32 {
-    if !out_permitted.is_null() {
-        *out_permitted = true;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetVibrationDeviceInfo(
-    info_out: *mut u32,
-    _handle: *const u32,
-) -> i32 {
-    if !info_out.is_null() {
-        *info_out = 1; // LinearResonantActuator (HD Rumble)
-        *info_out.add(1) = 1; // Left
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeMouse() -> i32 {
-    println!("[+] HLE: nn::hid::InitializeMouse() called -> returning 0");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeKeyboard() -> i32 {
-    println!("[+] HLE: nn::hid::InitializeKeyboard() called -> returning 0");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeTouchScreen() -> i32 {
-    println!("[+] HLE: nn::hid::InitializeTouchScreen() called -> returning 0");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetMouseState(state: *mut u8) {
-    if !state.is_null() {
-        let bytes = crate::host::input::next_mouse_state();
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), state, bytes.len());
-    }
-}
 
-/// The newest state only, as for the keyboard.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetMouseStates(states: *mut u8, count: i32) -> i32 {
-    if states.is_null() || count <= 0 {
-        return 0;
-    }
-    hle_nn_hid_GetMouseState(states);
-    1
-}
 
-/// nn::hid::detail::GetMouseStates(int* written, MouseState*, int): takes the count's address and returns a Result.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_detail_GetMouseStates(written: *mut i32, states: *mut u8, count: i32) -> u32 {
-    let n = hle_nn_hid_GetMouseStates(states, count);
-    if !written.is_null() {
-        *written = n;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetKeyboardState(state: *mut u8) {
-    if !state.is_null() {
-        let bytes = crate::host::input::next_keyboard_state();
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), state, bytes.len());
-    }
-}
 
-/// The newest state only, as there is no history to give: a caller gets one state however many it asks for.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetKeyboardStates(states: *mut u8, count: i32) -> i32 {
-    if states.is_null() || count <= 0 {
-        return 0;
-    }
-    hle_nn_hid_GetKeyboardState(states);
-    1
-}
 
-/// nn::hid::detail::GetKeyboardStates(int* written, KeyboardState*, int): takes the count's address and returns a Result.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_detail_GetKeyboardStates(written: *mut i32, states: *mut u8, count: i32) -> u32 {
-    let n = hle_nn_hid_GetKeyboardStates(states, count);
-    if !written.is_null() {
-        *written = n;
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeDebugPad() {
-    println!("[+] HLE: nn::hid::InitializeDebugPad called");
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetDebugPadState(state: *mut u8) {
-    if !state.is_null() {
-        std::ptr::write_bytes(state, 0, 64);
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_ControllerSupportArg_SetDefault(arg: *mut u8) {
-    if !arg.is_null() {
-        std::ptr::write_bytes(arg, 0, 0x100);
-    }
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_ShowControllerSupport(
-    result_info: *mut u8,
-    arg: *const u8,
-) -> i32 {
-    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if n < 3 || n % 10000 == 0 {
-        let fp = crate::guest_reg!(x29);
-        let bytes = if arg.is_null() {
-            Vec::new()
-        } else {
-            std::slice::from_raw_parts(arg, 0x20).to_vec()
-        };
-        println!(
-            "[+] HLE: nn::hid::ShowControllerSupport() call #{} arg={:02x?} callers: {}",
-            n,
-            bytes,
-            guest_chain(fp)
-        );
-    }
-    // ControllerSupportResultInfo { int8 playerCount; u8 pad[3]; NpadIdType selectedId; ... }.
-    // playerCount == 0 means the user cancelled, and the game then shows the applet again, forever.
-    // A real session ends with the requested player count and Npad No1 selected.
-    if !result_info.is_null() {
-        std::ptr::write_bytes(result_info, 0, 0x40);
-        let min_players = if arg.is_null() { 1 } else { (*arg).max(1) as i8 };
-        let max_players = if arg.is_null() { 8 } else { (*arg.add(1)).max(min_players as u8) as i8 };
-        let connected = crate::host::input::connected_player_count() as i8;
-        let player_count = connected.clamp(min_players, max_players);
-        *(result_info as *mut i8) = player_count;
-        *(result_info.add(4) as *mut u32) = 0; // NpadId::No1
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_InitializeSevenSixAxisSensor(_buf: *mut u8, _size: usize) -> i32 {
-    println!("[+] HLE: nn::hid::InitializeSevenSixAxisSensor called");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_FinalizeSevenSixAxisSensor() {
-    println!("[+] HLE: nn::hid::FinalizeSevenSixAxisSensor called");
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_StartSevenSixAxisSensor() -> i32 {
-    println!("[+] HLE: nn::hid::StartSevenSixAxisSensor called");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_StopSevenSixAxisSensor() -> i32 {
-    println!("[+] HLE: nn::hid::StopSevenSixAxisSensor called");
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_IsSevenSixAxisSensorAtRest() -> bool {
-    true
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_GetSevenSixAxisSensorStates(out: *mut u8, count: i32) -> i32 {
-    if !out.is_null() && count > 0 {
-        std::ptr::write_bytes(out, 0, (count as usize) * 0x60);
-    }
-    0
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_hid_ResetSevenSixAxisSensorTimestamp() {
-    println!("[+] HLE: nn::hid::ResetSevenSixAxisSensorTimestamp called");
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_oe_SetUserInactivityDetectionTimeExtended(_extended: bool) {}

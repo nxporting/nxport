@@ -1054,18 +1054,6 @@ pub(crate) unsafe extern "C" fn nfp_fail2(_a: *mut u8, _b: *const u8) -> u32 {
 pub(crate) unsafe extern "C" fn nfp_mount(_h: *const u8, _m: i32, _t: i32) -> u32 {
     NFP_RESULT_NOT_AVAILABLE
 }
-pub(crate) unsafe extern "C" fn hid_get_states_zero(_out: *mut u8, _count: i32, _id: *const u8) -> i32 {
-    crate::host::input::log_hid(
-        "GetNpadStates(JoyLeft/JoyRight/SixAxis)",
-        if _id.is_null() {
-            u32::MAX
-        } else {
-            *(_id as *const u32)
-        },
-        _count,
-    );
-    0 // no controller input source yet: report zero new states
-}
 pub(crate) unsafe extern "C" fn aoc_list(_out_indices: *mut i32, _offset: i32, _count: i32) -> i32 {
     0
 }
@@ -1076,15 +1064,8 @@ pub(crate) unsafe extern "C" fn aoc_list_changed_event(event: *mut u8) {
 
 /// Which handheld Joy-Cons count as an active controller (both / either / none); the engine's controller is the
 /// keyboard / gamepad, so the mode is only kept for the game to read back.
-static HANDHELD_ACTIVATION_MODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-pub(crate) unsafe extern "C" fn hid_set_handheld_activation_mode(mode: i64) {
-    HANDHELD_ACTIVATION_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
-}
-pub(crate) unsafe extern "C" fn hid_get_handheld_activation_mode() -> i64 {
-    HANDHELD_ACTIVATION_MODE.load(std::sync::atomic::Ordering::Relaxed)
-}
+pub(crate) static HANDHELD_ACTIVATION_MODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-pub(crate) unsafe extern "C" fn hid_disconnect_npad(_id: *const u8) {}
 pub(crate) unsafe extern "C" fn noop_void() {}
 pub(crate) unsafe extern "C" fn noop_obj(_this: *mut u8) {}
 pub(crate) unsafe extern "C" fn prepo_zero_u32() -> u32 {

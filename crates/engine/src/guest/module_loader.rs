@@ -696,7 +696,7 @@ pub unsafe extern "C" fn hid_get_npad_state(
     out: *mut crate::horizon::hle::NpadFullKeyState,
     id: *const u32,
 ) {
-    crate::horizon::hle::hle_nn_hid_GetNpadStates(out, 1, id);
+    crate::horizon::hid::get_npad_states(out, 1, id);
 }
 
 /// Storage for nn::ro::detail data symbols mods may read (no auto-load list, no manual lookup hook).

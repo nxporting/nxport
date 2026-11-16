@@ -1737,19 +1737,19 @@ mod tests {
         use crate::horizon::hle::*;
         unsafe {
             let mut buf = [0xaau8; 0x40];
-            hle_nn_hid_GetKeyboardState(buf.as_mut_ptr());
+            crate::horizon::hid::get_keyboard_state(buf.as_mut_ptr());
             assert!(buf[0x30..].iter().all(|b| *b == 0xaa));
 
             // Asked for two, given one, and the second is left alone.
             let mut buf = [0xaau8; 0x70];
             let mut written = -1;
-            assert_eq!(hle_nn_hid_detail_GetKeyboardStates(&mut written, buf.as_mut_ptr(), 2), 0);
+            assert_eq!(crate::horizon::hid::detail_get_keyboard_states(&mut written, buf.as_mut_ptr(), 2), 0);
             assert_eq!(written, 1);
             assert!(buf[0x30..].iter().all(|b| *b == 0xaa));
 
             let mut buf = [0xaau8; 0x60];
             let mut written = -1;
-            assert_eq!(hle_nn_hid_detail_GetMouseStates(&mut written, buf.as_mut_ptr(), 2), 0);
+            assert_eq!(crate::horizon::hid::detail_get_mouse_states(&mut written, buf.as_mut_ptr(), 2), 0);
             assert_eq!(written, 1);
             assert!(buf[0x28..].iter().all(|b| *b == 0xaa));
         }
