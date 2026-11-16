@@ -116,7 +116,7 @@ mod tests {
         let Some(path) = std::env::var_os("NXPORT_TEST_GUEST_DLL").map(std::path::PathBuf::from) else { return };
         let modules = std::fs::read_to_string(path.with_file_name(crate::lift::MODULES_FILE)).unwrap();
         let mut pe = super::PeFile::open(&path).unwrap();
-        let lib = nxport::os::Library::open(&path).unwrap();
+        let lib = nxport::platform::os::Library::open(&path).unwrap();
         for m in modules.lines() {
             let count = pe.symbol_u64(&format!("{m}_fn_count")).unwrap().unwrap();
             let addrs = pe.symbol_bytes(&format!("{m}_fn_addrs"), count as usize * 8).unwrap().unwrap();
