@@ -136,6 +136,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
   share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
+- **BotW white water vs the early fence (2026-11-16, win-worker).** The user saw milky water after a restart with the
+  early fence on (bf93f40); BotW waits for its frame again (3ab7a05: ~107 -> ~78 fps at a 120 limit). Savage Wind #362:
+  the 1x1 / 3x3 lighting and exposure linear targets are read a frame late. Tried an exact middle way (not committed):
+  hold a linear target's pages (gpu::report_guard, engine reads through its copies) until its write-back whenever it is
+  drawn in a frame but was not drawn in the frame before. Lighting targets are made once at start and kept across loads
+  (--log-tex-init), but BotW also draws several linear targets in turns, so it held ~200 targets per 300 frames in steady
+  play: 72 fps, worse than the fence off. An exact rule that keeps the overlap would need to know which reads the game
+  latches; Savage Wind's (wait for the first 30 reads after a loading screen) is tuned. Open: a cheaper exact rule.
 - **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15). STATUS (later 2026-11-15): flicker fixed and water fixed (8a35540, one bug: nvnTextureFinalize lost the generation recorded commands named); early fence back on (bf93f40). Waiting on the user's playtest for the rest (boxes pinned or floating, Link floating far from water, white water, NPC IK): likely the same water bug, unconfirmed. History below.** Seen: boxes pinned to walls and floating, Link
   floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
   render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
