@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 /// The library the engine is built against (vendor/SDL3).
-pub const DLL: &[u8] = include_bytes!("../../../vendor/SDL3/lib/SDL3.dll");
+pub const DLL: &[u8] = include_bytes!("../../../../vendor/SDL3/lib/SDL3.dll");
 
 /// Loads SDL3.dll unless the program's folder has one: from nxport's data folder, written there once per version of the
 /// library. Call before anything uses SDL; the delay-load helper then finds it loaded by name.
