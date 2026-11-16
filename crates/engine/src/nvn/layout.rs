@@ -32,6 +32,22 @@ pub const NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT: i32 = 0x200;
 
 /// Texture storage must be at least this aligned / padded.
 pub const TEXTURE_STORAGE_ALIGNMENT: usize = 0x1000;
+/// Row pitch alignment of linear textures and linear render targets (device info 56 / 57). The real driver pads an 8x8
+/// RGBA16 linear render target's 64-byte rows to 128 and reports 16x16 at 0x800 bytes (Ryujinx, BotW's water maps).
+pub const LINEAR_TEXTURE_STRIDE_ALIGNMENT: u64 = 0x20;
+pub const LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT: u64 = 0x80;
+
+fn linear_default_pitch(flags: i32, row_bytes: u64) -> u64 {
+    if flags & NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT != 0 {
+        align(row_bytes, LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT)
+    } else {
+        align(row_bytes, LINEAR_TEXTURE_STRIDE_ALIGNMENT)
+    }
+}
+
+fn is_linear(flags: i32) -> bool {
+    flags & (NVN_TEXTURE_FLAGS_LINEAR_BIT | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT) != 0
+}
 /// Alignment for textures with the compressible bit (extra hardware mappings): 64 KB, as the real NVN driver places
 /// TotK's compressible render targets (Ryujinx render-target addresses: 64 KB steps, e.g. 0x2147b0000). 128 KB wasted
 /// enough of the game's 111 MB dynamic texture pool that UltraCam's 1080p targets no longer fit (null G-buffer).
@@ -342,15 +358,11 @@ fn compute_layout_uncached(p: &TextureParams) -> TextureLayout {
         };
     }
 
-    // Linear textures: a single level with an explicit (or 32-byte aligned) pitch.
-    if p.flags & (NVN_TEXTURE_FLAGS_LINEAR_BIT | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT) != 0 {
+    // Linear textures: a single level with an explicit (or the default aligned) pitch.
+    if is_linear(p.flags) {
         let wb = (w + info.block_w as u64 - 1) / info.block_w as u64;
         let hb = (h + info.block_h as u64 - 1) / info.block_h as u64;
-        let pitch = if p.stride > 0 {
-            p.stride as u64
-        } else {
-            align(wb * info.bytes as u64, 32)
-        };
+        let pitch = if p.stride > 0 { p.stride as u64 } else { linear_default_pitch(p.flags, wb * info.bytes as u64) };
         let size = pitch * hb;
         return TextureLayout {
             level_offsets: vec![0],
@@ -401,8 +413,12 @@ fn compute_layout_uncached(p: &TextureParams) -> TextureLayout {
 }
 
 /// Bytes NVN reports for a texture's storage (padded to the storage granule).
+/// Linear textures report their exact size (rows times pitch; the game derives row pitches from it), others are padded.
 pub fn storage_size(p: &TextureParams) -> usize {
     let t = compute_layout(p).total as usize;
+    if is_linear(p.flags) {
+        return t.max(1);
+    }
     align(t.max(1) as u64, TEXTURE_STORAGE_ALIGNMENT as u64) as usize
 }
 
@@ -451,11 +467,11 @@ pub fn block_linear_offset(x_bytes: usize, y: usize, pitch: usize, block_h_gobs:
 /// Linear textures (NVN_TEXTURE_FLAGS_LINEAR / LINEAR_RENDER_TARGET): one level of rows `pitch` bytes apart, the pitch
 /// compute_layout uses. None for block-linear textures.
 fn linear_pitch(p: &TextureParams, info: &FormatInfo) -> Option<usize> {
-    if p.flags & (NVN_TEXTURE_FLAGS_LINEAR_BIT | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT) == 0 {
+    if !is_linear(p.flags) {
         return None;
     }
     let wb = (p.width.max(1) as u64 + info.block_w as u64 - 1) / info.block_w as u64;
-    Some(if p.stride > 0 { p.stride as usize } else { align(wb * info.bytes as u64, 32) as usize })
+    Some(if p.stride > 0 { p.stride as usize } else { linear_default_pitch(p.flags, wb * info.bytes as u64) as usize })
 }
 
 /// A block-linear level's row pitch in bytes and block height in GOBs, as block_linear_offset takes them (what
