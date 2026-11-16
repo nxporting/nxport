@@ -123,7 +123,7 @@ mod render_impl {
         // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
         let progress = crate::gpu::pipeline_list::take_frame_progress();
         let perf = is_overlay_enabled();
-        if !perf && progress.is_none() {
+        if !perf && !matches!(progress, Some(Some(_))) {
             return;
         }
 
@@ -170,10 +170,10 @@ mod render_impl {
             {
                 let ui = frame.ui();
                 if perf {
-                    draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1]);
+                    draw_window(ui, w, &stats, &ordered_times.0[..ordered_times.1], progress == Some(None));
                 }
-                if let Some(listed) = progress {
-                    crate::perf_stats::draw_shader_progress(ui, w, h, listed);
+                if let Some(Some((done, total))) = progress {
+                    crate::perf_stats::draw_shader_progress(ui, w, h, done, total);
                 }
             }
 
