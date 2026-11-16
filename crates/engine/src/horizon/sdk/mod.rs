@@ -103,6 +103,9 @@ pub struct Layer {
     /// The first SDK version this layer describes.
     pub from: SdkVersion,
     pub tables: &'static [&'static [Entry]],
+    /// NVN functions handed out by nvnDeviceGetProcAddress (kept apart from the linked names: the sdk module holds the
+    /// NVN driver, whose own definitions must not be interposed).
+    pub nvn_procs: &'static [&'static [Entry]],
     /// NVN_API_MAJOR / MINOR_VERSION of this SDK's NVN headers (games require that major and at least that minor).
     pub nvn_api: Option<(i32, i32)>,
     /// Bytes by which the thread object's fields after its fiber pointers (TLS values, name, lock, handle) lie further
@@ -198,6 +201,14 @@ pub fn lookup(name: &str) -> Option<Target> {
     crate::horizon::movie::lookup(name)
         .or_else(|| crate::horizon::audio::out::lookup(name))
         .map(|f| Target::Func(f, Box::leak(name.to_string().into_boxed_str())))
+}
+
+/// The NVN function nvnDeviceGetProcAddress hands out for `name` (newest layer first), as a host function address.
+pub fn nvn_proc(name: &str) -> Option<usize> {
+    chain().layers.iter().flat_map(|l| l.nvn_procs.iter().flat_map(|t| t.iter())).find(|e| e.0 == name).map(|e| match target(&e.1) {
+        Target::Func(a, _) => a,
+        Target::Data(a) => a,
+    })
 }
 
 /// Every name the layers bind.

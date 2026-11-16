@@ -9,5 +9,6 @@ pub(super) static LAYER: Layer = Layer {
     // The 15.3.2 NVN headers (TotK main+0xeac0e4 and Wonder main+0x5a48c8 require 55, >= 15).
     nvn_api: Some((55, 15)),
     thread_tail_shift: Some(0),
+    nvn_procs: &[],
     audio_handle_state: None,
 };

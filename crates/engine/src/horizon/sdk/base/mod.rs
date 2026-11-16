@@ -44,6 +44,7 @@ pub(super) static LAYER: Layer = Layer {
     name: "base",
     from: SdkVersion(0, 0, 0),
     tables: TABLES,
+    nvn_procs: nvn::PROCS,
     nvn_api: None,
     thread_tail_shift: None,
     audio_handle_state: None,
