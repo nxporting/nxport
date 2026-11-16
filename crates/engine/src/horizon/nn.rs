@@ -498,7 +498,7 @@ pub(crate) unsafe extern "C" fn os_get_current_fiber() -> *mut u8 {
 }
 /// nn::os::ConvertToTick(TimeSpan) -> Tick, consistent with GetSystemTick (host mach ticks).
 pub(crate) unsafe extern "C" fn os_convert_to_tick(ns: i64) -> i64 {
-    crate::clock::ns_to_ticks(ns.max(0) as u64) as i64
+    crate::platform::clock::ns_to_ticks(ns.max(0) as u64) as i64
 }
 
 // ── nn::time ─────────────────────────────────────────────────────────────────────────────────
@@ -524,7 +524,7 @@ pub(crate) unsafe extern "C" fn time_clock_get_current_time(out: *mut i64) -> u3
     RESULT_SUCCESS
 }
 pub(crate) unsafe extern "C" fn time_steady_clock_now() -> i64 {
-    crate::clock::now_ns() as i64
+    crate::platform::clock::now_ns() as i64
 }
 // ClockSnapshot is 208 bytes. Our layout: +0 user posix secs, +8 steady ns.
 pub(crate) unsafe extern "C" fn time_clock_snapshot_ctor(snap: *mut u8) {
@@ -587,13 +587,13 @@ unsafe fn fill_calendar(
 }
 pub(crate) unsafe extern "C" fn time_to_calendar_time(cal: *mut u8, info: *mut u8, posix: *const i64) -> u32 {
     let t = if posix.is_null() { 0 } else { *posix };
-    let (tm, name, dst, off) = crate::os::local_time(t);
+    let (tm, name, dst, off) = crate::platform::os::local_time(t);
     fill_calendar(&tm, cal, info, name.as_bytes(), dst, off);
     RESULT_SUCCESS
 }
 /// nn::time::ToCalendarTimeInUtc(const PosixTime&) -> CalendarTime (8-byte struct, returned in x0).
 pub(crate) unsafe extern "C" fn time_to_calendar_time_in_utc(posix: *const i64) -> u64 {
-    let tm = crate::os::utc_time(if posix.is_null() { 0 } else { *posix });
+    let tm = crate::platform::os::utc_time(if posix.is_null() { 0 } else { *posix });
     let mut cal = [0u8; 8];
     fill_calendar(
         &tm,
@@ -617,7 +617,7 @@ pub(crate) unsafe extern "C" fn time_to_posix_time_from_utc(cal: *const u8) -> i
     tm.tm_hour = *cal.add(4) as i32;
     tm.tm_min = *cal.add(5) as i32;
     tm.tm_sec = *cal.add(6) as i32;
-    crate::os::from_utc_time(&mut tm)
+    crate::platform::os::from_utc_time(&mut tm)
 }
 
 // ── nn::oe / nn::pl / nn::account / nn::err ──────────────────────────────────────────────────

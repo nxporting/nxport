@@ -131,7 +131,7 @@ pub unsafe fn rewrite(
         *s.add(2) = back;
         let page = site & !0x3fff;
         if executable {
-            let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
+            let _ = crate::platform::os::protect(page as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
         }
         *(site as *mut u32) = to_stub;
         if executable {
@@ -140,9 +140,9 @@ pub unsafe fn rewrite(
         written += 1;
     }
     crate::cpu::aot::make_exec("tpidr.island", island, island_len);
-    crate::os::flush_icache(island as usize, island_len);
+    crate::platform::os::flush_icache(island as usize, island_len);
     for &(s, l, _) in ranges {
-        crate::os::flush_icache(s as usize, l);
+        crate::platform::os::flush_icache(s as usize, l);
     }
     println!("[+] tpidr_el0 rewrite: {} of {} guest read sites now load the TLS pointer from TSD (island at {:#x})", written, sites.len(), island);
     Ok(written)

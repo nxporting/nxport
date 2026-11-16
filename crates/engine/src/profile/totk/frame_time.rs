@@ -281,7 +281,7 @@ unsafe fn patch(base: usize, site: usize, from: u32, to: u32, what: &str) -> boo
     match std::ptr::read(p) {
         w if w == from => {
             std::ptr::write(p, to);
-            crate::os::flush_icache(p as usize, 4);
+            crate::platform::os::flush_icache(p as usize, 4);
             true
         }
         w if w == to => true,
@@ -316,7 +316,7 @@ pub(crate) unsafe fn replace_with_call(
     for (k, w) in code.iter().enumerate() {
         std::ptr::write(site.add(k), *w);
     }
-    crate::os::flush_icache(site as usize, code.len() * 4);
+    crate::platform::os::flush_icache(site as usize, code.len() * 4);
     Ok(())
 }
 
@@ -388,7 +388,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
                 CLOTH.store((base + data) as u64, Ordering::Relaxed);
                 for (at, _, to) in sites {
                     std::ptr::write((base + at) as *mut u32, if *to == ADRP_TO_CLOTH { adrp(*at) } else { *to });
-                    crate::os::flush_icache(base + at, 4);
+                    crate::platform::os::flush_icache(base + at, 4);
                 }
                 println!("[+] Hair and cloth: their clock follows the frame's step");
             }
@@ -447,7 +447,7 @@ unsafe fn equip_cooldown(base: usize, at: usize, load_at: usize) {
     match (load, std::ptr::read(p)) {
         (LDR_S0_COOLDOWN, FMOV_S1_EPSILON) => {
             std::ptr::write(p, FMOV_S1_ZERO);
-            crate::os::flush_icache(p as usize, 4);
+            crate::platform::os::flush_icache(p as usize, 4);
             println!("[+] Equipment: its switch cooldown runs out at any frame rate");
         }
         (LDR_S0_COOLDOWN, FMOV_S1_ZERO) => {}
@@ -516,7 +516,7 @@ unsafe fn install_rotate_check(
     match replace_with_call(base, mem_space, at, &rotate_entry_code(at, normalize), code, 2, hle) {
         Ok(()) => {
             std::ptr::write((base + fdiv) as *mut u32, FDIV_S12_S0_S12);
-            crate::os::flush_icache(base + fdiv, 4);
+            crate::platform::os::flush_icache(base + fdiv, 4);
             println!("[+] Gears: their rotation check counts the update's frame delta (shrine doors open at any frame rate)");
         }
         Err(e) => println!("[!] Gears: main+{at:#x}: {e}; their rotation check stays at 30 fps"),
@@ -538,7 +538,7 @@ unsafe fn rewrite(base: usize, at: usize, from: &[u32], to: &[u32], what: &str) 
     for (k, w) in to.iter().enumerate() {
         std::ptr::write(p.add(k), *w);
     }
-    crate::os::flush_icache(p as usize, 4 * to.len());
+    crate::platform::os::flush_icache(p as usize, 4 * to.len());
     true
 }
 

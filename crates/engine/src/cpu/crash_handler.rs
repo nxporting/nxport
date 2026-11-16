@@ -33,7 +33,7 @@ pub fn add_watchpoint(addr: usize) -> bool {
             .compare_exchange(0, page, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            let ret = unsafe { crate::os::protect(page, 0x4000, crate::os::Prot::Read) };
+            let ret = unsafe { crate::platform::os::protect(page, 0x4000, crate::platform::os::Prot::Read) };
             eprintln!(
                 "[WATCH] Watchpoint set on page 0x{:x} (addr=0x{:x}, protect: {:?})",
                 page, addr, ret
@@ -68,10 +68,10 @@ unsafe fn trace_write_insn(pc: usize, insn: u32) {
     // thread executing inside this 16KB page during that window would fault; acceptable for a
     // debug-only tool.
     let page = pc & !0x3fff;
-    let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
+    let _ = crate::platform::os::protect(page as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
     *(pc as *mut u32) = insn;
-    let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadExec);
-    crate::os::flush_icache(pc as usize, 4);
+    let _ = crate::platform::os::protect(page as usize, 0x4000, crate::platform::os::Prot::ReadExec);
+    crate::platform::os::flush_icache(pc as usize, 4);
 }
 
 /// Install a trace point at guest address `pc` (must be in writable text).
@@ -99,7 +99,7 @@ pub unsafe fn install_trace_point(
     // Startup: guest text is still writable, so no mprotect (it would break later startup hooks
     // that patch other words in the same page).
     *(pc as *mut u32) = BRK_TRACE;
-    crate::os::flush_icache(pc as usize, 4);
+    crate::platform::os::flush_icache(pc as usize, 4);
     TRACE_PCS[slot].store(pc, Ordering::SeqCst);
     true
 }
@@ -370,7 +370,7 @@ unsafe extern "C" fn handle_signal(
             WRITER_RING[i]
                 .2
                 .store((*mc).__ss.__lr as u64, Ordering::Relaxed);
-            let _ = crate::os::protect(((pg << 14)) as usize, 1 << 14, crate::os::Prot::ReadWrite);
+            let _ = crate::platform::os::protect(((pg << 14)) as usize, 1 << 14, crate::platform::os::Prot::ReadWrite);
             return;
         }
         // Another thread's fault on the same page unprotected it first: retry the access.
@@ -572,7 +572,7 @@ unsafe extern "C" fn handle_signal(
                 }
 
                 // Re-enable writes so the faulting instruction can complete.
-                let _ = crate::os::protect(fault_page as usize, 0x4000, crate::os::Prot::ReadWrite);
+                let _ = crate::platform::os::protect(fault_page as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
                 if hit < MAX_WATCH_HITS {
                     // Arm the single-step bit so we re-protect after one instruction.
                     // ARM64 CPSR bit 21 = SS (Software Step).
@@ -611,7 +611,7 @@ unsafe extern "C" fn handle_signal(
         let pending = PENDING_REPROTECT.load(Ordering::SeqCst);
         if pending != 0 {
             PENDING_REPROTECT.store(0, Ordering::SeqCst);
-            let _ = crate::os::protect(pending as usize, 0x4000, crate::os::Prot::Read);
+            let _ = crate::platform::os::protect(pending as usize, 0x4000, crate::platform::os::Prot::Read);
             // Clear the SS bit so execution continues normally.
             if !ucontext.is_null() {
                 let uc = ucontext as *mut libc::ucontext_t;

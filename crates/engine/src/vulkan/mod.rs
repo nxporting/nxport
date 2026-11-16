@@ -711,8 +711,8 @@ impl Imports {
         #[cfg(windows)]
         {
             // The driver takes only committed pages, and a page it imports stays mapped: commit it before the import.
-            unsafe { crate::os::ensure_committed(start, end - start) };
-            let read_only = crate::os::read_only_ranges(start, end - start);
+            unsafe { crate::platform::os::ensure_committed(start, end - start) };
+            let read_only = crate::platform::os::read_only_ranges(start, end - start);
             if !read_only.is_empty() {
                 guard::before_host_write(start, end - start);
                 for (a, b) in read_only {
@@ -721,7 +721,7 @@ impl Imports {
                     }
                 }
                 // Still read-only (protected by something else): copies until the pools change, then tried again.
-                if !crate::os::read_only_ranges(start, end - start).is_empty() {
+                if !crate::platform::os::read_only_ranges(start, end - start).is_empty() {
                     crate::guest::dirty_track::imported_remove(start, end - start);
                     self.failed.insert((start, end));
                     return None;

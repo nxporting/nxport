@@ -166,12 +166,12 @@ unsafe fn redirect_entries(base: &[FnTable], over: &[FnTable]) -> Result<(), Str
             }
             let page = from & !0xfff;
             let span = ((from + 14 + 0xfff) & !0xfff) - page;
-            crate::os::protect(page, span, crate::os::Prot::ReadWriteExec).map_err(|e| e.to_string())?;
+            crate::platform::os::protect(page, span, crate::platform::os::Prot::ReadWriteExec).map_err(|e| e.to_string())?;
             let mut jmp = [0xffu8, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
             jmp[6..14].copy_from_slice(&to.to_le_bytes());
             std::ptr::copy_nonoverlapping(jmp.as_ptr(), from as *mut u8, 14);
-            crate::os::protect(page, span, crate::os::Prot::ReadExec).map_err(|e| e.to_string())?;
-            crate::os::flush_icache(from, 14);
+            crate::platform::os::protect(page, span, crate::platform::os::Prot::ReadExec).map_err(|e| e.to_string())?;
+            crate::platform::os::flush_icache(from, 14);
             replaced += 1;
         }
     }
@@ -196,7 +196,7 @@ impl GuestLibrary {
         if HANDLERS.set(handlers).is_err() {
             return Err("lifted: a guest library is already loaded".into());
         }
-        let sym = |lib: &crate::os::Library, path: &std::path::Path, name: &str| -> Result<*mut c_void, String> {
+        let sym = |lib: &crate::platform::os::Library, path: &std::path::Path, name: &str| -> Result<*mut c_void, String> {
             let p = lib.symbol(name);
             if p.is_null() {
                 Err(format!("{}: no symbol {name}", path.display()))
@@ -205,7 +205,7 @@ impl GuestLibrary {
             }
         };
         unsafe {
-            let tables = |lib: &crate::os::Library, path: &std::path::Path, names: &[&str]| -> Result<Vec<FnTable>, String> {
+            let tables = |lib: &crate::platform::os::Library, path: &std::path::Path, names: &[&str]| -> Result<Vec<FnTable>, String> {
                 names
                     .iter()
                     .map(|m| {
@@ -226,17 +226,17 @@ impl GuestLibrary {
                 call_hle: host_call_hle,
                 code_changed: host_code_changed,
             }));
-            let lib = crate::os::Library::open(path)?;
+            let lib = crate::platform::os::Library::open(path)?;
             let base_tables = tables(&lib, path, modules)?;
             let over = overlay.map(|(p, names)| -> Result<_, String> {
-                let l = crate::os::Library::open(p)?;
+                let l = crate::platform::os::Library::open(p)?;
                 let t = tables(&l, p, names)?;
                 Ok((l, t, p))
             }).transpose()?;
             // Each library has its own dispatcher (its rt.c), which looks an address up in tables in order: the overlay's
             // versions first in both.
             let over_tables: &[FnTable] = over.as_ref().map_or(&[], |o| &o.1);
-            let register = |l: &crate::os::Library, p: &std::path::Path| -> Result<(), String> {
+            let register = |l: &crate::platform::os::Library, p: &std::path::Path| -> Result<(), String> {
                 let init: unsafe extern "C" fn(*const RtHost) = std::mem::transmute(sym(l, p, "nx_rt_init")?);
                 let add: unsafe extern "C" fn(*const u64, *const c_void, u64) -> i32 =
                     std::mem::transmute(sym(l, p, "nx_rt_add_module")?);
@@ -281,7 +281,7 @@ impl GuestLibrary {
                         scattered: name.starts_with("ov_"),
                     }
                 }).collect();
-                let add_of = |l: &crate::os::Library, p: &std::path::Path| -> Result<crate::live_patch::AddModule, String> {
+                let add_of = |l: &crate::platform::os::Library, p: &std::path::Path| -> Result<crate::live_patch::AddModule, String> {
                     Ok(std::mem::transmute(sym(l, p, "nx_rt_add_module")?))
                 };
                 let mut adds = vec![add_of(&lib, path)?];

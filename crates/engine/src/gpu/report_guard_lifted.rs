@@ -19,7 +19,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use crate::os::Prot;
+use crate::platform::os::Prot;
 
 const PAGE: usize = 0x4000;
 const SLOTS: usize = 1024;
@@ -136,14 +136,14 @@ fn unlock_slot(i: usize) {
 /// The protection of a page not held here: read-only while the early-fence write guard holds it, else read-write.
 unsafe fn set_open(page: usize) {
     if !crate::gpu::backend().early_fence_holds(page) {
-        let _ = crate::os::protect(page, PAGE, Prot::ReadWrite);
+        let _ = crate::platform::os::protect(page, PAGE, Prot::ReadWrite);
         return;
     }
-    let _ = crate::os::protect(page, PAGE, Prot::Read);
+    let _ = crate::platform::os::protect(page, PAGE, Prot::Read);
     // Released between the check and the protection (the write guard marks a range released, then opens it): left
     // read-only with nothing holding it, the next write to it was a crash.
     if !crate::gpu::backend().early_fence_holds(page) {
-        let _ = crate::os::protect(page, PAGE, Prot::ReadWrite);
+        let _ = crate::platform::os::protect(page, PAGE, Prot::ReadWrite);
     }
 }
 
@@ -151,7 +151,7 @@ unsafe fn set_open(page: usize) {
 unsafe fn open_page(i: usize, page: usize) {
     lock_slot(i);
     if PROTECTED[i].load(Ordering::Acquire) != 0 {
-        let _ = crate::os::protect(page, PAGE, Prot::ReadWrite);
+        let _ = crate::platform::os::protect(page, PAGE, Prot::ReadWrite);
         let copy = COPY[i].swap(0, Ordering::AcqRel);
         for (w, word) in DIRTY[i].iter().enumerate() {
             let mut bits = word.swap(0, Ordering::Relaxed);
@@ -174,11 +174,11 @@ unsafe fn close_page(i: usize, page: usize, shadow: usize) -> bool {
         return false;
     }
     lock_slot(i);
-    let ok = crate::os::protect(page, PAGE, Prot::Read).is_ok();
+    let ok = crate::platform::os::protect(page, PAGE, Prot::Read).is_ok();
     if ok {
         std::ptr::copy_nonoverlapping(page as *const u8, shadow as *mut u8, PAGE);
         COPY[i].store(shadow, Ordering::Release);
-        let _ = crate::os::protect(page, PAGE, Prot::None);
+        let _ = crate::platform::os::protect(page, PAGE, Prot::None);
         PROTECTED[i].store(1, Ordering::Release);
     }
     unlock_slot(i);
@@ -193,7 +193,7 @@ pub(crate) unsafe fn reprotect_held(addr: usize, len: usize) {
         if page != 0 && page < addr + len && page + PAGE > addr {
             lock_slot(i);
             if PAGE_ADDR[i].load(Ordering::Acquire) == page && PROTECTED[i].load(Ordering::Acquire) != 0 {
-                let _ = crate::os::protect(page, PAGE, Prot::None);
+                let _ = crate::platform::os::protect(page, PAGE, Prot::None);
             }
             unlock_slot(i);
         }
@@ -251,7 +251,7 @@ pub(crate) fn begin_submit(addrs: &[usize]) {
         }
         let mut shadow = SHADOW[i].load(Ordering::Acquire);
         if shadow == 0 {
-            shadow = unsafe { crate::os::alloc(PAGE, Prot::ReadWrite) }.map_or(0, |p| p as usize);
+            shadow = unsafe { crate::platform::os::alloc(PAGE, Prot::ReadWrite) }.map_or(0, |p| p as usize);
             SHADOW[i].store(shadow, Ordering::Release);
         }
         // Write-tracked texture pages: dirty_track's handler would unprotect them without waiting.
@@ -472,7 +472,7 @@ pub(crate) fn frame_end(frame: u64) {
     );
     for hit in HIT.iter().take(HIT_N.swap(0, Ordering::AcqRel).min(HITS)) {
         let pc = hit.0.load(Ordering::Acquire);
-        let owner = crate::os::address_owner(pc).0.unwrap_or_default();
+        let owner = crate::platform::os::address_owner(pc).0.unwrap_or_default();
         let kind = if hit.2.load(Ordering::Acquire) != 0 { "write" } else { "read" };
         println!("[report-guard] {kind} of {:#x} from {pc:#x} ({owner})", hit.1.load(Ordering::Relaxed));
     }

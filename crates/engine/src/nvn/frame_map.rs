@@ -74,7 +74,7 @@ pub(crate) unsafe fn note(name: &'static str, cmd: usize) {
         return;
     }
     let chain = guest_chain::<16>();
-    let thread = crate::os::current_thread_id();
+    let thread = crate::platform::os::current_thread_id();
     LOG.lock().unwrap().push(Entry { cmd, thread, name, chain });
 }
 

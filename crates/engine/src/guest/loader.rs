@@ -81,7 +81,7 @@ pub struct GuestMemorySpace {
     /// the SDK image (SDK_SLOT_SIZE). Hinted mmaps used to land elsewhere when the spot was taken.
     pub island_slot: usize,
     pub sdk_slot: usize,
-    /// (start, size) of the address space reserved for all of the above (crate::os::reserve).
+    /// (start, size) of the address space reserved for all of the above (crate::platform::os::reserve).
     reservation: (usize, usize),
     pub total_size: usize,
     pub text_size: usize,
@@ -139,8 +139,8 @@ impl GuestMemorySpace {
             || crate::settings::get().guest.fixed_guest_base;
 
         let expected_base = FIXED_GUEST_BASE - RTLD_SLOT_SIZE;
-        let at = if fixed { crate::os::At::Exactly(expected_base) } else { crate::os::At::Anywhere };
-        let slot = match unsafe { crate::os::reserve(at, total_reserve) } {
+        let at = if fixed { crate::platform::os::At::Exactly(expected_base) } else { crate::platform::os::At::Anywhere };
+        let slot = match unsafe { crate::platform::os::reserve(at, total_reserve) } {
             Ok(p) => p,
             Err(e) if fixed => {
                 eprintln!("[-] the guest needs {:#x} (AOT image with mods): {}", expected_base, e);
@@ -166,12 +166,12 @@ impl GuestMemorySpace {
         let gen = ptr + main_end + SDK_GAP - GEN_SIZE;
         let after_gap = gen - X18_ISLAND_SIZE;
         let committed = unsafe {
-            crate::os::commit(ptr, gap - ptr, crate::os::Prot::ReadWrite).and_then(|()| {
-                crate::os::commit(after_gap, slot + total_reserve - after_gap, crate::os::Prot::ReadWrite)
+            crate::platform::os::commit(ptr, gap - ptr, crate::platform::os::Prot::ReadWrite).and_then(|()| {
+                crate::platform::os::commit(after_gap, slot + total_reserve - after_gap, crate::platform::os::Prot::ReadWrite)
             })
         };
         if let Err(e) = committed {
-            unsafe { crate::os::release(slot, total_reserve) };
+            unsafe { crate::platform::os::release(slot, total_reserve) };
             eprintln!("[-] committing guest memory failed: {}", e);
             return Err("Failed to allocate guest virtual memory space".into());
         }
@@ -653,7 +653,7 @@ impl GuestMemorySpace {
                 self.trampoline_pool as usize,
                 pool_bytes,
             );
-            crate::os::flush_icache(self.trampoline_pool as usize, self.trampoline_next * TRAMPOLINE_WORDS * 4);
+            crate::platform::os::flush_icache(self.trampoline_pool as usize, self.trampoline_next * TRAMPOLINE_WORDS * 4);
         }
         println!(
             "[+] Trampoline pool: {} entries ready at {:p}",
@@ -706,6 +706,6 @@ impl GuestMemorySpace {
 
 impl Drop for GuestMemorySpace {
     fn drop(&mut self) {
-        unsafe { crate::os::release(self.reservation.0, self.reservation.1) };
+        unsafe { crate::platform::os::release(self.reservation.0, self.reservation.1) };
     }
 }

@@ -25,7 +25,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2os13FinalizeMutexEPNS0_9MutexTypeE", func!(crate::horizon::hle::hle_nn_os_FinalizeMutex(_))),
     // GetSystemTick / GetSystemTickFrequency / ConvertToTimeSpan need no kernel, but the sdk module's frequency is the
     // Switch's fixed 19.2 MHz while its tick would read the host counter: all three are HLE'd so they agree
-    // (crate::clock).
+    // (crate::platform::clock).
     Entry("_ZN2nn2os13GetSystemTickEv", func!(crate::horizon::hle::hle_nn_os_GetSystemTick())),
     Entry("_ZN2nn2os13SetThreadNameEPNS0_10ThreadTypeEPKc", func!(crate::horizon::hle::hle_nn_os_SetThreadName(_, _))),
     Entry("_ZN2nn2os13TryWaitThreadEPNS0_10ThreadTypeE", func!(crate::horizon::hle::hle_nn_os_TryWaitThread(_))),

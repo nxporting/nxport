@@ -225,7 +225,7 @@ pub unsafe fn apply(
     base: usize,
     size: usize,
     text: (usize, usize),
-    text_prot: crate::os::Prot,
+    text_prot: crate::platform::os::Prot,
 ) -> usize {
     if crate::settings::get().files.no_exefs_patches {
         return 0;
@@ -318,7 +318,7 @@ pub fn any_not_lifted() -> bool {
     !NOT_LIFTED.lock().unwrap().is_empty()
 }
 
-unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: crate::os::Prot, lifted: bool) {
+unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: crate::platform::os::Prot, lifted: bool) {
     let in_text = addr < text.0 + text.1 && addr + bytes.len() > text.0;
     // A guest library has only the code of the app's built-in mods, in its overlay.
     if in_text && !lifted && crate::settings::get().files.guest_library.is_some() {
@@ -327,12 +327,12 @@ unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot
     let page = addr & !0x3fff;
     let span = ((addr + bytes.len() + 0x3fff) & !0x3fff) - page;
     if in_text {
-        let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
+        let _ = crate::platform::os::protect(page as usize, span, crate::platform::os::Prot::ReadWrite);
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as *mut u8, bytes.len());
     if in_text {
-        let _ = crate::os::protect(page, span, text_prot);
-        crate::os::flush_icache(addr as usize, bytes.len());
+        let _ = crate::platform::os::protect(page, span, text_prot);
+        crate::platform::os::flush_icache(addr as usize, bytes.len());
     }
 }
 

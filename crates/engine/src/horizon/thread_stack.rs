@@ -46,11 +46,11 @@ extern "C" {
 /// A stack of `size` bytes for guest code that has no buffer from the game (the main thread's, which Horizon's
 /// kernel allocates). It lives as long as the process. Returns (lo, hi).
 pub fn allocate(size: usize) -> (usize, usize) {
-    let page = crate::os::page_size();
+    let page = crate::platform::os::page_size();
     let size = size.next_multiple_of(page);
-    let base = unsafe { crate::os::alloc(page + size, crate::os::Prot::ReadWrite) }
+    let base = unsafe { crate::platform::os::alloc(page + size, crate::platform::os::Prot::ReadWrite) }
         .unwrap_or_else(|e| panic!("guest stack: allocating {size:#x} bytes failed: {e}")) as usize;
-    let _ = unsafe { crate::os::protect(base, page, crate::os::Prot::None) }; // a guard page below the stack
+    let _ = unsafe { crate::platform::os::protect(base, page, crate::platform::os::Prot::None) }; // a guard page below the stack
     (base + page, base + page + size)
 }
 

@@ -26,7 +26,7 @@ static CARRY: AtomicU32 = AtomicU32::new(0);
 /// This frame's step in seconds, from the real time since the previous frame (`interval`, the game's present interval,
 /// sizes the first one). Called once per game frame, by the game's clock update.
 pub fn step_seconds(interval: i32) -> f32 {
-    let now = crate::clock::now_ns();
+    let now = crate::platform::clock::now_ns();
     let last = LAST_NS.load(Ordering::Relaxed);
     let reuse = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
     if last != 0 && now.saturating_sub(last) < SAME_FRAME_NS && reuse > 0.0 {

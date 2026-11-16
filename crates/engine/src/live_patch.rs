@@ -76,7 +76,7 @@ pub fn enabled() -> bool {
 
 /// Called with the guest library's tables (the overlay's first), before guest code runs.
 pub fn enable(tables: Vec<Table>, rt_dispatch: usize, adds: Vec<AddModule>, host: usize) -> Result<(), String> {
-    let pool = unsafe { crate::os::alloc(STUB_POOL, crate::os::Prot::ReadWriteExec) }.map_err(|e| format!("live patches: {e}"))?;
+    let pool = unsafe { crate::platform::os::alloc(STUB_POOL, crate::platform::os::Prot::ReadWriteExec) }.map_err(|e| format!("live patches: {e}"))?;
     NX_LIVE_RT_DISPATCH.store(rt_dispatch, Ordering::Relaxed);
     let version = std::env::current_exe().ok().and_then(|e| std::fs::read(e).ok()).map_or(0, |b| fnv(&b));
     let state = State {
@@ -457,13 +457,13 @@ unsafe fn write_entries(jumps: &[(usize, [u8; ENTRY_JUMP])]) -> Result<(), Strin
         for &(at, bytes) in jumps {
             let page = at & !0xfff;
             let span = ((at + ENTRY_JUMP + 0xfff) & !0xfff) - page;
-            if crate::os::protect(page, span, crate::os::Prot::ReadWriteExec).is_err() {
+            if crate::platform::os::protect(page, span, crate::platform::os::Prot::ReadWriteExec).is_err() {
                 result = Err("live patches: a function's entry cannot be written");
                 break;
             }
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), at as *mut u8, ENTRY_JUMP);
-            let _ = crate::os::protect(page, span, crate::os::Prot::ReadExec);
-            crate::os::flush_icache(at, ENTRY_JUMP);
+            let _ = crate::platform::os::protect(page, span, crate::platform::os::Prot::ReadExec);
+            crate::platform::os::flush_icache(at, ENTRY_JUMP);
         }
         for &t in &threads {
             ResumeThread(t);
@@ -773,7 +773,7 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
     }
     let _applying = state.applying.lock().unwrap();
     unsafe {
-        let lib = crate::os::Library::open(&dll)?;
+        let lib = crate::platform::os::Library::open(&dll)?;
         let sym = |n: &str| -> Result<*mut c_void, String> {
             let p = lib.symbol(n);
             if p.is_null() {
@@ -789,7 +789,7 @@ fn compile_and_apply(state: &State, func: u64, end: u64, extra: Option<u64>) -> 
         let fns = std::slice::from_raw_parts(sym(&format!("{lib_name}_fn_ptrs"))? as *const usize, count);
         init(state.host);
         add(addrs.as_ptr(), fns.as_ptr() as *const c_void, count as u64);
-        if let Some((lo, hi)) = fns.first().and_then(|&f| crate::os::image_range(f)) {
+        if let Some((lo, hi)) = fns.first().and_then(|&f| crate::platform::os::image_range(f)) {
             let i = RANGE_COUNT.load(Ordering::Relaxed);
             if i < MAX_RANGES {
                 RANGES[i][0].store(lo, Ordering::Relaxed);
@@ -1003,7 +1003,7 @@ pub fn empty_present_layer() {
     let page = addr & !0x3fff;
     let span = ((addr + len + 0x3fff) & !0x3fff) - page;
     unsafe {
-        let _ = crate::os::protect(page, span, crate::os::Prot::ReadWrite);
+        let _ = crate::platform::os::protect(page, span, crate::platform::os::Prot::ReadWrite);
         std::ptr::copy_nonoverlapping(EMPTY_FUNCTION.as_ptr(), addr as *mut u32, EMPTY_FUNCTION.len());
         crate::cpu::aot::protect_rx(page, span);
     }

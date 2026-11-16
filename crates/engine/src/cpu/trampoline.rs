@@ -1314,7 +1314,7 @@ impl TrampolineIsland {
             return Err("Failed to protect trampoline island as executable");
         }
 
-        crate::os::flush_icache(self.base_ptr as usize, self.next_offset);
+        crate::platform::os::flush_icache(self.base_ptr as usize, self.next_offset);
 
         println!(
             "[+] Trampoline Island finalized: {} KB of executable stubs ready ({} bytes)",

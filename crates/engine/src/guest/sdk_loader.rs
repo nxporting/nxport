@@ -77,7 +77,7 @@ impl SdkModule {
         unsafe {
             let page = addr & !0x3fff;
             let span = ((addr + 16 + 0x3fff) & !0x3fff) - page;
-            let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
+            let _ = crate::platform::os::protect(page as usize, span, crate::platform::os::Prot::ReadWrite);
             let p = addr as *mut u32;
             // The target comes from a literal (data), not the code: patched code must be the same on every launch
             // (AOT images, cpu/aot.rs).
@@ -87,7 +87,7 @@ impl SdkModule {
             ptr::write(p.add(2), 0xD61F_0200); // br x16
             ptr::write(p.add(3), 0xD503_201F); // nop
             crate::cpu::aot::protect_rx(page, span);
-            crate::os::flush_icache(addr as usize, 16);
+            crate::platform::os::flush_icache(addr as usize, 16);
         }
         true
     }
@@ -132,7 +132,7 @@ impl SdkModule {
         };
         // Stub: adrp x16; ldr x16, <literal: target>; br x16; nop
         let page = stub & !0x3fff;
-        let _ = crate::os::protect(page as usize, 0x4000, crate::os::Prot::ReadWrite);
+        let _ = crate::platform::os::protect(page as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
         let p = stub as *mut u32;
         let [adrp, ldr] = crate::cpu::aot::adrp_ldr(stub, crate::cpu::aot::literal(target), 16);
         ptr::write(p, adrp);
@@ -140,12 +140,12 @@ impl SdkModule {
         ptr::write(p.add(2), 0xD61F_0200);
         ptr::write(p.add(3), 0xD503_201F);
         crate::cpu::aot::make_exec("sdk.short_island", page, 0x4000);
-        crate::os::flush_icache(stub as usize, 16);
+        crate::platform::os::flush_icache(stub as usize, 16);
         let fpage = addr & !0x3fff;
-        let _ = crate::os::protect(fpage as usize, 0x4000, crate::os::Prot::ReadWrite);
+        let _ = crate::platform::os::protect(fpage as usize, 0x4000, crate::platform::os::Prot::ReadWrite);
         ptr::write(addr as *mut u32, b);
         crate::cpu::aot::protect_rx(fpage, 0x4000);
-        crate::os::flush_icache(addr as usize, 4);
+        crate::platform::os::flush_icache(addr as usize, 4);
         true
     }
 }
@@ -153,7 +153,7 @@ impl SdkModule {
 impl Drop for SdkModule {
     fn drop(&mut self) {
         if let Some((base, size)) = self.own {
-            unsafe { crate::os::release(base, size) };
+            unsafe { crate::platform::os::release(base, size) };
         }
     }
 }
@@ -372,8 +372,8 @@ pub fn load_sdk(
             (mem_space.base_ptr as usize + mem_space.total_size + crate::guest::loader::SDK_GAP)
                 & !0x3fff;
         let base = unsafe {
-            crate::os::reserve(crate::os::At::Near(hint), total_aligned).and_then(|b| {
-                crate::os::commit(b, total_aligned, crate::os::Prot::ReadWrite).map(|()| b)
+            crate::platform::os::reserve(crate::platform::os::At::Near(hint), total_aligned).and_then(|b| {
+                crate::platform::os::commit(b, total_aligned, crate::platform::os::Prot::ReadWrite).map(|()| b)
             })
         }
         .map_err(|e| format!("SDK memory: {e}"))?;

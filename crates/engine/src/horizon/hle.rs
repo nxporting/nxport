@@ -382,7 +382,7 @@ pub unsafe extern "C" fn hle_nn_os_GetCurrentThread() -> *mut NnThreadType {
             }
             // Populate the REAL host stack bounds at the REAL field offsets
             // (_stack/_stackSize), not a placeholder. See struct doc comment.
-            let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(crate::os::current_thread_stack);
+            let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(crate::platform::os::current_thread_stack);
             (*ptr).stack = lo as *mut ();
             (*ptr).original_stack = (*ptr).stack;
             (*ptr).stack_size = hi - lo;
@@ -604,7 +604,7 @@ pub unsafe extern "C" fn hle_nn_os_IsMutexLockedByCurrentThread(mutex: *const Nn
     }
 }
 
-// 5. System clocks. The guest's system tick is the host clock (crate::clock), not the Switch's 19.2 MHz counter:
+// 5. System clocks. The guest's system tick is the host clock (crate::platform::clock), not the Switch's 19.2 MHz counter:
 // GetSystemTick, GetSystemTickFrequency and ConvertToTimeSpan all use it, so they agree with each other and with NVN
 // timestamps.
 
@@ -617,14 +617,14 @@ pub(crate) fn log_timestamps() -> bool {
 /// Sleep on a guest thread without nanosleep(): libsystem's nanosleep makes a MIG call that
 /// needs this thread's mach reply-port TSD slot, which the guest's use of tpidrro_el0 as
 /// its Horizon TLS can clobber ("clock_get_time() failed: (ipc/send) invalid reply port").
-/// mach_wait_until is a bare kernel trap with no reply port (crate::clock::sleep_ns).
+/// mach_wait_until is a bare kernel trap with no reply port (crate::platform::clock::sleep_ns).
 pub fn hle_sleep_ns(ns: u64) {
-    crate::clock::sleep_ns(ns);
+    crate::platform::clock::sleep_ns(ns);
 }
 
 #[no_mangle]
 pub extern "C" fn hle_nn_os_GetSystemTick() -> u64 {
-    crate::clock::ticks()
+    crate::platform::clock::ticks()
 }
 
 // 6. NVN Graphics Bootstrap Loader & NV / VI Subsystems
@@ -889,7 +889,7 @@ impl BlockGuard {
             *slot = *((gfp + 8) as *const usize);
             gfp = *(gfp as *const usize);
         }
-        let key = crate::os::current_thread_id();
+        let key = crate::platform::os::current_thread_id();
         blocked_table()
             .lock()
             .unwrap()
@@ -1014,7 +1014,7 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryBlock(addr: usize, size: usize) {
         b.remove(i);
         crate::horizon::heap_layout::freed(addr);
         crate::guest::dirty_track::release(addr, size);
-        crate::os::free(addr as *mut u8, size);
+        crate::platform::os::free(addr as *mut u8, size);
     }
     println!(
         "[+] HLE: nn::os::FreeMemoryBlock({:#x}, {} MB)",
@@ -1028,7 +1028,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, siz
     let file_backed = {
         #[cfg(unix)]
         {
-            crate::settings::get().guest.file_backed_memory.then(|| crate::os::alloc_file_backed(size, &std::env::temp_dir()))
+            crate::settings::get().guest.file_backed_memory.then(|| crate::platform::os::alloc_file_backed(size, &std::env::temp_dir()))
         }
         #[cfg(not(unix))]
         {
@@ -1042,9 +1042,9 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryBlock(out_addr: *mut usize, siz
         }
         Some(Err(e)) => {
             eprintln!("[!] HLE: AllocateMemoryBlock: file-backed memory failed ({e}); anonymous instead");
-            crate::os::alloc_on_demand(size)
+            crate::platform::os::alloc_on_demand(size)
         }
-        None => crate::os::alloc_on_demand(size),
+        None => crate::platform::os::alloc_on_demand(size),
     };
     let Ok(ptr) = alloc else {
         eprintln!(
@@ -1337,7 +1337,7 @@ pub unsafe extern "C" fn hle_nn_diag_detail_Abort(res: *const u32) -> ! {
         }
         let next_fp = *(fp as *const usize);
         let lr = *((fp + 8) as *const usize);
-        let (lib, sym) = crate::os::address_owner(lr);
+        let (lib, sym) = crate::platform::os::address_owner(lr);
         let (sname, dname) = (sym.unwrap_or_else(|| "?".into()), lib.unwrap_or_else(|| "?".into()));
         eprintln!(
             "    Frame #{:02}: FP={:#x} LR={:#x} <{} in {}>",
@@ -1600,7 +1600,7 @@ pub unsafe extern "C" fn hle_nn_os_SleepThread(nano: i64) {
         hle_sleep_ns(nano as u64);
     }
     if nano > 1_000_000 && log_timestamps() && std::thread::current().name() == Some("guest-main") {
-        let now = crate::clock::now_ms();
+        let now = crate::platform::clock::now_ms();
         println!(
             "[ts] sleep {:.1} ms ended t {:.3} ms",
             nano as f64 / 1e6,
@@ -1623,7 +1623,7 @@ pub unsafe extern "C" fn hle_nn_os_YieldThread() {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_ConvertToTimeSpan(tick: i64) -> i64 {
-    crate::clock::ticks_to_ns(tick.max(0) as u64) as i64
+    crate::platform::clock::ticks_to_ns(tick.max(0) as u64) as i64
 }
 
 #[repr(C)]
@@ -2724,7 +2724,7 @@ fn region_arena() -> &'static StdMutex<RegionArena> {
     static ARENA: OnceLock<StdMutex<RegionArena>> = OnceLock::new();
     ARENA.get_or_init(|| {
         let reserved = REGION_ARENA_SIZES.iter().find_map(|&size| {
-            unsafe { crate::os::reserve(crate::os::At::Anywhere, size + REGION_ALIGN) }.ok().map(|raw| (raw, size))
+            unsafe { crate::platform::os::reserve(crate::platform::os::At::Anywhere, size + REGION_ALIGN) }.ok().map(|raw| (raw, size))
         });
         let mut free = std::collections::BTreeMap::new();
         let (base, size) = if let Some((raw, size)) = reserved {
@@ -2745,7 +2745,7 @@ fn region_arena() -> &'static StdMutex<RegionArena> {
         #[cfg(target_vendor = "apple")]
         let file = (size != 0 && crate::settings::get().guest.file_backed_memory)
             // The arena is a reservation; regions in use are what the disk must hold. 2 GB covers TotK's.
-            .then(|| crate::os::sparse_file_with_room(size, 3 << 30, &std::env::temp_dir()))
+            .then(|| crate::platform::os::sparse_file_with_room(size, 3 << 30, &std::env::temp_dir()))
             .and_then(|f| f.map_err(|e| eprintln!("[!] HLE: file-backed region arena failed ({e}); anonymous instead")).ok());
         StdMutex::new(RegionArena {
             base,
@@ -2774,9 +2774,9 @@ fn arena_file(addr: usize) -> Option<(i32, usize)> {
 unsafe fn region_arena_commit(addr: usize, size: usize) -> std::io::Result<()> {
     #[cfg(target_vendor = "apple")]
     if let Some((fd, off)) = arena_file(addr) {
-        return crate::os::map_file(addr, size, fd, off);
+        return crate::platform::os::map_file(addr, size, fd, off);
     }
-    crate::os::commit(addr, size, crate::os::Prot::ReadWrite)
+    crate::platform::os::commit(addr, size, crate::platform::os::Prot::ReadWrite)
 }
 
 /// First fit; `size` is 64KB aligned.
@@ -2811,15 +2811,15 @@ fn region_arena_free(addr: usize, size: usize) {
 pub(crate) unsafe fn release_address_region(addr: usize, size: usize) {
     if in_region_arena(addr) {
         // Back to reserved: drops the pages but keeps the arena contiguous.
-        crate::os::decommit(addr, size);
+        crate::platform::os::decommit(addr, size);
         // File-backed: the pages read zero when the range is handed out again.
         #[cfg(target_vendor = "apple")]
         if let Some((fd, off)) = arena_file(addr) {
-            crate::os::punch_hole(fd, off, size);
+            crate::platform::os::punch_hole(fd, off, size);
         }
         region_arena_free(addr, size);
     } else {
-        crate::os::release(addr, size);
+        crate::platform::os::release(addr, size);
     }
 }
 
@@ -2848,9 +2848,9 @@ pub unsafe extern "C" fn hle_nn_os_AllocateAddressRegion(
                 "[!] HLE: address region arena exhausted; mapping {} bytes outside it",
                 aligned_size
             );
-            let region = crate::os::reserve(crate::os::At::Anywhere, aligned_size + REGION_ALIGN).and_then(|raw| {
+            let region = crate::platform::os::reserve(crate::platform::os::At::Anywhere, aligned_size + REGION_ALIGN).and_then(|raw| {
                 let addr = (raw + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
-                crate::os::commit(addr, aligned_size, crate::os::Prot::ReadWrite).map(|()| addr)
+                crate::platform::os::commit(addr, aligned_size, crate::platform::os::Prot::ReadWrite).map(|()| addr)
             });
             match region {
                 Ok(addr) => addr,
@@ -2886,7 +2886,7 @@ pub unsafe extern "C" fn hle_nn_os_AllocateMemoryPages(address: usize, size: usi
     let page_len = page_end - page_start;
     // These pages are made writable and zeroed below without faulting: tell write tracking.
     crate::guest::dirty_track::before_host_write(page_start, page_len);
-    if let Err(err) = crate::os::protect(page_start, page_len, crate::os::Prot::ReadWrite) {
+    if let Err(err) = crate::platform::os::protect(page_start, page_len, crate::platform::os::Prot::ReadWrite) {
         println!(
             "[!] HLE: nn::os::AllocateMemoryPages(addr=0x{:x}, size={}) FAILED: {}",
             address, size, err
@@ -2947,12 +2947,12 @@ pub unsafe extern "C" fn hle_nn_os_FreeMemoryPages(address: usize, size: usize) 
     for host in first_host..last_host {
         let base = host * per_host;
         if (base..base + per_host).all(|p| !mapped.contains(&p)) {
-            crate::os::discard(host * HOST_PAGE, HOST_PAGE);
+            crate::platform::os::discard(host * HOST_PAGE, HOST_PAGE);
             // File-backed: the file's block goes too (madvise leaves file pages in place).
             #[cfg(target_vendor = "apple")]
             if in_region_arena(host * HOST_PAGE) {
                 if let Some((fd, off)) = arena_file(host * HOST_PAGE) {
-                    crate::os::punch_hole(fd, off, HOST_PAGE);
+                    crate::platform::os::punch_hole(fd, off, HOST_PAGE);
                 }
             }
             released += 1;
@@ -3041,7 +3041,7 @@ mod printf_tests {
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nn_os_GetSystemTickFrequency() -> u64 {
-    crate::clock::frequency()
+    crate::platform::clock::frequency()
 }
 
 // 10. Stack, Core, Mutex TryLock, and ReaderWriterLock
@@ -3050,7 +3050,7 @@ pub unsafe extern "C" fn hle_nn_os_GetCurrentStackInfo(
     out_stack: *mut usize,
     out_stack_size: *mut usize,
 ) {
-    let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(crate::os::current_thread_stack);
+    let (lo, hi) = super::thread_stack::current_bounds().unwrap_or_else(crate::platform::os::current_thread_stack);
     if !out_stack.is_null() {
         *out_stack = lo;
     }

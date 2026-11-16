@@ -80,7 +80,7 @@ fn alias_region() -> (usize, usize) {
     let mut a = ALIAS.lock().unwrap();
     if a.1 == 0 {
         const SIZE: usize = 0x1_0000_0000;
-        if let Ok(p) = unsafe { crate::os::reserve(crate::os::At::Anywhere, SIZE) } {
+        if let Ok(p) = unsafe { crate::platform::os::reserve(crate::platform::os::At::Anywhere, SIZE) } {
             *a = (p, SIZE);
         }
     }
@@ -93,7 +93,7 @@ fn small_alias_region() -> (usize, usize) {
     static R: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
     *R.get_or_init(|| {
         const SIZE: usize = 0x400_0000;
-        unsafe { crate::os::reserve(crate::os::At::Anywhere, SIZE) }.map_or((0, 0), |p| (p, SIZE))
+        unsafe { crate::platform::os::reserve(crate::platform::os::At::Anywhere, SIZE) }.map_or((0, 0), |p| (p, SIZE))
     })
 }
 
@@ -334,7 +334,7 @@ unsafe fn set_heap_size(r: &mut [u64; 8]) -> u64 {
     let mut g = HEAP.lock().unwrap();
     let (mut base, cur_size) = *g;
     if base == 0 {
-        match crate::os::reserve(crate::os::At::Anywhere, HEAP_CAPACITY) {
+        match crate::platform::os::reserve(crate::platform::os::At::Anywhere, HEAP_CAPACITY) {
             Ok(p) => {
                 base = p;
                 *g = (base, 0);
@@ -361,13 +361,13 @@ unsafe fn set_heap_size(r: &mut [u64; 8]) -> u64 {
     }
     if size > cur_size {
         if let Err(e) =
-            crate::os::commit(base + cur_size, size - cur_size, crate::os::Prot::ReadWrite)
+            crate::platform::os::commit(base + cur_size, size - cur_size, crate::platform::os::Prot::ReadWrite)
         {
             eprintln!("[-] SetHeapSize: commit failed: {e}");
             return RESULT_OUT_OF_MEMORY;
         }
     } else if size < cur_size {
-        crate::os::decommit(base + size, cur_size - size);
+        crate::platform::os::decommit(base + size, cur_size - size);
     }
     *g = (base, size);
     drop(g);
@@ -614,7 +614,7 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
                     a = st + n;
                 }
                 None => {
-                    let what = match crate::os::address_owner(a) {
+                    let what = match crate::platform::os::address_owner(a) {
                         (Some(lib), sym) => format!("{} {}", lib, sym.unwrap_or_default()),
                         (None, _) => "unknown mapping".to_string(),
                     };
@@ -665,7 +665,7 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
         let mut page = lo;
         while page < hi {
             if !covered.iter().any(|&(a, b)| page >= a && page < b) {
-                if crate::os::commit(page, PAGE, crate::os::Prot::ReadWrite).is_err() {
+                if crate::platform::os::commit(page, PAGE, crate::platform::os::Prot::ReadWrite).is_err() {
                     return RESULT_INVALID_ADDRESS;
                 }
             }
@@ -761,14 +761,14 @@ unsafe fn flush_range(v: &mut Shadow, start: usize, end: usize) -> usize {
                     let code = std::slice::from_raw_parts((v.src + off) as *const u8, n);
                     (0..n).step_by(4).filter(|&i| view.get(i..(i + 4).min(n)) != code.get(i..(i + 4).min(n))).map(|i| v.src + off + i).collect()
                 };
-                let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadWrite);
+                let _ = crate::platform::os::protect(page as usize, span, crate::platform::os::Prot::ReadWrite);
                 std::ptr::copy_nonoverlapping(view.as_ptr(), (v.src + off) as *mut u8, n);
                 #[cfg(windows)]
                 for a in changed {
                     crate::live_patch::code_written(a, 4);
                 }
-                let _ = crate::os::protect(page as usize, span, crate::os::Prot::ReadExec);
-                crate::os::flush_icache(((v.src + off)) as usize, n);
+                let _ = crate::platform::os::protect(page as usize, span, crate::platform::os::Prot::ReadExec);
+                crate::platform::os::flush_icache(((v.src + off)) as usize, n);
                 if !touched.contains(&page) {
                     touched.push(page);
                 }
@@ -811,13 +811,13 @@ unsafe fn unmap_process_memory(r: &mut [u64; 8]) -> u64 {
     let mut page = dst & !0x3fff;
     while page < (dst + size + 0x3fff) & !0x3fff {
         if !others.iter().any(|&(a, b)| page >= a && page < b) {
-            crate::os::decommit(page, 0x4000);
+            crate::platform::os::decommit(page, 0x4000);
         }
         page += 0x4000;
     }
     REGIONS.lock().unwrap().retain(|x| x.start != dst);
     // Code written through the view must be visible to instruction fetch at the original address.
-    crate::os::flush_icache(src as usize, size);
+    crate::platform::os::flush_icache(src as usize, size);
     RESULT_OK
 }
 
@@ -875,7 +875,7 @@ unsafe fn exit_current_thread() {
         }
     });
     // The thread is one start_thread made: nothing of it is needed after the guest's entry.
-    crate::os::exit_thread();
+    crate::platform::os::exit_thread();
 }
 
 /// svcWaitSynchronization(s32* index, const Handle* handles, s32 count, s64 timeout) -> w1 index. Threads signal when
