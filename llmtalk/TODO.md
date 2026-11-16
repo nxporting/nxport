@@ -165,7 +165,7 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   draw the maps (a99b7a48, 8bd2523a, f4c0e5d3; translated cleanly, trivial): R is the .x of a 256x256 RGBA8 linear
   render target (tera::ImageResourceMgr, made by GPU draws; Metal contents = guest bytes). mac-worker is tracing which
   draws write those RGBA8 tiles. Vulkan loads guest bytes before a partial draw into a re-made target (refresh(first)).
-- **BotW black-blob flicker on Vulkan (open, win-worker, 2026-11-15).** User's save at the Great Plateau lookout: about
+- **BotW black-blob flicker on Vulkan: FIXED by 8a35540 (mac-worker: finalized textures keep their generation for commands recorded before). The game cycles one texture object through transient depth buffers in a frame; every recorded pass resolved to its last state. 0 blob frames at 30 and 120 fps after it (was 5-15 in 60). Notes kept.** User's save at the Great Plateau lookout: about
   1 frame in 6 a large black region covers the distant terrain (sky and the near platform unaffected; Link inside it
   only a dark silhouette), and about 1 in 8 frames is brighter overall. The same at 30 and 120 fps. Measure with the
   history: mean of the 640x360 crop (270,150,330x130) is 158 normally, 33 blob, 208 bright. Not changed by
@@ -205,7 +205,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   main+0x151d484, GUI speed main+0x1280ecc, controller step float main+0x1dad0e0 (GOT main+0x1d6e9e0; the 0x1cad0e0
   above was wrong by 0x100000, and pause state is main+0x1e1611c), frame wait -> ret; profile::real_time() covers BotW
   so the pacer lifts the 30 fps cap. The game keeps its own interval (+0x34) and its override (+0x29). Still to do:
-  arrow gravity, sound frame floor, kf_angle, Havok deactivation pace; other versions by pattern.
+  Havok deactivation pace, the demo move arrival (needs a register to spare at main+0xc711dc), solver steps
+  (Savage Wind's are tuned; an exact rule is open); other versions by pattern. Arrow gravity, the sound frame floor
+  and the keyframed-body angle are in (2026-11-15).
 
 - **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
   virtual call (vtable slot 0x50) at main+0x15e790 (f_700025e5a0, a piece of the function at main+0x15db24, which
