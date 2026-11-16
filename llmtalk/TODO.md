@@ -12,6 +12,11 @@ Everything is on main (9c53805+: both agents' work, ios-shader-cache-windows mer
 209 unit tests pass, GitHub CI green. Mac: builder tests pass; a Mac app built from main runs from its bundle at ~59 fps
 and peaks at ~3 GB (the 32 GB archive bug, 664d61a, is fixed).
 
+Status 2026-11-16 (win-worker): CI on main was red from e9940b5 (a reorganization test path) to 6ee6f52, green again.
+A local rehearsal of the Windows release job found the iOS / macOS engines no longer linked on Windows (new
+CoreMedia / VideoToolbox frameworks missing from the stub SDK), fixed in 367a974; tests, both engines and the notices
+pass. So the dry run (1) is worth running again before the tag.
+
 Must do, in order:
 1. Run the release dry run: GitHub > Actions > Release > Run workflow, on main, no tag (neither agent has gh or a token).
    Check the three jobs pass: windows (zip with ios/nxport, macos/nxport, notices), macos, macos-with-windows (adds
