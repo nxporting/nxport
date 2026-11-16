@@ -10,5 +10,6 @@ pub(super) static LAYER: Layer = Layer {
     // its code does not check the version.
     nvn_api: Some((53, 311)),
     thread_tail_shift: Some(0),
+    nvn_procs: &[],
     audio_handle_state: None,
 };
