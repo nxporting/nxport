@@ -43,16 +43,6 @@ pub static V1_5_0: VersionProfile = VersionProfile {
     draw_item: None,
 };
 
-fn options() -> crate::settings::SettingsPatch {
-    let mut s = crate::settings::SettingsPatch::default();
-    // The game reads GPU results as soon as its frame fence says the work is done: the collision height tiles and the
-    // lighting / exposure values it draws into linear render targets. The early fence lets that wait return with the
-    // frame still on the GPU (TotK reads such results a frame late, vulkan/guard.rs), so BotW read heights and lighting
-    // that were not written yet (Link lifted into the air near water, milky water, flicker; Savage Wind #362).
-    s.graphics.early_fence = Some(false);
-    s
-}
-
 pub static PROFILE: GameProfile = GameProfile {
     kind: GameKind::BotW,
     name: "The Legend of Zelda: Breath of the Wild",
@@ -62,7 +52,7 @@ pub static PROFILE: GameProfile = GameProfile {
     compute_has_preamble: true,
     versions: &[V1_0_0, V1_5_0, V1_6_0, V1_9_0],
     shader_dirs: &["Pack", "Effect", "UI", "Layout", "System", "Model"],
-    options: Some(options),
+    options: None,
     platform_options: None,
     presets: &[],
     module_patches: &[],
