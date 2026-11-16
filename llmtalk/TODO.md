@@ -224,9 +224,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   main+0x151d484, GUI speed main+0x1280ecc, controller step float main+0x1dad0e0 (GOT main+0x1d6e9e0; the 0x1cad0e0
   above was wrong by 0x100000, and pause state is main+0x1e1611c), frame wait -> ret; profile::real_time() covers BotW
   so the pacer lifts the 30 fps cap. The game keeps its own interval (+0x34) and its override (+0x29). Still to do:
-  Havok deactivation pace (world tick main+0xf5e1c: the counter update at +0x3ef has one redundant reload to spare
-  where skip-unless-a-console-frame needs four words; body ticks main+0x11f95c and 0x1207cc likewise; matters above
-  ~120 fps), the demo move arrival (main+0xc711dc: s10-s12 are free there but the rewrite needs ~10 words where 5-7
+  Havok deactivation pace: done 2026-11-16 (the world counter update replaced whole by a call, main+0xf5e20 /
+  0x12644c; bodies main+0x11f95c / 0x1207cc keep their cbnz; ball shrine not checked in game), the demo move arrival (main+0xc711dc: s10-s12 are free there but the rewrite needs ~10 words where 5-7
   can go), solver steps
   (Savage Wind's are tuned; an exact rule is open); other versions by pattern. Arrow gravity, the sound frame floor
   and the keyframed-body angle are in (2026-11-15).
