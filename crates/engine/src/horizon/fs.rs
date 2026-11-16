@@ -407,10 +407,36 @@ pub fn patch_sets(root: &Path, depth: u32) -> Vec<(String, PathBuf)> {
 /// Every folder of IPS and pchtxt files: the mods' exefs folders, then the patch sets.
 pub fn exefs_patch_dirs() -> Vec<(String, PathBuf)> {
     let mut v: Vec<(String, PathBuf)> = mods().iter().map(|(n, d)| (n.clone(), mod_subdir(d, "exefs"))).collect();
-    if let Some(root) = crate::settings::get().files.mods_dir.clone().or_else(|| crate::profile::data_subdir("mods")) {
-        v.extend(patch_sets(&root, 2));
+    if crate::settings::get().files.no_mods {
+        return v;
+    }
+    for root in mod_roots() {
+        v.extend(patch_sets(root, 2));
     }
     v
+}
+
+/// The folders mods come from: --mods-dir (an app's built-in mods), else the game's data directory's mods folder. An
+/// app with built-in mods takes the data directory's too, for mods added after the build.
+pub fn mod_roots() -> &'static [PathBuf] {
+    static ROOTS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| {
+        let s = crate::settings::get();
+        let data = crate::profile::data_subdir("mods").filter(|d| d.is_dir());
+        match s.files.mods_dir.clone() {
+            Some(own) if crate::config::app_resources().is_some() => {
+                [Some(own.clone()), data.filter(|d| *d != own)].into_iter().flatten().collect()
+            }
+            Some(own) => vec![own],
+            None => data.into_iter().collect(),
+        }
+    })
+}
+
+/// Whether `path` lies in an app's built-in mods (lifted with the game's code on Windows), not one added after the build.
+pub fn built_in_mod(path: &Path) -> bool {
+    crate::config::app_resources().is_some()
+        && crate::settings::get().files.mods_dir.as_ref().is_some_and(|own| path.starts_with(own))
 }
 
 /// Files a host's file manager leaves in folders, which a game listing a RomFS directory must not see.
@@ -439,12 +465,9 @@ pub fn mods() -> &'static [(String, PathBuf)] {
         if crate::settings::get().files.no_mods {
             return Vec::new();
         }
-        let Some(root) = crate::settings::get().files.mods_dir.clone().or_else(|| crate::profile::data_subdir("mods")) else {
-            return Vec::new();
-        };
         // A mod's main.npdm does not say which game it is for: Atmosphere overwrites its program ids with the running
         // program's (ldr_meta.cpp), and exlaunch's template names a fixed one. Which folder it is in decides (discover_mods).
-        let mut v = discover_mods(&root, crate::game::title_id());
+        let mut v: Vec<(String, PathBuf)> = mod_roots().iter().flat_map(|r| discover_mods(r, crate::game::title_id())).collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, path) in &v {
             let parts: Vec<&str> = ["romfs", "exefs", "cheats"].into_iter().filter(|d| mod_subdir(path, d).is_dir()).collect();

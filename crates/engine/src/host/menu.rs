@@ -202,27 +202,31 @@ pub fn title_label() -> String {
     }
 }
 
-/// The app's mods (one folder each, or one mod's romfs/exefs at the top), and whether each has code (ExeFS: lifted into
-/// the app when it was built on Windows, so it changes only with a new build there; loaded at start natively).
+/// The app's mods (one folder each, or one mod's romfs/exefs at the top), and whether each has code (ExeFS: on Windows
+/// built-in mods' code is lifted into the app, later mods' is compiled while the game runs; loaded at start natively).
 pub fn mods() -> Vec<(String, bool)> {
     let s = crate::settings::get();
     if s.files.no_mods {
         return Vec::new();
     }
-    let Some(dir) = s.files.mods_dir.clone().or_else(|| crate::profile::data_subdir("mods")) else { return Vec::new() };
-    let dir = &dir;
     let has_code = |d: &std::path::Path| ["exefs", "ExeFS"].iter().any(|e| d.join(e).is_dir()) || crate::mods::has_exefs_nsp(d);
-    if crate::mods::is_mod_dir(dir) {
-        let name = dir.file_name().map_or_else(|| "Mod".to_string(), |n| n.to_string_lossy().into_owned());
-        return vec![(name, has_code(dir))];
+    // The app's built-in mods and those added to the data directory after the build (horizon::fs::mod_roots).
+    let mut list: Vec<(String, bool)> = Vec::new();
+    for dir in crate::horizon::fs::mod_roots() {
+        if crate::mods::is_mod_dir(dir) {
+            let name = dir.file_name().map_or_else(|| "Mod".to_string(), |n| n.to_string_lossy().into_owned());
+            list.push((name, has_code(dir)));
+            continue;
+        }
+        list.extend(
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| (e.file_name().to_string_lossy().into_owned(), has_code(&e.path()))),
+        );
     }
-    let mut list: Vec<(String, bool)> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .map(|e| (e.file_name().to_string_lossy().into_owned(), has_code(&e.path())))
-        .collect();
     list.sort();
     list
 }

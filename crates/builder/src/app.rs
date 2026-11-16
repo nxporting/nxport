@@ -619,9 +619,9 @@ impl Builder {
 
         let lifted = self.target == Target::WindowsApp;
         let mods_help = if lifted {
-            "Mods built into the app, in Atmosphère layout: a folder of mods (one folder each) or one mod's folder. Their exefs/ code (IPS / pchtxt patches, subsdk plugins) is lifted with the game's, so it runs at full speed from the first start. An app built without mods takes mods from the game's data folder (games/<title id>/mods) instead, added any time; their code is compiled while the game runs."
+            "Mods built into the app, in Atmosphère layout: a folder of mods (one folder each) or one mod's folder. Their exefs/ code (IPS / pchtxt patches, subsdk plugins) is lifted with the game's, so it runs at full speed from the first start. Mods added any time go in %APPDATA%\\nxport\\games\\<title id>\\mods (with or without built-in mods); their code is compiled while the game runs."
         } else {
-            "Mods built into the app, in Atmosphère layout: a folder of mods (one folder each) or one mod's folder, copied into the app. A Mac app built without mods takes mods from the game's data folder (games/<title id>/mods) instead, added any time; an iPhone app has only the mods built in."
+            "Mods built into the app, in Atmosphère layout: a folder of mods (one folder each) or one mod's folder, copied into the app. A Mac app also takes mods added any time from ~/Library/Application Support/nxport/games/<title id>/mods; an iPhone app has only the mods built in."
         };
         row(ui, "mods", "Built-in mods", &mut self.mods, "none", mods_help);
         if !self.mods.trim().is_empty() {

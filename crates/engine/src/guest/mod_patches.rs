@@ -231,10 +231,13 @@ pub unsafe fn apply(
         return 0;
     }
     let mut applied = 0;
+    // Built-in mods' code is in an app's overlay; mods added after the build reach lifted code through live patches.
+    let overlay = crate::settings::get().files.guest_overlay.is_some();
     for (mod_name, exefs) in crate::horizon::fs::exefs_patch_dirs() {
         let Ok(rd) = std::fs::read_dir(&exefs) else {
             continue;
         };
+        let lifted = overlay && crate::horizon::fs::built_in_mod(&exefs);
         let mut files: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
         files.sort();
         for path in files {
@@ -287,7 +290,7 @@ pub unsafe fn apply(
                     );
                     continue;
                 }
-                write_bytes(base + p.offset, &p.bytes, text, text_prot);
+                write_bytes(base + p.offset, &p.bytes, text, text_prot, lifted);
                 n += 1;
             }
             println!(
@@ -315,10 +318,10 @@ pub fn any_not_lifted() -> bool {
     !NOT_LIFTED.lock().unwrap().is_empty()
 }
 
-unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: crate::os::Prot) {
+unsafe fn write_bytes(addr: usize, bytes: &[u8], text: (usize, usize), text_prot: crate::os::Prot, lifted: bool) {
     let in_text = addr < text.0 + text.1 && addr + bytes.len() > text.0;
-    // A guest library with no overlay of the app's mods was lifted from the unpatched code.
-    if in_text && crate::settings::get().files.guest_library.is_some() && crate::settings::get().files.guest_overlay.is_none() {
+    // A guest library has only the code of the app's built-in mods, in its overlay.
+    if in_text && !lifted && crate::settings::get().files.guest_library.is_some() {
         NOT_LIFTED.lock().unwrap().push((addr, bytes.len()));
     }
     let page = addr & !0x3fff;
