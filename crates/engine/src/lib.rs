@@ -60,7 +60,7 @@ use std::thread;
 use guest::loader::GuestMemorySpace;
 
 #[cfg(nx_runtime)]
-/// Builds the guest code image (cpu/aot.rs): the game's code loaded and patched with `settings`, as the app will patch
+/// Builds the guest code image (guest/exec/aot.rs): the game's code loaded and patched with `settings`, as the app will patch
 /// it at startup, without running any of it. iOS apps get it signed; where guest code is lifted it is what the lifter
 /// lifts. Plugin mods (exefs/subsdkN modules) patch code from their initialisers, so an image with them needs those to
 /// run: not done here. Once per process.
@@ -261,7 +261,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         ..
     } = load()?;
 
-    // 5'. AOT images (cpu/aot.rs): write the patched code out (--aot-dump), or swap in a signed copy (--aot-image).
+    // 5'. AOT images (guest/exec/aot.rs): write the patched code out (--aot-dump), or swap in a signed copy (--aot-image).
     //     With mods a dump run writes the image after their initialisers patched the code (step 7b).
     let dump_after_mods =
         matches!(guest::exec::aot::mode(), guest::exec::aot::Mode::Dump(_)) && !mod_inits.is_empty();
@@ -472,7 +472,7 @@ fn guest_chain(
     }
 
     // Mod modules' initialisers. rtld initialises the modules main depends on before main's own initialisers, and
-    // exlaunch installs its hooks here: with an AOT image (cpu/aot.rs) the hooks are in the code from the start, so the
+    // exlaunch installs its hooks here: with an AOT image (guest/exec/aot.rs) the hooks are in the code from the start, so the
     // mods must have set up the state their hooks use before any game code can reach them (main's static
     // constructors ran into an UltraCam trampoline whose target was still null). A dump run snapshots the code
     // first and writes the image once they patched it.
@@ -706,7 +706,7 @@ struct Loaded {
 /// Loads the game's modules and the mods' into guest memory and patches them for this host: relocations, HLE bindings,
 /// SDK interposition, x18 / tpidr rewrites, game hooks, then makes the code executable. Nothing of the guest has run yet.
 fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
-    // The TSD keys whose offsets patched code embeds (fixed numbers, cpu/tls.rs), before anything else creates keys.
+    // The TSD keys whose offsets patched code embeds (fixed numbers, guest/exec/tls.rs), before anything else creates keys.
     #[cfg(nx_native)]
     {
         let _ = (
@@ -837,51 +837,13 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
-    // 3. Bind specific GOT entries to our native HLE shims via x9-restoring trampolines.
-
-    // Bind specific routines
-
-    // Bind C++ ABI guards
-    // nn::util::BitArray::reset is pure computation in the sdk module
-    // (confirmed by disassembly: it only calls the SDK's own internal
-    // memset, no svc, no external dependency) -- let it run for real instead
-    // of the Rust stand-in, same reasoning as StandardAllocator below.
-    // bind_import!("_ZN2nn4util8BitArray5resetEv", guest::loader::JUMP_SLOT, horizon::crate::horizon::util::bit_array_reset);
-
-    // Bind Horizon Heap & Allocator routines
-
-    // Bind nn::oe and nn::account
-
-    // Bind Threading, TLS, and System GOT symbols
-    // GetSystemTick / GetSystemTickFrequency / ConvertToTimeSpan need no kernel, but the sdk module's frequency is the
-    // Switch's fixed 19.2 MHz while its tick would read the host counter: all three are HLE'd so they agree
-    // (crate::platform::clock).
-    // The SDK-internal variant (Super Mario Bros. Wonder's static constructors): the SDK's own walks its thread list,
-    // which is empty under the HLE threads.
-
-    // C ABI bindings for Horizon OS (used by SMO and middleware)
-
-    // Bind ConvertToTimeSpan & Human Interface Device (nn::hid)
-
-    // Bind nn::os::TimerEvent
-
-    // Bind Stack, Mutex & RWLock
-
-    // Bind File System (nn::fs)
-
-    // Bind Graphics (NV, VI, NVN)
-
-    // Bind Libc string & memory routines
-
-    // Bind libc output (pure libc string/math/formatting functions resolve to the SDK's own definitions)
-
-
-    // GLOB_DAT system globals (nn::util math constants resolve to the SDK's own definitions)
+    // 3. Imports the engine replaces are bound by name through horizon::sdk (guest/loader.rs); the rest resolve to the
+    //    SDK's own definitions.
     println!(
         "[+] Successfully bound core libc, nn::os, math constants, and NVN entrypoints into GOT."
     );
 
-    // 4. x18 (cpu/trampoline.rs): macOS keeps x18 for this process (linked against a macOS SDK < 13, .cargo/config.toml);
+    // 4. x18 (guest/exec/trampoline.rs): macOS keeps x18 for this process (linked against a macOS SDK < 13, .cargo/config.toml);
     //    where the kernel does not (iOS, the simulator, a macOS build without that link flag) every x18 use of main
     //    and the SDK is rewritten into an island of stubs that keep the value in a TSD slot. Before the SDK
     //    interposition and the tpidr rewrite, so `mrs x18, tpidr_el0` sites are handled by the x18 stubs.
@@ -1234,7 +1196,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     }
 
     // 4a'. Guest reads of tpidr_el0 get XNU's per-CPU value after a reschedule; point them at the stable
-    //      copy of the guest TLS pointer (cpu/tpidr_rewrite.rs). Main text is still writable here; the SDK's is R-X.
+    //      copy of the guest TLS pointer (guest/exec/tpidr_rewrite.rs). Main text is still writable here; the SDK's is R-X.
     #[cfg(any(nx_native, windows))]
     if guest::exec::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];
@@ -1254,7 +1216,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
     }
 
-    // Plain load-exclusives become acquire loads (cpu/exclusive_rewrite.rs).
+    // Plain load-exclusives become acquire loads (guest/exec/exclusive_rewrite.rs).
     #[cfg(any(nx_native, windows))]
     if guest::exec::aot::native_rewrites() {
         let mut ranges = vec![(mem_space.base_ptr as usize, mem_space.text_size, false)];

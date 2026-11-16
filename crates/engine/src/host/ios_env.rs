@@ -6,7 +6,7 @@
 //   Documents/log.txt              stdout + stderr (the engine logs a lot; send this file when something breaks)
 //   Documents/shader_dump_missing  shader stages the cache lacks (they draw nothing; send them back to add them)
 //   <bundle>/shader_cache          the iOS shader cache (nxport-builder shaders build-ios)
-//   <bundle>/Frameworks/NxportGuest.framework/NxportGuest   the signed guest code image (cpu/aot.rs)
+//   <bundle>/Frameworks/NxportGuest.framework/NxportGuest   the signed guest code image (guest/exec/aot.rs)
 //   <bundle>/mods                  mods built into the app (the image holds their code patches)
 //   <bundle>/settings.toml         the settings the app was built with (a layer above the game profiles)
 

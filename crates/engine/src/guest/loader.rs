@@ -48,7 +48,7 @@ const TRAMPOLINE_CAPACITY: usize = 2048;
 /// Trampoline pool entries taken by the shared HLE entry stub (22 words).
 const HLE_STUB_ENTRIES: usize = 3;
 
-/// x18 stub island (cpu/trampoline.rs) just below the generated-code area: within branch range of main (TotK's main text
+/// x18 stub island (guest/exec/trampoline.rs) just below the generated-code area: within branch range of main (TotK's main text
 /// is ~45 MB) and the SDK, at a fixed distance from both. TotK main's ~31k x18 sites need ~1.3 MB.
 pub const X18_ISLAND_SIZE: usize = 0x0080_0000;
 
@@ -129,7 +129,7 @@ impl GuestMemorySpace {
         let reserve = main_end + SDK_GAP + SDK_SLOT_SIZE;
         let total_reserve = RTLD_SLOT_SIZE + reserve;
 
-        // AOT images with mods (cpu/aot.rs): exlaunch plugins write absolute addresses (trampoline pointers) into their
+        // AOT images with mods (guest/exec/aot.rs): exlaunch plugins write absolute addresses (trampoline pointers) into their
         // code, so the guest must sit at the same address in the run that dumps the image (macOS) and the runs that load
         // it (iOS). A fixed spot both address spaces leave free; any other run lets the kernel choose.
         // Lifted code (docs/windows-port.md) has the guest addresses it was lifted at built in: always fixed there.
@@ -575,7 +575,7 @@ impl GuestMemorySpace {
     }
 
     /// Emit one HLE trampoline for `rust_fn` and return its address. Entry i is 8 words; its literal (rust_fn) is at
-    /// GEN_TRAMPOLINE_LITERALS + 16 i, in a data page, so the code holds no per-run addresses (cpu/aot.rs). The first
+    /// GEN_TRAMPOLINE_LITERALS + 16 i, in a data page, so the code holds no per-run addresses (guest/exec/aot.rs). The first
     /// instruction is not PC-relative: mods hook these entries by replacing it.
     ///   stp  x29, x30, [sp, #-16]!
     ///   ldr  x16, <rust_fn>

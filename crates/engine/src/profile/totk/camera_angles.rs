@@ -188,7 +188,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     OFFSET.store(offset.to_bits(), Ordering::Relaxed);
     SCALE.store(scale.to_bits(), Ordering::Relaxed);
-    // Natively (and in an image made for a native engine, which must hold exactly that engine's patches: cpu/aot.rs
+    // Natively (and in an image made for a native engine, which must hold exactly that engine's patches: guest/exec/aot.rs
     // checks them page by page) the camera goes as a third argument: the site is a call, so nothing caller-saved is live.
     let native = crate::guest::exec::aot::native_rewrites();
     let target = if native {

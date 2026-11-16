@@ -570,12 +570,12 @@ struct Shadow {
     src: usize,
     size: usize,
     baseline: Vec<u8>,
-    /// A view of code that comes from a signed AOT image (cpu/aot.rs, iOS): its writes are checked against the image (which
+    /// A view of code that comes from a signed AOT image (guest/exec/aot.rs, iOS): its writes are checked against the image (which
     /// already holds the mods' patches) and dropped; signed pages cannot change.
     image: bool,
 }
 
-/// Bytes mods wrote into image-backed code that differ from the image (cpu/aot.rs): patches they removed again (which the
+/// Bytes mods wrote into image-backed code that differ from the image (guest/exec/aot.rs): patches they removed again (which the
 /// image keeps), plus anything their hooks did differently from when the image was made.
 pub static IMAGE_MISMATCH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SHADOWS: Mutex<Vec<Shadow>> = Mutex::new(Vec::new());
@@ -636,7 +636,7 @@ unsafe fn map_process_memory(r: &mut [u64; 8]) -> u64 {
         }
     }
     const PAGE: usize = 0x4000;
-    // Image code (cpu/aot.rs): always a copy, so writes reach the code only at flushes, where a dump run records each
+    // Image code (guest/exec/aot.rs): always a copy, so writes reach the code only at flushes, where a dump run records each
     // page's new content and a loading run maps the matching signed version.
     let in_image = crate::guest::exec::aot::active() && crate::guest::exec::aot::in_region(src, size);
     let image = in_image && crate::guest::exec::aot::loading();
@@ -735,7 +735,7 @@ unsafe fn flush_range(v: &mut Shadow, start: usize, end: usize) -> usize {
         if view != &v.baseline[off..off + n] {
             let page = (v.src + off) & !0x3fff;
             if v.image {
-                // Image code already holds the patches (cpu/aot.rs): writes are dropped. Bytes that differ from it are the
+                // Image code already holds the patches (guest/exec/aot.rs): writes are dropped. Bytes that differ from it are the
                 // patches the mod removes again (the image keeps them; the dump run reports how many) or writes the
                 // image does not know.
                 let code = std::slice::from_raw_parts((v.src + off) as *const u8, n);

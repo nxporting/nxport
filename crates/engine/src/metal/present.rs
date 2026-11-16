@@ -264,7 +264,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
         }
         static P: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let pn = P.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        // AOT dump run with mods (cpu/aot.rs): write the image once mods finished patching code, then stop.
+        // AOT dump run with mods (guest/exec/aot.rs): write the image once mods finished patching code, then stop.
         if crate::guest::exec::aot::deferred_dump_frame() == Some(pn) {
             if let Err(e) = unsafe { crate::guest::exec::aot::dump_after_mods() } {
                 eprintln!("[!!] AOT: {}", e);

@@ -35,13 +35,13 @@ pub fn guest_tls_offset() -> usize {
 }
 
 /// Fixed TSD keys: their offsets are baked into patched guest code, which must be the same on every launch (AOT
-/// images, cpu/aot.rs). pthread_key_create hands out the lowest free key, so keys are created until these come up.
+/// images, guest/exec/aot.rs). pthread_key_create hands out the lowest free key, so keys are created until these come up.
 const GUEST_TLS_KEY: Key = 400;
 const ERRNO_SAVE_KEY: Key = 401;
 const X18_KEY: Key = 402;
 const HLE_STACK_KEY: Key = 403;
 
-/// Byte offset (from tpidrro_el0) of the slot holding the guest's x18 when x18 uses are rewritten (cpu/trampoline.rs).
+/// Byte offset (from tpidrro_el0) of the slot holding the guest's x18 when x18 uses are rewritten (guest/exec/trampoline.rs).
 pub fn x18_slot_offset() -> usize {
     static OFF: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| tsd_key_offset("guest x18", X18_KEY))

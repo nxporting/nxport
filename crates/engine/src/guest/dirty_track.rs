@@ -2,7 +2,7 @@
 // straight into it; terrain tile maps streamed into reused memory). Hashing every such texture each frame to notice
 // changes cost ~45 MB of hashing per frame in Hateno (260 terrain textures of 260x260) on the encoding thread.
 // Instead a texture's pages are made read-only after each check; the first write to a page faults, the signal handler
-// (cpu/crash_handler.rs) makes the page writable again and bumps the page's write generation, and a check is skipped while
+// (guest/exec/crash_handler.rs) makes the page writable again and bumps the page's write generation, and a check is skipped while
 // the generations of the texture's pages sum to what they were when it was last hashed.
 //
 // State is per 16 KiB host page, in flat arrays per registered domain (the guest heap blocks and the address-region

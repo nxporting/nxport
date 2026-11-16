@@ -257,7 +257,7 @@ pub struct Hle {
     adapter: unsafe fn(*const (), &mut Cpu),
     /// Which function this is in a table, as written in the source (of_const). Not its address: a linker may fold
     /// identical functions into one on one host and not on another, and trampolines made per function must come out
-    /// the same on every host (the iOS guest image, cpu/aot.rs).
+    /// the same on every host (the iOS guest image, guest/exec/aot.rs).
     id: &'static str,
 }
 
