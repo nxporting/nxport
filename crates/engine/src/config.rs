@@ -54,7 +54,7 @@ const APP_SETTINGS: &str = "settings.toml";
 
 /// Where an app keeps what it carries: a macOS .app's Contents/Resources; on Windows the folder the builder made (the
 /// program's own directory, when it holds the app's settings file). None when the program is not in an app.
-fn app_resources() -> Option<PathBuf> {
+pub fn app_resources() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     #[cfg(windows)]

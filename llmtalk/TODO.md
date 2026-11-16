@@ -125,8 +125,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   applied at load that the library was not lifted with go to live patches (mod_patches::take_not_lifted ->
   live_patch::code_written once enabled). Checked: a pchtxt in the data directory with an undefined instruction in
   main+0x151d518 made that function recompile and stop at that instruction. Plugin (subsdk) mods added after the build:
-  not checked. Builder wording done (the choice is "Built-in mods", its help says where later mods go). Still open:
-  layering both folders when an app has mods of its own.
+  not checked. Builder wording done (the choice is "Built-in mods", its help names both folders). Layering done
+  (horizon::fs::mod_roots): an app with built-in mods takes the data folder's too; checked on Windows with a built-in
+  pchtxt (in the overlay, not live-patched) and a data-folder one (live-patched, ran).
 - **Later (after the first release): our own game patches as ordinary exefs mods (user, 2026-11-14).** Every patch of
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
