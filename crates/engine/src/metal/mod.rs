@@ -7857,7 +7857,11 @@ fn glitch_scan(g: &Gfx, pn: u64, src: &Tex) {
         return;
     };
     if pn < from || pn >= from + count {
-        if pn == from + count && crate::settings::get().dump.exit_on_dump {
+        // A frame still to dump (--dump-frame) exits there instead.
+        if pn == from + count
+            && crate::settings::get().dump.exit_on_dump
+            && !crate::settings::get().dump.dump_frame.iter().any(|&f| f >= pn)
+        {
             println!(
                 "[glitch] scan of frames {}..{} done, {} events, {} tint flashes, {} sky dips",
                 from,
