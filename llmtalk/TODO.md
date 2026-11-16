@@ -257,7 +257,17 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 - **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Retested 2026-11-15 on main (bf93f40 +):
   same crash in f_7000f52794 (the EmergencyHeap listener), now before the first frame. Base-only mount for tests:
-  nsmount on a spare letter (O:) with the base NSP alone, M: untouched. Built from the user's base NSP
+  nsmount on a spare letter (O:) with the base NSP alone, M: untouched.
+  **Root found (2026-11-15 evening, probes in scratchpad botwc100):** the listener runs because an allocation FAILED:
+  main+0xf39524 is a heap class's tryAlloc that falls back to its EmergencyHeap (+0xf0) when sead's tryAlloc
+  (main+0xa0c238) returns null, and on the first fallback sends the "emergencyheap" product report (main+0xe52794),
+  which reads the not-yet-made object at singleton+0x38. The heap that runs out is an actor instance heap,
+  "Dm_Npc_Goron_HeroSoul_Kago" (0x60 or 0x530 bytes failing after ~0x8568 allocated). The Gerudo variant of the same actor
+  fits (0x9ee0 total); the Goron one makes extra allocations at the end (callers main+0xacd83c de8, 0xac37e8 4a0,
+  0xacba48 530). On the console the instance heap is big enough, so something allocated in it is bigger here, or the heap
+  is sized from something we answer differently (resource sizes). Next: print the heap's size at failure (sead::Heap
+  +0x50 start / +0x58 size, probe written, not yet run) and what the main+0xacd83c / 0xac37e8 / 0xacba48 allocations are.
+  1.9.0 has no "emergencyheap" product report (the string survives only among navmesh parameter names). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
