@@ -21,6 +21,8 @@ pub struct StageCode {
 
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+/// Stages the cache lacked that were translated here (counted in the hits too).
+static CACHE_TRANSLATED: AtomicU64 = AtomicU64::new(0);
 
 static PROGRAMS: OnceLock<Mutex<HashMap<usize, std::sync::Arc<Vec<StageCode>>>>> = OnceLock::new();
 static DUMPED: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
@@ -51,6 +53,9 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
         st.cached = unsafe { shader_cache::lookup(st.data) };
         if st.cached.is_none() {
             st.cached = unsafe { shader_cache::lookup_or_translate_dynamic(st.data, st.control, i) };
+            if st.cached.is_some() {
+                CACHE_TRANSLATED.fetch_add(1, Ordering::Relaxed);
+            }
         }
         let (hits, misses) = match st.cached {
             Some(_) => (
@@ -80,8 +85,9 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
         }
         if (hits + misses) % 500 == 0 {
             println!(
-                "[shader-cache] {} hits / {} misses over {} stages",
+                "[shader-cache] {} hits ({} translated here, not in the cache) / {} misses over {} stages",
                 hits,
+                CACHE_TRANSLATED.load(Ordering::Relaxed),
                 misses,
                 hits + misses
             );
