@@ -1985,31 +1985,9 @@ pub static mut NVN_PRIVATE0: [u64; 64] = [0; 64];
 // There's no audio backend yet: updates are accepted and nothing is mixed.
 pub(crate) const NN_RESULT_SUCCESS: u32 = 0;
 
-pub(crate) fn audio_align_up(v: usize, a: usize) -> usize {
-    (v + a - 1) & !(a - 1)
-}
 
-/// nn::audio::GetAudioRendererWorkBufferSize(const AudioRendererParameter&).
-/// The buffer only backs the audren process's state, which we don't run, so
-/// this just needs to be a valid 4KB-aligned size that scales with the params.
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_GetAudioRendererWorkBufferSize(param: *const i32) -> usize {
-    record_hle_call("hle_nn_audio_GetAudioRendererWorkBufferSize");
-    // AudioRendererParameter: sampleRate, sampleCount, mixBufferCount, subMixCount,
-    // voiceCount, sinkCount, effectCount, ...
-    let (mix, sub, voice, sink, fx) = if param.is_null() {
-        (24, 8, 96, 4, 16)
-    } else {
-        let g = |i: usize| (*param.add(i)).max(0) as usize;
-        (g(2), g(3), g(4), g(5), g(6))
-    };
-    audio_align_up(
-        0x40000 + voice * 0x800 + sub * 0x1000 + mix * 0x400 + sink * 0x400 + fx * 0x2000,
-        0x1000,
-    )
-}
 
-static NN_AUDIO_RENDERER_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub(crate) static NN_AUDIO_RENDERER_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 // ── nn::os::SystemEvent (kernel readable-event handle) ──────────────────────
 // SystemEventType state normally comes from an svc-created kernel event; the
@@ -2066,7 +2044,7 @@ fn hle_system_event_signal(ev: &HleSystemEvent) {
 }
 
 /// audren signals the renderer's event once per audio frame (240 samples @ 48kHz = 5ms).
-fn nn_audio_start_frame_pacer(ev: std::sync::Arc<HleSystemEvent>) {
+pub(crate) fn nn_audio_start_frame_pacer(ev: std::sync::Arc<HleSystemEvent>) {
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
@@ -2082,108 +2060,7 @@ fn nn_audio_start_frame_pacer(ev: std::sync::Arc<HleSystemEvent>) {
         .expect("spawn audren pacer");
 }
 
-/// nn::audio::OpenAudioRenderer(AudioRendererHandle*, SystemEvent*, const AudioRendererParameter&, void*, size_t)
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_OpenAudioRenderer(
-    handle: *mut usize,
-    event: *mut (),
-    param: *const (),
-    _work: *mut (),
-    _work_size: usize,
-) -> u32 {
-    record_hle_call("hle_nn_audio_OpenAudioRenderer");
-    if !event.is_null() {
-        let ev = hle_system_event_register(event as usize);
-        nn_audio_start_frame_pacer(ev);
-    }
-    if !handle.is_null() {
-        *handle = crate::horizon::audio::renderer::open(param as *const u32);
-        if crate::horizon::sdk::audio_handle_state() {
-            *handle.add(1) = audio_renderer_state(param as *const u32, event as u64);
-        }
-    }
-    NN_AUDIO_RENDERER_STATE.store(1, std::sync::atomic::Ordering::SeqCst);
-    println!("[+] HLE: nn::audio::OpenAudioRenderer -> audren service object (timing only, no audio output)");
-    NN_RESULT_SUCCESS
-}
-/// The client state block SDK 20.5's OpenAudioRenderer (BotW 1.9.0 sdk+0x221580) puts in the handle's second word, filled
-/// as it fills it: +0x08 / +0x0c / +0x10 sample rate, sample count and mix buffer count from the parameter; +0x14 1;
-/// +0x18 the rendering time limit, 100 (%); +0x1c / +0x20 the parameter's words at +0x2c / +0x30; +0x24 the voice drop
-/// parameter, 1.0; +0x00 the system event; the rest 0. Lives as long as the process (one renderer).
-unsafe fn audio_renderer_state(param: *const u32, event: u64) -> usize {
-    let s: &'static mut [u32; 12] = Box::leak(Box::new([0u32; 12]));
-    // +0x00: the system event (the five-argument OpenAudioRenderer stores it there after the four-argument one).
-    s[0] = event as u32;
-    s[1] = (event >> 32) as u32;
-    let p = |i: usize| if param.is_null() { 0 } else { *param.add(i) };
-    s[2] = p(0);
-    s[3] = p(1);
-    s[4] = p(2);
-    s[5] = 1;
-    s[6] = 100;
-    s[7] = p(0x2c / 4);
-    s[8] = p(0x30 / 4);
-    s[9] = 1.0f32.to_bits();
-    s.as_mut_ptr() as usize
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_StartAudioRenderer(_handle: usize) -> u32 {
-    record_hle_call("hle_nn_audio_StartAudioRenderer");
-    NN_AUDIO_RENDERER_STATE.store(2, std::sync::atomic::Ordering::SeqCst);
-    crate::horizon::audio::renderer::set_running(true);
-    NN_RESULT_SUCCESS
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_StopAudioRenderer(_handle: usize) {
-    record_hle_call("hle_nn_audio_StopAudioRenderer");
-    NN_AUDIO_RENDERER_STATE.store(1, std::sync::atomic::Ordering::SeqCst);
-    crate::horizon::audio::renderer::set_running(false);
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_CloseAudioRenderer(_handle: usize) {
-    record_hle_call("hle_nn_audio_CloseAudioRenderer");
-    NN_AUDIO_RENDERER_STATE.store(0, std::sync::atomic::Ordering::SeqCst);
-}
 
-// AudioDeviceName is `char name[256]`.
-unsafe fn audio_write_device_name(out: *mut u8) {
-    let name = b"AudioStereoJackOutput\0";
-    std::ptr::write_bytes(out, 0, 256);
-    std::ptr::copy_nonoverlapping(name.as_ptr(), out, name.len());
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_GetActiveAudioOutputDeviceName(out: *mut u8) {
-    record_hle_call("hle_nn_audio_GetActiveAudioOutputDeviceName");
-    if !out.is_null() {
-        audio_write_device_name(out);
-    }
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_ListAudioOutputDeviceName(out: *mut u8, count: i32) -> i32 {
-    record_hle_call("hle_nn_audio_ListAudioOutputDeviceName");
-    if out.is_null() || count < 1 {
-        return 0;
-    }
-    audio_write_device_name(out);
-    1
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_GetActiveAudioDeviceChannelCountForOutput() -> i32 {
-    record_hle_call("hle_nn_audio_GetActiveAudioDeviceChannelCountForOutput");
-    2
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_SetAudioDeviceOutputVolume(_name: *const u8, _volume: f32) {
-    record_hle_call("hle_nn_audio_SetAudioDeviceOutputVolume");
-}
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_audio_AcquireAudioDeviceNotificationForOutput(event: *mut ()) {
-    record_hle_call("hle_nn_audio_AcquireAudioDeviceNotificationForOutput");
-    // Signaled only on output-device changes (headphones plugged in, ...); never fires here.
-    if !event.is_null() {
-        hle_system_event_register(event as usize);
-    }
-}
 
 // ── nn::codec hardware Opus decoder (IPC to hwopus) ─────────────────────────
 // Same story as audren: the decoder object lives in another sysmodule, so every
