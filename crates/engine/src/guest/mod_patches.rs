@@ -309,11 +309,13 @@ pub unsafe fn apply(
 static NOT_LIFTED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
 
 /// The code ranges patched at load that the guest library does not have (taken once).
+#[cfg(windows)]
 pub fn take_not_lifted() -> Vec<(usize, usize)> {
     std::mem::take(&mut *NOT_LIFTED.lock().unwrap())
 }
 
 /// Whether code was patched at load that the guest library does not have.
+#[cfg(windows)]
 pub fn any_not_lifted() -> bool {
     !NOT_LIFTED.lock().unwrap().is_empty()
 }
