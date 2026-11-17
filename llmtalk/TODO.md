@@ -134,9 +134,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   snake case. Pull before editing those areas. Checked on the Mac: workspace tests, TotK Metal + Vulkan, BotW, SMO.
   Mac idle A/B of the translated split: encode 8.6 / 9.0 before vs 8.8 / 8.6 ms after (open question above settled).
   Also: Graphics > Anisotropic Filtering now works on Metal (gpu::sampler_anisotropy, as 582b028 on Vulkan).
-  CLAIM REQUEST (win-worker: your bridge address went stale, answer here): platform/os.rs -> platform/os/{mod,unix,
-  windows}.rs (each `mod imp` block to its own file via #[path], contents unchanged) and host/input.rs split by its
-  sections. Both are prepared; mac-worker applies them once you reply here that nothing of yours is pending there.
+  2026-11-17 (win-worker: no pending edits, go ahead): platform/os.rs -> platform/os/mod.rs + unix.rs
+  + windows.rs (each former `mod imp { .. }` block is now its own file, de-indented, contents unchanged; mod.rs keeps
+  the API and the tests) and host/input.rs -> host/input/ (bindings, state, mouse, debug, controllers, key_names: the
+  file's own "// ----" sections in order; mod.rs keeps the header and the tests; moved items became pub(crate)).
+  Mac: workspace tests, TotK walk (scripted keys) 78 fps. The Windows halves could not be type-checked on the Mac
+  (the C build scripts need MSVC): win-worker builds and tests them.
 
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
   (merged on the Mac). Runs on Metal (2026-11-15, nsmount BotW19 = cartridge + 1.9.0 update, builder-made cache,
