@@ -104,3 +104,39 @@ pub(crate) unsafe extern "C" fn get_device_location_name(out: *mut u8) {
         std::ptr::copy_nonoverlapping(b"UTC".as_ptr(), out, 3);
     }
 }
+// ── nn::time ─────────────────────────────────────────────────────────────────────────────────
+pub(crate) fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// CalendarTime { i16 year; i8 month, day, hour, minute, second }  (8 bytes)
+// CalendarAdditionalInfo { i32 dayOfWeek; i32 yearDay; TimeZone { char name[8]; bool dst; i32 utcOffset } }
+pub(crate) unsafe fn fill_calendar(
+    tm: &libc::tm,
+    cal: *mut u8,
+    info: *mut u8,
+    name: &[u8],
+    dst: bool,
+    off: i32,
+) {
+    if !cal.is_null() {
+        *(cal as *mut i16) = (tm.tm_year + 1900) as i16;
+        *cal.add(2) = (tm.tm_mon + 1) as u8;
+        *cal.add(3) = tm.tm_mday as u8;
+        *cal.add(4) = tm.tm_hour as u8;
+        *cal.add(5) = tm.tm_min as u8;
+        *cal.add(6) = tm.tm_sec as u8;
+    }
+    if !info.is_null() {
+        *(info as *mut i32) = tm.tm_wday;
+        *(info.add(4) as *mut i32) = tm.tm_yday;
+        std::ptr::write_bytes(info.add(8), 0, 16);
+        let n = name.len().min(7);
+        std::ptr::copy_nonoverlapping(name.as_ptr(), info.add(8), n);
+        *info.add(16) = dst as u8;
+        *(info.add(20) as *mut i32) = off;
+    }
+}

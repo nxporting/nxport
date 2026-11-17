@@ -21,7 +21,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererParameterE", func!(crate::horizon::audio::api::get_audio_renderer_work_buffer_size(_))),
     Entry("_ZN2nn5audio36AcquireAudioDeviceSwitchNotificationEPNS_2os11SystemEventE", func!(crate::horizon::audio::api::acquire_audio_device_notification_for_output(_))),
     Entry("_ZN2nn5audio39AcquireAudioDeviceNotificationForOutputEPNS_2os11SystemEventE", func!(crate::horizon::audio::api::acquire_audio_device_notification_for_output(_))),
-    Entry("_ZN2nn5audio3dsp14FlushDataCacheEPKvm", func!(crate::horizon::nn::cache_noop(_, _))),
-    Entry("_ZN2nn5audio3dsp19InvalidateDataCacheEPvm", func!(crate::horizon::nn::cache_noop(_, _))),
+    Entry("_ZN2nn5audio3dsp14FlushDataCacheEPKvm", func!(crate::horizon::os::cache_noop(_, _))),
+    Entry("_ZN2nn5audio3dsp19InvalidateDataCacheEPvm", func!(crate::horizon::os::cache_noop(_, _))),
     Entry("_ZN2nn5audio41GetActiveAudioDeviceChannelCountForOutputEv", func!(crate::horizon::audio::api::get_active_audio_device_channel_count_for_output())),
 ];

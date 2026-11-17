@@ -63,7 +63,7 @@ pub(crate) const REGION_ARENA_SIZES: &[usize] = &[16 << 30, 8 << 30, 4 << 30, 2 
 #[cfg(target_os = "ios")]
 pub(crate) const REGION_ARENA_SIZES: &[usize] = &[2 << 30, 1 << 30];
 
-pub(crate) const REGION_ALIGN: usize = 0x10000;
+pub(crate) const REGION_ALIGN: usize = 0x10000; // Horizon requires 64KB alignment for address regions
 
 pub(crate) struct RegionArena {
     base: usize,

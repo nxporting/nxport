@@ -126,3 +126,7 @@ pub(crate) unsafe extern "C" fn make_broadcast(ip: u32, mask: u32) -> u32 {
 pub(crate) unsafe extern "C" fn make_network(ip: u32, mask: u32) -> u32 {
     ip & mask
 }
+// ── nn::ldn: local wireless / ad-hoc networking ──────────────────────────────
+pub(crate) static LDN_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0); // 0 = None
+
+pub(crate) static LDN_STATE_EVENT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

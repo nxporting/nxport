@@ -88,3 +88,9 @@ pub(crate) unsafe extern "C" fn abort_impl_noargs() {
     );
     std::process::abort();
 }
+pub(crate) unsafe extern "C" fn detail_unexpected_default_impl() {
+    eprintln!(
+        "[!] CRITICAL ABORT: nn::detail::UnexpectedDefaultImpl() (a switch default was reached)"
+    );
+    std::process::abort();
+}

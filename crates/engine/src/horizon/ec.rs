@@ -1,6 +1,5 @@
 // nn::ec as the game calls it: shop service accessors, reported as unavailable.
 
-use super::nn::*;
 
 pub(crate) unsafe extern "C" fn initialize_for_shop_service_accessors(_work: *mut u8, _size: usize) -> u32 {
     0
@@ -50,3 +49,7 @@ pub(crate) unsafe extern "C" fn show_shop_product_details(ns_uid: u64, _user: *c
         ns_uid
     );
 }
+// nn::ec (shop access): no network. The library initializes; requests fail
+// with ResultInternetRequestNotAccepted (module 164, description 56). Constructors / destructors run
+// in the SDK.
+pub(crate) const EC_INTERNET_REQUEST_NOT_ACCEPTED: u32 = 164 | (56 << 9);

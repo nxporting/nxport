@@ -4,6 +4,6 @@ use super::super::Entry;
 
 pub(super) static TABLE: &[Entry] = &[
     // nn::err (ErrorCode overload)
-    Entry("_ZN2nn3err9ShowErrorENS0_9ErrorCodeE", func!(crate::horizon::nn::err_show_error_code(_))),
-    Entry("_ZN2nn3err9ShowErrorENS_6ResultE", func!(crate::horizon::nn::err_show_error(_))),
+    Entry("_ZN2nn3err9ShowErrorENS0_9ErrorCodeE", func!(crate::horizon::err::err_show_error_code(_))),
+    Entry("_ZN2nn3err9ShowErrorENS_6ResultE", func!(crate::horizon::err::err_show_error(_))),
 ];

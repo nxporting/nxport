@@ -48,3 +48,5 @@ pub(crate) unsafe extern "C" fn fail2(_a: *mut u8, _b: *const u8) -> u32 {
 pub(crate) unsafe extern "C" fn mount(_h: *const u8, _m: i32, _t: i32) -> u32 {
     NFP_RESULT_NOT_AVAILABLE
 }
+// nfp: no NFC hardware. State 0 = None.
+pub(crate) const NFP_RESULT_NOT_AVAILABLE: u32 = 0x1;

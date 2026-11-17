@@ -1911,3 +1911,6 @@ mod mod_layout_tests {
 }
 #[no_mangle]
 pub(crate) unsafe extern "C" fn hle_nn_fs_SetPriorityOnCurrentThread(_prio: i32) {}
+pub(crate) unsafe extern "C" fn fs_is_save_data_existing(_uid: *const u8) -> bool {
+    true // saves live in the save directory (horizon/fs.rs); EnsureSaveData / MountSaveData create it
+}

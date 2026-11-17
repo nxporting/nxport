@@ -29,7 +29,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2os13GetSystemTickEv", func!(crate::horizon::os::get_system_tick())),
     Entry("_ZN2nn2os13SetThreadNameEPNS0_10ThreadTypeEPKc", func!(crate::horizon::os::set_thread_name(_, _))),
     Entry("_ZN2nn2os13TryWaitThreadEPNS0_10ThreadTypeE", func!(crate::horizon::os::try_wait_thread(_))),
-    Entry("_ZN2nn2os14FlushDataCacheEPKvm", func!(crate::horizon::nn::cache_noop(_, _))),
+    Entry("_ZN2nn2os14FlushDataCacheEPKvm", func!(crate::horizon::os::cache_noop(_, _))),
     Entry("_ZN2nn2os14StopTimerEventEPNS0_14TimerEventTypeE", func!(crate::horizon::os::stop_timer_event(_))),
     Entry("_ZN2nn2os14TimedWaitEventEPNS0_9EventTypeENS_8TimeSpanE", func!(crate::horizon::os::timed_wait_event(_, _))),
     Entry("_ZN2nn2os14WaitLightEventEPNS0_14LightEventTypeE", func!(crate::horizon::os::wait_light_event(_))),

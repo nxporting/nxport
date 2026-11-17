@@ -173,3 +173,10 @@ pub(crate) struct NnAccountUid {
     pub high: u64,
     pub low: u64,
 }
+// ── nn::account: one local user (the uid TryOpenPreselectedUser / GetUserId report, horizon/hle.rs), no network account ──────
+pub(crate) const USER_UID: [u64; 2] = [0x0123456789ABCDEF, 0xFEDCBA9876543210];
+
+// nn::account network service account: the user has none linked / no network,
+// ResultNetworkServiceAccountUnavailable (module 124, description 200). An AsyncContext the
+// failed calls never started reports done with that result; its event is signaled.
+pub(crate) const ACCOUNT_NSA_UNAVAILABLE: u32 = 124 | (200 << 9);

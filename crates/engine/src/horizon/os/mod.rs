@@ -1,12 +1,12 @@
 // nn::os as the game calls it: threads, synchronization (mutexes, events, semaphores, condition variables, message
 // queues), TLS, memory and time.
 
+use std::sync::Mutex;
 use crate::horizon::vi::*;
 use crate::horizon::os::objects::*;
 use crate::horizon::call_log::*;
 use crate::horizon::os::memory::*;
 use crate::horizon::hle::*;
-use crate::horizon::nn::*;
 pub(crate) mod objects;
 pub(crate) mod memory;
 pub(crate) mod threads;
@@ -1829,3 +1829,15 @@ pub(crate) unsafe extern "C" fn get_current_fiber() -> *mut u8 {
 pub(crate) unsafe extern "C" fn convert_to_tick(ns: i64) -> i64 {
     crate::platform::clock::ns_to_ticks(ns.max(0) as u64) as i64
 }
+
+
+/// MultiWaitHolder user data: an opaque value the caller attaches to a holder.
+pub(crate) static HOLDER_USER_DATA: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
+
+pub(crate) fn deadline_ns(timeout_ns: i64) -> Option<std::time::Instant> {
+    Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64))
+}
+
+/// Data-cache maintenance (FlushDataCache etc.): the sdk module's versions execute `dc`/`mrs ctr_el0`
+/// sequences that Darwin traps (SIGILL). Apple Silicon memory is coherent for our purposes, so no-op.
+pub(crate) unsafe extern "C" fn cache_noop(_addr: *const u8, _size: usize) {}

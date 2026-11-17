@@ -355,7 +355,7 @@ pub(crate) unsafe extern "C" fn get_hardware_opus_multi_stream_decoder_processin
 // the SDK's software Opus decoder (zero external dependencies), falling back to libopus
 // (horizon/audio/opus.rs), or silence with correct accounting;
 // nn::codec::GetOpusPacketSize is pure CPU and stays in the sdk module.
-pub(crate) static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new());
+pub(crate) static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new()); // (addr, rate, channels)
 
 // The SDK's own Opus functions are guest code: they run through guest::call (natively a call, lifted through the guest
 // library), never as host function pointers.
