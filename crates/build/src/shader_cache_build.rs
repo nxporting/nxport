@@ -696,7 +696,7 @@ fn compile_batch(items: &[(String, String)], work: &Path) -> HashMap<String, Opt
 fn fingerprint() -> String {
     let mut bytes = Vec::new();
     bytes.extend(sass2spv::SOURCE_HASH.as_bytes());
-    bytes.extend(include_str!("../../engine/src/metal/msl_specialize.rs").as_bytes());
+    bytes.extend(include_str!("../../engine/src/gpu/metal/msl_specialize.rs").as_bytes());
     bytes.extend(include_str!("tiny_kernels.rs").as_bytes());
     bytes.extend(include_str!("batch_kernels.rs").as_bytes());
     bytes.extend(crate::translation::fingerprint().as_bytes());

@@ -95,9 +95,9 @@ impl Recorder {
                 while let Ok(mut b) = rx.recv() {
                     // On the Presentation Thread's L3 cache once its first submit chose it (vulkan::REC_AFFINITY).
                     if !pinned {
-                        let mask = crate::vulkan::rec_affinity();
+                        let mask = crate::gpu::vulkan::rec_affinity();
                         if mask != 0 {
-                            unsafe { crate::vulkan::pin_current_thread(mask) };
+                            unsafe { crate::gpu::vulkan::pin_current_thread(mask) };
                             pinned = true;
                         }
                     }
@@ -335,11 +335,11 @@ unsafe fn run(dev: &Dev, cb: &mut vk::CommandBuffer, sets: &mut Sets, op: Op, en
         Op::VertexBuffer(binding, b, o) => d.cmd_bind_vertex_buffers(c, binding, &[b], &[o]),
         Op::IndexBuffer(b, o, ty) => d.cmd_bind_index_buffer(c, b, o, ty),
         Op::Draw(n, i, first, base) => {
-            crate::vulkan::count_for_overlay(&crate::vulkan::OVERLAY_DRAWS);
+            crate::gpu::vulkan::count_for_overlay(&crate::gpu::vulkan::OVERLAY_DRAWS);
             d.cmd_draw(c, n, i, first, base)
         }
         Op::DrawIndexed(n, i, first, base_vertex, base) => {
-            crate::vulkan::count_for_overlay(&crate::vulkan::OVERLAY_DRAWS);
+            crate::gpu::vulkan::count_for_overlay(&crate::gpu::vulkan::OVERLAY_DRAWS);
             d.cmd_draw_indexed(c, n, i, first, base_vertex, base)
         }
         Op::Barrier => dev.full_barrier(c),
@@ -375,7 +375,7 @@ pub(super) fn clear_overwritten() {
 /// put back (latest first, so the earliest of them, which held the epoch's bytes, is last).
 unsafe fn copy_guest(src: usize, dst: *mut u8, len: usize, epoch: u64) {
     crate::gpu::report_guard::engine_copy(std::slice::from_raw_parts_mut(dst, len), src as *const u8);
-    crate::vulkan::guard::patch(src, dst, len);
+    crate::gpu::vulkan::guard::patch(src, dst, len);
     std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
     if OVERWRITTEN_LATEST.load(std::sync::atomic::Ordering::SeqCst) <= epoch {
         return;

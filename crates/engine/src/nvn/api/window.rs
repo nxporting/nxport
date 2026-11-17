@@ -359,12 +359,12 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         };
         let wait = if frame.is_zero() {
             #[cfg(nx_native)]
-            let paced = interval == 0 && crate::metal::display_pacing() && crate::host::overlay::is_vsync();
+            let paced = interval == 0 && crate::gpu::metal::display_pacing() && crate::host::overlay::is_vsync();
             #[cfg(not(nx_native))]
             let paced = false;
             if paced {
                 #[cfg(nx_native)]
-                let w = crate::metal::display_pacing_wait().unwrap_or_default();
+                let w = crate::gpu::metal::display_pacing_wait().unwrap_or_default();
                 #[cfg(not(nx_native))]
                 let w = std::time::Duration::ZERO;
                 w
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         }
     }
     #[cfg(nx_native)]
-    crate::metal::frame_started();
+    crate::gpu::metal::frame_started();
     let idx = (*w).next_index % ((*w).texture_count as u32);
     (*w).next_index = (*w).next_index.wrapping_add(1);
     if !out_index.is_null() {

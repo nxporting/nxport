@@ -639,15 +639,15 @@ define_class!(
         // finishes what is in flight first so nothing is still running when the app goes to the background.
         #[unsafe(method(applicationWillResignActive:))]
         fn will_resign_active(&self, _app: &AnyObject) {
-            crate::metal::SUSPENDED.store(true, Ordering::Release);
-            crate::metal::wait_serial(crate::metal::submitted_serial(), 2_000_000_000);
+            crate::gpu::metal::SUSPENDED.store(true, Ordering::Release);
+            crate::gpu::metal::wait_serial(crate::gpu::metal::submitted_serial(), 2_000_000_000);
             crate::host::input::clear_keys();
             println!("[+] Display: app inactive; GPU work suspended");
         }
 
         #[unsafe(method(applicationDidBecomeActive:))]
         fn did_become_active(&self, _app: &AnyObject) {
-            if crate::metal::SUSPENDED.swap(false, Ordering::AcqRel) {
+            if crate::gpu::metal::SUSPENDED.swap(false, Ordering::AcqRel) {
                 println!("[+] Display: app active again; GPU work resumed");
             }
             unsafe {
@@ -686,7 +686,7 @@ unsafe fn launch(mtm: MainThreadMarker, delegate: &AppDelegate) {
     let _: () = msg_send![view, setBackgroundColor: black];
 
     // The executor is already running (crate::run initialises it before the guest starts); the layer joins it here.
-    let device = crate::metal::device()
+    let device = crate::gpu::metal::device()
         .unwrap_or_else(|| MTLCreateSystemDefaultDevice().expect("no Metal device"));
     let layer = CAMetalLayer::new();
     layer.setDevice(Some(&device));
@@ -726,7 +726,7 @@ unsafe fn launch(mtm: MainThreadMarker, delegate: &AppDelegate) {
     // Kept for the life of the process.
     std::mem::forget(vc);
 
-    crate::metal::attach_layer(layer);
+    crate::gpu::metal::attach_layer(layer);
 
     let _: *mut AnyObject = msg_send![
         objc2::class!(NSTimer),

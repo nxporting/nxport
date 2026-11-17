@@ -81,7 +81,7 @@ pub(crate) fn load_shader_lib(device: &Device) -> Option<ShaderLibs> {
     if !enabled() {
         return None;
     }
-    let dir = crate::metal::shader_cache::cache_dir();
+    let dir = crate::gpu::metal::shader_cache::cache_dir();
     let mut paths: Vec<_> = std::fs::read_dir(&dir)
         .into_iter()
         .flatten()
@@ -138,7 +138,7 @@ pub(crate) fn load_shader_lib(device: &Device) -> Option<ShaderLibs> {
 pub(crate) fn denylist() -> &'static Mutex<std::collections::HashSet<String>> {
     static D: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     D.get_or_init(|| {
-        let path = crate::metal::shader_cache::cache_dir().join("hang_denylist.txt");
+        let path = crate::gpu::metal::shader_cache::cache_dir().join("hang_denylist.txt");
         let set: std::collections::HashSet<String> = std::fs::read_to_string(&path)
             .map(|t| {
                 t.lines()

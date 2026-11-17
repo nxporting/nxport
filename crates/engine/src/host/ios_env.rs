@@ -85,7 +85,7 @@ pub fn setup() -> (
         b.display(),
         docs.display()
     );
-    let (footprint, avail) = crate::metal::process_memory_stats();
+    let (footprint, avail) = crate::gpu::metal::process_memory_stats();
     if avail > 0 {
         println!(
             "[+] iOS: initial footprint {} MB, available memory limit {:.2} GB",

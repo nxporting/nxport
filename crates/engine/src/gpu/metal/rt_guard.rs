@@ -324,7 +324,7 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
         || info.block_h != 1
         || t.samples > 1
         || tex.sampleCount() > 1
-        || crate::metal::copy::is_depth_stencil(tex.pixelFormat())
+        || crate::gpu::metal::copy::is_depth_stencil(tex.pixelFormat())
         || !matches!(tex.textureType(), MTLTextureType::Type2D | MTLTextureType::Type2DArray)
         || tex.storageMode() == MTLStorageMode::Private
     {

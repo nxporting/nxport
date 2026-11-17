@@ -44,10 +44,10 @@ fn main() {
 
     windows_version_resource("nxport: runs a game recompiled from its dump");
 
-    compile_shader("src/vulkan/astc.comp", naga::ShaderStage::Compute, "astc.spv");
-    compile_shader("src/vulkan/relayout.comp", naga::ShaderStage::Compute, "relayout.spv");
-    compile_shader("src/vulkan/overlay.vert", naga::ShaderStage::Vertex, "overlay_vert.spv");
-    compile_shader("src/vulkan/overlay.frag", naga::ShaderStage::Fragment, "overlay_frag.spv");
+    compile_shader("src/gpu/vulkan/astc.comp", naga::ShaderStage::Compute, "astc.spv");
+    compile_shader("src/gpu/vulkan/relayout.comp", naga::ShaderStage::Compute, "relayout.spv");
+    compile_shader("src/gpu/vulkan/overlay.vert", naga::ShaderStage::Vertex, "overlay_vert.spv");
+    compile_shader("src/gpu/vulkan/overlay.frag", naga::ShaderStage::Fragment, "overlay_frag.spv");
 }
 
 /// A GLSL shader to SPIR-V in OUT_DIR (included by the Vulkan backend).

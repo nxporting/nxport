@@ -76,7 +76,7 @@ impl Default for EncCache {
 
 impl EncCache {
     /// Makes a resource read through the descriptor heaps resident (once per encoder; recorded for kernels).
-    pub(in crate::metal) unsafe fn heap_use(
+    pub(in crate::gpu::metal) unsafe fn heap_use(
         &mut self,
         enc: &Enc,
         r: &ProtocolObject<dyn objc2_metal::MTLResource>,
@@ -89,7 +89,7 @@ impl EncCache {
             enc.push(Op::Use(r.retain(), objc2_metal::MTLResourceUsage::Read));
         }
     }
-    pub(in crate::metal) unsafe fn pipeline(
+    pub(in crate::gpu::metal) unsafe fn pipeline(
         &mut self,
         enc: &Enc,
         p: &ProtocolObject<dyn objc2_metal::MTLRenderPipelineState>,
@@ -103,7 +103,7 @@ impl EncCache {
             enc.push(Op::Pipeline(p.retain()));
         }
     }
-    pub(in crate::metal) unsafe fn viewport(&mut self, enc: &Enc, v: MTLViewport) {
+    pub(in crate::gpu::metal) unsafe fn viewport(&mut self, enc: &Enc, v: MTLViewport) {
         if self.rec.is_some() {
             return;
         }
@@ -120,7 +120,7 @@ impl EncCache {
             enc.push(Op::Viewport(v));
         }
     }
-    pub(in crate::metal) unsafe fn scissor(&mut self, enc: &Enc, r: MTLScissorRect) {
+    pub(in crate::gpu::metal) unsafe fn scissor(&mut self, enc: &Enc, r: MTLScissorRect) {
         if self.rec.is_some() {
             return;
         }
@@ -130,7 +130,7 @@ impl EncCache {
             enc.push(Op::Scissor(r));
         }
     }
-    pub(in crate::metal) unsafe fn cull(&mut self, enc: &Enc, m: MTLCullMode) {
+    pub(in crate::gpu::metal) unsafe fn cull(&mut self, enc: &Enc, m: MTLCullMode) {
         if self.rec.is_some() {
             return;
         }
@@ -139,7 +139,7 @@ impl EncCache {
             enc.push(Op::Cull(m));
         }
     }
-    pub(in crate::metal) unsafe fn clip(&mut self, enc: &Enc, m: objc2_metal::MTLDepthClipMode) {
+    pub(in crate::gpu::metal) unsafe fn clip(&mut self, enc: &Enc, m: objc2_metal::MTLDepthClipMode) {
         if self.rec.is_some() {
             return;
         }
@@ -148,7 +148,7 @@ impl EncCache {
             enc.push(Op::Clip(m));
         }
     }
-    pub(in crate::metal) unsafe fn winding(&mut self, enc: &Enc, w: MTLWinding) {
+    pub(in crate::gpu::metal) unsafe fn winding(&mut self, enc: &Enc, w: MTLWinding) {
         if self.rec.is_some() {
             return;
         }
@@ -157,7 +157,7 @@ impl EncCache {
             enc.push(Op::Winding(w));
         }
     }
-    pub(in crate::metal) unsafe fn fill(&mut self, enc: &Enc, f: MTLTriangleFillMode) {
+    pub(in crate::gpu::metal) unsafe fn fill(&mut self, enc: &Enc, f: MTLTriangleFillMode) {
         if self.rec.is_some() {
             return;
         }
@@ -166,7 +166,7 @@ impl EncCache {
             enc.push(Op::Fill(f));
         }
     }
-    pub(in crate::metal) unsafe fn bias(&mut self, enc: &Enc, units: f32, factor: f32, clamp: f32) {
+    pub(in crate::gpu::metal) unsafe fn bias(&mut self, enc: &Enc, units: f32, factor: f32, clamp: f32) {
         if self.rec.is_some() {
             return;
         }
@@ -176,7 +176,7 @@ impl EncCache {
             enc.push(Op::Bias(units, factor, clamp));
         }
     }
-    pub(in crate::metal) unsafe fn stencil_ref(&mut self, enc: &Enc, r: [u8; 2]) {
+    pub(in crate::gpu::metal) unsafe fn stencil_ref(&mut self, enc: &Enc, r: [u8; 2]) {
         if self.rec.is_some() {
             return;
         }
@@ -186,7 +186,7 @@ impl EncCache {
             enc.push(Op::StencilRef(r[0] as u32, r[1] as u32));
         }
     }
-    pub(in crate::metal) unsafe fn depth_stencil(
+    pub(in crate::gpu::metal) unsafe fn depth_stencil(
         &mut self,
         enc: &Enc,
         d: &ProtocolObject<dyn MTLDepthStencilState>,
@@ -200,7 +200,7 @@ impl EncCache {
             enc.push(Op::DepthStencil(d.retain()));
         }
     }
-    pub(in crate::metal) unsafe fn blend(&mut self, enc: &Enc, c: [f32; 4]) {
+    pub(in crate::gpu::metal) unsafe fn blend(&mut self, enc: &Enc, c: [f32; 4]) {
         if self.rec.is_some() {
             return;
         }
@@ -212,7 +212,7 @@ impl EncCache {
     }
     // The same buffer at a new offset only moves the offset (setVertexBufferOffset: no retain here, no resource-list
     // work in the driver): uniform copies of consecutive draws sit in one arena chunk. --no-buf-offset-ops: off.
-    pub(in crate::metal) unsafe fn vbuf(
+    pub(in crate::gpu::metal) unsafe fn vbuf(
         &mut self,
         enc: &Enc,
         b: &ProtocolObject<dyn MTLBuffer>,
@@ -237,7 +237,7 @@ impl EncCache {
             Op::VBuf(b.retain(), off, i)
         });
     }
-    pub(in crate::metal) unsafe fn fbuf(
+    pub(in crate::gpu::metal) unsafe fn fbuf(
         &mut self,
         enc: &Enc,
         b: &ProtocolObject<dyn MTLBuffer>,
@@ -262,7 +262,7 @@ impl EncCache {
             Op::FBuf(b.retain(), off, i)
         });
     }
-    pub(in crate::metal) unsafe fn vtex(
+    pub(in crate::gpu::metal) unsafe fn vtex(
         &mut self,
         enc: &Enc,
         t: &ProtocolObject<dyn objc2_metal::MTLTexture>,
@@ -281,7 +281,7 @@ impl EncCache {
         }
         enc.push(Op::VTex(t.retain(), i));
     }
-    pub(in crate::metal) unsafe fn ftex(
+    pub(in crate::gpu::metal) unsafe fn ftex(
         &mut self,
         enc: &Enc,
         t: &ProtocolObject<dyn objc2_metal::MTLTexture>,
@@ -300,7 +300,7 @@ impl EncCache {
         }
         enc.push(Op::FTex(t.retain(), i));
     }
-    pub(in crate::metal) unsafe fn vsamp(
+    pub(in crate::gpu::metal) unsafe fn vsamp(
         &mut self,
         enc: &Enc,
         s: Option<&ProtocolObject<dyn MTLSamplerState>>,
@@ -319,7 +319,7 @@ impl EncCache {
         }
         enc.push(Op::VSamp(s.map(|x| x.retain()), i));
     }
-    pub(in crate::metal) unsafe fn fsamp(
+    pub(in crate::gpu::metal) unsafe fn fsamp(
         &mut self,
         enc: &Enc,
         s: Option<&ProtocolObject<dyn MTLSamplerState>>,

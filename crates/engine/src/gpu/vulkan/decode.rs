@@ -122,9 +122,9 @@ impl Decoder {
                 while rx.recv().is_ok() {
                     // On the recording threads' L3 cache (vulkan::REC_AFFINITY): what it publishes is read right away.
                     if !pinned {
-                        let mask = crate::vulkan::rec_affinity();
+                        let mask = crate::gpu::vulkan::rec_affinity();
                         if mask != 0 {
-                            unsafe { crate::vulkan::pin_current_thread(mask) };
+                            unsafe { crate::gpu::vulkan::pin_current_thread(mask) };
                             pinned = true;
                         }
                     }

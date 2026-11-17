@@ -51,7 +51,7 @@ use objc2_metal::{
     MTLVertexStepFunction, MTLWinding,
 };
 
-use crate::metal::shader_cache::{CachedStage, StageKind, TexBinding};
+use crate::gpu::metal::shader_cache::{CachedStage, StageKind, TexBinding};
 
 const STAGE_VERTEX: i32 = 0;
 const STAGE_FRAGMENT: i32 = 1;

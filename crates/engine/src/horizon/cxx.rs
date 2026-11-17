@@ -133,7 +133,7 @@ pub(crate) unsafe extern "C" fn hle_nnmusl_init_dso(
 #[no_mangle]
 pub(crate) unsafe extern "C" fn hle_memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
     #[cfg(nx_native)]
-    let _copy = crate::metal::rt_guard::guest_copy_scope();
+    let _copy = crate::gpu::metal::rt_guard::guest_copy_scope();
     if (dest as usize) < 0x10000 || n == 0 {
         return dest;
     }
@@ -143,7 +143,7 @@ pub(crate) unsafe extern "C" fn hle_memset(dest: *mut u8, c: i32, n: usize) -> *
 #[no_mangle]
 pub(crate) unsafe extern "C" fn hle_memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     #[cfg(nx_native)]
-    let _copy = crate::metal::rt_guard::guest_copy_scope();
+    let _copy = crate::gpu::metal::rt_guard::guest_copy_scope();
     if (dest as usize) < 0x10000 || (src as usize) < 0x10000 || n == 0 {
         return dest;
     }
@@ -153,7 +153,7 @@ pub(crate) unsafe extern "C" fn hle_memcpy(dest: *mut u8, src: *const u8, n: usi
 #[no_mangle]
 pub(crate) unsafe extern "C" fn hle_memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     #[cfg(nx_native)]
-    let _copy = crate::metal::rt_guard::guest_copy_scope();
+    let _copy = crate::gpu::metal::rt_guard::guest_copy_scope();
     if (dest as usize) < 0x10000 || (src as usize) < 0x10000 || n == 0 {
         return dest;
     }

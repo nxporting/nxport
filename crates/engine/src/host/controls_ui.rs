@@ -95,7 +95,7 @@ define_class!(
                 // F6: display pacing of unlocked frame rates on / off (to compare by feel).
                 KEY_F6 => {
                     if !repeat {
-                        crate::metal::toggle_display_pacing();
+                        crate::gpu::metal::toggle_display_pacing();
                     }
                 }
                 // F8: mouse look frees the mouse, or takes it again.
@@ -205,7 +205,7 @@ fn request_capture() {
         crate::gpu::history::request();
         println!("[+] Capture requested: the frame history is written at the next present");
     } else {
-        crate::metal::request_capture();
+        crate::gpu::metal::request_capture();
     }
 }
 
