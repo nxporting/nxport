@@ -377,7 +377,7 @@ pub(crate) struct SharedCaches {
     /// through argument buffers are a limited device resource, and pool slots repeat descriptors).
     pub(super) sampler_states: Vec<(crate::nvn::api::SamplerDesc, Retained<ProtocolObject<dyn MTLSamplerState>>)>,
     pub(super) samplers: HashMap<
-        i32,
+        (i32, bool),
         (
             crate::nvn::api::SamplerDesc,
             Retained<ProtocolObject<dyn MTLSamplerState>>,

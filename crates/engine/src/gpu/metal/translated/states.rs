@@ -4,23 +4,26 @@
 use super::*;
 
 impl Gfx {
+    /// `plain`: the draw keeps the game's anisotropy (a texture with one mip level, or a blended draw; see
+    /// gpu::sampler_anisotropy).
     pub(crate) fn sampler_state(
         &self,
         sh: &mut SharedCaches,
         id: i32,
+        plain: bool,
     ) -> Option<Retained<ProtocolObject<dyn MTLSamplerState>>> {
         // Per-thread memo by sampler id while no sampler was registered since (horizon::hle::samplers_gen): the pool lookup took
         // a global lock per texture binding. --no-sampler-memo / --replay-ab-sampler (side B): off.
         thread_local! {
-            static MEMO: std::cell::RefCell<(u64, HashMap<i32, Retained<ProtocolObject<dyn MTLSamplerState>>>)> =
-                std::cell::RefCell::new((0, HashMap::default()));
+            static MEMO: std::cell::RefCell<((u64, u32), HashMap<(i32, bool), Retained<ProtocolObject<dyn MTLSamplerState>>>)> =
+                std::cell::RefCell::new(((0, 0), HashMap::default()));
         }
-        let gen = crate::nvn::api::samplers_gen();
+        let gen = (crate::nvn::api::samplers_gen(), crate::gpu::anisotropy());
         {
             if let Some(s) = MEMO.with(|m| {
                 let m = m.borrow();
                 if m.0 == gen {
-                    m.1.get(&id).cloned()
+                    m.1.get(&(id, plain)).cloned()
                 } else {
                     None
                 }
@@ -28,7 +31,7 @@ impl Gfx {
                 return Some(s);
             }
         }
-        let r = self.sampler_state_slow(sh, id);
+        let r = self.sampler_state_slow(sh, id, plain);
         if let Some(x) = &r {
             MEMO.with(|m| {
                 let mut m = m.borrow_mut();
@@ -36,7 +39,7 @@ impl Gfx {
                     m.1.clear();
                     m.0 = gen;
                 }
-                m.1.insert(id, x.clone());
+                m.1.insert((id, plain), x.clone());
             });
         }
         r
@@ -46,16 +49,18 @@ impl Gfx {
         &self,
         sh: &mut SharedCaches,
         id: i32,
+        plain: bool,
     ) -> Option<Retained<ProtocolObject<dyn MTLSamplerState>>> {
         let desc = crate::nvn::api::lookup_pool_sampler(id)?;
-        if let Some((d, s)) = sh.samplers.get(&id) {
+        let desc = crate::nvn::api::SamplerDesc { max_anisotropy: crate::gpu::sampler_anisotropy(&desc, plain), ..desc };
+        if let Some((d, s)) = sh.samplers.get(&(id, plain)) {
             if *d == desc {
                 return Some(s.clone());
             }
         }
         if let Some((_, s)) = sh.sampler_states.iter().find(|(d, _)| *d == desc) {
             let s = s.clone();
-            sh.samplers.insert(id, (desc, s.clone()));
+            sh.samplers.insert((id, plain), (desc, s.clone()));
             return Some(s);
         }
         let sd = MTLSamplerDescriptor::new();
@@ -101,7 +106,7 @@ impl Gfx {
         });
         sd.setSupportArgumentBuffers(true); // samplers 16+ are passed by handle (see bind_extra_samplers)
         let s = self.device.newSamplerStateWithDescriptor(&sd)?;
-        sh.samplers.insert(id, (desc, s.clone()));
+        sh.samplers.insert((id, plain), (desc, s.clone()));
         sh.sampler_states.push((desc, s.clone()));
         Some(s)
     }

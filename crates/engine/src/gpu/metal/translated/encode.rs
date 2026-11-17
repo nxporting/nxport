@@ -933,9 +933,10 @@ impl Gfx {
                         continue;
                     };
                     let Some(tex) = r.2.clone() else { continue };
+                    let plain = p.color_state & 0xff != 0 || tex.mipmapLevelCount() <= 1;
                     let sampler = r
                         .3
-                        .and_then(|id| self.sampler_state(&mut *env.sh, id))
+                        .and_then(|id| self.sampler_state(&mut *env.sh, id, plain))
                         .or_else(|| self.default_sampler(&mut *env.sh));
                     // Tiny kernels take the sampler as a parameter at the texture's binding (index line `tks`).
                     if let (Some(r), Some(s)) = (env.cx.ec.rec.as_mut(), sampler.as_ref()) {
@@ -1338,8 +1339,9 @@ impl Gfx {
                 if cached.texture_heap {
                     continue;
                 }
+                let plain = p.color_state & 0xff != 0 || tex.mipmapLevelCount() <= 1;
                 let sampler = sampler_id
-                    .and_then(|id| self.sampler_state(&mut *env.sh, id))
+                    .and_then(|id| self.sampler_state(&mut *env.sh, id, plain))
                     .or_else(|| self.default_sampler(&mut *env.sh));
                 if is_vs {
                     env.cx.ec.vtex(&enc, &tex, tb.binding as usize);
