@@ -537,7 +537,9 @@ un-%p.profraw
   while a video frame decodes, the game can neither take ready frames nor decode audio: frames bunch up, then come out
   in a burst. Fix in progress (win-worker): decode outside the lock, take it again only to hand the frames over.
 
-- **macOS parity, open (2026-11-09, Mac session):** (1) TotK 1.1.2 logs "the camera's angle code was not found":
+- **macOS parity, open (2026-11-09, Mac session).** Status 2026-11-17 (mac-worker): (1) and (2) are done (TotK 1.1.2 on
+  the Mac logs "mouse movement turns the camera's yaw and pitch directly (main+0xbbc4c8)" and "... the bow's aim directly";
+  native hooks exist for both); only (3) is left, a windowed try by the user. Original entry: (1) TotK 1.1.2 logs "the camera's angle code was not found":
   camera_angles.rs's AROUND pattern does not match 1.1.2, so Exact Mouse Aim does nothing there on any platform (found
   on the Mac's 1.1.2 dump; the Windows work used 1.0.0). (2) Natively the camera pitch and bow-aim hooks
   (install_decision / install_aim) stay lifted-only: they rewrite instructions mid-function and read x19 / x20 / s14,
