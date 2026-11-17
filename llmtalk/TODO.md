@@ -448,7 +448,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   2026-11-17: done half. Ryujinx canary (headless, --enable-gdb-stub, a private --root-data-dir so the base runs
   without the update; a throwaway RSP client) ran 1.0.0 for 10 minutes from boot with a breakpoint on tryAlloc's
   fallback (main+0xf39568, sead tryAlloc returned null): never hit. So on the reference these actor heaps fit; nxport
-  puts more into them. (Every-allocation breakpoints are too slow there: ~50 ms per hit.) Built from the user's base NSP
+  puts more into them. (Every-allocation breakpoints are too slow there: ~50 ms per hit.)
+  2026-11-17 (with mac-worker, who reproduced the crash natively on the Mac: shared engine cause): the instance heap
+  is the REMAINDER of the actor's outer heap (same name) at its creation (main+0x105406c..0x10540d8: parent's max
+  allocatable, less 0x20000 if a flag is set; create main+0xf39094). Remainders, Ryujinx vs nxport: Goron 0xd618 vs
+  0x83b8 / 0x8c30; Zora 0xdf28 vs 0x8d38 / 0x9408; Gerudo 0x109a0 vs 0xaab8; Rito 0xdce0 vs 0xe480. So the outer heaps
+  hold different contents first (mostly ~0x5000 more here, Rito less). Next: diff the outer heaps' allocation lists
+  (Ryujinx log running; mac-worker logging the Mac side). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
