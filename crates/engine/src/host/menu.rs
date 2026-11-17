@@ -312,7 +312,7 @@ pub fn bind_label(s: input::SwitchInput) -> String {
 
 /// Whether item `cmd` shows a check mark (None: it is not a switch or a choice).
 pub fn checked(cmd: u16) -> Option<bool> {
-    let handheld = crate::horizon::hle::is_handheld();
+    let handheld = crate::horizon::oe::is_handheld();
     let (ab, _) = live::swaps();
     Some(match cmd {
         id::DOCKED => !handheld,
@@ -390,7 +390,7 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
         }
         id::DOCKED | id::HANDHELD => {
             let handheld = cmd == id::HANDHELD;
-            crate::horizon::hle::set_handheld(handheld);
+            crate::horizon::oe::set_handheld(handheld);
             crate::config::remember(|p| p.system.handheld = Some(handheld));
         }
         id::VSYNC => {

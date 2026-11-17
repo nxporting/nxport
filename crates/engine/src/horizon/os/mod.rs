@@ -1,6 +1,8 @@
 // nn::os as the game calls it: threads, synchronization (mutexes, events, semaphores, condition variables, message
 // queues), TLS, memory and time.
 
+use crate::horizon::vi::*;
+use crate::horizon::os::objects::*;
 use crate::horizon::call_log::*;
 use crate::horizon::os::memory::*;
 use crate::horizon::hle::*;
@@ -9,7 +11,6 @@ pub(crate) mod objects;
 pub(crate) mod memory;
 pub(crate) mod threads;
 use threads::*;
-use objects::*;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::CStr;
 use std::os::raw::c_char;

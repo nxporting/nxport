@@ -1,6 +1,6 @@
 // nn::oe as the game calls it: application state (focus, operation mode, performance mode, display) and launch parameters.
 
-use super::hle::*;
+use std::sync::OnceLock;
 use super::nn::*;
 use std::collections::VecDeque;
 
@@ -155,5 +155,45 @@ pub(crate) unsafe extern "C" fn get_pseudo_device_id(out: *mut u8) {
     if !out.is_null() {
         let id: [u8; 16] = *b"nxport-device-id";
         std::ptr::copy_nonoverlapping(id.as_ptr(), out, 16);
+    }
+}
+pub(crate) static HANDHELD_OVERRIDE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+pub(crate) fn set_handheld(handheld: bool) {
+    HANDHELD_OVERRIDE.store(
+        if handheld { 1 } else { 0 },
+        std::sync::atomic::Ordering::Release,
+    );
+    crate::horizon::oe::push_notification_message(0x1e); // MessageOperationModeChanged
+    crate::horizon::oe::push_notification_message(0x1f); // MessagePerformanceModeChanged
+    #[cfg(target_os = "macos")]
+    crate::host::display::update_handheld_drawable(handheld);
+    if handheld {
+        println!("[+] HLE: Handheld mode active (720p target)");
+    } else {
+        println!("[+] HLE: Docked mode active (1080p target)");
+    }
+}
+
+pub(crate) fn is_handheld() -> bool {
+    match HANDHELD_OVERRIDE.load(std::sync::atomic::Ordering::Acquire) {
+        0 => false,
+        1 => true,
+        _ => {
+            static HANDHELD_ENV: OnceLock<bool> = OnceLock::new();
+            *HANDHELD_ENV.get_or_init(|| {
+                let h = crate::settings::get().system.handheld;
+                if h {
+                    println!(
+                        "[+] HLE: Handheld mode active (720p target; --docked for docked 1080p)"
+                    );
+                } else {
+                    println!(
+                        "[+] HLE: Docked mode active (1080p target; --handheld for handheld 720p)"
+                    );
+                }
+                h
+            })
+        }
     }
 }

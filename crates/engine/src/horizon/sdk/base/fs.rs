@@ -40,7 +40,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2fs22QueryMountRomCacheSizeEPm", func!(crate::horizon::fs::hle_nn_fs_QueryMountRomCacheSize(_))),
     Entry("_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", func!(crate::horizon::fs::hle_nn_fs_CleanDirectoryRecursively(_))),
     Entry("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", func!(crate::horizon::fs::hle_nn_fs_DeleteDirectoryRecursively(_))),
-    Entry("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", func!(crate::horizon::hle::hle_nn_fs_SetPriorityOnCurrentThread(_))),
+    Entry("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", func!(crate::horizon::fs::hle_nn_fs_SetPriorityOnCurrentThread(_))),
     Entry("_ZN2nn2fs29QueryMountSystemDataCacheSizeEPmNS_3ncm12SystemDataIdE", func!(crate::horizon::fs::hle_nn_fs_QueryMountSystemDataCacheSize(_, _))),
     Entry("_ZN2nn2fs6CommitEPKc", func!(crate::horizon::fs::hle_nn_fs_Commit(_))),
     Entry("_ZN2nn2fs7UnmountEPKc", func!(crate::horizon::fs::hle_nn_fs_Unmount(_))),

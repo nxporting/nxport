@@ -290,3 +290,91 @@ pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::t
         chain.join(" <- ")
     );
 }
+// ── Guest-main sampler (--sample-main=<seconds>) ──────────────────────────────────────────────
+// Suspends the guest-main thread every few ms, reads its register state and walks the frame-pointer chain, then
+// prints the hottest guest call chains. Shows which guest function the main loop is actually running/waiting in.
+#[cfg(nx_native)]
+pub(crate) static SAMPLE_TARGET: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(nx_native)]
+pub(crate) fn register_main_sample_target() {
+    if crate::settings::get().debug.sample_main.is_some() {
+        extern "C" {
+            fn pthread_mach_thread_np(t: libc::pthread_t) -> u32;
+        }
+        SAMPLE_TARGET.store(
+            unsafe { pthread_mach_thread_np(libc::pthread_self()) },
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        std::thread::Builder::new()
+            .name("main-sampler".into())
+            .spawn(sample_main_thread)
+            .ok();
+    }
+}
+
+#[cfg(nx_native)]
+pub(crate) fn sample_main_thread() {
+    extern "C" {
+        fn thread_suspend(t: u32) -> i32;
+        fn thread_resume(t: u32) -> i32;
+        fn thread_get_state(t: u32, flavor: i32, state: *mut u64, count: *mut u32) -> i32;
+    }
+    let secs: u64 = crate::settings::get().debug.sample_main.unwrap_or_default();
+    // Let the game get going first.
+    let delay: u64 = crate::settings::get().debug.sample_delay;
+    std::thread::sleep(std::time::Duration::from_secs(delay));
+    let target = SAMPLE_TARGET.load(std::sync::atomic::Ordering::SeqCst);
+    let base = crate::guest::loader::main_base();
+    let in_guest = |a: usize| base != 0 && a >= base && a < base + 0x5000000;
+    let mut hist: rustc_hash::FxHashMap<Vec<usize>, u32> = rustc_hash::FxHashMap::default();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut total = 0u32;
+    while std::time::Instant::now() < end {
+        let mut st = [0u64; 68];
+        let mut count = 68u32;
+        let mut chain = Vec::new();
+        unsafe {
+            if thread_suspend(target) == 0 {
+                if thread_get_state(target, 6, st.as_mut_ptr(), &mut count) == 0 {
+                    // x[0..29], fp=st[29], lr=st[30], sp=st[31], pc=st[32]
+                    let (pc, lr, mut fp) = (st[32] as usize, st[30] as usize, st[29] as usize);
+                    chain.push(pc);
+                    chain.push(lr);
+                    for _ in 0..10 {
+                        if fp < 0x1_0000_0000 || fp & 7 != 0 {
+                            break;
+                        }
+                        let ret = *((fp + 8) as *const usize);
+                        chain.push(ret);
+                        fp = *(fp as *const usize);
+                    }
+                }
+                thread_resume(target);
+            }
+        }
+        if !chain.is_empty() {
+            // Keep only guest frames: HLE/engine frames add noise.
+            let guest: Vec<usize> = chain
+                .iter()
+                .copied()
+                .filter(|a| in_guest(*a))
+                .map(|a| a - base)
+                .take(6)
+                .collect();
+            *hist.entry(guest).or_insert(0) += 1;
+            total += 1;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let mut rows: Vec<_> = hist.into_iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+    println!(
+        "[main-sample] {} samples of guest-main, hottest guest chains (innermost first):",
+        total
+    );
+    for (chain, n) in rows.iter().take(15) {
+        let c: Vec<String> = chain.iter().map(|a| format!("{:#x}", a)).collect();
+        println!("[main-sample]   {:>5} {}", n, c.join(" <- "));
+    }
+}

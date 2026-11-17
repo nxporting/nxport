@@ -46,7 +46,7 @@ fn out_size() -> (f64, f64) {
     if c != 0 {
         return ((c >> 32) as f64, (c & 0xffff_ffff) as f64);
     }
-    if crate::horizon::hle::is_handheld() {
+    if crate::horizon::oe::is_handheld() {
         (1280.0, 720.0)
     } else {
         (1920.0, 1080.0)
@@ -295,10 +295,10 @@ fn handle_shortcut_item(item: *mut AnyObject) {
         }
         let s = std::ffi::CStr::from_ptr(utf8).to_str().unwrap_or("");
         if s.contains("docked") {
-            crate::horizon::hle::set_handheld(false);
+            crate::horizon::oe::set_handheld(false);
             println!("[+] Display: launched via Quick Action: Docked Mode (1080p)");
         } else if s.contains("handheld") {
-            crate::horizon::hle::set_handheld(true);
+            crate::horizon::oe::set_handheld(true);
             println!("[+] Display: launched via Quick Action: Handheld Mode (720p)");
         }
     }

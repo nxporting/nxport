@@ -1,6 +1,5 @@
 // nn::account as the game calls it: user accounts and the preselected user.
 
-use super::hle::*;
 use super::nn::*;
 
 pub(crate) unsafe extern "C" fn initialize() -> i32 {
@@ -165,7 +164,12 @@ pub(crate) unsafe extern "C" fn async_cancel(_this: *mut u8) -> u32 {
 
 pub(crate) unsafe extern "C" fn async_get_system_event(_this: *mut u8, out_event: *mut u8) -> u32 {
     if !out_event.is_null() {
-        crate::horizon::hle::hle_system_event_register_signaled(out_event as usize);
+        crate::horizon::os::objects::hle_system_event_register_signaled(out_event as usize);
     }
     0
+}
+#[repr(C)]
+pub(crate) struct NnAccountUid {
+    pub high: u64,
+    pub low: u64,
 }

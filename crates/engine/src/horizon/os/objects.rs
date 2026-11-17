@@ -632,3 +632,82 @@ pub(crate) fn rw_write_held_by_me(addr: usize) -> bool {
         .map(|r| r.writer == t)
         .unwrap_or(false)
 }
+// ── nn::os::SystemEvent (kernel readable-event handle) ──────────────────────
+// SystemEventType state normally comes from an svc-created kernel event; the
+// sdk module TryWait/WaitSystemEvent abort (nn::diag::detail::AbortImpl) on an
+// event they didn't initialize. Events handed out by our HLE (audio renderer,
+// audio device notification, ...) are tracked here by address instead, with
+// auto-clear semantics, and Wait/TryWait/Destroy are HLE over this registry.
+pub(crate) struct HleSystemEvent {
+    pub(crate) signaled: StdMutex<bool>,
+    pub(crate) cv: std::sync::Condvar,
+}
+
+pub(crate) static HLE_SYSTEM_EVENTS: StdMutex<Vec<(usize, std::sync::Arc<HleSystemEvent>)>> =
+    StdMutex::new(Vec::new());
+
+pub(crate) fn hle_system_event_register_addr(addr: usize) {
+    hle_system_event_register(addr);
+}
+
+pub(crate) fn hle_system_event_signal_addr(addr: usize) {
+    if let Some(ev) = hle_system_event_lookup(addr) {
+        hle_system_event_signal(&ev);
+    }
+}
+
+/// Registers an HLE system event at `addr` that is already signaled (an operation that completed at once).
+pub(crate) fn hle_system_event_register_signaled(addr: usize) {
+    let ev = hle_system_event_register(addr);
+    *ev.signaled.lock().unwrap() = true;
+    ev.cv.notify_all();
+}
+
+pub(crate) fn hle_system_event_register(addr: usize) -> std::sync::Arc<HleSystemEvent> {
+    let ev = std::sync::Arc::new(HleSystemEvent {
+        signaled: StdMutex::new(false),
+        cv: std::sync::Condvar::new(),
+    });
+    let mut v = HLE_SYSTEM_EVENTS.lock().unwrap();
+    v.retain(|(a, _)| *a != addr);
+    v.push((addr, ev.clone()));
+    ev
+}
+
+// nn::os::SystemEvent (class) wraps a SystemEventType; accept a pointer to either,
+// i.e. the registered address or a small offset into it.
+pub(crate) fn hle_system_event_lookup(addr: usize) -> Option<std::sync::Arc<HleSystemEvent>> {
+    HLE_SYSTEM_EVENTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(a, _)| addr >= *a && addr - *a < 0x40)
+        .min_by_key(|(a, _)| addr - *a)
+        .map(|(_, e)| e.clone())
+}
+
+pub(crate) fn hle_system_event_signal(ev: &HleSystemEvent) {
+    *ev.signaled.lock().unwrap() = true;
+    ev.cv.notify_all();
+}
+
+#[repr(C)]
+pub(crate) struct NnMutex {
+    pub state: u8,
+    pub is_recursive: bool,
+    pub _pad1: [u8; 2],
+    pub lock_level: i32,
+    pub nest_count: i32,
+    pub _pad2: [u8; 4],
+    pub owner_thread: *mut NnThreadType,
+    pub lock: u32,
+    pub _pad3: u32,
+}
+
+// Reader-writer lock: real exclusion, tracked in a side table keyed by the lock's address
+// (horizon/nn.rs).
+#[repr(C)]
+pub(crate) struct NnReaderWriterLock {
+    pub lock_state: u32,
+    pub thread_id: u64,
+}

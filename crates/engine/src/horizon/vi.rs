@@ -1,6 +1,8 @@
 // nn::vi as the game calls it: displays and layers.
 
-use super::hle::*;
+use std::ffi::CStr;
+use std::sync::Mutex as StdMutex;
+use crate::horizon::os::objects::*;
 
 pub(crate) unsafe extern "C" fn initialize() -> i32 {
     println!("[+] HLE: nn::vi::Initialize() called");
@@ -55,4 +57,76 @@ pub(crate) unsafe extern "C" fn get_native_window(
         *out_window = &raw mut DUMMY_WINDOW;
     }
     0
+}
+// 6. NVN Graphics Bootstrap Loader & NV / VI Subsystems
+pub(crate) static mut DUMMY_DISPLAY: usize = 0x1000;
+
+pub(crate) static mut DUMMY_LAYER: usize = 0x2000;
+
+pub(crate) static mut DUMMY_WINDOW: usize = 0x3000;
+
+pub(crate) fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
+    static EVENTS: StdMutex<Vec<std::sync::Arc<HleSystemEvent>>> = StdMutex::new(Vec::new());
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    EVENTS.lock().unwrap().push(ev);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("hle-vsync".into())
+        .spawn(|| {
+            let period = std::time::Duration::from_nanos(16_666_667);
+            let mut next = std::time::Instant::now() + period;
+            loop {
+                let now = std::time::Instant::now();
+                if next > now {
+                    std::thread::sleep(next - now);
+                }
+                next += period;
+                for e in EVENTS.lock().unwrap().iter() {
+                    hle_system_event_signal(e);
+                }
+            }
+        })
+        .expect("spawn vsync pacer");
+}
+
+pub(crate) static PRESENT_PACED: StdMutex<Vec<&'static str>> = StdMutex::new(Vec::new());
+
+/// Light message queue receives on threads with this name return only after the next present (at most 20 ms later).
+pub(crate) fn pace_to_present(thread_name: &'static str) {
+    PRESENT_PACED.lock().unwrap().push(thread_name);
+}
+
+pub(crate) fn present_paced_wait() {
+    thread_local! {
+        static PACED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+    let paced = PACED.with(|p| {
+        if let Some(v) = p.get() {
+            return v;
+        }
+        let v = (|| {
+            let names = PRESENT_PACED.lock().unwrap();
+            if names.is_empty() {
+                return false;
+            }
+            // The name the game gave this thread (nn::os::SetThreadName), the same on every host; the host thread's own
+            // name is set differently per platform.
+            let p = unsafe { crate::horizon::os::get_thread_name_pointer(std::ptr::null()) };
+            let name = if p.is_null() { &[][..] } else { unsafe { CStr::from_ptr(p) }.to_bytes() };
+            names.iter().any(|n| n.as_bytes() == name)
+        })();
+        p.set(Some(v));
+        v
+    });
+    if !paced {
+        return;
+    }
+    let Some(g) = crate::gpu::try_backend() else { return };
+    let f0 = g.presented_frames();
+    let until = std::time::Instant::now() + std::time::Duration::from_millis(20);
+    while g.presented_frames() == f0 && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
 }

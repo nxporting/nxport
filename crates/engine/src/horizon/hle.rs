@@ -3,7 +3,6 @@
 #![allow(non_snake_case)]
 
 use crate::horizon::os::threads::*;
-use std::ffi::CStr;
 
 
 
@@ -41,7 +40,6 @@ pub unsafe extern "C" fn hle_default_stub() -> i64 {
 
 
 // 4. Horizon OS Thread & Mutex implementation (backed by thread-aware recursive lock)
-use std::sync::atomic::AtomicU32;
 
 
 const _: () = assert!(std::mem::size_of::<NnThreadType>() == 0x1C0);
@@ -55,18 +53,6 @@ const _: () = assert!(std::mem::size_of::<NnThreadType>() == 0x1C0);
 
 
 
-#[repr(C)]
-pub struct NnMutex {
-    pub state: u8,
-    pub is_recursive: bool,
-    pub _pad1: [u8; 2],
-    pub lock_level: i32,
-    pub nest_count: i32,
-    pub _pad2: [u8; 4],
-    pub owner_thread: *mut NnThreadType,
-    pub lock: u32,
-    pub _pad3: u32,
-}
 
 
 
@@ -96,71 +82,15 @@ pub fn hle_sleep_ns(ns: u64) {
 }
 
 
-// 6. NVN Graphics Bootstrap Loader & NV / VI Subsystems
-pub(crate) static mut DUMMY_DISPLAY: usize = 0x1000;
-pub(crate) static mut DUMMY_LAYER: usize = 0x2000;
-pub(crate) static mut DUMMY_WINDOW: usize = 0x3000;
-
-#[no_mangle]
-pub unsafe extern "C" fn hle_nv_SetGraphicsAllocator(
-    _alloc: *const (),
-    _free: *const (),
-    _realloc: *const (),
-    _user: *const (),
-) {
-    println!("[+] HLE: nv::SetGraphicsAllocator called");
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn hle_nv_InitializeGraphics(mem: *mut (), size: usize) -> i32 {
-    println!(
-        "[+] HLE: nv::InitializeGraphics(mem={:p}, size={} MB)",
-        mem,
-        size / (1024 * 1024)
-    );
-    0
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn hle_nv_SetGraphicsDevtoolsAllocator(
-    _alloc: *const (),
-    _free: *const (),
-    _realloc: *const (),
-    _user: *const (),
-) {
-    println!("[+] HLE: nv::SetGraphicsDevtoolsAllocator called");
-}
 
 
 
 
 
 
-pub(crate) fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
-    static EVENTS: StdMutex<Vec<std::sync::Arc<HleSystemEvent>>> = StdMutex::new(Vec::new());
-    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    EVENTS.lock().unwrap().push(ev);
-    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    std::thread::Builder::new()
-        .name("hle-vsync".into())
-        .spawn(|| {
-            let period = std::time::Duration::from_nanos(16_666_667);
-            let mut next = std::time::Instant::now() + period;
-            loop {
-                let now = std::time::Instant::now();
-                if next > now {
-                    std::thread::sleep(next - now);
-                }
-                next += period;
-                for e in EVENTS.lock().unwrap().iter() {
-                    hle_system_event_signal(e);
-                }
-            }
-        })
-        .expect("spawn vsync pacer");
-}
+
+
+
 
 
 
@@ -216,56 +146,13 @@ pub(crate) fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
 
 
 
-static HANDHELD_OVERRIDE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
 
-pub fn set_handheld(handheld: bool) {
-    HANDHELD_OVERRIDE.store(
-        if handheld { 1 } else { 0 },
-        std::sync::atomic::Ordering::Release,
-    );
-    crate::horizon::oe::push_notification_message(0x1e); // MessageOperationModeChanged
-    crate::horizon::oe::push_notification_message(0x1f); // MessagePerformanceModeChanged
-    #[cfg(target_os = "macos")]
-    crate::host::display::update_handheld_drawable(handheld);
-    if handheld {
-        println!("[+] HLE: Handheld mode active (720p target)");
-    } else {
-        println!("[+] HLE: Docked mode active (1080p target)");
-    }
-}
 
-pub fn is_handheld() -> bool {
-    match HANDHELD_OVERRIDE.load(std::sync::atomic::Ordering::Acquire) {
-        0 => false,
-        1 => true,
-        _ => {
-            static HANDHELD_ENV: OnceLock<bool> = OnceLock::new();
-            *HANDHELD_ENV.get_or_init(|| {
-                let h = crate::settings::get().system.handheld;
-                if h {
-                    println!(
-                        "[+] HLE: Handheld mode active (720p target; --docked for docked 1080p)"
-                    );
-                } else {
-                    println!(
-                        "[+] HLE: Docked mode active (1080p target; --handheld for handheld 720p)"
-                    );
-                }
-                h
-            })
-        }
-    }
-}
 
 
 
 
 
-#[repr(C)]
-pub struct NnAccountUid {
-    pub high: u64,
-    pub low: u64,
-}
 
 
 
@@ -274,8 +161,6 @@ pub struct NnAccountUid {
 
 
 
-// 9. Threading & TLS Management
-pub(crate) static NEXT_TLS_SLOT: AtomicU32 = AtomicU32::new(0);
 
 
 
@@ -350,8 +235,6 @@ pub(crate) static NEXT_TLS_SLOT: AtomicU32 = AtomicU32::new(0);
 
 
 
-#[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_SetPriorityOnCurrentThread(_prio: i32) {}
 
 
 
@@ -390,13 +273,6 @@ pub unsafe extern "C" fn hle_nn_fs_SetPriorityOnCurrentThread(_prio: i32) {}
 
 
 
-// Reader-writer lock: real exclusion, tracked in a side table keyed by the lock's address
-// (horizon/nn.rs).
-#[repr(C)]
-pub struct NnReaderWriterLock {
-    pub lock_state: u32,
-    pub thread_id: u64,
-}
 
 
 
@@ -411,7 +287,6 @@ pub struct NnReaderWriterLock {
 // ring storage host-side, keyed by the guest queue pointer, and use a real Condvar so
 // Receive blocks instead of busy-spinning (this was causing VibrationThread to spin at
 // ~1M calls/sec on an unbound GOT stub before these were wired up).
-use std::sync::{Mutex as StdMutex, OnceLock};
 
 
 
@@ -426,45 +301,8 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 
 
 
-static PRESENT_PACED: StdMutex<Vec<&'static str>> = StdMutex::new(Vec::new());
 
-/// Light message queue receives on threads with this name return only after the next present (at most 20 ms later).
-pub fn pace_to_present(thread_name: &'static str) {
-    PRESENT_PACED.lock().unwrap().push(thread_name);
-}
 
-pub(crate) fn present_paced_wait() {
-    thread_local! {
-        static PACED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-    }
-    let paced = PACED.with(|p| {
-        if let Some(v) = p.get() {
-            return v;
-        }
-        let v = (|| {
-            let names = PRESENT_PACED.lock().unwrap();
-            if names.is_empty() {
-                return false;
-            }
-            // The name the game gave this thread (nn::os::SetThreadName), the same on every host; the host thread's own
-            // name is set differently per platform.
-            let p = unsafe { crate::horizon::os::get_thread_name_pointer(std::ptr::null()) };
-            let name = if p.is_null() { &[][..] } else { unsafe { CStr::from_ptr(p) }.to_bytes() };
-            names.iter().any(|n| n.as_bytes() == name)
-        })();
-        p.set(Some(v));
-        v
-    });
-    if !paced {
-        return;
-    }
-    let Some(g) = crate::gpu::try_backend() else { return };
-    let f0 = g.presented_frames();
-    let until = std::time::Instant::now() + std::time::Duration::from_millis(20);
-    while g.presented_frames() == f0 && std::time::Instant::now() < until {
-        std::thread::sleep(std::time::Duration::from_micros(200));
-    }
-}
 
 
 
@@ -569,137 +407,14 @@ pub(crate) const NN_RESULT_SUCCESS: u32 = 0;
 
 
 
-pub(crate) static NN_AUDIO_RENDERER_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-// ── nn::os::SystemEvent (kernel readable-event handle) ──────────────────────
-// SystemEventType state normally comes from an svc-created kernel event; the
-// sdk module TryWait/WaitSystemEvent abort (nn::diag::detail::AbortImpl) on an
-// event they didn't initialize. Events handed out by our HLE (audio renderer,
-// audio device notification, ...) are tracked here by address instead, with
-// auto-clear semantics, and Wait/TryWait/Destroy are HLE over this registry.
-pub(crate) struct HleSystemEvent {
-    pub(crate) signaled: StdMutex<bool>,
-    pub(crate) cv: std::sync::Condvar,
-}
-pub(crate) static HLE_SYSTEM_EVENTS: StdMutex<Vec<(usize, std::sync::Arc<HleSystemEvent>)>> =
-    StdMutex::new(Vec::new());
-
-pub fn hle_system_event_register_addr(addr: usize) {
-    hle_system_event_register(addr);
-}
-pub fn hle_system_event_signal_addr(addr: usize) {
-    if let Some(ev) = hle_system_event_lookup(addr) {
-        hle_system_event_signal(&ev);
-    }
-}
-/// Registers an HLE system event at `addr` that is already signaled (an operation that completed at once).
-pub fn hle_system_event_register_signaled(addr: usize) {
-    let ev = hle_system_event_register(addr);
-    *ev.signaled.lock().unwrap() = true;
-    ev.cv.notify_all();
-}
-
-pub(crate) fn hle_system_event_register(addr: usize) -> std::sync::Arc<HleSystemEvent> {
-    let ev = std::sync::Arc::new(HleSystemEvent {
-        signaled: StdMutex::new(false),
-        cv: std::sync::Condvar::new(),
-    });
-    let mut v = HLE_SYSTEM_EVENTS.lock().unwrap();
-    v.retain(|(a, _)| *a != addr);
-    v.push((addr, ev.clone()));
-    ev
-}
-// nn::os::SystemEvent (class) wraps a SystemEventType; accept a pointer to either,
-// i.e. the registered address or a small offset into it.
-pub(crate) fn hle_system_event_lookup(addr: usize) -> Option<std::sync::Arc<HleSystemEvent>> {
-    HLE_SYSTEM_EVENTS
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(a, _)| addr >= *a && addr - *a < 0x40)
-        .min_by_key(|(a, _)| addr - *a)
-        .map(|(_, e)| e.clone())
-}
-fn hle_system_event_signal(ev: &HleSystemEvent) {
-    *ev.signaled.lock().unwrap() = true;
-    ev.cv.notify_all();
-}
-
-/// audren signals the renderer's event once per audio frame (240 samples @ 48kHz = 5ms).
-pub(crate) fn nn_audio_start_frame_pacer(ev: std::sync::Arc<HleSystemEvent>) {
-    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    std::thread::Builder::new()
-        .name("hle-audren-pacer".into())
-        .spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            if NN_AUDIO_RENDERER_STATE.load(std::sync::atomic::Ordering::SeqCst) == 2 {
-                hle_system_event_signal(&ev);
-            }
-        })
-        .expect("spawn audren pacer");
-}
 
 
 
-// ── nn::codec hardware Opus decoder (IPC to hwopus) ─────────────────────────
-// Same story as audren: the decoder object lives in another sysmodule, so every
-// entry point that touches it is HLE. Per-decoder state (sample rate, channels)
-// is kept in a side table keyed by address and the getters are HLE too. Decoding goes through
-// the SDK's software Opus decoder (zero external dependencies), falling back to libopus
-// (horizon/audio/opus.rs), or silence with correct accounting;
-// nn::codec::GetOpusPacketSize is pure CPU and stays in the sdk module.
-pub(crate) static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new()); // (addr, rate, channels)
-// The SDK's own Opus functions are guest code: they run through guest::call (natively a call, lifted through the guest
-// library), never as host function pointers.
-/// Address of guest decoder -> (software decoder buffer address, is_multistream)
-pub(crate) static SOFT_OPUS_MAP: StdMutex<Option<std::collections::HashMap<usize, (usize, bool)>>> = StdMutex::new(None);
 
-/// Stand-in for the decoder's service object (HardwareOpusDecoderType::_handle): code that releases it calls
-/// through its vtable, so every entry is a no-op.
-unsafe extern "C" fn opus_handle_noop() -> u32 {
-    0
-}
-pub(crate) static OPUS_HANDLE_VTABLE: [unsafe extern "C" fn() -> u32; 16] = [opus_handle_noop; 16];
-pub(crate) static OPUS_HANDLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-/// HardwareOpusDecoderType: _handle, _buffer, _size, _sampleRate, _channelCount,
-/// _perf, _isResetRequested. Inline getters read these fields.
-#[repr(C)]
-pub(crate) struct OpusDecoderType {
-    pub(crate) handle: usize,
-    pub(crate) buffer: usize,
-    pub(crate) size: usize,
-    pub(crate) sample_rate: i32,
-    pub(crate) channel_count: i32,
-    pub(crate) perf: i64,
-    pub(crate) reset_requested: bool,
-}
-pub(crate) fn hle_opus_decoder(dec: usize) -> Option<(i32, i32)> {
-    HLE_OPUS_DECODERS
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(a, _, _)| *a == dec)
-        .map(|(_, r, c)| (*r, *c))
-}
-/// Samples per channel in one Opus packet at `rate`, from the TOC byte (RFC 6716 §3.1).
-pub(crate) fn opus_packet_samples(pkt: &[u8], rate: i32) -> usize {
-    let Some(&toc) = pkt.first() else { return 0 };
-    let cfg = toc >> 3;
-    let frame_us: u32 = match cfg {
-        0..=11 => [10_000, 20_000, 40_000, 60_000][(cfg & 3) as usize],
-        12..=15 => [10_000, 20_000][(cfg & 1) as usize],
-        _ => [2_500, 5_000, 10_000, 20_000][(cfg & 3) as usize],
-    };
-    let frames = match toc & 3 {
-        0 => 1,
-        1 | 2 => 2,
-        _ => pkt.get(1).map(|b| (b & 0x3f) as u32).unwrap_or(0),
-    };
-    (frame_us as u64 * frames as u64 * rate.max(0) as u64 / 1_000_000) as usize
-}
+
+
+
+ // (addr, rate, channels)
 
 
 
@@ -713,92 +428,7 @@ pub(crate) fn opus_packet_samples(pkt: &[u8], rate: i32) -> usize {
 
 
 
-// ── Guest-main sampler (--sample-main=<seconds>) ──────────────────────────────────────────────
-// Suspends the guest-main thread every few ms, reads its register state and walks the frame-pointer chain, then
-// prints the hottest guest call chains. Shows which guest function the main loop is actually running/waiting in.
-#[cfg(nx_native)]
-static SAMPLE_TARGET: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-#[cfg(nx_native)]
-pub fn register_main_sample_target() {
-    if crate::settings::get().debug.sample_main.is_some() {
-        extern "C" {
-            fn pthread_mach_thread_np(t: libc::pthread_t) -> u32;
-        }
-        SAMPLE_TARGET.store(
-            unsafe { pthread_mach_thread_np(libc::pthread_self()) },
-            std::sync::atomic::Ordering::SeqCst,
-        );
-        std::thread::Builder::new()
-            .name("main-sampler".into())
-            .spawn(sample_main_thread)
-            .ok();
-    }
-}
 
-#[cfg(nx_native)]
-fn sample_main_thread() {
-    extern "C" {
-        fn thread_suspend(t: u32) -> i32;
-        fn thread_resume(t: u32) -> i32;
-        fn thread_get_state(t: u32, flavor: i32, state: *mut u64, count: *mut u32) -> i32;
-    }
-    let secs: u64 = crate::settings::get().debug.sample_main.unwrap_or_default();
-    // Let the game get going first.
-    let delay: u64 = crate::settings::get().debug.sample_delay;
-    std::thread::sleep(std::time::Duration::from_secs(delay));
-    let target = SAMPLE_TARGET.load(std::sync::atomic::Ordering::SeqCst);
-    let base = crate::guest::loader::main_base();
-    let in_guest = |a: usize| base != 0 && a >= base && a < base + 0x5000000;
-    let mut hist: rustc_hash::FxHashMap<Vec<usize>, u32> = rustc_hash::FxHashMap::default();
-    let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    let mut total = 0u32;
-    while std::time::Instant::now() < end {
-        let mut st = [0u64; 68];
-        let mut count = 68u32;
-        let mut chain = Vec::new();
-        unsafe {
-            if thread_suspend(target) == 0 {
-                if thread_get_state(target, 6, st.as_mut_ptr(), &mut count) == 0 {
-                    // x[0..29], fp=st[29], lr=st[30], sp=st[31], pc=st[32]
-                    let (pc, lr, mut fp) = (st[32] as usize, st[30] as usize, st[29] as usize);
-                    chain.push(pc);
-                    chain.push(lr);
-                    for _ in 0..10 {
-                        if fp < 0x1_0000_0000 || fp & 7 != 0 {
-                            break;
-                        }
-                        let ret = *((fp + 8) as *const usize);
-                        chain.push(ret);
-                        fp = *(fp as *const usize);
-                    }
-                }
-                thread_resume(target);
-            }
-        }
-        if !chain.is_empty() {
-            // Keep only guest frames: HLE/engine frames add noise.
-            let guest: Vec<usize> = chain
-                .iter()
-                .copied()
-                .filter(|a| in_guest(*a))
-                .map(|a| a - base)
-                .take(6)
-                .collect();
-            *hist.entry(guest).or_insert(0) += 1;
-            total += 1;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let mut rows: Vec<_> = hist.into_iter().collect();
-    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
-    println!(
-        "[main-sample] {} samples of guest-main, hottest guest chains (innermost first):",
-        total
-    );
-    for (chain, n) in rows.iter().take(15) {
-        let c: Vec<String> = chain.iter().map(|a| format!("{:#x}", a)).collect();
-        println!("[main-sample]   {:>5} {}", n, c.join(" <- "));
-    }
-}
+
 

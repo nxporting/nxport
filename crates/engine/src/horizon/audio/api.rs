@@ -1,5 +1,6 @@
 // nn::audio as the game calls it: opening and running audio renderers, and the output device.
 
+use crate::horizon::os::objects::*;
 use crate::horizon::call_log::*;
 use crate::horizon::hle::*;
 
@@ -127,4 +128,22 @@ pub(crate) unsafe extern "C" fn acquire_audio_device_notification_for_output(eve
     if !event.is_null() {
         hle_system_event_register(event as usize);
     }
+}
+pub(crate) static NN_AUDIO_RENDERER_STATE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// audren signals the renderer's event once per audio frame (240 samples @ 48kHz = 5ms).
+pub(crate) fn nn_audio_start_frame_pacer(ev: std::sync::Arc<HleSystemEvent>) {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("hle-audren-pacer".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if NN_AUDIO_RENDERER_STATE.load(std::sync::atomic::Ordering::SeqCst) == 2 {
+                hle_system_event_signal(&ev);
+            }
+        })
+        .expect("spawn audren pacer");
 }

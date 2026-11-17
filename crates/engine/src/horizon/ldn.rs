@@ -6,7 +6,7 @@ pub(crate) fn set_state(new_state: u32) {
     LDN_STATE.store(new_state, std::sync::atomic::Ordering::SeqCst);
     let ev = LDN_STATE_EVENT.load(std::sync::atomic::Ordering::SeqCst);
     if ev != 0 {
-        crate::horizon::hle::hle_system_event_signal_addr(ev);
+        crate::horizon::os::objects::hle_system_event_signal_addr(ev);
     }
 }
 
@@ -27,7 +27,7 @@ pub(crate) unsafe extern "C" fn get_state() -> u32 {
 pub(crate) unsafe extern "C" fn attach_state_change_event(event: *mut u8) {
     if !event.is_null() {
         LDN_STATE_EVENT.store(event as usize, std::sync::atomic::Ordering::SeqCst);
-        crate::horizon::hle::hle_system_event_register_signaled(event as usize);
+        crate::horizon::os::objects::hle_system_event_register_signaled(event as usize);
     }
 }
 

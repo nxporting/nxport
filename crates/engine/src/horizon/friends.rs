@@ -12,7 +12,7 @@ pub(crate) unsafe extern "C" fn ok() -> u32 {
 
 pub(crate) unsafe extern "C" fn get_system_event(event: *mut ()) -> u32 {
     if !event.is_null() {
-        crate::horizon::hle::hle_system_event_register_signaled(event as usize);
+        crate::horizon::os::objects::hle_system_event_register_signaled(event as usize);
     }
     RESULT_SUCCESS
 }

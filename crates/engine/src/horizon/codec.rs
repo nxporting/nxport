@@ -1,5 +1,6 @@
 // nn::codec as the game calls it: the hardware Opus decoder.
 
+use std::sync::Mutex as StdMutex;
 use crate::horizon::call_log::*;
 use super::hle::*;
 
@@ -346,4 +347,66 @@ pub(crate) unsafe extern "C" fn decode_opus_multi_stream_interleaved_with_hardwa
 
 pub(crate) unsafe extern "C" fn get_hardware_opus_multi_stream_decoder_processing_time(_dec: *const ()) -> i64 {
     0
+}
+// ── nn::codec hardware Opus decoder (IPC to hwopus) ─────────────────────────
+// Same story as audren: the decoder object lives in another sysmodule, so every
+// entry point that touches it is HLE. Per-decoder state (sample rate, channels)
+// is kept in a side table keyed by address and the getters are HLE too. Decoding goes through
+// the SDK's software Opus decoder (zero external dependencies), falling back to libopus
+// (horizon/audio/opus.rs), or silence with correct accounting;
+// nn::codec::GetOpusPacketSize is pure CPU and stays in the sdk module.
+pub(crate) static HLE_OPUS_DECODERS: StdMutex<Vec<(usize, i32, i32)>> = StdMutex::new(Vec::new());
+
+// The SDK's own Opus functions are guest code: they run through guest::call (natively a call, lifted through the guest
+// library), never as host function pointers.
+/// Address of guest decoder -> (software decoder buffer address, is_multistream)
+pub(crate) static SOFT_OPUS_MAP: StdMutex<Option<std::collections::HashMap<usize, (usize, bool)>>> = StdMutex::new(None);
+
+/// Stand-in for the decoder's service object (HardwareOpusDecoderType::_handle): code that releases it calls
+/// through its vtable, so every entry is a no-op.
+pub(crate) unsafe extern "C" fn opus_handle_noop() -> u32 {
+    0
+}
+
+pub(crate) static OPUS_HANDLE_VTABLE: [unsafe extern "C" fn() -> u32; 16] = [opus_handle_noop; 16];
+
+pub(crate) static OPUS_HANDLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// HardwareOpusDecoderType: _handle, _buffer, _size, _sampleRate, _channelCount,
+/// _perf, _isResetRequested. Inline getters read these fields.
+#[repr(C)]
+pub(crate) struct OpusDecoderType {
+    pub(crate) handle: usize,
+    pub(crate) buffer: usize,
+    pub(crate) size: usize,
+    pub(crate) sample_rate: i32,
+    pub(crate) channel_count: i32,
+    pub(crate) perf: i64,
+    pub(crate) reset_requested: bool,
+}
+
+pub(crate) fn hle_opus_decoder(dec: usize) -> Option<(i32, i32)> {
+    HLE_OPUS_DECODERS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(a, _, _)| *a == dec)
+        .map(|(_, r, c)| (*r, *c))
+}
+
+/// Samples per channel in one Opus packet at `rate`, from the TOC byte (RFC 6716 §3.1).
+pub(crate) fn opus_packet_samples(pkt: &[u8], rate: i32) -> usize {
+    let Some(&toc) = pkt.first() else { return 0 };
+    let cfg = toc >> 3;
+    let frame_us: u32 = match cfg {
+        0..=11 => [10_000, 20_000, 40_000, 60_000][(cfg & 3) as usize],
+        12..=15 => [10_000, 20_000][(cfg & 1) as usize],
+        _ => [2_500, 5_000, 10_000, 20_000][(cfg & 3) as usize],
+    };
+    let frames = match toc & 3 {
+        0 => 1,
+        1 | 2 => 2,
+        _ => pkt.get(1).map(|b| (b & 0x3f) as u32).unwrap_or(0),
+    };
+    (frame_us as u64 * frames as u64 * rate.max(0) as u64 / 1_000_000) as usize
 }

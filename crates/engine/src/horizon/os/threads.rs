@@ -1,6 +1,7 @@
 // Guest threads: the nn::os thread object (NnThreadType) and its tail fields, handles, the current thread's state, the
 // Darwin TLS a guest thread runs with, exit signals and joins, and core assignment.
 
+use std::sync::atomic::AtomicU32;
 use std::os::raw::c_char;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::cell::RefCell;
@@ -241,3 +242,5 @@ thread_local! {
     // "clock_get_time() failed: (ipc/send) invalid reply port" inside nanosleep.
     static TSD_SHADOW: std::cell::Cell<Option<[usize; 4]>> = const { std::cell::Cell::new(None) };
 }
+// 9. Threading & TLS Management
+pub(crate) static NEXT_TLS_SLOT: AtomicU32 = AtomicU32::new(0);
