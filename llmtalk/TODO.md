@@ -478,7 +478,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   per-command encoding sizes per driver version, read from each sdk's NVN driver code, checked against Ryujinx.
   Measured in Ryujinx (1.0.0 driver in subsdk0; used = [cb+0x18]-[cb+0x50], control [cb+0x30]-[cb+0x58]; per-call
   deltas on the same cb): BindUniformBuffer 20 bytes, BindTexture 20, DrawElementsInstanced 44, BeginRecording 0;
-  control 0 for these. Vertex attrib / stream / buffer binds still to measure (log: nxport-build/ryu_cmds.out, tool:
+  control 0 for these. Later (847 calls): BindVertexAttribState 68, BindVertexStreamState 68, BindVertexBuffer 24, DrawElements 60;
+  rarer larger deltas include calls not hooked in between (Program 128, SetRenderTargets 96-320: to confirm) (log: nxport-build/ryu_cmds.out, tool:
   a throwaway RSP client, "multi" mode, scratchpad rsp/). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
