@@ -454,7 +454,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   allocatable, less 0x20000 if a flag is set; create main+0xf39094). Remainders, Ryujinx vs nxport: Goron 0xd618 vs
   0x83b8 / 0x8c30; Zora 0xdf28 vs 0x8d38 / 0x9408; Gerudo 0x109a0 vs 0xaab8; Rito 0xdce0 vs 0xe480. So the outer heaps
   hold different contents first (mostly ~0x5000 more here, Rito less). Next: diff the outer heaps' allocation lists
-  (Ryujinx log running; mac-worker logging the Mac side). Built from the user's base NSP
+  (Ryujinx log running; mac-worker logging the Mac side). Ryujinx also varies by run (2nd run: Gerudo 0x11458, Zora
+  0xe2a8, Rito 0xe118); outer heap sizes equal ours (Gerudo 0x64610, Zora 0x4bab0, Rito 0x36640); at the instance
+  creation the outer heap has no child heaps (sead Heap +0x50 list empty) and 8-10 disposers (+0x88). Ryujinx's
+  Gerudo instance heap: 368 allocations, 0xf081 gross, identical to the Mac's: the instance contents match. Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
