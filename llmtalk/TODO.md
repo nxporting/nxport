@@ -166,7 +166,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   cache, frame rate above 30, cheats. In progress: ultrawide (claimed above). Missing, roughly by what players notice:
   (1) internal resolution (BotW renders 900p docked; SW scales its render targets, with FSR 1): neither backend scales
   render targets (vulkan/draw.rs support buffer: render scale 1 everywhere), a backend-wide feature for both Vulkan and
-  Metal, worth agreeing with mac-worker first; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
+  Metal, worth agreeing with mac-worker first; DESIGN agreed with mac-worker 2026-11-16: Ryujinx's model (texture-group scale,
+  the support buffer's RenderScale array): only render targets of the game's main-view size class (exact, from its own
+  view sizes) take the scale, spread through copies / blits / views within the class, all else 1x; hard exclusions win
+  when unsure (CPU-read targets: linear and write-back targets, CPU-moved memory, compressed proxies, storage images);
+  shaders using texelFetch / textureSize / gl_FragCoord with scaled textures read the render scale (sass2spv, both
+  backends; Ryujinx's ShaderStage rescaling as reference); viewports, scissors, clears, copy regions scaled per target,
+  size queries at guest size; opt-in; gpu-replay captures byte-identical at 1x; BotW first. Starts after nvn/api/ lands; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
   (3) DLC (blocked: no dump here); (4) draw distance; (5) higher-resolution shadows; (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
@@ -317,7 +323,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   table (so these two were not its cause). Windows check at 9a7265a: tests, TotK (60 fps, record 3.1 ms) and BotW 1.9.0
   (no black or bright frames) unchanged. Mac (mac-worker): BotW has no unmapped queries; SMO audio peak 18,852 vs
   18,031 earlier: only 85 changed for SMO (24's table value equals the old 256), so likely run-to-run variation.
-- **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Retested 2026-11-15 on main (bf93f40 +):
+- **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker). GOAL (user, 2026-11-16): BotW 1.0.0 must
+  be supported; no longer parked.** Retested 2026-11-15 on main (bf93f40 +):
   same crash in f_7000f52794 (the EmergencyHeap listener), now before the first frame. Base-only mount for tests:
   nsmount on a spare letter (O:) with the base NSP alone, M: untouched.
   **Root found (2026-11-15 evening, probes in scratchpad botwc100):** the listener runs because an allocation FAILED:
@@ -352,8 +359,7 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the component at +0x568 and creation flags (w21 & 0x70) are set: part of this actor's normal creation, not timing.
   So more likely one allocation is larger here than on the console (a size from a value nxport answers: buffer or
   texture size queries, memory requirements). Next, when picked up again: log each allocation's caller chain into this
-  heap and look for sizes computed from HLE answers (nvn*GetSize / GetRequiredAlignment, nn::mem). Paused (beyond
-  Savage Wind's scope). Built from the user's base NSP
+  heap and look for sizes computed from HLE answers (nvn*GetSize / GetRequiredAlignment, nn::mem). Unparked 2026-11-16 (user). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
