@@ -328,7 +328,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   builder taking a DLC NSP (mounted beside the game) into the app's files, nn::aoc Count / List / Mount, and the merged
   case. Blocked on a test: BotW's DLC wants an update the base 1.0.0 lacks; no DLC dump on this PC (asked in PROGRESS).
 
-- **An SDK layer for every SDK release (user, 2026-11-14).** Source lists: titledb.nintendo-research.com/switch/main.html
+- **An SDK layer for every SDK release (user, 2026-11-14).** Status 2026-11-17 (mac-worker): the release list is in
+  horizon/sdk/releases.rs (e62b814: all 123, the log names the game's release and whether it is known) and layers exist
+  where something is verified (v0_12, v3_5, v4_4, v7_3, v15_3, v20_5, each with its evidence). A layer for a release is
+  added when a game on it shows a difference; empty layers would only repeat the fall-through. Source lists: titledb.nintendo-research.com/switch/main.html
   and subsdks.html there (the SDK versions of the extra modules, subsdk0..n, which can differ from the sdk module's);
   the tables load /data/switch/main.json and /data/switch/subsdks.json (rows: name, av, sdk.version, nvn.version, and
   the other libraries' versions). 123 distinct SDK versions, 0.12.12 to 22.2.0.
