@@ -145,3 +145,41 @@ pub fn backend() -> &'static dyn Backend {
         .get()
         .expect("GPU backend used before it was installed")
 }
+
+/// Graphics > Anisotropic filtering as set now (the setting at start; the menu changes it while the game runs).
+static ANISOTROPY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The anisotropic filtering setting in samples (1: the game's own).
+pub fn anisotropy() -> u32 {
+    match ANISOTROPY.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => crate::settings::get().graphics.anisotropy.clamp(1, 16),
+        n => n,
+    }
+}
+
+/// Sets the anisotropic filtering setting; samplers made from then on use it.
+pub fn set_anisotropy(samples: u32) {
+    ANISOTROPY.store(samples.clamp(1, 16), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The anisotropy a sampler draws with, in whole samples (1-16, as the hardware takes them): the game's own, raised to
+/// the setting for samplers that filter linearly within mip levels and have several to choose from (minification
+/// linear, between levels nearest or linear, as Ryujinx forces it; magnification linear; a LOD range of at least half a
+/// level): the samplers of mip-mapped surfaces, which are the ones seen at an angle. Others keep the game's: nearest or
+/// unmipmapped sampling (HUD, lookup tables), samplers clamped to one level (BotW reads its bloom and blur chains that
+/// way) and depth compares (shadows). `plain`: the draw keeps the game's whatever the sampler: textures with one mip
+/// level (BotW reads its render targets with samplers allowing a whole chain; widened, they put stepped light outlines
+/// along edges) and blended draws (particles, effects, decals: their quads' square edges show). These are Savage
+/// Wind's findings in BotW (MIT, runtime/nvn/vulkan/textures.c). Backends substitute it into the description before
+/// looking a sampler up, so a change makes new samplers.
+pub fn sampler_anisotropy(d: &crate::nvn::api::SamplerDesc, plain: bool) -> f32 {
+    /// NVN_MIN_FILTER_LINEAR_MIPMAP_NEAREST / _LINEAR_MIPMAP_LINEAR.
+    const LINEAR_MIPMAP_NEAREST: i32 = 3;
+    const LINEAR_MIPMAP_LINEAR: i32 = 5;
+    let game = d.max_anisotropy.round().clamp(1.0, 16.0);
+    let mipmapped = matches!(d.min_filter, LINEAR_MIPMAP_NEAREST | LINEAR_MIPMAP_LINEAR) && d.lod_max - d.lod_min >= 0.5;
+    if plain || !mipmapped || d.mag_filter == 0 || d.compare_mode != 0 {
+        return game;
+    }
+    game.max(anisotropy() as f32)
+}

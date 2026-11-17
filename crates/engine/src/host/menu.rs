@@ -35,6 +35,8 @@ pub mod id {
     pub const SIZE: u16 = 1000;
     pub const ASYNC_SHADERS: u16 = 30;
     pub const SHADER_CACHE: u16 = 31;
+    /// + the anisotropic filtering samples (1-16).
+    pub const ANISOTROPY: u16 = 420;
     pub const MUTE: u16 = 40;
     /// + the volume in percent.
     pub const VOLUME: u16 = 300;
@@ -65,6 +67,7 @@ pub const LIMITS: [u32; 5] = [30, 60, 90, 120, 144];
 pub const SIZES: [u32; 3] = [720, 1080, 1440];
 pub const VOLUMES: [u32; 4] = [25, 50, 75, 100];
 pub const STRENGTHS: [u32; 3] = [50, 100, 150];
+pub const ANISOTROPIES: [u32; 5] = [1, 2, 4, 8, 16];
 /// Room for the cheats' ids: eight mods' files of dmnt's 0x7F cheats each.
 pub const CHEATS: u16 = 1024;
 
@@ -139,7 +142,10 @@ pub fn bar() -> Vec<Entry> {
                 item("Frame Rate in Title Bar", id::FPS_TITLE),
             ],
         ),
-        sub("Graphics", vec![item("Asynchronous Shader Compilation", id::ASYNC_SHADERS), Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]),
+        sub("Graphics", vec![
+            item("Asynchronous Shader Compilation", id::ASYNC_SHADERS),
+            sub("Anisotropic Filtering", ANISOTROPIES.iter().map(|&n| choice(anisotropy_label(n), id::ANISOTROPY + n as u16)).collect()),
+            Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]),
         sub("Audio", vec![item("Mute", id::MUTE), sub("Volume", VOLUMES.iter().map(|&v| choice(format!("{v}%"), id::VOLUME + v as u16)).collect())]),
         sub(
             "Input",
@@ -283,6 +289,15 @@ pub fn limit_label(fps: u32) -> String {
     }
 }
 
+/// An anisotropic filtering choice's label.
+pub fn anisotropy_label(samples: u32) -> String {
+    if samples <= 1 {
+        "Game's own".to_string()
+    } else {
+        format!("{samples}x")
+    }
+}
+
 /// A limit's label with why it is greyed, if it is (menus have no tooltips).
 pub fn limit_item_label(fps: u32) -> String {
     match unreachable(fps) {
@@ -323,6 +338,7 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::PERF_OVERLAY => overlay::is_overlay_enabled(),
         c if (id::LIMIT..id::LIMIT + 200).contains(&c) => (c - id::LIMIT) as u32 == limit(),
         id::ASYNC_SHADERS => overlay::is_async_shaders(),
+        c if (id::ANISOTROPY..id::ANISOTROPY + 17).contains(&c) => (c - id::ANISOTROPY) as u32 == crate::gpu::anisotropy(),
         id::MUTE => live::muted(),
         c if (id::VOLUME..id::VOLUME + 101).contains(&c) => (c - id::VOLUME) as u32 == live::volume(),
         id::BY_LABEL => !ab,
@@ -422,6 +438,12 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
             let on = overlay::toggle_async_shaders();
             crate::config::remember(|p| p.graphics.async_pipelines = Some(on));
         }
+        c if (id::ANISOTROPY..id::ANISOTROPY + 17).contains(&c) => {
+            let n = (c - id::ANISOTROPY) as u32;
+            crate::gpu::set_anisotropy(n);
+            crate::config::remember(|p| p.graphics.anisotropy = Some(n));
+            println!("[+] Graphics: anisotropic filtering {}", anisotropy_label(n));
+        }
         id::SHADER_CACHE => {
             let own = if cfg!(target_vendor = "apple") && crate::settings::get().graphics.gpu != crate::settings::GpuBackend::Vulkan {
                 "shader_cache"
@@ -477,6 +499,7 @@ mod tests {
             ("limit", id::LIMIT, id::LIMIT + 200),
             ("size", id::SIZE, id::SIZE + 2000),
             ("volume", id::VOLUME, id::VOLUME + 101),
+            ("anisotropy", id::ANISOTROPY, id::ANISOTROPY + 17),
             ("strength", id::STRENGTH, id::STRENGTH + 201),
             ("bind", id::BIND, id::BIND + n),
             ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),

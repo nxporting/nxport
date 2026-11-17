@@ -241,6 +241,9 @@ group! {
         dynamic_shaders: bool = true,
         /// Decode movies on the video hardware where the system has a decoder for them (VP9 on Apple GPUs)
         hw_video: bool = true,
+        /// Anisotropic filtering: samples for mip-mapped textures seen at an angle, such as the ground and paths
+        /// (1: the game's own; 2, 4, 8 or 16)
+        anisotropy: u32 = 1,
         /// Compile new shaders in the background instead of pausing the game. Smoother, but for now everything
         /// waiting on a compile is skipped until it is ready, which can cause visual glitches (missing objects or
         /// passes, flashes) the first time something is drawn.
