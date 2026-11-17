@@ -1,7 +1,7 @@
 // nn::nv as the game calls it: graphics memory allocators and initialisation.
 
 #[no_mangle]
-pub(crate) unsafe extern "C" fn hle_nv_SetGraphicsAllocator(
+pub(crate) unsafe extern "C" fn set_graphics_allocator(
     _alloc: *const (),
     _free: *const (),
     _realloc: *const (),
@@ -11,7 +11,7 @@ pub(crate) unsafe extern "C" fn hle_nv_SetGraphicsAllocator(
 }
 
 #[no_mangle]
-pub(crate) unsafe extern "C" fn hle_nv_InitializeGraphics(mem: *mut (), size: usize) -> i32 {
+pub(crate) unsafe extern "C" fn initialize_graphics(mem: *mut (), size: usize) -> i32 {
     println!(
         "[+] HLE: nv::InitializeGraphics(mem={:p}, size={} MB)",
         mem,
@@ -21,7 +21,7 @@ pub(crate) unsafe extern "C" fn hle_nv_InitializeGraphics(mem: *mut (), size: us
 }
 
 #[no_mangle]
-pub(crate) unsafe extern "C" fn hle_nv_SetGraphicsDevtoolsAllocator(
+pub(crate) unsafe extern "C" fn set_graphics_devtools_allocator(
     _alloc: *const (),
     _free: *const (),
     _realloc: *const (),

@@ -23,7 +23,7 @@ pub(crate) struct OpenDir {
 pub(crate) static OPEN_DIRS: Mutex<Vec<Option<OpenDir>>> = Mutex::new(Vec::new());
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
+pub unsafe extern "C" fn open_directory(
     out_handle: *mut u64,
     path: *const c_char,
     open_mode: i32,
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_ReadDirectory(
+pub unsafe extern "C" fn read_directory(
     out_count: *mut i64,
     out_entries: *mut DirectoryEntryRaw,
     handle: u64,
@@ -141,7 +141,7 @@ pub unsafe extern "C" fn hle_nn_fs_ReadDirectory(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CloseDirectory(handle: u64) {
+pub unsafe extern "C" fn close_directory(handle: u64) {
     if handle == 0 {
         return;
     }
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn hle_nn_fs_CloseDirectory(handle: u64) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_GetDirectoryEntryCount(out_count: *mut i64, handle: u64) -> i32 {
+pub unsafe extern "C" fn get_directory_entry_count(out_count: *mut i64, handle: u64) -> i32 {
     if handle == 0 || out_count.is_null() {
         return RESULT_PATH_NOT_FOUND;
     }

@@ -236,7 +236,7 @@ static OPEN_FILES: Mutex<Vec<Option<OpenFile>>> = Mutex::new(Vec::new());
 
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_QueryMountRomCacheSize(out_size: *mut usize) -> i32 {
+pub unsafe extern "C" fn query_mount_rom_cache_size(out_size: *mut usize) -> i32 {
     if !out_size.is_null() {
         *out_size = 0;
     }
@@ -244,7 +244,7 @@ pub unsafe extern "C" fn hle_nn_fs_QueryMountRomCacheSize(out_size: *mut usize) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountRom(
+pub unsafe extern "C" fn mount_rom(
     name: *const c_char,
     _cache_buf: *mut (),
     _cache_size: usize,
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn hle_nn_fs_MountRom(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_OpenFile(
+pub unsafe extern "C" fn open_file(
     out_handle: *mut u64,
     path: *const c_char,
     mode: i32,
@@ -451,7 +451,7 @@ unsafe fn open_image_file(out_handle: *mut u64, path: &str, image: &RomfsImage, 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_GetFileSize(out_size: *mut i64, handle: u64) -> i32 {
+pub unsafe extern "C" fn get_file_size(out_size: *mut i64, handle: u64) -> i32 {
     if handle == 0 || out_size.is_null() {
         return RESULT_PATH_NOT_FOUND;
     }
@@ -467,7 +467,7 @@ pub unsafe extern "C" fn hle_nn_fs_GetFileSize(out_size: *mut i64, handle: u64) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_ReadFile(
+pub unsafe extern "C" fn read_file(
     out_bytes_read: *mut usize,
     handle: u64,
     offset: i64,
@@ -547,14 +547,14 @@ pub unsafe extern "C" fn hle_nn_fs_ReadFile(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_ReadFile_no_option(
+pub unsafe extern "C" fn read_file_no_option(
     out_bytes_read: *mut usize,
     handle: u64,
     offset: i64,
     buffer: *mut u8,
     size: usize,
 ) -> i32 {
-    hle_nn_fs_ReadFile(
+    read_file(
         out_bytes_read,
         handle,
         offset,
@@ -565,13 +565,13 @@ pub unsafe extern "C" fn hle_nn_fs_ReadFile_no_option(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_ReadFile_simple(
+pub unsafe extern "C" fn read_file_simple(
     handle: u64,
     offset: i64,
     buffer: *mut u8,
     size: usize,
 ) -> i32 {
-    hle_nn_fs_ReadFile(
+    read_file(
         std::ptr::null_mut(),
         handle,
         offset,
@@ -582,7 +582,7 @@ pub unsafe extern "C" fn hle_nn_fs_ReadFile_simple(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CloseFile(handle: u64) {
+pub unsafe extern "C" fn close_file(handle: u64) {
     if handle == 0 {
         return;
     }
@@ -612,7 +612,7 @@ fn log_fs_miss(op: &str, path: &str, detail: &str) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_GetEntryType(out_type: *mut i32, path: *const c_char) -> i32 {
+pub unsafe extern "C" fn get_entry_type(out_type: *mut i32, path: *const c_char) -> i32 {
     if path.is_null() || out_type.is_null() {
         return RESULT_PATH_NOT_FOUND;
     }
@@ -651,12 +651,12 @@ pub unsafe extern "C" fn hle_nn_fs_GetEntryType(out_type: *mut i32, path: *const
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_Commit(_name: *const c_char) -> i32 {
+pub unsafe extern "C" fn commit(_name: *const c_char) -> i32 {
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_Unmount(_name: *const c_char) -> i32 {
+pub unsafe extern "C" fn unmount(_name: *const c_char) -> i32 {
     0
 }
 
@@ -694,7 +694,7 @@ pub unsafe extern "C" fn hle_nn_fs_Unmount(_name: *const c_char) -> i32 {
 
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_WriteFile(
+pub unsafe extern "C" fn write_file(
     handle: u64,
     offset: i64,
     buffer: *const u8,
@@ -727,7 +727,7 @@ pub unsafe extern "C" fn hle_nn_fs_WriteFile(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_FlushFile(handle: u64) -> i32 {
+pub unsafe extern "C" fn flush_file(handle: u64) -> i32 {
     // Synced through a second handle to the same file, outside OPEN_FILES: a sync waits on the disk (tens of
     // milliseconds), and under the lock every other file call of the game waited with it (reads of game data included).
     let file = {
@@ -744,7 +744,7 @@ pub unsafe extern "C" fn hle_nn_fs_FlushFile(handle: u64) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_SetFileSize(handle: u64, size: i64) -> i32 {
+pub unsafe extern "C" fn set_file_size(handle: u64, size: i64) -> i32 {
     let mut files = OPEN_FILES.lock().unwrap();
     match files.get_mut((handle.wrapping_sub(1)) as usize) {
         Some(Some(entry)) => match &entry.data {
@@ -762,4 +762,4 @@ pub unsafe extern "C" fn hle_nn_fs_SetFileSize(handle: u64, size: i64) -> i32 {
 }
 
 #[no_mangle]
-pub(crate) unsafe extern "C" fn hle_nn_fs_SetPriorityOnCurrentThread(_prio: i32) {}
+pub(crate) unsafe extern "C" fn set_priority_on_current_thread(_prio: i32) {}

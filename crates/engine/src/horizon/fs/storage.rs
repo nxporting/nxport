@@ -4,14 +4,14 @@
 use super::*;
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountSaveData(name: *const c_char, _uid: *const ()) -> i32 {
+pub unsafe extern "C" fn mount_save_data(name: *const c_char, _uid: *const ()) -> i32 {
     register_writable_mount("MountSaveData", name);
     let _ = std::fs::create_dir_all(save_root());
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountSaveDataReadOnly(
+pub unsafe extern "C" fn mount_save_data_read_only(
     name: *const c_char,
     _app_id: u64,
     _uid: *const (),
@@ -81,7 +81,7 @@ pub(crate) fn system_data_dir(id: u64) -> Option<PathBuf> {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_QueryMountSystemDataCacheSize(out_size: *mut u64, _id: u64) -> i32 {
+pub unsafe extern "C" fn query_mount_system_data_cache_size(out_size: *mut u64, _id: u64) -> i32 {
     if !out_size.is_null() {
         *out_size = 0;
     }
@@ -89,7 +89,7 @@ pub unsafe extern "C" fn hle_nn_fs_QueryMountSystemDataCacheSize(out_size: *mut 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountSystemData(name: *const c_char, id: u64, _cache: *mut u8, _size: usize) -> i32 {
+pub unsafe extern "C" fn mount_system_data(name: *const c_char, id: u64, _cache: *mut u8, _size: usize) -> i32 {
     if name.is_null() {
         return RESULT_TARGET_NOT_FOUND;
     }
@@ -108,19 +108,19 @@ pub unsafe extern "C" fn hle_nn_fs_MountSystemData(name: *const c_char, id: u64,
 /// Device save data (shared by the console's users); MountDeviceSaveData(name, ApplicationId) mounts another
 /// application's, which here is this one's.
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountDeviceSaveData(name: *const c_char, _app_id: u64) -> i32 {
+pub unsafe extern "C" fn mount_device_save_data(name: *const c_char, _app_id: u64) -> i32 {
     register_writable_mount("MountDeviceSaveData", name);
     let _ = std::fs::create_dir_all(save_root());
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_IsSaveDataExisting(_app_id: u64, _uid: *const ()) -> bool {
+pub unsafe extern "C" fn is_save_data_existing(_app_id: u64, _uid: *const ()) -> bool {
     true
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountTemporaryStorage(name: *const c_char) -> i32 {
+pub unsafe extern "C" fn mount_temporary_storage(name: *const c_char) -> i32 {
     register_writable_mount("MountTemporaryStorage", name);
     0
 }
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn hle_nn_fs_MountTemporaryStorage(name: *const c_char) ->
 // without a session. A fresh console has no cache storage: the list is empty,
 // and Create/Mount/Delete succeed like the save-data mounts above.
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_OpenCacheStorageList(out_handle: *mut u64) -> i32 {
+pub unsafe extern "C" fn open_cache_storage_list(out_handle: *mut u64) -> i32 {
     if !out_handle.is_null() {
         *out_handle = 1;
     }
@@ -138,7 +138,7 @@ pub unsafe extern "C" fn hle_nn_fs_OpenCacheStorageList(out_handle: *mut u64) ->
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_ReadCacheStorageList(
+pub unsafe extern "C" fn read_cache_storage_list(
     out_count: *mut i32,
     _out_infos: *mut (),
     _handle: u64,
@@ -151,16 +151,16 @@ pub unsafe extern "C" fn hle_nn_fs_ReadCacheStorageList(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CloseCacheStorageList(_handle: u64) {}
+pub unsafe extern "C" fn close_cache_storage_list(_handle: u64) {}
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_MountCacheStorage(name: *const c_char, _index: i32) -> i32 {
+pub unsafe extern "C" fn mount_cache_storage(name: *const c_char, _index: i32) -> i32 {
     register_writable_mount("MountCacheStorage", name);
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CreateCacheStorage(
+pub unsafe extern "C" fn create_cache_storage(
     _index: i32,
     _size: i64,
     _journal_size: i64,
@@ -169,7 +169,7 @@ pub unsafe extern "C" fn hle_nn_fs_CreateCacheStorage(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_DeleteCacheStorage(_index: i32) -> i32 {
+pub unsafe extern "C" fn delete_cache_storage(_index: i32) -> i32 {
     0
 }
 
@@ -188,7 +188,7 @@ pub(crate) unsafe fn save_host_path(path: *const c_char) -> Option<(String, Path
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CreateDirectory(path: *const c_char) -> i32 {
+pub unsafe extern "C" fn create_directory(path: *const c_char) -> i32 {
     let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
@@ -205,7 +205,7 @@ pub unsafe extern "C" fn hle_nn_fs_CreateDirectory(path: *const c_char) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CreateFile(path: *const c_char, size: i64) -> i32 {
+pub unsafe extern "C" fn create_file(path: *const c_char, size: i64) -> i32 {
     let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
@@ -228,7 +228,7 @@ pub unsafe extern "C" fn hle_nn_fs_CreateFile(path: *const c_char, size: i64) ->
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_DeleteFile(path: *const c_char) -> i32 {
+pub unsafe extern "C" fn delete_file(path: *const c_char) -> i32 {
     let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn hle_nn_fs_DeleteFile(path: *const c_char) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_DeleteDirectoryRecursively(path: *const c_char) -> i32 {
+pub unsafe extern "C" fn delete_directory_recursively(path: *const c_char) -> i32 {
     let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
@@ -255,7 +255,7 @@ pub unsafe extern "C" fn hle_nn_fs_DeleteDirectoryRecursively(path: *const c_cha
 
 /// nn::fs::CleanDirectoryRecursively: deletes everything inside the directory and keeps the directory itself.
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_CleanDirectoryRecursively(path: *const c_char) -> i32 {
+pub unsafe extern "C" fn clean_directory_recursively(path: *const c_char) -> i32 {
     let Some((guest, host)) = save_host_path(path) else {
         return RESULT_PATH_NOT_FOUND;
     };
@@ -280,12 +280,12 @@ pub unsafe extern "C" fn hle_nn_fs_CleanDirectoryRecursively(path: *const c_char
 
 /// nn::fs::EnsureSaveData(Uid): the user's save data is a host directory that mounting creates; nothing to do.
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_EnsureSaveData(_uid: *const u8) -> i32 {
+pub unsafe extern "C" fn ensure_save_data(_uid: *const u8) -> i32 {
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_GetSaveDataSizeMax(size: *mut i64, journal: *mut i64) -> i32 {
+pub unsafe extern "C" fn get_save_data_size_max(size: *mut i64, journal: *mut i64) -> i32 {
     if !size.is_null() {
         *size = 256 << 20; // 256 MB data
     }
@@ -296,7 +296,7 @@ pub unsafe extern "C" fn hle_nn_fs_GetSaveDataSizeMax(size: *mut i64, journal: *
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_GetCacheStorageSize(size: *mut i64, journal: *mut i64, _index: i32) -> i32 {
+pub unsafe extern "C" fn get_cache_storage_size(size: *mut i64, journal: *mut i64, _index: i32) -> i32 {
     if !size.is_null() {
         *size = 256 << 20;
     }
@@ -307,7 +307,7 @@ pub unsafe extern "C" fn hle_nn_fs_GetCacheStorageSize(size: *mut i64, journal: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_GetFreeSpaceSize(out: *mut i64, _path: *const c_char) -> i32 {
+pub unsafe extern "C" fn get_free_space_size(out: *mut i64, _path: *const c_char) -> i32 {
     if !out.is_null() {
         *out = 256 << 20;
     }
@@ -315,12 +315,12 @@ pub unsafe extern "C" fn hle_nn_fs_GetFreeSpaceSize(out: *mut i64, _path: *const
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_ExtendSaveData(_uid: *const (), _size: i64, _journal: i64) -> i32 {
+pub unsafe extern "C" fn extend_save_data(_uid: *const (), _size: i64, _journal: i64) -> i32 {
     0
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn hle_nn_fs_RenameFile(
+pub unsafe extern "C" fn rename_file(
     old_path: *const c_char,
     new_path: *const c_char,
 ) -> i32 {
