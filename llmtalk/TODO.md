@@ -475,7 +475,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   (rounded to 4), summed into [obj+0x163c] (main+0xb84d00), then reserved per material (main+0xb85648). Ours counts a
   flat 32 bytes per command (nvn/api/command_buffer.rs, a guess): ~0xa40 per material where the real driver uses
   0x14 / 0x28 / 0x3c / 0xb4 (Ryujinx, main+0xb84ce8, nxport-build/ryu_b84.out). Fix (mac-worker implementing):
-  per-command encoding sizes per driver version, read from each sdk's NVN driver code, checked against Ryujinx. Built from the user's base NSP
+  per-command encoding sizes per driver version, read from each sdk's NVN driver code, checked against Ryujinx.
+  Measured in Ryujinx (1.0.0 driver in subsdk0; used = [cb+0x18]-[cb+0x50], control [cb+0x30]-[cb+0x58]; per-call
+  deltas on the same cb): BindUniformBuffer 20 bytes, BindTexture 20, DrawElementsInstanced 44, BeginRecording 0;
+  control 0 for these. Vertex attrib / stream / buffer binds still to measure (log: nxport-build/ryu_cmds.out, tool:
+  a throwaway RSP client, "multi" mode, scratchpad rsp/). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
