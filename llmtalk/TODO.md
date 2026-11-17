@@ -511,7 +511,11 @@ un-%p.profraw
   valid pairs 108.5 / 99.8 / 109.0 against 99.0 / 98.2 / 97.5 fps (~10%); mac-worker's 2ccaf73 leaves its 3 changed
   files' functions unprofiled, the rest still matches. Both in pgo-kit/profiles, gzipped, named as the builder fetches.
 
-- **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** TotK's
+- **Prerendered movies stutter on the iPhone (the user, 2026-11-12): slow, then fast, "like it can't keep up".** Status 2026-11-17 (mac-worker): the
+  fixes below landed: decode outside the lock (b1ea336, d24baa2), a frame an interval late restarts the clock (1fe6fe0),
+  VP9 on four threads (3685c43), and hardware VP9 on the iPhone after all (f37eb96: iOS 26.2+ vends it once the
+  supplemental decoder is registered; confirmed on the user's iPhone 16e, iOS 27.3). The research note below that it is
+  macOS-only is superseded. Open only if the user still sees stutter on a current .ipa. TotK's
   28 movies are WebM VP9 (RomFS/Event/Movie), decoded in software by vp9-mt (tile columns on threads). Measured on the
   Windows PC (scratch decode loop, release): DmT_OP_GanonWakeUp_PreRender.webm, 1920x1080 30 fps, 6421 frames at 57.1
   fps decoded, slowest frame 43.6 ms. A phone has fewer, slower cores, and the first movies play while the engine
