@@ -114,6 +114,9 @@ pub struct Layer {
     /// Whether nn::audio::AudioRendererHandle is two words, the service object and the client state block its inline
     /// functions read (rendering time limit, voice drop), rather than the service object alone.
     pub audio_handle_state: Option<bool>,
+    /// Command memory each NVN command takes in this release's driver (GetCommandMemoryUsed), by function name. Read
+    /// only from the game's own layer: an older driver's sizes say nothing about a newer one.
+    pub command_costs: Option<&'static [(&'static str, usize)]>,
 }
 
 /// Version layers, oldest first.
@@ -229,6 +232,11 @@ pub fn audio_handle_state() -> bool {
 pub fn thread_tail_shift() -> usize {
     static S: OnceLock<usize> = OnceLock::new();
     *S.get_or_init(|| chain().layers.iter().find_map(|l| l.thread_tail_shift).unwrap_or(0))
+}
+
+/// The command memory `name` takes in the game's NVN driver, when its release's sizes are known.
+pub fn nvn_command_cost(name: &str) -> Option<usize> {
+    chain().layers.first()?.command_costs?.iter().find(|(n, _)| *n == name).map(|&(_, b)| b)
 }
 
 /// The NVN API version this game's SDK reports (the newest layer that knows it).

@@ -16,4 +16,5 @@ pub(super) static LAYER: Layer = Layer {
     thread_tail_shift: Some(8),
     nvn_procs: &[],
     audio_handle_state: None,
+    command_costs: None,
 };

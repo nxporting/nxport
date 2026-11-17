@@ -12,4 +12,5 @@ pub(super) static LAYER: Layer = Layer {
     // BotW 1.9.0's sdk: OpenAudioRenderer (sdk+0x221580) stores the service object and a 0x30-byte state block in the
     // handle; Get/SetAudioRendererVoiceDropParameter and ...RenderingTimeLimit read the block through the second word.
     audio_handle_state: Some(true),
+    command_costs: None,
 };
