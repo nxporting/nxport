@@ -5,6 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
+- BotW 1.9.0 ultrawide (Savage Wind parity), win-worker via a worktree subagent, 2026-11-16.
+
 
 ## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)
 
