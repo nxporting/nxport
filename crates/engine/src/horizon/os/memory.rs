@@ -177,3 +177,251 @@ pub(crate) unsafe fn release_address_region(addr: usize, size: usize) {
         crate::platform::os::release(addr, size);
     }
 }
+pub(crate) unsafe extern "C" fn set_memory_heap_size(size: usize) -> i32 {
+    println!(
+        "[+] HLE: nn::os::SetMemoryHeapSize({} MB / {} bytes)",
+        size / (1024 * 1024),
+        size
+    );
+    MEMORY_HEAP_SIZE.store(size, std::sync::atomic::Ordering::Relaxed);
+    crate::horizon::heap_layout::set_size(size);
+    0
+}
+
+pub(crate) unsafe extern "C" fn free_memory_block(addr: usize, size: usize) {
+    let mut b = MEMORY_BLOCKS.lock().unwrap();
+    if let Some(i) = b.iter().position(|&(a, _)| a == addr) {
+        b.remove(i);
+        crate::horizon::heap_layout::freed(addr);
+        crate::guest::dirty_track::release(addr, size);
+        crate::platform::os::free(addr as *mut u8, size);
+    }
+    println!(
+        "[+] HLE: nn::os::FreeMemoryBlock({:#x}, {} MB)",
+        addr,
+        size / (1024 * 1024)
+    );
+}
+
+pub(crate) unsafe extern "C" fn allocate_memory_block(out_addr: *mut usize, size: usize) -> i32 {
+    let file_backed = {
+        #[cfg(unix)]
+        {
+            crate::settings::get().guest.file_backed_memory.then(|| crate::platform::os::alloc_file_backed(size, &std::env::temp_dir()))
+        }
+        #[cfg(not(unix))]
+        {
+            None::<std::io::Result<*mut u8>>
+        }
+    };
+    let alloc = match file_backed {
+        Some(Ok(p)) => {
+            println!("[+] HLE: AllocateMemoryBlock: {} MB file-backed", size >> 20);
+            Ok(p)
+        }
+        Some(Err(e)) => {
+            eprintln!("[!] HLE: AllocateMemoryBlock: file-backed memory failed ({e}); anonymous instead");
+            crate::platform::os::alloc_on_demand(size)
+        }
+        None => crate::platform::os::alloc_on_demand(size),
+    };
+    let Ok(ptr) = alloc else {
+        eprintln!(
+            "[-] HLE: AllocateMemoryBlock failed for {} bytes",
+            size
+        );
+        return 1;
+    };
+    // Fresh anonymous memory is already zero; touching it would commit the whole block (2.5 GB for TotK's heap).
+    if !out_addr.is_null() {
+        *out_addr = ptr as usize;
+    }
+    MEMORY_BLOCKS.lock().unwrap().push((ptr as usize, size));
+    crate::horizon::heap_layout::allocated(ptr as usize, size);
+    println!(
+        "[+] HLE: nn::os::AllocateMemoryBlock({} MB) allocated at {:p}",
+        size / (1024 * 1024),
+        ptr
+    );
+    crate::guest::dirty_track::register_domain(ptr as usize, size);
+    #[cfg(nx_native)]
+    let focus = crate::guest::exec::crash_handler::watch_focus();
+    #[cfg(nx_native)]
+    if focus >= ptr as usize && focus < ptr as usize + size {
+        crate::guest::exec::crash_handler::add_watchpoint(focus);
+    }
+    0
+}
+
+pub(crate) unsafe extern "C" fn query_memory_info(info: *mut NnMemoryInfo) {
+    // Every field: games read more than the first two (only those used to be written; the rest was stack garbage, and
+    // Super Mario Bros. Wonder then asked for a negative-size heap block).
+    if !info.is_null() {
+        // Used memory as Horizon counts it: the program image, the main thread's stack and the memory heap once its size
+        // is set. Super Mario Bros. Wonder aborts at boot unless what is used before its heap fits its 85 MB "Program"
+        // budget (the old flat 512 MB did not), then sizes the heap as available - used - its reserve.
+        let allocated: usize = MEMORY_BLOCKS.lock().unwrap().iter().map(|b| b.1).sum();
+        let heap = MEMORY_HEAP_SIZE.load(std::sync::atomic::Ordering::Relaxed) as u64;
+        let program = PROGRAM_SIZE.load(std::sync::atomic::Ordering::Relaxed) as u64;
+        let stacks = 1u64 << 20;
+        (*info).total_available_memory_size = 4 * 1024 * 1024 * 1024;
+        (*info).total_used_memory_size = program + stacks + heap;
+        (*info).total_memory_heap_size = heap;
+        (*info).allocated_memory_heap_size = allocated as u64;
+        (*info).program_size = program;
+        (*info).total_thread_stack_size = stacks;
+        (*info).thread_count = 1;
+    }
+}
+
+pub(crate) unsafe extern "C" fn allocate_address_region(
+    out_address: *mut usize,
+    size: usize,
+) -> i32 {
+    let aligned_size = (size + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
+    let aligned_addr = match region_arena_alloc(aligned_size) {
+        Some(addr) => {
+            if region_arena_commit(addr, aligned_size).is_err() {
+                region_arena_free(addr, aligned_size);
+                println!(
+                    "[!] HLE: nn::os::AllocateAddressRegion(size={}) FAILED",
+                    size
+                );
+                return -1;
+            }
+            addr
+        }
+        None => {
+            // Arena exhausted (or unreserved): an aligned region anywhere. Windows reservations are already 64 KiB
+            // aligned, so `addr` is the reservation's start there, as release_address_region needs.
+            println!(
+                "[!] HLE: address region arena exhausted; mapping {} bytes outside it",
+                aligned_size
+            );
+            let region = crate::platform::os::reserve(crate::platform::os::At::Anywhere, aligned_size + REGION_ALIGN).and_then(|raw| {
+                let addr = (raw + REGION_ALIGN - 1) & !(REGION_ALIGN - 1);
+                crate::platform::os::commit(addr, aligned_size, crate::platform::os::Prot::ReadWrite).map(|()| addr)
+            });
+            match region {
+                Ok(addr) => addr,
+                Err(_) => {
+                    println!(
+                        "[!] HLE: nn::os::AllocateAddressRegion(size={}) FAILED",
+                        size
+                    );
+                    return -1;
+                }
+            }
+        }
+    };
+    if !out_address.is_null() {
+        *out_address = aligned_addr;
+    }
+    address_regions()
+        .lock()
+        .unwrap()
+        .insert(aligned_addr, aligned_size);
+    println!(
+        "[+] HLE: nn::os::AllocateAddressRegion(size={} bytes, aligned={}) -> 0x{:x}",
+        size, aligned_size, aligned_addr
+    );
+    0
+}
+
+pub(crate) unsafe extern "C" fn allocate_memory_pages(address: usize, size: usize) -> i32 {
+    let page_size = HOST_PAGE;
+    let page_start = address & !(page_size - 1);
+    let page_end = (address + size + page_size - 1) & !(page_size - 1);
+    let page_len = page_end - page_start;
+    // These pages are made writable and zeroed below without faulting: tell write tracking.
+    crate::guest::dirty_track::before_host_write(page_start, page_len);
+    if let Err(err) = crate::platform::os::protect(page_start, page_len, crate::platform::os::Prot::ReadWrite) {
+        println!(
+            "[!] HLE: nn::os::AllocateMemoryPages(addr=0x{:x}, size={}) FAILED: {}",
+            address, size, err
+        );
+        return -1;
+    }
+    // Horizon maps fresh, zeroed pages. Guest pages are 4KB but host pages 16KB, so zero exactly the newly
+    // mapped 4KB pages and never touch neighbours that are still in use.
+    let mut mapped = mapped_guest_pages().lock().unwrap();
+    let mut fresh = 0usize;
+    for page in (address / GUEST_PAGE)..((address + size + GUEST_PAGE - 1) / GUEST_PAGE) {
+        if mapped.insert(page) {
+            libc::memset((page * GUEST_PAGE) as *mut libc::c_void, 0, GUEST_PAGE);
+            fresh += 1;
+        }
+    }
+    drop(mapped);
+    println!(
+        "[+] HLE: nn::os::AllocateMemoryPages(addr=0x{:x}, size={} bytes, {} fresh 4KB pages)",
+        address, size, fresh
+    );
+    0
+}
+
+pub(crate) unsafe extern "C" fn free_address_region(address: usize) {
+    let size = address_regions().lock().unwrap().remove(&address);
+    if let Some(size) = size {
+        let mut mapped = mapped_guest_pages().lock().unwrap();
+        for page in (address / GUEST_PAGE)..((address + size) / GUEST_PAGE) {
+            mapped.remove(&page);
+        }
+        drop(mapped);
+        // GPU work recorded before this free may still read the memory through zero-copy Metal buffers; unmapping it
+        // now would leave those buffers pointing at nothing (GPU fault). Release it a few frames later instead.
+        crate::nvn::api::guest_memory_released(address, size);
+        crate::nvn::api::PENDING_UNMAPS.lock().unwrap().push((
+            address,
+            size,
+            crate::gpu::backend().presented_frames(),
+        ));
+    }
+    println!("[+] HLE: nn::os::FreeAddressRegion(addr=0x{:x})", address);
+}
+
+pub(crate) unsafe extern "C" fn free_memory_pages(address: usize, size: usize) {
+    // Guest pages are 4KB, host pages 16KB: only hand a host page back to the kernel once all four guest
+    // pages in it are free. Discarding a partially freed host page would zero live neighbouring data.
+    let mut mapped = mapped_guest_pages().lock().unwrap();
+    for page in (address / GUEST_PAGE)..((address + size + GUEST_PAGE - 1) / GUEST_PAGE) {
+        mapped.remove(&page);
+    }
+    let per_host = HOST_PAGE / GUEST_PAGE;
+    let first_host = address / HOST_PAGE;
+    let last_host = (address + size + HOST_PAGE - 1) / HOST_PAGE;
+    let mut released = 0usize;
+    for host in first_host..last_host {
+        let base = host * per_host;
+        if (base..base + per_host).all(|p| !mapped.contains(&p)) {
+            crate::platform::os::discard(host * HOST_PAGE, HOST_PAGE);
+            // File-backed: the file's block goes too (madvise leaves file pages in place).
+            #[cfg(target_vendor = "apple")]
+            if in_region_arena(host * HOST_PAGE) {
+                if let Some((fd, off)) = arena_file(host * HOST_PAGE) {
+                    crate::platform::os::punch_hole(fd, off, HOST_PAGE);
+                }
+            }
+            released += 1;
+        }
+    }
+    drop(mapped);
+    println!(
+        "[+] HLE: nn::os::FreeMemoryPages(addr=0x{:x}, size={} bytes, {} host pages released)",
+        address, size, released
+    );
+}
+
+// 10. Stack, Core, Mutex TryLock, and ReaderWriterLock
+pub(crate) unsafe extern "C" fn get_current_stack_info(
+    out_stack: *mut usize,
+    out_stack_size: *mut usize,
+) {
+    let (lo, hi) = crate::horizon::thread_stack::current_bounds().unwrap_or_else(crate::platform::os::current_thread_stack);
+    if !out_stack.is_null() {
+        *out_stack = lo;
+    }
+    if !out_stack_size.is_null() {
+        *out_stack_size = hi - lo;
+    }
+}
