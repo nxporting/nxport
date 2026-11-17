@@ -192,6 +192,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the linear write-backs is the whole frame; splitting the submit after the last linear pass would save at most the
   last ~7% of the frame's commands. Fence on, 120 limit: 80 fps, record 5.5 ms, GPU wait 3.4 ms, GPU 6.7 ms per frame.
   Not pursued.
+  GPU time (2026-11-16 late, gpu-replay --profile of frame 7030, every pass in order): the last lighting target (3x3)
+  ends at 5.57 ms of 6.10 ms. So an exact wait for the lighting results alone (a GPU event after that pass, copies
+  moved next to it) saves at most ~0.5 ms of the 3.4 ms wait: ~80 -> ~84 fps. The user asked to make sure no cheaper
+  fix exists: still to measure is when the game reads them in the next frame (a read-fault probe on their pages:
+  time from the frame wait, GPU done or not); only reads late in the frame would make a wait-on-read rule pay.
 - **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15). STATUS (later 2026-11-15): flicker fixed and water fixed (8a35540, one bug: nvnTextureFinalize lost the generation recorded commands named); early fence back on (bf93f40). Waiting on the user's playtest for the rest (boxes pinned or floating, Link floating far from water, white water, NPC IK): likely the same water bug, unconfirmed. History below.** Seen: boxes pinned to walls and floating, Link
   floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
   render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
