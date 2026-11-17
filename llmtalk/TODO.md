@@ -364,7 +364,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the component at +0x568 and creation flags (w21 & 0x70) are set: part of this actor's normal creation, not timing.
   So more likely one allocation is larger here than on the console (a size from a value nxport answers: buffer or
   texture size queries, memory requirements). Next, when picked up again: log each allocation's caller chain into this
-  heap and look for sizes computed from HLE answers (nvn*GetSize / GetRequiredAlignment, nn::mem). Unparked 2026-11-16 (user). Built from the user's base NSP
+  heap and look for sizes computed from HLE answers (nvn*GetSize / GetRequiredAlignment, nn::mem). Unparked 2026-11-16 (user).
+  2026-11-16 late: by caller, Goron's 0x8b20 is 4 x 0xd50 (constant, main+0xfdf77c), one count x constant
+  (main+0xbf65b0: a virtual call's count, model data; 0x1680 Goron, 0x1928 Gerudo) and ~100 small ones: all sized by
+  game data, so the difference from the console is how many allocations land in the heap during creation (which
+  varies by run here). Decisive next step: the same actor's allocation list on a reference (Ryujinx built from
+  ../ref/ryujinx with its GDB stub, a breakpoint at main+0xf39524 and its failure branch), then diff the lists. Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
