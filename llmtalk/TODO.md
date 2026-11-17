@@ -293,7 +293,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   49 min supported GPU code minor version (0, 5); 58 memory pool page size (0x10000, 0x1000: likely deliberate for
   Apple's 16 KB pages and host import; check before changing); 60 uniform buffer update alignment (0x100, 4). The
   driver version per game differs (TotK's is newer); the table is BotW's. BotW 1.0.0 still crashes the same way with the
-  table (so these two were not its cause).
+  table (so these two were not its cause). Windows check at 9a7265a: tests, TotK (60 fps, record 3.1 ms) and BotW 1.9.0
+  (no black or bright frames) unchanged. Mac (mac-worker): BotW has no unmapped queries; SMO audio peak 18,852 vs
+  18,031 earlier: only 85 changed for SMO (24's table value equals the old 256), so likely run-to-run variation.
 - **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Retested 2026-11-15 on main (bf93f40 +):
   same crash in f_7000f52794 (the EmergencyHeap listener), now before the first frame. Base-only mount for tests:
   (host build note redacted)
