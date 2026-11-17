@@ -227,7 +227,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   1920x1080; main+0x1266178: a size computed from a float width kept at +0x1210 of the caller's object, so it follows
   the mode and may change at run time) load the instance from main+0x1e39050 / through main+0x1d6b470. So the scale
   rule reads layer 0's size from SystemTask+0x4c0 each frame (no hook). UNVERIFIED: in Ryujinx 1.0.0 at the title, +0x4c0 = 1920x1080 and
-  +0x4c8 = 854x480; check in gameplay before relying on it (accessor kept local, not pushed).
+  +0x4c8 = 854x480; check in gameplay before relying on it (accessor kept local, not pushed). RESULT: in gameplay +0x4c0 is the OUTPUT size
+  (docked 1920x1080, handheld 1280x720), not the scene. The 1600x900 scene targets are made through main+0xed6428
+  from main+0x1063cb4 / 0x1064094 / 0x10653b0 / 0x106498c (and 0xf845e4 / 0xf8483c): size = a float rectangle
+  [x24+0x3f0..0x3fc] (w = x1 - x0, h = y1 - y0), x24 = element w2 of an array of 0x2de0-byte objects at [x0+0x10]
+  (count [x0+8]) in function main+0x1063bdc. Next: what that array and its owner are (a global to reach it).
 
 - **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
   recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
