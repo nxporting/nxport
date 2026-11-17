@@ -221,6 +221,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   Split: mac-worker gpu::scale (rule + unit tests) and Metal; win-worker Vulkan. BotW first (no UltraCam there).
   win-worker also takes BotW's render-size site (1.9.0; the input to rule 1), 2026-11-17. Savage Wind classifies by
   guessed dimensions (aspect 1.74-1.81, >= 32x16, 900 lines constant): not usable under our rules.
+  FOUND 2026-11-17: BotW's render size is gsys::SystemTask's frame-buffer size per layer (setFrameBufferSize(index,
+  Vector2i&): layer 0 at SystemTask+0x4c0 (w, h as i32), layer 1 at +0x4c8; name from the 1.5.0 decomp, mac-worker).
+  Setter: 1.5.0 main+0xc65894, 1.9.0 main+0x106dc70, 1.0.0 main+0xb74f08. In 1.9.0 its two callers (main+0x12660e8:
+  1920x1080; main+0x1266178: a size computed from a float width kept at +0x1210 of the caller's object, so it follows
+  the mode and may change at run time) load the instance from main+0x1e39050 / through main+0x1d6b470. So the scale
+  rule reads layer 0's size from SystemTask+0x4c0 each frame (no hook).
 
 - **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
   recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
