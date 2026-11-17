@@ -16,6 +16,8 @@ Status 2026-11-16 (win-worker): CI on main was red from e9940b5 (a reorganizatio
 A local rehearsal of the Windows release job found the iOS / macOS engines no longer linked on Windows (new
 CoreMedia / VideoToolbox frameworks missing from the stub SDK), fixed in 367a974; tests, both engines and the notices
 pass. So the dry run (1) is worth running again before the tag.
+Rehearsed again 2026-11-16 evening at 7a5f035 (after the horizon/ and metal/translated/ reorganization): tests, both
+Apple engines (ios-engine, macos-engine) and the notices (149 crates, none without a licence file) pass on Windows.
 
 Must do, in order:
 1. Run the release dry run: GitHub > Actions > Release > Run workflow, on main, no tag (neither agent has gh or a token).
