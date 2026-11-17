@@ -1,5 +1,5 @@
 // HLE of the game's horizon::movie:: library (subsdk0): Buffer, MediaData, Extractor and Decoder,
-// backed by crates/media (its demuxers and decoders are built into the program). The native library decodes through
+// backed by crates/medialib (its demuxers and decoders are built into the program). The native library decodes through
 // multimedia sysmodules and the hardware video decoder, neither of which runs here.
 //
 // Object layouts: Buffer is plain data, MediaData / Extractor / Decoder are a pointer
@@ -7,7 +7,7 @@
 // after the Itanium ABI's two destructor entries. The decoder follows the MediaCodec-style decoder contract:
 // input / output buffer indices, BufferFlags_EndOfStream, and nn::os events signaled when buffers become available.
 
-use nxport_media::Format;
+use nxport_medialib::Format;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::OnceLock;

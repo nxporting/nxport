@@ -22,7 +22,7 @@ fn main() {
         "crates/engine/build.rs",
         "crates/engine/Cargo.toml",
         "crates/sass2spv/src",
-        "crates/media/src",
+        "crates/medialib/src",
         "crates/pipelines/src",
         "crates/lifter/src",
         "Cargo.lock",
