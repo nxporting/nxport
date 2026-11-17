@@ -49,14 +49,17 @@ const DRAW_INFO_LAYOUT: usize = 0xc0;
 
 /// (layout, pane): panes drawn over the whole screen. The pause menu's and the quick menus' backgrounds (their root:
 /// every pane in them is the screen's size: the blurred capture of the game, its tint), the loading screen's and the
-/// fades' black (Fade_00) with the band of the previous picture across its top, and the start screen's black.
-const FILL: [(&str, &str); 8] = [
+/// fades' black (Fade_00; FadeDemo_00 around cutscenes) with the band of the previous picture across its top, and the
+/// start screen's black.
+const FILL: [(&str, &str); 10] = [
     ("PauseMenuBG_00", "RootPane"),
     ("SeekPadMenuBG_00", "RootPane"),
     ("Fade_00", "P_Black_00"),
     ("Fade_00", "P_Black_01"),
     ("Fade_00", "P_BlackBG_00"),
     ("Fade_00", "P_Capture_00"),
+    ("FadeDemo_00", "P_Black_01"),
+    ("FadeDemo_00", "P_BlackBG_00"),
     ("Title_00", "Black8_00"),
     ("Title_00", "P_BackGround_00"),
 ];
