@@ -1,6 +1,6 @@
 // nn::diag as the game calls it: logging and asserts.
 
-use super::hle::*;
+use crate::horizon::os::threads::sanitize_darwin_tpidrro;
 
 pub(crate) unsafe extern "C" fn is_debugger_attached() -> bool {
     false

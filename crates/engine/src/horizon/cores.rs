@@ -53,12 +53,12 @@ fn now_ns() -> u64 {
 }
 
 fn my_core() -> usize {
-    let g = super::hle::CORES_GEN.load(Ordering::Relaxed);
+    let g = crate::horizon::os::threads::CORES_GEN.load(Ordering::Relaxed);
     let (cg, c) = CORE.with(|c| c.get());
     if cg == g {
         return c;
     }
-    let c = (super::hle::current_core() as usize).min(CORES - 1);
+    let c = (crate::horizon::os::threads::current_core() as usize).min(CORES - 1);
     CORE.with(|cell| cell.set((g, c)));
     c
 }
