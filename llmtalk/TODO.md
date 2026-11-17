@@ -526,6 +526,14 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   outer heap holds NVN memory pools (main+0xa35054: page-aligned storage + nvnMemoryPoolBuilder) made by the GPU
   allocator main+0xa35634 (x4 size, w5 alignment, x0 holder, [x0+0x10] heap) for requests from 0xb08844 (model data,
   align 256, e.g. Zora 0x6c00) and 0xb85660 (8 x 0xa40 / 0xa80, align 4). Next: the same breakpoints in Ryujinx, diff.
+  ROOT CAUSE (2026-11-17): main+0xb84d44 records a material's binds into a scratch command buffer and reserves
+  GetCommandMemoryUsed bytes for it (obj+0x163c); our NVN HLE charges a guessed flat 32 bytes per recorded command
+  (nvn/api/command_buffer.rs), ~0xa40 per material vs the real driver's 0x14..0xb4 (Ryujinx). Experiment (4 bytes per
+  command; work/notes/botw100_cmdmem_experiment_20261117.patch, not the fix): 1.0.0 3/3 runs reach gameplay (Shrine of
+  Resurrection), instance remainders at the Ryujinx values. FIX IN PROGRESS (mac-worker implements, win-worker measures in
+  Ryujinx): driver-accurate command / control memory per NVN driver version; 1.0.0's proc globals main+0x22d7c48..;
+  recordings use BindVertexAttribState / StreamState / VertexBuffer, DrawElementsInstanced, BindUniformBuffer,
+  BindTexture, and empty lists.
 
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
