@@ -716,3 +716,114 @@ impl Gfx {
         true
     }
 }
+pub(crate) type TinyCell = std::sync::Arc<OnceLock<Result<ComputePipe, String>>>;
+
+/// A tiny-pass kernel, shared by draws and the precompile like compute_cell; true when the key is new.
+pub(crate) fn tiny_cell(entry: &str, key: &[i64]) -> (TinyCell, bool) {
+    static M: OnceLock<Mutex<HashMap<(String, Vec<i64>), TinyCell>>> = OnceLock::new();
+    let mut m = M.get_or_init(Default::default).lock().unwrap();
+    if let Some(c) = m.get(&(entry.to_string(), key.to_vec())) {
+        return (c.clone(), false);
+    }
+    let c = TinyCell::default();
+    m.insert((entry.to_string(), key.to_vec()), c.clone());
+    (c, true)
+}
+
+/// The keys of a draw's two tiny-pass kernels: [0, depth_gl, y_negate, point size bits, (location, attribute kind)..]
+/// for the vertex kernel, [1, (location, colour output kind).., (100 + location, the vertex stage writes it)..] for the
+/// fragment kernel (Gfx::make_tiny turns them into function constants).
+pub(crate) fn tiny_keys(
+    vs: &CachedStage,
+    fs: &CachedStage,
+    attr_descs: &[(u32, MTLVertexFormat, usize, usize, i32)],
+    depth_gl: bool,
+    point_size: f32,
+    color_pfs: &[MTLPixelFormat],
+) -> (Vec<i64>, Vec<i64>) {
+    let mut vkey: Vec<i64> = vec![0, depth_gl as i64, y_negate() as i64, point_size.to_bits() as i64];
+    for (loc, _, _, _, kind) in attr_descs {
+        vkey.extend([*loc as i64, *kind as i64]);
+    }
+    let mut fkey: Vec<i64> = vec![1];
+    for &loc in &fs.colors {
+        fkey.extend([loc as i64, pf_kind(color_pfs.get(loc as usize).copied().unwrap_or(MTLPixelFormat::Invalid)) as i64]);
+    }
+    for &loc in &fs.varyings {
+        fkey.extend([100 + loc as i64, vs.varyings.contains(&loc) as i64]);
+    }
+    (vkey, fkey)
+}
+
+/// Queues the tiny-pass kernels a listed pipeline's draws would run (when its stages have them), so a first launch
+/// does not make them at the draw.
+pub(crate) fn queue_tiny(
+    vs: &'static CachedStage,
+    fs: Option<&'static CachedStage>,
+    attr_descs: &[(u32, MTLVertexFormat, usize, usize, i32)],
+    depth_gl: bool,
+    point_size: f32,
+    color_pfs: &[MTLPixelFormat],
+) {
+    let Some(fs) = fs else { return };
+    let heap_samplers = |c: &CachedStage| c.texture_heap && !c.textures.is_empty() && !c.tiny_samplers;
+    if !tiny_enabled() || !vs.tiny_kernel || !fs.tiny_kernel || heap_samplers(vs) || heap_samplers(fs) {
+        return;
+    }
+    let (vkey, fkey) = tiny_keys(vs, fs, attr_descs, depth_gl, point_size, color_pfs);
+    let jobs: Vec<_> = [(vs, vkey), (fs, fkey)]
+        .into_iter()
+        .filter_map(|(st, k)| tiny_cell(&st.entry, &k).1.then_some((st.entry.as_str(), k)))
+        .collect();
+    if jobs.is_empty() {
+        return;
+    }
+    let (q, cv) = pipe_queue();
+    let mut g = q.lock().unwrap();
+    g.compute_n += jobs.len();
+    crate::gpu::pipeline_list::listed_queued(jobs.len());
+    g.tiny.extend(jobs);
+    drop(g);
+    cv.notify_all();
+}
+
+/// Makes one queued tiny-pass kernel (or finds it made by a draw).
+pub(crate) fn build_tiny(entry: &str, key: &[i64]) {
+    let t0 = std::time::Instant::now();
+    if let Some(g) = super::GFX.get() {
+        if let Some(lib) = g.shader_lib.as_ref() {
+            let _ = tiny_cell(entry, key).0.get_or_init(|| g.make_tiny(lib, entry, key));
+        }
+    }
+    kernel_done(t0);
+}
+
+/// A draw the tiny-pass path runs as compute: the command buffer, its color outputs (color index, target texture) and
+/// the triangles over its vertex records.
+pub(crate) struct TinyPlan {
+    pub(crate) cb: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    pub(crate) outputs: smallvec::SmallVec<[(usize, Tex); 8]>,
+    pub(crate) tris: [[u32; 4]; 2],
+    pub(crate) ntri: u32,
+    pub(crate) nverts: u32,
+    /// Dispatch rectangle: x, y, width, height (viewport and scissor within the targets).
+    pub(crate) rect: (u32, u32, u32, u32),
+    /// Pending clears folded into the kernel: (colour output, clear colour).
+    pub(crate) clears: smallvec::SmallVec<[(usize, [f32; 4]); 8]>,
+}
+
+/// Tiny passes as compute: on by default; --tiny-compute=0 renders them. Without a cache built with kernels (index lines `tk`) no draw qualifies.
+pub(crate) fn tiny_compute_on() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| crate::settings::get().graphics.tiny_compute)
+}
+
+pub(crate) fn tiny_enabled() -> bool {
+    tiny_compute_on()
+}
+
+pub(crate) fn tiny_reason(r: String) {
+    if super::tracing_frame() {
+        TINY_REASON.with(|x| *x.borrow_mut() = r);
+    }
+}
