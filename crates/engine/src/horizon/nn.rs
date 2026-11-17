@@ -270,9 +270,6 @@ pub(crate) unsafe extern "C" fn aoc_list_changed_event(event: *mut u8) {
     crate::horizon::hle::hle_system_event_register_addr(event as usize);
 }
 
-/// Which handheld Joy-Cons count as an active controller (both / either / none); the engine's controller is the
-/// keyboard / gamepad, so the mode is only kept for the game to read back.
-pub(crate) static HANDHELD_ACTIVATION_MODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 pub(crate) unsafe extern "C" fn noop_void() {}
 pub(crate) unsafe extern "C" fn noop_obj(_this: *mut u8) {}
