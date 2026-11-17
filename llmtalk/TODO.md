@@ -118,7 +118,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   all claims released. Remaining plan (work/notes/REORG_PLAN.md on the Mac): the rest of hle.rs, fs, the
   translated.rs / nvn/api.rs splits, metal/ + vulkan/ under gpu/. Open question it left: TotK walk encode read
   7.3-7.5 ms after the hid / services moves vs 6.1 ms after the os move (Mac, GPU times also high, likely load); an
-  interleaved A/B of the binaries before / after was not run. Windows checks of every step: tests pass; TotK runs.
+  interleaved A/B of the binaries before / after was not run. Windows A/B (win-worker, 2026-11-16): 2728b0f vs ec12e63,
+  TotK 1.0.0 scripted new game, frames 5000+, interleaved: record 3.15 / 3.11 ms before, 3.14 / 3.18 after; GPU 9.7-9.8 in
+  all four. No regression on Windows. Windows checks of every step: tests pass; TotK runs.
   At b7ad8a4 on Windows: workspace tests pass; TotK 1.0.0 new game to frame 8350 at 60 fps, no errors, the opening's
   audio at -20..-40 dB RMS (the audio and os-object moves work on Vulkan / Windows).
 
