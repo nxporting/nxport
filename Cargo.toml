@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/engine",
-    "crates/build",
+    "crates/builderlib",
     "crates/builder",
     "crates/sass2spv",
     "crates/pipelines",

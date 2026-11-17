@@ -32,7 +32,7 @@ pub fn guest_image_for_native(s: settings::Settings) -> Result<Vec<u8>, String> 
     guest_image(s)
 }
 
-/// Guest code as the lifter takes it (nxport-build's lift): a module's memory from `base`, with its executable range.
+/// Guest code as the lifter takes it (nxport-builderlib's lift): a module's memory from `base`, with its executable range.
 #[cfg(nx_runtime)]
 pub struct GuestModule {
     /// A C identifier: the lifter prefixes the module's tables with it.

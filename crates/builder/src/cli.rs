@@ -1,15 +1,15 @@
 // The builder's commands (`nxport-builder <command>`): shader caches, app bundles, lifted code and frame-dump
 // conversion, one step at a time, for development and the release workflow.
 
-use nxport_build::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
+use nxport_builderlib::{extract_shaders, ppm2png, tiny_kernels, vulkan_precompile};
 // App bundles, signed images and Metal shader caches are built on macOS hosts.
 #[cfg(target_os = "macos")]
-use nxport_build::{msl_specialize, pack};
+use nxport_builderlib::{msl_specialize, pack};
 // The shader cache build translates on Windows too (its Metal compile needs Apple's compiler).
 #[cfg(any(target_os = "macos", windows))]
-use nxport_build::{shader_cache_build, translation};
+use nxport_builderlib::{shader_cache_build, translation};
 #[cfg(any(target_os = "macos", windows))]
-use nxport_build::{ipa, macho};
+use nxport_builderlib::{ipa, macho};
 
 use std::path::PathBuf;
 
@@ -479,7 +479,7 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(windows)]
         Command::IosEngine | Command::MacosEngine => {
-            use nxport_build::apple_engine::{build, Os};
+            use nxport_builderlib::apple_engine::{build, Os};
             let os = if matches!(command, Command::IosEngine) { Os::Ios } else { Os::MacOs };
             let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
             println!("[+] {}", build(os, &toolchains, &|name| println!("  compiling {name}"))?.display());
@@ -537,32 +537,32 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Ppm2png { input, output, downscale } => ppm2png::convert_ppm_to_png(&input, &output, downscale)?,
         Command::Lift { nso, out, name, base } => {
-            let r = nxport_build::lift::lift_nso(&nso, &name, base, &out)?;
-            nxport_build::lift::report(&nso.display().to_string(), &r);
+            let r = nxport_builderlib::lift::lift_nso(&nso, &name, base, &out)?;
+            nxport_builderlib::lift::report(&nso.display().to_string(), &r);
         }
         Command::LiftGame { dump, out, mods, patched_image } => {
-            let s = nxport_build::lift::game_settings(&dump, Default::default(), mods.as_deref());
-            for (name, r) in nxport_build::lift::lift_game(s, patched_image.as_deref(), &out, &|_, _, _| {})? {
-                nxport_build::lift::report(&name, &r);
+            let s = nxport_builderlib::lift::game_settings(&dump, Default::default(), mods.as_deref());
+            for (name, r) in nxport_builderlib::lift::lift_game(s, patched_image.as_deref(), &out, &|_, _, _| {})? {
+                nxport_builderlib::lift::report(&name, &r);
             }
         }
         #[cfg(windows)]
         Command::BaseCode { dump, out } => {
-            let s = nxport_build::lift::game_settings(&dump, Default::default(), None);
-            nxport_build::lift::write_base_code(s, &out)?;
+            let s = nxport_builderlib::lift::game_settings(&dump, Default::default(), None);
+            nxport_builderlib::lift::write_base_code(s, &out)?;
             println!("[+] {}", out.display());
         }
         #[cfg(windows)]
         Command::LiftOverlay { dump, base, out, mods, patched_image } => {
-            let s = nxport_build::lift::game_settings(&dump, Default::default(), Some(&mods));
-            for (name, r) in nxport_build::lift::lift_overlay(s, patched_image.as_deref(), &base, &out)? {
-                nxport_build::lift::report(&name, &r);
+            let s = nxport_builderlib::lift::game_settings(&dump, Default::default(), Some(&mods));
+            for (name, r) in nxport_builderlib::lift::lift_overlay(s, patched_image.as_deref(), &base, &out)? {
+                nxport_builderlib::lift::report(&name, &r);
             }
         }
         Command::CompileGuest { c_dir, out, cc, j, profile } => {
             let cc: Vec<String> = cc.split_whitespace().map(String::from).collect();
             let jobs = j.unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
-            nxport_build::lift::compile(&c_dir, &out, &cc, jobs, profile.as_deref(), None, &|_, _| {})?;
+            nxport_builderlib::lift::compile(&c_dir, &out, &cc, jobs, profile.as_deref(), None, &|_, _| {})?;
             println!("[+] {}", out.display());
         }
     }

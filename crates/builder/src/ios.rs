@@ -1,10 +1,10 @@
 // The iOS app's build steps: one list on every host. Only how some steps are done depends on the host:
 // - the engine for iOS: a Mac builder carries it (build.rs builds it beside the builder); on Windows it is built from
-//   this checkout first (nxport_build::apple_engine).
+//   this checkout first (nxport_builderlib::apple_engine).
 // - the shaders: on a Mac, Apple's Metal compiler compiles the shader cache for iOS (and, for a chosen GPU, its listed
 //   pipelines); on Windows, without that compiler, the stages are translated and packed as Metal source, which the app
 //   compiles the first time the game uses each (metal/source_pack.rs), as the macOS app built on Windows does.
-// - the app (nxport_build::ipa): on a Mac in this process; on Windows in a worker process, as every Windows step that
+// - the app (nxport_builderlib::ipa): on a Mac in this process; on Windows in a worker process, as every Windows step that
 //   sets up the guest image (windows.rs).
 
 use std::path::PathBuf;
@@ -21,10 +21,10 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     app(r, cache, steps)
 }
 
-/// Each step of nxport_build::ipa::build on the progress bar, with its share of the step (a Windows worker reports
+/// Each step of nxport_builderlib::ipa::build on the progress bar, with its share of the step (a Windows worker reports
 /// the same through windows::report).
 #[cfg(target_os = "macos")]
-fn ipa_progress(job: &Mutex<crate::app::Job>, step: nxport_build::ipa::IpaBuildPhase) {
+fn ipa_progress(job: &Mutex<crate::app::Job>, step: nxport_builderlib::ipa::IpaBuildPhase) {
     println!("[+] {step}");
     crate::app::progress(job, step.to_string(), 0, 0, step.default_fraction());
 }
@@ -32,7 +32,7 @@ fn ipa_progress(job: &Mutex<crate::app::Job>, step: nxport_build::ipa::IpaBuildP
 /// The engine for iOS, built from this checkout (as the macOS app's). A Mac builder carries it.
 #[cfg(windows)]
 fn engine(r: &Request, steps: &mut Vec<Step>) {
-    crate::apple::engine_from_source(nxport_build::apple_engine::Os::Ios, r, steps);
+    crate::apple::engine_from_source(nxport_builderlib::apple_engine::Os::Ios, r, steps);
 }
 
 #[cfg(target_os = "macos")]
@@ -51,11 +51,11 @@ fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
         steps.push((
             "Building the iOS shader cache".into(),
             Box::new(move || {
-                use nxport_build::shader_cache_build::IosShaderBuildPhase as Phase;
+                use nxport_builderlib::shader_cache_build::IosShaderBuildPhase as Phase;
                 let cb = move |phase: Phase, done: usize, total: usize| {
                     crate::app::phase_progress(&job, phase.to_string(), phase.phase_index(), Phase::NUM_PHASES, done, total);
                 };
-                nxport_build::shader_cache_build::build_ios(&cache, &ios_cache, crate::app::shader_jobs(), false, arg_variants, Some(&cb))?;
+                nxport_builderlib::shader_cache_build::build_ios(&cache, &ios_cache, crate::app::shader_jobs(), false, arg_variants, Some(&cb))?;
                 let list = cache.join("pipelines.txt");
                 if list.exists() {
                     std::fs::copy(&list, ios_cache.join("pipelines.txt")).map_err(|e| e.to_string())?;
@@ -66,7 +66,7 @@ fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
     }
     if !r.ios_gpu.is_empty() {
         let (ios_cache, scratch, gpu) = (ios_cache.clone(), r.work.join("pipeline_script"), r.ios_gpu.clone());
-        steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_build::pipeline_archive::build_ios(&ios_cache, &scratch, &gpu))));
+        steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_builderlib::pipeline_archive::build_ios(&ios_cache, &scratch, &gpu))));
     }
     ios_cache
 }
@@ -90,13 +90,13 @@ fn app(r: Request, cache: Cache, steps: &mut Vec<Step>) -> Output {
             let ipa = {
                 let _ = &name;
                 crate::windows::ipa_in_worker(&job, &work, dump, mods, out_dir.clone(), edits, bundle_game, entitlements, bundle_id, cache)?;
-                nxport_build::ipa::path_for(&out_dir, &name)
+                nxport_builderlib::ipa::path_for(&out_dir, &name)
             };
             #[cfg(target_os = "macos")]
             let ipa = {
                 let _ = (&name, &work);
-                nxport_build::ipa::build(
-                    &nxport_build::ipa::Options {
+                nxport_builderlib::ipa::build(
+                    &nxport_builderlib::ipa::Options {
                         dump: &dump,
                         mods: mods.as_deref(),
                         cache: cache.as_deref(),

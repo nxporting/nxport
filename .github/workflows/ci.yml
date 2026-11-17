@@ -43,8 +43,8 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked --lib --bins
 
-  # The engine and the crates without Apple engines of their own. nxport-build's build script compiles the macOS and iOS
-  # engines in release with LTO, so nxport-build and nxport-builder build only in the release workflow.
+  # The engine and the crates without Apple engines of their own. nxport-builderlib's build script compiles the macOS and iOS
+  # engines in release with LTO, so nxport-builderlib and nxport-builder build only in the release workflow.
   macos:
     runs-on: macos-15
     timeout-minutes: 60
