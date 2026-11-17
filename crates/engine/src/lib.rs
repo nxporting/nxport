@@ -38,12 +38,8 @@ pub use host::ui;
 pub use gpu::metal;
 /// The Metal backend's shader tooling that does not need Metal itself (the builder specializes MSL on any host).
 #[cfg(not(nx_native))]
-pub mod metal {
-    #[path = "../gpu/metal/msl_specialize.rs"]
-    pub mod msl_specialize;
-    #[path = "../gpu/metal/source_pack.rs"]
-    pub mod source_pack;
-}
+#[path = "gpu/metal/tooling.rs"]
+pub mod metal;
 #[cfg(nx_runtime)]
 mod nvn;
 #[cfg(nx_runtime)]
