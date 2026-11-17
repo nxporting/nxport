@@ -8,8 +8,8 @@ pub(super) static LAYER: Layer = Layer {
     tables: &[],
     nvn_api: None,
     thread_tail_shift: None,
+    nvn_procs: &[],
     // BotW 1.9.0's sdk: OpenAudioRenderer (sdk+0x221580) stores the service object and a 0x30-byte state block in the
     // handle; Get/SetAudioRendererVoiceDropParameter and ...RenderingTimeLimit read the block through the second word.
-    nvn_procs: &[],
     audio_handle_state: Some(true),
 };
