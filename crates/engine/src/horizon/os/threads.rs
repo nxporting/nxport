@@ -39,6 +39,7 @@ pub(crate) struct NnThreadType {
     /// handle; older SDKs place them sdk::thread_tail_shift() bytes later (`ThreadTail`). Room for the longest layout.
     pub _tail: [u8; 0x140],
 }
+const _: () = assert!(std::mem::size_of::<NnThreadType>() == 0x1C0);
 
 /// The thread object's fields after its fiber pointers, at the game's SDK's offsets.
 pub(crate) struct ThreadTail(usize);

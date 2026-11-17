@@ -1,4 +1,8 @@
-// nn::audio as the game calls it: opening and running audio renderers, and the output device.
+// nn::audio as the game calls it: opening and running audio renderers, and the output device. The renderer lifecycle,
+// work-buffer sizing and output-device queries all end in HIPC calls to the audio sysmodule, so the sdk module's code
+// can't run here (it crashed in CreateAudioRendererManagerByHipc -> AllocateFromExpHeap with a null heap). The pure-CPU
+// parts of nn::audio (config / mixer / voice bookkeeping, Set* / Get* / Acquire* / Add* on AudioRendererConfig) still
+// run in the sdk module against the work buffers the game hands us; only the IPC edge is replaced.
 
 use crate::horizon::os::objects::*;
 use crate::horizon::call_log::*;

@@ -102,6 +102,11 @@ pub(crate) struct LightMsgQueueInner {
     pub(crate) queue: VecDeque<u64>,
 }
 
+// nn::os::LightMessageQueue: a bounded, blocking SPSC/MPMC queue. Real hardware backs
+// it with the guest-supplied buffer; we keep the actual
+// ring storage host-side, keyed by the guest queue pointer, and use a real Condvar so
+// Receive blocks instead of busy-spinning (this was causing VibrationThread to spin at
+// ~1M calls/sec on an unbound GOT stub before these were wired up).
 pub(crate) struct LightMsgQueueState {
     pub(crate) inner: StdMutex<LightMsgQueueInner>,
     pub(crate) not_empty: Condvar,
@@ -266,6 +271,14 @@ pub(crate) struct TimerEventInner {
     pub(crate) interval_ns: i64,
 }
 
+// ── nn::os::TimerEvent ─────────────────────────────────────────────────────────
+//
+// TimerEvent is a timed synchronization primitive supporting one-shot and
+// periodic intervals with automatic or manual clear semantics.
+// Native Switch implementations use Horizon kernel condition variables
+// and critical sections which issue Switch SVCs (svc 0x1c, 0x1d) and check
+// thread handles, causing aborts on Darwin. This HLE provides complete
+// standard condition variable and deadline based blocking.
 pub(crate) struct TimerEventState {
     pub(crate) inner: StdMutex<TimerEventInner>,
     pub(crate) cv: Condvar,

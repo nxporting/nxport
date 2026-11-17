@@ -196,6 +196,8 @@ pub(crate) fn dump_blocked_threads() {
     }
 }
 
+/// Prints a summary of the ring buffer (call counts, then the most recent calls in order) to stdout. Used with
+/// --hle-history-at=<present number> to see what the game polls while it sits on a loading screen.
 pub(crate) fn summarize_hle_call_history() {
     dump_blocked_threads();
     let hist = hle_call_history();
@@ -223,6 +225,8 @@ pub(crate) fn summarize_hle_call_history() {
     }
 }
 
+/// Called from the crash handler. Prints the most recent HLE calls in order,
+/// oldest first, ending with whatever ran immediately before the fault.
 pub(crate) fn dump_hle_call_history() {
     let hist = hle_call_history();
     eprintln!(
