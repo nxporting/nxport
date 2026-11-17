@@ -824,3 +824,316 @@ pub(super) fn dump_main_image() {
         Err(e) => println!("[!] main image dump to {} failed: {}", path.display(), e),
     }
 }
+/// --log-tex-mem: every 600 frames, where texture memory goes. Metal textures of the cache by kind (rendered or
+/// cleared by the GPU vs copies of guest data), and how much guest memory under the copies is resident (what the guest
+/// side of the duplication costs), plus Metal's total allocation.
+pub(super) fn tex_mem_report(g: &Gfx, pn: u64) {
+    static ON: OnceLock<bool> = OnceLock::new();
+    if pn % 600 != 0 || !*ON.get_or_init(|| crate::settings::get().log.log_tex_mem) {
+        return;
+    }
+    let st = g.state.lock().unwrap();
+    let mut seen = rustc_hash::FxHashSet::default();
+    let (mut rt, mut rt_n, mut copy, mut copy_n, mut resident) = (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut vec = vec![0u8; 1 << 16];
+    for (desc, (tex, _)) in st.tc.tex_by_desc.iter() {
+        let id = Retained::as_ptr(tex) as *const () as usize;
+        if !seen.insert(id) {
+            continue;
+        }
+        let bytes = objc2_metal::MTLAllocation::allocatedSize(&**tex) as u64;
+        if st.tc.gpu_written.contains(&storage_id(tex)) {
+            rt += bytes;
+            rt_n += 1;
+            continue;
+        }
+        copy += bytes;
+        copy_n += 1;
+        // Resident 16 KiB pages of the guest storage under it (mincore).
+        let start = desc.storage & !0x3fff;
+        let end = (desc.storage + bytes as usize + 0x3fff) & !0x3fff;
+        let pages = (end - start) / 0x4000;
+        if desc.storage >= 0x10000 && pages > 0 && pages <= vec.len() {
+            if unsafe {
+                libc::mincore(
+                    start as *mut libc::c_void,
+                    end - start,
+                    vec.as_mut_ptr() as *mut libc::c_char,
+                )
+            } == 0
+            {
+                resident += vec[..pages].iter().filter(|&&b| b & 1 != 0).count() as u64 * 0x4000;
+            }
+        }
+    }
+    let metal = g.device.currentAllocatedSize() as u64;
+    println!("[tex-mem] f{}: Metal total {} MB; cached textures: GPU-written {} ({} MB), copies of guest data {} ({} MB) over {} MB of resident guest memory",
+        pn, metal >> 20, rt_n, rt >> 20, copy_n, copy >> 20, resident >> 20);
+}
+
+/// --tex-backing (metal/tex_backing.rs): every 60 frames, the storage of textures whose content is a copy of guest data.
+pub(super) fn tex_backing_frame(g: &Gfx, pn: u64) {
+    if tex_backing::mode() == crate::settings::TexBacking::Off {
+        return;
+    }
+    tex_backing::frame_end(pn);
+    if pn % 60 != 0 {
+        return;
+    }
+    let texs: Vec<tex_backing::TexRec> = {
+        let st = g.state.lock().unwrap();
+        st.tc
+            .tex_by_desc
+            .iter()
+            .filter(|(_, (tex, _))| !st.tc.gpu_written.contains(&storage_id(tex)))
+            .filter_map(|(d, (tex, _))| {
+                let p = crate::nvn::layout::TextureParams {
+                    target: d.target,
+                    width: d.width,
+                    height: d.height,
+                    depth: d.depth,
+                    levels: d.levels,
+                    format: d.format,
+                    flags: d.flags,
+                    samples: d.samples,
+                    stride: d.stride,
+                };
+                // Only textures whose guest bytes can be rebuilt from Metal (others keep their pages out of the ranges).
+                tex_backing::supported(tex, &p).then(|| tex_backing::TexRec {
+                    storage: d.storage,
+                    len: crate::nvn::layout::storage_size(&p),
+                    params: p,
+                    tex: tex.clone(),
+                })
+            })
+            .collect()
+    };
+    tex_backing::rebuild(pn, texs);
+}
+
+/// --watch-storage=0x...: log render-target binds and copies into textures stored at that address.
+/// Debug: --watch-size=WxH logs render-target binds, copies and clears into textures of that size (any storage):
+/// finds the writer of a texture whose storage address changes from run to run.
+pub(crate) fn watch_size() -> Option<(u32, u32)> {
+    crate::settings::get().trace.watch_size.map(|s| (s.w, s.h))
+}
+
+/// Guest memory of the textures --watch-size has seen; watch_log reports everything else that touches it (holds,
+/// write-backs, ended holds, engine reads of held pages, cache evictions), so a texture's whole history is in the log.
+pub(crate) static WATCH_MEM: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// Remembers `t`'s memory when it has the --watch-size size; true if it does.
+pub(crate) fn watch_texture(t: &NvnTexture) -> bool {
+    let Some((w, h)) = watch_size() else {
+        return false;
+    };
+    if t.width as u32 != w || t.height as u32 != h || t.storage <= 0x10000 {
+        return false;
+    }
+    let range = (t.storage, t.storage + layout_of(t).total as usize);
+    let mut m = WATCH_MEM.lock().unwrap();
+    if !m.contains(&range) {
+        if m.len() >= 8192 {
+            m.remove(0);
+        }
+        m.push(range);
+    }
+    true
+}
+
+pub(crate) fn watch_log(start: usize, end: usize, what: impl FnOnce() -> String) {
+    if watch_size().is_none() || !WATCH_MEM.lock().unwrap().iter().any(|&(s, e)| s < end && e > start) {
+        return;
+    }
+    println!("[watch-size] f{} {}", presented_frames() + 1, what());
+}
+
+/// Non-zero bytes of [addr, addr+len) read without disturbing holds (through their second mappings).
+pub(crate) unsafe fn watch_nonzero(addr: usize, len: usize) -> usize {
+    match rt_guard::guest_copy::<u8>(addr, len) {
+        Some(v) => v.iter().filter(|&&b| b != 0).count(),
+        None => std::slice::from_raw_parts(addr as *const u8, len).iter().filter(|&&b| b != 0).count(),
+    }
+}
+
+pub(crate) fn watch_storage() -> Option<usize> {
+    crate::settings::get().trace.watch_storage.map(|a| a.0)
+}
+
+/// Debug: --verify-tex records, per Metal texture, the guest storage, content hash and frame of its last upload;
+/// the frame trace prints it next to each bound texture's current guest hash (stale or foreign uploads show up there).
+pub(crate) fn verify_tex_enabled() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| crate::settings::get().log.verify_tex)
+}
+
+/// Frames presented so far (for deferring work until the GPU is done with a frame).
+pub(crate) fn draw_reuse_log() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| crate::settings::get().log.log_draw_reuse)
+}
+
+pub(crate) fn cmd_time_from() -> Option<u64> {
+    static F: OnceLock<Option<u64>> = OnceLock::new();
+    *F.get_or_init(|| crate::settings::get().log.log_cmd_time)
+}
+
+pub(crate) fn cmd_time_on() -> bool {
+    let on = cmd_time_from().is_some_and(|f| (f..f + 60).contains(&presented_frames()));
+    if on {
+        let _ = CMD_TIME_GEN0.compare_exchange(
+            0,
+            crate::nvn::api::pools_gen(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+        let _ = CMD_TIME_SGEN0.compare_exchange(
+            0,
+            crate::nvn::api::samplers_gen(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+    on
+}
+
+/// horizon::hle::pools_gen() when the --log-cmd-time window began (how often pool-derived memos are invalidated).
+pub(crate) static CMD_TIME_GEN0: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) static CMD_TIME_SGEN0: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) static CMD_TIME: Mutex<Option<std::collections::HashMap<&'static str, (u64, u64)>>> =
+    Mutex::new(None);
+
+pub(crate) fn note_cmd_time(name: &'static str, ns: u64) {
+    let mut g = CMD_TIME.lock().unwrap();
+    let e = g
+        .get_or_insert_with(Default::default)
+        .entry(name)
+        .or_default();
+    e.0 += ns;
+    e.1 += 1;
+}
+
+/// Prints the --log-cmd-time table once its 60 frames are over (called at the present).
+pub(crate) fn report_cmd_time() {
+    let Some(f) = cmd_time_from() else { return };
+    if presented_frames() != f + 60 {
+        return;
+    }
+    let g = CMD_TIME.lock().unwrap();
+    let mut rows: Vec<_> = g
+        .as_ref()
+        .map(|m| m.iter().map(|(k, v)| (*k, *v)).collect())
+        .unwrap_or_default();
+    rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    let total: u64 = rows
+        .iter()
+        .filter(|r| r.0 != "nvnCommandBufferCallCommands")
+        .map(|r| r.1 .0)
+        .sum();
+    println!("[cmd-time] frames {}..{}: {:.2} ms per frame in commands (CallCommands excluded; it includes its list); pool generation changes {:.1}, sampler registrations {:.1} per frame",
+        f, f + 60, total as f64 / 60.0 / 1e6, crate::nvn::api::pools_gen().saturating_sub(CMD_TIME_GEN0.load(Ordering::Relaxed)) as f64 / 60.0,
+        crate::nvn::api::samplers_gen().saturating_sub(CMD_TIME_SGEN0.load(Ordering::Relaxed)) as f64 / 60.0);
+    for (n, (ns, c)) in rows.iter().take(30) {
+        println!(
+            "[cmd-time] {:7.3} ms {:8.1} per frame ({:6.2} us each) {}",
+            *ns as f64 / 60.0 / 1e6,
+            *c as f64 / 60.0,
+            *ns as f64 / (*c).max(1) as f64 / 1e3,
+            n
+        );
+    }
+}
+
+/// Query the current process memory footprint (phys_footprint) and available memory limit on Darwin/Apple Silicon.
+pub fn process_memory_stats() -> (u64, u64) {
+    #[cfg(target_vendor = "apple")]
+    unsafe {
+        #[repr(C)]
+        struct TaskVMInfo {
+            virtual_size: u64,
+            region_count: i32,
+            page_size: i32,
+            resident_size: u64,
+            resident_size_peak: u64,
+            device: u64,
+            device_peak: u64,
+            internal: u64,
+            internal_peak: u64,
+            external: u64,
+            external_peak: u64,
+            reusable: u64,
+            reusable_peak: u64,
+            purgeable_volatile_pmap: u64,
+            purgeable_volatile_resident: u64,
+            purgeable_volatile_virtual: u64,
+            compressed: u64,
+            compressed_peak: u64,
+            compressed_lifetime: u64,
+            phys_footprint: u64,
+        }
+        extern "C" {
+            fn mach_task_self() -> u32;
+            fn task_info(
+                task: u32,
+                flavor: u32,
+                task_info_out: *mut TaskVMInfo,
+                task_info_outCnt: *mut u32,
+            ) -> i32;
+            fn os_proc_available_memory() -> usize;
+        }
+        let mut info: TaskVMInfo = std::mem::zeroed();
+        let mut count = (std::mem::size_of::<TaskVMInfo>() / 4) as u32;
+        let footprint = if task_info(mach_task_self(), 22, &mut info, &mut count) == 0 {
+            info.phys_footprint
+        } else {
+            0
+        };
+        let avail = os_proc_available_memory() as u64;
+        (footprint, avail)
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        (0, 0)
+    }
+}
+
+/// --trace-on-shader=<entry>: the frame after the first draw using that shader is traced (and dumped with
+/// --dump-on-trigger), for content that appears at a different frame number in every run.
+pub(crate) static TRACE_TRIGGERED_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Set by request_capture: the triggered frame is also dumped (as with --dump-on-trigger).
+pub(crate) static CAPTURE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// F9 in the game window: trace the next frame's draws into the log and dump it to /tmp/nxport_frame_<n>.ppm.
+/// Can be repeated; each press captures a new frame.
+#[cfg(target_os = "macos")]
+pub fn request_capture() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let f = PRESENTED.load(Relaxed) + 2;
+    CAPTURE_REQUESTED.store(true, Relaxed);
+    TRACE_TRIGGERED_FRAME.store(f, Relaxed);
+    crate::gpu::history::request();
+    println!(
+        "[+] Capture requested: frame {} (trace in the log, image /tmp/nxport_frame_{}.ppm)",
+        f, f
+    );
+}
+
+pub(crate) fn trace_trigger_check(entries: &[&str]) {
+    let Some(want) = &crate::settings::get().trace.trace_on_shader else {
+        return;
+    };
+    if TRACE_TRIGGERED_FRAME.load(std::sync::atomic::Ordering::Relaxed) == 0
+        && entries.iter().any(|e| e == want)
+    {
+        let f = PRESENTED.load(std::sync::atomic::Ordering::Relaxed) + 2;
+        TRACE_TRIGGERED_FRAME.store(f, std::sync::atomic::Ordering::Relaxed);
+        println!("[+] Gfx: {} seen; tracing frame {}", want, f);
+    }
+}
+
+pub(crate) fn trace_triggered_frame() -> u64 {
+    TRACE_TRIGGERED_FRAME.load(std::sync::atomic::Ordering::Relaxed)
+}
