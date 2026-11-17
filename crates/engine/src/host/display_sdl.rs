@@ -416,7 +416,7 @@ impl Host {
     }
 
     fn update_title(&mut self, base_title: &str) {
-        let fps = crate::vulkan::display_fps();
+        let fps = crate::gpu::vulkan::display_fps();
         let title = if let Some(s) = input::capturing() {
             format!("{base_title}  |  Press a key or controller button for {} (Esc cancels, Delete clears)", s.label())
         } else if fps > 0.0 && menu::fps_in_title() {

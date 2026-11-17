@@ -35,17 +35,19 @@ mod host;
 #[cfg(target_os = "macos")]
 pub use host::ui;
 #[cfg(nx_native)]
-pub mod metal;
+pub use gpu::metal;
 /// The Metal backend's shader tooling that does not need Metal itself (the builder specializes MSL on any host).
 #[cfg(not(nx_native))]
 pub mod metal {
+    #[path = "../gpu/metal/msl_specialize.rs"]
     pub mod msl_specialize;
+    #[path = "../gpu/metal/source_pack.rs"]
     pub mod source_pack;
 }
 #[cfg(nx_runtime)]
 mod nvn;
 #[cfg(nx_runtime)]
-pub mod vulkan;
+pub use gpu::vulkan;
 pub mod profile;
 pub mod settings;
 /// Dear ImGui windows over SDL3 on Windows (the builder's and the game's settings window), and the SDL3.dll the
@@ -289,7 +291,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     // (host/display_ios.rs). macOS creates its window before the guest submits anything.
     #[cfg(target_os = "ios")]
     if !host::display::headless() {
-        crate::metal::init(
+        crate::gpu::metal::init(
             objc2_metal::MTLCreateSystemDefaultDevice().expect("no Metal device"),
             None,
         );
@@ -309,7 +311,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     if host::display::headless() {
         if !vulkan {
             let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("no Metal device");
-            crate::metal::init(device, None);
+            crate::gpu::metal::init(device, None);
         }
         return match handle.join() {
             Ok(Ok(())) => Ok(()),

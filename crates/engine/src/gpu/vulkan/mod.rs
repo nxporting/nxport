@@ -4,7 +4,7 @@
 // before the submit returns. Images stay in the GENERAL layout with full barriers between passes and other work.
 // Guest memory pools are imported as buffers where the device allows it (VK_EXT_external_memory_host), so vertex,
 // index and storage data are the guest's own pages, as on the Switch; uniform buffers are copied when bound (NVN updates
-// them inline in the command stream). The Metal backend (crate::metal) is the reference this one is checked against
+// them inline in the command stream). The Metal backend (crate::gpu::metal) is the reference this one is checked against
 // with frame captures (crate::capture).
 
 mod astc;

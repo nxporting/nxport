@@ -359,7 +359,7 @@ pub(crate) fn engine_ptr(a: usize) -> usize {
     #[inline]
     fn fallback(a: usize) -> usize {
         #[cfg(target_os = "macos")]
-        return crate::metal::rt_guard::engine_ptr(a).unwrap_or(a);
+        return crate::gpu::metal::rt_guard::engine_ptr(a).unwrap_or(a);
         #[cfg(not(target_os = "macos"))]
         return a;
     }
@@ -379,7 +379,7 @@ pub(crate) fn engine_ptr(a: usize) -> usize {
 /// Copies guest memory at `src` into `dst` (engine side: guarded pages are read through their aliases).
 pub(crate) unsafe fn engine_copy(dst: &mut [u8], src: *const u8) {
     #[cfg(target_os = "macos")]
-    let no_rt = !crate::metal::rt_guard::any_held();
+    let no_rt = !crate::gpu::metal::rt_guard::any_held();
     #[cfg(not(target_os = "macos"))]
     let no_rt = true;
 

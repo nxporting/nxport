@@ -48,9 +48,9 @@ define_class!(
         fn update_title(&self, _timer: &objc2::runtime::AnyObject) {
             let mtm = MainThreadMarker::from(self);
             let fps = if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
-                crate::vulkan::display_fps()
+                crate::gpu::vulkan::display_fps()
             } else {
-                crate::metal::display_fps()
+                crate::gpu::metal::display_fps()
             };
             let app_name = crate::profile::app_title();
             let title = if fps > 0.0 && crate::host::live::fps_in_title() {
@@ -316,7 +316,7 @@ pub fn run_main_thread() -> ! {
 
     // The Vulkan backend presents to the layer itself (vulkan/window.rs).
     if crate::settings::get().graphics.gpu != crate::settings::GpuBackend::Vulkan {
-        crate::metal::init(device.clone(), Some(layer.clone()));
+        crate::gpu::metal::init(device.clone(), Some(layer.clone()));
     }
     LAYER_PTR.store((&*layer) as *const CAMetalLayer as usize, Ordering::Release);
     if crate::horizon::oe::is_handheld() {

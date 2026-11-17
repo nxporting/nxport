@@ -1767,7 +1767,7 @@ unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         }
         if objc2_metal::MTLResource::storageMode(&*real) == MTLStorageMode::Private
             || real.sampleCount() > 1
-            || crate::metal::copy::is_depth_stencil(real.pixelFormat())
+            || crate::gpu::metal::copy::is_depth_stencil(real.pixelFormat())
             || real.textureType() != MTLTextureType::Type2D
         {
             continue;

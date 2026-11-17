@@ -61,8 +61,8 @@ const REPACK_CACHE_MAX: usize = 8 << 20;
 
 /// A vertex stream repacked for all its elements, with the hash of its guest bytes then and the last frame a draw
 /// used it.
-pub(in crate::vulkan) struct RepackedStream {
-    pub(super) buf: crate::vulkan::device::HostBuffer,
+pub(in crate::gpu::vulkan) struct RepackedStream {
+    pub(super) buf: crate::gpu::vulkan::device::HostBuffer,
     elems: usize,
     token: u64,
     pub(super) used: u64,
@@ -80,7 +80,7 @@ pub(super) struct VAttr {
 
 /// A vertex stream as the pipeline reads it.
 #[derive(Clone, Hash)]
-pub(in crate::vulkan) struct VStream {
+pub(in crate::gpu::vulkan) struct VStream {
     stream: u32,
     stride: u32,
     src_stride: u32,
@@ -121,7 +121,7 @@ pub(super) const TEX_MEMO: usize = 48;
 /// feedback is checked against the pass), the texture's description and where it lives (Textures::locate), checked once
 /// per submit (`serial`: Textures::serial then).
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct BlEntry {
+pub(in crate::gpu::vulkan) struct BlEntry {
     word: u32,
     image: vk::Image,
     place: Option<(super::texture::Desc, (super::texture::Desc, u32, u32))>,
@@ -136,7 +136,7 @@ pub(in crate::vulkan) struct BlEntry {
 /// Bindless textures: a push constant word's last resolution (Ctx::bl_memo), good within the submit (`serial`) while
 /// the image is not rendered to (`fb` 0) or, while it is, for the feedback copy of barrier epoch `fb`.
 #[derive(Clone, Copy, Default)]
-pub(in crate::vulkan) struct BlMemo {
+pub(in crate::gpu::vulkan) struct BlMemo {
     pub(super) handle: u64,
     pub(super) declared: vk::ImageViewType,
     pub(super) serial: u64,
@@ -243,7 +243,7 @@ impl Ctx {
         };
         let code = shader::guest_code(data);
         let prep = shader::prep(code, shader::guest_ctrl(control), index);
-        let known = crate::vulkan::stage_cache::identify(code, &prep);
+        let known = crate::gpu::vulkan::stage_cache::identify(code, &prep);
         let state_for = |inputs: Option<&[u32]>| {
             let mut s = state.clone();
             if let (true, Some(inputs)) = (vertex, inputs) {
@@ -369,7 +369,7 @@ impl Ctx {
         // Pipelines listed by earlier sessions, made on worker threads from the first draw.
         if self.pipeline_cache.is_none() {
             let cache = self.pipeline_cache();
-            crate::vulkan::listed::start(self.dev.clone(), cache);
+            crate::gpu::vulkan::listed::start(self.dev.clone(), cache);
         }
         if self.st.render_disabled || self.st.rasterizer_discard || instances <= 0 || !self.begin_pass() {
             return;
@@ -534,8 +534,8 @@ impl Ctx {
                 let mut req = Default::default();
                 let info = vk::ComputePipelineCreateInfo::default().stage(module.stage(vk::ShaderStageFlags::COMPUTE, &mut req)).layout(layout);
                 let cache = self.pipeline_cache();
-                crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
+                crate::gpu::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::gpu::vulkan::hitch_add(crate::gpu::vulkan::HITCH_PIPELINES, 1);
                 let pipe = match self.dev.device.create_compute_pipelines(cache, &[info], None) {
                     Ok(p) => p[0],
                     Err((_, e)) => {
@@ -650,8 +650,8 @@ impl Ctx {
         let pipe = match made {
             Some((p, _)) => p,
             None => {
-                if crate::vulkan::async_pipe::is_async() {
-                    let job = crate::vulkan::async_pipe::PipeJob {
+                if crate::gpu::vulkan::async_pipe::is_async() {
+                    let job = crate::gpu::vulkan::async_pipe::PipeJob {
                         dev: self.dev.clone(),
                         desc: desc.clone(),
                         vstage: vstage.clone(),
@@ -661,34 +661,34 @@ impl Ctx {
                         cache,
                     };
                     let key = hash(&desc);
-                    let mut r = crate::vulkan::async_pipe::query_async_pipeline(key, job);
+                    let mut r = crate::gpu::vulkan::async_pipe::query_async_pipeline(key, job);
                     // Still compiling: skipped only where its pass's targets are drawn every frame (the next frame draws
                     // it); a target drawn now and then may never be drawn again, so its draw waits.
-                    if matches!(r, crate::vulkan::async_pipe::AsyncPipe::Pending) && !self.targets_recur() {
-                        r = crate::vulkan::async_pipe::wait_async_pipeline(key);
+                    if matches!(r, crate::gpu::vulkan::async_pipe::AsyncPipe::Pending) && !self.targets_recur() {
+                        r = crate::gpu::vulkan::async_pipe::wait_async_pipeline(key);
                     }
                     match r {
-                        crate::vulkan::async_pipe::AsyncPipe::Ready(p) => {
-                            crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
+                        crate::gpu::vulkan::async_pipe::AsyncPipe::Ready(p) => {
+                            crate::gpu::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            crate::gpu::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::gpu::vulkan::hitch_add(crate::gpu::vulkan::HITCH_PIPELINES, 1);
                             self.record_pipeline(mode, vstage, gstage, fstage, &desc);
                             p
                         }
-                        crate::vulkan::async_pipe::AsyncPipe::Pending => {
+                        crate::gpu::vulkan::async_pipe::AsyncPipe::Pending => {
                             crate::gpu::pipeline_list::draw_skipped_compiling();
                             return None;
                         }
-                        crate::vulkan::async_pipe::AsyncPipe::Failed => {
+                        crate::gpu::vulkan::async_pipe::AsyncPipe::Failed => {
                             let targets: Vec<String> = pass.colors.iter().map(|c| c.map_or("-".into(), |c| format!("{:?}/nvn {}", c.1, c.2))).collect();
                             self.warn(format!("pipeline for {:#x}/{:?}/{:?} (targets {targets:?}): async compile failed", vs.0, gs.map(|g| g.0), fs.map(|f| f.0)));
                             return None;
                         }
                     }
                 } else {
-                    crate::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    crate::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                crate::vulkan::hitch_add(crate::vulkan::HITCH_PIPELINES, 1);
+                    crate::gpu::vulkan::PIPELINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    crate::gpu::vulkan::PIPELINES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::gpu::vulkan::hitch_add(crate::gpu::vulkan::HITCH_PIPELINES, 1);
                     match pipelines::create(&self.dev, &desc, vstage, gstage, fstage, layout, cache) {
                         Ok(p) => {
                             self.record_pipeline(mode, vstage, gstage, fstage, &desc);
@@ -1157,7 +1157,7 @@ impl Ctx {
             self.gpu_write_added(a, a + size);
             // GPU writes cannot fault: pages the write tracking protected would lose them.
             crate::guest::dirty_track::release_for_gpu(a, size);
-            crate::vulkan::guard::note_write(a, size);
+            crate::gpu::vulkan::guard::note_write(a, size);
         }
         // Read-only ones are not held by the write guard either: their bound sizes overstate what the GPU reads (up to
         // 1 MiB for bindings from the game's own buffers), and holding all of it made the game fault on every
@@ -1179,7 +1179,7 @@ impl Ctx {
         // write-combined, slow to read).
         let (buf, off, p) = if write && self.dev.discrete { self.readback.alloc(&self.dev, size)? } else { self.arena.alloc(&self.dev, size)? };
         crate::gpu::report_guard::engine_copy(std::slice::from_raw_parts_mut(p, size), a as *const u8);
-        crate::vulkan::guard::patch(a, p, size);
+        crate::gpu::vulkan::guard::patch(a, p, size);
         if write {
             self.writebacks.push((a, p, size));
         }
@@ -1341,7 +1341,7 @@ impl Ctx {
         let sampler = crate::nvn::api::lookup_pool_sampler(sampler_id).and_then(|d| self.tex.sampler(&self.dev, &d, true)).unwrap_or(self.default_sampler);
         let mut slots = match self.bl.take() {
             Some(s) => s,
-            None => crate::vulkan::bindless::Slots::new(&self.dev, self.default_sampler),
+            None => crate::gpu::vulkan::bindless::Slots::new(&self.dev, self.default_sampler),
         };
         let word = slots.word(&self.dev, view.unwrap_or(vk::ImageView::null()), declared, sampler);
         // The feedback copy is current for this barrier epoch (feedback_view took it if it was not).
@@ -1512,13 +1512,13 @@ impl Ctx {
 }
 
 /// A pipeline description's vertex streams.
-pub(in crate::vulkan) fn desc_streams(vl: &[VStream]) -> Vec<pipelines::Stream> {
+pub(in crate::gpu::vulkan) fn desc_streams(vl: &[VStream]) -> Vec<pipelines::Stream> {
     vl.iter().map(|v| (v.stream, v.stride, v.per_instance, v.attrs.iter().map(|a| (a.location, a.format, a.offset)).collect())).collect()
 }
 
 /// A vertex stage's translation state: attribute types from NVN attribute bits by location (unbound attributes read
 /// float zeros from ZERO_STREAM), and the depth mode.
-pub(in crate::vulkan) fn vertex_graphics_state(attribs: impl Iterator<Item = (usize, u32)>, depth_gl: bool) -> GraphicsState {
+pub(in crate::gpu::vulkan) fn vertex_graphics_state(attribs: impl Iterator<Item = (usize, u32)>, depth_gl: bool) -> GraphicsState {
     let mut s = GraphicsState::engine();
     s.attribute_types = [AttributeType::Float; 32];
     for (i, bits) in attribs {
@@ -1532,7 +1532,7 @@ pub(in crate::vulkan) fn vertex_graphics_state(attribs: impl Iterator<Item = (us
 }
 
 /// A fragment stage's translation state: output types from the NVN formats its targets render in, by slot.
-pub(in crate::vulkan) fn fragment_graphics_state(rendered: impl Iterator<Item = (usize, i32)>) -> GraphicsState {
+pub(in crate::gpu::vulkan) fn fragment_graphics_state(rendered: impl Iterator<Item = (usize, i32)>) -> GraphicsState {
     let mut s = GraphicsState::engine();
     for (i, nvn) in rendered {
         if i < 8 {
@@ -1548,7 +1548,7 @@ pub(in crate::vulkan) fn fragment_graphics_state(rendered: impl Iterator<Item = 
 }
 
 /// The vertex streams for NVN attribute bits by location (the vertex stage's inputs) and stream bits.
-pub(in crate::vulkan) fn vertex_streams(dev: &Dev, attribs: impl Iterator<Item = (u32, u32)>, streams: &[u64]) -> Vec<VStream> {
+pub(in crate::gpu::vulkan) fn vertex_streams(dev: &Dev, attribs: impl Iterator<Item = (u32, u32)>, streams: &[u64]) -> Vec<VStream> {
     {
         let mut out: Vec<VStream> = Vec::new();
         for (i, b) in attribs {
@@ -1597,8 +1597,8 @@ impl Ctx {
         let Some(pass) = self.pass.as_ref() else { return };
         let attribs = self.st.attribs.as_slice();
         let e = nxport_pipelines::Entry {
-            vs: crate::vulkan::listed::name(vstage.known.full),
-            fs: fstage.map(|f| crate::vulkan::listed::name(f.known.full)),
+            vs: crate::gpu::vulkan::listed::name(vstage.known.full),
+            fs: fstage.map(|f| crate::gpu::vulkan::listed::name(f.known.full)),
             point_size: self.st.point_size.to_bits(),
             depth_gl: desc.gl_depth,
             y_negate: !desc.upper_left,
@@ -1623,8 +1623,8 @@ impl Ctx {
             tiny: false,
         }
         .normalized();
-        let back = crate::vulkan::listed::desc(&self.dev, &e, vstage, fstage);
-        let keys = crate::vulkan::listed::stage_keys(&self.dev, &e, vstage, fstage);
+        let back = crate::gpu::vulkan::listed::desc(&self.dev, &e, vstage, fstage);
+        let keys = crate::gpu::vulkan::listed::stage_keys(&self.dev, &e, vstage, fstage);
         if back.as_ref() != Some(desc) || keys != Some((vstage.id.key, fstage.map(|f| f.id.key))) {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
@@ -1762,7 +1762,7 @@ impl Ctx {
     /// guest bytes still hash the same, else made now.
     unsafe fn cached_repack(&mut self, a: usize, size: usize, v: &VStream, n: usize) -> Option<vk::Buffer> {
         let key = super::hash_of(&(a, size, v));
-        let frame = crate::vulkan::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
+        let frame = crate::gpu::vulkan::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         let token = super::texture::hash_bytes(std::slice::from_raw_parts(a as *const u8, size));
         if let Some(e) = self.repack_cache.get_mut(&key) {
             if e.elems >= n && e.token == token {
@@ -1788,7 +1788,7 @@ impl Ctx {
                 dst[d0..d0 + len].copy_from_slice(&src[s0..s0 + len]);
             }
         }
-        crate::vulkan::note_copied(elems * stride);
+        crate::gpu::vulkan::note_copied(elems * stride);
         let b = buf.buffer;
         if let Some(old) = self.repack_cache.insert(key, RepackedStream { buf, elems, token, used: frame }) {
             // Submits in flight may still read it.
@@ -1862,7 +1862,7 @@ impl Ctx {
                 }
                 let x = self.imports.find(&self.dev, a, n * 2).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
-                    crate::vulkan::guard::note_read(a, n * 2);
+                    crate::gpu::vulkan::guard::note_read(a, n * 2);
                 }
                 x.or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, n * 2)))
                     .map(|(b, o)| (b, o, vk::IndexType::UINT16))
@@ -1882,7 +1882,7 @@ impl Ctx {
                 }
                 let x = self.imports.find(&self.dev, a, n * 4).filter(|(_, o)| o % 4 == 0);
                 if x.is_some() {
-                    crate::vulkan::guard::note_read(a, n * 4);
+                    crate::gpu::vulkan::guard::note_read(a, n * 4);
                 }
                 x.or_else(|| self.arena.copy(&self.dev, std::slice::from_raw_parts(a as *const u8, n * 4)))
                     .map(|(b, o)| (b, o, vk::IndexType::UINT32))

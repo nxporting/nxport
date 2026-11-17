@@ -1,15 +1,18 @@
-// The interface between the NVN frontend (crate::nvn) and a GPU backend (crate::metal). The frontend records command
+// The interface between the NVN frontend (crate::nvn) and a GPU backend (crate::gpu::metal). The frontend records command
 // lists and hands them over at submit; the backend executes them, signals fences by serial and presents. The backend
 // also keeps guest memory coherent with the GPU's view of it, through page guards consulted by the fault handler and
 // by write tracking.
 
 // Lifted hosts until they have a GPU backend, and frame capture scenarios (which record commands without running them).
 pub mod history;
+#[cfg(nx_native)]
+pub mod metal;
 pub mod null;
 pub mod pipeline_list;
 #[cfg(nx_native)]
 pub mod report_guard;
 pub mod restart;
+pub mod vulkan;
 
 #[cfg(not(nx_native))]
 #[path = "report_guard_lifted.rs"]

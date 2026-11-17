@@ -120,7 +120,7 @@ unsafe fn install_native_hooks(base: usize, mem_space: &mut crate::guest::loader
         const STP_X29_X30_M40: u32 = 0xa9bc7bfd; // stp x29, x30, [sp, #-0x40]!
         let site = (base + SITE) as *mut u32;
         let tramp =
-            mem_space.make_hle_trampoline(crate::hle!(crate::metal::journal_occl_read(_))) as usize;
+            mem_space.make_hle_trampoline(crate::hle!(crate::gpu::metal::journal_occl_read(_))) as usize;
         let wrap = tramp + 12; // words 3..7 of the 8-word entry (make_hle_trampoline uses 0..2)
         let b = |from: usize, to: usize, link: bool| -> Option<u32> {
             let d = to as i64 - from as i64;

@@ -1,5 +1,5 @@
 // NVN entry points: the device, memory pools, buffers, textures, samplers, programs, command buffers (recorded into
-// crate::nvn::cmd lists), queues and windows. Submits and presents go to the GPU backend (crate::metal).
+// crate::nvn::cmd lists), queues and windows. Submits and presents go to the GPU backend (crate::gpu::metal).
 #![allow(non_snake_case)]
 
 use crate::horizon::hle::{hle_sleep_ns, log_timestamps};

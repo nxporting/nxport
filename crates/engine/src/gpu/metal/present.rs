@@ -310,7 +310,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                         if p == 0 {
                             "-".to_string()
                         } else {
-                            unsafe { &*(p as *const crate::metal::shader_cache::CachedStage) }
+                            unsafe { &*(p as *const crate::gpu::metal::shader_cache::CachedStage) }
                                 .entry
                                 .clone()
                         }

@@ -1187,7 +1187,7 @@ impl Ctx {
                 self.rt_reads.push((t, level, ptr as usize, n as usize));
             }
             // The watcher writes it: the write guard must not hold these pages.
-            crate::vulkan::guard::note_write(t.storage, len);
+            crate::gpu::vulkan::guard::note_write(t.storage, len);
             self.rt_resettle.push(d);
         }
         self.barrier();

@@ -85,7 +85,7 @@ pub fn thread_block() -> usize {
 pub fn mark_guest_thread() {
     GUEST_THREAD.with(|g| g.set(true));
     if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
-        unsafe { crate::vulkan::pin_current_thread(crate::vulkan::guest_affinity()) };
+        unsafe { crate::gpu::vulkan::pin_current_thread(crate::gpu::vulkan::guest_affinity()) };
     }
 }
 

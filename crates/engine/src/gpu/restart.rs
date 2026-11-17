@@ -44,7 +44,7 @@ pub unsafe fn restart_rewrite(
     let values: Vec<u32> = match index_type {
         0 => {
             #[cfg(target_os = "macos")]
-            let held = crate::metal::rt_guard::guest_copy::<u8>(addr as usize, n);
+            let held = crate::gpu::metal::rt_guard::guest_copy::<u8>(addr as usize, n);
             #[cfg(not(target_os = "macos"))]
             let held: Option<Vec<u8>> = None;
             let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u8, n));
@@ -55,7 +55,7 @@ pub unsafe fn restart_rewrite(
         }
         1 => {
             #[cfg(target_os = "macos")]
-            let held = crate::metal::rt_guard::guest_copy::<u16>(addr as usize, n);
+            let held = crate::gpu::metal::rt_guard::guest_copy::<u16>(addr as usize, n);
             #[cfg(not(target_os = "macos"))]
             let held: Option<Vec<u16>> = None;
             let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u16, n));
@@ -66,7 +66,7 @@ pub unsafe fn restart_rewrite(
         }
         2 => {
             #[cfg(target_os = "macos")]
-            let held = crate::metal::rt_guard::guest_copy::<u32>(addr as usize, n);
+            let held = crate::gpu::metal::rt_guard::guest_copy::<u32>(addr as usize, n);
             #[cfg(not(target_os = "macos"))]
             let held: Option<Vec<u32>> = None;
             let v = held.as_deref().unwrap_or_else(|| std::slice::from_raw_parts(addr as *const u32, n));

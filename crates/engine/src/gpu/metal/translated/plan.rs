@@ -168,7 +168,7 @@ impl Gfx {
                     let (weak, kind) = if s.data >= 0x1_0000_0000 {
                         let b = std::slice::from_raw_parts(s.data as *const u8, 0x130);
                         let w0 = u32::from_le_bytes([b[0x30], b[0x31], b[0x32], b[0x33]]);
-                        (crate::metal::shader_cache::fnv1a64(b), (w0 >> 10) & 0xF)
+                        (crate::gpu::metal::shader_cache::fnv1a64(b), (w0 >> 10) & 0xF)
                     } else {
                         (0, 99)
                     };
@@ -473,7 +473,7 @@ impl Gfx {
         // --gfx-draw-mask=N/M runs only the shader pairs whose stable hash % M == N (the rest are skipped), so a GPU
         // hang can be bisected over shader pairs by halving M / choosing N. Also --gfx-draw-mask=N/M,N2/M2 for a union.
         if let Some(masks) = draw_masks() {
-            let h = crate::metal::shader_cache::fnv1a64(
+            let h = crate::gpu::metal::shader_cache::fnv1a64(
                 format!("{}/{}", vs.entry, fs.map_or("-", |f| &f.entry)).as_bytes(),
             );
             if !masks.iter().any(|m| h % m.every == m.first) {
