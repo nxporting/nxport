@@ -31,12 +31,23 @@ use crate::profile::readable;
 
 /// Where one version's code is (offsets in main).
 pub struct Sites {
-    /// sead::Projection::updateMatrixImpl's check of the dirty flag: `ldrb w8, [x0, #8]; mov x19, x0; cbz w8, <clean>`.
-    pub update: usize,
+    /// Every check of a projection's dirty flag before its matrix is made (Update). 1.9.0 has one, in
+    /// sead::Projection::updateMatrixImpl; 1.5.0 inlines it into the three functions that read the matrix.
+    pub updates: &'static [Update],
     /// sead::PerspectiveProjection's vtable, and its matrix function (the vtable's entry +0x58).
     pub perspective: (usize, usize),
     /// sead::FrustumProjection's vtable and matrix function.
     pub frustum: (usize, usize),
+}
+
+/// One dirty-flag check: the code the game has at `at` (the flag's `ldrb w8, [xN, #8]`, the moves around it, `cbz w8,
+/// <clean>`) and what replaces it: the same moves, `bl <projection_update>` (word `call`, x0 = the projection) and
+/// `cbz w0, <clean>` in the same place, so the branch's offset stays.
+pub struct Update {
+    pub at: usize,
+    pub expected: &'static [u32],
+    pub code: &'static [u32],
+    pub call: usize,
 }
 
 const SIXTEEN_NINTHS: f32 = 16.0 / 9.0;
@@ -197,8 +208,6 @@ pub unsafe extern "C" fn projection_update(p: usize) -> u64 {
     dirty as u64
 }
 
-/// The update's check as the game has it: `ldrb w8, [x0, #8]; mov x19, x0; cbz w8, +0x4c`.
-const UPDATE_CODE: [u32; 3] = [0x3940_2008, 0xaa00_03f3, 0x3400_0268];
 
 /// Installs the hook and, with the dynamic aspect ratio setting on, starts at the launch aspect (--launch-aspect, else
 /// 16:9). With it off the game keeps its own shape until set_aspect is called.
@@ -208,11 +217,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     if !vt_ok(s.perspective) || !vt_ok(s.frustum) {
         return println!("[!] Aspect: unexpected projection vtables; the picture stays 16:9");
     }
-    // mov x19, x0; bl <projection_update> (x0 = the flag); cbz w0, +0x4c.
-    let code = vec![UPDATE_CODE[1], 0x9400_0000, UPDATE_CODE[2] & !31];
-    let hle = crate::hle!(projection_update(_));
-    if let Err(e) = crate::profile::totk::frame_time::replace_with_call(base, mem_space, s.update, &UPDATE_CODE, code, 1, hle) {
-        return println!("[!] Aspect: main+{:#x}: {e}; the picture stays 16:9", s.update);
+    for u in s.updates {
+        let hle = crate::hle!(projection_update(_));
+        if let Err(e) = crate::profile::totk::frame_time::replace_with_call(base, mem_space, u.at, u.expected, u.code.to_vec(), u.call, hle) {
+            return println!("[!] Aspect: main+{:#x}: {e}; the picture stays 16:9", u.at);
+        }
     }
     PERSPECTIVE_VT.store(base + s.perspective.0, Ordering::Relaxed);
     FRUSTUM_VT.store(base + s.frustum.0, Ordering::Relaxed);

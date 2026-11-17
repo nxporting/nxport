@@ -39,6 +39,9 @@ pub static V1_9_0: VersionProfile = VersionProfile {
 pub static V1_5_0: VersionProfile = VersionProfile {
     version_string: "1.5.0",
     build_id_prefix: "16a91992bba71201e98756f3bc8f5d2f",
+    #[cfg(nx_runtime)]
+    install_hooks: Some(install_v1_5_0_hooks),
+    #[cfg(not(nx_runtime))]
     install_hooks: None,
     heap_instance_offset: None,
     allocator_pool_offset: None,
@@ -88,7 +91,13 @@ pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
 
 /// 1.9.0's projections (aspect.rs).
 pub static ASPECT_V1_9_0: aspect::Sites = aspect::Sites {
-    update: 0xeb4474,
+    // sead::Projection::updateMatrixImpl: `ldrb w8, [x0, #8]; mov x19, x0; cbz w8`.
+    updates: &[aspect::Update {
+        at: 0xeb4474,
+        expected: &[0x3940_2008, 0xaa00_03f3, 0x3400_0268],
+        code: &[0xaa00_03f3, 0x9400_0000, 0x3400_0260],
+        call: 1,
+    }],
     perspective: (0x1d05380, 0xeb4a44),
     frustum: (0x1d05480, 0xeb4f24),
 };
@@ -96,9 +105,43 @@ pub static ASPECT_V1_9_0: aspect::Sites = aspect::Sites {
 /// 1.9.0's layout calculations (hud.rs): the library's (`mov x2, sp`) and the game's layout class's (`add x2, sp, #8`);
 /// the clipping pane's call of the scissor setter.
 pub static HUD_V1_9_0: hud::Sites = hud::Sites {
-    layout: [(0xf625dc, 0x9100_03e2), (0x25c98, 0x9100_23e2)],
+    layout: [(0xf625dc, hud::layout_code_v1_9(0x9100_03e2)), (0x25c98, hud::layout_code_v1_9(0x9100_23e2))],
     scissor: (0xf67138, 0xeb6a54),
 };
+
+/// 1.5.0's projection sites (aspect.rs; names from the decomp of this version): the dirty-flag checks inlined into
+/// sead::Projection's matrix readers, PerspectiveProjection::doUpdateMatrix main+0xb1dfa0, FrustumProjection's
+/// main+0xb1e4e0.
+pub static ASPECT_V1_5_0: aspect::Sites = aspect::Sites {
+    updates: &[
+        // getProjectionMatrix (main+0xb1d8a0) and getDeviceProjectionMatrix (main+0xb1d918): `mov x19, x0;
+        // ldrb w8, [x19, #8]; cbz w8`.
+        aspect::Update { at: 0xb1d8ac, expected: &[0xaa00_03f3, 0x3940_2268, 0x3400_0148], code: &[0xaa00_03f3, 0x9400_0000, 0x3400_0140], call: 1 },
+        aspect::Update { at: 0xb1d928, expected: &[0xaa00_03f3, 0x3940_2268, 0x3400_0148], code: &[0xaa00_03f3, 0x9400_0000, 0x3400_0140], call: 1 },
+        // cameraPosToScreenPos (main+0xb1d9a4): `mov x22, x0; ldrb w8, [x22, #8]; mov x21, x2; mov x19, x1; cbz w8`.
+        aspect::Update {
+            at: 0xb1d9b4,
+            expected: &[0xaa00_03f6, 0x3940_22c8, 0xaa02_03f5, 0xaa01_03f3, 0x3400_0148],
+            code: &[0xaa00_03f6, 0xaa02_03f5, 0xaa01_03f3, 0x9400_0000, 0x3400_0140],
+            call: 3,
+        },
+    ],
+    perspective: (0x24bf9e8, 0xb1dfa0),
+    frustum: (0x24bfae8, 0xb1e4e0),
+};
+
+/// 1.5.0's layout calculations (nn::ui2d::Layout::CalculateImpl, eui::LayoutEx::CalculateImpl) and
+/// eui::ScissorPane::Draw's call of sead::Viewport::applyScissor.
+pub static HUD_V1_5_0: hud::Sites = hud::Sites {
+    layout: [(0xab7738, hud::layout_code_v1_5(0x9100_23e2)), (0xbde5e8, hud::layout_code_v1_5(0x9100_03e2))],
+    scissor: (0xbe2080, 0xb20510),
+};
+
+#[cfg(nx_runtime)]
+unsafe fn install_v1_5_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    aspect::install(base, mem_space, &ASPECT_V1_5_0);
+    hud::install(base, mem_space, &HUD_V1_5_0);
+}
 
 #[cfg(nx_runtime)]
 unsafe fn install_v1_9_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {

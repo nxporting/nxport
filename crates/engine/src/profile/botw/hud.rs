@@ -27,8 +27,8 @@ use crate::profile::ui2d::{c_str, find_pane, Field};
 /// Where one version's code is (offsets in main).
 pub struct Sites {
     /// The layout calculations, after their draw info took the layout: `str x21, [x19, #0xc0]` and the call of the root
-    /// pane's calculation (LAYOUT_CODE with the version's `mov x2, sp` / `add x2, sp, #8` as word 2).
-    pub layout: [(usize, u32); 2],
+    /// pane's calculation, as the version has it (layout_code_v1_9 / layout_code_v1_5).
+    pub layout: [(usize, [u32; 8]); 2],
     /// The clipping pane's draw: its `bl` of the scissor setter (SCISSOR_CODE before it), and the setter.
     pub scissor: (usize, usize),
 }
@@ -189,9 +189,23 @@ pub unsafe extern "C" fn scissor_pane(rect: usize, a1: u64, a2: u64) {
     crate::guest::call(SCISSOR_TO.load(Ordering::Relaxed), &[rect as u64, a1, a2]);
 }
 
-/// The calculation's call of its root pane's: `str x21, [x19, #0xc0]; and w3, w20, #1; <x2 = the context>;
-/// ldr x0, [x21, #0x18]; mov x1, x19; ldr x8, [x0]; ldr x8, [x8, #0xa0]; blr x8`.
-const LAYOUT_CODE: [u32; 8] = [0xf900_6275, 0x1200_0283, 0, 0xf940_0ea0, 0xaa13_03e1, 0xf940_0008, 0xf940_5108, 0xd63f_0100];
+/// The calculation's call of its root pane's in 1.9.0: `str x21, [x19, #0xc0]; and w3, w20, #1; <x2 = the context>;
+/// ldr x0, [x21, #0x18]; mov x1, x19; ldr x8, [x0]; ldr x8, [x8, #0xa0]; blr x8`, with `context` the version's
+/// `mov x2, sp` / `add x2, sp, #8`.
+pub const fn layout_code_v1_9(context: u32) -> [u32; 8] {
+    [0xf900_6275, 0x1200_0283, context, 0xf940_0ea0, 0xaa13_03e1, 0xf940_0008, 0xf940_5108, 0xd63f_0100]
+}
+
+/// The same call in 1.5.0, which loads the root pane's function first: `str x21, [x19, #0xc0]; ldr x0, [x21, #0x18];
+/// ldr x8, [x0]; ldr x8, [x8, #0xa0]; and w3, w20, #1; <x2 = the context>; mov x1, x19; blr x8`.
+pub const fn layout_code_v1_5(context: u32) -> [u32; 8] {
+    [0xf900_6275, 0xf940_0ea0, 0xf940_0008, 0xf940_5108, 0x1200_0283, context, 0xaa13_03e1, 0xd63f_0100]
+}
+
+/// The context word (`mov x2, sp` or `add x2, sp, #8`) of a layout site's code.
+fn layout_context(code: &[u32; 8]) -> Option<u32> {
+    code.iter().copied().find(|&w| w == 0x9100_03e2 || w == 0x9100_23e2)
+}
 /// The clipping pane's call of the scissor setter: `ldr x1, [sp, #0x48]; mov x0, sp; mov x2, x23; bl <setter>`.
 const SCISSOR_CODE: [u32; 4] = [0xf940_27e1, 0x9100_03e0, 0xaa17_03e2, 0x9400_0000];
 
@@ -201,10 +215,14 @@ const SCISSOR_CODE: [u32; 4] = [0xf940_27e1, 0x9100_03e0, 0xaa17_03e2, 0x9400_00
 pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) {
     use crate::profile::totk::frame_time::replace_with_call;
     let mut ok = true;
-    for (at, context) in s.layout {
-        let mut expected = LAYOUT_CODE;
-        expected[2] = context;
-        let code = vec![expected[0], 0xaa13_03e0, 0x9400_0000, expected[1], expected[2], expected[5], expected[6], expected[7]];
+    for (at, expected) in s.layout {
+        let Some(context) = layout_context(&expected) else {
+            println!("[!] HUD: main+{at:#x}: no context in the site's code; full-screen panes stay 16:9");
+            ok = false;
+            continue;
+        };
+        // str x21, [x19, #0xc0]; mov x0, x19; bl <layout_calculate>; and w3, w20, #1; <context>; then the call.
+        let code = vec![0xf900_6275, 0xaa13_03e0, 0x9400_0000, 0x1200_0283, context, 0xf940_0008, 0xf940_5108, 0xd63f_0100];
         if let Err(e) = replace_with_call(base, mem_space, at, &expected, code, 2, crate::hle!(layout_calculate(_))) {
             println!("[!] HUD: main+{at:#x}: {e}; full-screen panes stay 16:9");
             ok = false;
