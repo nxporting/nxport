@@ -16,7 +16,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
-  # crates/build/src/zig.rs: the version and checksum the builder would download. Beside it, none is downloaded.
+  # crates/builderlib/src/zig.rs: the version and checksum the builder would download. Beside it, none is downloaded.
   ZIG_NAME: zig-x86_64-windows-0.17.1
   ZIG_VERSION: "0.17.1"
   ZIG_SHA256: b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e
@@ -107,11 +107,11 @@ jobs:
         with:
           shared-key: macos
           save-if: false
-      # nxport-build's build script builds the two engines into target/engines first.
+      # nxport-builderlib's build script builds the two engines into target/engines first.
       - name: Build the builder and the engines
         run: cargo build --release --locked -p nxport-builder
       - name: Test
-        run: cargo test --locked -p nxport -p nxport-build -p nxport-builder -p nxport-lifter -p nxport-pipelines -p sass2spv --lib --bins
+        run: cargo test --locked -p nxport -p nxport-builderlib -p nxport-builder -p nxport-lifter -p nxport-pipelines -p sass2spv --lib --bins
       - name: Assemble the archive
         run: |
           root="nxport-builder-$VERSION"
@@ -135,7 +135,7 @@ jobs:
           if-no-files-found: error
 
   # The macOS archive gets the Windows builder as windows/nxport.exe: with it a Mac makes the Windows app (the engine the
-  # app runs, from the same commit as the code it lifts; nxport_build::winapp::engine). On every run, so a dry run's
+  # app runs, from the same commit as the code it lifts; nxport_builderlib::winapp::engine). On every run, so a dry run's
   # macos-with-windows artifact is what a release would publish.
   macos-with-windows:
     needs: [windows, macos]

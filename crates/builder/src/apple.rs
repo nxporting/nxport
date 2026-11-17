@@ -1,11 +1,11 @@
 // The macOS app's build steps: one list on every host. Only how some steps are done depends on the host:
 // - the engine for macOS: a Mac builder carries it (build.rs builds it beside the builder); on Windows it is built from
-//   this checkout first (nxport_build::apple_engine, as for iOS).
+//   this checkout first (nxport_builderlib::apple_engine, as for iOS).
 // - the shaders: on a Mac, the Metal shader cache from the game's shader stages (Apple's Metal compiler), the shared
 //   pipeline list and its precompiled pipelines; on Windows, without that compiler, the stages the list uses translated
 //   and packed as Metal source, which the app compiles the first time the game uses each (as the iOS app's,
 //   windows::metal_source_steps).
-// - the app (nxport_build::pack): on a Mac a folder, signed by the linker; on Windows signed with the Rust ad-hoc signer
+// - the app (nxport_builderlib::pack): on a Mac a folder, signed by the linker; on Windows signed with the Rust ad-hoc signer
 //   (the engine with it: Apple silicon runs no unsigned code) and zipped with its file modes, so the executable reaches
 //   the Mac executable (pack::zip_app).
 // The iOS app's steps are in ios.rs; on a Mac they share the shader cache steps here.
@@ -26,7 +26,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
 
 #[cfg(windows)]
 fn engine(r: &Request, steps: &mut Vec<Step>) {
-    engine_from_source(nxport_build::apple_engine::Os::MacOs, r, steps);
+    engine_from_source(nxport_builderlib::apple_engine::Os::MacOs, r, steps);
 }
 
 #[cfg(target_os = "macos")]
@@ -35,15 +35,15 @@ fn engine(_: &Request, _: &mut Vec<Step>) {}
 /// Windows: the engine for `os` (the macOS app's, or the iOS app's), built from this checkout first (cargo does nothing
 /// when it is up to date).
 #[cfg(windows)]
-pub(crate) fn engine_from_source(os: nxport_build::apple_engine::Os, r: &Request, steps: &mut Vec<Step>) {
+pub(crate) fn engine_from_source(os: nxport_builderlib::apple_engine::Os, r: &Request, steps: &mut Vec<Step>) {
     let (toolchains, job) = (crate::app::data_dir().join("toolchains"), r.job.clone());
     steps.push((
         format!("Building the engine for {}", os.name()),
         Box::new(move || {
-            if nxport_build::apple_engine::source_root().is_some() {
+            if nxport_builderlib::apple_engine::source_root().is_some() {
                 // No count: cargo does not say how many crates it will compile.
                 let compiling = |name: &str| crate::app::progress(&job, format!("Compiling {name}"), 0, 0, 0.0);
-                let engine = nxport_build::apple_engine::build(os, &toolchains, &compiling)?;
+                let engine = nxport_builderlib::apple_engine::build(os, &toolchains, &compiling)?;
                 println!("  {}", engine.display());
             }
             Ok(())
@@ -56,7 +56,7 @@ pub(crate) fn engine_from_source(os: nxport_build::apple_engine::Os, r: &Request
 fn shaders(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
     let cache = metal_cache_steps(r, steps);
     let archive_cache = cache.clone();
-    steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_build::pipeline_archive::build_mac(&archive_cache))));
+    steps.push(("Precompiling pipelines".into(), Box::new(move || nxport_builderlib::pipeline_archive::build_mac(&archive_cache))));
     cache
 }
 
@@ -79,15 +79,15 @@ fn app(r: Request, cache: Option<PathBuf>, steps: &mut Vec<Step>) -> Output {
             // Without mods of its own the app takes the game's data directory's mods folder (mods added after the build).
             let edits = edits.clone();
             if settings_file.exists() || settings_file.is_symlink() {
-                let _ = nxport_build::pack::ensure_writable(&settings_file);
+                let _ = nxport_builderlib::pack::ensure_writable(&settings_file);
                 let _ = std::fs::remove_file(&settings_file);
             }
             settings::save_preset(&settings_file, &edits)?;
             if let Some(parent) = app2.parent() {
-                let _ = nxport_build::pack::ensure_writable(parent);
+                let _ = nxport_builderlib::pack::ensure_writable(parent);
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            nxport_build::pack::pack_app(&nxport_build::pack::PackOptions {
+            nxport_builderlib::pack::pack_app(&nxport_builderlib::pack::PackOptions {
                 dump_dir: &dump,
                 mods_dir: mods.as_deref(),
                 shader_cache_dir: cache.as_deref(),
@@ -124,13 +124,13 @@ fn handed_over(app: &std::path::Path) -> PathBuf {
 #[cfg(windows)]
 fn finish(app: &std::path::Path, steps: &mut Vec<Step>) {
     let (app, signed) = (app.to_path_buf(), app.to_path_buf());
-    steps.push(("Signing the app".into(), Box::new(move || nxport_build::macho::sign(&signed, None))));
+    steps.push(("Signing the app".into(), Box::new(move || nxport_builderlib::macho::sign(&signed, None))));
     steps.push((
         "Zipping the app".into(),
         Box::new(move || {
-            let zip = nxport_build::pack::zip_app(&app)?;
+            let zip = nxport_builderlib::pack::zip_app(&app)?;
             debug_assert_eq!(zip, handed_over(&app));
-            nxport_build::pack::clean_path(&app).map_err(|e| format!("{}: {e}", app.display()))?;
+            nxport_builderlib::pack::clean_path(&app).map_err(|e| format!("{}: {e}", app.display()))?;
             println!("  {}", zip.display());
             Ok(())
         }),
@@ -152,15 +152,15 @@ pub(crate) fn metal_cache_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf {
         steps.push((
             "Building the shader cache".into(),
             Box::new(move || {
-                use nxport_build::shader_cache_build::ShaderBuildPhase as Phase;
-                let mut translation = nxport_build::translation::get();
+                use nxport_builderlib::shader_cache_build::ShaderBuildPhase as Phase;
+                let mut translation = nxport_builderlib::translation::get();
                 translation.no_batch_kernels = !batch_enabled;
                 translation.no_arg_kernels = !args_enabled;
-                nxport_build::translation::install(translation);
+                nxport_builderlib::translation::install(translation);
                 let on_progress = Arc::new(move |phase: Phase, done: usize, total: usize| {
                     crate::app::phase_progress(&job, phase.to_string(), phase.phase_index(), Phase::NUM_PHASES, done, total);
                 });
-                nxport_build::shader_cache_build::build(&nxport_build::shader_cache_build::Options {
+                nxport_builderlib::shader_cache_build::build(&nxport_builderlib::shader_cache_build::Options {
                     dump_dirs: vec![stages],
                     out_dir: cache,
                     ctrl_dir: None,

@@ -1,6 +1,6 @@
 // SDL3.dll, carried in the program (Windows): the builder is a single file that runs without it beside. The builder
 // links SDL delay-loaded (its build.rs), so Windows looks for the library at its first call instead of at start, and
-// load() puts it in place before that. A Windows app has its own copy beside its nxport.exe (nxport_build::winapp).
+// load() puts it in place before that. A Windows app has its own copy beside its nxport.exe (nxport_builderlib::winapp).
 
 use std::path::PathBuf;
 

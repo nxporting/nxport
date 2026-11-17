@@ -15,7 +15,7 @@ mod gpu;
 mod guest;
 /// The lifted guest library and its calling convention (public as before the move into guest/exec/).
 pub use guest::exec::{hle_abi, lifted};
-/// NSO parsing, for tools that read a game's modules (the lifter in nxport-build).
+/// NSO parsing, for tools that read a game's modules (the lifter in nxport-builderlib).
 pub use guest::nso;
 #[cfg(nx_runtime)]
 mod horizon;

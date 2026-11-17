@@ -16,7 +16,7 @@ use nxport::settings::SettingsPatch;
 
 use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step};
 
-/// The Vulkan backend's cache can be built offline (nxport_build::vulkan_precompile), where Vulkan runs: on Windows.
+/// The Vulkan backend's cache can be built offline (nxport_builderlib::vulkan_precompile), where Vulkan runs: on Windows.
 /// Built elsewhere, the app translates and compiles shaders as the game loads them.
 pub const PRECOMPILES_SHADERS: bool = cfg!(windows);
 
@@ -40,9 +40,9 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         steps.push((
             "Getting the C compiler".into(),
             Box::new(move || {
-                let cc = nxport_build::zig::windows_cc(&toolchains, &move |done, total| {
+                let cc = nxport_builderlib::zig::windows_cc(&toolchains, &move |done, total| {
                     let mb = |b: u64| (b >> 20) as usize;
-                    progress(&job, format!("Downloading zig {}", nxport_build::zig::VERSION), mb(done), mb(total));
+                    progress(&job, format!("Downloading zig {}", nxport_builderlib::zig::VERSION), mb(done), mb(total));
                 })?;
                 println!("  {}", cc.join(" "));
                 Ok(())
@@ -107,7 +107,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
         steps.push((
             "Packaging the app".into(),
             Box::new(move || {
-                *app_mods.lock().unwrap() = nxport_build::winapp::pack(&nxport_build::winapp::Options {
+                *app_mods.lock().unwrap() = nxport_builderlib::winapp::pack(&nxport_builderlib::winapp::Options {
                     dump: &dump,
                     mods: mods.as_deref(),
                     app: &app,
@@ -123,7 +123,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
 
     // The game's code without mods, kept between builds: lifting and compiling it takes minutes. Code mods change it as
     // it loads (IPS, pchtxt): that, and the modules of plugin mods, go into an overlay library beside it
-    // (nxport_build::lift::lift_overlay). What plugin mods patch while the game runs is handled while it runs
+    // (nxport_builderlib::lift::lift_overlay). What plugin mods patch while the game runs is handled while it runs
     // (engine live_patch.rs, which the overlay's presence turns on): a run ahead of time could not know a patch's moment.
     // With code mods, a library of its own, whose functions are not inlined (runtime/cpu.h), kept beside the plain one: changing
     // mods does not cost a compile of either.
@@ -171,12 +171,12 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                     run_worker(&job, &lift_file, &work(WorkKind::Lift, c_dir.clone()))?;
                     let profile = profile_for(&profiles, &main, &c_dir)?;
                     compile_guest(&toolchains, &c_dir, &built.join("guest.dll"), profile.as_deref(), code_mods, &job)?;
-                    run_worker(&job, &base_file, &work(WorkKind::BaseCode, built.join(nxport_build::lift::BASE_CODE_FILE)))?;
+                    run_worker(&job, &base_file, &work(WorkKind::BaseCode, built.join(nxport_builderlib::lift::BASE_CODE_FILE)))?;
                     // Gigabytes of C and objects, needed again only with a new base.
                     let _ = std::fs::remove_dir_all(&c_dir);
                     Ok(())
                 })?;
-                for name in ["guest.dll", "guest.pdb", nxport_build::lift::MODULES_FILE] {
+                for name in ["guest.dll", "guest.pdb", nxport_builderlib::lift::MODULES_FILE] {
                     let (from, to) = (base.join(name), app.join(name));
                     let _ = std::fs::remove_file(&to);
                     if from.is_file() && std::fs::hard_link(&from, &to).is_err() {
@@ -236,7 +236,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             Box::new(move || {
                 let mods = app_mods.lock().unwrap().clone();
                 if has_plugin_mods(mods.as_deref(), title_id) {
-                    nxport_build::zig::copy_into_app(&toolchains, &app, &|_, _| {})?;
+                    nxport_builderlib::zig::copy_into_app(&toolchains, &app, &|_, _| {})?;
                 } else {
                     let _ = std::fs::remove_dir_all(app.join("zig"));
                 }
@@ -283,10 +283,10 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
                 let msl = build_dir.join("msl");
                 let _ = std::fs::remove_dir_all(&msl);
                 let job_cb = job.clone();
-                let cb = move |phase: nxport_build::shader_cache_build::ShaderBuildPhase, done: usize, total: usize| {
+                let cb = move |phase: nxport_builderlib::shader_cache_build::ShaderBuildPhase, done: usize, total: usize| {
                     progress(&job_cb, phase.to_string(), done, total);
                 };
-                nxport_build::shader_cache_build::build(&nxport_build::shader_cache_build::Options {
+                nxport_builderlib::shader_cache_build::build(&nxport_builderlib::shader_cache_build::Options {
                     dump_dirs: vec![stages],
                     out_dir: build_dir.clone(),
                     ctrl_dir: None,
@@ -295,7 +295,7 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
                     index_only: false,
                     on_progress: Some(Arc::new(cb)),
                 })?;
-                let (n, bytes) = nxport_build::shader_cache_build::pack_source(&msl, list.is_file().then_some(list.as_path()), &cache, arg_variants)?;
+                let (n, bytes) = nxport_builderlib::shader_cache_build::pack_source(&msl, list.is_file().then_some(list.as_path()), &cache, arg_variants)?;
                 println!("  {n} shader stages packed as source ({} MB)", bytes >> 20);
                 // The loose source is ~1 GB for TotK: only the pack is kept.
                 let _ = std::fs::remove_dir_all(&msl);
@@ -365,7 +365,7 @@ const FETCHED_PROFILES_DIR: &str = "profiles_fetched";
 /// published. The compiler matches functions by their control flow and builds those a lifter change has altered without
 /// it, so an older profile only gains less. Without one the code is built without: slower, and otherwise the same.
 fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, String> {
-    let exact = dir.join(format!("{main}-{}.profdata", nxport_build::lift::lifted_hash(c_dir)?));
+    let exact = dir.join(format!("{main}-{}.profdata", nxport_builderlib::lift::lifted_hash(c_dir)?));
     if exact.is_file() {
         return Ok(Some(exact));
     }
@@ -378,7 +378,7 @@ fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, 
     if fetched.is_file() {
         return Ok(Some(fetched));
     }
-    match nxport_build::lift::fetch_gzipped(&format!("{PROFILES_URL}/{name}.gz"), &fetched) {
+    match nxport_builderlib::lift::fetch_gzipped(&format!("{PROFILES_URL}/{name}.gz"), &fetched) {
         Ok(()) => Ok(Some(fetched)),
         Err(e) => {
             println!("  No profile for this code: building without one ({} is not there; {e})", profile.display());
@@ -390,7 +390,7 @@ fn profile_for(dir: &Path, main: &str, c_dir: &Path) -> Result<Option<PathBuf>, 
 /// Compiles the lifted C in `c_dir` into the guest library `library` (and its modules.txt), optimised by `profile`. A
 /// profile the compiler cannot read costs the optimisation, not the build.
 fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Option<&Path>, no_inline: bool, job: &Arc<Mutex<Job>>) -> Result<(), String> {
-    let mut cc = nxport_build::zig::windows_cc(toolchains, &|_, _| {})?;
+    let mut cc = nxport_builderlib::zig::windows_cc(toolchains, &|_, _| {})?;
     if no_inline {
         cc.push("-DNX_NO_INLINE".into());
     }
@@ -399,10 +399,10 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Optio
     let on_file = |done, total| progress(job, "C files".into(), done, total);
     // zig's objects in a cache of the builder's own, kept within a bound (zig's default one grows forever).
     let cache_dir = crate::app::data_dir().join("zig-cache");
-    let cache = match nxport_build::zig::bounded_cache(&cache_dir, nxport_build::zig::CACHE_CAP) {
+    let cache = match nxport_builderlib::zig::bounded_cache(&cache_dir, nxport_builderlib::zig::CACHE_CAP) {
         Ok(emptied) => {
             if emptied {
-                println!("  The compiler's cache was over {} GB and is emptied: everything is compiled once", nxport_build::zig::CACHE_CAP >> 30);
+                println!("  The compiler's cache was over {} GB and is emptied: everything is compiled once", nxport_builderlib::zig::CACHE_CAP >> 30);
             }
             Some(cache_dir)
         }
@@ -412,14 +412,14 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Optio
         }
     };
     // Also copies modules.txt beside the library.
-    if let Err(e) = nxport_build::lift::compile(c_dir, library, &cc, jobs, profile, cache.as_deref(), &on_file) {
+    if let Err(e) = nxport_builderlib::lift::compile(c_dir, library, &cc, jobs, profile, cache.as_deref(), &on_file) {
         if profile.is_none() {
             return Err(e.to_string());
         }
         println!("  The profile did not work, building without it: {e}");
         // A failed compile records no flags, and what it did compile would be taken as it is.
         let _ = std::fs::remove_dir_all(c_dir.join("obj"));
-        nxport_build::lift::compile(c_dir, library, &cc, jobs, None, cache.as_deref(), &on_file).map_err(|e| e.to_string())?;
+        nxport_builderlib::lift::compile(c_dir, library, &cc, jobs, None, cache.as_deref(), &on_file).map_err(|e| e.to_string())?;
     }
     // The linker's import library (the engine loads the library at run time; the .pdb stays, for crashes).
     let dir = library.parent().unwrap_or(Path::new("."));
@@ -451,16 +451,16 @@ fn has_code_mods(mods: Option<&Path>, title: u64) -> bool {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum WorkKind {
-    /// The game's code lifted to C files in `into`, with `mods` and `edits` (nxport_build::lift::lift_game).
+    /// The game's code lifted to C files in `into`, with `mods` and `edits` (nxport_builderlib::lift::lift_game).
     Lift,
-    /// The code the lift holds, as the file `into`, for overlays (nxport_build::lift::write_base_code).
+    /// The code the lift holds, as the file `into`, for overlays (nxport_builderlib::lift::write_base_code).
     BaseCode,
-    /// What `mods` change against `base`, lifted to C files in `into` (nxport_build::lift::lift_overlay).
+    /// What `mods` change against `base`, lifted to C files in `into` (nxport_builderlib::lift::lift_overlay).
     Overlay,
-    /// The iOS app, in the folder `into` (nxport_build::ipa).
+    /// The iOS app, in the folder `into` (nxport_builderlib::ipa).
     Ipa,
     /// The Vulkan shader cache in `into` from the shader stages in `stages` and the pipelines `pipeline_list` names
-    /// (nxport_build::vulkan_precompile).
+    /// (nxport_builderlib::vulkan_precompile).
     Shaders,
 }
 
@@ -474,20 +474,20 @@ pub struct Work {
     mods: Option<PathBuf>,
     stages: Option<PathBuf>,
     pipeline_list: Option<PathBuf>,
-    /// Lift: the image a first lift's run with plugin mods dumped (their patches; nxport_build::lift::lift_game).
+    /// Lift: the image a first lift's run with plugin mods dumped (their patches; nxport_builderlib::lift::lift_game).
     #[serde(default)]
     patched_image: Option<PathBuf>,
     /// Overlay: the guest library of the game without mods.
     #[serde(default)]
     base: Option<PathBuf>,
-    /// Ipa: as nxport_build::ipa::Options.
+    /// Ipa: as nxport_builderlib::ipa::Options.
     #[serde(default)]
     bundle_game: bool,
     #[serde(default)]
     entitlements: bool,
     #[serde(default)]
     bundle_id: Option<String>,
-    /// Ipa: the shader cache to put in the app (nxport_build::ipa::Options::cache).
+    /// Ipa: the shader cache to put in the app (nxport_builderlib::ipa::Options::cache).
     #[serde(default)]
     cache: Option<PathBuf>,
     /// The settings above the game's profile (last: a table).
@@ -524,7 +524,7 @@ fn run_worker(job: &Arc<Mutex<Job>>, file: &Path, w: &Work) -> Result<(), String
     let text = toml::to_string(w).map_err(|e| e.to_string())?;
     std::fs::write(file, text).map_err(|e| format!("{}: {e}", file.display()))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut child = nxport_build::lift::command(exe)
+    let mut child = nxport_builderlib::lift::command(exe)
         .arg("--worker")
         .arg(file)
         .stdout(Stdio::piped())
@@ -575,30 +575,30 @@ pub fn worker(file: &Path) -> Result<(), String> {
     let w: Work = toml::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
     match w.kind {
         WorkKind::Lift => {
-            let s = nxport_build::lift::game_settings(&w.dump, w.edits, w.mods.as_deref());
-            let lifted = nxport_build::lift::lift_game(s, w.patched_image.as_deref(), &w.into, &|i, n, name| {
+            let s = nxport_builderlib::lift::game_settings(&w.dump, w.edits, w.mods.as_deref());
+            let lifted = nxport_builderlib::lift::lift_game(s, w.patched_image.as_deref(), &w.into, &|i, n, name| {
                 report(i as f32 / n.max(1) as f32, i, n, &format!("Lifting {name}"))
             })
             .map_err(|e| e.to_string())?;
             for (name, r) in &lifted {
-                nxport_build::lift::report(name, r);
+                nxport_builderlib::lift::report(name, r);
             }
         }
         WorkKind::BaseCode => {
-            let s = nxport_build::lift::game_settings(&w.dump, w.edits, None);
-            nxport_build::lift::write_base_code(s, &w.into).map_err(|e| e.to_string())?;
+            let s = nxport_builderlib::lift::game_settings(&w.dump, w.edits, None);
+            nxport_builderlib::lift::write_base_code(s, &w.into).map_err(|e| e.to_string())?;
         }
         WorkKind::Overlay => {
-            let s = nxport_build::lift::game_settings(&w.dump, w.edits, w.mods.as_deref());
+            let s = nxport_builderlib::lift::game_settings(&w.dump, w.edits, w.mods.as_deref());
             let base = w.base.ok_or("no base library")?;
-            let lifted = nxport_build::lift::lift_overlay(s, w.patched_image.as_deref(), &base, &w.into).map_err(|e| e.to_string())?;
+            let lifted = nxport_builderlib::lift::lift_overlay(s, w.patched_image.as_deref(), &base, &w.into).map_err(|e| e.to_string())?;
             for (name, r) in &lifted {
-                nxport_build::lift::report(name, r);
+                nxport_builderlib::lift::report(name, r);
             }
         }
         WorkKind::Ipa => {
-            let ipa = nxport_build::ipa::build(
-                &nxport_build::ipa::Options {
+            let ipa = nxport_builderlib::ipa::build(
+                &nxport_builderlib::ipa::Options {
                     dump: &w.dump,
                     mods: w.mods.as_deref(),
                     cache: w.cache.as_deref(),
@@ -617,7 +617,7 @@ pub fn worker(file: &Path) -> Result<(), String> {
             println!("  {}", ipa.display());
         }
         WorkKind::Shaders => {
-            use nxport_build::vulkan_precompile::{self as vp, VulkanPrecompilePhase as Phase};
+            use nxport_builderlib::vulkan_precompile::{self as vp, VulkanPrecompilePhase as Phase};
             std::fs::create_dir_all(&w.into).map_err(|e| format!("{}: {e}", w.into.display()))?;
             nxport::vulkan::stage_cache::set_cache_dir(w.into.clone());
             let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());

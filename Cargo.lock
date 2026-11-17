@@ -772,7 +772,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "nxport-build"
+name = "nxport-builder"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dear-imgui-rs",
+ "libc",
+ "nxport",
+ "nxport-builderlib",
+ "nxport-pipelines",
+ "sdl3",
+ "serde",
+ "serde_json",
+ "struct-patch",
+ "toml",
+]
+
+[[package]]
+name = "nxport-builderlib"
 version = "0.1.0"
 dependencies = [
  "ash",
@@ -790,23 +807,6 @@ dependencies = [
  "sha2",
  "zip",
  "zstd",
-]
-
-[[package]]
-name = "nxport-builder"
-version = "0.1.0"
-dependencies = [
- "clap",
- "dear-imgui-rs",
- "libc",
- "nxport",
- "nxport-build",
- "nxport-pipelines",
- "sdl3",
- "serde",
- "serde_json",
- "struct-patch",
- "toml",
 ]
 
 [[package]]

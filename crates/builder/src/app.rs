@@ -51,7 +51,7 @@ struct TargetMemory {
     mods: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bundle_id: Option<String>,
-    /// iOS: the GPU the pipeline list is precompiled for (nxport_build::pipeline_archive::IOS_GPUS).
+    /// iOS: the GPU the pipeline list is precompiled for (nxport_builderlib::pipeline_archive::IOS_GPUS).
     #[serde(skip_serializing_if = "Option::is_none")]
     gpu: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -186,7 +186,7 @@ impl Target {
 
     pub fn offered(self) -> bool {
         // Off Windows the Windows app needs the Windows engine a release puts beside the builder.
-        Self::ALL.contains(&self) && (self != Target::WindowsApp || cfg!(windows) || nxport_build::winapp::engine().is_ok())
+        Self::ALL.contains(&self) && (self != Target::WindowsApp || cfg!(windows) || nxport_builderlib::winapp::engine().is_ok())
     }
 
     /// Whether the app's shaders can be translated when it is built (Windows: windows::PRECOMPILES_SHADERS).
@@ -677,7 +677,7 @@ impl Builder {
             #[cfg(target_os = "macos")]
             if self.prebuild_shaders {
                 next(ui);
-                let gpus = nxport_build::pipeline_archive::IOS_GPUS;
+                let gpus = nxport_builderlib::pipeline_archive::IOS_GPUS;
                 let current = gpus.iter().find(|g| g.1 == self.ios_gpu).map_or("no pipeline archive", |g| g.0);
                 ui.set_next_item_width(260.0);
                 if let Some(_c) = ui.begin_combo("Pipeline archive GPU", current) {
@@ -697,7 +697,7 @@ impl Builder {
             ui.set_next_item_width(-1.0);
             ui.input_text("##bundle_id", &mut self.bundle_id).hint(default_id).build();
         }
-        // The settings lifting reads (nxport_build::lift::game_settings): they decide which code is in the app.
+        // The settings lifting reads (nxport_builderlib::lift::game_settings): they decide which code is in the app.
         if lifted {
             label(ui, "Lifted code", "How the game's modules are loaded and patched before they are lifted to C.");
             let mut patches = !self.settings.files.no_exefs_patches;
@@ -1067,10 +1067,10 @@ pub fn extract_stages_step(job: &Arc<Mutex<Job>>, dump: &Path, stages: &Path) ->
         "Extracting shader stages".into(),
         Box::new(move || {
             let romfs = dump.join("RomFS");
-            let dirs = nxport_build::extract_shaders::default_dirs(&romfs);
+            let dirs = nxport_builderlib::extract_shaders::default_dirs(&romfs);
             let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
             let job_cb = job.clone();
-            let cb = move |sub: nxport_build::extract_shaders::ShaderExtractPhase, done: usize, total: usize| {
+            let cb = move |sub: nxport_builderlib::extract_shaders::ShaderExtractPhase, done: usize, total: usize| {
                 let mut j = job_cb.lock().unwrap();
                 j.sub_step = Some(sub.to_string());
                 j.sub_done = done;
@@ -1080,7 +1080,7 @@ pub fn extract_stages_step(job: &Arc<Mutex<Job>>, dump: &Path, stages: &Path) ->
                     j.sub_frac = j.sub_frac.max(f);
                 }
             };
-            nxport_build::extract_shaders::extract_all(&romfs, &stages, &dirs, None, Some(&cb)).map_err(|e| e.to_string())
+            nxport_builderlib::extract_shaders::extract_all(&romfs, &stages, &dirs, None, Some(&cb)).map_err(|e| e.to_string())
         }),
     )
 }
@@ -1096,7 +1096,7 @@ pub fn pipeline_list(title_id: u64, cache: &Path, filter_stages: bool) -> Result
     let _ = std::fs::create_dir_all(&game);
     let tmp = shared.with_extension("download");
     let url = format!("{SHARED_PIPELINES_URL}/{title_id:016x}.txt");
-    let ok = nxport_build::lift::command("curl")
+    let ok = nxport_builderlib::lift::command("curl")
         .args(["-fsSL", "--max-time", "60", "-o"])
         .arg(&tmp)
         .arg(&url)
@@ -1350,7 +1350,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     match snapshot {
         Some(png) => {
             let (w, h, bgra) = window::snapshot(900.0, height, 2.0, 3, Box::new(move |ui| b.frame(ui)))?;
-            nxport_build::ppm2png::write_bgra_to_png(w, h, &bgra, &png)?;
+            nxport_builderlib::ppm2png::write_bgra_to_png(w, h, &bgra, &png)?;
         }
         None => {
             crate::log::capture_output();

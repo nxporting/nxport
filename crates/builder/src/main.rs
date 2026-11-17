@@ -30,7 +30,7 @@ fn main() -> std::process::ExitCode {
             unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), wide("nxport").as_ptr(), 0x10) };
             return std::process::ExitCode::FAILURE;
         }
-        // A Windows app's nxport.exe is this program (nxport_build::winapp::pack), so the engine an app runs is always
+        // A Windows app's nxport.exe is this program (nxport_builderlib::winapp::pack), so the engine an app runs is always
         // the one that lifted its code: it runs the game by that name, or beside the app's files.
         let exe = std::env::current_exe().unwrap_or_default();
         let app = exe.with_file_name("settings.toml").is_file() && exe.with_file_name("guest.dll").is_file();
