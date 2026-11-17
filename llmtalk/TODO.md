@@ -179,9 +179,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   support buffer's render_scale[73] (0 = the render target, 1..64 textures, 65..72 images); Metal writes 1.0 everywhere
   (gpu/metal/translated/encode.rs:904). Ryujinx's selection (TextureCache.IsUpscaleCompatible / UpscaleSafeMode) guesses
   from dimensions (levels > 3, square, < 8 px, ~16:9 under 360 lines): not ours. Proposal, one shared module gpu::scale:
-  1. Eligible: 2D / 2D array / MSAA render targets, uncompressed, created with the main view's size (the window /
-     swapchain size the game presents, learned from the presented texture) or an exact power-of-two division of it
-     (the game's own downsample chains); depth and colour alike. Everything else 1x. No other size guesses.
+  1. Eligible: 2D / 2D array / MSAA render targets, uncompressed, of size floor(W/k) x floor(H/k) for an integer k,
+     where W x H is the game's render size, read from the game through its profile (BotW: its render-buffer size site,
+     1600x900 docked / 1280x720 handheld, switching with the mode; TotK: the dynamic resolution, per frame). A game
+     without such a profile site does not scale. Not the presented size: win-worker's BotW 1.9.0 frame 7030 has the
+     scene at 1600x900 (x31 passes), chains /2../16 and /10, /20, /40 (160x90, 80x45, 40x22, floored), and 1920x1080 only
+     for the final upscale + HUD; UI strips (165x1080, 696x42) correctly stay 1x. Everything else 1x.
   2. Demoted to 1x for good (Ryujinx BlacklistScale): any CPU access to its memory (rt_guard hold / write-back, texel
      reads / writes, CPU-filled uploads), a copy to or from a 1x texture of a different size class, storage-image use,
      compressed proxies (bc_proxy), linear layout. A demotion re-creates the texture at 1x from the scaled one.
