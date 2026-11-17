@@ -5,7 +5,17 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- BotW 1.9.0 ultrawide (Savage Wind parity), win-worker via a worktree subagent, 2026-11-16.
+- BotW 1.9.0 ultrawide (Savage Wind parity), win-worker via a worktree subagent, 2026-11-16. **First part done
+  (profile/botw/aspect.rs, hud.rs):** every 16:9 sead perspective / frustum projection takes the screen's shape in
+  Projection::updateMatrixImpl (main+0xeb4474), written into the projection so shadows and unprojection see it; Vert+
+  narrower than 16:9. The HUD's 40-degree layers are 16:9 perspectives too, so the HUD stays 16:9 in the middle.
+  Full-screen panes (PauseMenuBG_00, SeekPadMenuBG_00 roots; Fade_00's blacks and capture band; Title_00's blacks)
+  are scaled to fill, from the two Layout::Calculate sites (main+0xf625dc, +0x25c98). The minimap's scissor
+  (clipping pane draw, main+0xf67144) follows the layout. Seen headless at 21:9 and 16:9 (gameplay, inventory).
+  BotW reads TotK's dynamic_aspect_ratio setting and --launch-aspect; the menu item is shown for BotW but its change
+  is not kept (keep_own_options drops totk options for other games). Not yet looked at: the map, the start screen,
+  the loading screen at 21:9, event fades other than Fade_00, pre-rendered movies, 4:3 (Vert+) captures, a live
+  window resize; at 21:9 the inventory's description box shows a dark end right of it.
 
 
 ## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)
