@@ -29,8 +29,10 @@ pub struct Sites {
     /// The layout calculations, after their draw info took the layout: `str x21, [x19, #0xc0]` and the call of the root
     /// pane's calculation, as the version has it (layout_code_v1_9 / layout_code_v1_5).
     pub layout: [(usize, [u32; 8]); 2],
-    /// The clipping pane's draw: its `bl` of the scissor setter (SCISSOR_CODE before it), and the setter.
+    /// The clipping pane's draw: its call of the scissor setter (the three instructions before the `bl`, as the version
+    /// has them: SCISSOR_CODE's, or 1.0.0's with the rectangle at sp + 8), and the setter.
     pub scissor: (usize, usize),
+    pub scissor_code: [u32; 3],
 }
 
 // Layout fields: its root pane, its name.
@@ -206,8 +208,9 @@ pub const fn layout_code_v1_5(context: u32) -> [u32; 8] {
 fn layout_context(code: &[u32; 8]) -> Option<u32> {
     code.iter().copied().find(|&w| w == 0x9100_03e2 || w == 0x9100_23e2)
 }
-/// The clipping pane's call of the scissor setter: `ldr x1, [sp, #0x48]; mov x0, sp; mov x2, x23; bl <setter>`.
-const SCISSOR_CODE: [u32; 4] = [0xf940_27e1, 0x9100_03e0, 0xaa17_03e2, 0x9400_0000];
+/// The clipping pane's call of the scissor setter in 1.5.0 and 1.9.0: `ldr x1, [sp, #0x48]; mov x0, sp; mov x2, x23`
+/// before the `bl <setter>`.
+pub const SCISSOR_CODE: [u32; 3] = [0xf940_27e1, 0x9100_03e0, 0xaa17_03e2];
 
 /// Installs the layout hooks (`str x21, [x19, #0xc0]; mov x0, x19; bl <layout_calculate>`: x0 = the root pane, x1 =
 /// the draw info, then the rest as it was) and the clipping pane's (its `bl` to scissor_pane).
@@ -229,7 +232,7 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         }
     }
     let (at, setter) = s.scissor;
-    let mut expected = SCISSOR_CODE;
+    let mut expected = [s.scissor_code[0], s.scissor_code[1], s.scissor_code[2], 0x9400_0000];
     expected[3] |= ((setter as i64 - (at + 12) as i64) >> 2) as u32 & 0x03ff_ffff;
     let mut code = expected.to_vec();
     code[3] = 0x9400_0000;

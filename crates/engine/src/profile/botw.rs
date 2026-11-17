@@ -9,6 +9,9 @@ pub mod hud;
 pub static V1_0_0: VersionProfile = VersionProfile {
     version_string: "1.0.0",
     build_id_prefix: "2094f152836683a3632c6153fd84ab80",
+    #[cfg(nx_runtime)]
+    install_hooks: Some(install_v1_0_0_hooks),
+    #[cfg(not(nx_runtime))]
     install_hooks: None,
     heap_instance_offset: None,
     allocator_pool_offset: None,
@@ -107,7 +110,50 @@ pub static ASPECT_V1_9_0: aspect::Sites = aspect::Sites {
 pub static HUD_V1_9_0: hud::Sites = hud::Sites {
     layout: [(0xf625dc, hud::layout_code_v1_9(0x9100_03e2)), (0x25c98, hud::layout_code_v1_9(0x9100_23e2))],
     scissor: (0xf67138, 0xeb6a54),
+    scissor_code: hud::SCISSOR_CODE,
 };
+
+/// 1.0.0's projection sites (aspect.rs). No names for this version: the vtables are the ones whose getters are 1.5.0's
+/// code (main+0xa22d74 / main+0xa232d0 their matrix functions), and the dirty-flag checks are inlined into the same three
+/// matrix readers as in 1.5.0, reading the flag with the byte after it (`ldrh w8, [xN, #8]; and w9, w8, #0xff;
+/// cbz w9`; the clean path tests w8's second byte, so the call is followed by the same `ldrh`).
+pub static ASPECT_V1_0_0: aspect::Sites = aspect::Sites {
+    updates: &[
+        aspect::Update {
+            at: 0xa2264c,
+            expected: &[0xaa00_03f3, 0x7940_1268, 0x1200_1d09, 0x3400_0149],
+            code: &[0xaa00_03f3, 0x9400_0000, 0x7940_1268, 0x3400_0140],
+            call: 1,
+        },
+        aspect::Update {
+            at: 0xa226d4,
+            expected: &[0xaa00_03f3, 0x7940_1268, 0x1200_1d09, 0x3400_0149],
+            code: &[0xaa00_03f3, 0x9400_0000, 0x7940_1268, 0x3400_0140],
+            call: 1,
+        },
+        aspect::Update {
+            at: 0xa22764,
+            expected: &[0xaa00_03f6, 0x7940_12c8, 0xaa02_03f5, 0xaa01_03f3, 0x1200_1d09, 0x3400_0149],
+            code: &[0xaa00_03f6, 0xaa02_03f5, 0xaa01_03f3, 0x9400_0000, 0x7940_12c8, 0x3400_0140],
+            call: 3,
+        },
+    ],
+    perspective: (0x21b75e0, 0xa22d74),
+    frustum: (0x21b76e0, 0xa232d0),
+};
+
+/// 1.0.0's layout calculations (in 1.5.0's order) and the clipping pane's scissor call (its rectangle at sp + 8).
+pub static HUD_V1_0_0: hud::Sites = hud::Sites {
+    layout: [(0x9baa44, hud::layout_code_v1_5(0x9100_23e2)), (0xae2d6c, hud::layout_code_v1_5(0x9100_03e2))],
+    scissor: (0xae6884, 0xa25438),
+    scissor_code: [0xf940_27e1, 0x9100_23e0, 0xaa17_03e2],
+};
+
+#[cfg(nx_runtime)]
+unsafe fn install_v1_0_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    aspect::install(base, mem_space, &ASPECT_V1_0_0);
+    hud::install(base, mem_space, &HUD_V1_0_0);
+}
 
 /// 1.5.0's projection sites (aspect.rs; names from the decomp of this version): the dirty-flag checks inlined into
 /// sead::Projection's matrix readers, PerspectiveProjection::doUpdateMatrix main+0xb1dfa0, FrustumProjection's
@@ -135,6 +181,7 @@ pub static ASPECT_V1_5_0: aspect::Sites = aspect::Sites {
 pub static HUD_V1_5_0: hud::Sites = hud::Sites {
     layout: [(0xab7738, hud::layout_code_v1_5(0x9100_23e2)), (0xbde5e8, hud::layout_code_v1_5(0x9100_03e2))],
     scissor: (0xbe2080, 0xb20510),
+    scissor_code: hud::SCISSOR_CODE,
 };
 
 #[cfg(nx_runtime)]
