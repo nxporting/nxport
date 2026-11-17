@@ -829,7 +829,7 @@ pub(crate) unsafe fn record_generic(
         typed: None,
         args: Some(Box::new([a1, a2, a3, a4, a5])),
     });
-    (*cmd).command_used += 32; // rough per-command footprint, just needs to trend upward plausibly
+    (*cmd).command_used += command_cost(name);
 }
 
 /// --log-drawables: counts the command against the drawable being drawn on this thread (gfx_cmd).
@@ -886,8 +886,8 @@ pub(crate) unsafe fn commit_buffered(b: Buffered) {
         if cmd.is_null() || (*cmd).ops == 0 {
             continue;
         }
+        (*cmd).command_used += command_cost(op.name);
         (*((*cmd).ops as *mut Vec<RecordedNvnCommand>)).push(op);
-        (*cmd).command_used += 32;
     }
 }
 
@@ -1089,7 +1089,13 @@ pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::
         typed: Some(typed),
         args: None,
     });
-    (*cmd).command_used += 32;
+    (*cmd).command_used += command_cost(name);
+}
+
+/// The command memory a recorded command takes (GetCommandMemoryUsed). Games size buffers by it and record into them
+/// later, so a command must always cost the same. 32 is a guess, far above the driver's sizes for binds.
+fn command_cost(_name: &str) -> usize {
+    32
 }
 
 // Commands with a float argument: it comes in s0, not in the x registers the generic recorders read.
