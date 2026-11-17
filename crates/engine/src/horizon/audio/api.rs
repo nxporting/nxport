@@ -1,5 +1,6 @@
 // nn::audio as the game calls it: opening and running audio renderers, and the output device.
 
+use crate::horizon::call_log::*;
 use crate::horizon::hle::*;
 
 pub(crate) fn align_up(v: usize, a: usize) -> usize {

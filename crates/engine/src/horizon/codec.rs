@@ -1,5 +1,6 @@
 // nn::codec as the game calls it: the hardware Opus decoder.
 
+use crate::horizon::call_log::*;
 use super::hle::*;
 
 pub(crate) unsafe extern "C" fn get_hardware_opus_decoder_work_buffer_size(

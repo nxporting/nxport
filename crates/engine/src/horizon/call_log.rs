@@ -1,0 +1,292 @@
+// The HLE call log: the last calls of every thread (record_hle_call, kept for crash and hang reports), threads blocked
+// in HLE waits, and reports of long waits with their guest call chains.
+
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex as StdMutex, OnceLock};
+
+// Global, always-on HLE call-history ring buffer. Every NVN HLE function
+// (both the real implementations and the labeled-stub pool) reports here on
+// every call, not just on resolution. Answers "what HLE functions were
+// called, in order, before this crash?" directly from the crash dump instead
+// of requiring a fresh live-tracing session each time -- the silent-stub gap
+// and the "we don't have call-time visibility" gap were really the same
+// problem, just found from two different angles this session.
+pub(crate) const HLE_CALL_HISTORY_SIZE: usize = 4096;
+
+// Each thread records into a ring of its own, with plain stores: one ring for all threads had its lock contended by
+// every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime), and a lock per
+// thread (and a shared sequence counter) still cost 4-5% of the busy time of guest-main and the module workers.
+// Readers merge the rings by sequence number (on x86-64 the time stamp counter, synchronized across cores) and skip a
+// slot written while they read it. Names are 'static (literals,
+// and the rare formatted name interned once), so a slot is a sequence number and a str's pointer and length.
+pub(crate) const HLE_CALL_RING_SIZE: usize = 1024;
+
+pub(crate) struct HleCallSlot {
+    seq: AtomicU64, // 0: empty or being written
+    ptr: AtomicUsize,
+    len: AtomicUsize,
+}
+
+pub(crate) struct HleCallRing {
+    next: AtomicUsize,
+    slots: [HleCallSlot; HLE_CALL_RING_SIZE],
+}
+
+pub(crate) static HLE_CALL_RINGS: StdMutex<Vec<&'static HleCallRing>> = StdMutex::new(Vec::new());
+
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) static HLE_CALL_SEQ: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    // Rings outlive their threads (HLE calls from TLS destructors still record), so the slot needs no destructor.
+    static HLE_CALL_RING: std::cell::Cell<Option<&'static HleCallRing>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn intern_hle_call_name(name: String) -> &'static str {
+    static NAMES: StdMutex<Option<std::collections::HashSet<&'static str>>> = StdMutex::new(None);
+    let mut names = NAMES.lock().unwrap();
+    let names = names.get_or_insert_with(Default::default);
+    match names.get(name.as_str()) {
+        Some(&n) => n,
+        None => {
+            let n: &'static str = Box::leak(name.into_boxed_str());
+            names.insert(n);
+            n
+        }
+    }
+}
+
+pub(crate) fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
+    let name: &'static str = match name.into() {
+        std::borrow::Cow::Borrowed(n) => n,
+        std::borrow::Cow::Owned(n) => intern_hle_call_name(n),
+    };
+    let ring = HLE_CALL_RING.with(|r| {
+        r.get().unwrap_or_else(|| {
+            let ring: &'static HleCallRing = Box::leak(Box::new(HleCallRing {
+                next: AtomicUsize::new(0),
+                slots: std::array::from_fn(|_| HleCallSlot {
+                    seq: AtomicU64::new(0),
+                    ptr: AtomicUsize::new(0),
+                    len: AtomicUsize::new(0),
+                }),
+            }));
+            HLE_CALL_RINGS.lock().unwrap().push(ring);
+            r.set(Some(ring));
+            ring
+        })
+    });
+    #[cfg(target_arch = "x86_64")]
+    let seq = unsafe { core::arch::x86_64::_rdtsc() };
+    #[cfg(not(target_arch = "x86_64"))]
+    let seq = HLE_CALL_SEQ.fetch_add(1, Ordering::Relaxed);
+    let i = ring.next.load(Ordering::Relaxed);
+    ring.next.store((i + 1) % HLE_CALL_RING_SIZE, Ordering::Relaxed);
+    let slot = &ring.slots[i];
+    slot.seq.store(0, Ordering::Relaxed);
+    std::sync::atomic::fence(Ordering::Release);
+    slot.ptr.store(name.as_ptr() as usize, Ordering::Relaxed);
+    slot.len.store(name.len(), Ordering::Relaxed);
+    slot.seq.store(seq, Ordering::Release);
+}
+
+/// The last HLE_CALL_HISTORY_SIZE recorded calls of all threads, oldest first.
+pub(crate) fn hle_call_history() -> Vec<(u64, std::borrow::Cow<'static, str>)> {
+    let mut all = Vec::new();
+    for ring in HLE_CALL_RINGS.lock().unwrap().iter() {
+        for slot in &ring.slots {
+            let seq = slot.seq.load(Ordering::Acquire);
+            let (ptr, len) = (slot.ptr.load(Ordering::Relaxed), slot.len.load(Ordering::Relaxed));
+            std::sync::atomic::fence(Ordering::Acquire);
+            if seq != 0 && slot.seq.load(Ordering::Relaxed) == seq {
+                // The pointer and length of a 'static str, stored together under `seq`.
+                let name: &'static str =
+                    unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr as *const u8, len)) };
+                all.push((seq, std::borrow::Cow::Borrowed(name)));
+            }
+        }
+    }
+    all.sort_unstable_by_key(|e| e.0);
+    all.drain(..all.len().saturating_sub(HLE_CALL_HISTORY_SIZE));
+    all
+}
+
+// Wait graph: which guest thread is currently blocked on which sync object, and from where. Dumped by
+// summarize_hle_call_history() to tell a deadlocked worker apart from an idle one.
+pub(crate) type BlockedEntry = (&'static str, usize, [usize; 4], std::time::Instant, std::thread::Thread);
+
+pub(crate) static BLOCKED: OnceLock<StdMutex<rustc_hash::FxHashMap<u64, BlockedEntry>>> = OnceLock::new();
+
+pub(crate) fn blocked_table() -> &'static StdMutex<rustc_hash::FxHashMap<u64, BlockedEntry>> {
+    BLOCKED.get_or_init(|| StdMutex::new(rustc_hash::FxHashMap::default()))
+}
+
+/// The guest frame pointer of the function that called an HLE function, from `fp` = x29 as the HLE function sees it:
+/// natively its own frame record, which saved the guest's; lifted, the guest's x29 itself (HLE functions are host
+/// calls that leave the guest registers as they were).
+pub(crate) unsafe fn first_guest_fp(fp: usize) -> usize {
+    if cfg!(nx_native) {
+        *(fp as *const usize)
+    } else {
+        fp
+    }
+}
+
+pub(crate) struct BlockGuard(u64);
+
+impl BlockGuard {
+    /// `fp` is x29 inside the HLE function (see report_long_wait); records the guest return-address chain.
+    pub unsafe fn new(kind: &'static str, obj: usize, fp: usize) -> Self {
+        let mut chain = [0usize; 4];
+        let mut gfp = first_guest_fp(fp);
+        for slot in chain.iter_mut() {
+            if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
+                break;
+            }
+            *slot = *((gfp + 8) as *const usize);
+            gfp = *(gfp as *const usize);
+        }
+        let key = crate::platform::os::current_thread_id();
+        blocked_table()
+            .lock()
+            .unwrap()
+            .insert(key, (kind, obj, chain, std::time::Instant::now(), std::thread::current()));
+        BlockGuard(key)
+    }
+}
+
+impl Drop for BlockGuard {
+    fn drop(&mut self) {
+        blocked_table().lock().unwrap().remove(&self.0);
+    }
+}
+
+pub(crate) fn dump_blocked_threads() {
+    let base = crate::guest::loader::main_base();
+    let fmt = |a: usize| {
+        if a == 0 {
+            String::new()
+        } else if base != 0 && a >= base && a < base + 0x5000000 {
+            format!("guest+{:#x}", a - base)
+        } else {
+            format!("{:#x}", a)
+        }
+    };
+    let table = blocked_table().lock().unwrap();
+    let mut rows: Vec<_> = table.values().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.3.elapsed()));
+    println!(
+        "[wait-graph] {} threads currently blocked in HLE waits:",
+        rows.len()
+    );
+    for (kind, obj, chain, since, thread) in rows {
+        let c: Vec<String> = chain
+            .iter()
+            .map(|a| fmt(*a))
+            .filter(|s| !s.is_empty())
+            .collect();
+        println!(
+            "[wait-graph]   {:>6.1}s {:<28} {} on {:#x} <- {}",
+            since.elapsed().as_secs_f32(),
+            thread.name().unwrap_or("?"),
+            kind,
+            obj,
+            c.join(" <- ")
+        );
+    }
+}
+
+pub(crate) fn summarize_hle_call_history() {
+    dump_blocked_threads();
+    let hist = hle_call_history();
+    // Command recording and texture/buffer plumbing outnumber everything else; the wait condition is among the rest.
+    let interesting = |n: &str| {
+        !(n.starts_with("nvnCommandBuffer")
+            || n.starts_with("hle_nvnTexture")
+            || n.starts_with("hle_nvnBuffer")
+            || n.starts_with("hle_nvnMemoryPool"))
+    };
+    let mut counts: rustc_hash::FxHashMap<&str, usize> = rustc_hash::FxHashMap::default();
+    for (_, name) in hist.iter().filter(|(_, n)| interesting(n)) {
+        *counts.entry(name.as_ref()).or_insert(0) += 1;
+    }
+    let mut v: Vec<_> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    println!("[hle-history] last {} HLE calls, by count:", hist.len());
+    for (name, n) in v.iter().take(40) {
+        println!("[hle-history]   {:5} x {}", n, name);
+    }
+    println!("[hle-history] most recent 80 calls, oldest first:");
+    let recent: Vec<_> = hist.iter().filter(|(_, n)| interesting(n)).collect();
+    for (seq, name) in recent.iter().skip(recent.len().saturating_sub(80)) {
+        println!("[hle-history]   #{} {}", seq, name);
+    }
+}
+
+pub(crate) fn dump_hle_call_history() {
+    let hist = hle_call_history();
+    eprintln!(
+        "    HLE Call History (last {} calls, oldest first):",
+        hist.len()
+    );
+    for (seq, name) in hist.iter() {
+        eprintln!("      #{}: {}", seq, name);
+    }
+}
+
+/// Debug aid: report (once per wait) a blocking nn::os wait that has not completed after 5s,
+/// with the guest call site, so whole-process stalls can be attributed to a specific wait.
+pub(crate) fn guest_chain(fp: usize) -> String {
+    let base = crate::guest::loader::main_base();
+    let fmt = |a: usize| {
+        if base != 0 && a >= base && a < base + 0x5000000 {
+            format!("guest+{:#x}", a - base)
+        } else {
+            format!("{:#x}", a)
+        }
+    };
+    let mut chain = Vec::new();
+    unsafe {
+        let mut gfp = first_guest_fp(fp);
+        for _ in 0..6 {
+            if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
+                break;
+            }
+            chain.push(fmt(*((gfp + 8) as *const usize)));
+            gfp = *(gfp as *const usize);
+        }
+    }
+    chain.join(" <- ")
+}
+
+pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Duration) {
+    // `fp` is x29 inside the HLE function: its frame record's saved x29 is the guest's FP (the
+    // trampoline doesn't change it), so [guest_fp + 8] is the return address of the guest function
+    // that called the wait, followed up the guest FP chain.
+    let base = crate::guest::loader::main_base();
+    let fmt = |a: usize| {
+        if base != 0 && a >= base && a < base + 0x5000000 {
+            format!("guest+{:#x}", a - base)
+        } else {
+            format!("{:#x}", a)
+        }
+    };
+    let mut chain = Vec::new();
+    unsafe {
+        let mut gfp = first_guest_fp(fp);
+        for _ in 0..6 {
+            if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
+                break;
+            }
+            chain.push(fmt(*((gfp + 8) as *const usize)));
+            gfp = *(gfp as *const usize);
+        }
+    }
+    eprintln!(
+        "[STALL] {} on {:#x} blocked {}s (guest callers: {})",
+        what,
+        obj,
+        waited.as_secs(),
+        chain.join(" <- ")
+    );
+}

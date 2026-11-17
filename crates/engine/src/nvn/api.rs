@@ -2,7 +2,8 @@
 // crate::nvn::cmd lists), queues and windows. Submits and presents go to the GPU backend (crate::metal).
 #![allow(non_snake_case)]
 
-use crate::horizon::hle::{guest_chain, hle_sleep_ns, log_timestamps, record_hle_call};
+use crate::horizon::hle::{hle_sleep_ns, log_timestamps};
+use crate::horizon::call_log::{guest_chain, record_hle_call};
 use crate::horizon::os::memory::release_address_region;
 use std::ffi::CStr;
 use std::os::raw::c_char;
