@@ -165,6 +165,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   (--log-tex-init), but BotW also draws several linear targets in turns, so it held ~200 targets per 300 frames in steady
   play: 72 fps, worse than the fence off. An exact rule that keeps the overlap would need to know which reads the game
   latches; Savage Wind's (wait for the first 30 reads after a loading screen) is tuned. Open: a cheaper exact rule.
+  Measured 2026-11-16 (probe, not committed): BotW makes one submit per frame, and every frame writes back 7-9 linear
+  targets (512x512 at op ~100, 1x1 / 3x3 / 8x8 lighting and exposure up to op ~18,800 of ~20,200). So waiting only for
+  the linear write-backs is the whole frame; splitting the submit after the last linear pass would save at most the
+  last ~7% of the frame's commands. Fence on, 120 limit: 80 fps, record 5.5 ms, GPU wait 3.4 ms, GPU 6.7 ms per frame.
+  Not pursued.
 - **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15). STATUS (later 2026-11-15): flicker fixed and water fixed (8a35540, one bug: nvnTextureFinalize lost the generation recorded commands named); early fence back on (bf93f40). Waiting on the user's playtest for the rest (boxes pinned or floating, Link floating far from water, white water, NPC IK): likely the same water bug, unconfirmed. History below.** Seen: boxes pinned to walls and floating, Link
   floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
   render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
