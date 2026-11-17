@@ -313,7 +313,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   <- 0x10b14f4 <- 0x1054660 <- 0x105de04 (actor creation) <- 0x117d88c. Lead: sead allocates through each thread's
   current heap; the second setup may belong to a later phase (another current heap) on the console and land inside
   creation here because of thread timing. Next: who sets the current heap around main+0x10b14f4, and whether
-  main+0x1054660 runs the setup synchronously only when something (a resource) is already loaded. Built from the user's base NSP
+  main+0x1054660 runs the setup synchronously only when something (a resource) is already loaded.
+  Read (2026-11-16): the call at main+0x105465c (bl 0x10b13d8, the path to the second setup) runs when the actor has
+  the component at +0x568 and creation flags (w21 & 0x70) are set: part of this actor's normal creation, not timing.
+  So more likely one allocation is larger here than on the console (a size from a value nxport answers: buffer or
+  texture size queries, memory requirements). Next, when picked up again: log each allocation's caller chain into this
+  heap and look for sizes computed from HLE answers (nvn*GetSize / GetRequiredAlignment, nn::mem). Paused (beyond
+  Savage Wind's scope). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
