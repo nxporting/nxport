@@ -1,6 +1,6 @@
 // The host platform where guest code is lifted (Windows, docs/windows-port.md): SDL3 gives it a window, the keyboard,
 // game controllers and rumble (host/display_sdl.rs, host/rumble_sdl.rs); input goes through the bindings the native
-// hosts use (host/input.rs). Audio is the native hosts' module, whose output device is SDL3's here. --headless runs
+// hosts use (host/input/). Audio is the native hosts' module, whose output device is SDL3's here. --headless runs
 // without the window, as natively. The functions the runtime calls, with the native host modules' signatures.
 
 #[path = "audio.rs"]
@@ -9,7 +9,7 @@ pub mod audio;
 #[path = "display_sdl.rs"]
 pub mod display;
 
-#[path = "input.rs"]
+#[path = "input/mod.rs"]
 pub mod input;
 
 #[path = "rumble_sdl.rs"]
