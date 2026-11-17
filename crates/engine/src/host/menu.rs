@@ -114,6 +114,8 @@ pub fn bar() -> Vec<Entry> {
             item("Exact Mouse Aim (Experimental)", id::EXACT_MOUSE_AIM),
             Separator,
         ]);
+    } else if crate::profile::active().kind == crate::profile::GameKind::BotW {
+        title.extend([item("Dynamic Aspect Ratio", id::DYNAMIC_ASPECT), Separator]);
     }
     let mods = mods();
     let mut listed: Vec<Entry> = mods.iter().map(|(name, code)| Entry::Note(mod_label(name, *code))).collect();

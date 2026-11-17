@@ -26,6 +26,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
+use crate::profile::readable;
+
 /// Where one version's code is (offsets in main). Each site is checked against the code it expects before any is
 /// written; the expected code is the same in both versions apart from pc-relative immediates.
 pub struct Sites {
@@ -114,18 +116,6 @@ pub fn set_aspect(aspect: f64) {
                 *((p + PROJ_DIRTY) as *mut u8) = 1;
             }
         }
-    }
-}
-
-fn readable(p: usize, len: usize) -> bool {
-    #[cfg(nx_native)]
-    return unsafe { crate::guest::exec::crash_handler::readable_len(p, len) } == len;
-    #[cfg(windows)]
-    return crate::platform::os::readable_len(p, len) == len;
-    #[cfg(not(any(nx_native, windows)))]
-    {
-        let _ = (p, len);
-        false
     }
 }
 
