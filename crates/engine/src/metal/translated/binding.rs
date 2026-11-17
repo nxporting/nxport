@@ -636,3 +636,279 @@ impl Gfx {
         Some(p)
     }
 }
+/// The texture a shader binding should see: `t` restricted by the NVN texture view (format, swizzle, mip range,
+/// layer range) and re-typed to `want` when Metal allows that view; None when the types cannot be reconciled.
+pub(crate) unsafe fn texture_for_binding(
+    cache: &mut HashMap<(usize, usize, usize, [usize; 4], [isize; 4]), (Tex, u64)>,
+    t: &Tex,
+    view: Option<&crate::nvn::api::NvnTextureView>,
+    want: MTLTextureType,
+    tex_swizzle: [u8; 4],
+) -> Option<Tex> {
+    let have = t.textureType();
+    let levels_total = t.mipmapLevelCount();
+    let slices_total = match have {
+        MTLTextureType::TypeCube => 6,
+        MTLTextureType::TypeCubeArray => t.arrayLength() * 6,
+        MTLTextureType::Type3D => 1,
+        _ => t.arrayLength().max(1),
+    };
+    let (mut level0, mut nlevels, mut slice0, mut nslices) =
+        (0usize, levels_total, 0usize, slices_total);
+    let mut pf = t.pixelFormat();
+    if let Some(v) = view {
+        if v.num_levels > 0 {
+            level0 = (v.min_level as usize).min(levels_total - 1);
+            nlevels = (v.num_levels as usize).min(levels_total - level0).max(1);
+        }
+        if v.num_layers > 0 && have != MTLTextureType::Type3D {
+            slice0 = (v.min_layer as usize).min(slices_total - 1);
+            nslices = (v.num_layers as usize).min(slices_total - slice0).max(1);
+        }
+        if v.format != 0 {
+            let vpf = metal_format(v.format as i32).0;
+            if is_view_compatible(vpf, pf) {
+                pf = vpf;
+            }
+        }
+    }
+    // The texture's own swizzle (nvnTextureBuilderSetSwizzle, e.g. ONE, ONE, ONE, R for an R8 mask); a view's swizzle
+    // replaces it (NVN: view swizzles override the builder's). Composing them read Mario Kart 8 Deluxe's shadow mask
+    // (texture and view both G, B, A, R) as B, A, R, G: its race track came out black.
+    let mut eff = if tex_swizzle == [0; 4] {
+        [2, 3, 4, 5]
+    } else {
+        tex_swizzle
+    };
+    if let Some(v) = view {
+        if v.swizzle != [0; 4] {
+            eff = v.swizzle;
+        }
+    }
+    if let Some(m) = packed_channels(t.pixelFormat()) {
+        eff = eff.map(|c| if (2..=5).contains(&c) { m[(c - 2) as usize] } else { c });
+    }
+    let swz = {
+        let sw = |x: u8| match x {
+            0 => MTLTextureSwizzle::Zero,
+            1 => MTLTextureSwizzle::One,
+            2 => MTLTextureSwizzle::Red,
+            3 => MTLTextureSwizzle::Green,
+            4 => MTLTextureSwizzle::Blue,
+            _ => MTLTextureSwizzle::Alpha,
+        };
+        MTLTextureSwizzleChannels {
+            red: sw(eff[0]),
+            green: sw(eff[1]),
+            blue: sw(eff[2]),
+            alpha: sw(eff[3]),
+        }
+    };
+    // Metal view type rules: 2D <-> 2D array (one slice for 2D), cube <-> 2D array (6 faces), cube array <-> 2D array.
+    let layered = |t: MTLTextureType| {
+        matches!(
+            t,
+            MTLTextureType::Type2D
+                | MTLTextureType::Type2DArray
+                | MTLTextureType::TypeCube
+                | MTLTextureType::TypeCubeArray
+        )
+    };
+    let (tt, nslices) = if want == have {
+        (want, nslices)
+    } else if layered(want) && layered(have) {
+        match want {
+            MTLTextureType::Type2D => (want, 1),
+            MTLTextureType::TypeCube if nslices >= 6 => (want, 6),
+            MTLTextureType::TypeCubeArray if nslices >= 6 => (want, nslices / 6 * 6),
+            MTLTextureType::Type2DArray => (want, nslices),
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    let identity = tt == have
+        && pf == t.pixelFormat()
+        && level0 == 0
+        && nlevels == levels_total
+        && slice0 == 0
+        && nslices == slices_total
+        && swz.red == MTLTextureSwizzle::Red
+        && swz.green == MTLTextureSwizzle::Green
+        && swz.blue == MTLTextureSwizzle::Blue
+        && swz.alpha == MTLTextureSwizzle::Alpha;
+    if identity {
+        return Some(t.clone());
+    }
+    // Views are cached: creating one per draw was a measurable share of the executor's time. A cached view retains its
+    // texture, so the texture's address cannot be reused while the entry exists. Entries remember the frame they were
+    // last used in; the frame end drops those unused for two frames (see trim_view_cache).
+    let key = (
+        Retained::as_ptr(t) as *const () as usize,
+        pf.0 as usize,
+        tt.0 as usize,
+        [level0, nlevels, slice0, nslices],
+        [
+            swz.red.0 as isize,
+            swz.green.0 as isize,
+            swz.blue.0 as isize,
+            swz.alpha.0 as isize,
+        ],
+    );
+    let frame = super::presented_frames();
+    if let Some((v, used)) = cache.get_mut(&key) {
+        *used = frame;
+        return Some(v.clone());
+    }
+    BINDING_VIEW_STATS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if cache.len() >= view_cache_cap() {
+        BINDING_VIEW_STATS[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        cache.clear();
+    }
+    if !super::view_format_ok(t, pf) {
+        return None;
+    }
+    let v = t.newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
+        pf,
+        tt,
+        objc2_foundation::NSRange::new(level0, nlevels),
+        objc2_foundation::NSRange::new(slice0, nslices),
+        swz,
+    )?;
+    cache.insert(key, (v.clone(), frame));
+    Some(v)
+}
+
+/// A 2D view of one level and slice of `t` (tiny compute passes write render-target levels / cube faces through it),
+/// kept in the binding-view cache.
+pub(crate) fn sub_view_2d(
+    cache: &mut HashMap<(usize, usize, usize, [usize; 4], [isize; 4]), (Tex, u64)>,
+    t: &Tex,
+    level: usize,
+    slice: usize,
+) -> Option<Tex> {
+    let key = (
+        Retained::as_ptr(t) as *const () as usize,
+        t.pixelFormat().0 as usize,
+        MTLTextureType::Type2D.0 as usize,
+        [level, 1, slice, 1],
+        [-1; 4],
+    );
+    let frame = super::presented_frames();
+    if let Some((v, used)) = cache.get_mut(&key) {
+        *used = frame;
+        return Some(v.clone());
+    }
+    if cache.len() >= view_cache_cap() {
+        cache.clear();
+    }
+    let v = unsafe {
+        t.newTextureViewWithPixelFormat_textureType_levels_slices(
+            t.pixelFormat(),
+            MTLTextureType::Type2D,
+            objc2_foundation::NSRange::new(level, 1),
+            objc2_foundation::NSRange::new(slice, 1),
+        )
+    }?;
+    BINDING_VIEW_STATS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    cache.insert(key, (v.clone(), frame));
+    Some(v)
+}
+
+/// Entries the binding-view cache may hold (--view-cache-cap): a cached view retains its texture.
+pub(crate) fn view_cache_cap() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| crate::settings::get().graphics.view_cache_cap)
+}
+
+/// Frame end: drops binding views not used in this or the previous frame. TotK's textures are mostly stable from frame to
+/// frame (a bound texture needs the same swizzle / type view each frame: ~450 views per Hateno frame, re-created every
+/// frame when the cache was cleared at 512 entries, ~1.3 ms of encode), while transient ones disappear; keeping views of
+/// those alive longer would keep their textures alive (a 4096-entry cache without aging doubled memory to ~9 GB).
+pub(crate) fn trim_view_cache(
+    cache: &mut HashMap<(usize, usize, usize, [usize; 4], [isize; 4]), (Tex, u64)>,
+) {
+    let frame = super::presented_frames();
+    cache.retain(|_, (_, used)| *used + 1 >= frame);
+    if cache.len() > view_cache_cap() {
+        cache.clear();
+    }
+}
+
+pub(crate) fn root_id(t: &Tex) -> u64 {
+    static KEY: u8 = 0;
+    let obj = Retained::as_ptr(t) as *const objc2::runtime::AnyObject;
+    let key = &KEY as *const u8 as *const std::ffi::c_void;
+    let v = unsafe { objc2::ffi::objc_getAssociatedObject(obj, key) } as u64;
+    if v != 0 {
+        ROOT_STATS[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return v;
+    }
+    ROOT_STATS[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Views can be made of views (a swizzled binding view of a format view): follow the chain to the real texture.
+    let mut r = t.clone();
+    while let Some(p) = r.parentTexture() {
+        r = p;
+    }
+    let id = Retained::as_ptr(&r) as *const () as u64;
+    unsafe {
+        objc2::ffi::objc_setAssociatedObject(
+            obj as *mut _,
+            key,
+            id as *mut _,
+            objc2::ffi::OBJC_ASSOCIATION_ASSIGN,
+        )
+    };
+    id
+}
+
+/// --tiny-compute runs qualifying small draws as compute; off on replay side B with
+/// --replay-ab-tiny.
+/// Formats compute kernels cannot write as color targets (depth / stencil, sRGB).
+pub(crate) fn is_depth_or_srgb(pf: MTLPixelFormat) -> bool {
+    use MTLPixelFormat as P;
+    matches!(
+        pf,
+        P::Depth16Unorm
+            | P::Depth32Float
+            | P::Depth24Unorm_Stencil8
+            | P::Depth32Float_Stencil8
+            | P::Stencil8
+            | P::X32_Stencil8
+            | P::X24_Stencil8
+            | P::RGBA8Unorm_sRGB
+            | P::BGRA8Unorm_sRGB
+            | P::R8Unorm_sRGB
+            | P::RG8Unorm_sRGB
+    ) || super::copy::is_depth_stencil(pf)
+}
+
+/// plan_draw's texture-resolution reuse key (State::tex_reuse).
+#[derive(PartialEq)]
+pub(crate) struct TexReuseKey {
+    pub(crate) vs: usize,
+    pub(crate) fs: usize,
+    pub(crate) handles: smallvec::SmallVec<[Option<u64>; 16]>,
+    pub(crate) epochs: [u64; 4],
+}
+
+/// Draws whose textures were [reused from the previous draw, resolved].
+pub(crate) static TEX_REUSE_STATS: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// A thread's texture binding memos (EncodeCtx::bind_memo).
+pub(crate) type BindMemos = HashMap<(i32, usize), super::BindMemo>;
+
+/// Textures a draw binds: (stage, binding, texture, sampler id, root id).
+pub(crate) type ResolvedTex =
+    smallvec::SmallVec<[(i32, u32, Option<Tex>, Option<i32>, Option<u64>); 16]>;
+
+/// Whether [addr, addr + size) overlaps guest memory written by GPU work earlier in this submit (`State::gpu_dirty`).
+pub(crate) fn gpu_written(gpu_dirty: &std::collections::BTreeMap<u64, u64>, addr: u64, size: usize) -> bool {
+    // The ranges are merged and disjoint: only the last one starting below `end` can overlap.
+    let end = addr + size as u64;
+    gpu_dirty
+        .range(..end)
+        .next_back()
+        .is_some_and(|(_, &e)| e > addr)
+}
