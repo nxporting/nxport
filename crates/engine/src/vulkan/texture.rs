@@ -1650,7 +1650,10 @@ impl Textures {
         Self::view(dev, img, declared, fmt, base_level, levels, base_layer, layers, swizzle, true)
     }
 
-    pub unsafe fn sampler(&mut self, dev: &Dev, d: &SamplerDesc) -> Option<vk::Sampler> {
+    /// `plain`: the draw keeps the game's anisotropy (gpu::sampler_anisotropy).
+    pub unsafe fn sampler(&mut self, dev: &Dev, d: &SamplerDesc, plain: bool) -> Option<vk::Sampler> {
+        // The anisotropy it draws with (the game's, or the setting's), in the cache's key.
+        let d = &SamplerDesc { max_anisotropy: crate::gpu::sampler_anisotropy(d, plain), ..*d };
         if let Some((_, s)) = self.samplers.iter().find(|(k, _)| k == d) {
             return Some(*s);
         }
