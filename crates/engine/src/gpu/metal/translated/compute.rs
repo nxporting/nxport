@@ -149,7 +149,7 @@ impl Gfx {
                 let sampler = {
                     let mut g = shm.lock().unwrap();
                     sampler_id
-                        .and_then(|id| self.sampler_state(&mut g, id))
+                        .and_then(|id| self.sampler_state(&mut g, id, tex.mipmapLevelCount() <= 1))
                         .or_else(|| self.default_sampler(&mut g))
                 };
                 let Some(ss) = sampler.and_then(|s| st.cx.heaps.sampler(&self.device, &s, frame))
@@ -341,7 +341,7 @@ impl Gfx {
             let sampler = {
                 let mut g = shm.lock().unwrap();
                 sampler_id
-                    .and_then(|id| self.sampler_state(&mut g, id))
+                    .and_then(|id| self.sampler_state(&mut g, id, tex.mipmapLevelCount() <= 1))
                     .or_else(|| self.default_sampler(&mut g))
             };
             st.issuer
