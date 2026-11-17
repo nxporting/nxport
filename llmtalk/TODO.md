@@ -219,6 +219,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   5. Off by default (Graphics > Resolution 1x..4x); at 1x the code paths must not change output: gpu-replay suite
      byte-identical, Hateno shot at the noise floor.
   Split: mac-worker gpu::scale (rule + unit tests) and Metal; win-worker Vulkan. BotW first (no UltraCam there).
+  win-worker also takes BotW's render-size site (1.9.0; the input to rule 1), 2026-11-17. Savage Wind classifies by
+  guessed dimensions (aspect 1.74-1.81, >= 32x16, 900 lines constant): not usable under our rules.
 
 - **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
   recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
