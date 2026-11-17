@@ -380,7 +380,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   (main+0xbf65b0: a virtual call's count, model data; 0x1680 Goron, 0x1928 Gerudo) and ~100 small ones: all sized by
   game data, so the difference from the console is how many allocations land in the heap during creation (which
   varies by run here). Decisive next step: the same actor's allocation list on a reference (Ryujinx built from
-  ../ref/ryujinx with its GDB stub, a breakpoint at main+0xf39524 and its failure branch), then diff the lists. Built from the user's base NSP
+  ../ref/ryujinx with its GDB stub, a breakpoint at main+0xf39524 and its failure branch), then diff the lists.
+  2026-11-17: done half. Ryujinx canary (headless, --enable-gdb-stub, a private --root-data-dir so the base runs
+  without the update; a throwaway RSP client) ran 1.0.0 for 10 minutes from boot with a breakpoint on tryAlloc's
+  fallback (main+0xf39568, sead tryAlloc returned null): never hit. So on the reference these actor heaps fit; nxport
+  puts more into them. (Every-allocation breakpoints are too slow there: ~50 ms per hit.) Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
