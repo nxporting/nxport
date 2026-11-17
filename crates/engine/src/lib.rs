@@ -783,7 +783,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     );
 
     // Program size for nn::os::QueryMemoryInfo (the loaded images; games budget memory with it).
-    horizon::hle::set_program_size(
+    crate::horizon::os::memory::set_program_size(
         mem_space.bss_off + mem_space.bss_size + sdk.as_ref().map_or(0, |m| m.total_size),
     );
     #[cfg(nx_native)]
