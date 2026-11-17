@@ -301,7 +301,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   it used; allocations that come after the fit (here the late ones at main+0xacd83c / 0xac37e8 / 0xacba48) go to the
   EmergencyHeap. On the console they must come before it: find what the actor waits on for them (a resource load or
   another thread) and why it finishes later here. sead::Heap +0x50 / +0x58 are list heads, not start / size (wrong
-  guess). Parked: beyond Savage Wind's scope (1.9.0 only). Built from the user's base NSP
+  guess). Parked: beyond Savage Wind's scope (1.9.0 only).
+  2026-11-16 later: the heap class's adjust (vtable slot before tryAlloc, main+0xf39854, from the relocations at
+  main+0x21fb170) is never called on these heaps, so "fitted, then late allocations" is not it (or that slot is not
+  adjust). What varies by run: whether an actor makes a second setup sequence while it is created (0x48 at
+  main+0xac3610, then 0xe00 at 0xacd83c, 0xd0 at 0xacd8bc, 0x4a8 at 0xac37e8: the same array setups as earlier in its
+  creation, with larger counts). Gerudo fitted without it in one run and failed with it in the next. Next: what decides
+  that second sequence (the caller of main+0xacd7f0 the second time). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
