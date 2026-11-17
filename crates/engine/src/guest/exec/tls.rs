@@ -60,7 +60,7 @@ pub fn hle_stack_offset() -> usize {
     *OFF.get_or_init(|| tsd_key_offset("HLE stack", HLE_STACK_KEY))
 }
 
-/// Byte offset (from tpidrro_el0) of the slot where horizon::hle::setup_horizon_tpidrro saves Darwin's errno pointer.
+/// Byte offset (from tpidrro_el0) of the slot where crate::horizon::os::threads::setup_horizon_tpidrro saves Darwin's errno pointer.
 pub fn errno_save_offset() -> usize {
     static OFF: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| tsd_key_offset("errno save", ERRNO_SAVE_KEY))

@@ -4,6 +4,8 @@
 use crate::horizon::hle::*;
 use crate::horizon::nn::*;
 pub(crate) mod objects;
+pub(crate) mod threads;
+use threads::*;
 use objects::*;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::CStr;

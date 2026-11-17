@@ -716,7 +716,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             guest::exec::tls::hle_stack_offset(),
         );
         unsafe {
-            horizon::hle::capture_darwin_tsd_shadow();
+            crate::horizon::os::threads::capture_darwin_tsd_shadow();
         }
     }
 

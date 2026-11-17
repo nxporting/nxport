@@ -1,6 +1,7 @@
 // The objects nn::os functions manage (os/mod.rs): mutexes, semaphores, light and timer events, condition variables,
 // message queues and reader / writer locks, by guest object address.
 
+use crate::horizon::os::threads::*;
 use super::*;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};

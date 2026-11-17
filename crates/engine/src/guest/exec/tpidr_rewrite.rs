@@ -4,7 +4,7 @@
 // user TPIDR_EL0 when it reschedules a thread (it carries CPU information, e.g. 0x1006), so a guest
 // `mrs Xt, tpidr_el0` can return garbage at any time, and a pointer derived from it may be spilled to the
 // stack and dereferenced much later. The engine keeps each thread's guest TLS pointer in a Darwin TSD slot of
-// its own (a pthread key, cpu::tls::guest_tls_offset; set by horizon::hle::setup_horizon_tpidrro), which XNU never touches.
+// its own (a pthread key, cpu::tls::guest_tls_offset; set by crate::horizon::os::threads::setup_horizon_tpidrro), which XNU never touches.
 // Every read site is redirected to a stub in a code island next to the guest modules:
 //     mrs Xt, tpidrro_el0 ; ldr Xt, [Xt, #slot] ; b <site + 4>
 

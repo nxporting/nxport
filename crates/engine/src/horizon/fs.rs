@@ -1360,7 +1360,7 @@ pub unsafe extern "C" fn hle_nn_fs_OpenDirectory(
     path: *const c_char,
     open_mode: i32,
 ) -> i32 {
-    crate::horizon::hle::sanitize_darwin_tpidrro();
+    crate::horizon::os::threads::sanitize_darwin_tpidrro();
     if path.is_null() || out_handle.is_null() {
         return RESULT_PATH_NOT_FOUND;
     }
