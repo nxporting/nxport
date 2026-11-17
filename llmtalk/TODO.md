@@ -167,8 +167,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   (1) internal resolution (BotW renders 900p docked; SW scales its render targets, with FSR 1): neither backend scales
   render targets (vulkan/draw.rs support buffer: render scale 1 everywhere), a backend-wide feature for both Vulkan and
   Metal, worth agreeing with mac-worker first; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
-  (3) DLC (blocked: no dump here); (4) draw distance; (5) higher-resolution shadows; (6) motion controls from the
-  controller's gyro (horizon/hid.rs has gyro plumbing: check what BotW reads); (7) anisotropic filtering and
+  (3) DLC (blocked: no dump here); (4) draw distance; (5) higher-resolution shadows; (6) motion controls: nxport has them
+  (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
+  tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
   sharpening; (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
   languages. VRR: check whether present pacing already allows it.
 - **BotW white water vs the early fence (2026-11-16, win-worker).** The user saw milky water after a restart with the
