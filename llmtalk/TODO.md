@@ -197,6 +197,16 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   moved next to it) saves at most ~0.5 ms of the 3.4 ms wait: ~80 -> ~84 fps. The user asked to make sure no cheaper
   fix exists: still to measure is when the game reads them in the next frame (a read-fault probe on their pages:
   time from the frame wait, GPU done or not); only reads late in the frame would make a wait-on-read rule pay.
+  Measured 2026-11-17 (probe in a throwaway worktree: each lighting target's guest bytes read-protected as its submit
+  is recorded, first toucher logged): of 16,200 targets, 64% are first read by guest threads (guest-main, the
+  Presentation Thread) before the GPU finished, 36% first touched by the write-back. Early reads come a median 1.3 ms
+  after the submit (p90 2.6 ms), GPU frame 6-7 ms: a wait-on-read rule waits ~5 ms nearly every frame. So no exact
+  rule that waits for the GPU in steady play is cheaper than the fence. Remaining candidate (free in steady play):
+  with the overlap the game reads lighting one frame older than on the console (accepted already for other GPU
+  results, guard.rs notes); the white water is a value from before a load being latched (targets are kept across
+  loads, SW #362). Exact version: after the game's own load end (a hook on BotW's loading state, not SW's tuned 30
+  reads), wait for each lighting target's first write-back. Needs first: a repro of the white water (intermittent)
+  to confirm it is load-only.
 - **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15). STATUS (later 2026-11-15): flicker fixed and water fixed (8a35540, one bug: nvnTextureFinalize lost the generation recorded commands named); early fence back on (bf93f40). Waiting on the user's playtest for the rest (boxes pinned or floating, Link floating far from water, white water, NPC IK): likely the same water bug, unconfirmed. History below.** Seen: boxes pinned to walls and floating, Link
   floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
   render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
