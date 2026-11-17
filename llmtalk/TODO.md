@@ -20,7 +20,15 @@ and update this file when you finish or drop it.
   start screen and save list (16:9 centred), loading screen (black and top band fill, tips and logo stay 16:9).
   The inventory list's sixth column is cut at the same layout place at 16:9 (the next page peeking in): the game's.
   Open: the pause background (a blurred capture of the game) shows the world about 1/F narrower than the game did
-  just before (pillar edge measured: expected x 151, seen ~229 of the middle 960 px); not fixed. Also not looked at:
+  just before (pillar edge measured: expected x 151, seen ~229 of the middle 960 px); not fixed. Followed so far:
+  the visible picture is PauseMenuBG_00's P_Capture_00 showing N_Capture_00's texture (capture pane: vtable
+  main+0x1d0cec8, calculate main+0xf59b2c, draw main+0xf59c40, texture setup main+0xf5a028, which sizes the copy in
+  pixels from the pane's size x canvas width / the layout's width at layout+0x28, and draws with an ortho of the
+  pane's size, main+0xeb4c44). Its content does not depend on P_Capture_00's scale (x F and x F^2 look the same;
+  only how far it covers changes), but does on the layout's width: PauseMenuBG_00's width x F zoomed and moved it
+  (Link at x 430 of 1258 instead of 629), so the mapping is not simply UV = 0.5 + x / width. Next: read how
+  P_Capture_00's texture coordinates are made (its material's texture projection, likely from the capture pane's
+  rectangle in main+0xf5a028's x20 / x29-0x70) before choosing what to widen. Also not looked at:
   event fades other than Fade_00, pre-rendered movies, 4:3 (Vert+) captures, a live window resize.
 
 
