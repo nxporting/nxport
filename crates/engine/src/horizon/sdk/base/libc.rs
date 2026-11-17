@@ -4,7 +4,7 @@ use super::super::{Bind, Entry};
 
 pub(super) static TABLE: &[Entry] = &[
     Entry("__errno_location", func!(super::super::errno_location())),
-    Entry("__nnmusl_init_dso", func!(crate::horizon::hle::hle_nnmusl_init_dso(_, _, _, _, _, _, _, _))),
+    Entry("__nnmusl_init_dso", func!(crate::horizon::cxx::hle_nnmusl_init_dso(_, _, _, _, _, _, _, _))),
     Entry("__syscall_cond_broadcast", func!(crate::guest::module_loader::sys_cond_broadcast(_))),
     Entry("__syscall_cond_signal", func!(crate::guest::module_loader::sys_cond_signal(_))),
     Entry("__syscall_cond_wait", func!(crate::guest::module_loader::sys_cond_wait(_, _, _))),
@@ -24,14 +24,14 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("clock", func!(super::super::clock())),
     Entry("fflush", func!(libc::fflush(_))),
     Entry("memcmp", func!(libc::memcmp(_, _, _))),
-    Entry("memcpy", func!(crate::horizon::hle::hle_memcpy(_, _, _))),
-    Entry("memmove", func!(crate::horizon::hle::hle_memmove(_, _, _))),
-    Entry("memset", func!(crate::horizon::hle::hle_memset(_, _, _))),
-    Entry("printf", func!(crate::horizon::hle::hle_printf(_, _, _, _, _, _, _, _))),
+    Entry("memcpy", func!(crate::horizon::cxx::hle_memcpy(_, _, _))),
+    Entry("memmove", func!(crate::horizon::cxx::hle_memmove(_, _, _))),
+    Entry("memset", func!(crate::horizon::cxx::hle_memset(_, _, _))),
+    Entry("printf", func!(crate::horizon::cxx::hle_printf(_, _, _, _, _, _, _, _))),
     // glslc* are WEAK imports (STB_WEAK): retail has no glslc, so they stay null and nn::gfx's GlslcDll::Initialize()
     // fails exactly as on hardware. Binding HLE stubs here made the game believe the shader compiler existed.
     Entry("stdout", Bind::Data(super::super::stdout_variable)),
-    Entry("strcmp", func!(crate::horizon::hle::hle_strcmp(_, _))),
+    Entry("strcmp", func!(crate::horizon::cxx::hle_strcmp(_, _))),
     Entry("strlen", func!(libc::strlen(_))),
     Entry("time", func!(libc::time(_))),
 ];
