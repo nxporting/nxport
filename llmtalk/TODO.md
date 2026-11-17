@@ -226,7 +226,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   Setter: 1.5.0 main+0xc65894, 1.9.0 main+0x106dc70, 1.0.0 main+0xb74f08. In 1.9.0 its two callers (main+0x12660e8:
   1920x1080; main+0x1266178: a size computed from a float width kept at +0x1210 of the caller's object, so it follows
   the mode and may change at run time) load the instance from main+0x1e39050 / through main+0x1d6b470. So the scale
-  rule reads layer 0's size from SystemTask+0x4c0 each frame (no hook).
+  rule reads layer 0's size from SystemTask+0x4c0 each frame (no hook). UNVERIFIED: in Ryujinx 1.0.0 at the title, +0x4c0 = 1920x1080 and
+  +0x4c8 = 854x480; check in gameplay before relying on it (accessor kept local, not pushed).
 
 - **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
   recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
@@ -468,7 +469,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the remainder varies, and gross + remainder > size: memory is freed back before the instance heap is made, and the
   creation sometimes comes first. Windows 2026-11-17: 6 of 6 runs crash with or without --guest-cores (one guest
   thread per core), so host scheduling alone is not it; suspect an HLE ordering (a call that returns or signals
-  before the console would, e.g. a read completing synchronously). Next: mac-worker's timeline of frees vs creation. Built from the user's base NSP
+  before the console would, e.g. a read completing synchronously). Next: mac-worker's timeline of frees vs creation.
+  ROOT CAUSE (mac-worker, 2026-11-17): the outer heap holds GPU memory pools sized by each material's command list:
+  main+0xb84d44 records the material's binds into a command buffer and takes nvnCommandBufferGetCommandMemoryUsed
+  (rounded to 4), summed into [obj+0x163c] (main+0xb84d00), then reserved per material (main+0xb85648). Ours counts a
+  flat 32 bytes per command (nvn/api/command_buffer.rs, a guess): ~0xa40 per material where the real driver uses
+  0x14 / 0x28 / 0x3c / 0xb4 (Ryujinx, main+0xb84ce8, nxport-build/ryu_b84.out). Fix (mac-worker implementing):
+  per-command encoding sizes per driver version, read from each sdk's NVN driver code, checked against Ryujinx. Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
