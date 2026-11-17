@@ -1,4 +1,4 @@
-// crates/build/src/extract_shaders.rs
+// crates/builderlib/src/extract_shaders.rs
 // Pure Rust RomFS shader extractor.
 // Extracts every shader stage from RomFS (port of the former tools/extract_romfs_shaders.py; identical output).
 
