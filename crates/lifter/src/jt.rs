@@ -182,32 +182,59 @@ fn value(mem: &dyn Memory, defs: Defs, entry: u64, pc: u64, r: u32, depth: u32) 
 
 /// The number of table entries, from the bounds check of register `idx` before the table load at `load_pc` (following
 /// register copies and zero extensions: `cmp w0, #5; b.hi ..; mov w8, w0; .. ldrsw x8, [x9, x8, lsl #2]`).
+///
+/// The check is the first compare before the bounds branch (the one whose flags it reads). It may compare a register the
+/// index is copied from further back, with no write to that register in between: BotW 1.0.0 main+0x109b90c
+/// `mov w12, w11; cmp w11, #3; b.hi ..; ldrsw x11, [x26, x12, lsl #2]`, where an earlier `cmp w11, #1` (for a ccmp)
+/// was taken for the bound and two of the four cases were left unlifted.
 fn bound(mem: &dyn Memory, entry: u64, load_pc: u64, mut idx: u32) -> Option<u64> {
     let mut a = load_pc;
     let mut limit_cond = None;
+    // The check found on another register than the index (so far): that register and the entry count.
+    let mut check: Option<(u32, u64)> = None;
     while a > entry && load_pc - a < WINDOW * 4 {
         a -= 4;
         let w = mem.word(a)?;
         if is_bcond(w) {
-            limit_cond.get_or_insert(bits(w, 0, 4));
+            if check.is_none() {
+                limit_cond.get_or_insert(bits(w, 0, 4));
+            }
             continue;
         }
         if is_branch(w) && !(is_call(w) && callee_saved(idx)) {
             return None;
         }
-        // cmp wN / xN, #imm (subs zr, rn, #imm)
-        if w & 0x7f80_001f == 0x7100_001f && bits(w, 5, 5) == idx {
+        // cmp wN / xN, #imm (subs zr, rn, #imm): the first one is the check.
+        if check.is_none() && w & 0x7f80_001f == 0x7100_001f {
             let imm = (bits(w, 10, 12) as u64) << if bits(w, 22, 1) == 1 { 12 } else { 0 };
-            return match limit_cond? {
-                8 | 9 => Some(imm + 1), // b.hi default / b.ls cases: 0..=imm
-                2 | 3 => Some(imm),     // b.cs default / b.cc cases: 0..imm
-                _ => None,
+            let entries = match limit_cond? {
+                8 | 9 => imm + 1, // b.hi default / b.ls cases: 0..=imm
+                2 | 3 => imm,     // b.cs default / b.cc cases: 0..imm
+                _ => return None,
             };
+            let reg = bits(w, 5, 5);
+            if reg == idx {
+                return Some(entries);
+            }
+            check = Some((reg, entries));
+            continue;
         }
         if writes(w, idx) {
             match mov_reg(w).or_else(|| zero_extend(w)) {
                 Some(src) => idx = src,
                 None => return None,
+            }
+            if let Some((reg, entries)) = check {
+                if reg == idx {
+                    return Some(entries);
+                }
+            }
+            continue;
+        }
+        // The compared register changed between the copy and the check: they hold different values.
+        if let Some((reg, _)) = check {
+            if writes(w, reg) {
+                return None;
             }
         }
     }
@@ -359,5 +386,27 @@ mod tests {
         }
         let img = Img { base: 0x3000, data };
         assert_eq!(resolve(&img, &|_, _| None, 0x3000, 0x3024, 9), Some(vec![0x3028, 0x302c, 0x3034]));
+    }
+
+    #[test]
+    fn check_on_the_index_source() {
+        // BotW 1.0.0 main+0x109b900 (moved to 0x4000): cmp w11, #1 (another branch's compare); mov w12, w11;
+        // cmp w11, #3; b.hi ..; adrp x26, 0x4000; add x26, x26, #0x100; ldrsw x11, [x26, x12, lsl #2];
+        // add x11, x11, x26; br x11. Four entries, not the two of the first compare.
+        let code: [u32; 9] = [
+            0x7100057f, 0x2a0b03ec, 0x71000d7f, 0x54000208, 0x9000001a, 0x9104035a, 0xb8ac7b4b, 0x8b1a016b,
+            0xd61f0160,
+        ];
+        let mut data = vec![0u8; 0x200];
+        for (i, w) in code.iter().enumerate() {
+            data[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+        }
+        // Targets 0x4024 + 4k, as offsets from the table at 0x4100.
+        for k in 0..4i32 {
+            let off = (0x4024 + 4 * k) - 0x4100;
+            data[0x100 + 4 * k as usize..0x104 + 4 * k as usize].copy_from_slice(&off.to_le_bytes());
+        }
+        let img = Img { base: 0x4000, data };
+        assert_eq!(resolve(&img, &|_, _| None, 0x4000, 0x4020, 11), Some(vec![0x4024, 0x4028, 0x402c, 0x4030]));
     }
 }
