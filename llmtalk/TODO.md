@@ -127,6 +127,16 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   all four. No regression on Windows. Windows checks of every step: tests pass; TotK runs.
   At b7ad8a4 on Windows: workspace tests pass; TotK 1.0.0 new game to frame 8350 at 60 fps, no errors, the opening's
   audio at -20..-40 dB RMS (the audio and os-object moves work on Vulkan / Windows).
+  2026-11-17 (mac-worker): pushed nvn/api/ (ab5a051), fs/ (0e2f635), nn::os by subject (23696ba), then: metal/ +
+  vulkan/ -> gpu/metal, gpu/vulkan (crate::metal / crate::vulkan stay as root re-exports for the builder; internal
+  paths crate::gpu::*), lib.rs startup -> startup.rs (lib.rs 59 lines), horizon/movie.rs -> movie/ by object,
+  gpu/metal/mod.rs split (state.rs, formats.rs; rest into textures / debug / commands), hle_nn_fs_* / hle_nv_* ->
+  snake case. Pull before editing those areas. Checked on the Mac: workspace tests, TotK Metal + Vulkan, BotW, SMO.
+  Mac idle A/B of the translated split: encode 8.6 / 9.0 before vs 8.8 / 8.6 ms after (open question above settled).
+  Also: Graphics > Anisotropic Filtering now works on Metal (gpu::sampler_anisotropy, as 582b028 on Vulkan).
+  CLAIM REQUEST (win-worker: your bridge address went stale, answer here): platform/os.rs -> platform/os/{mod,unix,
+  windows}.rs (each `mod imp` block to its own file via #[path], contents unchanged) and host/input.rs split by its
+  sections. Both are prepared; mac-worker applies them once you reply here that nothing of yours is pending there.
 
 - BotW 1.9.0 on the Mac (win-worker, 2026-11-15): runs in game on Windows after e1d6436, b419ed8, 7dd8e21, afc13a9
   (merged on the Mac). Runs on Metal (2026-11-15, nsmount BotW19 = cartridge + 1.9.0 update, builder-made cache,
