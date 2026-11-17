@@ -693,7 +693,7 @@ pub unsafe extern "C" fn oe_get_display_version(out: *mut u8) {
 /// nn::hid::GetNpadState(State*, const NpadIdType&): the single-state form of the HLE'd GetNpadStates (the SDK's own
 /// version needs hid state the engine does not create).
 pub unsafe extern "C" fn hid_get_npad_state(
-    out: *mut crate::horizon::hle::NpadFullKeyState,
+    out: *mut crate::horizon::hid::NpadFullKeyState,
     id: *const u32,
 ) {
     crate::horizon::hid::get_npad_states(out, 1, id);

@@ -1,7 +1,7 @@
 // nn::hid as the game calls it: controllers (Npad styles, states, handles), six-axis sensors, vibration and touch.
 
 use super::hle::*;
-use super::nn::*;
+use std::sync::Mutex as StdMutex;
 
 
 pub(crate) unsafe extern "C" fn initialize_npad() {
@@ -461,3 +461,183 @@ pub(crate) unsafe extern "C" fn get_handheld_activation_mode() -> i64 {
 }
 
 pub(crate) unsafe extern "C" fn disconnect_npad(_id: *const u8) {}
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+pub(crate) struct NpadFullKeyState {
+    pub sampling_number: i64,
+    pub buttons: u64,
+    pub analog_stick_l_x: i32,
+    pub analog_stick_l_y: i32,
+    pub analog_stick_r_x: i32,
+    pub analog_stick_r_y: i32,
+    pub attributes: u32,
+    pub _reserved: u32,
+}
+
+pub(crate) static SAMPLING_COUNTER: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
+
+pub(crate) static HID_SUPPORTED_STYLES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// NpadJoyHoldType: Vertical = 0 (the default), Horizontal = 1.
+pub(crate) static HID_HOLD_TYPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Fills a TouchScreenState<n> from the window's contacts (host::input::touches).
+pub(crate) unsafe fn write_touch_screen_state(out: *mut u8, n: usize) {
+    if out.is_null() {
+        return;
+    }
+    std::ptr::write_bytes(out, 0, 16 + n * 0x28);
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now = std::time::Instant::now();
+    // The touch panel is sampled at ~200 Hz on the console: the sampling number advances with time.
+    let sampling = now.duration_since(*T0.get_or_init(|| now)).as_millis() as i64 / 5;
+    *(out as *mut i64) = sampling;
+    let touches = crate::host::input::touches();
+    let count = touches.len().min(n);
+    *(out.add(8) as *mut i32) = count as i32;
+    for (i, t) in touches.iter().take(count).enumerate() {
+        let p = out.add(16 + i * 0x28);
+        let mut attributes = 0u32;
+        if t.fresh {
+            attributes |= 1; // Start
+        }
+        if t.ended {
+            attributes |= 2; // End
+        }
+        *(p as *mut i64) = 0;
+        *(p.add(8) as *mut u32) = attributes;
+        *(p.add(12) as *mut i32) = t.finger_id;
+        *(p.add(16) as *mut i32) = t.x;
+        *(p.add(20) as *mut i32) = t.y;
+        *(p.add(24) as *mut i32) = 15; // diameterX / Y: a fingertip
+        *(p.add(28) as *mut i32) = 15;
+    }
+}
+
+/// SixAxisSensorState (96 bytes): 200 Hz accelerometer + gyroscope samples.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SixAxisSensorState {
+    pub delta_ns: i64,
+    pub sampling_number: i64,
+    pub acceleration: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub angle: [f32; 3],
+    pub direction: [f32; 9],
+    pub attributes: u32,
+    pub _pad: u32,
+}
+
+impl Default for SixAxisSensorState {
+    fn default() -> Self {
+        Self {
+            delta_ns: 5_000_000, // 5 ms (200 Hz)
+            sampling_number: 0,
+            acceleration: [0.0, 0.0, -1.0], // Gravity vector: 1G downwards
+            angular_velocity: [0.0, 0.0, 0.0],
+            angle: [0.0, 0.0, 0.0],
+            direction: [
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0,
+            ],
+            attributes: 1, // SixAxisSensorAttribute_IsConnected
+            _pad: 0,
+        }
+    }
+}
+
+/// The first player's controller motion (host/input.rs), when it has a gyroscope; otherwise the default: flat and still.
+pub(crate) fn with_motion(state: &mut SixAxisSensorState) {
+    if let Some((acc, w, angle, dir)) = crate::host::input::motion_state(0) {
+        state.acceleration = acc;
+        state.angular_velocity = w;
+        state.angle = angle;
+        state.direction = dir;
+    }
+}
+
+/// The shared body of the GetNpadStates overloads (all state structs have the NpadFullKeyState layout).
+/// Supports up to 8 players (NpadId No1..No8, plus Handheld mapped to player 0);
+/// `extra_attributes` adds style-specific attribute bits (JoyDual: IsLeftConnected | IsRightConnected).
+pub(crate) unsafe fn npad_states(
+    states: *mut NpadFullKeyState,
+    count: i32,
+    _npad_id: *const u32,
+    extra_attributes: u32,
+) -> i32 {
+    let id = if _npad_id.is_null() {
+        u32::MAX
+    } else {
+        *_npad_id
+    };
+    let player = match id {
+        0..=7 => id as usize,
+        0x20 => 0, // Handheld maps to player 0
+        _ => usize::MAX,
+    };
+    let connected = player < crate::host::input::MAX_PLAYERS
+        && crate::host::input::is_player_connected(player);
+    if states.is_null() || count <= 0 {
+        return 0;
+    }
+    if player == 0 {
+        crate::host::input::before_npad_read();
+    }
+    // Keyboard / controller state mapped by the user's bindings (host/input.rs).
+    let (buttons, sticks) = if connected {
+        crate::host::input::player_npad_state(player)
+    } else {
+        (0, [0; 4])
+    };
+    // --log-hid-buttons: every read that returns pressed buttons (which id / style path the game polls).
+    static LOG_BUTTONS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if buttons != 0 && *LOG_BUTTONS.get_or_init(|| crate::settings::get().log.log_hid_buttons) {
+        let fp = crate::guest_reg!(x29);
+        let lr = if fp > 0x10000 {
+            *((fp + 8) as *const usize)
+        } else {
+            0
+        };
+        let _ = lr;
+        println!(
+            "[hid-buttons] frame {} id {:#x} player {} buttons {:#x} attrs {:#x} callers: {}",
+            crate::gpu::backend().presented_frames(),
+            id,
+            player,
+            buttons,
+            1 | extra_attributes,
+            guest_chain(fp)
+        );
+    }
+    let n = count.min(1) as usize;
+    for i in 0..n {
+        let cur = states.add(i);
+        std::ptr::write(
+            cur,
+            NpadFullKeyState {
+                sampling_number: SAMPLING_COUNTER
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                buttons: buttons as _,
+                analog_stick_l_x: sticks[0],
+                analog_stick_l_y: sticks[1],
+                analog_stick_r_x: sticks[2],
+                analog_stick_r_y: sticks[3],
+                attributes: if connected { 1 | extra_attributes } else { 0 }, // IsConnected
+                _reserved: 0,
+            },
+        );
+    }
+    n as i32
+}
+
+/// The last vibration value sent to each motor handle.
+pub(crate) static VIBRATION_SENT: StdMutex<Option<rustc_hash::FxHashMap<u32, [f32; 4]>>> = StdMutex::new(None);
+
+pub(crate) fn send_vibration(handle: u32, v: [f32; 4]) {
+    VIBRATION_SENT.lock().unwrap().get_or_insert_with(Default::default).insert(handle, v);
+    crate::host::rumble::set(handle, v);
+}
+/// Which handheld Joy-Cons count as an active controller (both / either / none); the engine's controller is the
+/// keyboard / gamepad, so the mode is only kept for the game to read back.
+pub(crate) static HANDHELD_ACTIVATION_MODE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
