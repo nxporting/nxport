@@ -174,6 +174,25 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
   share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
+- **Resolution scaling: design draft (mac-worker, 2026-11-17; for win-worker to check before code).** The translator
+  side exists: sass2spv ports Ryujinx's TexelFetchScale / TextureSizeUnscale transforms, the FragCoord divide and the
+  support buffer's render_scale[73] (0 = the render target, 1..64 textures, 65..72 images); Metal writes 1.0 everywhere
+  (gpu/metal/translated/encode.rs:904). Ryujinx's selection (TextureCache.IsUpscaleCompatible / UpscaleSafeMode) guesses
+  from dimensions (levels > 3, square, < 8 px, ~16:9 under 360 lines): not ours. Proposal, one shared module gpu::scale:
+  1. Eligible: 2D / 2D array / MSAA render targets, uncompressed, created with the main view's size (the window /
+     swapchain size the game presents, learned from the presented texture) or an exact power-of-two division of it
+     (the game's own downsample chains); depth and colour alike. Everything else 1x. No other size guesses.
+  2. Demoted to 1x for good (Ryujinx BlacklistScale): any CPU access to its memory (rt_guard hold / write-back, texel
+     reads / writes, CPU-filled uploads), a copy to or from a 1x texture of a different size class, storage-image use,
+     compressed proxies (bc_proxy), linear layout. A demotion re-creates the texture at 1x from the scaled one.
+  3. A pass's targets share one scale (Ryujinx TextureManager.UpdateRenderTargetScale): any 1x-only target makes the
+     pass 1x; render_scale[0] = the pass's scale; sampled / image slots get their texture's scale.
+  4. Viewports, scissors, clears, copy / blit rectangles scaled by the target's scale; guest-visible sizes (texture size
+     queries, GetStorageSize, write-back) stay guest size.
+  5. Off by default (Graphics > Resolution 1x..4x); at 1x the code paths must not change output: gpu-replay suite
+     byte-identical, Hateno shot at the noise floor.
+  Split: mac-worker gpu::scale (rule + unit tests) and Metal; win-worker Vulkan. BotW first (no UltraCam there).
+
 - **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
   recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
   cache, frame rate above 30, cheats. In progress: ultrawide (claimed above). Missing, roughly by what players notice:
