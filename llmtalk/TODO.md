@@ -199,6 +199,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
   share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
 - **Resolution scaling: design draft (mac-worker, 2026-11-17; for win-worker to check before code).** The translator
+  Render-size notes (mac-worker, 2026-11-17): 1.5.0's output size is set by main+0xf2f964 (handheld flag
+  [obj+0xf5e]: 1280x720, else 1920x1080 into SystemTask+0x4c0); on the Mac (1.5.0, botw-pool save) the scene targets are
+  1280x720 inside the 1920x1080 output (not 1.9.0's docked 1600x900), so the scene size varies by version / mode. Every
+  texture init reports the same caller (a shared wrapper, base+0x45bc028), so finding the scene size's source needs a
+  deeper chain (e.g. a probe at that wrapper with a frame-pointer walk for 1280x720 / 1600x900 targets).
   side exists: sass2spv ports Ryujinx's TexelFetchScale / TextureSizeUnscale transforms, the FragCoord divide and the
   support buffer's render_scale[73] (0 = the render target, 1..64 textures, 65..72 images); Metal writes 1.0 everywhere
   (gpu/metal/translated/encode.rs:904). Ryujinx's selection (TextureCache.IsUpscaleCompatible / UpscaleSafeMode) guesses
