@@ -1,6 +1,7 @@
 // nn::os as the game calls it: threads, synchronization (mutexes, events, semaphores, condition variables, message
 // queues), TLS, memory and time.
 
+use crate::horizon::call_log::*;
 use crate::horizon::os::memory::*;
 use crate::horizon::hle::*;
 use crate::horizon::nn::*;

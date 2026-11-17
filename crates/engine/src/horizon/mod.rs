@@ -3,6 +3,7 @@
 pub mod audio;
 #[cfg(nx_native)]
 pub mod cores;
+pub mod call_log;
 pub mod cxx;
 pub mod fs;
 pub mod heap_layout;

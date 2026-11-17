@@ -1,6 +1,6 @@
 // nn::hid as the game calls it: controllers (Npad styles, states, handles), six-axis sensors, vibration and touch.
 
-use super::hle::*;
+use crate::horizon::call_log::*;
 use std::sync::Mutex as StdMutex;
 
 

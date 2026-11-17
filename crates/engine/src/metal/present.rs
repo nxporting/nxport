@@ -281,7 +281,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
         // is no longer read by the GPU.
         crate::nvn::api::flush_pending_unmaps(pn, frames_in_flight() as u64 + 2);
         if crate::settings::get().log.hle_history_at == Some(pn) {
-            crate::horizon::hle::summarize_hle_call_history();
+            crate::horizon::call_log::summarize_hle_call_history();
         }
         if pn == 1 || pn % 100 == 0 {
             println!("[DEBUG GFX] present #{} nvn_tex=0x{:x}", pn, nvn_tex);

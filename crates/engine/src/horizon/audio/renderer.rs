@@ -338,7 +338,7 @@ unsafe extern "C" fn request_update(
     perf: *const SfBuffer,
     input: *const SfBuffer,
 ) -> u32 {
-    crate::horizon::hle::record_hle_call("audren::RequestUpdate");
+    crate::horizon::call_log::record_hle_call("audren::RequestUpdate");
     let (out, input) = (&*out, &*input);
     let _ = perf; // performance histories are not produced (HistorySize 0)
     let mut guard = RENDERER.lock().unwrap();

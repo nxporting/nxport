@@ -829,7 +829,7 @@ unsafe extern "C" fn handle_signal(
                     }
                 }
             }
-            crate::horizon::hle::dump_hle_call_history();
+            crate::horizon::call_log::dump_hle_call_history();
             let mut dli: DlInfo = std::mem::zeroed();
             if dladdr(pc as *const libc::c_void, &mut dli) != 0 && !dli.dli_sname.is_null() {
                 let sname = std::ffi::CStr::from_ptr(dli.dli_sname).to_string_lossy();
