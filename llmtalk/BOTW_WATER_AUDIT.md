@@ -1,6 +1,6 @@
 # BotW water / floating / milky water / flicker: Savage Wind against nxport (audit, 2026-11-15)
 
-Read-only audit. Savage Wind (SW) paths are under `nxport-build/ref/savagewind`, nxport paths under `crates/engine/src`.
+Read-only audit. Savage Wind (SW) paths are under `nxport-builderlib/ref/savagewind`, nxport paths under `crates/engine/src`.
 Everything already settled in SAVAGEWIND_LEARNINGS.md or ruled out in the brief is left out.
 
 ## Ranked differences

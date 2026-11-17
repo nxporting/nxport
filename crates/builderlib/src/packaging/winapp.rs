@@ -50,7 +50,7 @@ pub fn engine() -> Result<PathBuf, String> {
 #[cfg(windows)]
 const SDL3_DLL: &[u8] = nxport::sdl_library::DLL;
 #[cfg(not(windows))]
-const SDL3_DLL: &[u8] = include_bytes!("../../../vendor/SDL3/lib/SDL3.dll");
+const SDL3_DLL: &[u8] = include_bytes!("../../../../vendor/SDL3/lib/SDL3.dll");
 
 /// Lays out the app folder, all but the guest library: the engine, the settings, mods, the game files and the pipeline
 /// list. Returns the directory the app's mods are in, if it has any (the code is lifted with them).

@@ -1,7 +1,7 @@
 # What nxport can learn from Savage Wind Recomp (BotW)
 
 Study of Savage Wind Recomp (github.com/Revivedx/SavageWindRecomp, 0.5.3-alpha.5, 2026-11-12; MIT) for the user,
-2026-11-14, by a win-worker subagent. It reads the source cloned at `nxport-build/ref/savagewind` (shallow: no
+2026-11-14, by a win-worker subagent. It reads the source cloned at `nxport-builderlib/ref/savagewind` (shallow: no
 history). Nothing was built or run. Savage Wind is a static recompiler of BotW (Switch) to C from LAS Recomp, with a
 Vulkan backend (Metal for macOS in `renderer.m`) and its own Maxwell translator. "Code" below means read in the source;
 "docs" means only the docs say it. Its addresses are absolute with main at 0x7000000000: main offset = address -

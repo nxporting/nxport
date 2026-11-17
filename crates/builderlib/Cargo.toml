@@ -1,10 +1,10 @@
 [package]
-name = "nxport-build"
+name = "nxport-builderlib"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "nxport_build"
+name = "nxport_builderlib"
 path = "src/lib.rs"
 
 [dependencies]
