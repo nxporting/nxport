@@ -1073,7 +1073,8 @@ un-%p.profraw
     Captures / save: `work/captures/totk_20261025_freefall*`, `work/saves/totk-freefall` (slot 01: press A, hold right stick down).
   - Second flicker while falling: a sky island vanishes for one frame while a white tile appears on the ground below.
     Captured (`work/captures/totk_20261025_freefall_fix`, frames before 2153 / 4233) but not located in the frames yet.
-- **Breath of the Wild**:
+- **Breath of the Wild** (superseded 2026-11-16: swimming fixed with the water maps, 8a35540 era, line "Link now swims
+  at Ryujinx's height"; the black flicker is the black-blob entry, FIXED by 8a35540. Recheck the haze on the Mac only):
   - Water: Link stands on the pond floor instead of swimming (`work/saves/botw-pool`).
   - One-frame black foliage (~130 per 600 frames at `work/saves/botw-sunk`); blue-grey haze over the image.
 - **Uncommitted work in ../nxport-nxnative (reviewed 2026-10-25)**: checked 2026-11-05: that folder no longer exists and
