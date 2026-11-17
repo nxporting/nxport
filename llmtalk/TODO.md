@@ -307,7 +307,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   adjust). What varies by run: whether an actor makes a second setup sequence while it is created (0x48 at
   main+0xac3610, then 0xe00 at 0xacd83c, 0xd0 at 0xacd8bc, 0x4a8 at 0xac37e8: the same array setups as earlier in its
   creation, with larger counts). Gerudo fitted without it in one run and failed with it in the next. Next: what decides
-  that second sequence (the caller of main+0xacd7f0 the second time). Built from the user's base NSP
+  that second sequence (the caller of main+0xacd7f0 the second time).
+  Heap size found (dump of the heap object at the failure): +0x40 = 0x8c30 for Dm_Npc_Goron_HeroSoul_Kago (start
+  pointer at +0x08); 109 allocations of 0x8b20 bytes plus block headers overflow it. The failing chain: main+0xacd684
+  <- 0x10b14f4 <- 0x1054660 <- 0x105de04 (actor creation) <- 0x117d88c. Lead: sead allocates through each thread's
+  current heap; the second setup may belong to a later phase (another current heap) on the console and land inside
+  creation here because of thread timing. Next: who sets the current heap around main+0x10b14f4, and whether
+  main+0x1054660 runs the setup synchronously only when something (a resource) is already loaded. Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
   checked on SMO 1.0.0 to its title menu and TotK 1.0.0 and 1.1.2 into the opening cave, frame 5000). Now: an ActorCreate thread (the one the game restarts right after its first run returns)
