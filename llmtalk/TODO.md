@@ -161,6 +161,16 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   ours that could be a traditional exefs mod (IPS / pchtxt-style code changes with no engine call: e.g. the pacer's
   lowest interval and veto in frame_time.rs, fixed-word rewrites) should ship as one, so players can see, toggle and
   share them like other mods; patches that call into the engine (HLE trampolines) stay in the profiles.
+- **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
+  recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
+  cache, frame rate above 30, cheats. In progress: ultrawide (claimed above). Missing, roughly by what players notice:
+  (1) internal resolution (BotW renders 900p docked; SW scales its render targets, with FSR 1): neither backend scales
+  render targets (vulkan/draw.rs support buffer: render scale 1 everywhere), a backend-wide feature for both Vulkan and
+  Metal, worth agreeing with mac-worker first; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
+  (3) DLC (blocked: no dump here); (4) draw distance; (5) higher-resolution shadows; (6) motion controls from the
+  controller's gyro (horizon/hid.rs has gyro plumbing: check what BotW reads); (7) anisotropic filtering and
+  sharpening; (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
+  languages. VRR: check whether present pacing already allows it.
 - **BotW white water vs the early fence (2026-11-16, win-worker).** The user saw milky water after a restart with the
   early fence on (bf93f40); BotW waits for its frame again (3ab7a05: ~107 -> ~78 fps at a 120 limit). Savage Wind #362:
   the 1x1 / 3x3 lighting and exposure linear targets are read a frame late. Tried an exact middle way (not committed):
