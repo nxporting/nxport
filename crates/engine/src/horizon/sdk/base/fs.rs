@@ -26,7 +26,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2fs18DeleteCacheStorageEi", func!(crate::horizon::fs::hle_nn_fs_DeleteCacheStorage(_))),
     Entry("_ZN2nn2fs18GetSaveDataSizeMaxEPlS1_", func!(crate::horizon::fs::hle_nn_fs_GetSaveDataSizeMax(_, _))),
     Entry("_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", func!(crate::horizon::fs::hle_nn_fs_IsSaveDataExisting(_, _))),
-    Entry("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", func!(crate::horizon::nn::fs_is_save_data_existing(_))),
+    Entry("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", func!(crate::horizon::fs::fs_is_save_data_existing(_))),
     Entry("_ZN2nn2fs19GetCacheStorageSizeEPlS1_i", func!(crate::horizon::fs::hle_nn_fs_GetCacheStorageSize(_, _, _))),
     Entry("_ZN2nn2fs19MountDeviceSaveDataEPKc", func!(crate::horizon::fs::hle_nn_fs_MountDeviceSaveData(_, _))),
     Entry("_ZN2nn2fs19MountDeviceSaveDataEPKcNS_3ncm13ApplicationIdE", func!(crate::horizon::fs::hle_nn_fs_MountDeviceSaveData(_, _))),

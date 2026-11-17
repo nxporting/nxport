@@ -1,5 +1,7 @@
 // The objects nn::os functions manage (os/mod.rs): mutexes, semaphores, light and timer events, condition variables,
-// message queues and reader / writer locks, by guest object address.
+// message queues and reader / writer locks, by guest object address. They live in side tables keyed by the guest
+// object's address, protected by one global mutex + condvar: independent of the SDK's internal layouts (no sizeof or
+// offsets to match), and cross-object waits (MultiWait) are simple.
 
 use crate::horizon::os::threads::*;
 use super::*;
@@ -723,4 +725,12 @@ pub(crate) struct NnMutex {
 pub(crate) struct NnReaderWriterLock {
     pub lock_state: u32,
     pub thread_id: u64,
+}
+pub(crate) fn me() -> usize {
+    unsafe { crate::horizon::os::get_current_thread() as usize }
+}
+
+/// Signals an nn::os::EventType the game initialised through the HLE (for HLE'd libraries that report to the game).
+pub(crate) fn signal_event_at(ev: usize) {
+    unsafe { crate::horizon::os::signal_event(ev as *mut u8) }
 }

@@ -1,7 +1,7 @@
 // nn::oe as the game calls it: application state (focus, operation mode, performance mode, display) and launch parameters.
 
+use std::sync::Mutex;
 use std::sync::OnceLock;
-use super::nn::*;
 use std::collections::VecDeque;
 
 // 7. Horizon Memory & Heap Management
@@ -197,3 +197,7 @@ pub(crate) fn is_handheld() -> bool {
         }
     }
 }
+/// Notification messages for the application. After launch the system reports the focus
+/// state once (MessageFocusStateChanged = 15; GetCurrentFocusState then says InFocus), as Ryujinx's applet state
+/// manager does. Kirby and the Forgotten Land (FocusHandlingMode_SuspendAndNotify) ignored all input without it.
+pub(crate) static OE_MESSAGES: Mutex<Option<VecDeque<u32>>> = Mutex::new(None);

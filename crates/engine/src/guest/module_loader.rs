@@ -643,10 +643,10 @@ pub unsafe extern "C" fn socket_recv(_fd: i32, _buf: *mut u8, _len: usize, flags
     // Nothing ever arrives: a non-blocking receive says so at once. UltraCam polls its command socket this way on the
     // game's worker threads several times per frame.
     if mod_log_socket() && flags & MSG_DONTWAIT != 0 {
-        crate::horizon::nn::set_socket_errno(EAGAIN);
+        crate::horizon::socket::set_socket_errno(EAGAIN);
         return -1;
     }
-    crate::horizon::nn::set_socket_errno(100); // ENETDOWN
+    crate::horizon::socket::set_socket_errno(100); // ENETDOWN
     if mod_log_socket() {
         std::thread::sleep(std::time::Duration::from_millis(100)); // nothing ever arrives; don't let a reader spin
     }

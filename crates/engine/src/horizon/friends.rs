@@ -53,3 +53,4 @@ pub(crate) unsafe extern "C" fn empty_ref() -> *const u8 {
 pub(crate) unsafe extern "C" fn not_found() -> u32 {
     121 | (1 << 9) // a friends-module failure: there is no friend to have an image
 }
+pub(crate) static FRIENDS_EMPTY: [u8; 0x100] = [0; 0x100];

@@ -1024,7 +1024,7 @@ fn movie_clock() {
 /// them after Stop.
 fn signal(d: &Decoder, which: usize) {
     if d.started && d.events[which] != 0 {
-        crate::horizon::nn::signal_event(d.events[which]);
+        crate::horizon::os::objects::signal_event_at(d.events[which]);
     }
 }
 /// The decoder's Codec lock (taken before DECODER_LOCK by those that touch the media decoder), or None once it is gone.

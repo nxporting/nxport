@@ -1,6 +1,5 @@
 // nn::bcat as the game calls it: delivery cache (online content), reported as empty.
 
-use super::nn::*;
 
 pub(crate) unsafe extern "C" fn initialize() {}
 
@@ -65,3 +64,11 @@ pub(crate) unsafe extern "C" fn directory_read(
 }
 
 pub(crate) unsafe extern "C" fn close(_this: *mut u8) {}
+// nn::bcat (data distribution / delivery cache): a console that never went online. The storage mounts and
+// is empty, sync requests fail with no Internet connection, files and directories are not found.
+// Result codes use module 122 (result = module | description << 9).
+pub(crate) const BCAT_NOT_FOUND: u32 = 122 | (2 << 9);
+
+pub(crate) const BCAT_NOT_OPENED: u32 = 122 | (7 << 9);
+
+pub(crate) const BCAT_INTERNET_REQUEST_NOT_ACCEPTED: u32 = 122 | (8 << 9);
