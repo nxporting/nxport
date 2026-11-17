@@ -511,6 +511,15 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   other than main+0xa0913c. Not memory, back to order: this job uses its EmergencyHeap before the setup that sets
   singleton+0x38. Next: the create path of that heap (heap constructors / FrameHeap) and the job that owns it.
 
+  2026-11-17 (mac-worker, native Mac runs, the same crash: main+0xe52964 on ActorCreate, so shared engine, not lifting):
+  probes in work/notes/botw100_heap_probe_20261117.patch (Mac). The instance heap (class vtable main+0x21fb148,
+  create main+0xf39094) is made by main+0x10540d8 with size = the outer actor heap's max allocatable block (outer class
+  vtable main+0x21fb260, tryAlloc main+0xf3a468 over sead FrameHeap); Ryujinx remainders are larger for Goron / Zora /
+  Gerudo (~0x5000), smaller for Rito. Every outer-heap operation is on ActorCreate, identical each run (no race). The
+  outer heap holds NVN memory pools (main+0xa35054: page-aligned storage + nvnMemoryPoolBuilder) made by the GPU
+  allocator main+0xa35634 (x4 size, w5 alignment, x0 holder, [x0+0x10] heap) for requests from 0xb08844 (model data,
+  align 256, e.g. Zora 0x6c00) and 0xb85660 (8 x 0xa40 / 0xa80, align 4). Next: the same breakpoints in Ryujinx, diff.
+
 - **iPhone "AOT region x18.island: image 0x16c000 bytes, this run 0x2d8000" (2026-11-14): a game-version mismatch.** The
   .ipa's image was made from TotK 1.1.2 (x18.island 0x16c000; Windows and Mac images agree), the phone holds the user's
   1.0.0 files (a 1.0.0 image needs 0x2d8000, measured on Windows). Fix for the user: build the .ipa from the version on
