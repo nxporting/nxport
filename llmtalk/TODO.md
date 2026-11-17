@@ -171,7 +171,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
   sharpening; (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
-  languages. VRR: check whether present pacing already allows it.
+  languages. VRR: vsync on presents with FIFO (vulkan/window.rs), which G-SYNC / FreeSync run at variable rate below
+  the refresh, as SW's "VSync: On"; untested (no VRR display here). SW also offers Adaptive (FIFO_RELAXED).
 - **BotW white water vs the early fence (2026-11-16, win-worker).** The user saw milky water after a restart with the
   early fence on (bf93f40); BotW waits for its frame again (3ab7a05: ~107 -> ~78 fps at a 120 limit). Savage Wind #362:
   the 1x1 / 3x3 lighting and exposure linear targets are read a frame late. Tried an exact middle way (not committed):
