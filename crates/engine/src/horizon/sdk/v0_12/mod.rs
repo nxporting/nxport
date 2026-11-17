@@ -15,4 +15,15 @@ pub(super) static LAYER: Layer = Layer {
     thread_tail_shift: Some(8),
     nvn_procs: &[],
     audio_handle_state: None,
+    // The 52.32 driver's command memory per command, measured as GetCommandMemoryUsed deltas between consecutive
+    // calls on one command buffer under Ryujinx (Breath of the Wild 1.0.0, 847 calls). Its control memory stayed 0.
+    command_costs: Some(&[
+        ("nvnCommandBufferBindVertexAttribState", 68),
+        ("nvnCommandBufferBindVertexStreamState", 68),
+        ("nvnCommandBufferBindVertexBuffer", 24),
+        ("nvnCommandBufferBindTexture", 20),
+        ("nvnCommandBufferBindUniformBuffer", 20),
+        ("nvnCommandBufferDrawElementsInstanced", 44),
+        ("nvnCommandBufferDrawElements", 60),
+    ]),
 };

@@ -1093,9 +1093,10 @@ pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::
 }
 
 /// The command memory a recorded command takes (GetCommandMemoryUsed). Games size buffers by it and record into them
-/// later, so a command must always cost the same. 32 is a guess, far above the driver's sizes for binds.
-fn command_cost(_name: &str) -> usize {
-    32
+/// later, so a command must always cost the same: the driver's size where the game's SDK layer has it, else 32 (a
+/// guess, far above the driver's sizes for binds: Breath of the Wild 1.0.0 overflowed its actor heaps with it).
+fn command_cost(name: &str) -> usize {
+    crate::horizon::sdk::nvn_command_cost(name).unwrap_or(32)
 }
 
 // Commands with a float argument: it comes in s0, not in the x registers the generic recorders read.
