@@ -206,7 +206,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   results, guard.rs notes); the white water is a value from before a load being latched (targets are kept across
   loads, SW #362). Exact version: after the game's own load end (a hook on BotW's loading state, not SW's tuned 30
   reads), wait for each lighting target's first write-back. Needs first: a repro of the white water (intermittent)
-  to confirm it is load-only.
+  to confirm it is load-only. Tried 2026-11-17: early fence on, 2 runs from the copied saves: both start at the Great Plateau tower
+  (no water in view); asked the user for a save near water (PROGRESS.md).
 - **BotW 1.9.0 physics and flicker (the user played it, 2026-11-15). STATUS (later 2026-11-15): flicker fixed and water fixed (8a35540, one bug: nvnTextureFinalize lost the generation recorded commands named); early fence back on (bf93f40). Waiting on the user's playtest for the rest (boxes pinned or floating, Link floating far from water, white water, NPC IK): likely the same water bug, unconfirmed. History below.** Seen: boxes pinned to walls and floating, Link
   floating, an NPC's IK maybe, the game confused about water levels, plenty of flicker. Savage Wind: BotW draws linear
   render targets the CPU reads (the height tiles its collision reads, the 8x8 sky for fog / ambient, 1x1 / 3x3
