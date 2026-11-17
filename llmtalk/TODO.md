@@ -13,9 +13,15 @@ and update this file when you finish or drop it.
   are scaled to fill, from the two Layout::Calculate sites (main+0xf625dc, +0x25c98). The minimap's scissor
   (clipping pane draw, main+0xf67144) follows the layout. Seen headless at 21:9 and 16:9 (gameplay, inventory).
   BotW reads TotK's dynamic_aspect_ratio setting and --launch-aspect; the menu item is shown for BotW but its change
-  is not kept (keep_own_options drops totk options for other games). Not yet looked at: the map, the start screen,
-  the loading screen at 21:9, event fades other than Fade_00, pre-rendered movies, 4:3 (Vert+) captures, a live
-  window resize; at 21:9 the inventory's description box shows a dark end right of it.
+  is not kept (keep_own_options drops totk options for other games; BotW's variable frame rate has the same limit,
+  so there is no BotW options pattern to follow yet). The pause menu's page-slide strips past the 16:9 right edge
+  (P_CaptureSlideR_00/01 in PauseMenu_00 and PauseMenuInfo_00, x 641-741) are hidden when wider: they showed as a
+  dark band right of the item description. Also seen at 21:9: map (16:9 centred, its frame's pattern at the sides),
+  start screen and save list (16:9 centred), loading screen (black and top band fill, tips and logo stay 16:9).
+  The inventory list's sixth column is cut at the same layout place at 16:9 (the next page peeking in): the game's.
+  Open: the pause background (a blurred capture of the game) shows the world about 1/F narrower than the game did
+  just before (pillar edge measured: expected x 151, seen ~229 of the middle 960 px); not fixed. Also not looked at:
+  event fades other than Fade_00, pre-rendered movies, 4:3 (Vert+) captures, a live window resize.
 
 
 ## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)
