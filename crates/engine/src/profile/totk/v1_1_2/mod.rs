@@ -102,7 +102,7 @@ pub unsafe fn install_v1_1_2_hooks(base: usize, mem_space: &mut crate::guest::lo
     super::camera_angles::install(base, mem_space);
     // 4. Placement jobs paced to the present (a scheduling workaround, not a code hook).
     if crate::settings::get().totk.enhancements.placement_after_present {
-        crate::horizon::hle::pace_to_present("PlacementMgr");
+        crate::horizon::vi::pace_to_present("PlacementMgr");
     }
     #[cfg(nx_native)]
     if crate::guest::exec::aot::native_rewrites() {

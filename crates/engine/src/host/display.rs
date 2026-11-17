@@ -319,7 +319,7 @@ pub fn run_main_thread() -> ! {
         crate::metal::init(device.clone(), Some(layer.clone()));
     }
     LAYER_PTR.store((&*layer) as *const CAMetalLayer as usize, Ordering::Release);
-    if crate::horizon::hle::is_handheld() {
+    if crate::horizon::oe::is_handheld() {
         update_handheld_drawable(true);
     }
 

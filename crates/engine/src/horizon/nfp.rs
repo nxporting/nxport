@@ -1,6 +1,6 @@
 // nn::nfp as the game calls it: amiibo, with no reader present.
 
-use super::hle::*;
+use crate::horizon::os::objects::*;
 use super::nn::*;
 
 pub(crate) unsafe extern "C" fn initialize() -> u32 {

@@ -25,6 +25,7 @@ pub mod swkbd;
 pub mod socket;
 pub mod prepo;
 pub mod nifm;
+pub mod nv;
 pub mod codec;
 pub mod oe;
 pub mod account;

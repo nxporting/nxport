@@ -427,7 +427,7 @@ fn guest_chain(
     unsafe {
         guest::exec::tls::install_guest_tls();
         guest::exec::trampoline::init_worker_thread_x18();
-        horizon::hle::register_main_sample_target();
+        crate::horizon::call_log::register_main_sample_target();
     }
     unsafe { horizon::os::get_current_thread() };
 

@@ -1909,3 +1909,5 @@ mod mod_layout_tests {
         assert_eq!(rom_mount_rel("no/mount"), None);
     }
 }
+#[no_mangle]
+pub(crate) unsafe extern "C" fn hle_nn_fs_SetPriorityOnCurrentThread(_prio: i32) {}
