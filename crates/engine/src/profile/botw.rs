@@ -2,7 +2,9 @@
 
 use super::{GameKind, GameProfile, VersionProfile, BOTW_TITLE_ID};
 
+pub mod aspect;
 pub mod frame_time;
+pub mod hud;
 
 pub static V1_0_0: VersionProfile = VersionProfile {
     version_string: "1.0.0",
@@ -84,7 +86,23 @@ pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
     phys_body_tick: [(0x11f95c, 20), (0x1207cc, 26)],
 };
 
+/// 1.9.0's projections (aspect.rs).
+pub static ASPECT_V1_9_0: aspect::Sites = aspect::Sites {
+    update: 0xeb4474,
+    perspective: (0x1d05380, 0xeb4a44),
+    frustum: (0x1d05480, 0xeb4f24),
+};
+
+/// 1.9.0's layout calculations (hud.rs): the library's (`mov x2, sp`) and the game's layout class's (`add x2, sp, #8`);
+/// the clipping pane's call of the scissor setter.
+pub static HUD_V1_9_0: hud::Sites = hud::Sites {
+    layout: [(0xf625dc, 0x9100_03e2), (0x25c98, 0x9100_23e2)],
+    scissor: (0xf67138, 0xeb6a54),
+};
+
 #[cfg(nx_runtime)]
 unsafe fn install_v1_9_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     frame_time::install(base, mem_space, &SITES_V1_9_0);
+    aspect::install(base, mem_space, &ASPECT_V1_9_0);
+    hud::install(base, mem_space, &HUD_V1_9_0);
 }

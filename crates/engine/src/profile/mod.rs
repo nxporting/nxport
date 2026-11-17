@@ -6,6 +6,7 @@ pub mod frame_step;
 pub mod kirby;
 pub mod smo;
 pub mod totk;
+pub mod ui2d;
 pub mod wonder;
 
 use std::path::{Path, PathBuf};
@@ -304,6 +305,7 @@ pub fn real_time() -> bool {
 pub fn rendered_aspect() -> Option<f64> {
     match active().kind {
         GameKind::TotK => totk::aspect::rendered_aspect(),
+        GameKind::BotW => botw::aspect::rendered_aspect(),
         _ => None,
     }
 }
@@ -312,15 +314,31 @@ pub fn rendered_aspect() -> Option<f64> {
 /// shape).
 pub fn renders_screen_shape() -> bool {
     match active().kind {
-        GameKind::TotK => crate::settings::get().totk.enhancements.dynamic_aspect_ratio,
+        // BotW follows TotK's setting (profile/botw/aspect.rs), as its game time follows TotK's variable frame rate.
+        GameKind::TotK | GameKind::BotW => crate::settings::get().totk.enhancements.dynamic_aspect_ratio,
         _ => false,
     }
 }
 
 /// The screen's shape changed (the window was resized): a game rendering at another shape follows it.
 pub fn screen_aspect_changed(aspect: f64) {
-    if active().kind == GameKind::TotK {
-        totk::aspect::set_aspect(aspect);
+    match active().kind {
+        GameKind::TotK => totk::aspect::set_aspect(aspect),
+        GameKind::BotW => botw::aspect::set_aspect(aspect),
+        _ => {}
+    }
+}
+
+/// Whether `len` bytes of guest memory at `p` can be read (an object a hook recorded may have been freed since).
+pub(crate) fn readable(p: usize, len: usize) -> bool {
+    #[cfg(nx_native)]
+    return unsafe { crate::guest::exec::crash_handler::readable_len(p, len) } == len;
+    #[cfg(windows)]
+    return crate::platform::os::readable_len(p, len) == len;
+    #[cfg(not(any(nx_native, windows)))]
+    {
+        let _ = (p, len);
+        false
     }
 }
 
