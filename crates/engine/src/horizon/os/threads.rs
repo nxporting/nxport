@@ -1,6 +1,8 @@
 // Guest threads: the nn::os thread object (NnThreadType) and its tail fields, handles, the current thread's state, the
 // Darwin TLS a guest thread runs with, exit signals and joins, and core assignment.
 
+use std::ffi::CStr;
+use super::*;
 use std::sync::atomic::AtomicU32;
 use std::os::raw::c_char;
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -245,3 +247,407 @@ thread_local! {
 }
 // 9. Threading & TLS Management
 pub(crate) static NEXT_TLS_SLOT: AtomicU32 = AtomicU32::new(0);
+pub(crate) unsafe extern "C" fn get_current_thread() -> *mut NnThreadType {
+    CURRENT_NN_THREAD.with(|cell| {
+        let mut ptr = *cell.borrow();
+        if ptr.is_null() {
+            ptr = THREAD_SELF_STRUCT.with(|s| s.as_ptr());
+            let handle = ThreadTail::of(ptr).handle();
+            if *handle == 0 {
+                *handle = 1;
+            }
+            // Populate the REAL host stack bounds at the REAL field offsets
+            // (_stack/_stackSize), not a placeholder. See struct doc comment.
+            let (lo, hi) = crate::horizon::thread_stack::current_bounds().unwrap_or_else(crate::platform::os::current_thread_stack);
+            (*ptr).stack = lo as *mut ();
+            (*ptr).original_stack = (*ptr).stack;
+            (*ptr).stack_size = hi - lo;
+            *cell.borrow_mut() = ptr;
+        }
+        setup_horizon_tpidrro(ptr);
+        ptr
+    })
+}
+
+pub(crate) unsafe extern "C" fn is_mutex_locked_by_current_thread(mutex: *const NnMutex) -> bool {
+    if (mutex as usize) >= 0x10000 {
+        let cur = crate::horizon::os::get_current_thread();
+        (*mutex).owner_thread == cur && (*mutex).nest_count > 0
+    } else {
+        false
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_memory_allocator_for_thread_local(
+    _alloc: *const (),
+    _free: *const (),
+) {
+    println!("[+] HLE: nn::os::SetMemoryAllocatorForThreadLocal called");
+}
+
+pub(crate) unsafe extern "C" fn allocate_tls_slot(out_slot: *mut u32, _dtor: *const ()) -> i32 {
+    let slot = NEXT_TLS_SLOT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if !out_slot.is_null() {
+        *out_slot = slot;
+    }
+    println!("[+] HLE: nn::os::AllocateTlsSlot() -> slot {}", slot);
+    0
+}
+
+pub(crate) unsafe extern "C" fn set_tls_value(slot: u32, val: u64) {
+    if (slot as usize) < 64 {
+        THREAD_TLS_VALUES.with(|cell| {
+            cell.borrow_mut()[slot as usize] = val;
+        });
+    }
+}
+
+pub(crate) unsafe extern "C" fn get_tls_value(slot: u32) -> u64 {
+    if (slot as usize) < 64 {
+        THREAD_TLS_VALUES.with(|cell| cell.borrow()[slot as usize])
+    } else {
+        0
+    }
+}
+
+pub(crate) unsafe extern "C" fn free_tls_slot(_slot: u32) {}
+
+pub(crate) unsafe extern "C" fn sleep_thread(nano: i64) {
+    sanitize_darwin_tpidrro();
+    if nano > 0 {
+        hle_sleep_ns(nano as u64);
+    }
+    if nano > 1_000_000 && log_timestamps() && std::thread::current().name() == Some("guest-main") {
+        let now = crate::platform::clock::now_ms();
+        println!(
+            "[ts] sleep {:.1} ms ended t {:.3} ms",
+            nano as f64 / 1e6,
+            now
+        );
+    }
+}
+
+pub(crate) unsafe extern "C" fn yield_thread() {
+    // A few pauses, not SwitchToThread. The console yields to the game's own ready threads on that core, and TotK's job
+    // threads poll with yields hundreds of thousands of times a second. Windows yields to whatever is ready on the
+    // processor: with all of them busy that is another process, for its whole quantum (~10 ms a yield, ~1 fps). The
+    // game's threads that are ready get a processor from the scheduler anyway; an idle machine's SwitchToThread
+    // returned at once (0.1-0.2 us), about what these pauses take.
+    for _ in 0..8 {
+        std::hint::spin_loop();
+    }
+}
+
+pub(crate) unsafe extern "C" fn create_thread(
+    thread: *mut NnThreadType,
+    entry: unsafe extern "C" fn(*mut ()),
+    arg: *mut (),
+    stack: *mut (),
+    stack_size: usize,
+    priority: i32,
+) -> i32 {
+    println!(
+        "[+] HLE: nn::os::CreateThread(thread={:p}, entry={:#x}, arg={:p}, stack={:p}, size={}, prio={})",
+        thread, entry as usize, arg, stack, stack_size, priority
+    );
+    if !stack.is_null() && stack_size > 0 {
+        libc::memset(stack as *mut libc::c_void, 0, stack_size);
+    }
+    if !thread.is_null() {
+        *ThreadTail::of(thread).handle() = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (*thread).state = THREAD_STATE_INITIALIZED;
+        (*thread).base_priority = priority;
+        (*thread).original_stack = stack;
+        (*thread).stack = stack;
+        (*thread).stack_size = stack_size;
+        (*thread).thread_function = Some(entry);
+        (*thread).argument = arg;
+        // nn::os::CreateThread starts every thread on its own stack, not on a fiber.
+        (*thread).current_fiber = std::ptr::null_mut();
+        (*thread).initial_fiber = std::ptr::null_mut();
+    }
+    0
+}
+
+pub(crate) unsafe extern "C" fn set_thread_name(thread: *mut NnThreadType, name: *const c_char) {
+    if !thread.is_null() && !name.is_null() {
+        let name_str = CStr::from_ptr(name).to_string_lossy();
+        println!(
+            "[+] HLE: nn::os::SetThreadName(thread={:p}, name='{}')",
+            thread, name_str
+        );
+        let bytes = name_str.as_bytes();
+        let len = bytes.len().min(31);
+        let tail = ThreadTail::of(thread);
+        libc::memcpy(tail.name_buffer() as *mut libc::c_void, bytes.as_ptr() as *const libc::c_void, len);
+        *tail.name_buffer().add(len) = 0;
+        *tail.name_pointer() = tail.name_buffer() as *const c_char;
+    }
+}
+
+/// nn::os::SetThreadNamePointer / GetThreadNamePointer: the name is the caller's string, kept by pointer.
+pub(crate) unsafe extern "C" fn set_thread_name_pointer(
+    thread: *mut NnThreadType,
+    name: *const c_char,
+) {
+    let t = if thread.is_null() {
+        crate::horizon::os::get_current_thread() as *mut NnThreadType
+    } else {
+        thread
+    };
+    if !t.is_null() {
+        *ThreadTail::of(t).name_pointer() = name;
+    }
+}
+
+pub(crate) unsafe extern "C" fn get_thread_name_pointer(
+    thread: *const NnThreadType,
+) -> *const c_char {
+    let t = if thread.is_null() {
+        crate::horizon::os::get_current_thread() as *const NnThreadType
+    } else {
+        thread
+    };
+    if t.is_null() {
+        std::ptr::null()
+    } else {
+        *ThreadTail::of(t).name_pointer()
+    }
+}
+
+pub(crate) unsafe extern "C" fn start_thread(thread: *mut NnThreadType) {
+    if thread.is_null() {
+        return;
+    }
+    let name_bytes = std::slice::from_raw_parts(ThreadTail::of(thread).name_buffer(), 32);
+    let name_end = name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+    let name_str = String::from_utf8_lossy(&name_bytes[..name_end]).to_string();
+    println!(
+        "[+] HLE: nn::os::StartThread(thread={:p}, name='{}')",
+        thread, name_str
+    );
+
+    (*thread).state = THREAD_STATE_STARTED;
+
+    let entry = match (*thread).thread_function {
+        Some(f) => f,
+        None => {
+            println!("    [!] StartThread: no entry_fn set, not spawning thread");
+            return;
+        }
+    };
+    let arg = (*thread).argument;
+    let exit = thread_exit_signal(thread, true).unwrap();
+
+    // Cast raw pointers to usize to make them Send (guest memory is shared globally)
+    let thread_usize = thread as usize;
+    let arg_usize = arg as usize;
+    let entry_usize = entry as usize;
+    let guest_stack = ((*thread).stack as usize, (*thread).stack_size);
+
+    // Spawn a real OS thread. The guest binary is natively compiled AArch64 code
+    // so we can call the entry function pointer directly from a Rust thread.
+    std::thread::Builder::new()
+        .name(name_str.clone())
+        // The thread's own stack is where its HLE calls run (thread_stack.rs): they call into Metal and other system
+        // libraries, and compiling a render pipeline (synchronous, on the calling thread) took the Presentation Thread
+        // past 512 KiB in long play sessions.
+        .stack_size(8 << 20)
+        .spawn(move || {
+            crate::guest::tls::mark_guest_thread();
+            println!("[+] HLE: Guest thread '{}' starting execution", name_str);
+            // The threads on the frame's critical path (all of our Metal encoding runs on the Presentation Thread)
+            // ask for performance cores: with the default QoS macOS may run them on efficiency cores.
+            #[cfg(target_vendor = "apple")]
+            if name_str == "Presentation Thread" || name_str == "guest-main" {
+                extern "C" {
+                    fn pthread_set_qos_class_self_np(qos: u32, relpri: i32) -> i32;
+                }
+                const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+                let r = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+                println!(
+                    "[+] HLE: thread '{}' QoS user-interactive (rc {})",
+                    name_str, r
+                );
+            }
+            #[cfg(nx_native)]
+            crate::guest::exec::crash_handler::ensure_altstack();
+            // Every guest thread reads tpidr_el0 directly for thread_local /
+            // SDK per-thread state -- must be installed before any guest code
+            // (including code reached indirectly through HLE calls below) runs
+            // on this OS thread. See guest/exec/tls.rs.
+            #[cfg(nx_native)]
+            {
+                crate::guest::exec::tls::install_guest_tls();
+                crate::guest::exec::trampoline::init_worker_thread_x18();
+            }
+            let thread_ptr = thread_usize as *mut NnThreadType;
+            // Initialize this thread's TLS self-pointer
+            CURRENT_NN_THREAD.with(|cell| {
+                *cell.borrow_mut() = thread_ptr;
+            });
+            // Guest code runs on the game's stack buffer, as on Horizon (thread_stack.rs).
+            let (stack_lo, stack_hi) = if guest_stack.0 != 0 && guest_stack.1 != 0 {
+                (guest_stack.0, guest_stack.0 + guest_stack.1)
+            } else {
+                crate::horizon::thread_stack::allocate(1 << 20)
+            };
+            let handle = ThreadTail::of(thread_ptr).handle();
+            if *handle == 0 {
+                *handle = NEXT_THREAD_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            setup_horizon_tpidrro(thread_ptr);
+            crate::horizon::thread_stack::run(stack_lo, stack_hi, entry_usize, arg_usize);
+            println!("[+] HLE: Guest thread '{}' ({:p}) returned", name_str, thread_ptr);
+            (*thread_ptr).state = THREAD_STATE_EXITED;
+            let (done, cv) = &*exit;
+            *done.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            cv.notify_all();
+        })
+        .expect("failed to spawn guest thread");
+}
+
+pub(crate) unsafe extern "C" fn wait_thread(thread: *mut NnThreadType) {
+    if !thread.is_null() {
+        join_guest_thread(thread);
+    }
+}
+
+pub(crate) unsafe extern "C" fn try_wait_thread(thread: *mut NnThreadType) -> bool {
+    match thread_exit_signal(thread, false) {
+        Some(sig) => *sig.0.lock().unwrap_or_else(|e| e.into_inner()),
+        None => false,
+    }
+}
+
+pub(crate) unsafe extern "C" fn destroy_thread(thread: *mut NnThreadType) {
+    if !thread.is_null() {
+        join_guest_thread(thread);
+        THREAD_EXITS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(std::collections::HashMap::new)
+            .remove(&(thread as usize));
+        (*thread).state = THREAD_STATE_NOT_INITIALIZED;
+    }
+}
+
+pub(crate) unsafe extern "C" fn get_thread_id(thread: *const NnThreadType) -> u64 {
+    if !thread.is_null() {
+        *ThreadTail::of(thread).handle() as u64
+    } else {
+        1
+    }
+}
+
+pub(crate) unsafe extern "C" fn change_thread_priority(thread: *mut NnThreadType, prio: i32) {
+    if !thread.is_null() {
+        (*thread).base_priority = prio;
+    }
+}
+
+pub(crate) unsafe extern "C" fn get_thread_priority(thread: *const NnThreadType) -> i32 {
+    if !thread.is_null() {
+        (*thread).base_priority
+    } else {
+        16
+    }
+}
+
+pub(crate) unsafe extern "C" fn get_thread_available_core_mask() -> u64 {
+    0b111
+}
+
+/// nn::os::CreateThread(..., priority, idealCore): the 6-argument version plus the core the thread
+/// starts on, which GetCurrentCoreNumber reports (see current_core).
+pub(crate) unsafe extern "C" fn create_thread_with_core(
+    thread: *mut NnThreadType,
+    entry: unsafe extern "C" fn(*mut ()),
+    arg: *mut (),
+    stack: *mut (),
+    stack_size: usize,
+    priority: i32,
+    ideal_core: i32,
+) -> i32 {
+    let r = crate::horizon::os::create_thread(thread, entry, arg, stack, stack_size, priority);
+    if r == 0 && ideal_core >= 0 && !thread.is_null() {
+        thread_cores()
+            .lock()
+            .unwrap()
+            .insert(thread as usize, ideal_core);
+        CORES_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    r
+}
+
+pub(crate) unsafe extern "C" fn set_thread_core_mask(
+    thread: *mut NnThreadType,
+    ideal_core: i32,
+    affinity: u64,
+) {
+    // ideal_core < 0 (CoreId_Default / "any"): run on the lowest core the affinity allows.
+    let core = if ideal_core >= 0 {
+        ideal_core
+    } else if affinity != 0 {
+        affinity.trailing_zeros() as i32
+    } else {
+        DEFAULT_CORE
+    };
+    let t = if thread.is_null() {
+        crate::horizon::os::get_current_thread() as usize
+    } else {
+        thread as usize
+    };
+    thread_cores().lock().unwrap().insert(t, core);
+    CORES_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "[+] HLE: nn::os::SetThreadCoreMask(thread={:#x}, ideal={}, affinity={:#x}) -> core {}",
+        t, ideal_core, affinity, core
+    );
+}
+
+/// nn::os::GetThreadCoreMask(int* idealCore, Bit64* affinity, const ThreadType*): the core recorded by CreateThread /
+/// SetThreadCoreMask (current_core's table); the affinity is that core alone.
+pub(crate) unsafe extern "C" fn get_thread_core_mask(
+    out_core: *mut i32,
+    out_mask: *mut u64,
+    thread: *const NnThreadType,
+) {
+    let t = if thread.is_null() {
+        crate::horizon::os::get_current_thread() as usize
+    } else {
+        thread as usize
+    };
+    let core = thread_cores()
+        .lock()
+        .unwrap()
+        .get(&t)
+        .copied()
+        .unwrap_or(DEFAULT_CORE);
+    if !out_core.is_null() {
+        *out_core = core;
+    }
+    if !out_mask.is_null() {
+        *out_mask = 1u64 << core;
+    }
+}
+
+pub(crate) unsafe extern "C" fn is_write_lock_held_by_current_thread(
+    rwlock: *const NnReaderWriterLock,
+) -> bool {
+    !rwlock.is_null() && crate::horizon::os::objects::rw_write_held_by_me(rwlock as usize)
+}
+
+pub(crate) extern "C" fn get_current_core_number() -> u32 {
+    current_core()
+}
+
+/// nn::os::GetCurrentFiber: ThreadType::_currentFiber, which the SDK's native SwitchToFiber maintains.
+pub(crate) unsafe extern "C" fn get_current_fiber() -> *mut u8 {
+    let t = crate::horizon::os::get_current_thread();
+    if t.is_null() {
+        std::ptr::null_mut()
+    } else {
+        (*t).current_fiber as *mut u8
+    }
+}
