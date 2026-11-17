@@ -1015,3 +1015,305 @@ impl Gfx {
         }
     }
 }
+/// Frees Metal textures for memory that has since been reused for other textures: entries of `tex_by_desc` whose storage
+/// address also backs another description, unused for SWEEP_AGE frames and not resolved by any live texture object.
+/// Dynamic resolution (Kirby) re-creates its render targets at the same storage in new sizes every few seconds; without
+/// this the old sizes stay allocated (memory on iOS). Not done at creation: TotK places several transient targets at one
+/// storage address within every frame, and evicting the others there re-created ~36 textures per frame (some 1920x1080),
+/// uploads and hashes included. On iOS (or with --tex-sweep-unshared; =0 turns it off there) textures alone at their
+/// storage are freed too once unused for UNSHARED_AGE frames (areas, characters, cutscenes left behind), for memory.
+/// Render targets bound at the present are never freed. --no-tex-sweep keeps everything.
+pub(crate) fn sweep_shared_storage(tc: &mut TexCache, colors: &[RtRef], depth: Option<&RtRef>) {
+    const SWEEP_EVERY: u64 = 300;
+    const SWEEP_AGE: u64 = 300;
+    const UNSHARED_AGE: u64 = 1200;
+    let frame = presented_frames();
+    if frame % SWEEP_EVERY != 0 {
+        return;
+    }
+    let sweep_unshared = crate::settings::get().graphics.tex_sweep_unshared;
+
+    // Active render targets in the current frame must never be evicted.
+    let active_storages: rustc_hash::FxHashSet<usize> = colors
+        .iter()
+        .chain(depth)
+        .filter_map(|r| unsafe { tex_info(r.texture) }.map(|(_, t)| t.storage))
+        .collect();
+
+    let mut per_storage: HashMap<usize, u32> = HashMap::default();
+    for k in tc.tex_by_desc.keys() {
+        *per_storage.entry(k.storage).or_default() += 1;
+    }
+    // Memory the game released (pool finalized, virtual range remapped, address region freed): copies of guest data
+    // there are dead (the cache otherwise kept them until their storage was reused: walking around for ~9000 frames,
+    // 1.5 GB of copies over 0.95 GB of resident guest memory, 2026-10-16). GPU-written textures stay: their content
+    // exists only in Metal, and on the Switch it would still be in that memory.
+    let mut released = crate::nvn::api::take_tex_released();
+    released.sort_unstable();
+    let in_released = |a: usize| {
+        let i = released.partition_point(|&(s, _)| s <= a);
+        i > 0 && a < released[i - 1].0 + released[i - 1].1
+    };
+
+    let old: Vec<TexDesc> = tc
+        .tex_by_desc
+        .iter()
+        .filter(|(k, (tex, _))| {
+            if active_storages.contains(&k.storage) {
+                return false;
+            }
+            if !released.is_empty()
+                && in_released(k.storage)
+                && !tc.gpu_written.contains(&storage_id(tex))
+            {
+                return true;
+            }
+            let max_age = if per_storage.get(&k.storage).copied().unwrap_or(0) >= 2 {
+                SWEEP_AGE
+            } else if sweep_unshared {
+                UNSHARED_AGE
+            } else {
+                return false;
+            };
+            tc.desc_used.get(k).map_or(true, |&f| f + max_age < frame)
+        })
+        .map(|(k, _)| *k)
+        .collect();
+
+    if old.is_empty() {
+        return;
+    }
+
+    // Storage ids that a texture object still resolves to with its current contents.
+    let live: std::collections::HashSet<u64> = tc
+        .textures
+        .iter()
+        .filter(|(&a, _)| unsafe { tex_info(a) }.map(|(g, _)| g) == tc.tex_gens.get(&a).copied())
+        .map(|(_, t)| storage_id(t))
+        .collect();
+
+    let mut freed = 0;
+    for k in old {
+        let (tex, _) = match tc.tex_by_desc.get(&k) {
+            Some(entry) => entry,
+            None => continue,
+        };
+        let id = storage_id(tex);
+        if live.contains(&id) {
+            continue;
+        }
+        if tc.tex_by_desc.remove(&k).is_none() {
+            continue;
+        }
+        watch_log(k.storage, k.storage + 1, || {
+            format!(
+                "sweep evicted metal {:x} storage {:#x} ({}x{} fmt {}, gpu-written {})",
+                id,
+                k.storage,
+                k.width,
+                k.height,
+                k.format,
+                tc.gpu_written.contains(&id)
+            )
+        });
+        tc.desc_used.remove(&k);
+        tc.gpu_written.remove(&id);
+        tc.tex_checked.remove(&k);
+        tc.tex_sparse.remove(&k);
+        tc.tex_track_gen.remove(&k);
+
+        let to_remove: Vec<usize> = tc
+            .textures
+            .iter()
+            .filter(|(_, t)| storage_id(t) == id)
+            .map(|(&a, _)| a)
+            .collect();
+        for a in to_remove {
+            tc.textures.remove(&a);
+            tc.tex_gens.remove(&a);
+            tc.tex_memo.remove(&a);
+            tc.refresh_memo.remove(&a);
+            tc.alias_of.remove(&a);
+        }
+        freed += 1;
+    }
+    if freed > 0 {
+        bump_tex_epoch();
+    }
+    tc.desc_used.retain(|k, _| tc.tex_by_desc.contains_key(k));
+}
+
+/// Identity of a texture's storage: a view's parent, else the texture itself.
+pub(crate) fn storage_id(t: &Tex) -> u64 {
+    match t.parentTexture() {
+        Some(p) => Retained::as_ptr(&p) as *const () as u64,
+        None => Retained::as_ptr(t) as *const () as u64,
+    }
+}
+
+/// GPU-rendered textures in guest memory. On the Switch the GPU writes render targets into memory the CPU shares, and
+/// TotK's texture heap compaction moves textures with CPU copies (aglTextureDataMgr / tera::ImageResourceMgr): the
+/// terrain normal maps it renders once at load were moved as zeros here, so the grass vertex shader saw flat-zero
+/// normals and every grass fragment failed its alpha test (Hyrule Field nearly bare, issue 13). Exact emulation would
+/// trap CPU reads of GPU-written pages (as Ryujinx does); this approximation copies a render target back into guest
+/// memory one frame after it was drawn, but only targets not drawn in the 4 frames before (rendered once or rarely), so
+/// per-frame and alternating targets cost nothing after their first use. 2D, single-sample, uncompressed color targets only.
+/// --no-rt-writeback disables.
+pub(crate) fn rt_writeback_enabled() -> bool {
+    static E: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *E.get_or_init(|| !crate::settings::get().graphics.no_rt_writeback)
+}
+
+/// Writes last frame's write-back candidates into guest memory (their GPU work has completed: TotK waits for each
+/// frame's fence before presenting the next).
+/// Last command buffer holding draws into the render targets the next `writeback_pass` copies back.
+pub(crate) static WRITEBACK_SERIAL: AtomicU64 = AtomicU64::new(0);
+
+pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
+    let done = std::mem::replace(&mut st.writeback.1, std::mem::take(&mut st.writeback.0));
+    // Everything the candidates now in writeback.1 were drawn in is committed (present synced the issuer).
+    WRITEBACK_SERIAL.store(submitted_serial(), Ordering::Release);
+    let mut n = 0;
+    for (addr, _frame) in done {
+        let Some((_, t)) = tex_info(addr) else {
+            continue;
+        };
+        // Drawn again since (the game rendered it in the frame just submitted too): present waited for that rendering
+        // to finish, so the write-back copies the newest contents now. Postponing it until the game stopped drawing the
+        // target (dc6c9bf) wrote textures back long after the game had moved them (tera::ImageResourceMgr compacts its
+        // terrain textures with CPU copies) into memory it had reused: SIGSEGV at TotK 1.1.2 main+0xbecbf8 on a list node full of
+        // texels, reliably after unequipping a weapon in the inventory (2026-10-14). Skipping it (b743568) lost targets
+        // rendered over a few consecutive frames and then kept.
+        let Some(info) = crate::nvn::layout::format_info(t.format) else {
+            continue;
+        };
+        if info.block_w != 1 || t.target != 1 || t.samples > 1 || t.storage < 0x10000 {
+            continue;
+        }
+        // The texture may have been freed since it was drawn (the descriptor is the one recorded at initialization) and
+        // its memory returned to the game's heap: writing there corrupted live game data (2026-10-14: a list node of
+        // tera::ImageResourceMgr overwritten with texels, SIGSEGV at TotK 1.1.2 main+0xbecbf8 after ~7 minutes of play). On the
+        // Switch the GPU wrote this memory while it was still a texture; only memory still inside a live memory pool
+        // is written now.
+        if crate::nvn::api::containing_pool(t.storage, layout_of(&t).total as usize).is_none() {
+            if crate::settings::get().log.log_rt_writeback {
+                println!(
+                    "[writeback]   skipped {}x{} fmt {} storage {:#x}: not in a live memory pool",
+                    t.width, t.height, t.format, t.storage
+                );
+            }
+            continue;
+        }
+        let Some(tex) = g.texture(&mut st.tc, addr) else {
+            continue;
+        };
+        let mut real = tex.clone();
+        while let Some(p) = real.parentTexture() {
+            real = p;
+        }
+        if objc2_metal::MTLResource::storageMode(&*real) == MTLStorageMode::Private
+            || real.sampleCount() > 1
+            || crate::gpu::metal::copy::is_depth_stencil(real.pixelFormat())
+            || real.textureType() != MTLTextureType::Type2D
+        {
+            continue;
+        }
+        for level in 0..(t.levels.max(1) as usize).min(real.mipmapLevelCount()) {
+            let (w, h) = (
+                ((t.width as usize) >> level).max(1),
+                ((t.height as usize) >> level).max(1),
+            );
+            let bpp = info.bytes as usize;
+            let mut buf = vec![0u8; w * h * bpp];
+            let region = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize {
+                    width: w,
+                    height: h,
+                    depth: 1,
+                },
+            };
+            real.getBytes_bytesPerRow_fromRegion_mipmapLevel(
+                std::ptr::NonNull::new(buf.as_mut_ptr().cast()).unwrap(),
+                w * bpp,
+                region,
+                level,
+            );
+            crate::nvn::api::guest_write_level(&t, level, &buf);
+        }
+        if crate::settings::get().log.log_rt_writeback {
+            println!(
+                "[writeback]   {}x{} fmt {} levels {} storage {:#x}",
+                t.width, t.height, t.format, t.levels, t.storage
+            );
+        }
+        n += 1;
+    }
+    if n > 0 && crate::settings::get().log.log_rt_writeback {
+        println!(
+            "[writeback] f{} wrote {} render target(s) back to guest memory",
+            presented_frames(),
+            n
+        );
+    }
+}
+
+pub(crate) static UPLOADS: std::sync::Mutex<Option<HashMap<u64, (usize, u64, u64)>>> =
+    std::sync::Mutex::new(None);
+
+pub(crate) fn upload_record(id: u64) -> Option<(usize, u64, u64)> {
+    UPLOADS.lock().unwrap().as_ref()?.get(&id).copied()
+}
+
+pub(crate) unsafe fn current_guest_hash(nvn_tex: usize) -> Option<(usize, u64)> {
+    tex_info(nvn_tex).map(|(_, t)| (t.storage, guest_bytes_hash(&t)))
+}
+
+/// `tex_by_desc` hash of an entry whose guest bytes were not hashed yet (see the alias path in `texture`).
+pub(crate) const HASH_UNKNOWN: u64 = u64::MAX;
+
+/// Bytes fully hashed by `refresh_cpu_written` (printed per frame with the fps line).
+pub(crate) static REFRESH_HASHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Fast hash of a texture's guest bytes (detects new data streamed into reused memory).
+pub(crate) unsafe fn guest_bytes_hash(t: &NvnTexture) -> u64 {
+    if t.storage <= 0x10000 {
+        return 0;
+    }
+    let len = layout_of(t).total as usize;
+    let words = std::slice::from_raw_parts(t.storage as *const u64, len / 8);
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ len as u64;
+    for (i, w) in words.iter().enumerate() {
+        h = (h ^ w.wrapping_add(i as u64))
+            .rotate_left(27)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    h
+}
+
+/// Cheap content fingerprint: a few words from each mip level of each layer (up to 8 per level, spread over its pages).
+/// Streamed texels replace whole levels, so any new data changes it.
+pub(crate) unsafe fn sparse_bytes_hash(t: &NvnTexture, layout: &crate::nvn::layout::TextureLayout) -> u64 {
+    if t.storage <= 0x10000 {
+        return 0;
+    }
+    let base = t.storage as *const u8;
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ layout.total;
+    for layer in 0..layout.layers.max(1) as u64 {
+        for (&off, &size) in layout.level_offsets.iter().zip(&layout.level_sizes) {
+            let n = (size / 4096).clamp(1, 8);
+            let step = size / n;
+            for k in 0..n {
+                let o = layer * layout.layer_stride + off + (k * step + step / 2) / 8 * 8;
+                if o + 8 > layout.total {
+                    continue;
+                }
+                let w = std::ptr::read_unaligned(base.add(o as usize) as *const u64);
+                h = (h ^ w.wrapping_add(o))
+                    .rotate_left(27)
+                    .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            }
+        }
+    }
+    h
+}

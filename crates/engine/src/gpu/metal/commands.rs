@@ -1084,3 +1084,116 @@ impl Gfx {
         // No translation: the draw is skipped (translated.rs warns once per program).
     }
 }
+pub(crate) fn apply_vertex_input(st: &mut State, v: &crate::nvn::cmd::VertexInput) {
+    st.vertex_attribs = v.attribs;
+    st.vertex_streams.clone_from(&v.streams);
+    for &(i, a, n) in &v.buffers {
+        st.vertex_buffers.insert(i, (a, n));
+    }
+}
+
+pub(crate) fn apply_render_state(st: &mut State, r: &crate::nvn::cmd::RenderState) {
+    for &b in &r.blend {
+        st.blend_states[(b & 7) as usize] = b;
+    }
+    st.color_state = r.color;
+    st.channel_mask = r.channel_mask;
+    st.blend_color = r.blend_color;
+    st.depth_stencil = r.depth_stencil;
+    if let Some((mask, reference)) = r.stencil {
+        st.stencil = [[reference; 2], [mask; 2], [0xff; 2]];
+    }
+    st.polygon = r.polygon;
+    st.polygon_offset = r.polygon_offset;
+    st.depth_clamp = r.depth_clamp;
+}
+
+pub(crate) fn apply_model_bind(st: &mut State, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) {
+    use crate::nvn::cmd::ModelBindKind;
+    match kind {
+        ModelBindKind::Uniform { addr, size } => {
+            st.uniform_buffers.insert((stage, index), (addr, size));
+        }
+        ModelBindKind::Storage { addr, size } => {
+            if (0..6).contains(&stage) && (0..16).contains(&index) {
+                st.storage_buffers[stage as usize][index as usize] = (addr, size);
+            }
+        }
+        ModelBindKind::Texture(handle) => {
+            st.textures_bound.insert((stage, index), handle);
+        }
+        ModelBindKind::Vertex { addr, size } => {
+            st.vertex_buffers.insert(index, (addr, size));
+        }
+    }
+}
+
+pub(crate) fn apply_program(st: &mut State, program: usize, stages: i32) {
+    // NVN_SHADER_STAGE_COMPUTE_BIT: compute and graphics programs are bound independently.
+    if stages & 0x20 != 0 {
+        st.compute_program = Some(program);
+    }
+    if stages & 0x1F != 0 || stages == 0 {
+        st.program = Some(program);
+    }
+}
+
+pub(crate) unsafe fn apply_textures_deferred(st: &mut State, stage: i32, first: i32, count: i32, handles: u64) {
+    for i in 0..count.clamp(0, 32) {
+        let h = if handles > 0x10000 { std::ptr::read_unaligned((handles as *const u64).add(i as usize)) } else { 0 };
+        st.textures_bound.insert((stage, first + i), h);
+    }
+}
+
+pub(crate) fn set_viewport(st: &mut State, x: i32, y: i32, w: i32, h: i32) {
+    st.viewport = Some((x, y, w, h));
+    // The main 3D passes (3+ colour targets: the G-buffer) show the game's render resolution (its dynamic resolution
+    // scales the viewport): reported with the fps line.
+    if st.colors.len() >= 3 && w > 0 && h > 0 {
+        // Largest since the last report (area in the high bits).
+        let (w, h) = ((w as u64).min(0xFFFFF), (h as u64).min(0xFFFFF));
+        SCENE_VIEWPORT.fetch_max((w * h) << 40 | w << 20 | h, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn apply_fixed(st: &mut State, f: crate::nvn::cmd::FixedState) {
+    use crate::nvn::cmd::FixedState;
+    match f {
+        FixedState::Blend(v) => st.blend_states[(v & 7) as usize] = v,
+        FixedState::Color(v) => st.color_state = v,
+        FixedState::ChannelMask(v) => st.channel_mask = v,
+        FixedState::BlendColor(c) => st.blend_color = c,
+        FixedState::DepthStencil(v) => st.depth_stencil = v,
+        FixedState::Stencil { kind, faces, value } => {
+            // NVNface: FRONT 1, BACK 2, FRONT_AND_BACK 3.
+            let k = (kind as usize).min(2);
+            if faces & 1 != 0 {
+                st.stencil[k][0] = value as u8;
+            }
+            if faces & 2 != 0 {
+                st.stencil[k][1] = value as u8;
+            }
+        }
+        FixedState::DepthBounds { enable, min, max } => st.depth_bounds = enable.then_some((min, max)),
+        FixedState::Polygon(v) => st.polygon = v,
+        FixedState::PolygonOffset { factor, units, clamp } => st.polygon_offset = (factor, units, clamp),
+        FixedState::Multisample(v) => st.multisample = v,
+        FixedState::DepthClamp(v) => st.depth_clamp = v,
+        FixedState::Scissor { x, y, w, h } => st.scissor = Some((x, y, w, h)),
+        FixedState::Viewport { x, y, w, h } => set_viewport(st, x, y, w, h),
+        FixedState::DepthRange { near, far } => st.depth_range = (near, far),
+    }
+}
+
+pub(crate) unsafe fn update_uniform(st: &mut State, addr: u64, offset: isize, data: &[u8]) {
+    if addr > 0x10000 && !data.is_empty() {
+        let dest = (addr as isize + offset) as *mut u8;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), dest, data.len());
+        // Plan-side copies and encode-side copies overlapping the written range are stale now.
+        let (lo, hi) = (dest as u64, dest as u64 + data.len() as u64);
+        st.plan_ubo.invalidate(lo, hi);
+        st.cx.ubo_copies.invalidate(lo, hi);
+        st.ubo_plan_epoch += 1;
+        GUEST_WRITES.fetch_add(1, Ordering::Relaxed);
+    }
+}
