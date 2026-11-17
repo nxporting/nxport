@@ -283,6 +283,17 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   check or the release's headers, the thread layout from a game that runs on it, and the functions it changed. Layers
   with nothing verified still help: the log then says exactly which release a game uses.
 
+- **NVN device info: our answers vs the NVN 55.15 driver's table (2026-11-16, win-worker).** Savage Wind (MIT,
+  runtime/nvn/objects.c) read nvnDeviceGetInteger's whole table from the driver in BotW 1.8.2's sdk. Queries nxport had
+  no answer for (BotW asks 24, the recommended scratch scale factor, and 85, the default queue compute memory size;
+  both got a generic 256) now take the driver's value (nvn/api.rs NVN_55_DEVICE_TABLE). Mapped answers that differ from
+  the driver, to review one by one (some may be deliberate): 11 / 12 transform feedback buffer / control alignment (ours
+  0x100, driver 4); 20 command buffer control alignment (4, 8); 25 shader scratch memory alignment (0x20, 0x1000);
+  28 / 31 max compute work group size X / threads (1024, 0x600); 47 min supported GPU code major version (0, 1);
+  49 min supported GPU code minor version (0, 5); 58 memory pool page size (0x10000, 0x1000: likely deliberate for
+  Apple's 16 KB pages and host import; check before changing); 60 uniform buffer update alignment (0x100, 4). The
+  driver version per game differs (TotK's is newer); the table is BotW's. BotW 1.0.0 still crashes the same way with the
+  table (so these two were not its cause).
 - **BotW 1.0.0 crashes on Windows after its first frame (2026-11-14, win-worker).** Retested 2026-11-15 on main (bf93f40 +):
   same crash in f_7000f52794 (the EmergencyHeap listener), now before the first frame. Base-only mount for tests:
   (host build note redacted)

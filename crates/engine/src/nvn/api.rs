@@ -841,13 +841,33 @@ pub unsafe extern "C" fn hle_nvnDeviceGetInteger(_device: *const (), pname: i32,
             ZCULL_SAVE_RESTORE_ALIGNMENT => 0x20,
             LINEAR_TEXTURE_STRIDE_ALIGNMENT => crate::nvn::layout::LINEAR_TEXTURE_STRIDE_ALIGNMENT as i32,
             LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT => crate::nvn::layout::LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT as i32,
-            other => {
-                println!("[!] nvnDeviceGetInteger: unmapped pname {} (0x{:x}), returning 256 as a generic default", other, other);
-                256
-            }
+            other => match NVN_55_DEVICE_TABLE.get(other as usize) {
+                Some(&v) => v as i32,
+                None => {
+                    println!("[!] nvnDeviceGetInteger: unmapped pname {} (0x{:x}), returning 256 as a generic default", other, other);
+                    256
+                }
+            },
         };
     }
 }
+
+/// What the NVN 55.15 driver (BotW 1.8.2's) answers for each device info, as Savage Wind (MIT) read it from the
+/// driver's table: the answer for queries nxport has no reasoned value of its own for (above). Indices 23 / 24 are the
+/// scratch memory scale factors (minimum, recommended), 85 the default per-queue compute memory size.
+const NVN_55_DEVICE_TABLE: [u32; 105] = [
+    55, 15, 14, 0x10000, 0x100, 8, 0x10, 4, 0x10, 0x20, // 0-9
+    0x10, 4, 4, 4, 0x10, 0x20, 0x20, 0x100, 0x100, 4, // 10-19
+    8, 0x200, 0x100, 256, 256, 0x1000, 0x20000, 0x10, 0x600, 0x400, // 20-29
+    0x40, 0x600, 0xffff, 0xffff, 0xffff, 8, 0x100000, 0x1000, 0x10, 0x1000, // 30-39
+    1, 1, 1, 0x40000, 0xf, 0x800, 1, 1, 0x10, 5, // 40-49
+    1, 8, 8, 4, 0x20, 256, 0x20, 0x80, 0x1000, 1, // 50-59
+    4, 16384, 0x8000000, 2048, 16384, 16384, 1, 1, 1, 1, // 60-69
+    5, 1, 1, 1, 1, 1, 1, 0x10, 0x400, 0x20, // 70-79
+    0x1000, 0x10000, 0x10000, 0x100, 0x4000, 0x40000, 0x1000, 1, 4, 2, // 80-89
+    0, 0x1000, 0x4000, 0x1000, 0x80, 0x20, 0xffff, 1, 0x20, 0x100, // 90-99
+    0x10, 0xffff, 0xffff, 0x100, 0x3fff, // 100-104
+];
 
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnDeviceGetProcAddress(
