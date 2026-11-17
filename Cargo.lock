@@ -748,7 +748,7 @@ dependencies = [
  "lz4_flex",
  "naga",
  "nxport-lifter",
- "nxport-media",
+ "nxport-medialib",
  "nxport-pipelines",
  "objc2",
  "objc2-app-kit",
@@ -814,7 +814,7 @@ name = "nxport-lifter"
 version = "0.1.0"
 
 [[package]]
-name = "nxport-media"
+name = "nxport-medialib"
 version = "0.1.0"
 dependencies = [
  "matroska-demuxer",

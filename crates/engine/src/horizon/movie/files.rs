@@ -1,10 +1,10 @@
-// Movie files through crates/media: the extractor and decoder hold their file and decoder as handles and talk to them
+// Movie files through crates/medialib: the extractor and decoder hold their file and decoder as handles and talk to them
 // through these functions.
 
 use super::*;
 
-// ── Movie files (crates/media) ─────────────────────────────────────────────────────────────────────────────────────
-// The extractor and decoder below hold their file and decoder as handles (a boxed nxport_media::Source / Decoder) and
+// ── Movie files (crates/medialib) ─────────────────────────────────────────────────────────────────────────────────────
+// The extractor and decoder below hold their file and decoder as handles (a boxed nxport_medialib::Source / Decoder) and
 // talk to them through these functions: sizes and statuses as ints, -1 at the end, -2 when a buffer is too small.
 #[derive(Default, Clone, Copy)]
 pub(crate) struct TrackInfo {
@@ -34,7 +34,7 @@ pub(crate) struct Media {
 }
 
 pub(crate) fn media() -> &'static Media {
-    use nxport_media::{Codec, Decoder, Kind, Output, Source};
+    use nxport_medialib::{Codec, Decoder, Kind, Output, Source};
     unsafe fn src<'a>(h: *mut c_void) -> &'a mut Source {
         &mut *(h as *mut Source)
     }
@@ -43,7 +43,7 @@ pub(crate) fn media() -> &'static Media {
     }
     static MEDIA: Media = Media {
         open: |path, n| unsafe {
-            nxport_media::set_hardware_video(crate::settings::get().graphics.hw_video);
+            nxport_medialib::set_hardware_video(crate::settings::get().graphics.hw_video);
             let p = CStr::from_ptr(path).to_string_lossy().into_owned();
             match Source::open(std::path::Path::new(&p)) {
                 Ok(s) => {
