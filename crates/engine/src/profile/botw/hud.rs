@@ -12,8 +12,11 @@
 // - Panes that clip what they hold (the minimap) turn their rectangle into a scissor of the 16:9 canvas
 //   (main+0xf66f0c): that rectangle is moved to where the layout is shown (scissor_pane), or the clip stayed at the 16:9
 //   place while the minimap moved inward.
-// The panes are the layouts' own (names and sizes as the game's layout files have them: each listed pane is as large
-// as the 1280x720 layout).
+// - Panes the game keeps just past the 16:9 screen's right edge (OUTSIDE: the pause menu's strips that show its pages
+//   sliding in, captured from beyond the screen) come into view on a wider screen, as dark bands: they are hidden
+//   while the screen is wider than 16:9.
+// The panes are the layouts' own (names, sizes and places as the game's layout files have them: each FILL pane is as
+// large as the 1280x720 layout, each OUTSIDE pane lies wholly right of x = 640).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,12 +59,44 @@ const FILL: [(&str, &str); 8] = [
     ("Title_00", "P_BackGround_00"),
 ];
 
-/// Per layout object: its name pointer and root pane (a layout rebuilt at the same address has others), and the scale
-/// of each pane that fills the screen.
+/// (layout, pane): panes past the 16:9 screen's right edge (the pause menu's page slide strips, x 641 to 741, and the
+/// item panel's, at its height).
+const OUTSIDE: [(&str, &str); 4] = [
+    ("PauseMenu_00", "P_CaptureSlideR_00"),
+    ("PauseMenu_00", "P_CaptureSlideR_01"),
+    ("PauseMenuInfo_00", "P_CaptureSlideR_00"),
+    ("PauseMenuInfo_00", "P_CaptureSlideR_01"),
+];
+
+/// A pane's visibility (flags bit 0) the hook overrides: the game's own value and what was last written.
+struct Visibility {
+    pane: usize,
+    base: bool,
+    written: Option<bool>,
+}
+
+impl Visibility {
+    unsafe fn set(&mut self, hide: bool) {
+        let flags = (self.pane + PANE_FLAGS) as *mut u8;
+        let cur = *flags & 1 != 0;
+        if self.written != Some(cur) {
+            self.base = cur;
+        }
+        let v = self.base && !hide;
+        self.written = Some(v);
+        if v != cur {
+            *flags = (*flags & !1) | v as u8;
+        }
+    }
+}
+
+/// Per layout object: its name pointer and root pane (a layout rebuilt at the same address has others), the scale of
+/// each pane that fills the screen, and the panes hidden past its edge.
 struct Layout {
     name_ptr: usize,
     root: usize,
     panes: Vec<(usize, Field, Field)>,
+    outside: Vec<Visibility>,
 }
 
 static LAYOUTS: Mutex<Option<HashMap<usize, Layout>>> = Mutex::new(None);
@@ -100,14 +135,23 @@ pub fn calculate(layout: usize) {
                 .filter_map(|(_, p)| find_pane(root, p.as_bytes(), PANE_NAME))
                 .map(|p| (p, Field::new(p + PANE_SCALE_X), Field::new(p + PANE_SCALE_Y)))
                 .collect();
-            if panes.is_empty() {
+            let outside: Vec<_> = OUTSIDE
+                .iter()
+                .filter(|(l, _)| l.as_bytes() == name)
+                .filter_map(|(_, p)| find_pane(root, p.as_bytes(), PANE_NAME))
+                .map(|pane| Visibility { pane, base: *((pane + PANE_FLAGS) as *const u8) & 1 != 0, written: None })
+                .collect();
+            if panes.is_empty() && outside.is_empty() {
                 layouts.remove(&layout);
                 return;
             }
-            layouts.insert(layout, Layout { name_ptr, root, panes });
+            layouts.insert(layout, Layout { name_ptr, root, panes, outside });
         }
         let Some(entry) = layouts.get_mut(&layout) else { return };
         let (fx, fy) = fill_factors();
+        for v in &mut entry.outside {
+            v.set(fx > 1.0);
+        }
         for (p, x, y) in &mut entry.panes {
             if x.set(|v| v * fx) | y.set(|v| v * fy) {
                 *((*p + PANE_FLAGS) as *mut u8) |= FLAG_MTX_DIRTY;
