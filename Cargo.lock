@@ -748,7 +748,7 @@ dependencies = [
  "lz4_flex",
  "naga",
  "nxport-buildscriptlib",
- "nxport-lifter",
+ "nxport-lifterlib",
  "nxport-medialib",
  "nxport-metalshaderlib",
  "nxport-pipelines",
@@ -801,7 +801,7 @@ dependencies = [
  "image",
  "libc",
  "nxport",
- "nxport-lifter",
+ "nxport-lifterlib",
  "nxport-metalshaderlib",
  "nxport-pipelines",
  "regex",
@@ -818,7 +818,7 @@ name = "nxport-buildscriptlib"
 version = "0.1.0"
 
 [[package]]
-name = "nxport-lifter"
+name = "nxport-lifterlib"
 version = "0.1.0"
 
 [[package]]

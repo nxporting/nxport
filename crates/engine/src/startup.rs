@@ -1400,12 +1400,12 @@ unsafe fn lifted_access_fault(addr: usize, write: bool, pc: usize) -> bool {
 /// counter is lifted_ticks, and traps and branches to code nothing lifted stop the process with the guest's state.
 #[cfg(all(nx_runtime, not(nx_native)))]
 fn lifted_handlers() -> guest::exec::lifted::Handlers {
-    fn svc(cpu: &mut nxport_lifter::abi::Cpu, imm: u32, _pc: u64) {
+    fn svc(cpu: &mut nxport_lifterlib::abi::Cpu, imm: u32, _pc: u64) {
         let mut regs: [u64; 8] = cpu.x[..8].try_into().unwrap();
         unsafe { horizon::svc::svc_dispatch(&mut regs, imm as u64) };
         cpu.x[..8].copy_from_slice(&regs);
     }
-    fn stop(cpu: &nxport_lifter::abi::Cpu, what: &str) -> ! {
+    fn stop(cpu: &nxport_lifterlib::abi::Cpu, what: &str) -> ! {
         let main = guest::loader::main_base() as u64;
         let rel = |a: u64| if a >= main { format!("{a:#x} (main+{:#x})", a - main) } else { format!("{a:#x}") };
         eprintln!("[-] Lifted: {what}; pc {}, lr {}, sp {:#x}", rel(cpu.pc), rel(cpu.x[30]), cpu.sp);
@@ -1421,11 +1421,11 @@ fn lifted_handlers() -> guest::exec::lifted::Handlers {
         }
         std::process::exit(1);
     }
-    fn trap(cpu: &mut nxport_lifter::abi::Cpu, kind: u32, imm: u32, pc: u64) -> ! {
+    fn trap(cpu: &mut nxport_lifterlib::abi::Cpu, kind: u32, imm: u32, pc: u64) -> ! {
         cpu.pc = pc;
         stop(cpu, &if kind == 0 { format!("brk #{imm:#x}") } else { "an instruction that was not lifted".to_string() })
     }
-    fn unknown(cpu: &mut nxport_lifter::abi::Cpu) {
+    fn unknown(cpu: &mut nxport_lifterlib::abi::Cpu) {
         #[cfg(windows)]
         if guest::exec::live_patch::run_unknown(cpu) {
             return;

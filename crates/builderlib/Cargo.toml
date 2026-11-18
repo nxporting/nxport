@@ -21,7 +21,7 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 libc = "0.2"
 sass2spv = { path = "../sass2spv" }
-nxport-lifter = { path = "../lifter" }
+nxport-lifterlib = { path = "../lifterlib" }
 sha2 = "0.10"
 ash = "0.38"
 nxport-pipelines = { path = "../pipelines" }

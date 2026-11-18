@@ -1,6 +1,6 @@
 // Guest code that mods patch while the game runs, on a host running lifted code. The base library's version of a changed
 // function is out of date, so its x86 entry is pointed at a stub that runs the current guest instructions in
-// nxport_lifter::interp, at once; meanwhile the function is lifted and compiled in the background (or found compiled, by
+// nxport_lifterlib::interp, at once; meanwhile the function is lifted and compiled in the background (or found compiled, by
 // the hash of its code, from an earlier run) and its entry is pointed at the result. Code the interpreter declines waits
 // for that compile. `guest.live-patches` turns all this on.
 //
@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 
-use nxport_lifter::abi::Cpu;
-use nxport_lifter::interp::{self, Stop};
+use nxport_lifterlib::abi::Cpu;
+use nxport_lifterlib::interp::{self, Stop};
 
 /// A guest library's function table: addresses sorted, and the x86 function of each.
 #[derive(Clone, Copy)]
@@ -142,7 +142,7 @@ impl State {
     /// of a function), functions out of date, and HLE trampolines a mod hooked. Not the others, which the dispatcher calls,
     /// nor the common code all trampolines branch to (run_hle).
     fn interpreted(&self, pc: u64) -> bool {
-        if pc == nxport_lifter::abi::RETURN_TO_HOST || pc == HLE_POOL.load(Ordering::Relaxed) as u64 {
+        if pc == nxport_lifterlib::abi::RETURN_TO_HOST || pc == HLE_POOL.load(Ordering::Relaxed) as u64 {
             return false;
         }
         // Asked at every call and branch target of interpreted code: with a plugin hooking the game's NVN calls, on the
@@ -686,8 +686,8 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
     }
     // Jump tables lie in the module's rodata: the image reaches past the code. Only what the lifter asks for is read.
     let image = unsafe { std::slice::from_raw_parts(func as *const u8, IMAGE_SPAN) };
-    let module = nxport_lifter::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone(), functions: std::collections::BTreeSet::new() };
-    let out = nxport_lifter::lift_module(&module, &Default::default());
+    let module = nxport_lifterlib::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone(), functions: std::collections::BTreeSet::new() };
+    let out = nxport_lifterlib::lift_module(&module, &Default::default());
     // The cache name hashes the function's bytes, and some differ from run to run without changing the lifted code (a
     // plugin's trampoline area holds this run's pointers, read at run time): 6 of a start's compiles with UltraCam were
     // of C an earlier run had compiled. The same C compiles to the same library.
@@ -696,7 +696,7 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
         return Ok(found);
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    for (file, body) in nxport_lifter::RUNTIME_FILES {
+    for (file, body) in nxport_lifterlib::RUNTIME_FILES {
         std::fs::write(dir.join(file), body).map_err(|e| e.to_string())?;
     }
     let mut sources = vec!["rt.c".to_string()];
@@ -734,7 +734,7 @@ fn by_source_key(state: &State, name: &str, files: &[(String, String)]) -> u64 {
         text.extend_from_slice(file.replace(name, "\u{1}").as_bytes());
         text.extend_from_slice(body.replace(name, "\u{1}").as_bytes());
     }
-    for (file, body) in nxport_lifter::RUNTIME_FILES {
+    for (file, body) in nxport_lifterlib::RUNTIME_FILES {
         text.extend_from_slice(file.as_bytes());
         text.extend_from_slice(body.as_bytes());
     }
