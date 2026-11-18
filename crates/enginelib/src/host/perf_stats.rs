@@ -177,6 +177,13 @@ pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32], co
             imgui::Condition::Always as i32,
             imgui::sys::ImVec2 { x: 1.0, y: 0.0 },
         );
+        // The widest it has been: the window keeps that width instead of following each frame's numbers.
+        imgui::sys::igSetNextWindowSizeConstraints(
+            imgui::sys::ImVec2 { x: f32::from_bits(WIDEST.load(std::sync::atomic::Ordering::Relaxed)), y: 0.0 },
+            imgui::sys::ImVec2 { x: f32::MAX, y: f32::MAX },
+            None,
+            std::ptr::null_mut(),
+        );
     }
 
     ui.window("Performance##Overlay")
@@ -229,8 +236,15 @@ pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32], co
             if compiling {
                 ui.text_colored([0.95, 0.85, 0.2, 1.0], "Compiling shaders");
             }
+            let width = ui.window_size()[0];
+            if width > f32::from_bits(WIDEST.load(std::sync::atomic::Ordering::Relaxed)) {
+                WIDEST.store(width.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
         });
 }
+
+#[cfg(any(target_os = "macos", target_os = "ios", windows))]
+static WIDEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 
 /// While listed pipelines are still compiling (gpu::pipeline_list::take_frame_progress): a bar at the bottom of the
