@@ -19,16 +19,16 @@ and update this file when you finish or drop it.
   dark band right of the item description. Also seen at 21:9: map (16:9 centred, its frame's pattern at the sides),
   start screen and save list (16:9 centred), loading screen (black and top band fill, tips and logo stay 16:9).
   The inventory list's sixth column is cut at the same layout place at 16:9 (the next page peeking in): the game's.
-  Open: the pause background (a blurred capture of the game) shows the world about 1/F narrower than the game did
-  just before (pillar edge measured: expected x 151, seen ~229 of the middle 960 px); not fixed. Followed so far:
-  the visible picture is PauseMenuBG_00's P_Capture_00 showing N_Capture_00's texture (capture pane: vtable
-  main+0x1d0cec8, calculate main+0xf59b2c, draw main+0xf59c40, texture setup main+0xf5a028, which sizes the copy in
-  pixels from the pane's size x canvas width / the layout's width at layout+0x28, and draws with an ortho of the
-  pane's size, main+0xeb4c44). Its content does not depend on P_Capture_00's scale (x F and x F^2 look the same;
-  only how far it covers changes), but does on the layout's width: PauseMenuBG_00's width x F zoomed and moved it
-  (Link at x 430 of 1258 instead of 629), so the mapping is not simply UV = 0.5 + x / width. Next: read how
-  P_Capture_00's texture coordinates are made (its material's texture projection, likely from the capture pane's
-  rectangle in main+0xf5a028's x20 / x29-0x70) before choosing what to widen. Also not looked at:
+  Pause background fixed (hud.rs layout_fit; it showed the world 1/F narrower: pillar edge at x ~229 instead of 151
+  of the middle 960 px). The capture pane's copy (texture setup main+0xf5a028, copy call main+0xf5a5b0) already
+  holds the whole wide screen (fraction copied: 1 at 21:9); P_Capture_00 shows it through a projection texgen
+  fitted to the layout's size (main+0x2deb0, size choice main+0x2df24, flag bit 0), the 16:9 screen in layout
+  units. The fitted size is now the layout's size as the screen shows it (width x F wider, height / f narrower).
+  Measured at 21:9 (row profiles of pillar / ridge edges, gameplay frame vs pause frame): within 1-3 px (blur)
+  across the whole width, sides included, in 1.9.0 and 1.0.0 (same code at main+0x9c7f04); 16:9 unchanged.
+  1.5.0: find the same `ldr x8, [x20, #0xc0]; ldp <w>, <h>, [x8, #0x28]; b; ldp <w>, <h>, [x3]` in its projection
+  texgen and set HUD_V1_5_0.texgen. Smaller capture panes still copy their 16:9 place on the screen (their copy
+  rectangle is not scaled about the centre); not seen to matter. Also not looked at:
   event fades other than Fade_00, pre-rendered movies, 4:3 (Vert+) captures, a live window resize.
 
 
