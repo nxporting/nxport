@@ -225,10 +225,6 @@ group! {
         fixed_guest_base: bool = false,
         /// The game's main memory block in an unlinked sparse file instead of anonymous memory (memory limits on iOS)
         file_backed_memory: bool = false,
-        /// Run one guest thread per core at a time, as the console does (game code only; engine calls release the core)
-        guest_cores: bool = false,
-        /// Bind main's imports to the game's own subsdk libraries and run their initialisers (experiment)
-        run_game_subsdk: bool = false,
     }
 }
 
