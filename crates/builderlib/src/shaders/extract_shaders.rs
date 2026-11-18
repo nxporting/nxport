@@ -131,6 +131,38 @@ pub fn read_romfs_file(path: &Path, dicts: &HashMap<String, Vec<u8>>) -> Result<
     decompress_zstd(&raw, dict)
 }
 
+/// A file and, for a SARC archive, the files in it instead (Yaz0-compressed ones decompressed, archives in archives
+/// opened in turn): BotW keeps its shader archives as compressed files inside its packs, where a scan of the pack's
+/// bytes cannot see them.
+fn unpacked(data: Vec<u8>) -> Vec<Vec<u8>> {
+    if !data.starts_with(b"SARC") {
+        return vec![data];
+    }
+    let Ok(files) = crate::sarc::read_sarc(&data) else {
+        return vec![data];
+    };
+    // Archives of plain files are scanned whole, as before (stages keep the order they are found in).
+    if !files.values().any(|f| f.starts_with(b"Yaz0") || f.starts_with(b"SARC")) {
+        return vec![data];
+    }
+    // In name order: the `<weak>_<n>` numbering follows the order stages are found.
+    let mut files: Vec<_> = files.into_iter().collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = Vec::new();
+    for (_, f) in files {
+        let f = if f.starts_with(b"Yaz0") {
+            match decompress_yaz0(&f) {
+                Ok(d) => d,
+                Err(_) => continue,
+            }
+        } else {
+            f
+        };
+        out.extend(unpacked(f));
+    }
+    out
+}
+
 pub fn bnsh_blobs(data: &[u8]) -> Vec<&[u8]> {
     let mut blobs = Vec::new();
     let mut i = 0;
@@ -412,7 +444,8 @@ fn files_identity(romfs: &Path, lists: &[(&str, Vec<PathBuf>)]) -> u64 {
         })
         .collect();
     entries.sort();
-    let mut bytes = Vec::new();
+    // What extraction reads in them: raised when it finds more (2: files inside SARC packs).
+    let mut bytes = b"2\0".to_vec();
     for (rel, len) in entries {
         bytes.extend(rel.as_bytes());
         bytes.push(0);
@@ -535,21 +568,23 @@ pub fn extract_all(
                             cb(ShaderExtractPhase::ExtractingStages, done, total_files);
                         }
                         let Ok(data) = read_romfs_file(&chunk[idx], &dicts) else { continue };
-                        let is_raw_nvn = data.len() >= 16 && {
-                            let first = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
-                            first >= 8 && first + 4 <= data.len() && u32::from_le_bytes(data[first..first + 4].try_into().unwrap()) == 0x98761234
-                        };
-                        if !data.windows(4).any(|w| w == b"BNSH" || w == b"BAHS") && !is_raw_nvn {
-                            continue;
-                        }
                         let mut found = Vec::new();
-                        for b in bnsh_blobs(&data) {
-                            found.extend(bnsh_stages(b));
+                        for data in unpacked(data) {
+                            let is_raw_nvn = data.len() >= 16 && {
+                                let first = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+                                first >= 8 && first + 4 <= data.len() && u32::from_le_bytes(data[first..first + 4].try_into().unwrap()) == 0x98761234
+                            };
+                            if !data.windows(4).any(|w| w == b"BNSH" || w == b"BAHS") && !is_raw_nvn {
+                                continue;
+                            }
+                            for b in bnsh_blobs(&data) {
+                                found.extend(bnsh_stages(b));
+                            }
+                            for s in shab_blobs(&data) {
+                                found.extend(shab_stages(s));
+                            }
+                            found.extend(raw_nvn_stages(&data));
                         }
-                        for s in shab_blobs(&data) {
-                            found.extend(shab_stages(s));
-                        }
-                        found.extend(raw_nvn_stages(&data));
                         *results[idx].lock().unwrap() = found;
                     });
                 }
