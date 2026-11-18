@@ -491,7 +491,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   Then Windows-only: a jump table at main+0x109b918 lifted with 2 of 4 cases (jt.rs bound() took an earlier compare);
   fixed in the lifter (win-worker), checking.
   control 0 for these. Later (847 calls): BindVertexAttribState 68, BindVertexStreamState 68, BindVertexBuffer 24, DrawElements 60;
-  rarer larger deltas include calls not hooked in between (Program 128, SetRenderTargets 96-320: to confirm) (log: nxport-builderlib/ryu_cmds.out, tool:
+  rarer larger deltas include calls not hooked in between (Program 128, SetRenderTargets 96-320: to confirm).
+  BotW 1.9.0 driver (55.15; NVNcommandBuffer command used = [cb+0x00]-[cb+0x30], control = [cb+0x20]-[cb+0x38]),
+  measured the same way (413 calls, the stub then failed): AttribState 68, StreamState 68, VertexBuffer 24, Texture 20,
+  DrawElementsInstanced 44, all control 0, identical to 52.32; UniformBuffer gave 0 / 60 / 864 with 56 control bytes in
+  4 samples (probably a switch to a new memory chunk at that call), so not yet a per-command size for 55.15 (log: nxport-builderlib/ryu_cmds.out, tool:
   a throwaway RSP client, "multi" mode, scratchpad rsp/). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
