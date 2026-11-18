@@ -185,7 +185,7 @@ pub static HUD_V1_5_0: hud::Sites = hud::Sites {
     layout: [(0xab7738, hud::layout_code_v1_5(0x9100_23e2)), (0xbde5e8, hud::layout_code_v1_5(0x9100_03e2))],
     scissor: (0xbe2080, 0xb20510),
     scissor_code: hud::SCISSOR_CODE,
-    texgen: None,
+    texgen: Some((0xac4530, hud::TEXGEN_CODE_V1_0)),
 };
 
 #[cfg(nx_runtime)]
