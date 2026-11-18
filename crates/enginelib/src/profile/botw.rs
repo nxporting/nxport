@@ -106,6 +106,10 @@ pub static ASPECT_V1_9_0: aspect::Sites = aspect::Sites {
     }],
     perspective: (0x1d05380, 0xeb4a44),
     frustum: (0x1d05480, 0xeb4f24),
+    // The screens' views: made once by main+0x10ed664 (0x208 bytes; its views' projections set by main+0x10eda5c).
+    world_cameras: Some(0x1e39d10),
+    // ksys::evt::Manager: made by main+0x110bf98 (0x1d438 bytes); hasActiveEvent main+0x110df98.
+    event_manager: Some(0x1e3a638),
 };
 
 /// 1.9.0's layout calculations (hud.rs): the library's (`mov x2, sp`) and the game's layout class's (`add x2, sp, #8`);
@@ -144,6 +148,10 @@ pub static ASPECT_V1_0_0: aspect::Sites = aspect::Sites {
     ],
     perspective: (0x21b75e0, 0xa22d74),
     frustum: (0x21b76e0, 0xa232d0),
+    // The screens' views: made by main+0xc121f0 (as 1.9.0's; its views' projections set by main+0x10dfd2c).
+    world_cameras: Some(0x22de770),
+    // ksys::evt::Manager (through the GOT entry main+0x2264738); hasActiveEvent main+0xc363c8, the same offset.
+    event_manager: Some(0x22def10),
 };
 
 /// 1.0.0's layout calculations (in 1.5.0's order) and the clipping pane's scissor call (its rectangle at sp + 8).
@@ -180,6 +188,9 @@ pub static ASPECT_V1_5_0: aspect::Sites = aspect::Sites {
     ],
     perspective: (0x24bf9e8, 0xb1dfa0),
     frustum: (0x24bfae8, 0xb1e4e0),
+    // Not found for this version yet: the field of view stays the game's.
+    world_cameras: None,
+    event_manager: None,
 };
 
 /// 1.5.0's layout calculations (nn::ui2d::Layout::CalculateImpl, eui::LayoutEx::CalculateImpl) and

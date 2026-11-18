@@ -34,6 +34,19 @@ and update this file when you finish or drop it.
   texgen and set HUD_V1_5_0.texgen. Smaller capture panes still copy their 16:9 place on the screen (their copy
   rectangle is not scaled about the centre); not seen to matter. Also not looked at:
   event fades other than Fade_00, pre-rendered movies, 4:3 (Vert+) captures, a live window resize.
+- BotW field of view (Savage Wind's Video > Field of view), win-worker subagent, 2026-11-18. **Done for 1.9.0 and
+  1.0.0** (profile/botw/aspect.rs; setting display.field_of_view, 70-150, 100 = the game's; title menu > Field of
+  View, kept per game). The world camera's projection is found from the game's objects, not from its far plane: a
+  singleton of views per screen (1.9.0 global main+0x1e39d10, made by main+0x10ed664; 1.0.0 main+0x22de770, made by
+  main+0xc121f0) holds view 0 at +0x28 with its PerspectiveProjection at +0x10 (so +0x38), set every frame by
+  main+0x10eda5c (1.0.0 main+0x10dfd2c) from the camera's fovy +0x74, near/far +0x6c/+0x70 and the screen layer's
+  viewport. A probe scanning main's data for references to the far-25000 16:9 projection in play found only this
+  global (and the singleton disposer at -8). Events: ksys::evt::Manager (1.9.0 main+0x1e3a638; 1.0.0 main+0x22def10
+  via GOT main+0x2264738), active event +0x1d2b8 as hasActiveEvent reads it (main+0x110df98 / main+0xc363c8). The
+  factor is chosen at each update of that projection, so it switches in the frame the event state changes (seen in
+  the log: in play / event lines around the new game's opening). 1.5.0 left None: find the singleton (0x208 bytes,
+  views at +0x28 / +0x118 built with index 0 / 1, the setter calling PerspectiveProjection::setFovy with the camera's
+  +0x74 on view+0x10) and ksys::evt::Manager's instance plus hasActiveEvent's offset.
 
 
 ## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)

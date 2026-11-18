@@ -142,7 +142,7 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [no_vsync, low_latency, frame_limit, perf_overlay, fps_in_title, launch_aspect, stretch] {
+    Window "Display" [no_vsync, low_latency, frame_limit, perf_overlay, fps_in_title, launch_aspect, stretch, field_of_view] {
         /// No window (frame dumps still work)
         headless: bool = false,
         /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
@@ -162,6 +162,9 @@ group! {
         launch_aspect: Option<Aspect> = None,
         /// Fill the window edge to edge
         stretch: bool = false,
+        /// Breath of the Wild: the field of view in play, percent of the game's own (70 to 150; 100: the game's).
+        /// Cutscenes, conversations and other events keep the game's framing
+        field_of_view: u32 = 100,
     }
 }
 
