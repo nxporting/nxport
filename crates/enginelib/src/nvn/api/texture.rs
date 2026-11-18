@@ -296,10 +296,27 @@ pub unsafe extern "C" fn hle_nvnTextureInitialize(
     if tex.is_null() || builder.is_null() {
         return 0;
     }
+    let fp = crate::guest_reg!(x29);
+    crate::profile::texture_initialized((*builder).width.max(0) as u32, (*builder).height.max(0) as u32, fp);
     if log_init {
         let b = &*builder;
-        println!("[tex-init] tex={:p} {}x{}x{} lv{} fmt {} flags {:#x} target {} pool {:#x}+{:#x} size {:#x} layout {} caller=base+{:#x} thread {}", tex, b.width, b.height, b.depth, b.levels, b.format, b.flags, b.target, b.pool, b.pool_offset, texture_builder_storage_size(builder),
-            if b.has_packaged_layout != 0 { format!("{:02x?}", b.packaged_layout) } else { "-".into() }, rel_lr, std::thread::current().name().unwrap_or("?"));
+        // Up to four more callers through the guest frame pointers (main-relative where they are in main).
+        let mut chain = String::new();
+        let mut f = fp;
+        for _ in 0..4 {
+            if f == 0 || !crate::profile::readable(f, 16) {
+                break;
+            }
+            let ret = *((f + 8) as *const usize);
+            chain += &format!(" {:#x}", if ret >= base && base != 0 { ret - base } else { ret });
+            let next = *(f as *const usize);
+            if next <= f {
+                break;
+            }
+            f = next;
+        }
+        println!("[tex-init] tex={:p} {}x{}x{} lv{} fmt {} flags {:#x} target {} pool {:#x}+{:#x} size {:#x} layout {} caller=base+{:#x}{} thread {}", tex, b.width, b.height, b.depth, b.levels, b.format, b.flags, b.target, b.pool, b.pool_offset, texture_builder_storage_size(builder),
+            if b.has_packaged_layout != 0 { format!("{:02x?}", b.packaged_layout) } else { "-".into() }, rel_lr, chain, std::thread::current().name().unwrap_or("?"));
     }
     let storage = if (*builder).pool != 0 {
         let pool = &*((*builder).pool as *const NvnMemoryPool);

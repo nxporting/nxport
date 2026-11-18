@@ -310,6 +310,26 @@ pub fn rendered_aspect() -> Option<f64> {
     }
 }
 
+/// The size the game renders its 3D scene at (resolution scaling's size classes), where its profile knows how to read
+/// it. None: unknown, so nothing scales.
+pub fn scene_size() -> Option<(u32, u32)> {
+    match active().kind {
+        GameKind::BotW => botw::render_size::scene_size(),
+        _ => None,
+    }
+}
+
+/// A texture of `width` x `height` was initialized with the guest frame pointer `fp` (games that read their scene size
+/// from where its targets are made).
+///
+/// # Safety
+/// `fp` is the guest's frame pointer at the initialization.
+pub unsafe fn texture_initialized(width: u32, height: u32, fp: usize) {
+    if active().kind == GameKind::BotW {
+        botw::render_size::texture_initialized(width, height, fp);
+    }
+}
+
 /// Whether the game will render at the screen's shape (known before its code is patched: the window opens at that
 /// shape).
 pub fn renders_screen_shape() -> bool {

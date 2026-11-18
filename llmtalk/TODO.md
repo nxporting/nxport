@@ -240,7 +240,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   Setter: 1.5.0 main+0xc65894, 1.9.0 main+0x106dc70, 1.0.0 main+0xb74f08. In 1.9.0 its two callers (main+0x12660e8:
   1920x1080; main+0x1266178: a size computed from a float width kept at +0x1210 of the caller's object, so it follows
   the mode and may change at run time) load the instance from main+0x1e39050 / through main+0x1d6b470. So the scale
-  rule reads layer 0's size from SystemTask+0x4c0 each frame (no hook). UNVERIFIED: in Ryujinx 1.0.0 at the title, +0x4c0 = 1920x1080 and
+  rule reads layer 0's size from SystemTask+0x4c0 each frame (no hook). SUPERSEDED 2026-11-18: profile::scene_size() (profile/botw/render_size.rs)
+  records the size of textures made by the scene-target creation (1.9.0: return address main+0x1063cb4 among the
+  initializing texture's guest callers). Seen: 1600x900, 1520x855, 1440x810 in one run: BotW's dynamic resolution
+  re-creates the scene targets at each step. 1.0.0: its 1600x900 targets come through a general helper (main+0xa736c0)
+  that makes every size, so no exact site yet (scene_size None there). UNVERIFIED: in Ryujinx 1.0.0 at the title, +0x4c0 = 1920x1080 and
   +0x4c8 = 854x480; check in gameplay before relying on it (accessor kept local, not pushed). RESULT: in gameplay +0x4c0 is the OUTPUT size
   (docked 1920x1080, handheld 1280x720), not the scene. The 1600x900 scene targets are made through main+0xed6428
   from main+0x1063cb4 / 0x1064094 / 0x10653b0 / 0x106498c (and 0xf845e4 / 0xf8483c): size = a float rectangle
