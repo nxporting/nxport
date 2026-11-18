@@ -42,7 +42,7 @@ fn main() {
         }
     }
 
-    windows_version_resource("nxport: runs a game recompiled from its dump");
+    nxport_buildscriptlib::windows_version_resource("nxport: runs a game recompiled from its dump");
 
     compile_shader("src/gpu/vulkan/astc.comp", naga::ShaderStage::Compute, "astc.spv");
     compile_shader("src/gpu/vulkan/relayout.comp", naga::ShaderStage::Compute, "relayout.spv");
@@ -69,4 +69,3 @@ fn compile_shader(src: &str, stage: naga::ShaderStage, out: &str) {
     std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join(out), bytes).unwrap();
 }
 
-include!("../windows_version.rs");

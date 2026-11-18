@@ -1,12 +1,11 @@
-// Build-script helper (include!d by the engine's and the builder's build.rs): a Windows version resource for the
+// Build-script helpers for the engine's and the builder's build.rs: a Windows version resource for the
 // crate's programs, so the files say what they are (product, description, version, origin) in Explorer's properties
 // and to anything that reads them, as installed software does. Compiled with the Windows SDK's resource compiler
 // (rc.exe, from the RC variable or the newest SDK under Windows Kits) and linked into the binaries. Skipped, with a
 // warning, when there is no SDK.
 
 /// Writes and compiles the resource for the crate's binaries, described as `description`.
-#[allow(dead_code)]
-fn windows_version_resource(description: &str) {
+pub fn windows_version_resource(description: &str) {
     use std::path::PathBuf;
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
         || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
