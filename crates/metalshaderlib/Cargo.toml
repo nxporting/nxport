@@ -1,0 +1,12 @@
+[package]
+name = "nxport-metalshaderlib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nxport_metalshaderlib"
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1"
+zstd = "0.13"

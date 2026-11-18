@@ -3,7 +3,7 @@
 // (lift, compiled with zig cc on Windows).
 
 pub mod lift;
-pub use nxport::metal::msl_specialize;
+pub use nxport_metalshaderlib::msl_specialize;
 pub mod ppm2png;
 
 pub mod game_data;

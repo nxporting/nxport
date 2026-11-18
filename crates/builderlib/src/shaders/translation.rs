@@ -80,11 +80,11 @@ static CURRENT: std::sync::RwLock<Option<Translation>> = std::sync::RwLock::new(
 
 pub fn install(t: Translation) {
     *CURRENT.write().unwrap() = Some(t);
-    nxport::metal::msl_specialize::set_options(nxport::metal::msl_specialize::TranslationOptions {
+    nxport_metalshaderlib::msl_specialize::set_options(nxport_metalshaderlib::msl_specialize::TranslationOptions {
         contract_fast: match t.contract_fast {
-            Contract::None => nxport::metal::msl_specialize::Contract::None,
-            Contract::Vertex => nxport::metal::msl_specialize::Contract::Vertex,
-            Contract::All => nxport::metal::msl_specialize::Contract::All,
+            Contract::None => nxport_metalshaderlib::msl_specialize::Contract::None,
+            Contract::Vertex => nxport_metalshaderlib::msl_specialize::Contract::Vertex,
+            Contract::All => nxport_metalshaderlib::msl_specialize::Contract::All,
         },
         keep_optnone: t.keep_optnone,
         fuse_guards: t.fuse_guards,
