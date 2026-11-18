@@ -64,6 +64,10 @@ pub struct Sites {
     /// in the multithreaded step, and each body's check counter (PHYS_BODY_TICK_CODE with the body's register).
     pub phys_world_tick: [usize; 2],
     pub phys_body_tick: [(usize, u32); 2],
+    /// A player demo move's arrival (the move that walks Link along a rail or to a point in a cutscene, shared by
+    /// PlayerRailMove and PlayerDestinationMove): `fcmp s8, s9` (distance left, one console frame of walking), its b.mi, and
+    /// the nine words after it through the other end test's `fcmp s8, s0` (2 x speed x delta frame), DEMO_MOVE_FIXED.
+    pub demo_move: Option<usize>,
 }
 
 pub const STP_FRAME_WAIT: u32 = 0xa9bd_7bfd;
@@ -315,6 +319,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     if let Some((dead, zero, load)) = s.arrow {
         install_arrow(base, mem_space, dead, zero, load);
     }
+    if let Some(at) = s.demo_move {
+        install_demo_move(base, mem_space, at);
+    }
     if let Some(at) = s.snd_floor {
         // fmov s1, #0.5; fcmp s0, s1; fcsel s8, s1, s0, mi -> fmov s8, s0; bl <snd_floor>; fmax s8, s8, s0
         // (max(delta frame, floor), NaN as fcsel gave it).
@@ -389,5 +396,68 @@ unsafe fn install_arrow(base: usize, mem_space: &mut crate::guest::loader::Guest
             println!("[+] Arrows: their fall follows the frame's step");
         }
         Err(e) => println!("[!] Arrows: main+{dead:#x}: {e}; their gravity stays per frame"),
+    }
+}
+
+/// The demo move's arrival code (index, word): fcmp s8, s9; b.mi <arrive>; adrp x8 (any, the constant's page);
+/// ldr s1, [x19, #0x40]; ldr s2, [x8, #lo]; fadd s1, s1, s2; fcmp s1, s8; b.pl <store>; fadd s1, s9, s9;
+/// fmul s0, s1, s0; fcmp s8, s0; b.mi <arrive>.
+const DEMO_MOVE_FIXED: [(usize, u32); 10] = [
+    (0, 0x1e29_2100),
+    (1, 0x5400_01a4),
+    (3, 0xbd40_4261),
+    (5, 0x1e22_2821),
+    (6, 0x1e28_2020),
+    (7, 0x5400_00a5),
+    (8, 0x1e29_2921),
+    (9, 0x1e20_0820),
+    (10, 0x1e20_2100),
+    (11, 0x5400_0064),
+];
+
+/// The game's constant the second test adds to the distance kept from the last frame (main+..., found at install).
+static DEMO_MOVE_SLACK: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a player demo move has arrived (1: go to its end, 0: keep the distance left and go on), as the game decides
+/// it with one change. The move (PlayerRailMove / PlayerDestinationMove's shared step, x19) ends when the distance left
+/// is under one console frame of walking (speed), or, when it no longer shrinks by more than the game's slack, under
+/// 2 x speed x the delta frame. Above ~100 fps a frame's step is short enough for Link to come within one console
+/// frame of an intermediate point of a rail, and the walk ended there for good (leaving the Shrine of Resurrection).
+/// So the first test takes speed x the delta frame when the frame is shorter than a console frame (0 < delta < 1);
+/// a zero delta (paused, loading) or a longer frame keeps the game's test. Savage Wind's finding (MIT, #364).
+pub unsafe extern "C" fn demo_move_arrive(mv: usize, delta: f32, speed: f32, left: f32) -> u32 {
+    let step = if delta > 0.0 && delta < 1.0 { delta } else { 1.0 };
+    if left < speed * step {
+        return 1;
+    }
+    let slack = f32::from_bits(DEMO_MOVE_SLACK.load(Ordering::Relaxed) as u32);
+    let kept = *((mv + 0x40) as *const f32);
+    if !(kept + slack < left) {
+        return 0;
+    }
+    (left < 2.0 * speed * delta) as u32
+}
+
+/// mov x0, x19; fmov s1, s9; fmov s2, s8 (s0 is the delta frame already); bl <demo_move_arrive>; cbnz w0, <arrive>;
+/// b <store>. The game's words after them are no longer reached.
+#[cfg(nx_runtime)]
+unsafe fn install_demo_move(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, at: usize) {
+    let site = (base + at) as *const u32;
+    let old: Vec<u32> = (0..12).map(|k| std::ptr::read(site.add(k))).collect();
+    let ldr = old[4];
+    if DEMO_MOVE_FIXED.iter().any(|&(k, w)| old[k] != w) || old[2] & 0x9f00_001f != 0x9000_0008 || ldr & 0xffc0_03ff != 0xbd40_0102 {
+        println!("[!] Demo moves: unexpected code at main+{at:#x}; their arrival stays one 30 fps frame of walking");
+        return;
+    }
+    let adrp = old[2];
+    let imm = ((adrp >> 29) & 3 | ((adrp >> 5) & 0x7_ffff) << 2) as i64;
+    let page = (((base + at + 8) & !0xfff) as i64 + (((imm << 43) >> 43) << 12)) as usize;
+    let slack = page + ((ldr >> 10) & 0xfff) as usize * 4;
+    DEMO_MOVE_SLACK.store(std::ptr::read(slack as *const u32) as u64, Ordering::Relaxed);
+    // cbnz at word 4 to word 14 (the arrival, +0x28); b at word 5 to word 12 (the store, +0x1c).
+    let code = vec![0xaa13_03e0, 0x1e20_4121, 0x1e20_4102, BL, 0x3500_0140, 0x1400_0007];
+    match crate::profile::totk::frame_time::replace_with_call(base, mem_space, at, &old[..6], code, 3, crate::hle!(demo_move_arrive(_, _, _, _))) {
+        Ok(()) => println!("[+] Demo moves: they arrive within the frame's step of walking"),
+        Err(e) => println!("[!] Demo moves: main+{at:#x}: {e}; their arrival stays one 30 fps frame of walking"),
     }
 }
