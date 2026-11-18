@@ -240,6 +240,9 @@ group! {
         /// Anisotropic filtering: samples for mip-mapped textures seen at an angle, such as the ground and paths
         /// (1: the game's own; 2, 4, 8 or 16)
         anisotropy: u32 = 1,
+        /// Draw distance, in percent of the game's own (100 to 150): how far away placed actors (trees, rocks,
+        /// buildings, enemies) appear, in Breath of the Wild
+        draw_distance: u32 = 100,
         /// Compile new shaders in the background instead of pausing the game. Smoother, but for now everything
         /// waiting on a compile is skipped until it is ready, which can cause visual glitches (missing objects or
         /// passes, flashes) the first time something is drawn.

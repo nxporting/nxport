@@ -4,6 +4,7 @@ use super::{GameKind, GameProfile, VersionProfile, BOTW_TITLE_ID};
 
 pub mod aspect;
 pub mod frame_time;
+pub mod draw_distance;
 pub mod hud;
 pub mod render_size;
 
@@ -197,6 +198,7 @@ unsafe fn install_v1_5_0_hooks(base: usize, mem_space: &mut crate::guest::loader
 
 #[cfg(nx_runtime)]
 unsafe fn install_v1_9_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    draw_distance::install(base, mem_space, 0x10a4684);
     render_size::install(base, render_size::SCENE_V1_9_0);
     frame_time::install(base, mem_space, &SITES_V1_9_0);
     aspect::install(base, mem_space, &ASPECT_V1_9_0);
