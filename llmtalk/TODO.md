@@ -409,6 +409,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   check or the release's headers, the thread layout from a game that runs on it, and the functions it changed. Layers
   with nothing verified still help: the log then says exactly which release a game uses.
 
+- **NVN device info MEASURED from the real 52.32 driver (BotW 1.0.0 in Ryujinx, 2026-11-17, win-worker; breakpoints on
+  the driver's nvnDeviceGetInteger entry and its result store, 400 calls):** 0x0 52, 0x1 32, 0x4 0x100, 0xf / 0x10 0x20,
+  0x11 / 0x12 0x100, 0x14 8, 0x18 0x100, 0x19 0x1000, 0x1a 0x20000, 0x39 0x80, 0x55 0x40000, flags 0x28-0x2a, 0x32,
+  0x3b, 0x42-0x4c = 1. Ours differ on 0x14 COMMAND_BUFFER_CONTROL_ALIGNMENT (4, driver 8) and 0x19
+  SHADER_SCRATCH_MEMORY_ALIGNMENT (0x20, driver 0x1000); 0x39 LINEAR_RENDER_TARGET_STRIDE_ALIGNMENT matches (0x80).
+  0x3a MEMORY_POOL_PAGE_SIZE is not queried at boot (still unknown). To fix after the engine crate move.
 - **NVN device info: our answers vs the NVN 55.15 driver's table (2026-11-16, win-worker).** Savage Wind (MIT,
   runtime/nvn/objects.c) read nvnDeviceGetInteger's whole table from the driver in BotW 1.8.2's sdk. Queries nxport had
   no answer for (BotW asks 24, the recommended scratch scale factor, and 85, the default queue compute memory size;
