@@ -378,8 +378,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   above was wrong by 0x100000, and pause state is main+0x1e1611c), frame wait -> ret; profile::real_time() covers BotW
   so the pacer lifts the 30 fps cap. The game keeps its own interval (+0x34) and its override (+0x29). Still to do:
   Havok deactivation pace: done 2026-11-16 (the world counter update replaced whole by a call, main+0xf5e20 /
-  0x12644c; bodies main+0x11f95c / 0x1207cc keep their cbnz; ball shrine not checked in game), the demo move arrival (main+0xc711dc: s10-s12 are free there but the rewrite needs ~10 words where 5-7
-  can go), solver steps
+  0x12644c; bodies main+0x11f95c / 0x1207cc keep their cbnz; ball shrine not checked in game), the demo move arrival (DONE 2026-11-18: main+0xc711dc becomes a call to frame_time::demo_move_arrive, which
+  repeats both of the game's end tests with the first scaled by the delta frame only for 0 < delta < 1: a plain
+  multiply made Link's placement during loading never arrive (delta 0) and the game stayed on its loading screen;
+  gameplay reached at 120 fps; the shrine exit walk itself not replayed here), solver steps
   (Savage Wind's are tuned; an exact rule is open); other versions by pattern. Arrow gravity, the sound frame floor
   and the keyframed-body angle are in (2026-11-15).
 

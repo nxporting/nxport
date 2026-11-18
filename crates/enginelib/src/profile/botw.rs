@@ -90,6 +90,7 @@ pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
     kf_angle: Some((0x12d57fc, 0xb06d4)),
     phys_world_tick: [0xf5e20, 0x12644c],
     phys_body_tick: [(0x11f95c, 20), (0x1207cc, 26)],
+    demo_move: Some(0xc711dc),
 };
 
 /// 1.9.0's projections (aspect.rs).
