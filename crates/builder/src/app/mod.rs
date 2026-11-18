@@ -9,6 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod job;
+mod presets;
+pub use job::*;
+pub(crate) use presets::*;
+
 use nxport::settings::edit::{Audience, Section};
 use nxport::settings::profiles::{self, Platform};
 use nxport::settings::{self, Settings, SettingsPatch};
@@ -28,118 +33,15 @@ pub enum Target {
     WindowsApp,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
-struct BuildPreset {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<Target>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    out: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bundle_game: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    entitlements: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    prebuild_shaders: Option<bool>,
-}
 
-/// What the builder remembers per game and target: the mods folder, bundle ID, and settings used last.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case", default)]
-struct TargetMemory {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mods: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bundle_id: Option<String>,
-    /// iOS: the GPU the pipeline list is precompiled for (nxport_builderlib::pipeline_archive::IOS_GPUS).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    gpu: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    settings: Option<SettingsPatch>,
-}
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-struct GameMemory {
-    /// The preset selected last for this game (whatever the target).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    preset: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mac: Option<TargetMemory>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ios: Option<TargetMemory>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    windows: Option<TargetMemory>,
-}
 
-impl GameMemory {
-    fn path(title_id: u64) -> PathBuf {
-        data_dir().join("games").join(format!("{title_id:016x}.toml"))
-    }
 
-    fn load(title_id: u64) -> GameMemory {
-        std::fs::read_to_string(Self::path(title_id)).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
-    }
 
-    fn save(&self, title_id: u64) -> Result<(), String> {
-        let path = Self::path(title_id);
-        let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(path.parent().unwrap()).and_then(|_| std::fs::write(&path, text)).map_err(|e| format!("{}: {e}", path.display()))
-    }
 
-    fn target(&mut self, t: Target) -> &mut Option<TargetMemory> {
-        match t {
-            Target::MacApp => &mut self.mac,
-            Target::Ipa => &mut self.ios,
-            Target::WindowsApp => &mut self.windows,
-        }
-    }
-}
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-struct PresetFile {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    build: Option<BuildPreset>,
-    #[serde(flatten)]
-    settings: SettingsPatch,
-}
 
-fn expand_home(p: &str) -> String {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(rest).display().to_string();
-        }
-    }
-    p.to_string()
-}
 
-fn save_builder_preset(path: &Path, build: BuildPreset, edits: &SettingsPatch) -> Result<(), String> {
-    let file = PresetFile {
-        build: Some(build),
-        settings: edits.clone(),
-    };
-    let mut v = toml::Value::try_from(&file).map_err(|e| e.to_string())?;
-    settings::prune_empty(&mut v);
-    let text = toml::to_string_pretty(&v).or_else(|_| toml::to_string(&v)).map_err(|e| e.to_string())?;
-    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn parse_builder_preset(text: &str) -> Result<(Option<BuildPreset>, SettingsPatch), String> {
-    let preset: PresetFile = toml::from_str(text).map_err(|e| e.to_string())?;
-    Ok((preset.build, preset.settings))
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct PresetInfo {
-    name: String,
-    path: PathBuf,
-}
-
-fn load_builder_preset(path: &Path) -> Result<(Option<BuildPreset>, SettingsPatch), String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    parse_builder_preset(&text)
-}
 
 impl Target {
     /// The targets this host builds (the first is the default). Presets for the others still load their settings.
@@ -209,66 +111,13 @@ struct Game {
     is_32bit: bool,
 }
 
-/// A build's progress: its steps, the running one's sub-step, and its outcome.
-#[derive(Default)]
-pub struct Job {
-    pub step: String,
-    pub steps_done: usize,
-    pub steps: usize,
-    pub sub_step: Option<String>,
-    pub sub_done: usize,
-    pub sub_total: usize,
-    pub sub_frac: f32,
-    pub result: Option<Result<PathBuf, String>>,
-}
 
-impl Job {
-    /// Where the running build is, in one line (empty before the first step).
-    fn status(&self) -> String {
-        if let Some(sub) = &self.sub_step {
-            if self.sub_total > 0 {
-                format!("{} ({} of {}): {} ({}/{})", self.step, self.steps_done + 1, self.steps, sub, self.sub_done, self.sub_total)
-            } else {
-                format!("{} ({} of {}): {}", self.step, self.steps_done + 1, self.steps, sub)
-            }
-        } else if self.steps > 0 {
-            format!("{} ({} of {})", self.step, self.steps_done + 1, self.steps)
-        } else {
-            String::new()
-        }
-    }
-}
 
-/// Sets the running step's sub-step: `done` of `total` (0: no count), which is `frac` of the step.
-#[allow(dead_code)]
-pub fn progress(job: &Mutex<Job>, sub: impl Into<String>, done: usize, total: usize, frac: f32) {
-    let mut j = job.lock().unwrap();
-    j.sub_step = Some(sub.into());
-    j.sub_done = done;
-    j.sub_total = total;
-    j.sub_frac = j.sub_frac.max(frac.min(1.0));
-}
 
-/// Sets the running step's sub-step for a build of `phases` phases in order: `done` of `total` in phase `phase`.
-#[allow(dead_code)]
-pub fn phase_progress(job: &Mutex<Job>, sub: String, phase: usize, phases: usize, done: usize, total: usize) {
-    let in_phase = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
-    progress(job, sub, done, total, (phase as f32 + in_phase) / phases.max(1) as f32);
-}
 
-/// Threads a shader cache build uses: all but two of the CPU's, at least two.
-#[allow(dead_code)]
-pub fn shader_jobs() -> usize {
-    std::thread::available_parallelism().map_or(6, |n| n.get()).saturating_sub(2).max(2)
-}
 
-/// Stop after the running step.
-static CANCEL: AtomicBool = AtomicBool::new(false);
 
-pub type Step = (String, Box<dyn FnOnce() -> Result<(), String> + Send>);
 
-/// What the build makes, once its last step is done.
-pub type Output = Arc<Mutex<Option<PathBuf>>>;
 
 /// A build, as the target's steps take it: the game, where things go, and the options set.
 #[allow(dead_code)]
@@ -353,38 +202,8 @@ fn user_defaults() -> SettingsPatch {
     })
 }
 
-/// A game's presets: `games/<title id>/presets/*.toml` in the builder's data directory.
-fn game_presets_dir(title_id: u64) -> PathBuf {
-    data_dir().join("games").join(format!("{title_id:016x}")).join("presets")
-}
 
-/// A game's presets, by name. The first time a game is opened its list is created from its profile's presets, if any;
-/// from then on they are the game's own.
-fn game_presets(title_id: u64, profile: Option<&nxport::profile::GameProfile>) -> Vec<PresetInfo> {
-    let dir = game_presets_dir(title_id);
-    let builtin = profile.map_or(&[][..], |p| p.presets);
-    if !builtin.is_empty() && !dir.exists() && std::fs::create_dir_all(&dir).is_ok() {
-        for (name, text) in builtin {
-            let _ = std::fs::write(dir.join(format!("{name}.toml")), text);
-        }
-    }
-    let mut list: Vec<PresetInfo> = std::fs::read_dir(&dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-        .filter_map(|p| Some(PresetInfo { name: p.file_stem()?.to_string_lossy().into_owned(), path: p }))
-        .collect();
-    list.sort_by_key(|p| p.name.to_lowercase());
-    list
-}
 
-/// A name usable as a preset file name.
-fn valid_preset_name(name: &str) -> bool {
-    let n = name.trim();
-    !n.is_empty() && !n.starts_with('.') && !n.contains(['/', '\\', ':'])
-}
 
 impl Builder {
     fn new(dump: Option<PathBuf>) -> Self {
@@ -1129,33 +948,6 @@ pub fn pipeline_list(title_id: u64, cache: &Path, filter_stages: bool) -> Result
     Ok(())
 }
 
-fn run_steps(job: &Arc<Mutex<Job>>, steps: Vec<Step>) -> Result<(), String> {
-    for (i, (name, f)) in steps.into_iter().enumerate() {
-        if CANCEL.load(Ordering::Relaxed) {
-            return Err("Stopped".into());
-        }
-        {
-            let mut j = job.lock().unwrap();
-            j.step = name.clone();
-            j.steps_done = i;
-            j.sub_step = None;
-            j.sub_done = 0;
-            j.sub_total = 0;
-            j.sub_frac = 0.0;
-        }
-        println!("== {name}");
-        f().map_err(|e| format!("{name}: {e}"))?;
-        {
-            let mut j = job.lock().unwrap();
-            j.steps_done = i + 1;
-            j.sub_step = None;
-            j.sub_done = 0;
-            j.sub_total = 0;
-            j.sub_frac = 0.0;
-        }
-    }
-    Ok(())
-}
 
 /// What a mod (Atmosphère layout) holds: RomFS data the app reads while it runs, and code that is compiled into the app
 /// (ExeFS patches: IPS / pchtxt; plugins: exefs/subsdkN modules).
