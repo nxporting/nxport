@@ -111,6 +111,7 @@ pub static HUD_V1_9_0: hud::Sites = hud::Sites {
     layout: [(0xf625dc, hud::layout_code_v1_9(0x9100_03e2)), (0x25c98, hud::layout_code_v1_9(0x9100_23e2))],
     scissor: (0xf67138, 0xeb6a54),
     scissor_code: hud::SCISSOR_CODE,
+    texgen: Some((0x2df24, hud::TEXGEN_CODE_V1_9)),
 };
 
 /// 1.0.0's projection sites (aspect.rs). No names for this version: the vtables are the ones whose getters are 1.5.0's
@@ -147,6 +148,7 @@ pub static HUD_V1_0_0: hud::Sites = hud::Sites {
     layout: [(0x9baa44, hud::layout_code_v1_5(0x9100_23e2)), (0xae2d6c, hud::layout_code_v1_5(0x9100_03e2))],
     scissor: (0xae6884, 0xa25438),
     scissor_code: [0xf940_27e1, 0x9100_23e0, 0xaa17_03e2],
+    texgen: Some((0x9c7f04, hud::TEXGEN_CODE_V1_0)),
 };
 
 #[cfg(nx_runtime)]
@@ -182,6 +184,7 @@ pub static HUD_V1_5_0: hud::Sites = hud::Sites {
     layout: [(0xab7738, hud::layout_code_v1_5(0x9100_23e2)), (0xbde5e8, hud::layout_code_v1_5(0x9100_03e2))],
     scissor: (0xbe2080, 0xb20510),
     scissor_code: hud::SCISSOR_CODE,
+    texgen: None,
 };
 
 #[cfg(nx_runtime)]

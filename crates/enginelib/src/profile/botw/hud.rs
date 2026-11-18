@@ -15,6 +15,11 @@
 // - Panes the game keeps just past the 16:9 screen's right edge (OUTSIDE: the pause menu's strips that show its pages
 //   sliding in, captured from beyond the screen) come into view on a wider screen, as dark bands: they are hidden
 //   while the screen is wider than 16:9.
+// - Textures projected from the screen (the pause menu's blurred picture of the game: a capture pane copies the screen,
+//   P_Capture_00 shows it with texture coordinates projected from its place on the screen) are fitted to the layout's
+//   size, as the 16:9 screen in layout units. The screen shows the layout F times as wide (1 / f as tall), so they are
+//   fitted to that (layout_fit, in the texture projection's choice of the size, main+0x2df24): the copy already holds
+//   the whole screen, and showed it 1 / F as narrow before.
 // The panes are the layouts' own (names, sizes and places as the game's layout files have them: each FILL pane is as
 // large as the 1280x720 layout, each OUTSIDE pane lies wholly right of x = 640).
 
@@ -33,11 +38,18 @@ pub struct Sites {
     /// has them: SCISSOR_CODE's, or 1.0.0's with the rectangle at sp + 8), and the setter.
     pub scissor: (usize, usize),
     pub scissor_code: [u32; 3],
+    /// The projection texture coordinates' choice of the layout's size (a material's texture projected from the
+    /// screen, fitted to the layout): `ldr x8, [x20, #0xc0]; ldp <w>, <h>, [x8, #0x28]; b <on>` and the pane-size
+    /// choice after it, `ldp <w>, <h>, [x3]`, as the version has them (TEXGEN_CODE_V1_9 / _V1_0); None where not
+    /// found yet (1.5.0).
+    pub texgen: Option<(usize, [u32; 4])>,
 }
 
 // Layout fields: its root pane, its name.
 const LAYOUT_ROOT: usize = 0x18;
 const LAYOUT_NAME: usize = 0x30;
+// Its size (width, height in layout units).
+const LAYOUT_SIZE: usize = 0x28;
 // Pane fields: scale x, y; flags (0x10: its matrix to recalculate); name.
 const PANE_SCALE_X: usize = 0x48;
 const PANE_SCALE_Y: usize = 0x4c;
@@ -194,6 +206,31 @@ pub unsafe extern "C" fn scissor_pane(rect: usize, a1: u64, a2: u64) {
     crate::guest::call(SCISSOR_TO.load(Ordering::Relaxed), &[rect as u64, a1, a2]);
 }
 
+thread_local! {
+    /// The size layout_fit hands the game (read right after the call, on the same thread).
+    static FIT: std::cell::UnsafeCell<[f32; 2]> = const { std::cell::UnsafeCell::new([0.0; 2]) };
+}
+
+/// The size a texture projected from the screen is fitted to, for a layout (the draw info's, +0xc0) whose material
+/// fits it to the layout: the layout's size as the screen shows it, F times as wide wider than 16:9 (1 / f as tall
+/// narrower), as the layout's views are widened; the layout's own size at 16:9. Returns where the (width, height) is,
+/// for the game's pane-size load that follows.
+pub unsafe extern "C" fn layout_fit(draw_info: usize) -> u64 {
+    let layout = *((draw_info + DRAW_INFO_LAYOUT) as *const usize);
+    let size = (layout + LAYOUT_SIZE) as *const f32;
+    let (fx, fy) = fill_factors();
+    FIT.with(|f| {
+        let f = f.get();
+        *f = [*size * fx, *size.add(1) * fy];
+        f as u64
+    })
+}
+
+/// The projection texture coordinates' layout-size choice in 1.9.0 (width s3, height s1).
+pub const TEXGEN_CODE_V1_9: [u32; 4] = [0xf940_6288, 0x2d45_0503, 0x1400_0005, 0x2d40_0463];
+/// The same in 1.0.0 (width s7, height s6).
+pub const TEXGEN_CODE_V1_0: [u32; 4] = [0xf940_6288, 0x2d45_1907, 0x1400_0005, 0x2d40_1867];
+
 /// The calculation's call of its root pane's in 1.9.0: `str x21, [x19, #0xc0]; and w3, w20, #1; <x2 = the context>;
 /// ldr x0, [x21, #0x18]; mov x1, x19; ldr x8, [x0]; ldr x8, [x8, #0xa0]; blr x8`, with `context` the version's
 /// `mov x2, sp` / `add x2, sp, #8`.
@@ -243,6 +280,14 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         Ok(()) => SCISSOR_TO.store(base + setter, Ordering::Relaxed),
         Err(e) => {
             println!("[!] HUD: main+{at:#x}: {e}; clipping panes keep their 16:9 place");
+            ok = false;
+        }
+    }
+    // mov x0, x20; bl <layout_fit>; mov x3, x0: then the pane-size choice loads the size from there.
+    if let Some((at, expected)) = s.texgen {
+        let code = vec![0xaa14_03e0, 0x9400_0000, 0xaa00_03e3];
+        if let Err(e) = replace_with_call(base, mem_space, at, &expected, code, 1, crate::hle!(layout_fit(_))) {
+            println!("[!] HUD: main+{at:#x}: {e}; textures projected from the screen keep the layout's 16:9 size");
             ok = false;
         }
     }
