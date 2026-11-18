@@ -237,6 +237,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   from main+0x1063cb4 / 0x1064094 / 0x10653b0 / 0x106498c (and 0xf845e4 / 0xf8483c): size = a float rectangle
   [x24+0x3f0..0x3fc] (w = x1 - x0, h = y1 - y0), x24 = element w2 of an array of 0x2de0-byte objects at [x0+0x10]
   (count [x0+8]) in function main+0x1063bdc. Next: what that array and its owner are (a global to reach it).
+  The owner is `this` of a method (caller main+0xfe74ac: x0 = [this+0x250], index = byte [x2+8]), no simple global.
+  Exact alternative: hook the scene-target creation itself (1.9.0 main+0x1063cac `stp w5, w4, [sp, #0x38]` before
+  bl main+0xed6364, and its siblings) and record the sizes the game creates there as the scene size class.
 
 - **BotW: Savage Wind's feature list against nxport (2026-11-16, win-worker survey, docs/STATUS.md there).** Have:
   recompiler, sound, game files setup, 1.9.0, keyboard / mouse and controllers, window sizes and fullscreen, pipeline
