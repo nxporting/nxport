@@ -1,0 +1,8 @@
+[package]
+name = "nxport-buildscriptlib"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nxport_buildscriptlib"
+path = "src/lib.rs"

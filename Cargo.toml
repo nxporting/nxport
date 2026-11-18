@@ -2,6 +2,7 @@
 members = [
     "crates/engine",
     "crates/builderlib",
+    "crates/buildscriptlib",
     "crates/builder",
     "crates/sass2spv",
     "crates/pipelines",
