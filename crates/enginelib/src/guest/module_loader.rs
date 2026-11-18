@@ -22,8 +22,6 @@ pub struct LoadedModule {
     /// The text segment (guest addresses).
     pub text: std::ops::Range<usize>,
     pub init: Option<usize>,
-    /// DT_INIT_ARRAY (address, entry count): static constructors, for modules whose DT_INIT does not run them.
-    pub init_array: (usize, usize),
     /// Defined dynamic symbols (name -> address).
     pub exports: std::collections::HashMap<String, usize>,
 }
@@ -232,7 +230,6 @@ pub unsafe fn load(
     let mod0 = r_u32(&segs[0].1, 4) as usize;
     let rd = |a: usize| ptr::read((base + a) as *const u64);
     let mut init = None;
-    let mut init_array = (0usize, 0usize);
     let mut exports = std::collections::HashMap::new();
     if mod0 + 8 <= image_size
         && &*std::ptr::slice_from_raw_parts((base + mod0) as *const u8, 4) == b"MOD0"
@@ -251,9 +248,6 @@ pub unsafe fn load(
         let symtab = tags.get(&6).copied().unwrap_or(0);
         let strtab = tags.get(&5).copied().unwrap_or(0);
         init = tags.get(&12).map(|&v| base + v);
-        if let (Some(&a), Some(&sz)) = (tags.get(&25), tags.get(&27)) {
-            init_array = (base + a, sz / 8);
-        }
         let sym_name = |idx: usize| -> (String, u16, usize) {
             let s = base + symtab + idx * 24;
             let st_name = ptr::read(s as *const u32) as usize;
@@ -401,7 +395,6 @@ pub unsafe fn load(
         image_size,
         text: base + text_mo..base + text_mo + text_len,
         init,
-        init_array,
         exports,
     })
 }

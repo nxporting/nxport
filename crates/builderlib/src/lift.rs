@@ -101,7 +101,6 @@ pub fn lift_overlay(
     base_library: &Path,
     out_dir: &Path,
 ) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
-    let run_game_subsdk = s.guest.run_game_subsdk;
     let base = read_base_code(&base_library.with_file_name(BASE_CODE_FILE))?;
     let mut library = crate::pe_exports::PeFile::open(base_library)?;
     let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
@@ -110,7 +109,7 @@ pub fn lift_overlay(
     let mut lifted = Vec::new();
     for (m, mut seeds) in modules.into_iter().zip(seeds) {
         // The game's own subsdk modules are in the map only for the module indices mods count by; nothing runs them.
-        if m.name.starts_with("game_subsdk") && !run_game_subsdk {
+        if m.name.starts_with("game_subsdk") {
             continue;
         }
         let dynamic = m.dynamic.then(|| nxport_enginelib::nso::image_dynamic(&m.image).ok()).flatten();

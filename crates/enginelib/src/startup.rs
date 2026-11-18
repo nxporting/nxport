@@ -207,7 +207,6 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         mem_space,
         sdk: _sdk,
         mod_inits,
-        game_subsdk_inits,
         ..
     } = load()?;
 
@@ -245,7 +244,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         );
     }
     let guest_chain =
-        AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, dump_after_mods));
+        AssertSend(move || guest_chain(mem_space, mod_inits, dump_after_mods));
 
     let handle = thread::Builder::new()
         .name("guest-main".into())
@@ -369,7 +368,6 @@ impl<F: FnOnce() -> Result<(), Box<dyn std::error::Error>>> AssertSend<F> {
 fn guest_chain(
     mem_space: GuestMemorySpace,
     mod_inits: Vec<(String, usize)>,
-    game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
     dump_after_mods: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 5a. Install TPIDR_EL0 (thread-local storage pointer) for this thread (lifted: its Cpu has it, guest::exec::lifted::thread_cpu).
@@ -531,21 +529,6 @@ fn guest_chain(
         executed_ctors
     );
 
-    // 7a. The game's own subsdk libraries (other games; TotK's are not run): DT_INIT, then the static constructors.
-    for (label, init, (arr, n)) in &game_subsdk_inits {
-        if let Some(init) = init {
-            println!("[+] {}: running DT_INIT at {:#x}", label, init);
-            unsafe { guest::call(*init, &[]) };
-        }
-        for i in 0..*n {
-            let ctor = unsafe { *((arr + i * 8) as *const usize) };
-            if ctor != 0 {
-                unsafe { guest::call(ctor, &[]) };
-            }
-        }
-        println!("[+] {}: {} static constructors run", label, n);
-    }
-
     // 8. Execute nnMain (the game's entry point, exported by main)
     println!(
         "[+] Invoking native nnMain entrypoint at {:#x}...",
@@ -648,8 +631,6 @@ struct Loaded {
     mod_inits: Vec<(String, usize)>,
     /// The mods' modules (label, base, image size, text), for the lifter.
     mod_modules: Vec<(String, usize, usize, std::ops::Range<usize>)>,
-    /// The game's own subsdk modules' initialisers (--run-game-subsdk): label, DT_INIT, init array.
-    game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))>,
 }
 
 #[cfg(nx_runtime)]
@@ -893,14 +874,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     //       modules in rtld/main/mods/sdk order, as exlaunch expects when it locates the game's code.
     let mut mod_inits: Vec<(String, usize)> = Vec::new();
     let mut mod_modules: Vec<(String, usize, usize, std::ops::Range<usize>)> = Vec::new();
-    // --run-game-subsdk (experiment): bind main's imports to the game's own subsdk libraries and run their
-    // initialisers, like rtld (Kirby: subsdk0 = the movie library). Off by default: the real movie library calls into
-    // the SDK's multimedia stack, which needs the SDK's static constructors (--sdk-ctors) and, past those, the
-    // hardware video decoder services.
-    let run_game_subsdk = crate::settings::get().guest.run_game_subsdk;
-    let mut game_subsdk_inits: Vec<(String, Option<usize>, (usize, usize))> = Vec::new();
-    if run_game_subsdk
-        || crate::horizon::fs::mods()
+    if crate::horizon::fs::mods()
             .iter()
             .any(|(_, d)| crate::horizon::fs::mod_has_plugin(d))
     {
@@ -1076,26 +1050,6 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                     for (k, v) in m.exports.iter() {
                         syms.entry(k.clone()).or_insert(*v);
                     }
-                    if run_game_subsdk {
-                        // Like rtld: main's imports the library defines are bound to it (horizon::movie:: except the decoder,
-                        // which needs the hardware video decoder and stays HLE'd, see hle_nn), and its initialisers
-                        // run before nnMain.
-                        let mut bound = 0;
-                        for (off, name) in mem_space.imports() {
-                            let Some(&addr) = m.exports.get(&name) else {
-                                continue;
-                            };
-                            if name.starts_with("_ZN5movie7Decoder")
-                                || name.starts_with("_ZNK5movie7Decoder")
-                            {
-                                continue;
-                            }
-                            mem_space.bind_got_symbol(off, addr as *const ());
-                            bound += 1;
-                        }
-                        println!("[+] {}: {} of main's imports bound to it", label, bound);
-                        game_subsdk_inits.push((label.clone(), m.init, m.init_array));
-                    }
                 }
                 Err(e) => println!("[!] {} not loaded: {}", label, e),
             }
@@ -1223,7 +1177,6 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         sdk,
         mod_inits,
         mod_modules,
-        game_subsdk_inits,
     })
 }
 
@@ -1271,10 +1224,6 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
     let s = settings::install(s);
     #[cfg(windows)]
     config::app_log();
-    // horizon/cores.rs schedules native code only (the HLE entry stub); lifted code runs every thread at once.
-    if s.guest.guest_cores {
-        println!("[!] --guest-cores has no effect here: guest cores are scheduled for native code (macOS / iOS) only");
-    }
     // Write-tracked pages and the Vulkan write guard's fault on writes, as natively (guest::exec::crash_handler).
     #[cfg(windows)]
     platform::os::on_access_fault(lifted_access_fault);
@@ -1293,7 +1242,6 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         sdk: _sdk,
         mod_inits,
         mod_modules,
-        game_subsdk_inits,
     } = load()?;
     let modules: Vec<&str> = names.lines().filter(|l| !l.is_empty()).collect();
     // The overlay holds the code of the mods, and calls trampolines only a run with them makes.
@@ -1358,7 +1306,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .name("guest-main".into())
         .stack_size(256 << 20)
         .spawn({
-            let chain = AssertSend(move || guest_chain(mem_space, mod_inits, game_subsdk_inits, dump_after_mods));
+            let chain = AssertSend(move || guest_chain(mem_space, mod_inits, dump_after_mods));
             move || {
                 guest::tls::mark_guest_thread();
                 chain.run().map_err(|e| e.to_string())
