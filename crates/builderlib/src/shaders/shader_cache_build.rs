@@ -696,7 +696,7 @@ fn compile_batch(items: &[(String, String)], work: &Path) -> HashMap<String, Opt
 fn fingerprint() -> String {
     let mut bytes = Vec::new();
     bytes.extend(sass2spv::SOURCE_HASH.as_bytes());
-    bytes.extend(include_str!("../../../engine/src/gpu/metal/msl_specialize.rs").as_bytes());
+    bytes.extend(include_str!("../../../metalshaderlib/src/msl_specialize.rs").as_bytes());
     bytes.extend(include_str!("tiny_kernels.rs").as_bytes());
     bytes.extend(include_str!("batch_kernels.rs").as_bytes());
     bytes.extend(crate::translation::fingerprint().as_bytes());
@@ -843,7 +843,7 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
 
 /// The shader cache as source (an app built without Apple's Metal compiler): from a translate-only build's output in
 /// `msl_dir` (its index.txt and <entry>.metal files), the stages `list` names (a pipeline list; all without one) go into
-/// `out`/source.pack (nxport::metal::source_pack) and their records into `out`/source/index.txt. Returns (stages
+/// `out`/source.pack (nxport_metalshaderlib::source_pack) and their records into `out`/source/index.txt. Returns (stages
 /// packed, pack bytes).
 /// `arg_variants`: keep each stage's argument-buffer variants (crate::arg_kernels, appended last), which only an app with
 /// the arg-buffers setting on uses: without them the pack is about a third smaller.
@@ -893,9 +893,9 @@ pub fn pack_source(msl_dir: &Path, list: Option<&Path>, out: &Path, arg_variants
     let mut stages: Vec<(String, Vec<u8>)> = sources.into_iter().collect();
     let n = stages.len();
     let pack = out.join("source.pack");
-    nxport::metal::source_pack::write(&pack, &mut stages)?;
+    nxport_metalshaderlib::source_pack::write(&pack, &mut stages)?;
     // Read back whole before it goes into an app: a stage the app cannot read would be translated again on the phone.
-    let read = nxport::metal::source_pack::Pack::open(&pack).ok_or_else(|| format!("{}: unreadable", pack.display()))?;
+    let read = nxport_metalshaderlib::source_pack::Pack::open(&pack).ok_or_else(|| format!("{}: unreadable", pack.display()))?;
     if let Some((name, _)) = stages.iter().find(|(name, src)| read.source(name).is_none_or(|s| s.as_bytes() != src.as_slice())) {
         return Err(format!("{}: {name} does not read back", pack.display()));
     }

@@ -28,6 +28,7 @@ ash = "0.38"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 toml = "1.1.8"
 regex = "1"
+nxport-metalshaderlib = { path = "../metalshaderlib" }
 sass2spv = { path = "../sass2spv" }
 nxport-lifter = { path = "../lifter" }
 nxport-medialib = { path = "../medialib" }

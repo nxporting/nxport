@@ -749,6 +749,7 @@ dependencies = [
  "naga",
  "nxport-lifter",
  "nxport-medialib",
+ "nxport-metalshaderlib",
  "nxport-pipelines",
  "objc2",
  "objc2-app-kit",
@@ -799,6 +800,7 @@ dependencies = [
  "libc",
  "nxport",
  "nxport-lifter",
+ "nxport-metalshaderlib",
  "nxport-pipelines",
  "regex",
  "sass2spv",
@@ -823,6 +825,14 @@ dependencies = [
  "opus-decoder",
  "symphonia",
  "vp9-mt",
+]
+
+[[package]]
+name = "nxport-metalshaderlib"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "zstd",
 ]
 
 [[package]]
