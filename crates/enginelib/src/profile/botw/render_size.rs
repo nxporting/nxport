@@ -28,15 +28,17 @@ pub fn install(base: usize, offset: usize) {
 /// it, that is the scene's size.
 ///
 /// # Safety
-/// `fp` is the guest's frame pointer at the initialization (its frames are read only where readable).
+/// `fp` is the guest's frame pointer at the initialization (a frame-record chain on the guest stack).
 pub unsafe fn texture_initialized(width: u32, height: u32, fp: usize) {
     let site = SITE.load(Ordering::Relaxed);
     if site == 0 {
         return;
     }
+    // The guest stack's frame records, as nvn::frame_map::guest_chain walks them (no system call per frame: this runs
+    // for every texture the game initializes, thousands a second).
     let mut fp = fp;
     for _ in 0..DEPTH {
-        if fp == 0 || !super::super::readable(fp, 16) {
+        if fp < 0x1000 || fp & 7 != 0 {
             return;
         }
         if *((fp + 8) as *const usize) == site {
