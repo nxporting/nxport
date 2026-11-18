@@ -5,6 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
+- BotW field of view (Savage Wind parity, exact world-camera and event rules), win-worker via a worktree subagent, 2026-11-18.
+
 - BotW 1.9.0 ultrawide (Savage Wind parity), win-worker via a worktree subagent, 2026-11-16. **First part done
   (profile/botw/aspect.rs, hud.rs):** every 16:9 sead perspective / frustum projection takes the screen's shape in
   Projection::updateMatrixImpl (main+0xeb4474), written into the projection so shadows and unprojection see it; Vert+
