@@ -1,7 +1,6 @@
 // The guest operating system: kernel calls, the nn:: libraries that reach it, and services.
 
 pub mod audio;
-#[cfg(nx_native)]
 pub mod call_log;
 pub mod cxx;
 pub mod fs;
