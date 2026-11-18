@@ -117,6 +117,9 @@ pub struct Layer {
     /// Command memory each NVN command takes in this release's driver (GetCommandMemoryUsed), by function name. Read
     /// only from the game's own layer: an older driver's sizes say nothing about a newer one.
     pub command_costs: Option<&'static [(&'static str, usize)]>,
+    /// nvnDeviceGetInteger answers this release's driver gives that differ from the engine's defaults (NVNdeviceInfo,
+    /// value). Read only from the game's own layer, as command_costs.
+    pub device_integers: Option<&'static [(i32, i32)]>,
 }
 
 /// Version layers, oldest first.
@@ -237,6 +240,11 @@ pub fn thread_tail_shift() -> usize {
 /// The command memory `name` takes in the game's NVN driver, when its release's sizes are known.
 pub fn nvn_command_cost(name: &str) -> Option<usize> {
     chain().layers.first()?.command_costs?.iter().find(|(n, _)| *n == name).map(|&(_, b)| b)
+}
+
+/// What the game's NVN driver answers for device info `pname`, when its release's answer is known to differ.
+pub fn nvn_device_integer(pname: i32) -> Option<i32> {
+    chain().layers.first()?.device_integers?.iter().find(|(p, _)| *p == pname).map(|&(_, v)| v)
 }
 
 /// The NVN API version this game's SDK reports (the newest layer that knows it).

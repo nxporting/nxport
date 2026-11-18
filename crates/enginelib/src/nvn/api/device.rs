@@ -483,6 +483,11 @@ pub unsafe extern "C" fn hle_nvnDeviceGetInteger(_device: *const (), pname: i32,
     const UNIFORM_BUFFER_UPDATE_ALIGNMENT: i32 = 0x3C;
 
     if !v.is_null() {
+        // The game's own driver release first, where its answer is known to differ (horizon::sdk layers).
+        if let Some(known) = crate::horizon::sdk::nvn_device_integer(pname) {
+            *v = known;
+            return;
+        }
         *v = match pname {
             MEMORY_POOL_PAGE_SIZE => 0x10000, // 64KB -- Tegra X1 GPU memory pool page size
             MEMPOOL_TEXTURE_OBJECT_PAGE_ALIGNMENT => 0x1000, // 4KB on NX (textures and buffers may not share a 4KB-aligned region)

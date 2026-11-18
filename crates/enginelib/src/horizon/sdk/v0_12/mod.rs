@@ -26,4 +26,8 @@ pub(super) static LAYER: Layer = Layer {
         ("nvnCommandBufferDrawElementsInstanced", 44),
         ("nvnCommandBufferDrawElements", 60),
     ]),
+    // The 52.32 driver's nvnDeviceGetInteger answers where they differ from the defaults, read with breakpoints on its
+    // entry and its result under Ryujinx (Breath of the Wild 1.0.0): COMMAND_BUFFER_CONTROL_ALIGNMENT 8,
+    // SHADER_SCRATCH_MEMORY_ALIGNMENT 0x1000. The rest of what the game asks matches the defaults.
+    device_integers: Some(&[(0x14, 8), (0x19, 0x1000)]),
 };
