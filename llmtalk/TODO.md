@@ -226,6 +226,13 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   5. Off by default (Graphics > Resolution 1x..4x); at 1x the code paths must not change output: gpu-replay suite
      byte-identical, Hateno shot at the noise floor.
   Split: mac-worker gpu::scale (rule + unit tests) and Metal; win-worker Vulkan. BotW first (no UltraCam there).
+  Vulkan plan (win-worker, 2026-11-18; waiting for the interface): image extent x scale where images are created
+  (gpu/vulkan/texture.rs, the ImageCreateInfo extent), views / readbacks keep guest size for size queries and
+  write-back (read_region), viewport and scissor x scale (draw.rs, the vp / sc built before cmd_set_viewport), render
+  area and clears (exec.rs render_area, cmd_clear_attachments rects), copies and blits (copy.rs cmd_copy_image /
+  cmd_blit_image regions, x the source and destination scales), and the support buffer's render_scale entries (draw.rs
+  support_template: entry 0 = the pass's scale, 1..64 textures, 65..72 images, at 192 + 16 i). Interface proposed to
+  mac-worker: gpu::scale::scale(texture) -> u32, demote(storage), pass_scale(targets) -> u32.
   win-worker also takes BotW's render-size site (1.9.0; the input to rule 1), 2026-11-17. Savage Wind classifies by
   guessed dimensions (aspect 1.74-1.81, >= 32x16, 900 lines constant): not usable under our rules.
   FOUND 2026-11-17: BotW's render size is gsys::SystemTask's frame-buffer size per layer (setFrameBufferSize(index,
