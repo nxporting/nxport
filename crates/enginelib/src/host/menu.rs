@@ -63,6 +63,8 @@ pub mod id {
     pub const CONTROLS: u16 = 901;
     /// + the cheat's index in guest::cheats::listed().
     pub const CHEAT: u16 = 3000;
+    /// + the field of view in percent (Breath of the Wild).
+    pub const FIELD_OF_VIEW: u16 = 4100;
 }
 
 pub const LIMITS: [u32; 5] = [30, 60, 90, 120, 144];
@@ -71,6 +73,8 @@ pub const VOLUMES: [u32; 4] = [25, 50, 75, 100];
 pub const STRENGTHS: [u32; 3] = [50, 100, 150];
 pub const ANISOTROPIES: [u32; 5] = [1, 2, 4, 8, 16];
 pub const DRAW_DISTANCES: [u32; 3] = [100, 125, 150];
+/// The field of view's choices, percent of the game's (profile::botw::aspect::FIELD_OF_VIEW).
+pub const FIELDS_OF_VIEW: [u32; 8] = [70, 80, 90, 100, 110, 120, 135, 150];
 /// Room for the cheats' ids: eight mods' files of dmnt's 0x7F cheats each.
 pub const CHEATS: u16 = 1024;
 
@@ -118,7 +122,14 @@ pub fn bar() -> Vec<Entry> {
             Separator,
         ]);
     } else if crate::profile::active().kind == crate::profile::GameKind::BotW {
-        title.extend([item("Dynamic Aspect Ratio", id::DYNAMIC_ASPECT), Separator]);
+        title.push(item("Dynamic Aspect Ratio", id::DYNAMIC_ASPECT));
+        if crate::profile::botw::aspect::has_field_of_view() {
+            title.push(sub(
+                "Field of View",
+                FIELDS_OF_VIEW.iter().map(|&p| choice(field_of_view_label(p), id::FIELD_OF_VIEW + p as u16)).collect(),
+            ));
+        }
+        title.push(Separator);
     }
     let mods = mods();
     let mut listed: Vec<Entry> = mods.iter().map(|(name, code)| Entry::Note(mod_label(name, *code))).collect();
@@ -304,6 +315,15 @@ pub fn anisotropy_label(samples: u32) -> String {
     }
 }
 
+/// A field of view choice's label.
+pub fn field_of_view_label(percent: u32) -> String {
+    if percent == 100 {
+        "Game's own (100%)".to_string()
+    } else {
+        format!("{percent}%")
+    }
+}
+
 /// A limit's label with why it is greyed, if it is (menus have no tooltips).
 pub fn limit_item_label(fps: u32) -> String {
     match unreachable(fps) {
@@ -355,6 +375,9 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::TOUCH => live::touch(),
         id::REAL_TIME => live::real_time_speed(),
         id::DYNAMIC_ASPECT => live::dynamic_aspect(),
+        c if (id::FIELD_OF_VIEW..id::FIELD_OF_VIEW + 151).contains(&c) => {
+            (c - id::FIELD_OF_VIEW) as u32 == crate::profile::botw::aspect::field_of_view()
+        }
         id::MOUSE_LOOK => live::mouse_look(),
         id::EXACT_MOUSE_AIM => live::exact_mouse_aim(),
         c if cheat_of(c).is_some() => {
@@ -476,6 +499,12 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
         id::TOUCH => live::set_touch(!live::touch()),
         id::REAL_TIME => live::set_real_time_speed(!live::real_time_speed()),
         id::DYNAMIC_ASPECT => live::set_dynamic_aspect(!live::dynamic_aspect()),
+        c if (id::FIELD_OF_VIEW..id::FIELD_OF_VIEW + 151).contains(&c) => {
+            let p = (c - id::FIELD_OF_VIEW) as u32;
+            crate::profile::botw::aspect::set_field_of_view(p);
+            crate::config::remember(|s| s.display.field_of_view = Some(p));
+            println!("[+] Display: field of view {}", field_of_view_label(p));
+        }
         id::MOUSE_LOOK => live::set_mouse_look(!live::mouse_look()),
         id::EXACT_MOUSE_AIM => live::set_exact_mouse_aim(!live::exact_mouse_aim()),
         id::SAVE_FOLDER => open(crate::settings::get().files.save_dir.clone().or_else(|| crate::profile::data_subdir("save"))),
@@ -519,6 +548,7 @@ mod tests {
             ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),
             ("controls", id::CONTROLS, id::CONTROLS + 1),
             ("cheats", id::CHEAT, id::CHEAT + CHEATS),
+            ("field of view", id::FIELD_OF_VIEW, id::FIELD_OF_VIEW + 151),
         ];
         for (i, a) in ranges.iter().enumerate() {
             for b in &ranges[i + 1..] {

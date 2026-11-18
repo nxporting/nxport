@@ -18,13 +18,29 @@
 // projections it changed dirty, so those the game no longer updates follow too.
 //
 // Found by Savage Wind (MIT; tools/patches.py, runtime/nvn/output_scale.c: the projections' update, matrix and offset,
-// and the world camera's widened values written back for its shadows, #103), and checked here against the code.
+// the world camera's widened values written back for its shadows, #103, and its field of view in play only with fovy,
+// sine and cosine written too, #162; runtime/hle/framepace.c: the event manager's active event), and checked here
+// against the code. Savage Wind takes the world camera to be a projection whose far plane is over 10000; here it is
+// the game's own object instead.
+//
+// The field of view (set_field_of_view, settings display.field_of_view: 70 to 150% of the game's) scales the world
+// camera's in play, in the same hook: its fovy and the sine, cosine and tangent of its half are written into that
+// projection before the aspect is applied, so the game's copies of it (getFovy / setFovy) and the shadow cascades
+// fitted to it see the view drawn. The world camera's projection is the game's own object, not a guess from its
+// values: a singleton the game creates once (Sites::world_cameras: the global holding it) keeps a view per screen,
+// the first at +0x28, each with its camera's handle (+0xd0) and a PerspectiveProjection at +0x10 that the game sets
+// every frame from that camera's fovy (+0x74), near and far (+0x6c / +0x70) and the screen layer's viewport (1.9.0
+// main+0x10eda5c, 1.0.0 main+0x10dfd2c); the first view's projection is the world's. During an event (a cutscene, a
+// talk, an item fanfare: ksys::evt::Manager's active event, read as its hasActiveEvent does, 1.9.0 main+0x110df98,
+// 1.0.0 main+0xc363c8) the game's own value is kept. The factor in use is chosen at each update of the projection,
+// which the game makes every frame, so it switches in the frame the event starts or ends.
 //
 // The hook rewrites instructions in place and calls an HLE function, so it applies natively and to the image that is
-// lifted. It is installed whenever the game is BotW 1.9.0 and keeps the game's own behaviour until an aspect is set.
+// lifted. It is installed for the versions with Sites (1.0.0, 1.5.0, 1.9.0) and keeps the game's own behaviour until
+// an aspect or a field of view other than 100% is set.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use crate::profile::readable;
@@ -38,6 +54,11 @@ pub struct Sites {
     pub perspective: (usize, usize),
     /// sead::FrustumProjection's vtable and matrix function.
     pub frustum: (usize, usize),
+    /// The global holding the singleton of the screens' views (the world camera's projection at +0x38); None: the field
+    /// of view stays the game's.
+    pub world_cameras: Option<usize>,
+    /// The global holding ksys::evt::Manager (its active event at +0x1d2b8); None: the field of view stays the game's.
+    pub event_manager: Option<usize>,
 }
 
 /// One dirty-flag check: the code the game has at `at` (the flag's `ldrb w8, [xN, #8]`, the moves around it, `cbz w8,
@@ -61,13 +82,27 @@ const PROJ_DIRTY: usize = 8;
 const PROJ_FIELDS: usize = 0xa0;
 const PERSPECTIVE_FIELDS: usize = 7;
 const FRUSTUM_FIELDS: usize = 4;
+/// The screens' views: the first view (+0x28)'s PerspectiveProjection (+0x10).
+const WORLD_PROJECTION: usize = 0x38;
+/// ksys::evt::Manager: the event running now (null: none).
+const ACTIVE_EVENT: usize = 0x1d2b8;
+
+/// The field of view's range, percent of the game's (Savage Wind's Video > Field of view).
+pub const FIELD_OF_VIEW: std::ops::RangeInclusive<u32> = 70..=150;
+/// The field of view in play, percent of the game's (100: the game's own).
+static FOV: AtomicU32 = AtomicU32::new(100);
+/// The two globals (absolute; 0: this version has none), once installed.
+static WORLD_CAMERAS: AtomicUsize = AtomicUsize::new(0);
+static EVENT_MANAGER: AtomicUsize = AtomicUsize::new(0);
+/// Whether the world camera's last update was in an event (for the log).
+static IN_EVENT: AtomicBool = AtomicBool::new(false);
 
 /// The aspect the game renders at (f32 bits); 0 until one is set: the hook then keeps the game's own views.
 static ASPECT: AtomicU32 = AtomicU32::new(0);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// The two vtables (absolute), once installed.
-static PERSPECTIVE_VT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static FRUSTUM_VT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PERSPECTIVE_VT: AtomicUsize = AtomicUsize::new(0);
+static FRUSTUM_VT: AtomicUsize = AtomicUsize::new(0);
 
 /// A projection the hook changed: its vtable, the values the game set and those written over them.
 struct Changed {
@@ -108,6 +143,81 @@ pub fn set_aspect(aspect: f64) {
             live
         });
     }
+}
+
+/// The field of view in play, percent of the game's.
+pub fn field_of_view() -> u32 {
+    FOV.load(Ordering::Relaxed)
+}
+
+/// Whether this version's field of view can be changed (the hook is installed and both globals are known).
+pub fn has_field_of_view() -> bool {
+    INSTALLED.load(Ordering::Relaxed) && WORLD_CAMERAS.load(Ordering::Relaxed) != 0 && EVENT_MANAGER.load(Ordering::Relaxed) != 0
+}
+
+/// Changes the field of view in play (percent of the game's, kept in FIELD_OF_VIEW); the world camera's projection
+/// takes it at its next update.
+pub fn set_field_of_view(percent: u32) {
+    if !has_field_of_view() {
+        return;
+    }
+    let percent = percent.clamp(*FIELD_OF_VIEW.start(), *FIELD_OF_VIEW.end());
+    if FOV.swap(percent, Ordering::Relaxed) == percent {
+        return;
+    }
+    if let Some(p) = unsafe { world_projection() } {
+        // (also when the game does not set it again now: paused)
+        unsafe { *((p + PROJ_DIRTY) as *mut u8) = 1 };
+    }
+}
+
+/// The world camera's projection, once the game has made it.
+unsafe fn world_projection() -> Option<usize> {
+    let g = WORLD_CAMERAS.load(Ordering::Relaxed);
+    if g == 0 {
+        return None;
+    }
+    let cams = *(g as *const usize);
+    let p = cams.checked_add(WORLD_PROJECTION).filter(|_| cams != 0)?;
+    (readable(p, PROJ_FIELDS + 4 * PERSPECTIVE_FIELDS) && *(p as *const usize) == PERSPECTIVE_VT.load(Ordering::Relaxed)).then_some(p)
+}
+
+/// Whether `p`, a projection being updated, is the world camera's.
+unsafe fn is_world_projection(p: usize) -> bool {
+    let g = WORLD_CAMERAS.load(Ordering::Relaxed);
+    g != 0 && {
+        let cams = *(g as *const usize);
+        cams != 0 && cams.wrapping_add(WORLD_PROJECTION) == p
+    }
+}
+
+/// An event is running (ksys::evt::Manager::hasActiveEvent).
+unsafe fn in_event() -> bool {
+    let g = EVENT_MANAGER.load(Ordering::Relaxed);
+    if g == 0 {
+        return true;
+    }
+    let m = *(g as *const usize);
+    m != 0 && readable(m + ACTIVE_EVENT, 8) && *((m + ACTIVE_EVENT) as *const usize) != 0
+}
+
+/// A perspective projection's values with its fovy scaled by `percent` / 100 (fovy, then the sine, cosine and tangent
+/// of its half, as setFovy makes them), or None if they stay (100%, or a view that would reach 180 degrees).
+fn scaled_fovy(game: &[u32; PERSPECTIVE_FIELDS], percent: u32) -> Option<[u32; PERSPECTIVE_FIELDS]> {
+    if percent == 100 {
+        return None;
+    }
+    let fovy = f32::from_bits(game[0]) * percent as f32 / 100.0;
+    if !(fovy > 0.0 && fovy < std::f32::consts::PI) {
+        return None;
+    }
+    let half = fovy / 2.0;
+    let mut out = *game;
+    out[0] = fovy.to_bits();
+    out[1] = half.sin().to_bits();
+    out[2] = half.cos().to_bits();
+    out[3] = half.tan().to_bits();
+    Some(out)
 }
 
 /// The shape of the game's 16:9 views as the game computes it: 16 / 9 in float.
@@ -163,7 +273,8 @@ fn widened(perspective: bool, game: &[u32; PERSPECTIVE_FIELDS], a: f32) -> Optio
 pub unsafe extern "C" fn projection_update(p: usize) -> u64 {
     let dirty = *((p + PROJ_DIRTY) as *const u8);
     let a = ASPECT.load(Ordering::Relaxed);
-    if dirty == 0 || (a == 0 && !ANY_CHANGED.load(Ordering::Relaxed)) {
+    let fov = FOV.load(Ordering::Relaxed);
+    if dirty == 0 || (a == 0 && fov == 100 && !ANY_CHANGED.load(Ordering::Relaxed)) {
         return dirty as u64;
     }
     let vt = *(p as *const usize);
@@ -186,10 +297,21 @@ pub unsafe extern "C" fn projection_update(p: usize) -> u64 {
         Some(c) if c.vtable == vt && c.wrote == cur => c.set,
         _ => cur,
     };
-    let out = match a {
-        0 => None,
-        a => widened(n == PERSPECTIVE_FIELDS, &game, f32::from_bits(a)),
-    };
+    // The field of view first (the world camera in play), then the screen's shape.
+    let mut want = game;
+    if n == PERSPECTIVE_FIELDS && fov != 100 && is_world_projection(p) {
+        let event = in_event();
+        if IN_EVENT.swap(event, Ordering::Relaxed) != event {
+            println!("[+] Aspect: {}", if event { "an event: the game's field of view" } else { "in play: the field of view set" });
+        }
+        if !event {
+            want = scaled_fovy(&game, fov).unwrap_or(game);
+        }
+    }
+    if a != 0 {
+        want = widened(n == PERSPECTIVE_FIELDS, &want, f32::from_bits(a)).unwrap_or(want);
+    }
+    let out = (want != game).then_some(want);
     let write = out.unwrap_or(game);
     if write != cur {
         for (k, w) in write.iter().enumerate().take(n) {
@@ -225,8 +347,18 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     PERSPECTIVE_VT.store(base + s.perspective.0, Ordering::Relaxed);
     FRUSTUM_VT.store(base + s.frustum.0, Ordering::Relaxed);
+    WORLD_CAMERAS.store(s.world_cameras.map_or(0, |g| base + g), Ordering::Relaxed);
+    EVENT_MANAGER.store(s.event_manager.map_or(0, |g| base + g), Ordering::Relaxed);
     INSTALLED.store(true, Ordering::Relaxed);
     let settings = crate::settings::get();
+    if has_field_of_view() {
+        set_field_of_view(settings.display.field_of_view);
+        if field_of_view() != 100 {
+            println!("[+] Aspect: the world camera's field of view in play is {}% of the game's", field_of_view());
+        }
+    } else if settings.display.field_of_view != 100 {
+        println!("[!] Aspect: no field of view setting for this version; the game's is kept");
+    }
     if settings.totk.enhancements.dynamic_aspect_ratio {
         let a = settings.display.launch_aspect;
         set_aspect(a.map_or(16.0 / 9.0, |a| a.ratio()));
