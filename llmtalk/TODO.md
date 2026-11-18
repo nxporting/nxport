@@ -498,7 +498,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   BotW 1.9.0 driver (55.15; NVNcommandBuffer command used = [cb+0x00]-[cb+0x30], control = [cb+0x20]-[cb+0x38]),
   measured the same way (413 calls, the stub then failed): AttribState 68, StreamState 68, VertexBuffer 24, Texture 20,
   DrawElementsInstanced 44, all control 0, identical to 52.32; UniformBuffer gave 0 / 60 / 864 with 56 control bytes in
-  4 samples (probably a switch to a new memory chunk at that call), so not yet a per-command size for 55.15 (log: nxport-builderlib/ryu_cmds.out, tool:
+  4 samples (probably a switch to a new memory chunk at that call), so not yet a per-command size for 55.15. A
+  second run (2026-11-17) stops at the same point (~414 calls, at the title; the GDB stub fails there): every
+  UniformBuffer bind seen coincides with a control-memory change. Needs a run into gameplay (Ryujinx with input) to
+  measure UniformBuffer and DrawElements for 55.15 (log: nxport-builderlib/ryu_cmds.out, tool:
   a throwaway RSP client, "multi" mode, scratchpad rsp/). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
