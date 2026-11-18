@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use nxport_lifter::abi::Cpu;
+use nxport_lifterlib::abi::Cpu;
 
 /// Guest arguments in AAPCS64 order: integers and pointers from x0-x7, floats from v0-v7, the rest from the guest
 /// stack (8-byte slots).

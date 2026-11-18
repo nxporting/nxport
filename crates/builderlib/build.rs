@@ -24,7 +24,7 @@ fn main() {
         "crates/sass2spv/src",
         "crates/medialib/src",
         "crates/pipelines/src",
-        "crates/lifter/src",
+        "crates/lifterlib/src",
         "Cargo.lock",
     ] {
         println!("cargo:rerun-if-changed={}", root.join(p).display());

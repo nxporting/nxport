@@ -1,5 +1,5 @@
 [package]
-name = "nxport-lifter"
+name = "nxport-lifterlib"
 version = "0.1.0"
 edition = "2021"
 # AArch64 -> C static recompiler for hosts that cannot run guest code natively (docs/windows-port.md). Instruction
@@ -7,7 +7,7 @@ edition = "2021"
 license = "MIT"
 
 [lib]
-name = "nxport_lifter"
+name = "nxport_lifterlib"
 path = "src/lib.rs"
 
 [dependencies]

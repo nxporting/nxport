@@ -1,4 +1,4 @@
-// Guest code -> C through nxport-lifter, for hosts without the native runtime (docs/windows-port.md).
+// Guest code -> C through nxport-lifterlib, for hosts without the native runtime (docs/windows-port.md).
 //
 // lift_game lifts what the runtime will run: the patched image (relocations, ExeFS patches, SDK interposition, game
 // hooks; nxport::guest_modules). lift_nso lifts a module as its NSO file holds it. Function starts are seeded from
@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use nxport_lifter::{ehframe, lift_module, Module, Options, Overlay};
-pub use nxport_lifter::Output;
+use nxport_lifterlib::{ehframe, lift_module, Module, Options, Overlay};
+pub use nxport_lifterlib::Output;
 
 const R_AARCH64_RELATIVE: u64 = 1027;
 const STT_FUNC: u8 = 2;
@@ -439,7 +439,7 @@ fn write_files(out_dir: &Path, outputs: &[&Output], whole: bool) -> std::io::Res
         }
         std::fs::write(path, body)
     };
-    for (file, body) in nxport_lifter::RUNTIME_FILES {
+    for (file, body) in nxport_lifterlib::RUNTIME_FILES {
         write(file, body)?;
     }
     for (file, body) in outputs.iter().flat_map(|o| &o.files) {
@@ -449,7 +449,7 @@ fn write_files(out_dir: &Path, outputs: &[&Output], whole: bool) -> std::io::Res
     // another game version (more modules or files) linked calls to functions this code does not have (BotW 1.0.0 after
     // 1.6.0: 751 undefined symbols).
     let written: std::collections::HashSet<&str> =
-        nxport_lifter::RUNTIME_FILES.iter().map(|(f, _)| *f).chain(outputs.iter().flat_map(|o| o.files.iter().map(|(f, _)| f.as_str()))).collect();
+        nxport_lifterlib::RUNTIME_FILES.iter().map(|(f, _)| *f).chain(outputs.iter().flat_map(|o| o.files.iter().map(|(f, _)| f.as_str()))).collect();
     for e in std::fs::read_dir(out_dir)?.flatten() {
         let name = e.file_name();
         let name = name.to_string_lossy();
@@ -611,7 +611,7 @@ mod tests {
     /// An uncompressed NSO holding the lifter's sample module (no MOD0: no dynamic tables or .eh_frame_hdr).
     #[test]
     fn lifts_an_nso() {
-        let (base, img, text) = nxport_lifter::module::sample_image();
+        let (base, img, text) = nxport_lifterlib::module::sample_image();
         let text_len = (text.end - text.start) as usize;
         let mut f = vec![0u8; 0x100];
         f[0..4].copy_from_slice(b"NSO0");

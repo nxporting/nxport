@@ -48,7 +48,7 @@ pub fn lifted_x(n: usize) -> usize {
 }
 
 /// The counter guest code reads (CNTPCT_EL0) and its frequency (CNTFRQ_EL0): the hardware's natively; lifted, the host
-/// clock at the Switch's 19.2 MHz, which lifted code reads as its frequency (nxport-lifter) and its counter (lifted
+/// clock at the Switch's 19.2 MHz, which lifted code reads as its frequency (nxport-lifterlib) and its counter (lifted
 /// code's counter reads return `lifted_ticks`).
 pub fn counter() -> (u64, u64) {
     #[cfg(nx_native)]

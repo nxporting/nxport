@@ -1,4 +1,4 @@
-// Guest CPU state and the helpers lifted code uses (nxport-lifter; docs/windows-port.md). Compiled with clang (zig cc
+// Guest CPU state and the helpers lifted code uses (nxport-lifterlib; docs/windows-port.md). Compiled with clang (zig cc
 // for players): GNU C, __int128, musttail. Based on LAS Recomp's runtime/cpu.h (MIT, see LICENSE-LASRecomp).
 //
 // Calls and returns: a call sets x30 to the return address and calls the target's C function (or rt_dispatch for a

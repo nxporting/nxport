@@ -1,4 +1,4 @@
-// Running lifted guest code (nxport-lifter's C, compiled into one library): loading the library, handing it the
+// Running lifted guest code (nxport-lifterlib's C, compiled into one library): loading the library, handing it the
 // runtime's callbacks, and entering it (docs/windows-port.md). The library's own side, the dispatcher, is the lifter's
 // runtime/rt.c.
 //
@@ -9,7 +9,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use nxport_lifter::abi::Cpu;
+use nxport_lifterlib::abi::Cpu;
 
 /// What the embedder handles for lifted code.
 pub struct Handlers {
@@ -324,7 +324,7 @@ impl GuestLibrary {
         assert!(args.len() <= 8, "lifted call: {} arguments", args.len());
         let saved_lr = cpu.x[30];
         cpu.x[..args.len()].copy_from_slice(args);
-        cpu.x[30] = nxport_lifter::abi::RETURN_TO_HOST;
+        cpu.x[30] = nxport_lifterlib::abi::RETURN_TO_HOST;
         cpu.pc = addr;
         self.enter(cpu);
         cpu.x[30] = saved_lr;
