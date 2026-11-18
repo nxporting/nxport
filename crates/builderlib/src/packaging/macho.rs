@@ -1,6 +1,6 @@
 // A code-signed dylib that carries a guest code image (the engine's --aot-dump output) in section __TEXT,__guest at a
 // 16 KiB-aligned file offset. The engine dlopens it, which registers its code signature, then maps the section's
-// pages executable over the patched guest code (crates/engine/src/guest/exec/aot.rs).
+// pages executable over the patched guest code (crates/enginelib/src/guest/exec/aot.rs).
 
 use std::path::Path;
 

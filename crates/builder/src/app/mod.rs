@@ -14,9 +14,9 @@ mod presets;
 pub use job::*;
 pub(crate) use presets::*;
 
-use nxport::settings::edit::{Audience, Section};
-use nxport::settings::profiles::{self, Platform};
-use nxport::settings::{self, Settings, SettingsPatch};
+use nxport_enginelib::settings::edit::{Audience, Section};
+use nxport_enginelib::settings::profiles::{self, Platform};
+use nxport_enginelib::settings::{self, Settings, SettingsPatch};
 use struct_patch::Patch;
 
 use crate::log::LOG;
@@ -106,7 +106,7 @@ struct Game {
     name: String,
     version: Option<String>,
     title_id: u64,
-    profile: Option<&'static nxport::profile::GameProfile>,
+    profile: Option<&'static nxport_enginelib::profile::GameProfile>,
     /// A 32-bit program: cannot run on Apple CPUs.
     is_32bit: bool,
 }
@@ -174,7 +174,7 @@ pub fn data_dir() -> PathBuf {
     #[cfg(test)]
     return std::env::temp_dir().join(format!("nxport-builder-test-{}-{:?}", std::process::id(), std::thread::current().id()));
     #[cfg(not(test))]
-    nxport::config::support_dir().unwrap_or_default()
+    nxport_enginelib::config::support_dir().unwrap_or_default()
 }
 
 fn default_out_dir(target: Target) -> String {
@@ -245,15 +245,15 @@ impl Builder {
         }
         self.dump = dump;
         let path = Path::new(&self.dump);
-        let id = nxport::profile::identify(path);
-        let control = nxport::game::control_of(path);
+        let id = nxport_enginelib::profile::identify(path);
+        let control = nxport_enginelib::game::control_of(path);
         self.game = id.title_id.map(|tid| Game {
             name: id.name.clone(),
             version: id.version.map(|v| v.version_string.to_string())
                 .or_else(|| control.as_ref().and_then(|c| c.version.clone())),
             title_id: tid,
             profile: id.profile,
-            is_32bit: nxport::game::is_32bit_of(path),
+            is_32bit: nxport_enginelib::game::is_32bit_of(path),
         });
         self.presets = self.game.as_ref().map_or_else(Vec::new, |g| game_presets(g.title_id, g.profile));
         self.preset_name = self.game.as_ref().and_then(|g| GameMemory::load(g.title_id).preset).unwrap_or_default();
@@ -295,7 +295,7 @@ impl Builder {
         let some = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
         // What differs from the builder's defaults too: those stay in their own file, not copied into every game.
         let mut edits = self.settings.clone().into_patch_by_diff(settings::resolve(self.base_layers().into_iter().chain([user_defaults()])));
-        nxport::profile::keep_own_options(self.game.as_ref().and_then(|g| g.profile), &mut edits);
+        nxport_enginelib::profile::keep_own_options(self.game.as_ref().and_then(|g| g.profile), &mut edits);
         if !self.system_data.trim().is_empty() {
             edits.files.system_data_dir = Some(PathBuf::from(self.system_data.trim()));
         }
@@ -314,7 +314,7 @@ impl Builder {
         let p = self.target.platform();
         let mut layers = vec![profiles::platform(p)];
         if let Some(prof) = self.game.as_ref().and_then(|g| g.profile) {
-            layers.extend(nxport::profile::layers(prof, p));
+            layers.extend(nxport_enginelib::profile::layers(prof, p));
         }
         layers
     }
@@ -329,7 +329,7 @@ impl Builder {
     /// The edits: what differs from the base.
     fn edits(&self) -> SettingsPatch {
         let mut patch = self.settings.clone().into_patch_by_diff(self.base.clone());
-        nxport::profile::keep_own_options(self.game.as_ref().and_then(|g| g.profile), &mut patch);
+        nxport_enginelib::profile::keep_own_options(self.game.as_ref().and_then(|g| g.profile), &mut patch);
         let sys = self.system_data.trim();
         if !sys.is_empty() {
             patch.files.system_data_dir = Some(PathBuf::from(sys));
@@ -364,7 +364,7 @@ impl Builder {
     /// ExeFS patches and plugins) is fixed here, and everything else is set in the app while it runs (its menu bar). The
     /// Apple targets run the game's code natively and take their settings when they are built (App settings).
     fn contents(&mut self, ui: &imgui::Ui) {
-        use nxport::settings::edit::{ERROR, MUTED, OK, WARN};
+        use nxport_enginelib::settings::edit::{ERROR, MUTED, OK, WARN};
         let running = self.job.as_ref().is_some_and(|j| j.lock().unwrap().result.is_none());
         const LABEL: f32 = 120.0;
         let tip = |ui: &imgui::Ui, text: &str| {
@@ -511,7 +511,7 @@ impl Builder {
                 }
                 tip(ui, "Compiles the listed pipelines into a binary archive for this GPU with Xcode's metal-tt, so the app does not compile them at first draw. The archive serves only phones on the iOS release of Xcode's iOS SDK; other phones and GPUs compile the list at first launch. Without Xcode the step is skipped.");
             }
-            let default_id = self.game.as_ref().map_or_else(String::new, |g| nxport::profile::bundle_id(g.title_id, g.profile));
+            let default_id = self.game.as_ref().map_or_else(String::new, |g| nxport_enginelib::profile::bundle_id(g.title_id, g.profile));
             label(ui, "Bundle ID", "CFBundleIdentifier (empty: the default shown).");
             ui.set_next_item_width(-1.0);
             ui.input_text("##bundle_id", &mut self.bundle_id).hint(default_id).build();
@@ -974,13 +974,13 @@ fn mod_kinds(dir: &Path) -> ModKinds {
         romfs: sub(&["romfs", "RomFS"]).is_some(),
         patches: files.iter().any(|f| f.ends_with(".ips") || f.ends_with(".pchtxt")),
         plugin: files.iter().any(|f| f.starts_with("subsdk")),
-        cheats: nxport::mods::mod_subdir(dir, "cheats").is_dir(),
+        cheats: nxport_enginelib::mods::mod_subdir(dir, "cheats").is_dir(),
     }
 }
 
 /// The mods in `dir`: one folder each, or a single mod's romfs / exefs / cheats at the top.
 fn mods_in(dir: &Path) -> Vec<(String, ModKinds)> {
-    if nxport::mods::is_mod_dir(dir) {
+    if nxport_enginelib::mods::is_mod_dir(dir) {
         let name = dir.file_name().map_or_else(|| "Mod".into(), |n| n.to_string_lossy().into_owned());
         return vec![(name, mod_kinds(dir))];
     }
@@ -1002,8 +1002,8 @@ fn general_sections(s: &mut Settings) -> Vec<&mut dyn Section> {
 }
 
 /// A game's own settings sections.
-fn game_sections<'a>(s: &'a mut Settings, game: &nxport::profile::GameProfile) -> Vec<(&'static str, &'a mut dyn Section)> {
-    nxport::profile::option_sections(game, s)
+fn game_sections<'a>(s: &'a mut Settings, game: &nxport_enginelib::profile::GameProfile) -> Vec<(&'static str, &'a mut dyn Section)> {
+    nxport_enginelib::profile::option_sections(game, s)
 }
 
 /// The builder: turns a game dump into an app (in its window, or with --build), or runs one of its steps (a command).
@@ -1159,8 +1159,8 @@ mod tests {
     /// A game whose profile comes with presets, and one without a profile.
     const WITH: u64 = 0x0100_0000_0000_A000;
     const WITHOUT: u64 = 0x0100_0000_0000_B000;
-    static PROFILE: nxport::profile::GameProfile = nxport::profile::GameProfile {
-        kind: nxport::profile::GameKind::Unknown(WITH),
+    static PROFILE: nxport_enginelib::profile::GameProfile = nxport_enginelib::profile::GameProfile {
+        kind: nxport_enginelib::profile::GameKind::Unknown(WITH),
         name: "Test game",
         short_name: "test",
         title_id: WITH,
@@ -1251,7 +1251,7 @@ mod tests {
         b.apply_preset_by_name("iPad").unwrap();
         assert_eq!(b.target, switched(Target::Ipa));
         assert_eq!(b.out_dir, default_out_dir(switched(Target::Ipa)));
-        assert_eq!(b.settings.system.fps, nxport::settings::FpsMode::Stock30);
+        assert_eq!(b.settings.system.fps, nxport_enginelib::settings::FpsMode::Stock30);
         assert!(b.settings.system.handheld);
         assert_eq!(b.settings.display.launch_aspect.map(|a| a.to_string()), Some("23:16".into()));
         b.apply_preset_by_name("iPhone SE").unwrap();
@@ -1265,7 +1265,7 @@ mod tests {
 
     #[test]
     fn profile_presets_load_and_leave_mods_and_bundle_id_to_the_user() {
-        for (name, text) in nxport::profile::PROFILES.iter().flat_map(|p| p.presets) {
+        for (name, text) in nxport_enginelib::profile::PROFILES.iter().flat_map(|p| p.presets) {
             parse_builder_preset(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             let v: toml::Table = toml::from_str(text).unwrap();
             let build = v.get("build").and_then(|b| b.as_table());
@@ -1331,20 +1331,20 @@ mod tests {
         b.game = Some(Game {
             name: "Kirby and the Forgotten Land".to_string(),
             version: Some("1.0.0".to_string()),
-            title_id: nxport::profile::KIRBY_TITLE_ID,
-            profile: Some(&nxport::profile::kirby::PROFILE),
+            title_id: nxport_enginelib::profile::KIRBY_TITLE_ID,
+            profile: Some(&nxport_enginelib::profile::kirby::PROFILE),
             is_32bit: false,
         });
         b.settings.totk.enhancements.dynamic_aspect_ratio = false;
         let edits = b.edits();
-        assert_eq!(edits.totk, nxport::profile::totk::OptionsPatch::default());
+        assert_eq!(edits.totk, nxport_enginelib::profile::totk::OptionsPatch::default());
     }
 
     #[test]
     fn game_memory_round_trips() {
         let mut mem = GameMemory { preset: Some("60fps".to_string()), ..Default::default() };
         let mut patch = SettingsPatch::default();
-        patch.system.fps = Some(nxport::settings::FpsMode::Unlocked);
+        patch.system.fps = Some(nxport_enginelib::settings::FpsMode::Unlocked);
         *mem.target(Target::MacApp) = Some(TargetMemory {
             mods: Some("my_kirby_mods".to_string()),
             bundle_id: None,

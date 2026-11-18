@@ -1,4 +1,4 @@
-// Movie files for the engine's movie:: HLE (crates/engine/src/horizon/movie.rs): a container (WebM / Matroska, MP4) split
+// Movie files for the engine's movie:: HLE (crates/enginelib/src/horizon/movie.rs): a container (WebM / Matroska, MP4) split
 // into samples, and decoders that turn samples into pictures (NV12 or RGBA) and 16-bit PCM. Everything is built into
 // the program: VP9, Opus, AAC and Vorbis in Rust, H.264 through OpenH264 (C++ compiled with this crate); on Apple
 // systems with a VP9 decoder in their video hardware, VP9 is decoded there (vt.rs). Nothing is installed or loaded at

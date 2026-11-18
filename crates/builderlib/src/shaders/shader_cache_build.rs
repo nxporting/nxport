@@ -6,7 +6,7 @@
 //         (--dump-shaders=<dir>, missing-stage dumps) or extracted from RomFS (`nxport-builder shaders extract`).
 //         The index covers exactly the stages in the given directories.
 // Output: <out>/shaders_NNNN.metallib   libraries of LINK_CHUNK stages each, entry point `s_<hash>`
-//         <out>/index.txt               lookup index + resource bindings, parsed by crates/engine/src/shader_cache.rs
+//         <out>/index.txt               lookup index + resource bindings, parsed by crates/enginelib/src/shader_cache.rs
 //         <out>/failures.txt            stages not translated, with the phase and message
 //         <out>/work/                   per-stage MSL and AIR, state.json (what the next build can reuse)
 //

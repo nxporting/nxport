@@ -20,7 +20,7 @@ fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     {
         // Linked delay-loaded (build.rs): SDL3.dll is put in place before anything uses it.
-        if let Err(e) = nxport::sdl_library::load() {
+        if let Err(e) = nxport_enginelib::sdl_library::load() {
             // Said by Windows itself: SDL's message box is what is missing.
             extern "system" {
                 fn MessageBoxW(hwnd: *mut core::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
@@ -35,7 +35,7 @@ fn main() -> std::process::ExitCode {
         let exe = std::env::current_exe().unwrap_or_default();
         let app = exe.with_file_name("settings.toml").is_file() && exe.with_file_name("guest.dll").is_file();
         if app || exe.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("nxport")) {
-            return nxport::main();
+            return nxport_enginelib::main();
         }
     }
     match app::main() {

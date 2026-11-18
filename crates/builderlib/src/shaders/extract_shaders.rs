@@ -360,7 +360,7 @@ pub fn raw_nvn_stages(data: &[u8]) -> Vec<(usize, usize, Vec<u8>, Vec<u8>)> {
 
 /// The RomFS directories to scan: the game profile's (the dump is RomFS's parent), else every top-level directory.
 pub fn default_dirs(romfs: &Path) -> Vec<String> {
-    let profile = romfs.parent().and_then(|dump| nxport::profile::identify(dump).profile);
+    let profile = romfs.parent().and_then(|dump| nxport_enginelib::profile::identify(dump).profile);
     match profile.filter(|p| !p.shader_dirs.is_empty()) {
         Some(p) => p.shader_dirs.iter().map(|d| d.to_string()).collect(),
         None => std::fs::read_dir(romfs)

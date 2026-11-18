@@ -124,21 +124,21 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
     let mut stats = VulkanPrecompileStats::default();
 
     // 1. Identify the game and install settings
-    let mut s = nxport::settings::Settings::default();
+    let mut s = nxport_enginelib::settings::Settings::default();
     s.files.game_dir = Some(options.dump_dir.clone());
-    let _ = nxport::settings::try_install(s);
+    let _ = nxport_enginelib::settings::try_install(s);
 
-    let ident = nxport::profile::identify(&options.dump_dir);
+    let ident = nxport_enginelib::profile::identify(&options.dump_dir);
     let title_id = ident.title_id.unwrap_or(0);
-    if let Some(id) = nxport::nso::nso_build_id(&options.dump_dir.join("ExeFS/main").display().to_string()) {
-        nxport::profile::set_main_build_id(&id);
+    if let Some(id) = nxport_enginelib::nso::nso_build_id(&options.dump_dir.join("ExeFS/main").display().to_string()) {
+        nxport_enginelib::profile::set_main_build_id(&id);
     }
 
     // 2. Configure output cache directory
     if let Some(out_dir) = &options.out_cache_dir {
-        nxport::vulkan::stage_cache::set_cache_dir(out_dir.clone());
+        nxport_enginelib::vulkan::stage_cache::set_cache_dir(out_dir.clone());
     }
-    let cache_dir = nxport::vulkan::stage_cache::dir()
+    let cache_dir = nxport_enginelib::vulkan::stage_cache::dir()
         .cloned()
         .ok_or_else(|| "Failed to determine Vulkan stage cache directory".to_string())?;
     stats.cache_dir = cache_dir.clone();
@@ -221,8 +221,8 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
     }
 
     // 4. Initialize Vulkan device and pipeline cache
-    let dev = Arc::new(nxport::vulkan::device::Dev::new(false)?);
-    let vk_cache = unsafe { nxport::vulkan::stage_cache::open_pipeline_cache(&dev) };
+    let dev = Arc::new(nxport_enginelib::vulkan::device::Dev::new(false)?);
+    let vk_cache = unsafe { nxport_enginelib::vulkan::stage_cache::open_pipeline_cache(&dev) };
 
     // 5. Phase 2: Translate stages to SPIR-V and register in stage_cache
     let total_stages = stage_files.len();
@@ -250,12 +250,12 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                         continue;
                     };
                     let ctrl = ctrl_path.as_ref().and_then(|p| std::fs::read(p).ok());
-                    let prep = nxport::vulkan::shader::prep(&code, ctrl.as_deref(), *slot);
+                    let prep = nxport_enginelib::vulkan::shader::prep(&code, ctrl.as_deref(), *slot);
 
                     let res = (|| -> Result<(), String> {
                         // Check if already registered
-                        let full = nxport::vulkan::stage_cache::fnv1a64(&code[..prep.code_len.max(code.len())]);
-                        if nxport::vulkan::stage_cache::by_name(full).is_some() {
+                        let full = nxport_enginelib::vulkan::stage_cache::fnv1a64(&code[..prep.code_len.max(code.len())]);
+                        if nxport_enginelib::vulkan::stage_cache::by_name(full).is_some() {
                             return Ok(());
                         }
 
@@ -276,9 +276,9 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                         // pipeline phase below know it. This translation has no draw state, and the engine looks
                         // translations up by the state of a draw (draw.rs's stage, listed::stages), so storing it would
                         // only take disk space (1.3 GB for TotK's 26k stages); the pipeline phase stores the ones used.
-                        let named_len = nxport::vulkan::shader::named_len(&code, p.size);
-                        let inputs = nxport::vulkan::shader::spirv_inputs(&p.binary_code);
-                        nxport::vulkan::stage_cache::remember(&code, named_len, prep, inputs);
+                        let named_len = nxport_enginelib::vulkan::shader::named_len(&code, p.size);
+                        let inputs = nxport_enginelib::vulkan::shader::spirv_inputs(&p.binary_code);
+                        nxport_enginelib::vulkan::stage_cache::remember(&code, named_len, prep, inputs);
                         Ok(())
                     })();
 
@@ -320,7 +320,7 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
         }
     }
     if pipeline_list_text.is_none() {
-        if let Some(game_data) = nxport::profile::data_dir() {
+        if let Some(game_data) = nxport_enginelib::profile::data_dir() {
             let p = game_data.join("pipelines.txt");
             if p.exists() {
                 pipeline_list_text = std::fs::read_to_string(&p).ok();
@@ -350,7 +350,7 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                     Entry::parse(l)
                 }
             })
-            .map(nxport::vulkan::listed::ensure_nvn)
+            .map(nxport_enginelib::vulkan::listed::ensure_nvn)
             .collect();
 
         // Deduplicate entries
@@ -385,12 +385,12 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
                         };
                         let Some(e) = e else { break };
 
-                        if let Some((v, f)) = nxport::vulkan::listed::stages(&dev, &e) {
-                            if let Some(d) = nxport::vulkan::listed::desc(&dev, &e, &v, f.as_ref()) {
-                                if let Some(lay) = nxport::vulkan::pipelines::layout(&dev, &v, None, f.as_ref()) {
+                        if let Some((v, f)) = nxport_enginelib::vulkan::listed::stages(&dev, &e) {
+                            if let Some(d) = nxport_enginelib::vulkan::listed::desc(&dev, &e, &v, f.as_ref()) {
+                                if let Some(lay) = nxport_enginelib::vulkan::pipelines::layout(&dev, &v, None, f.as_ref()) {
                                     let ok = {
                                         let _guard = cache_mutex.lock().unwrap();
-                                        nxport::vulkan::pipelines::create(
+                                        nxport_enginelib::vulkan::pipelines::create(
                                             &dev,
                                             &d,
                                             &v,
@@ -431,7 +431,7 @@ pub fn precompile(options: &VulkanPrecompileOptions) -> Result<VulkanPrecompileS
 
     // 7. Save pipeline cache
     unsafe {
-        nxport::vulkan::stage_cache::save_pipeline_cache(&dev, vk_cache);
+        nxport_enginelib::vulkan::stage_cache::save_pipeline_cache(&dev, vk_cache);
         dev.device.destroy_pipeline_cache(vk_cache, None);
     }
 

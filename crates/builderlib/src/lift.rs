@@ -1,7 +1,7 @@
 // Guest code -> C through nxport-lifterlib, for hosts without the native runtime (docs/windows-port.md).
 //
 // lift_game lifts what the runtime will run: the patched image (relocations, ExeFS patches, SDK interposition, game
-// hooks; nxport::guest_modules). lift_nso lifts a module as its NSO file holds it. Function starts are seeded from
+// hooks; nxport_enginelib::guest_modules). lift_nso lifts a module as its NSO file holds it. Function starts are seeded from
 // .eh_frame_hdr, the dynamic symbol table's functions and the code pointers R_AARCH64_RELATIVE relocations store in
 // data; the lifter adds call and branch targets.
 
@@ -16,7 +16,7 @@ const STT_FUNC: u8 = 2;
 
 /// Lifts the NSO at `path`, loaded at guest address `base`, into `out_dir` (C files and the runtime files).
 pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Output, Box<dyn std::error::Error>> {
-    let n = nxport::nso::Nso::read(path)?;
+    let n = nxport_enginelib::nso::Nso::read(path)?;
     let mut img = vec![0u8; n.image_size()];
     for s in [&n.text, &n.ro, &n.data] {
         img[s.mem_off..s.mem_off + s.data.len()].copy_from_slice(&s.data);
@@ -30,22 +30,22 @@ pub fn lift_nso(path: &Path, name: &str, base: u64, out_dir: &Path) -> Result<Ou
 /// Lifts the game in `s.files.game_dir`, loaded and patched as the runtime loads it, into `out_dir`: the C files of each
 /// module and the runtime files. Returns each module's name and what was lifted, in the order the runtime registers
 /// them (lifted::GuestLibrary::load). `on_module(i, n, name)` is told before each of the n modules is lifted.
-/// `patched`: the image a run with plugin mods dumped (`--aot-dump`), whose code replaces the load's (nxport::guest_modules).
+/// `patched`: the image a run with plugin mods dumped (`--aot-dump`), whose code replaces the load's (nxport_enginelib::guest_modules).
 #[cfg(any(target_vendor = "apple", windows))]
 pub fn lift_game(
-    s: nxport::settings::Settings,
+    s: nxport_enginelib::settings::Settings,
     patched: Option<&Path>,
     out_dir: &Path,
     on_module: &dyn Fn(usize, usize, &str),
 ) -> Result<Vec<(String, Output)>, Box<dyn std::error::Error>> {
     let mut lifted = Vec::new();
     let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
-    let modules = nxport::guest_modules(s, image.as_deref())?;
+    let modules = nxport_enginelib::guest_modules(s, image.as_deref())?;
     let seeds = cross_module_seeds(&modules);
     let n = modules.len();
     for ((i, m), seeds) in modules.into_iter().enumerate().zip(seeds) {
         on_module(i, n, &m.name);
-        let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
+        let dynamic = m.dynamic.then(|| nxport_enginelib::nso::image_dynamic(&m.image).ok()).flatten();
         let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
         lifted.push((m.name, out));
     }
@@ -60,9 +60,9 @@ pub const BASE_CODE_FILE: &str = "base_code.bin";
 
 /// Writes the code of the game loaded with `s`, as lift_game would lift it, for lift_overlay.
 #[cfg(any(target_vendor = "apple", windows))]
-pub fn write_base_code(s: nxport::settings::Settings, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn write_base_code(s: nxport_enginelib::settings::Settings, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut f = Vec::new();
-    for m in nxport::guest_modules(s, None)? {
+    for m in nxport_enginelib::guest_modules(s, None)? {
         let code = &m.image[(m.text.start - m.base) as usize..(m.text.end - m.base) as usize];
         f.extend_from_slice(&(m.name.len() as u64).to_le_bytes());
         f.extend_from_slice(m.name.as_bytes());
@@ -96,7 +96,7 @@ fn read_base_code(path: &Path) -> Result<Vec<(String, u64, Vec<u8>)>, Box<dyn st
 /// (as `ov_<module>`). The engine points the base's functions at these (--guest-overlay). `patched` as lift_game's.
 #[cfg(any(target_vendor = "apple", windows))]
 pub fn lift_overlay(
-    s: nxport::settings::Settings,
+    s: nxport_enginelib::settings::Settings,
     patched: Option<&Path>,
     base_library: &Path,
     out_dir: &Path,
@@ -105,7 +105,7 @@ pub fn lift_overlay(
     let base = read_base_code(&base_library.with_file_name(BASE_CODE_FILE))?;
     let mut library = crate::pe_exports::PeFile::open(base_library)?;
     let image = patched.map(|p| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))).transpose()?;
-    let modules = nxport::guest_modules(s, image.as_deref())?;
+    let modules = nxport_enginelib::guest_modules(s, image.as_deref())?;
     let seeds = cross_module_seeds(&modules);
     let mut lifted = Vec::new();
     for (m, mut seeds) in modules.into_iter().zip(seeds) {
@@ -113,7 +113,7 @@ pub fn lift_overlay(
         if m.name.starts_with("game_subsdk") && !run_game_subsdk {
             continue;
         }
-        let dynamic = m.dynamic.then(|| nxport::nso::image_dynamic(&m.image).ok()).flatten();
+        let dynamic = m.dynamic.then(|| nxport_enginelib::nso::image_dynamic(&m.image).ok()).flatten();
         let Some((_, start, code)) = base.iter().find(|(n, ..)| *n == m.name) else {
             let out = lift_image(&m.name, m.base, &m.image, m.text, dynamic, seeds, None);
             lifted.push((m.name, out));
@@ -390,11 +390,11 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
 /// The settings a game in `dump` is lifted with (and must later run with: patches and hooks depend on them): the
 /// platform's and the game's profiles, then `edits`, with the mods in `mods` (their ExeFS patches change the code it
 /// runs), none without.
-pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch, mods: Option<&Path>) -> nxport::settings::Settings {
-    use nxport::settings::{profiles, SettingsPatch};
+pub fn game_settings(dump: &Path, edits: nxport_enginelib::settings::SettingsPatch, mods: Option<&Path>) -> nxport_enginelib::settings::Settings {
+    use nxport_enginelib::settings::{profiles, SettingsPatch};
     let mut layers = vec![profiles::platform(profiles::PLATFORM)];
-    if let Some(p) = nxport::profile::identify(dump).profile {
-        layers.extend(nxport::profile::layers(p, profiles::PLATFORM));
+    if let Some(p) = nxport_enginelib::profile::identify(dump).profile {
+        layers.extend(nxport_enginelib::profile::layers(p, profiles::PLATFORM));
     }
     layers.push(edits);
     let mut env = SettingsPatch::default();
@@ -405,7 +405,7 @@ pub fn game_settings(dump: &Path, edits: nxport::settings::SettingsPatch, mods: 
     }
     env.display.headless = Some(true);
     layers.push(env);
-    nxport::settings::resolve(layers)
+    nxport_enginelib::settings::resolve(layers)
 }
 
 /// Refuses `dir` inside a git work tree. Lifted C, objects and guest libraries are the game's code: they must never land
@@ -470,7 +470,7 @@ fn write_files(out_dir: &Path, outputs: &[&Output], whole: bool) -> std::io::Res
 /// and, in the mods' modules and the code regions (where trampolines keep their targets as literals), every 8-byte
 /// value that points at code.
 #[cfg(any(target_vendor = "apple", windows))]
-fn cross_module_seeds(modules: &[nxport::GuestModule]) -> Vec<BTreeSet<u64>> {
+fn cross_module_seeds(modules: &[nxport_enginelib::GuestModule]) -> Vec<BTreeSet<u64>> {
     let mut seeds = vec![BTreeSet::new(); modules.len()];
     let owner = |a: u64| modules.iter().position(|m| m.text.contains(&a));
     for (i, m) in modules.iter().enumerate() {
@@ -542,7 +542,7 @@ fn lift_image(
     base: u64,
     img: &[u8],
     text: std::ops::Range<u64>,
-    dynamic: Option<nxport::nso::Dynamic>,
+    dynamic: Option<nxport_enginelib::nso::Dynamic>,
     extra_seeds: BTreeSet<u64>,
     overlay: Option<Overlay>,
 ) -> Output {
@@ -594,7 +594,7 @@ fn lift_image(
         }
         // DT_RELR (SDK 20 and later): each slot holds its addend, or the address already where the image was loaded.
         if let Some(table) = img.get(d.relr..d.relr + d.relrsz).filter(|_| d.relr != 0) {
-            for o in nxport::nso::relr_slots(table) {
+            for o in nxport_enginelib::nso::relr_slots(table) {
                 let Some(v) = u64_at(o) else { continue };
                 seeds.insert(if v < img.len() as u64 { base.wrapping_add(v) } else { v });
             }

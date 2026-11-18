@@ -8,7 +8,7 @@ name = "nxport_builderlib"
 path = "src/lib.rs"
 
 [dependencies]
-nxport = { path = "../engine" }
+nxport-enginelib = { path = "../enginelib" }
 nxport-metalshaderlib = { path = "../metalshaderlib" }
 zstd = "0.13"
 regex = "1"

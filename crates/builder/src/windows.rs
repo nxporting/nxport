@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
-use nxport::settings::SettingsPatch;
+use nxport_enginelib::settings::SettingsPatch;
 
 use crate::app::{extract_stages_step, pipeline_list, Job, Output, Request, Step};
 
@@ -65,7 +65,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
     // last built from is unchanged: the stages by the game's version (main's build id), the cache by that, the
     // translator and the pipeline list.
     if prebuild {
-        let main = nxport::profile::main_build_id_of(&dump).unwrap_or_default();
+        let main = nxport_enginelib::profile::main_build_id_of(&dump).unwrap_or_default();
         let stamp = Stamp { file: work.join("stages.from"), inputs: format!("main {main}\n"), output: stages.clone() };
         let extract = extract_stages_step(&job, &dump, &stages);
         steps.push((extract.0, Box::new(move || stamp.run("The shader stages are those of the last build", extract.1))));
@@ -91,7 +91,7 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
             "Building the shader cache".into(),
             Box::new(move || {
                 // The list is written by an earlier step.
-                use nxport::vulkan::stage_cache::{fnv1a64, translator};
+                use nxport_enginelib::vulkan::stage_cache::{fnv1a64, translator};
                 let pipelines = std::fs::read(&list).map_or(0, |b| fnv1a64(&b));
                 let inputs = format!("translator {}\nmain {main}\npipelines {pipelines:016x}\n", translator());
                 let stamp = Stamp { file: from, inputs, output: built.join(translator()) };
@@ -141,10 +141,10 @@ pub fn steps(r: Request, steps: &mut Vec<Step>) -> Output {
                 let base = if code_mods { mods_base } else { plain_base };
                 let from = if code_mods { from.with_file_name("base_mods.from") } else { from };
                 let engine = std::env::current_exe().and_then(std::fs::read).map_err(|e| e.to_string())?;
-                let main = nxport::profile::main_build_id_of(&dump).unwrap_or_default();
+                let main = nxport_enginelib::profile::main_build_id_of(&dump).unwrap_or_default();
                 let inputs = format!(
                     "engine {:016x}\nmain {main}\n{}{}",
-                    nxport::vulkan::stage_cache::fnv1a64(&engine),
+                    nxport_enginelib::vulkan::stage_cache::fnv1a64(&engine),
                     profiles_listed(&profiles, &main),
                     toml::to_string(&edits).unwrap_or_default()
                 );
@@ -258,7 +258,7 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
     let (work, dump, title_id) = (&r.work, &r.dump, r.title_id);
     let (stages, ios_cache) = (work.join("stages"), work.join("shader_cache_ios_source"));
     // The stages as the Windows target extracts them (shared, skipped when the game's version is unchanged).
-    let main = nxport::profile::main_build_id_of(dump).unwrap_or_default();
+    let main = nxport_enginelib::profile::main_build_id_of(dump).unwrap_or_default();
     let stamp = Stamp { file: work.join("stages.from"), inputs: format!("main {main}\n"), output: stages.clone() };
     let extract = extract_stages_step(&r.job, dump, &stages);
     steps.push((extract.0, Box::new(move || stamp.run("The shader stages are those of the last build", extract.1))));
@@ -273,10 +273,10 @@ pub(crate) fn metal_source_steps(r: &Request, steps: &mut Vec<Step>) -> PathBuf 
             std::fs::create_dir_all(&cache).map_err(|e| format!("{}: {e}", cache.display()))?;
             pipeline_list(title_id, &cache, false)?;
             let list = cache.join("pipelines.txt");
-            let listed = std::fs::read(&list).map_or(0, |b| nxport::vulkan::stage_cache::fnv1a64(&b));
+            let listed = std::fs::read(&list).map_or(0, |b| nxport_enginelib::vulkan::stage_cache::fnv1a64(&b));
             let stamp = Stamp {
                 file: stamp_file,
-                inputs: format!("main {main}\ntranslator {}\npipelines {listed:016x}\narg variants {arg_variants}\n", nxport::vulkan::stage_cache::translator()),
+                inputs: format!("main {main}\ntranslator {}\npipelines {listed:016x}\narg variants {arg_variants}\n", nxport_enginelib::vulkan::stage_cache::translator()),
                 output: cache.join("source"),
             };
             stamp.run("The translated shaders are those of the last build", || {
@@ -434,9 +434,9 @@ fn compile_guest(toolchains: &Path, c_dir: &Path, library: &Path, profile: Optio
 /// Whether any mod in `mods` brings code of its own that patches the game as it runs: a subsdk module, loose or in an exefs.nsp.
 fn has_plugin_mods(mods: Option<&Path>, title: u64) -> bool {
     let Some(mods) = mods else { return false };
-    nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| {
-        let exefs = nxport::mods::mod_subdir(d, "exefs");
-        nxport::mods::has_exefs_nsp(d) || (0..10).any(|i| exefs.join(format!("subsdk{i}")).is_file())
+    nxport_enginelib::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| {
+        let exefs = nxport_enginelib::mods::mod_subdir(d, "exefs");
+        nxport_enginelib::mods::has_exefs_nsp(d) || (0..10).any(|i| exefs.join(format!("subsdk{i}")).is_file())
     })
 }
 
@@ -444,8 +444,8 @@ fn has_plugin_mods(mods: Option<&Path>, title: u64) -> bool {
 fn has_code_mods(mods: Option<&Path>, title: u64) -> bool {
     let Some(mods) = mods else { return false };
     let code = |d: &Path| std::fs::read_dir(d).is_ok_and(|mut rd| rd.next().is_some());
-    nxport::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| code(&nxport::mods::mod_subdir(d, "exefs")) || nxport::mods::has_exefs_nsp(d))
-        || !nxport::mods::patch_sets(mods, 2).is_empty()
+    nxport_enginelib::mods::discover_mods(mods, Some(title)).iter().any(|(_, d)| code(&nxport_enginelib::mods::mod_subdir(d, "exefs")) || nxport_enginelib::mods::has_exefs_nsp(d))
+        || !nxport_enginelib::mods::patch_sets(mods, 2).is_empty()
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -619,7 +619,7 @@ pub fn worker(file: &Path) -> Result<(), String> {
         WorkKind::Shaders => {
             use nxport_builderlib::vulkan_precompile::{self as vp, VulkanPrecompilePhase as Phase};
             std::fs::create_dir_all(&w.into).map_err(|e| format!("{}: {e}", w.into.display()))?;
-            nxport::vulkan::stage_cache::set_cache_dir(w.into.clone());
+            nxport_enginelib::vulkan::stage_cache::set_cache_dir(w.into.clone());
             let cpus = std::thread::available_parallelism().map_or(6, |n| n.get());
             let stats = vp::precompile(&vp::VulkanPrecompileOptions {
                 dump_dir: w.dump,

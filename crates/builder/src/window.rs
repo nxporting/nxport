@@ -1,14 +1,14 @@
-// Window and Dear ImGui runner: AppKit on macOS (delegates to nxport::ui::window), SDL3 on Windows (window_sdl.rs).
+// Window and Dear ImGui runner: AppKit on macOS (delegates to nxport_enginelib::ui::window), SDL3 on Windows (window_sdl.rs).
 
 #[cfg(target_os = "macos")]
-pub use nxport::ui::imgui;
+pub use nxport_enginelib::ui::imgui;
 
 #[cfg(target_os = "macos")]
-pub use nxport::ui::window::{snapshot, Frame, PathKind, request_path, take_path};
+pub use nxport_enginelib::ui::window::{snapshot, Frame, PathKind, request_path, take_path};
 
 #[cfg(target_os = "macos")]
 pub fn run(title: &str, width: f64, height: f64, frame: Frame) -> Result<(), Box<dyn std::error::Error>> {
-    nxport::ui::window::run(title, width, height, frame);
+    nxport_enginelib::ui::window::run(title, width, height, frame);
     Ok(())
 }
 

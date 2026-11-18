@@ -737,6 +737,58 @@ dependencies = [
 name = "nxport"
 version = "0.1.0"
 dependencies = [
+ "nxport-buildscriptlib",
+ "nxport-enginelib",
+]
+
+[[package]]
+name = "nxport-builder"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dear-imgui-rs",
+ "libc",
+ "nxport-builderlib",
+ "nxport-buildscriptlib",
+ "nxport-enginelib",
+ "nxport-pipelines",
+ "sdl3",
+ "serde",
+ "serde_json",
+ "struct-patch",
+ "toml",
+]
+
+[[package]]
+name = "nxport-builderlib"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "clap",
+ "flate2",
+ "image",
+ "libc",
+ "nxport-enginelib",
+ "nxport-lifterlib",
+ "nxport-metalshaderlib",
+ "nxport-pipelines",
+ "regex",
+ "sass2spv",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "nxport-buildscriptlib"
+version = "0.1.0"
+
+[[package]]
+name = "nxport-enginelib"
+version = "0.1.0"
+dependencies = [
  "ash",
  "bincode",
  "block2",
@@ -747,7 +799,6 @@ dependencies = [
  "libc",
  "lz4_flex",
  "naga",
- "nxport-buildscriptlib",
  "nxport-lifterlib",
  "nxport-medialib",
  "nxport-metalshaderlib",
@@ -772,50 +823,6 @@ dependencies = [
  "toml",
  "zstd",
 ]
-
-[[package]]
-name = "nxport-builder"
-version = "0.1.0"
-dependencies = [
- "clap",
- "dear-imgui-rs",
- "libc",
- "nxport",
- "nxport-builderlib",
- "nxport-buildscriptlib",
- "nxport-pipelines",
- "sdl3",
- "serde",
- "serde_json",
- "struct-patch",
- "toml",
-]
-
-[[package]]
-name = "nxport-builderlib"
-version = "0.1.0"
-dependencies = [
- "ash",
- "clap",
- "flate2",
- "image",
- "libc",
- "nxport",
- "nxport-lifterlib",
- "nxport-metalshaderlib",
- "nxport-pipelines",
- "regex",
- "sass2spv",
- "serde",
- "serde_json",
- "sha2",
- "zip",
- "zstd",
-]
-
-[[package]]
-name = "nxport-buildscriptlib"
-version = "0.1.0"
 
 [[package]]
 name = "nxport-lifterlib"
