@@ -23,10 +23,10 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if !exefs.is_dir() {
         return Err(format!("ExeFS directory not found at {}", exefs.display()).into());
     }
-    let game = nxport::profile::identify(opts.dump_dir);
+    let game = nxport_enginelib::profile::identify(opts.dump_dir);
     let tid = game.title_id.ok_or("no program id in ExeFS/main.npdm")?;
     let game_name = game.name.clone();
-    let bundle_id = nxport::profile::bundle_id(tid, game.profile);
+    let bundle_id = nxport_enginelib::profile::bundle_id(tid, game.profile);
     let version_str = game.version.map_or("1.0", |v| v.version_string).to_string();
     let default_out = PathBuf::from("target").join(format!("{}.app", game_name.replace(':', " -")));
     let out_app = opts.out_app.unwrap_or(&default_out);
@@ -83,10 +83,10 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(mods) = opts.mods_dir {
         if mods.is_dir() {
             let dest_mods = resources.join("Mods");
-            let is_single_mod = nxport::mods::is_mod_dir(mods);
+            let is_single_mod = nxport_enginelib::mods::is_mod_dir(mods);
 
             let matches_game = |p: &Path| -> bool {
-                let other = nxport::game::is_other_title_dir(p, tid);
+                let other = nxport_enginelib::game::is_other_title_dir(p, tid);
                 if other {
                     println!("  [!] Skipping mod '{}': for another program than {tid:016X}", p.display());
                 }
@@ -122,9 +122,9 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
 
     let settings_path = resources.join("settings.toml");
     let mut app_settings = if let Some(file) = opts.settings {
-        nxport::settings::load_preset(file)?
+        nxport_enginelib::settings::load_preset(file)?
     } else {
-        nxport::settings::SettingsPatch::default()
+        nxport_enginelib::settings::SettingsPatch::default()
     };
     // Without packaged mods the app takes the game's data directory's mods folder (mods added after the build).
     // Made on another OS (Windows): a host path means nothing on the Mac the app runs on; the app asks for the game by
@@ -142,7 +142,7 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
         let _ = ensure_writable(&settings_path);
         let _ = fs::remove_file(&settings_path);
     }
-    nxport::settings::save_preset(&settings_path, &app_settings)?;
+    nxport_enginelib::settings::save_preset(&settings_path, &app_settings)?;
     let _ = ensure_writable(&settings_path);
 
     if let Some(shader_cache) = opts.shader_cache_dir.filter(|d| d.is_dir()) {

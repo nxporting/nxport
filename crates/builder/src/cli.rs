@@ -481,12 +481,12 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         Command::IosEngine | Command::MacosEngine => {
             use nxport_builderlib::apple_engine::{build, Os};
             let os = if matches!(command, Command::IosEngine) { Os::Ios } else { Os::MacOs };
-            let toolchains = nxport::config::support_dir().ok_or("no data directory")?.join("toolchains");
+            let toolchains = nxport_enginelib::config::support_dir().ok_or("no data directory")?.join("toolchains");
             println!("[+] {}", build(os, &toolchains, &|name| println!("  compiling {name}"))?.display());
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::Ipa { dump, mods, cache, settings, out, bundle_game, no_entitlements, bundle_id } => {
-            let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
+            let edits = settings.as_deref().map(nxport_enginelib::settings::load_preset).transpose()?.unwrap_or_default();
             std::fs::create_dir_all(&out)?;
             let ipa = ipa::build(
                 &ipa::Options {
@@ -505,12 +505,12 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(any(target_os = "macos", windows))]
         Command::GuestImage { dump, mods, settings, out, macos } => {
-            let edits = settings.as_deref().map(nxport::settings::load_preset).transpose()?.unwrap_or_default();
+            let edits = settings.as_deref().map(nxport_enginelib::settings::load_preset).transpose()?.unwrap_or_default();
             let s = ipa::app_settings(&dump, mods.as_deref(), edits);
             #[cfg(target_os = "macos")]
-            let img = nxport::guest_image(s)?;
+            let img = nxport_enginelib::guest_image(s)?;
             #[cfg(windows)]
-            let img = nxport::guest_image_for_native(s)?;
+            let img = nxport_enginelib::guest_image_for_native(s)?;
             let (platform, name) = if macos {
                 (macho::Platform::MacOS, "@rpath/libnxport_guest.dylib")
             } else {
@@ -520,17 +520,17 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(target_os = "macos")]
         Command::GpuScenario { name, out } => match out {
-            Some(out) if name != "list" => nxport::write_scenario(&name, &out)?,
-            _ => println!("{}", nxport::capture::scenarios::NAMES.join("\n")),
+            Some(out) if name != "list" => nxport_enginelib::write_scenario(&name, &out)?,
+            _ => println!("{}", nxport_enginelib::capture::scenarios::NAMES.join("\n")),
         },
         #[cfg(any(target_os = "macos", windows))]
-        Command::GpuReplay { capture, list_textures: true, .. } => nxport::capture::replay::list_gpu_textures(&capture)?,
+        Command::GpuReplay { capture, list_textures: true, .. } => nxport_enginelib::capture::replay::list_gpu_textures(&capture)?,
         #[cfg(any(target_os = "macos", windows))]
         Command::GpuReplay { capture, record, all, out, refs, images, backend, trace_pass, cut_draw, repeat, profile, engine, .. } => {
-            let layers = nxport::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
+            let layers = nxport_enginelib::settings::from_args(std::iter::once("nxport".into()).chain(engine.into_iter().map(Into::into)))
                 .map_err(|e| e.to_string())?;
-            let opts = nxport::capture::replay::Options { record, out, all, refs, images, backend, trace_passes: trace_pass, cut_draw, repeat, profile };
-            let report = nxport::replay_capture(&capture, &opts, layers)?;
+            let opts = nxport_enginelib::capture::replay::Options { record, out, all, refs, images, backend, trace_passes: trace_pass, cut_draw, repeat, profile };
+            let report = nxport_enginelib::replay_capture(&capture, &opts, layers)?;
             if report.first_failure.is_some() {
                 std::process::exit(1);
             }

@@ -8,29 +8,29 @@ use std::path::Path;
 /// Prints a warning for each ExeFS patch in `dir` (one mod, or a folder holding mods in Atmosphere's or Ryujinx's
 /// layout) that names none of the game dump's modules. `tid`: the game's title id.
 pub fn report(dir: &Path, tid: u64, dump: &Path) {
-    let mods = if nxport::mods::is_mod_dir(dir) {
+    let mods = if nxport_enginelib::mods::is_mod_dir(dir) {
         vec![(dir.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()), dir.to_path_buf())]
     } else {
-        nxport::mods::discover_mods(dir, Some(tid))
+        nxport_enginelib::mods::discover_mods(dir, Some(tid))
     };
     let ids: Vec<String> = ["ExeFS", "exefs"]
         .iter()
         .map(|d| dump.join(d))
         .filter(|d| d.is_dir())
         .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
-        .filter_map(|e| nxport::nso::nso_build_id(&e.path().display().to_string()))
+        .filter_map(|e| nxport_enginelib::nso::nso_build_id(&e.path().display().to_string()))
         .collect();
     let ids: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
     for (mod_name, path) in mods {
-        let exefs = nxport::mods::mod_subdir(&path, "exefs");
+        let exefs = nxport_enginelib::mods::mod_subdir(&path, "exefs");
         for e in std::fs::read_dir(&exefs).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             let ext = e.path().extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase());
             let other = match ext.as_deref() {
-                Some("ips") => nxport::mods::for_other_build(&name, None, &ids),
+                Some("ips") => nxport_enginelib::mods::for_other_build(&name, None, &ids),
                 Some("pchtxt") => {
                     let text = String::from_utf8_lossy(&std::fs::read(e.path()).unwrap_or_default()).into_owned();
-                    nxport::mods::for_other_build(&name, Some(&text), &ids)
+                    nxport_enginelib::mods::for_other_build(&name, Some(&text), &ids)
                 }
                 _ => false,
             };
@@ -41,8 +41,8 @@ pub fn report(dir: &Path, tid: u64, dump: &Path) {
                 );
             }
         }
-        romfs_for_other_version(&mod_name, &nxport::mods::mod_subdir(&path, "romfs"), &dump.join("RomFS"));
-        cheats_for_other_build(&mod_name, &nxport::mods::mod_subdir(&path, "cheats"), dump);
+        romfs_for_other_version(&mod_name, &nxport_enginelib::mods::mod_subdir(&path, "romfs"), &dump.join("RomFS"));
+        cheats_for_other_build(&mod_name, &nxport_enginelib::mods::mod_subdir(&path, "cheats"), dump);
     }
 }
 
@@ -104,7 +104,7 @@ mod tests {
 /// Warns of each cheat file in `cheats` named for another build of main than the dump's (the first 8 bytes of its build
 /// id, in hex): only the file named for the running main is loaded.
 fn cheats_for_other_build(mod_name: &str, cheats: &Path, dump: &Path) {
-    let main = ["ExeFS", "exefs"].iter().find_map(|d| nxport::nso::nso_build_id(&dump.join(d).join("main").display().to_string()));
+    let main = ["ExeFS", "exefs"].iter().find_map(|d| nxport_enginelib::nso::nso_build_id(&dump.join(d).join("main").display().to_string()));
     let Some(id) = main.as_deref().and_then(|m| m.get(..16)) else { return };
     for e in std::fs::read_dir(cheats).into_iter().flatten().flatten() {
         let path = e.path();

@@ -60,4 +60,4 @@ jobs:
       - name: Build
         run: cargo build --locked -p nxport
       - name: Test
-        run: cargo test --locked -p nxport -p nxport-lifterlib -p nxport-pipelines -p sass2spv --lib --bins
+        run: cargo test --locked -p nxport-enginelib -p nxport-lifterlib -p nxport-pipelines -p sass2spv --lib --bins

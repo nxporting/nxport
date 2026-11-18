@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use nxport::settings;
+use nxport_enginelib::settings;
 
 use crate::app::{Output, Request, Step};
 

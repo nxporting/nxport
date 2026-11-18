@@ -111,7 +111,7 @@ jobs:
       - name: Build the builder and the engines
         run: cargo build --release --locked -p nxport-builder
       - name: Test
-        run: cargo test --locked -p nxport -p nxport-builderlib -p nxport-builder -p nxport-lifterlib -p nxport-pipelines -p sass2spv --lib --bins
+        run: cargo test --locked -p nxport-enginelib -p nxport-builderlib -p nxport-builder -p nxport-lifterlib -p nxport-pipelines -p sass2spv --lib --bins
       - name: Assemble the archive
         run: |
           root="nxport-builder-$VERSION"

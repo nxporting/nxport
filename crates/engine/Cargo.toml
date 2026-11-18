@@ -3,67 +3,12 @@ name = "nxport"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "nxport"
-path = "src/lib.rs"
-
 [[bin]]
 name = "nxport"
 path = "src/main.rs"
 
 [dependencies]
-libc = "0.2"
-capstone = "0.12"
-zstd = "0.13"
-lz4_flex = "0.11"
-rustc-hash = "2"
-smallvec = { version = "1", features = ["serde"] }
-nxport-pipelines = { path = "../pipelines" }
-clap = { version = "4.6.7", features = ["derive"] }
-struct-patch = { version = "0.14.4", features = ["nesting"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0"
-bincode = "1.3"
-ash = "0.38"
-flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
-toml = "1.1.8"
-regex = "1"
-nxport-metalshaderlib = { path = "../metalshaderlib" }
-sass2spv = { path = "../sass2spv" }
-nxport-lifterlib = { path = "../lifterlib" }
-nxport-medialib = { path = "../medialib" }
-opus-decoder = "0.1.1"
+nxport-enginelib = { path = "../enginelib" }
 
-# Apple frameworks: the native guest runtime (cpu/, host/, metal/) is Apple-only for now; other hosts build the
-# platform-independent parts (settings, profiles, shader tooling) and the lifted runtime (docs/windows-port.md).
-[target.'cfg(target_vendor = "apple")'.dependencies]
-objc2 = "0.6"
-objc2-foundation = "0.3"
-block2 = "0.6"
-objc2-metal = "0.3"
-objc2-quartz-core = "0.3"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = "0.3"
-dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
-
-# SDL3 for host I/O where guest code is lifted (docs/windows-port.md), linked dynamically
-# against the pre-built SDL3.dll in vendor/SDL3/. The settings editor (settings::edit) uses dear-imgui-rs.
-[target.'cfg(windows)'.dependencies]
-sdl3-sys = { version = "0.7.2", default-features = false }
-sdl3 = { version = "0.20.0", default-features = false, features = ["hidapi"] }
-dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
-
-[target.'cfg(target_os = "ios")'.dependencies]
-objc2-ui-kit = "0.3"
-# The overlays (performance, shader progress), drawn with Dear ImGui as on macOS (host/ui/renderer.rs).
-dear-imgui-rs = { version = "0.21", features = ["build-from-source"] }
-objc2-core-foundation = "0.3"
-
-
-# The Vulkan backend's own compute shaders (vulkan/*.comp), compiled to SPIR-V at build time.
 [build-dependencies]
 nxport-buildscriptlib = { path = "../buildscriptlib" }
-# wgsl-in only because naga 30's glsl-in needs a module it compiles with the other front ends.
-naga = { version = "30", features = ["glsl-in", "wgsl-in", "spv-out"] }
-

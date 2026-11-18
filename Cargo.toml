@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/engine",
+    "crates/enginelib",
     "crates/builderlib",
     "crates/buildscriptlib",
     "crates/builder",

@@ -1,5 +1,5 @@
 // A Windows app: a folder that runs the game when nxport.exe in it is started without arguments. The engine finds what
-// the folder carries itself (nxport::config::app_bundle_layer, as a macOS app finds its Contents/Resources):
+// the folder carries itself (nxport_enginelib::config::app_bundle_layer, as a macOS app finds its Contents/Resources):
 //
 //   nxport.exe                 the engine: the builder itself, which runs the game by that name (the lifted code must
 //                              match the code its engine patches), marked a GUI program: no console window opens with it
@@ -23,7 +23,7 @@ pub struct Options<'a> {
     pub mods: Option<&'a Path>,
     pub app: &'a Path,
     /// The settings above the game's profile.
-    pub edits: nxport::settings::SettingsPatch,
+    pub edits: nxport_enginelib::settings::SettingsPatch,
     /// Copy the game files in; otherwise the app reads them from `dump`.
     pub bundle_game: bool,
     pub pipeline_list: Option<&'a Path>,
@@ -48,14 +48,14 @@ pub fn engine() -> Result<PathBuf, String> {
 
 /// SDL3.dll, the library the Windows engine is built against (vendor/SDL3).
 #[cfg(windows)]
-const SDL3_DLL: &[u8] = nxport::sdl_library::DLL;
+const SDL3_DLL: &[u8] = nxport_enginelib::sdl_library::DLL;
 #[cfg(not(windows))]
 const SDL3_DLL: &[u8] = include_bytes!("../../../../vendor/SDL3/lib/SDL3.dll");
 
 /// Lays out the app folder, all but the guest library: the engine, the settings, mods, the game files and the pipeline
 /// list. Returns the directory the app's mods are in, if it has any (the code is lifted with them).
 pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
-    let tid = nxport::profile::identify(o.dump).title_id.ok_or("no program id in ExeFS/main.npdm")?;
+    let tid = nxport_enginelib::profile::identify(o.dump).title_id.ok_or("no program id in ExeFS/main.npdm")?;
     mkdir(o.app)?;
     println!("  Copying the engine");
     let engine = engine()?;
@@ -84,7 +84,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     }
     // The game's name as the program's description: what Task Manager and Explorer show for it (the engine is the builder,
     // whose own description says what the builder does).
-    if let Some(control) = nxport::game::control_of(o.dump).filter(|c| c.title.is_some()) {
+    if let Some(control) = nxport_enginelib::game::control_of(o.dump).filter(|c| c.title.is_some()) {
         #[cfg(windows)]
         crate::app_icon::set_exe_version(&exe, &crate::app_icon::version_resource(control.title.as_deref().unwrap_or_default(), control.version.as_deref()))?;
         #[cfg(not(windows))]
@@ -101,7 +101,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
     let _ = std::fs::remove_dir_all(&mods);
     let mut any_mods = false;
     if let Some(m) = o.mods.filter(|m| m.is_dir()) {
-        let single = nxport::mods::is_mod_dir(m);
+        let single = nxport_enginelib::mods::is_mod_dir(m);
         let candidates: Vec<(PathBuf, PathBuf)> = if single {
             vec![(m.to_path_buf(), mods.clone())]
         } else {
@@ -144,7 +144,7 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
             .map_err(|e| format!("{}: {e}", o.dump.display()))?;
         settings.files.game_dir = Some(plain(dump));
     }
-    nxport::settings::save_preset(&o.app.join("settings.toml"), &settings)?;
+    nxport_enginelib::settings::save_preset(&o.app.join("settings.toml"), &settings)?;
 
     // Kept from an earlier build: what the app translated in play stays (the engine itself drops the directories of
     // other translator builds).
@@ -165,12 +165,12 @@ pub fn pack(o: &Options) -> Result<Option<PathBuf>, String> {
 
 /// Whether a mod is for program `tid` (one whose folder names no program is taken for any).
 fn for_program(m: &Path, tid: u64) -> bool {
-    !nxport::game::is_other_title_dir(m, tid)
+    !nxport_enginelib::game::is_other_title_dir(m, tid)
 }
 
 /// Marks the program at `exe` a GUI program (the PE optional header's subsystem field): started from Explorer, a
 /// console program gets a console window of its own, which an app has no use for (the engine logs to the game's data
-/// directory when it has no console, nxport::config::app_log).
+/// directory when it has no console, nxport_enginelib::config::app_log).
 fn gui_subsystem(exe: &Path) -> Result<(), String> {
     const IMAGE_SUBSYSTEM_WINDOWS_GUI: u16 = 2;
     let err = |e: &dyn std::fmt::Display| format!("{}: {e}", exe.display());
@@ -242,7 +242,7 @@ mod tests {
             dump,
             mods: None,
             app: &out_dir,
-            edits: nxport::settings::SettingsPatch::default(),
+            edits: nxport_enginelib::settings::SettingsPatch::default(),
             bundle_game: false,
             pipeline_list: None,
             shader_cache: None,

@@ -8,7 +8,7 @@ name = "nxport-builder"
 path = "src/main.rs"
 
 [dependencies]
-nxport = { path = "../engine" }
+nxport-enginelib = { path = "../enginelib" }
 nxport-builderlib = { path = "../builderlib" }
 nxport-pipelines = { path = "../pipelines" }
 clap = { version = "4.6.7", features = ["derive"] }

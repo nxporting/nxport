@@ -4,8 +4,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use nxport::settings::profiles::{self, Platform};
-use nxport::settings::{self, Settings, SettingsPatch};
+use nxport_enginelib::settings::profiles::{self, Platform};
+use nxport_enginelib::settings::{self, Settings, SettingsPatch};
 
 use crate::macho;
 
@@ -21,9 +21,9 @@ const EXECUTABLE: &str = "nxport";
 /// what the app's own environment sets (x18 trampolines, a phone's default handheld mode, no window at image build).
 pub fn app_settings(dump: &Path, mods: Option<&Path>, edits: SettingsPatch) -> Settings {
     let mut layers = vec![profiles::platform(Platform::IOS)];
-    let dump_id = nxport::profile::identify(dump);
+    let dump_id = nxport_enginelib::profile::identify(dump);
     if let Some(p) = dump_id.profile {
-        layers.extend(nxport::profile::layers(p, Platform::IOS));
+        layers.extend(nxport_enginelib::profile::layers(p, Platform::IOS));
     }
     layers.push(edits);
     let mut env = SettingsPatch::default();
@@ -33,7 +33,7 @@ pub fn app_settings(dump: &Path, mods: Option<&Path>, edits: SettingsPatch) -> S
             return false;
         }
         let Some(tid) = dump_id.title_id else { return true };
-        let is_single = nxport::mods::is_mod_dir(m);
+        let is_single = nxport_enginelib::mods::is_mod_dir(m);
         if is_single {
             mod_matches_tid(m, tid)
         } else {
@@ -114,19 +114,19 @@ impl std::fmt::Display for IpaBuildPhase {
 
 /// Builds the .ipa into `out_dir`; returns its path. `log` gets an event per step.
 pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String> {
-    let id = nxport::profile::identify(o.dump);
+    let id = nxport_enginelib::profile::identify(o.dump);
     let tid = id.title_id.ok_or("no program id in ExeFS/main.npdm")?;
     let name = id.name.clone();
-    let bundle_id = o.bundle_id.clone().unwrap_or_else(|| nxport::profile::bundle_id(tid, id.profile));
+    let bundle_id = o.bundle_id.clone().unwrap_or_else(|| nxport_enginelib::profile::bundle_id(tid, id.profile));
     let engine = ios_artifact("nxport").ok_or("the engine for iOS is missing (ios/nxport next to this program)")?;
 
     log(IpaBuildPhase::PatchingCode);
     let s = app_settings(o.dump, o.mods, o.edits.clone());
     #[cfg(target_os = "macos")]
-    let image = nxport::guest_image(s.clone())?;
+    let image = nxport_enginelib::guest_image(s.clone())?;
     // guest_image elsewhere is what the lifter takes, without the rewrites native code needs.
     #[cfg(windows)]
-    let image = nxport::guest_image_for_native(s.clone())?;
+    let image = nxport_enginelib::guest_image_for_native(s.clone())?;
 
     let work = o.out_dir.join(format!(".{}.ipa.work", sanitize(&name)));
     let _ = fs::remove_dir_all(&work);
@@ -146,7 +146,7 @@ pub fn build(o: &Options, log: &dyn Fn(IpaBuildPhase)) -> Result<PathBuf, String
     if let Some(m) = o.mods {
         if m.is_dir() {
             let dest_mods = app.join("mods");
-            let is_single = nxport::mods::is_mod_dir(m);
+            let is_single = nxport_enginelib::mods::is_mod_dir(m);
             if is_single {
                 if mod_matches_tid(m, tid) {
                     packaged_any_mods = true;
@@ -521,7 +521,7 @@ fn zip_payload(payload: &Path, ipa: &Path) -> Result<(), String> {
 }
 
 fn mod_matches_tid(p: &Path, tid: u64) -> bool {
-    !nxport::game::is_other_title_dir(p, tid)
+    !nxport_enginelib::game::is_other_title_dir(p, tid)
 }
 
 #[cfg(test)]

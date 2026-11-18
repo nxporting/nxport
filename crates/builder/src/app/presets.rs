@@ -123,7 +123,7 @@ pub(crate) fn game_presets_dir(title_id: u64) -> PathBuf {
 
 /// A game's presets, by name. The first time a game is opened its list is created from its profile's presets, if any;
 /// from then on they are the game's own.
-pub(crate) fn game_presets(title_id: u64, profile: Option<&nxport::profile::GameProfile>) -> Vec<PresetInfo> {
+pub(crate) fn game_presets(title_id: u64, profile: Option<&nxport_enginelib::profile::GameProfile>) -> Vec<PresetInfo> {
     let dir = game_presets_dir(title_id);
     let builtin = profile.map_or(&[][..], |p| p.presets);
     if !builtin.is_empty() && !dir.exists() && std::fs::create_dir_all(&dir).is_ok() {
