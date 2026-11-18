@@ -382,7 +382,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   repeats both of the game's end tests with the first scaled by the delta frame only for 0 < delta < 1: a plain
   multiply made Link's placement during loading never arrive (delta 0) and the game stayed on its loading screen;
   gameplay reached at 120 fps; the shrine exit walk itself not replayed here), solver steps
-  (Savage Wind's are tuned; an exact rule is open); other versions by pattern. Arrow gravity, the sound frame floor
+  (Savage Wind's are tuned; an exact rule is open). Solver steps (2026-11-18): the game gives round(delta frame x 6)
+  microsteps per Havok step (1.9.0 main+0x156f930): the console's microstep length, but fewer per step makes contacts
+  softer above 90 fps (holding a cucco cut Link's jump to a third, SW #161). SW gives 6 / sqrt(delta) (tuned). No exact
+  rule: either keep the game's (softer contacts at high fps) or 6 per step (stiffer than the console). Asked the user
+  (PROGRESS.md); other versions by pattern. Arrow gravity, the sound frame floor
   and the keyframed-body angle are in (2026-11-15).
 
 - **BotW 1.9.0 stopped at frame ~1200 on Windows (2026-11-14, win-worker): FIXED (lifter: jump-table bases across split pieces, reaching-definition cap 512 -> 8192, dup is not a general-register write). It runs to frame 5000 in game. Notes kept for the 1.0.0 twin.** A
