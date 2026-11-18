@@ -22,4 +22,5 @@ pub(super) static LAYER: Layer = Layer {
         ("nvnCommandBufferBindTexture", 20),
         ("nvnCommandBufferDrawElementsInstanced", 44),
     ]),
+    device_integers: None,
 };

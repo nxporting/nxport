@@ -13,4 +13,5 @@ pub(super) static LAYER: Layer = Layer {
     nvn_procs: &[],
     audio_handle_state: None,
     command_costs: None,
+    device_integers: None,
 };
