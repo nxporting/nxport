@@ -510,7 +510,7 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   measure UniformBuffer and DrawElements for 55.15. TotK 1.0.0: NVN proc slots found by scanning the image (GOT slots, e.g.
   GetCommandMemoryUsed main+0x45413e0, BindTexture 0x4540960, DrawElementsInstanced 0x4540820; the lookup is at
   main+0x2148920); not measured: headless Ryujinx with the private data folder fails in its NGC service on TotK
-  (KeyNotFoundException 'BuiltInSystem'), so TotK keeps the default 32 for now (log: nxport-builderlib/ryu_cmds.out, tool:
+  (KeyNotFoundException 'BuiltInSystem': a corrupted private bis/system/save after a kill; restoring it fixes that), but on TotK the GDB stub's listener then fails on its own 0.5 s after start ("Failed to accept incoming GDB client connection: Interrupted"), so TotK keeps the default 32 for now (log: nxport-builderlib/ryu_cmds.out, tool:
   a throwaway RSP client, "multi" mode, scratchpad rsp/). Built from the user's base NSP
   (main 2094f152..., SDK 0.12.14). Fixed so far: the NVN version (SDK 0.12 layer, 29b47c4); a printf jump table in the
   sdk whose base register is set before the loop (lifter: jt values from reaching definitions, sdk+0x3f5c0, 00dc372:
