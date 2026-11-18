@@ -266,7 +266,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   shaders using texelFetch / textureSize / gl_FragCoord with scaled textures read the render scale (sass2spv, both
   backends; Ryujinx's ShaderStage rescaling as reference); viewports, scissors, clears, copy regions scaled per target,
   size queries at guest size; opt-in; gpu-replay captures byte-identical at 1x; BotW first. Starts after nvn/api/ lands; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
-  (3) DLC (blocked: no dump here); (4) draw distance; (5) higher-resolution shadows; (6) motion controls: nxport has them
+  (3) DLC (blocked: no dump here); (4) draw distance: placed actors DONE 2026-11-18 (Graphics > Draw Distance,
+  100-150%, profile/botw/draw_distance.rs, 1.9.0; 1.0.0 and 1.5.0 compile the site differently, not ported); grass and
+  the distant trees not done; (5) higher-resolution shadows; (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
   sharpening; (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
