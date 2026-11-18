@@ -6,6 +6,8 @@ and update this file when you finish or drop it.
 ## Claimed: S41L0R Windows Machine
 
 - BotW field of view (Savage Wind parity, exact world-camera and event rules), win-worker via a worktree subagent, 2026-11-18.
+- Resolution scaling, the Vulkan side (gpu/vulkan, against a local gpu::scale stub until mac-worker's lands), win-worker via a
+  worktree subagent, 2026-11-18.
 
 - BotW 1.9.0 ultrawide (Savage Wind parity), win-worker via a worktree subagent, 2026-11-16. **First part done
   (profile/botw/aspect.rs, hud.rs):** every 16:9 sead perspective / frustum projection takes the screen's shape in
