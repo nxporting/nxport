@@ -487,6 +487,9 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   per-command encoding sizes per driver version, read from each sdk's NVN driver code, checked against Ryujinx.
   Measured in Ryujinx (1.0.0 driver in subsdk0; used = [cb+0x18]-[cb+0x50], control [cb+0x30]-[cb+0x58]; per-call
   deltas on the same cb): BindUniformBuffer 20 bytes, BindTexture 20, DrawElementsInstanced 44, BeginRecording 0;
+  FIXED 2026-11-17 (mac-worker 5f2c4e5: the 52.32 driver's command sizes): no heap overflow on Mac or Windows.
+  Then Windows-only: a jump table at main+0x109b918 lifted with 2 of 4 cases (jt.rs bound() took an earlier compare);
+  fixed in the lifter (win-worker), checking.
   control 0 for these. Later (847 calls): BindVertexAttribState 68, BindVertexStreamState 68, BindVertexBuffer 24, DrawElements 60;
   rarer larger deltas include calls not hooked in between (Program 128, SetRenderTargets 96-320: to confirm) (log: nxport-builderlib/ryu_cmds.out, tool:
   a throwaway RSP client, "multi" mode, scratchpad rsp/). Built from the user's base NSP
