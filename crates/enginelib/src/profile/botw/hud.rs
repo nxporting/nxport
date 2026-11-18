@@ -40,8 +40,7 @@ pub struct Sites {
     pub scissor_code: [u32; 3],
     /// The projection texture coordinates' choice of the layout's size (a material's texture projected from the
     /// screen, fitted to the layout): `ldr x8, [x20, #0xc0]; ldp <w>, <h>, [x8, #0x28]; b <on>` and the pane-size
-    /// choice after it, `ldp <w>, <h>, [x3]`, as the version has them (TEXGEN_CODE_V1_9 / _V1_0); None where not
-    /// found yet (1.5.0).
+    /// choice after it, `ldp <w>, <h>, [x3]`, as the version has them (TEXGEN_CODE_V1_9 / _V1_0).
     pub texgen: Option<(usize, [u32; 4])>,
 }
 
@@ -228,7 +227,7 @@ pub unsafe extern "C" fn layout_fit(draw_info: usize) -> u64 {
 
 /// The projection texture coordinates' layout-size choice in 1.9.0 (width s3, height s1).
 pub const TEXGEN_CODE_V1_9: [u32; 4] = [0xf940_6288, 0x2d45_0503, 0x1400_0005, 0x2d40_0463];
-/// The same in 1.0.0 (width s7, height s6).
+/// The same in 1.0.0 and 1.5.0 (width s7, height s6).
 pub const TEXGEN_CODE_V1_0: [u32; 4] = [0xf940_6288, 0x2d45_1907, 0x1400_0005, 0x2d40_1867];
 
 /// The calculation's call of its root pane's in 1.9.0: `str x21, [x19, #0xc0]; and w3, w20, #1; <x2 = the context>;
