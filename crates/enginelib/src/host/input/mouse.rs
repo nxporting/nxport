@@ -28,6 +28,12 @@ pub(crate) fn mouse_look_on() -> bool {
 /// hold the mouse.
 #[cfg_attr(target_os = "ios", allow(dead_code))]
 pub fn mouse_look_moved(dx: f32, dy: f32) {
+    if mouse_tilt_held() {
+        let mut t = MOUSE_TILT.lock().unwrap();
+        t.pending.0 += dx as f64;
+        t.pending.1 += dy as f64;
+        return;
+    }
     // Into the game's camera angles where a profile takes them, as a stick would turn them: mouse right as the stick
     // right (the yaw falls), mouse down as the stick down (the pitch rises).
     // Only while the camera storing them is the one the profile takes them for (ANGLE_ROUTE): another camera (TotK's
@@ -189,9 +195,63 @@ pub(crate) fn update_mouse_look() {
     }
 }
 
-/// Before the game reads player 1's controller: the debug input script and mouse look.
+// ---- mouse tilt ----
+
+/// Mouse tilt (Savage Wind's "hold T"): while T is held, mouse movement turns a virtual controller instead of the
+/// camera, for motion aiming and tilt puzzles: right turns it right (yaw), up raises its far end (pitch, at most 85
+/// degrees). Letting go keeps its orientation, so the mouse can be moved back; tapping T without moving the mouse levels
+/// it. Player 1's motion then comes from it, as from a controller's sensors.
+pub(crate) struct MouseTilt {
+    yaw: f64,
+    pitch: f64,
+    pending: (f64, f64),
+    moved: bool,
+    held: bool,
+}
+pub(crate) static MOUSE_TILT: Mutex<MouseTilt> =
+    Mutex::new(MouseTilt { yaw: 0.0, pitch: 0.0, pending: (0.0, 0.0), moved: false, held: false });
+/// T's key code (the macOS one, as KEYS holds them).
+const TILT_KEY: usize = 17;
+/// Radians the virtual controller turns per pixel of mouse movement (a tuning number, Savage Wind's 0.2 degrees).
+const TILT_RAD_PER_PX: f64 = 0.2 * std::f64::consts::PI / 180.0;
+const TILT_PITCH_MAX: f64 = 85.0 * std::f64::consts::PI / 180.0;
+
+pub(crate) fn mouse_tilt_held() -> bool {
+    mouse_look_on() && KEYS[TILT_KEY].load(Ordering::Relaxed)
+}
+
+/// Turns the mouse movement since the last read into the virtual controller's orientation, while T is held and at
+/// the read after it is let go (that sample's gyroscope reads no turn, so the game's aim stops).
+pub(crate) fn update_mouse_tilt() {
+    let held = mouse_tilt_held();
+    let q = {
+        let mut t = MOUSE_TILT.lock().unwrap();
+        if !held && !t.held {
+            return;
+        }
+        if held && !t.held {
+            t.moved = false;
+        }
+        let (dx, dy) = std::mem::take(&mut t.pending);
+        t.moved |= dx != 0.0 || dy != 0.0;
+        if !held && !t.moved {
+            t.yaw = 0.0;
+            t.pitch = 0.0;
+        }
+        t.held = held;
+        t.yaw -= dx * TILT_RAD_PER_PX;
+        t.pitch = (t.pitch - dy * TILT_RAD_PER_PX).clamp(-TILT_PITCH_MAX, TILT_PITCH_MAX);
+        qmul(qrot([0.0, 0.0, t.yaw]), qrot([t.pitch, 0.0, 0.0]))
+    };
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let ns = START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64;
+    motion_set(0, q, ns);
+}
+
+/// Before the game reads player 1's controller: the debug input script, mouse look and the mouse tilt.
 pub fn before_npad_read() {
     apply_script();
+    update_mouse_tilt();
     update_mouse_look();
 }
 
