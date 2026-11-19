@@ -519,20 +519,35 @@ pub fn texture_ref_gen(addr: usize) -> u32 {
     texture_snapshot(addr).map_or(0, |(g, _)| g as u32)
 }
 
-/// The texture object a recorded reference (`addr` as captured with generation `gen`) names now: `addr` while it still
-/// describes that texture, else a stable copy of the recorded description. Super Mario Odyssey records command lists once
+/// The texture object a recorded reference (`addr` as captured with generation `gen`) names: a stable copy of the recorded
+/// description (one per generation, freed with its history entry; `addr` itself when the description is gone). Super Mario Odyssey records command lists once
 /// and calls them every frame while the NVNtexture structs they named are re-initialized for other textures (its mip
 /// chain and volume passes then targeted levels the new textures do not have).
 pub fn resolve_texture_ref(addr: usize, gen: u32) -> usize {
-    if addr == 0 || gen == 0 || texture_snapshot(addr).map_or(true, |(g, _)| g as u32 == gen) {
+    if addr == 0 || gen == 0 {
         return addr;
     }
+    // The state is taken now, also when the object still describes it: the executor reads the object again later (when
+    // a pass using it is planned), and game threads re-initialize transient objects meanwhile. Breath of the Wild's scene
+    // composite, resolved to its 1600x900 depth object, then read the 800x450 texture the object had just become: the
+    // scene drawn into the top-left quarter for a frame.
+    let current = texture_snapshot(addr).and_then(|(g, s)| (g as u32 == gen).then_some(s));
     let mut h = TEX_HISTORY.lock().unwrap();
-    let Some(h) = h.as_mut() else { return addr };
-    let Some(&state) = h.by_gen.get(&gen) else { return addr };
+    let h = h.get_or_insert_with(|| SnapshotHistory {
+        by_gen: Default::default(),
+        order: Default::default(),
+        copies: Default::default(),
+    });
     if let Some(c) = h.copies.get(&gen) {
         return &**c as *const NvnTexture as usize;
     }
+    let state = match current {
+        Some(s) => s,
+        None => match h.by_gen.get(&gen) {
+            Some(&s) => s,
+            None => return addr,
+        },
+    };
     let b = Box::new(state);
     let copy = &*b as *const NvnTexture as usize;
     let g = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
