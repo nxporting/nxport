@@ -49,49 +49,16 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
             cached: None,
         })
         .collect();
+    // Stages the cache lacks are translated on the translation threads; the program's first use waits for them
+    // (stages()). Translating them here, one by one on the game's loading thread, held BotW 1.9.0 on a black screen.
+    let mut pending = Vec::new();
     for (i, st) in stages.iter_mut().enumerate() {
         st.cached = unsafe { shader_cache::lookup(st.data) };
-        if st.cached.is_none() {
-            st.cached = unsafe { shader_cache::lookup_or_translate_dynamic(st.data, st.control, i) };
-            if st.cached.is_some() {
-                CACHE_TRANSLATED.fetch_add(1, Ordering::Relaxed);
-            }
+        if st.cached.is_none() && st.data >= 0x1_0000_0000 && crate::settings::get().graphics.dynamic_shaders {
+            pending.push((i, queue_translation(st.data, st.control, i)));
+            continue;
         }
-        let (hits, misses) = match st.cached {
-            Some(_) => (
-                CACHE_HITS.fetch_add(1, Ordering::Relaxed) + 1,
-                CACHE_MISSES.load(Ordering::Relaxed),
-            ),
-            None => (
-                CACHE_HITS.load(Ordering::Relaxed),
-                CACHE_MISSES.fetch_add(1, Ordering::Relaxed) + 1,
-            ),
-        };
-        if st.cached.is_none() && misses <= 400 {
-            let weak = if st.data >= 0x1_0000_0000 {
-                shader_cache::fnv1a64(unsafe {
-                    std::slice::from_raw_parts(st.data as *const u8, 0x130)
-                })
-            } else {
-                0
-            };
-            println!(
-                "[shader-cache] MISS program=0x{:x} stage#{} data=0x{:x} weak={:016x}",
-                program, i, st.data, weak
-            );
-        }
-        if st.cached.is_none() {
-            dump_missing(st, i);
-        }
-        if (hits + misses) % 500 == 0 {
-            println!(
-                "[shader-cache] {} hits ({} translated here, not in the cache) / {} misses over {} stages",
-                hits,
-                CACHE_TRANSLATED.load(Ordering::Relaxed),
-                misses,
-                hits + misses
-            );
-        }
+        account(program, st, i, false);
     }
     if let Some(dir) = &crate::settings::get().dump.dump_shaders {
         let dumped = DUMPED.get_or_init(|| Mutex::new(Default::default()));
@@ -140,6 +107,93 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
         .lock()
         .unwrap()
         .insert(program, std::sync::Arc::new(stages));
+    if pending.is_empty() {
+        pending_programs().lock().unwrap().remove(&program);
+    } else {
+        pending_programs().lock().unwrap().insert(program, pending);
+    }
+}
+
+/// Counts a stage's cache result, logs a miss and writes the missing stage out (dump_missing).
+fn account(program: usize, st: &StageCode, i: usize, translated: bool) {
+    if translated {
+        CACHE_TRANSLATED.fetch_add(1, Ordering::Relaxed);
+    }
+    let (hits, misses) = match st.cached {
+        Some(_) => (
+            CACHE_HITS.fetch_add(1, Ordering::Relaxed) + 1,
+            CACHE_MISSES.load(Ordering::Relaxed),
+        ),
+        None => (
+            CACHE_HITS.load(Ordering::Relaxed),
+            CACHE_MISSES.fetch_add(1, Ordering::Relaxed) + 1,
+        ),
+    };
+    if st.cached.is_none() && misses <= 400 {
+        let weak = if st.data >= 0x1_0000_0000 {
+            shader_cache::fnv1a64(unsafe {
+                std::slice::from_raw_parts(st.data as *const u8, 0x130)
+            })
+        } else {
+            0
+        };
+        println!(
+            "[shader-cache] MISS program=0x{:x} stage#{} data=0x{:x} weak={:016x}",
+            program, i, st.data, weak
+        );
+    }
+    if st.cached.is_none() {
+        dump_missing(st, i);
+    }
+    if (hits + misses) % 500 == 0 {
+        println!(
+            "[shader-cache] {} hits ({} translated here, not in the cache) / {} misses over {} stages",
+            hits,
+            CACHE_TRANSLATED.load(Ordering::Relaxed),
+            misses,
+            hits + misses
+        );
+    }
+
+}
+
+/// A translation queued for the translation threads: its result once done.
+type Translation = std::sync::Arc<(Mutex<Option<Option<&'static CachedStage>>>, std::sync::Condvar)>;
+
+/// Queues the translation of a stage the cache lacks (one job per stage address while it runs).
+fn queue_translation(data: u64, control: u64, index: usize) -> Translation {
+    static IN_FLIGHT: OnceLock<Mutex<HashMap<u64, Translation>>> = OnceLock::new();
+    static QUEUE: OnceLock<Mutex<std::sync::mpsc::Sender<(u64, u64, usize, Translation)>>> = OnceLock::new();
+    let in_flight = IN_FLIGHT.get_or_init(Default::default);
+    if let Some(t) = in_flight.lock().unwrap().get(&data) {
+        return t.clone();
+    }
+    let t: Translation = Default::default();
+    in_flight.lock().unwrap().insert(data, t.clone());
+    let tx = QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(u64, u64, usize, Translation)>();
+        let rx = std::sync::Arc::new(Mutex::new(rx));
+        let n = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(2).max(2);
+        for k in 0..n {
+            let rx = rx.clone();
+            let _ = std::thread::Builder::new().name(format!("shader-translate-{k}")).spawn(move || loop {
+                let Ok((data, control, index, done)) = rx.lock().unwrap().recv() else { return };
+                let r = unsafe { shader_cache::lookup_or_translate_dynamic(data, control, index) };
+                *done.0.lock().unwrap() = Some(r);
+                done.1.notify_all();
+                IN_FLIGHT.get().unwrap().lock().unwrap().remove(&data);
+            });
+        }
+        Mutex::new(tx)
+    });
+    let _ = tx.lock().unwrap().send((data, control, index, t.clone()));
+    t
+}
+
+/// Programs whose stages are still being translated: (stage index, its translation).
+fn pending_programs() -> &'static Mutex<HashMap<usize, Vec<(usize, Translation)>>> {
+    static P: OnceLock<Mutex<HashMap<usize, Vec<(usize, Translation)>>>> = OnceLock::new();
+    P.get_or_init(Default::default)
 }
 
 /// A stage the cache lacks draws nothing (its program's draws are skipped): write it to
@@ -184,5 +238,21 @@ fn dump_missing(st: &StageCode, index: usize) {
 
 /// Shared, not copied: looked up for every draw.
 pub fn stages(program: usize) -> Option<std::sync::Arc<Vec<StageCode>>> {
+    let waiting = pending_programs().lock().unwrap().remove(&program);
+    if let Some(waiting) = waiting {
+        let mut stages = (*programs().lock().unwrap().get(&program)?.clone()).clone();
+        for (i, t) in waiting {
+            let mut r = t.0.lock().unwrap();
+            while r.is_none() {
+                r = t.1.wait(r).unwrap();
+            }
+            stages[i].cached = r.unwrap();
+            drop(r);
+            account(program, &stages[i], i, stages[i].cached.is_some());
+        }
+        let stages = std::sync::Arc::new(stages);
+        programs().lock().unwrap().insert(program, stages.clone());
+        return Some(stages);
+    }
     programs().lock().unwrap().get(&program).cloned()
 }
