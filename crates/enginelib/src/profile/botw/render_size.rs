@@ -89,3 +89,38 @@ pub fn scene_size() -> Option<(u32, u32)> {
     let s = SIZE.load(Ordering::Relaxed);
     (s != 0).then_some(((s >> 32) as u32, s as u32))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Frame records on a fake stack: each [next fp, return address], the first at the initialization's fp.
+    fn stack(rets: &[usize]) -> Vec<usize> {
+        let mut s = vec![0usize; rets.len() * 2 + 2];
+        let base = s.as_ptr() as usize;
+        for (i, &r) in rets.iter().enumerate() {
+            s[2 * i] = base + 16 * (i + 1); // the caller's record, higher up
+            s[2 * i + 1] = r;
+        }
+        s
+    }
+
+    #[test]
+    fn the_size_is_taken_only_under_the_site_and_helper_pair() {
+        // main_base() is 0 in tests: any small return address counts as the game's.
+        install(0, Scene { site: 0x1063cb4, helper: 0xed6428 });
+        SIZE.store(0, Ordering::Relaxed);
+        // The site above some other frame (a deeper creation inside another one): not the scene's.
+        let s = stack(&[0xecad34, 0xed71c8, 0x1063cb4, 0x100]);
+        unsafe { texture_initialized(16, 16, s.as_ptr() as usize) };
+        assert_eq!(scene_size(), None);
+        // The helper's return right below the site, whatever the depth under it.
+        let s = stack(&[0xecad34, 0xed71c8, 0xed66b4, 0xed6428, 0x1063cb4, 0x100]);
+        unsafe { texture_initialized(1600, 900, s.as_ptr() as usize) };
+        assert_eq!(scene_size(), Some((1600, 900)));
+        let s = stack(&[0xed7144, 0xed66b4, 0xed6428, 0x1063cb4]);
+        unsafe { texture_initialized(1440, 810, s.as_ptr() as usize) };
+        assert_eq!(scene_size(), Some((1440, 810)));
+        install(0, Scene { site: 0, helper: 0 });
+    }
+}

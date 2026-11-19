@@ -223,7 +223,13 @@ pub(crate) fn mouse_tilt_held() -> bool {
 /// Turns the mouse movement since the last read into the virtual controller's orientation, while T is held and at
 /// the read after it is let go (that sample's gyroscope reads no turn, so the game's aim stops).
 pub(crate) fn update_mouse_tilt() {
+    // Without a lock while the tilt is idle (the game reads its controller many times a frame).
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
     let held = mouse_tilt_held();
+    if !held && !ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    ACTIVE.store(held, Ordering::Relaxed);
     let q = {
         let mut t = MOUSE_TILT.lock().unwrap();
         if !held && !t.held {
