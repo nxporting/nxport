@@ -281,7 +281,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   size queries at guest size; opt-in; gpu-replay captures byte-identical at 1x; BotW first. Starts after nvn/api/ lands; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
   (3) DLC (blocked: no dump here); (4) draw distance: placed actors DONE 2026-11-18 (Graphics > Draw Distance,
   100-150%, profile/botw/draw_distance.rs, 1.9.0; 1.0.0 and 1.5.0 compile the site differently, not ported); grass and
-  the distant trees not done; (5) higher-resolution shadows; (6) motion controls: nxport has them
+  the distant trees not done (Savage Wind: the terrain's distant trees, tera::Core::Tree +0x14cb0, five floats: fade-in
+  start and length kept, end 4000 m, fade-out 500 m and block detail switch 4000 m times the far factor; the game
+  rewrites them about twice a frame, so SW scales at the entry of their per-frame shader setup, 1.9.0 main+0x13c94ac, x0
+  the object, comparing with what it last wrote. That entry still has x0, x1 and x30 live, so a call there needs a
+  code block, or the writers hooked instead. The grass layers in SW follow an adaptive factor stepped by how full
+  their cell list is: a heuristic, not taken); (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale; (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
   sharpening; (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
