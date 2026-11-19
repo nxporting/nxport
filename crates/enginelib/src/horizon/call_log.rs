@@ -34,7 +34,7 @@ pub(crate) struct HleCallRing {
 
 pub(crate) static HLE_CALL_RINGS: StdMutex<Vec<&'static HleCallRing>> = StdMutex::new(Vec::new());
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub(crate) static HLE_CALL_SEQ: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
@@ -76,11 +76,20 @@ pub(crate) fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
             ring
         })
     });
+    let i = ring.next.load(Ordering::Relaxed);
     #[cfg(target_arch = "x86_64")]
     let seq = unsafe { core::arch::x86_64::_rdtsc() };
-    #[cfg(not(target_arch = "x86_64"))]
+    // The virtual counter (synchronized across cores) with the ring position below it: a thread's calls within one tick
+    // stay in order. A shared atomic counter here was 2% of guest-main's time in BotW (its cache line moving between
+    // every thread making HLE calls).
+    #[cfg(target_arch = "aarch64")]
+    let seq = {
+        let cnt: u64;
+        unsafe { core::arch::asm!("mrs {}, cntvct_el0", out(reg) cnt, options(nomem, nostack)) };
+        (cnt << 10) | i as u64 | 1 << 63
+    };
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     let seq = HLE_CALL_SEQ.fetch_add(1, Ordering::Relaxed);
-    let i = ring.next.load(Ordering::Relaxed);
     ring.next.store((i + 1) % HLE_CALL_RING_SIZE, Ordering::Relaxed);
     let slot = &ring.slots[i];
     slot.seq.store(0, Ordering::Relaxed);
