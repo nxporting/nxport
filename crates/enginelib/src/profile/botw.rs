@@ -164,6 +164,7 @@ pub static HUD_V1_0_0: hud::Sites = hud::Sites {
 
 #[cfg(nx_runtime)]
 unsafe fn install_v1_0_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
+    draw_distance::install(base, mem_space, draw_distance::V1_0_0);
     render_size::install(base, render_size::SCENE_V1_0_0);
     aspect::install(base, mem_space, &ASPECT_V1_0_0);
     hud::install(base, mem_space, &HUD_V1_0_0);
@@ -212,7 +213,7 @@ unsafe fn install_v1_5_0_hooks(base: usize, mem_space: &mut crate::guest::loader
 
 #[cfg(nx_runtime)]
 unsafe fn install_v1_9_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
-    draw_distance::install(base, mem_space, 0x10a4684);
+    draw_distance::install(base, mem_space, draw_distance::V1_9_0);
     render_size::install(base, render_size::SCENE_V1_9_0);
     frame_time::install(base, mem_space, &SITES_V1_9_0);
     aspect::install(base, mem_space, &ASPECT_V1_9_0);
