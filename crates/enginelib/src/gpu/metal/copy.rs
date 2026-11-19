@@ -16,7 +16,7 @@ use objc2_metal::MTLBlitCommandEncoder;
 
 use crate::nvn::cmd::{Region, TexRef};
 
-fn warn_once(key: &'static str, msg: String) {
+pub(super) fn warn_once(key: &'static str, msg: String) {
     static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     let mut s = SEEN.lock().unwrap();
     if !s.contains(&key) {
@@ -279,13 +279,24 @@ impl Gfx {
                 image_stride,
             } => {
                 let src = &resolved(src);
-                let Some(tex) = self.texture(&mut st.tc, src.texture) else {
+                let Some(mut tex) = self.texture(&mut st.tc, src.texture) else {
                     return;
                 };
                 let Some((_, t)) = tex_info(src.texture) else {
                     return;
                 };
                 let t = &t;
+                // Guest memory takes the game's size (gpu::scale).
+                if super::tex_scale(&tex) > 1 {
+                    super::demote_scaled(&mut st.tc, &tex, t.storage as usize);
+                    let Some(d) = self.texture(&mut st.tc, src.texture) else {
+                        return;
+                    };
+                    tex = d;
+                    if !st.tc.downscale_pending.is_empty() {
+                        self.run_downscales(st);
+                    }
+                }
                 if is_depth_stencil(tex.pixelFormat()) {
                     warn_once(
                         "t2b-depth",
@@ -323,25 +334,50 @@ impl Gfx {
             Cmd::CopyTextureToTexture(p) => {
                 let (src, src_region, dst, dst_region) =
                     (&resolved(&p.src), &p.src_region, &resolved(&p.dst), &p.dst_region);
-                let (Some(stex), Some(dtex)) = (
+                let (Some(mut stex), Some(mut dtex)) = (
                     self.texture(&mut st.tc, src.texture),
                     self.texture(&mut st.tc, dst.texture),
                 ) else {
                     return;
                 };
-                st.tc.mark_gpu_written(super::storage_id(&dtex)); // contents now differ from guest memory
                 let (Some((_, st_)), Some((_, dt_))) =
                     (tex_info(src.texture), tex_info(dst.texture))
                 else {
                     return;
                 };
                 let (st_, dt_) = (&st_, &dt_);
-                let (Some(sg), Some(dg)) = (
+                // Scaled textures (gpu::scale): across scales the copy needs the game's size on both sides; within one
+                // scale regions are in game texels, times the scale.
+                if super::tex_scale(&stex) != super::tex_scale(&dtex) {
+                    super::demote_scaled(&mut st.tc, &stex, st_.storage as usize);
+                    super::demote_scaled(&mut st.tc, &dtex, dt_.storage as usize);
+                    let (Some(s), Some(d)) = (
+                        self.texture(&mut st.tc, src.texture),
+                        self.texture(&mut st.tc, dst.texture),
+                    ) else {
+                        return;
+                    };
+                    (stex, dtex) = (s, d);
+                    if !st.tc.downscale_pending.is_empty() {
+                        self.run_downscales(st);
+                    }
+                }
+                st.tc.mark_gpu_written(super::storage_id(&dtex)); // contents now differ from guest memory
+                let (Some(mut sg), Some(mut dg)) = (
                     geometry(st_, &stex, src, src_region, 0, 0),
                     geometry(dt_, &dtex, dst, dst_region, 0, 0),
                 ) else {
                     return;
                 };
+                let ks = super::tex_scale(&stex);
+                if ks > 1 {
+                    for g in [&mut sg, &mut dg] {
+                        g.origin.x *= ks as usize;
+                        g.origin.y *= ks as usize;
+                        g.size.width *= ks as usize;
+                        g.size.height *= ks as usize;
+                    }
+                }
                 if stex.pixelFormat() != dtex.pixelFormat() {
                     warn_once(
                         "t2t-format",
@@ -374,10 +410,24 @@ impl Gfx {
                 let t = &t;
                 let pf = tex.pixelFormat();
                 let level = (dst.level as usize).min(tex.mipmapLevelCount().saturating_sub(1));
+                // In game texels; a scaled texture (gpu::scale) has k times as many.
+                let k = super::tex_scale(&tex) as usize;
                 let (lw, lh) = (
-                    ((t.width as usize) >> level).max(1),
-                    ((t.height as usize) >> level).max(1),
+                    ((t.width as usize * k) >> level).max(1),
+                    ((t.height as usize * k) >> level).max(1),
                 );
+                let scaled_region;
+                let region = if k > 1 {
+                    let mut r = *region;
+                    r.x *= k as i32;
+                    r.y *= k as i32;
+                    r.w *= k as i32;
+                    r.h *= k as i32;
+                    scaled_region = r;
+                    &scaled_region
+                } else {
+                    region
+                };
                 let full = (region.w <= 0 || region.w as usize >= lw)
                     && (region.h <= 0 || region.h as usize >= lh)
                     && region.x <= 0

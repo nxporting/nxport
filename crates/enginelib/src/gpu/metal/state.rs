@@ -15,6 +15,8 @@ pub(crate) struct CachedPassRts {
     pub(super) samples: u32,
     pub(super) enc_key: smallvec::SmallVec<[u64; 36]>,
     pub(super) target_size: (f64, f64),
+    /// The targets' common scale (gpu::scale): game coordinates (viewports, scissors) times this are the targets'.
+    pub(super) scale: u32,
     /// Block-compressed targets rendered through proxies: (proxy, target, level), see `bc_proxy`.
     pub(super) bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]>,
 }
@@ -241,6 +243,10 @@ pub(crate) struct TexCache {
     pub(super) gpu_twins: rustc_hash::FxHashMap<u64, (Tex, u64)>,
     /// Twins a texture resolution found out of date: (source, twin, storage identity), copied before the draw.
     pub(super) twin_pending: Vec<(Tex, Tex, u64)>,
+    /// Scaled textures (gpu::scale) demoted, by guest storage address, until the texture at the game's size is made.
+    pub(super) demoted: HashMap<usize, Tex>,
+    /// (scaled texture, its replacement at the game's size): contents to bring down before the next draw or copy.
+    pub(super) downscale_pending: Vec<(Tex, Tex)>,
     /// Resolutions that returned such a twin: they are neither memoized nor reused (the twin may need a copy first).
     pub(super) twin_uses: u64,
     /// alias_view's views by (root, format, type, levels, slices).
@@ -277,6 +283,8 @@ impl Default for TexCache {
             gpu_write_counter: 0,
             gpu_twins: Default::default(),
             twin_pending: Vec::new(),
+            demoted: HashMap::default(),
+            downscale_pending: Vec::new(),
             twin_uses: 0,
         }
     }
@@ -296,7 +304,7 @@ pub(crate) struct EncodeCtx {
     pub(super) arena: translated::Arena,
     /// Ryujinx support buffers by viewport size (its only input). Arena chunks are never written again after reset,
     /// so a cached allocation stays valid.
-    pub(super) support_cache: HashMap<(u32, u32), (Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
+    pub(super) support_cache: HashMap<(u32, u32, u64), (Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
     pub(super) translated_draws: u64,
     /// (draws with instances > 1, largest instance count, sum of instance counts, largest vertex/index count)
     pub(super) instanced_stats: (u64, i64, i64, i64),

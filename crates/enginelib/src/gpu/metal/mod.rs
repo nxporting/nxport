@@ -56,6 +56,7 @@ pub(crate) use formats::*;
 pub(crate) mod backend;
 mod batch;
 mod copy;
+mod downscale;
 mod fence_guard;
 mod issuer;
 pub use nxport_metalshaderlib::msl_specialize;

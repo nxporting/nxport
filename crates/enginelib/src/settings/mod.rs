@@ -246,6 +246,9 @@ group! {
         /// Draw distance, in percent of the game's own (100 to 150): how far away placed actors (trees, rocks,
         /// buildings, enemies) appear, in Breath of the Wild
         draw_distance: u32 = 100,
+        /// Render the game's scene at this multiple of its own resolution (1-4; games whose profile knows their scene
+        /// size; applies at launch)
+        resolution_scale: u32 = 1,
         /// Compile new shaders in the background instead of pausing the game. Smoother, but for now everything
         /// waiting on a compile is skipped until it is ready, which can cause visual glitches (missing objects or
         /// passes, flashes) the first time something is drawn.

@@ -399,6 +399,8 @@ pub(super) struct DrawPacket {
     pub(super) multisample: u64,
     pub(super) prim_restart: Option<u32>,
     pub(super) target_size: (f64, f64),
+    /// The targets' scale (CachedPassRts).
+    pub(super) target_scale: u32,
     pub(super) color_pfs: [MTLPixelFormat; 8],
     pub(super) depth_pf: MTLPixelFormat,
     /// The targets' NVN formats and sample count (CachedPassRts).
@@ -460,6 +462,7 @@ impl Default for DrawPacket {
             multisample: 0,
             prim_restart: None,
             target_size: (0.0, 0.0),
+            target_scale: 1,
             color_pfs: [MTLPixelFormat::Invalid; 8],
             depth_pf: MTLPixelFormat::Invalid,
             nvn_targets: ([(0, 0); 8], (0, 0), 1),
@@ -485,6 +488,7 @@ impl DrawPacket {
         fs_code: Option<&super::programs::StageCode>,
         resolved_tex: Option<ResolvedTex>,
         target_size: (f64, f64),
+        target_scale: u32,
         color_pfs: [MTLPixelFormat; 8],
         depth_pf: MTLPixelFormat,
         nvn_targets: ([(u32, u32); 8], (u32, u32), u32),
@@ -507,6 +511,7 @@ impl DrawPacket {
         });
         self.resolved_tex = resolved_tex;
         self.target_size = target_size;
+        self.target_scale = target_scale;
         self.color_pfs = color_pfs;
         self.depth_pf = depth_pf;
         self.attr_bits.clear();

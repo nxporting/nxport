@@ -39,6 +39,8 @@ pub mod id {
     pub const ANISOTROPY: u16 = 420;
     /// + the draw distance in percent / 25 (4, 5, 6).
     pub const DRAW_DISTANCE: u16 = 450;
+    /// + the resolution scale (1-4).
+    pub const RESOLUTION: u16 = 460;
     pub const MUTE: u16 = 40;
     /// + the volume in percent.
     pub const VOLUME: u16 = 300;
@@ -73,6 +75,10 @@ pub const VOLUMES: [u32; 4] = [25, 50, 75, 100];
 pub const STRENGTHS: [u32; 3] = [50, 100, 150];
 pub const ANISOTROPIES: [u32; 5] = [1, 2, 4, 8, 16];
 pub const DRAW_DISTANCES: [u32; 3] = [100, 125, 150];
+pub const RESOLUTIONS: [u32; 4] = [1, 2, 3, 4];
+
+/// Graphics > Resolution as chosen this run (0: unchanged): it applies at the next launch.
+static RESOLUTION_CHOSEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// The field of view's choices, percent of the game's (profile::botw::aspect::FIELD_OF_VIEW).
 pub const FIELDS_OF_VIEW: [u32; 8] = [70, 80, 90, 100, 110, 120, 135, 150];
 /// Room for the cheats' ids: eight mods' files of dmnt's 0x7F cheats each.
@@ -161,6 +167,7 @@ pub fn bar() -> Vec<Entry> {
         sub("Graphics", vec![
             item("Asynchronous Shader Compilation", id::ASYNC_SHADERS),
             sub("Anisotropic Filtering", ANISOTROPIES.iter().map(|&n| choice(anisotropy_label(n), id::ANISOTROPY + n as u16)).collect()),
+            sub("Resolution (next launch)", RESOLUTIONS.iter().map(|&k| choice(if k == 1 { "Game's own".to_string() } else { format!("{k}x") }, id::RESOLUTION + k as u16)).collect()),
             sub("Draw Distance (Breath of the Wild)", DRAW_DISTANCES.iter().map(|&p| choice(if p == 100 { "Game's own".to_string() } else { format!("{p}%") }, id::DRAW_DISTANCE + (p / 25) as u16)).collect()),
             Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]),
         sub("Audio", vec![item("Mute", id::MUTE), sub("Volume", VOLUMES.iter().map(|&v| choice(format!("{v}%"), id::VOLUME + v as u16)).collect())]),
@@ -366,6 +373,11 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::ASYNC_SHADERS => overlay::is_async_shaders(),
         c if (id::ANISOTROPY..id::ANISOTROPY + 17).contains(&c) => (c - id::ANISOTROPY) as u32 == crate::gpu::anisotropy(),
         c if (id::DRAW_DISTANCE..id::DRAW_DISTANCE + 9).contains(&c) => (c - id::DRAW_DISTANCE) as u32 * 25 == crate::profile::botw::draw_distance::percent(),
+        c if (id::RESOLUTION..id::RESOLUTION + 5).contains(&c) => {
+            let chosen = RESOLUTION_CHOSEN.load(std::sync::atomic::Ordering::Relaxed);
+            let k = if chosen != 0 { chosen } else { crate::settings::get().graphics.resolution_scale.clamp(1, 4) };
+            (c - id::RESOLUTION) as u32 == k
+        }
         id::MUTE => live::muted(),
         c if (id::VOLUME..id::VOLUME + 101).contains(&c) => (c - id::VOLUME) as u32 == live::volume(),
         id::BY_LABEL => !ab,
@@ -468,6 +480,12 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
             let on = overlay::toggle_async_shaders();
             crate::config::remember(|p| p.graphics.async_pipelines = Some(on));
         }
+        c if (id::RESOLUTION..id::RESOLUTION + 5).contains(&c) => {
+            let k = (c - id::RESOLUTION) as u32;
+            RESOLUTION_CHOSEN.store(k, std::sync::atomic::Ordering::Relaxed);
+            crate::config::remember(|s| s.graphics.resolution_scale = Some(k));
+            println!("[+] Graphics: resolution {k}x from the next launch");
+        }
         c if (id::DRAW_DISTANCE..id::DRAW_DISTANCE + 9).contains(&c) => {
             let p = (c - id::DRAW_DISTANCE) as u32 * 25;
             crate::profile::botw::draw_distance::set_percent(p);
@@ -543,6 +561,7 @@ mod tests {
             ("volume", id::VOLUME, id::VOLUME + 101),
             ("anisotropy", id::ANISOTROPY, id::ANISOTROPY + 17),
             ("draw distance", id::DRAW_DISTANCE, id::DRAW_DISTANCE + 9),
+            ("resolution", id::RESOLUTION, id::RESOLUTION + 5),
             ("strength", id::STRENGTH, id::STRENGTH + 201),
             ("bind", id::BIND, id::BIND + n),
             ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),
