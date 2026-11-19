@@ -313,7 +313,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   render targets of 512 or more; the copy: square R16 2D array of 3 layers, 256 or more), a heuristic here: take them
   instead from their creation call, as profile::scene_size takes the scene (a return-address pair on the texture
   initialization's chain), and give gpu::scale a shadow class with its own factor. Above the console size SW has the
-  copy's readers sample the cascades directly (the copy scaled too cost 1.5-1.7 ms at 4096x4096x3 on an RTX 5090); (6) motion controls: nxport has them
+  copy's readers sample the cascades directly (the copy scaled too cost 1.5-1.7 ms at 4096x4096x3 on an RTX 5090);
+  1.9.0 (win-worker 2026-11-19, --log-tex-init): the cascades are 896x896x3 (format 50, flags 0x8, a 2D array) and
+  their copy 448x448x3 (format 6, R16), both through the render-target helper's other path (main+0xed68f8 inside
+  main+0xed6364) on the Worker threads, about 10 initializations a second each; the creation call above the helper
+  is beyond --log-tex-init's five callers: lengthen it to find the pair; (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T): done 2026-11-18 (host/input/mouse.rs mouse tilt; BotW reads its six-axis states, not tried in a shrine); (7) anisotropic filtering and
   sharpening (SW: AMD CAS, MIT, 0-100%, on the 3D image where the scene is composited, exec.c scene_post: after FSR 1's
