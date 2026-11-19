@@ -146,6 +146,12 @@ pub unsafe extern "C" fn distant_trees(tree: usize, far: f32) {
     let r = (tree + RANGES) as *mut u32;
     let f = percent() as f32 / 100.0;
     *r.add(2) = (far * f).to_bits();
+    // (the first changes only: the game may switch between two values in play)
+    static LOGGED: AtomicU32 = AtomicU32::new(0);
+    static LINES: AtomicU32 = AtomicU32::new(0);
+    if LOGGED.swap((far * f).to_bits(), Ordering::Relaxed) != (far * f).to_bits() && LINES.fetch_add(1, Ordering::Relaxed) < 8 {
+        println!("[+] Draw distance: distant trees to {:.0} m (the game's {far:.0} m)", far * f);
+    }
     let cur = [*r.add(3), *r.add(4)];
     let mut t = TREES.lock().unwrap();
     let i = match t.iter().position(|e| e.0 == tree) {

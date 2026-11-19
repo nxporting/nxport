@@ -168,7 +168,6 @@ mod tests {
 
     #[test]
     fn keyboard_and_mouse_calls_stay_in_their_buffers() {
-        use crate::horizon::hle::*;
         unsafe {
             let mut buf = [0xaau8; 0x40];
             crate::horizon::hid::get_keyboard_state(buf.as_mut_ptr());
