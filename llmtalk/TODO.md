@@ -271,7 +271,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   records the size of textures made by the scene-target creation (1.9.0: return address main+0x1063cb4 among the
   initializing texture's guest callers). Seen: 1600x900, 1520x855, 1440x810 in one run: BotW's dynamic resolution
   re-creates the scene targets at each step. 1.0.0: its 1600x900 targets come through a general helper (main+0xa736c0)
-  that makes every size, so no exact site yet (scene_size None there). UNVERIFIED: in Ryujinx 1.0.0 at the title, +0x4c0 = 1920x1080 and
+  that makes every size; its site came later (main+0xb86bf8). Detection made exact 2026-11-18 (b697d4c) after
+  mac-worker saw it miss in 4 of 8 Mac runs and once take a 16x16: the pair site + render-target helper return
+  (1.9.0 main+0x1063cb4 over main+0xed6428, 1.0.0 main+0xb86bf8 over main+0xa736c0), game frames only, crossing at
+  HLE stub frames as guest_chain does. UNVERIFIED: in Ryujinx 1.0.0 at the title, +0x4c0 = 1920x1080 and
   +0x4c8 = 854x480; check in gameplay before relying on it (accessor kept local, not pushed). RESULT: in gameplay +0x4c0 is the OUTPUT size
   (docked 1920x1080, handheld 1280x720), not the scene. The 1600x900 scene targets are made through main+0xed6428
   from main+0x1063cb4 / 0x1064094 / 0x10653b0 / 0x106498c (and 0xf845e4 / 0xf8483c): size = a float rectangle
