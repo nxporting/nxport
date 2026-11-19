@@ -32,6 +32,10 @@ pub fn present_interval() -> i32 {
     }
 }
 
+/// The frame time the frame-rate limit paces to (ns; 0: the display's vsync paces): each frame stays on screen that long
+/// (gpu::metal::present).
+pub static FRAME_TARGET_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnWindowSetPresentInterval(_window: usize, interval: i32) {
     #[cfg(all(nx_runtime, windows))]
@@ -374,13 +378,29 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         } else {
             let mut g = NEXT.lock().unwrap();
             let now = std::time::Instant::now();
-            let deadline = match *g {
+            let mut deadline = match *g {
                 Some(d) if d > now && d < now + frame * 2 => d,
                 _ => now,
             };
+            // A frame time of whole refreshes (the 30 fps limit on a 60 Hz display) starts on the display's refresh
+            // grid, as a console's present interval does: a schedule on the host clock drifted against the refreshes,
+            // and frames started late in a refresh missed their slot (shown 3 refreshes apart instead of 2).
+            #[cfg(nx_native)]
+            if crate::gpu::metal::display_pacing() && crate::host::overlay::is_vsync() {
+                if let (Some(to_grid), Some(period)) =
+                    (crate::gpu::metal::display_pacing_wait(), crate::gpu::metal::display_period())
+                {
+                    let want = deadline.saturating_duration_since(now).as_secs_f64();
+                    if frame.as_secs_f64() >= 1.5 * period {
+                        let j = ((want - to_grid.as_secs_f64()) / period).round().max(0.0);
+                        deadline = now + to_grid + std::time::Duration::from_secs_f64(j * period);
+                    }
+                }
+            }
             *g = Some(deadline + frame);
             deadline.saturating_duration_since(now)
         };
+        FRAME_TARGET_NS.store(frame.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         ACQUIRE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !wait.is_zero() {
             ACQUIRE_SLEEP_US.fetch_add(
