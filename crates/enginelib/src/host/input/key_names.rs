@@ -320,6 +320,29 @@ pub fn motion_accel(player: usize, a: [f64; 3]) {
     m.q = qnorm(qmul(m.q, qrot(axis.map(|v| v * TILT_CORRECTION))));
 }
 
+/// `player`'s controller is at orientation `q` at `ns` (a virtual controller: the mouse tilt). Its gyroscope reads the
+/// turn from the previous orientation over the time since it, and its accelerometer gravity alone, so everything the
+/// game reads agrees with the orientation.
+pub(crate) fn motion_set(player: usize, q: [f64; 4], ns: u64) {
+    let Some(slot) = MOTION.get(player) else { return };
+    let mut g = slot.lock().unwrap();
+    let m = g.get_or_insert(Motion { q, gyro: [0.0; 3], acc: [0.0, 0.0, -1.0], angle: [0.0; 3], gyro_ns: ns });
+    let dt = if ns > m.gyro_ns { ((ns - m.gyro_ns) as f64 / 1e9).min(0.1) } else { 0.0 };
+    // The turn in the controller's own axes: conj(old) * new, as a rotation vector.
+    let d = qnorm(qmul([m.q[0], -m.q[1], -m.q[2], -m.q[3]], q));
+    let d = if d[0] < 0.0 { d.map(|v| -v) } else { d };
+    let s = (d[1] * d[1] + d[2] * d[2] + d[3] * d[3]).sqrt();
+    let turn = if s < 1e-12 { [0.0; 3] } else { [d[1], d[2], d[3]].map(|v| v / s * 2.0 * s.atan2(d[0])) };
+    m.gyro = if dt > 0.0 { turn.map(|v| v / dt) } else { [0.0; 3] };
+    for i in 0..3 {
+        m.angle[i] += turn[i] / std::f64::consts::TAU;
+    }
+    m.q = q;
+    m.gyro_ns = ns;
+    let r = qmat(q);
+    m.acc = [-r[2][0], -r[2][1], -r[2][2]];
+}
+
 /// A controller with motion went away.
 #[cfg_attr(target_vendor = "apple", allow(dead_code))]
 pub fn motion_clear(player: usize) {
