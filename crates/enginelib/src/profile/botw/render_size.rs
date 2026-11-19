@@ -24,6 +24,9 @@ pub struct Scene {
 
 /// 1.9.0: main+0x1063cb0 `bl 0xed6364`; the helper's main+0xed6424 `bl 0xed6448`.
 pub const SCENE_V1_9_0: Scene = Scene { site: 0x1063cb4, helper: 0xed6428 };
+/// 1.5.0: main+0xc5a01c `bl 0xb46840` (the size stored just before, `stp w5, w4, [sp, #0x30]`); the helper's main+0xb46900
+/// `bl 0xb46924`. Found from the call chains --log-tex-init gives for the 1600x900 target, matched with 1.9.0's.
+pub const SCENE_V1_5_0: Scene = Scene { site: 0xc5a020, helper: 0xb46904 };
 /// 1.0.0: the function computes the size from its view (main+0xb86abc .. 0xb86acc, [sp+0x34], [sp+0x30]); main+0xb86bf4
 /// `bl 0xa735fc`, the helper's main+0xa736bc `bl 0xa736e0` (textures made there: 1600x900, 1440x810, 1280x720 seen).
 pub const SCENE_V1_0_0: Scene = Scene { site: 0xb86bf8, helper: 0xa736c0 };

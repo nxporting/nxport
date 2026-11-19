@@ -23,7 +23,7 @@ pub struct Shape {
     pub storage: usize,
 }
 
-static DEMOTED: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
+static DEMOTED: Mutex<Option<HashSet<(usize, u32, u32)>>> = Mutex::new(None);
 
 /// The scale render targets of the scene's class get (1: the game's resolution; the setting at launch).
 pub fn factor() -> u32 {
@@ -53,7 +53,7 @@ pub fn scale(s: &Shape) -> u32 {
     // Memory the CPU can reach holds the game's pixels as it reads and writes them (write-back, texel copies, heap
     // compaction by CPU copies): only GPU-only pools are scaled.
     if !in_class(s.width, s.height, scene)
-        || is_demoted(s.storage)
+        || is_demoted(s.storage, s.width, s.height)
         || crate::nvn::api::memory_pool_cpu_writable(s.storage)
     {
         return 1;
@@ -61,20 +61,21 @@ pub fn scale(s: &Shape) -> u32 {
     k
 }
 
-/// The texture memory at `storage` is used at the game's size from now on (CPU access, storage image, a copy across
-/// size classes). The backend re-creates a scaled texture there at scale 1.
-pub fn demote(storage: usize, what: impl FnOnce() -> String) {
+/// The `width` x `height` (game size) texture at `storage` is used at the game's size from now on (a copy across size
+/// classes, a pass with unscaled targets). The backend re-creates it at scale 1. A texture made there at another size
+/// (dynamic resolution) is decided afresh.
+pub fn demote(storage: usize, width: u32, height: u32, what: impl FnOnce() -> String) {
     if factor() == 1 {
         return;
     }
     let mut d = DEMOTED.lock().unwrap();
-    if d.get_or_insert_with(HashSet::default).insert(storage) {
+    if d.get_or_insert_with(HashSet::default).insert((storage, width, height)) {
         println!("[+] Scale: texture memory {storage:#x} stays at the game's resolution: {}", what());
     }
 }
 
-pub fn is_demoted(storage: usize) -> bool {
-    factor() != 1 && DEMOTED.lock().unwrap().as_ref().is_some_and(|d| d.contains(&storage))
+pub fn is_demoted(storage: usize, width: u32, height: u32) -> bool {
+    factor() != 1 && DEMOTED.lock().unwrap().as_ref().is_some_and(|d| d.contains(&(storage, width, height)))
 }
 
 /// The scale a pass renders at: its targets' common scale, 1 if any target is unscaled.
