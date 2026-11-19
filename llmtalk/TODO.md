@@ -60,6 +60,10 @@ and update this file when you finish or drop it.
   copy that is read back, and the target keeps its scale (as Ryujinx flushes). (2) A pass with mixed target scales now
   demotes its scaled targets first (Ryujinx UpdateRenderTargetScale). BotW 2x: demotions 41 -> 0, GPU 10 -> 14.4 ms.
   The same two rules are needed on Vulkan.
+- 2026-11-19 (750a6bf): BotW 1.5.0 scene size (render_size::SCENE_V1_5_0: main+0xc5a020 / helper main+0xb46904), so
+  scaling works on 1.5.0. Shared gpu/scale.rs again: a demotion is keyed by (storage, game width, height) now:
+  demote(storage, w, h, reason) / is_demoted(storage, w, h); a texture re-made at another size (dynamic resolution) is
+  decided afresh. --log-tex-init's chain now walks past the HLE entry stub (8 callers in the game).
 - Async submit (branch async-submit, ../nxport-async on the Mac, Metal only, off by default): BotW 47.0 / 51.8 vs
   50.3 / 46.5 fps, no gain (its main thread waits for each frame's fence, which then covers the encode); TotK same fps.
   Not merged.
