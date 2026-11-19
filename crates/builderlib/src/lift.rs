@@ -259,9 +259,13 @@ pub fn compile(
                     finished();
                     continue;
                 }
+                // Into a part file, renamed over the object once the compiler succeeds: an object cut off while it was
+                // written (a killed build, a power cut) would otherwise be newer than its source and taken as built
+                // (seen: a zero-filled main_048.o, and the link then missing its functions).
+                let part = obj.with_extension("o.part");
                 // In the C directory, by the file's bare name: a profile names static functions by the path they were
                 // compiled from, and one made on another machine must find them.
-                let r = std::path::absolute(obj).and_then(|obj| {
+                let r = std::path::absolute(&part).and_then(|obj| {
                     command(prog)
                         .current_dir(&c_dir_full)
                         .args(pre)
@@ -275,6 +279,9 @@ pub fn compile(
                 });
                 match r {
                     Ok(o) if o.status.success() => {
+                        if let Err(e) = std::fs::rename(&part, obj) {
+                            failed.lock().unwrap().push(format!("{}: {e}", obj.display()));
+                        }
                         let warnings = String::from_utf8_lossy(&o.stderr);
                         unmatched.fetch_add(warnings.matches("(hash mismatch)").count(), std::sync::atomic::Ordering::Relaxed);
                     }
