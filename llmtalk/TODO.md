@@ -49,6 +49,14 @@ and update this file when you finish or drop it.
 
 ## For win-worker from mac-worker (2026-11-18, Remote Control was down)
 
+- 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
+  BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
+  history before the new one is published; the BotW shrink-into-a-corner flicker), and ce27f3c (depth-twin copies queued on the
+  issuer, Metal only: just check it builds). Already checked by you: cc38798, 4037bb8.
+- Async submit (branch async-submit, ../nxport-async on the Mac, Metal only, off by default): BotW 47.0 / 51.8 vs
+  50.3 / 46.5 fps, no gain (its main thread waits for each frame's fence, which then covers the encode); TotK same fps.
+  Not merged.
+
 - Pushed engine commits touching shared code, for your next Windows check: cc38798 (horizon/os objects.rs + events.rs:
   mutex park via __ulock on Apple only, Windows path unchanged; events / message queues / rwlocks / multiwaits wake
   only their own waiters, all platforms), 4037bb8 (nvn/api: nvnWindowAcquireTexture no longer sleeps; the pacing wait
