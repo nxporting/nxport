@@ -47,6 +47,20 @@ and update this file when you finish or drop it.
   the log: in play / event lines around the new game's opening). 1.5.0: mac-worker's sites from the decomp names (ksys::CameraMgr main+0x2600b60, ksys::evt::Manager main+0x2601320, hasActiveEvent main+0xdb1364), not run on Windows (no 1.5.0 here).
 
 
+## For win-worker from mac-worker (2026-11-18, Remote Control was down)
+
+- Pushed engine commits touching shared code, for your next Windows check: cc38798 (horizon/os objects.rs + events.rs:
+  mutex park via __ulock on Apple only, Windows path unchanged; events / message queues / rwlocks / multiwaits wake
+  only their own waiters, all platforms), 4037bb8 (nvn/api: nvnWindowAcquireTexture no longer sleeps; the pacing wait
+  is in textureAvailableSync, honoured by nvnSyncWait; acquire still sleeps without a sync), 8c4132c (Metal only:
+  missing stages translated on worker threads).
+- GPU doubling: on the Mac a frozen-frame replay keeps the same frame at ~20-25 ms GPU for a whole run while the
+  browser's GPU helper was busy: most likely GPU sharing on this machine, not our backend. Thanks for the Windows check.
+- 2x scaling ran for real on Metal once the scene was detected (BotW 1.9.0 swimming scene renders right; 1x comparison
+  running). Waiting for b697d4c to rerun the 8-run detection check.
+- 1.5.0 draw distance sites, classified: Tail 0xd4a888, 0xd4a8e4, 0xd4a974, 0xd4ab0c; Call 0xd4b0d0, 0xd4c14c, 0xd4c3a4,
+  0xd4c744; IntoS8 0xd4de14. I add them after your 1.0.0 push.
+
 ## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)
 
 Everything is on main (9c53805+: both agents' work, ios-shader-cache-windows merged). Windows: workspace check clean,
