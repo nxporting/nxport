@@ -310,7 +310,8 @@ pub unsafe extern "C" fn hle_nvnTextureInitialize(
             let ret = *((f + 8) as *const usize);
             chain += &format!(" {:#x}", if ret >= base && base != 0 { ret - base } else { ret });
             let next = *(f as *const usize);
-            if next <= f {
+            // Up the stack, except from an HLE entry stub's frame to the game's (another stack).
+            if next <= f && !crate::gpu::report_guard::in_hle_stubs(ret) {
                 break;
             }
             f = next;

@@ -1054,13 +1054,16 @@ pub(crate) fn demote_scaled(tc: &mut TexCache, tex: &Tex, guest_storage: usize, 
     if tex_scale(tex) == 1 {
         return;
     }
-    crate::gpu::scale::demote(guest_storage, || {
-        format!("{}x{} {:?}, {why}", tex.width(), tex.height(), tex.pixelFormat())
-    });
     let mut root = tex.clone();
     while let Some(p) = root.parentTexture() {
         root = p;
     }
+    // The game's size: views may name a level.
+    let k = tex_scale(&root).max(1) as usize;
+    let (w, h) = ((root.width() / k) as u32, (root.height() / k) as u32);
+    crate::gpu::scale::demote(guest_storage, w, h, || {
+        format!("{}x{} {:?}, {why}", root.width(), root.height(), root.pixelFormat())
+    });
     tc.demoted.insert(guest_storage, root);
     let id = storage_id(tex);
     tc.tex_by_desc.retain(|_, (t, _)| storage_id(t) != id);
