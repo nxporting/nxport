@@ -115,15 +115,25 @@ pub fn installed() -> bool {
 // The terrain's distant trees (tera's tree object, 1.9.0 [[main+0x1e57bd8] + 0x360] + 0x140): drawn as far as the
 // ranges at +0x14cb0 say, five floats the constructor (main+0x13c76d8) sets: where they fade in and that fade (100 m,
 // 100 m), how far they go (4000 m), their fade out there (500 m) and where their blocks change detail (4000 m). Only
-// how far they go is set again in play, by a setter (main+0x13cbe9c: 4000 + 4000 x clamp(t, 0, 1), stored with `str
-// s0, [x0, x8]; ret`). The setting scales the last three, as Savage Wind does (its tree_ranges, at most its far
+// how far they go is set again in play, by a setter (1.9.0 main+0x13cbe9c, 1.5.0 main+0x10839c4: 4000 + 4000 x clamp(t, 0, 1), stored with
+// `str s0, [x0, x8]; ret`). The setting scales the last three, as Savage Wind does (its tree_ranges, at most its far
 // factor 1.5); the fade-in stays, since the actor trees, made farther out, already overlap it. The setter's store
 // becomes a tail call that writes them.
 
-/// 1.9.0: the setter's last words (its fmadd, then the store and the return).
-pub const TREES_V1_9_0: usize = 0x13cbecc;
-/// `fmadd s0, s1, s0, s0; str s0, [x0, x8]; ret`.
-const TREES_TAIL: [u32; 3] = [0x1f00_0020, 0xbc28_6800, 0xd65f_03c0];
+/// Where a version's setter ends: main+`at` holds the last word of its arithmetic (`last`), then `str s0, [x0, x8];
+/// ret`.
+#[derive(Clone, Copy)]
+pub struct Trees {
+    pub at: usize,
+    pub last: u32,
+}
+/// 1.9.0: `fmadd s0, s1, s0, s0`.
+pub const TREES_V1_9_0: Trees = Trees { at: 0x13cbecc, last: 0x1f00_0020 };
+/// 1.5.0 (main+0x10839c4, found by mac-worker; its only caller a tail branch at main+0xf06b38): `fmul s0, s0, s1; fadd
+/// s0, s0, s1`, the store's offset made with `mov w8, #0x10000; movk w8, #0x4cb8`.
+pub const TREES_V1_5_0: Trees = Trees { at: 0x10839f0, last: 0x1e21_2800 };
+/// `str s0, [x0, x8]; ret`.
+const TREES_TAIL: [u32; 2] = [0xbc28_6800, 0xd65f_03c0];
 const RANGES: usize = 0x14cb0;
 
 /// Per tree object: the game's fade-out and detail switch (f32 bits) and what was last written over them.
@@ -153,11 +163,13 @@ pub unsafe extern "C" fn distant_trees(tree: usize, far: f32) {
     t[i].2 = want;
 }
 
-/// Makes the distant trees' ranges follow the setting (the setter's store at main+`at`).
+/// Makes the distant trees' ranges follow the setting (the setter's store becomes `b <distant_trees>`).
 #[cfg(nx_runtime)]
-pub unsafe fn install_trees(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, at: usize) {
-    let code = vec![TREES_TAIL[0], B, TREES_TAIL[2]];
-    match crate::profile::totk::frame_time::replace_with_call(base, mem_space, at, &TREES_TAIL, code, 1, crate::hle!(distant_trees(_, _))) {
+pub unsafe fn install_trees(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, site: Trees) {
+    let at = site.at;
+    let expected = [site.last, TREES_TAIL[0], TREES_TAIL[1]];
+    let code = vec![site.last, B, TREES_TAIL[1]];
+    match crate::profile::totk::frame_time::replace_with_call(base, mem_space, at, &expected, code, 1, crate::hle!(distant_trees(_, _))) {
         Ok(()) => println!("[+] Draw distance: the distant trees reach {}% of the game's distance", percent()),
         Err(e) => println!("[!] Draw distance: main+{at:#x}: {e}; the distant trees keep the game's distance"),
     }

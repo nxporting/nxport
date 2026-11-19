@@ -304,7 +304,11 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   call writing far, fade-out and detail switch times the setting (SW scales the same three). 1.0.0 and 1.5.0 have no
   such leaf (searched by its shape and by its 4000.0 fmadd; its 1.9.0 caller is main+0x122c230, the object
   [[main+0x1e57bd8] + 0x360] + 0x140): probably inlined, to find at run time. Grass not taken: SW's
-  grass follows an adaptive factor stepped by how full its cell list is, a heuristic; (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale; (6) motion controls: nxport has them
+  grass follows an adaptive factor stepped by how full its cell list is, a heuristic; (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale. SW picks them by shape (square depth
+  render targets of 512 or more; the copy: square R16 2D array of 3 layers, 256 or more), a heuristic here: take them
+  instead from their creation call, as profile::scene_size takes the scene (a return-address pair on the texture
+  initialization's chain), and give gpu::scale a shadow class with its own factor. Above the console size SW has the
+  copy's readers sample the cascades directly (the copy scaled too cost 1.5-1.7 ms at 4096x4096x3 on an RTX 5090); (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T): done 2026-11-18 (host/input/mouse.rs mouse tilt; BotW reads its six-axis states, not tried in a shrine); (7) anisotropic filtering and
   sharpening (SW: AMD CAS, MIT, 0-100%, on the 3D image where the scene is composited, exec.c scene_post: after FSR 1's
