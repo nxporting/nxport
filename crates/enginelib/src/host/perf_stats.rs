@@ -247,8 +247,9 @@ pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32], co
 static WIDEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 
-/// While listed pipelines are still compiling (gpu::pipeline_list::take_frame_progress): a bar at the bottom of the
-/// screen with how many are done. Draws skipped for other compiling pipelines show in the performance window instead.
+/// While listed pipelines compile or missing stages translate (gpu::pipeline_list::take_frame_progress): a bar at the
+/// bottom of the screen with how many are done. Draws skipped for other compiling pipelines show in the performance
+/// window instead.
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
 pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, done: usize, total: usize) {
     let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.85]);

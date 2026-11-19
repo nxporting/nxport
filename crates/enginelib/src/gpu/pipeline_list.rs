@@ -332,10 +332,13 @@ fn request(method: &str, url: &str, body: Option<&[u8]>, if_none_match: Option<&
 }
 
 // What the shader progress bar shows (host/perf_stats.rs draw_shader_progress), the same on every backend: the listed
-// pipelines handed to the backend and done, and whether the frame just presented skipped draws because their pipeline
-// was still compiling (the picture is then missing parts, or black at the start).
+// pipelines handed to the backend and done, the shader stages being translated because the cache lacks them, and
+// whether the frame just presented skipped draws because their pipeline was still compiling (the picture is then
+// missing parts, or black at the start).
 static LISTED_TOTAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static LISTED_DONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static STAGES_TOTAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static STAGES_DONE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SKIPPED_DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The backend took `n` more listed pipelines to make.
@@ -353,18 +356,29 @@ pub fn listed_done() {
     LISTED_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// A shader stage the cache lacks was queued for translation.
+pub fn stage_queued() {
+    STAGES_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A queued stage translation finished (translated or failed).
+pub fn stage_done() {
+    STAGES_DONE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// A draw was skipped because its pipeline is still compiling (asynchronous shader compilation).
 pub fn draw_skipped_compiling() {
     SKIPPED_DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// At a present: Some while the picture waits on shaders, that is while listed pipelines are still to make (draws
-/// wait for them or are skipped: the first launch on a phone shows little but black for minutes) or the frame skipped
-/// draws for other compiling pipelines (the count starts again); with the listed pipelines (done, total) then.
+/// At a present: Some while the picture waits on shaders, that is while listed pipelines are still to make or stages to
+/// translate (draws wait for them or are skipped: a first launch shows little but black for minutes) or the frame
+/// skipped draws for other compiling pipelines (the count starts again); with (done, total) of both together then.
 pub fn take_frame_progress() -> Option<Option<(usize, usize)>> {
     use std::sync::atomic::Ordering::Relaxed;
     let skipped = SKIPPED_DRAWS.swap(0, Relaxed) > 0;
-    let (done, total) = (LISTED_DONE.load(Relaxed), LISTED_TOTAL.load(Relaxed));
+    let done = LISTED_DONE.load(Relaxed) + STAGES_DONE.load(Relaxed);
+    let total = LISTED_TOTAL.load(Relaxed) + STAGES_TOTAL.load(Relaxed);
     let listed = (done < total).then_some((done, total));
     (skipped || listed.is_some()).then_some(listed)
 }
