@@ -397,14 +397,25 @@ pub(crate) fn bump_tex_table_epoch() {
 }
 
 pub(crate) fn snapshot_texture(addr: usize, t: NvnTexture) {
+    // The state being replaced goes into the history before the new one is published: a recorded command resolved in
+    // between (another thread encodes while the game re-initializes the object) found neither and took the object's new
+    // texture (BotW's scene composite drew with the half-size depth target its object had just become: the scene shrunk
+    // into a corner for a frame, ~10 times a minute in headless runs).
+    let prev = texture_snapshot(addr);
+    if let Some((og, ot)) = prev {
+        remember_snapshot(og, ot);
+    }
     let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let old = TEX_SNAPSHOTS
         .lock()
         .unwrap()
         .get_or_insert_with(Default::default)
         .insert(addr, (gen, t));
+    // Another thread replaced it meanwhile: that state too.
     if let Some((og, ot)) = old {
-        remember_snapshot(og, ot);
+        if prev.map(|(g, _)| g) != Some(og) {
+            remember_snapshot(og, ot);
+        }
     }
     bump_tex_table_epoch();
     let mut idx = TEX_BY_STORAGE.lock().unwrap();
@@ -649,13 +660,14 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
             unindex_texture(idx, tex as usize, t.storage);
             log_index_change(t.storage, texture_span(&t));
         }
+        // Commands recorded before the finalize name the old generation (BotW initializes one object for each of its
+        // water maps, records a pass into it and finalizes it again: without this every pass drew into the last map).
+        // Remembered before the new generation is published (snapshot_texture).
+        remember_snapshot(og, t);
         let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(s) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
             s.insert(tex as usize, (gen, t));
         }
-        // Commands recorded before the finalize name the old generation (BotW initializes one object for each of its
-        // water maps, records a pass into it and finalizes it again: without this every pass drew into the last map).
-        remember_snapshot(og, t);
         bump_tex_table_epoch();
     }
     if !tex.is_null() {
