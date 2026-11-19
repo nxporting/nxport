@@ -453,19 +453,17 @@ pub(crate) unsafe extern "C" fn start_thread(thread: *mut NnThreadType) {
         .spawn(move || {
             crate::guest::tls::mark_guest_thread();
             println!("[+] HLE: Guest thread '{}' starting execution", name_str);
-            // The threads on the frame's critical path (all of our Metal encoding runs on the Presentation Thread)
-            // ask for performance cores: with the default QoS macOS may run them on efficiency cores.
+            // Every guest thread asks for performance cores: the console runs game threads on identical cores, and with
+            // the default QoS macOS put some on efficiency cores. Breath of the Wild's main thread then spun on its job
+            // queue's spinlock while a Worker holding it ran slowly or was preempted (a third of guest-main's game-code
+            // time while running; frames over 25 ms 10-16% -> 6-9%).
             #[cfg(target_vendor = "apple")]
-            if name_str == "Presentation Thread" || name_str == "guest-main" {
+            {
                 extern "C" {
                     fn pthread_set_qos_class_self_np(qos: u32, relpri: i32) -> i32;
                 }
                 const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
-                let r = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-                println!(
-                    "[+] HLE: thread '{}' QoS user-interactive (rc {})",
-                    name_str, r
-                );
+                pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
             }
             #[cfg(nx_native)]
             crate::guest::exec::crash_handler::ensure_altstack();
