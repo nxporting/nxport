@@ -297,18 +297,16 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   backends; Ryujinx's ShaderStage rescaling as reference); viewports, scissors, clears, copy regions scaled per target,
   size queries at guest size; opt-in; gpu-replay captures byte-identical at 1x; BotW first. Starts after nvn/api/ lands; (2) field of view (SW: 70-150% in play, cutscenes keep framing);
   (3) DLC (blocked: no dump here); (4) draw distance: placed actors DONE 2026-11-18 (Graphics > Draw Distance,
-  100-150%, profile/botw/draw_distance.rs, 1.9.0; 1.0.0 and 1.5.0 compile the site differently, not ported); grass and
-  the distant trees not done (Savage Wind: the terrain's distant trees, tera::Core::Tree +0x14cb0, five floats: fade-in
-  start and length kept, end 4000 m, fade-out 500 m and block detail switch 4000 m times the far factor; the game
-  rewrites them about twice a frame, so SW scales at the entry of their per-frame shader setup, 1.9.0 main+0x13c94ac, x0
-  the object, comparing with what it last wrote. That entry still has x0, x1 and x30 live, so a call there needs a
-  code block, which only native runs have (lifted images take in-place calls only; the frame set up after it has no
-  three spare words to keep x0 and x1 across a call), or the writers hooked instead: none stores there through an
-  obj+0x14000 base (searched 2026-11-18), so they reach the ranges another way (the constructor, main+0x13c76d8, keeps the ranges' address on its stack; the
-  per-frame writers want a write watchpoint in Ryujinx). The grass layers in SW follow an adaptive factor stepped by how full
-  their cell list is: a heuristic, not taken); (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale; (6) motion controls: nxport has them
+  100-150%, profile/botw/draw_distance.rs; 1.9.0 and 1.0.0 (nine inlined copies, Site), 1.5.0 sites from mac-worker);
+  the terrain's distant trees follow it in 1.9.0 (ed7ce3d, testing): their ranges at tree +0x14cb0 (100 m fade-in and
+  its length, 4000 m far, 500 m fade-out, 4000 m detail switch) are the constructor's (main+0x13c76d8) except the far
+  one, set by one leaf setter (main+0x13cbe9c, 4000 + 4000 x clamp(t), `str s0, [x0, x8]; ret`): its store is a tail
+  call writing far, fade-out and detail switch times the setting (SW scales the same three). 1.0.0 and 1.5.0 have no
+  such leaf (searched by its shape and by its 4000.0 fmadd; its 1.9.0 caller is main+0x122c230, the object
+  [[main+0x1e57bd8] + 0x360] + 0x140): probably inlined, to find at run time. Grass not taken: SW's
+  grass follows an adaptive factor stepped by how full its cell list is, a heuristic; (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale; (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
-  tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
+  tilt puzzles; SW also offers the mouse as motion (hold T): done 2026-11-18 (host/input/mouse.rs mouse tilt; BotW reads its six-axis states, not tried in a shrine); (7) anisotropic filtering and
   sharpening (SW: AMD CAS, MIT, 0-100%, on the 3D image where the scene is composited, exec.c scene_post: after FSR 1's
   EASU + RCAS or at window size without the upscaler, before the game draws the HUD; the processed copy keeps the
   game texture's swizzle, else the weapon wheel's blurred backdrop went black. It goes with resolution scaling's
