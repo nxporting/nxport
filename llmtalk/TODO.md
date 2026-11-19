@@ -64,6 +64,10 @@ and update this file when you finish or drop it.
   scaling works on 1.5.0. Shared gpu/scale.rs again: a demotion is keyed by (storage, game width, height) now:
   demote(storage, w, h, reason) / is_demoted(storage, w, h); a texture re-made at another size (dynamic resolution) is
   decided afresh. --log-tex-init's chain now walks past the HLE entry stub (8 callers in the game).
+- 2026-11-19 (7a63591, Apple only): every guest thread now asks for performance cores. BotW's main thread spun on its
+  job queue's spinlock (sead::FixedSizeJQ::run) while Workers holding it ran on efficiency cores: slow frames roughly
+  halved. Windows on hybrid CPUs (Intel P/E cores) may want the same for guest threads; worth a look if BotW stutters
+  there while running. 0a58b53: the HLE call log's sequence on aarch64 is cntvct_el0 (no shared atomic).
 - Async submit (branch async-submit, ../nxport-async on the Mac, Metal only, off by default): BotW 47.0 / 51.8 vs
   50.3 / 46.5 fps, no gain (its main thread waits for each frame's fence, which then covers the encode); TotK same fps.
   Not merged.
