@@ -156,6 +156,12 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
+- **BotW 1.0.0 above 30 fps (open, 2026-11-18, win-worker).** 1.0.0 runs (30 fps, draw distance, scene size, FOV,
+  ultrawide) but has no frame_time::Sites: frame wait, VFR ratio (1.9.0 main+0x151d484), GUI speed, controller step,
+  arrows, sound floor, keyframed angle, Havok deactivation ticks, demo move. 1.9.0's exact words do not occur in
+  1.0.0 (the VFR ratio code is compiled with other registers), so each needs finding by its fields and constants
+  (VFR: +0x150 interval source, +0x30 ratio, +0x34, +0x3c, +0x40). Not Savage Wind parity (SW is 1.9.0 only); a
+  separable job for a worktree subagent.
 - **Source code reorganization (user, 2026-11-15): everything in a super sensible place.** First a written target layout
   (module map by layer: guest / horizon / nvn / gpu backends (metal, vulkan) / host / profile; split metal/translated.rs,
   metal/mod.rs, nvn/api.rs, horizon/hle.rs along what they do; SDK replacements named for what they do), agreed with the
