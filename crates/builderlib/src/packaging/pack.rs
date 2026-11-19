@@ -113,9 +113,9 @@ pub fn pack_app(opts: &PackOptions) -> Result<(), Box<dyn std::error::Error>> {
                     crate::mod_check::report(&path, tid, opts.dump_dir);
                     place(&path, &dest_mods.join(entry.file_name()), opts.symlink_assets)?;
                 }
-                if packaged_any_mods {
-                    println!("  Included mods from {}", mods.display());
-                }
+            }
+            if packaged_any_mods {
+                println!("  Included mods from {}", mods.display());
             }
         }
     }
