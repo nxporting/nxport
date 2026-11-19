@@ -41,11 +41,28 @@ pub(crate) fn mutex_park(word: &std::sync::atomic::AtomicU32, held: u32) {
             )
         };
     }
-    #[cfg(not(windows))]
+    // The kernel's compare-and-wait on the word (a bare trap, as guest threads need: see hle_sleep_ns). It used to sleep
+    // 5 us and poll, and a sleep lasts far longer: BotW's main thread spent 42% of its time there while running.
+    #[cfg(target_vendor = "apple")]
+    unsafe {
+        __ulock_wait(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, word as *const _ as *mut std::ffi::c_void, held as u64, 0);
+    }
+    #[cfg(not(any(windows, target_vendor = "apple")))]
     {
         let _ = (word, held);
         hle_sleep_ns(5_000);
     }
+}
+
+#[cfg(target_vendor = "apple")]
+const UL_COMPARE_AND_WAIT: u32 = 1;
+#[cfg(target_vendor = "apple")]
+const ULF_NO_ERRNO: u32 = 0x0100_0000;
+
+#[cfg(target_vendor = "apple")]
+extern "C" {
+    fn __ulock_wait(operation: u32, addr: *mut std::ffi::c_void, value: u64, timeout_us: u32) -> i32;
+    fn __ulock_wake(operation: u32, addr: *mut std::ffi::c_void, wake_value: u64) -> i32;
 }
 
 pub(crate) fn mutex_unpark(word: &std::sync::atomic::AtomicU32) {
@@ -57,7 +74,11 @@ pub(crate) fn mutex_unpark(word: &std::sync::atomic::AtomicU32) {
         }
         unsafe { WakeByAddressSingle(word as *const _ as *const std::ffi::c_void) };
     }
-    #[cfg(not(windows))]
+    #[cfg(target_vendor = "apple")]
+    unsafe {
+        __ulock_wake(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, word as *const _ as *mut std::ffi::c_void, 0);
+    }
+    #[cfg(not(any(windows, target_vendor = "apple")))]
     let _ = word;
 }
 
@@ -436,11 +457,56 @@ pub(crate) struct Sync {
     pub(crate) multiwaits: HashMap<usize, Vec<usize>>, // multiwait addr -> ordered holder addrs
     pub(crate) msgqs: HashMap<usize, MsgQ>,
     pub(crate) rwlocks: HashMap<usize, RwSt>,
+    /// Threads waiting for a change to an object (event, message queue, multiwait, reader-writer lock), by its address.
+    pub(crate) waiters: HashMap<usize, Vec<std::sync::Arc<Condvar>>>,
 }
 
 pub(crate) static SYNC: Mutex<Option<Sync>> = Mutex::new(None);
 
-pub(crate) static SYNC_CV: Condvar = Condvar::new();
+thread_local! {
+    /// This thread's wake-up, registered under the objects it waits for.
+    static WAKE: std::sync::Arc<Condvar> = std::sync::Arc::new(Condvar::new());
+}
+
+/// Waits (releasing SYNC) until an object in `keys` changes, `deadline` passes, or a spurious wake; callers re-check.
+/// Only the threads waiting on a changed object wake: one shared condition variable woke every waiting thread at every
+/// signal, and they all queued for SYNC (BotW has ~15 in these waits).
+pub(crate) fn sync_wait<'a>(
+    mut g: MutexGuard<'a, Option<Sync>>,
+    keys: &[usize],
+    deadline: Option<std::time::Instant>,
+) -> MutexGuard<'a, Option<Sync>> {
+    let cv = WAKE.with(|w| w.clone());
+    let s = g.as_mut().unwrap();
+    for &k in keys {
+        s.waiters.entry(k).or_default().push(cv.clone());
+    }
+    g = match deadline {
+        None => cv.wait(g).unwrap(),
+        Some(d) => cv.wait_timeout(g, d.saturating_duration_since(std::time::Instant::now())).unwrap().0,
+    };
+    let s = g.as_mut().unwrap();
+    for &k in keys {
+        if let Some(v) = s.waiters.get_mut(&k) {
+            if let Some(i) = v.iter().position(|c| std::sync::Arc::ptr_eq(c, &cv)) {
+                v.swap_remove(i);
+            }
+            if v.is_empty() {
+                s.waiters.remove(&k);
+            }
+        }
+    }
+    g
+}
+
+/// Wakes the threads waiting for a change to the object at `key`.
+pub(crate) fn sync_wake(s: &Sync, key: usize) {
+    if let Some(v) = s.waiters.get(&key) {
+        for c in v {
+            c.notify_one();
+        }
+    }
+}
 
 pub(crate) fn lock() -> MutexGuard<'static, Option<Sync>> {
     let mut g = SYNC.lock().unwrap();
@@ -467,16 +533,10 @@ pub(crate) fn event_wait(ev: usize, deadline: Option<std::time::Instant>) -> boo
                 return true;
             }
         }
-        match deadline {
-            None => g = SYNC_CV.wait(g).unwrap(),
-            Some(d) => {
-                let now = std::time::Instant::now();
-                if now >= d {
-                    return false;
-                }
-                g = SYNC_CV.wait_timeout(g, d - now).unwrap().0;
-            }
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            return false;
         }
+        g = sync_wait(g, &[ev], deadline);
     }
 }
 
@@ -492,23 +552,16 @@ pub(crate) fn mq_send(mq: usize, data: u64, front: bool, deadline: Option<std::t
                 } else {
                     q.q.push_back(data)
                 }
-                drop(g);
-                SYNC_CV.notify_all();
+                sync_wake(g.as_ref().unwrap(), mq);
                 return true;
             }
             Some(_) => {}
             None => return false,
         }
-        g = match deadline {
-            None => SYNC_CV.wait(g).unwrap(),
-            Some(d) => {
-                let now = std::time::Instant::now();
-                if now >= d {
-                    return false;
-                }
-                SYNC_CV.wait_timeout(g, d - now).unwrap().0
-            }
-        };
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            return false;
+        }
+        g = sync_wait(g, &[mq], deadline);
     }
 }
 
@@ -523,23 +576,18 @@ pub(crate) fn mq_receive(out: *mut u64, mq: usize, deadline: Option<std::time::I
                     if !out.is_null() {
                         unsafe { *out = v };
                     }
-                    drop(g);
-                    SYNC_CV.notify_all();
+                    if !peek {
+                        sync_wake(g.as_ref().unwrap(), mq);
+                    }
                     return true;
                 }
             }
             None => return false,
         }
-        g = match deadline {
-            None => SYNC_CV.wait(g).unwrap(),
-            Some(d) => {
-                let now = std::time::Instant::now();
-                if now >= d {
-                    return false;
-                }
-                SYNC_CV.wait_timeout(g, d - now).unwrap().0
-            }
-        };
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            return false;
+        }
+        g = sync_wait(g, &[mq], deadline);
     }
 }
 
@@ -566,7 +614,7 @@ pub(crate) fn rw_acquire_write(addr: usize) {
             r.write_depth = 1;
             return;
         }
-        g = SYNC_CV.wait(g).unwrap();
+        g = sync_wait(g, &[addr], None);
     }
 }
 
@@ -594,8 +642,7 @@ pub(crate) fn rw_release_write(addr: usize) {
         r.write_depth -= 1;
         if r.write_depth == 0 {
             r.writer = 0;
-            drop(g);
-            SYNC_CV.notify_all();
+            sync_wake(g.as_ref().unwrap(), addr);
         }
     }
 }
@@ -609,7 +656,7 @@ pub(crate) fn rw_acquire_read(addr: usize) {
             r.readers += 1;
             return;
         }
-        g = SYNC_CV.wait(g).unwrap();
+        g = sync_wait(g, &[addr], None);
     }
 }
 
@@ -631,8 +678,7 @@ pub(crate) fn rw_release_read(addr: usize) {
     if r.readers > 0 {
         r.readers -= 1;
         if r.readers == 0 {
-            drop(g);
-            SYNC_CV.notify_all();
+            sync_wake(g.as_ref().unwrap(), addr);
         }
     }
 }
