@@ -379,12 +379,14 @@ impl fmt::Display for TracePoint {
     }
 }
 
-/// Keys held while the presented frame is in `first..last`, written `A-B:K[+K..]` (key codes).
+/// Keys held while the presented frame is in `first..last`, written `A-B:K[+K..]` (key codes), and optionally the mouse
+/// moved by DX, DY window pixels each presented frame in that range (`mDX/DY` among the keys, e.g. `A-B:17+m5/-2`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeldKeys {
     pub first: u64,
     pub last: u64,
     pub keys: Vec<u16>,
+    pub mouse: Option<(i32, i32)>,
 }
 
 impl FromStr for HeldKeys {
@@ -396,21 +398,30 @@ impl FromStr for HeldKeys {
         let (a, b) = range
             .split_once('-')
             .ok_or_else(|| format!("expected A-B, got {range:?}"))?;
-        let keys = keys
-            .split('+')
-            .map(|k| int(k, "key code"))
-            .collect::<Result<_, _>>()?;
+        let (mut codes, mut mouse) = (Vec::new(), None);
+        for k in keys.split('+') {
+            if let Some(m) = k.trim().strip_prefix('m') {
+                let (x, y) = m.split_once('/').ok_or_else(|| format!("expected mDX/DY, got {k:?}"))?;
+                mouse = Some((int(x, "mouse dx")?, int(y, "mouse dy")?));
+            } else {
+                codes.push(int(k, "key code")?);
+            }
+        }
         Ok(HeldKeys {
             first: int(a, "first frame")?,
             last: int(b, "last frame")?,
-            keys,
+            keys: codes,
+            mouse,
         })
     }
 }
 
 impl fmt::Display for HeldKeys {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let keys: Vec<String> = self.keys.iter().map(|k| k.to_string()).collect();
+        let mut keys: Vec<String> = self.keys.iter().map(|k| k.to_string()).collect();
+        if let Some((x, y)) = self.mouse {
+            keys.push(format!("m{x}/{y}"));
+        }
         write!(f, "{}-{}:{}", self.first, self.last, keys.join("+"))
     }
 }
@@ -575,3 +586,18 @@ impl serde::Serialize for FpsMode {
     }
 }
 
+
+#[cfg(test)]
+mod held_keys_tests {
+    use super::*;
+
+    #[test]
+    fn keys_and_mouse_parse_and_print_back() {
+        let h: HeldKeys = "3000-3100:17+m5/-2".parse().unwrap();
+        assert_eq!(h, HeldKeys { first: 3000, last: 3100, keys: vec![17], mouse: Some((5, -2)) });
+        assert_eq!(h.to_string(), "3000-3100:17+m5/-2");
+        let k: HeldKeys = "400-408:6".parse().unwrap();
+        assert_eq!((k.keys, k.mouse), (vec![6], None));
+        assert!("1-2:m5".parse::<HeldKeys>().is_err());
+    }
+}

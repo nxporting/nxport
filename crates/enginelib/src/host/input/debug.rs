@@ -12,13 +12,20 @@ pub fn apply_script() {
         return;
     }
     let frame = crate::gpu::backend().presented_frames();
+    // The mouse moves once per presented frame (the game may read its controller more often).
+    static MOVED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+    let new_frame = MOVED_AT.swap(frame as u64, Ordering::Relaxed) != frame as u64;
     let mut want = [false; 128];
+    let mut mouse = (0, 0);
     for held in script {
         if (held.first..held.last).contains(&frame) {
             for &k in &held.keys {
                 if (k as usize) < 128 {
                     want[k as usize] = true;
                 }
+            }
+            if let Some((x, y)) = held.mouse {
+                mouse = (mouse.0 + x, mouse.1 + y);
             }
         }
     }
@@ -33,6 +40,10 @@ pub fn apply_script() {
             (0..128).filter(|&i| want[i]).collect::<Vec<_>>()
         );
         update_npad();
+    }
+    // After the keys: a held tilt key takes the movement.
+    if new_frame && mouse != (0, 0) {
+        mouse_look_moved(mouse.0 as f32, mouse.1 as f32);
     }
 }
 
