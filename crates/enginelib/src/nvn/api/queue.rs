@@ -412,6 +412,7 @@ pub unsafe extern "C" fn hle_nvnQueueFenceSync(
     record_hle_call("hle_nvnQueueFenceSync");
     // Signaled once all work submitted so far (submits execute during nvnQueueSubmitCommands) has completed.
     if !sync.is_null() {
+        crate::nvn::api::sync::set_available_at(sync, std::time::Duration::ZERO);
         (*sync).serial = crate::gpu::backend().submitted_serial();
     }
 }
