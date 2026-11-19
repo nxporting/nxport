@@ -77,7 +77,7 @@ pub const ANISOTROPIES: [u32; 5] = [1, 2, 4, 8, 16];
 pub const DRAW_DISTANCES: [u32; 3] = [100, 125, 150];
 pub const RESOLUTIONS: [u32; 4] = [1, 2, 3, 4];
 
-/// Graphics > Resolution as chosen this run (0: unchanged): it applies at the next launch.
+/// <game> > Resolution as chosen this run (0: unchanged): it applies at the next launch.
 static RESOLUTION_CHOSEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// The field of view's choices, percent of the game's (profile::botw::aspect::FIELD_OF_VIEW).
 pub const FIELDS_OF_VIEW: [u32; 8] = [70, 80, 90, 100, 110, 120, 135, 150];
@@ -135,6 +135,24 @@ pub fn bar() -> Vec<Entry> {
                 FIELDS_OF_VIEW.iter().map(|&p| choice(field_of_view_label(p), id::FIELD_OF_VIEW + p as u16)).collect(),
             ));
         }
+        if crate::profile::botw::draw_distance::installed() {
+            title.push(sub(
+                "Draw Distance",
+                DRAW_DISTANCES
+                    .iter()
+                    .map(|&p| choice(if p == 100 { "Game's own".to_string() } else { format!("{p}%") }, id::DRAW_DISTANCE + (p / 25) as u16))
+                    .collect(),
+            ));
+        }
+        if crate::profile::botw::render_size::installed() {
+            title.push(sub(
+                "Resolution (next launch)",
+                RESOLUTIONS
+                    .iter()
+                    .map(|&k| choice(if k == 1 { "Game's own".to_string() } else { format!("{k}x") }, id::RESOLUTION + k as u16))
+                    .collect(),
+            ));
+        }
         title.push(Separator);
     }
     let mods = mods();
@@ -164,18 +182,15 @@ pub fn bar() -> Vec<Entry> {
                 item("Frame Rate in Title Bar", id::FPS_TITLE),
             ],
         ),
-        sub("Graphics", {
-            let mut g = vec![
+        sub(
+            "Graphics",
+            vec![
                 item("Asynchronous Shader Compilation", id::ASYNC_SHADERS),
                 sub("Anisotropic Filtering", ANISOTROPIES.iter().map(|&n| choice(anisotropy_label(n), id::ANISOTROPY + n as u16)).collect()),
-                sub("Resolution (next launch)", RESOLUTIONS.iter().map(|&k| choice(if k == 1 { "Game's own".to_string() } else { format!("{k}x") }, id::RESOLUTION + k as u16)).collect()),
-            ];
-            if crate::profile::botw::draw_distance::installed() {
-                g.push(sub("Draw Distance", DRAW_DISTANCES.iter().map(|&p| choice(if p == 100 { "Game's own".to_string() } else { format!("{p}%") }, id::DRAW_DISTANCE + (p / 25) as u16)).collect()));
-            }
-            g.extend([Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]);
-            g
-        }),
+                Separator,
+                item("Open Shader Cache Folder", id::SHADER_CACHE),
+            ],
+        ),
         sub("Audio", vec![item("Mute", id::MUTE), sub("Volume", VOLUMES.iter().map(|&v| choice(format!("{v}%"), id::VOLUME + v as u16)).collect())]),
         sub(
             "Input",

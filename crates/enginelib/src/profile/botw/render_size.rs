@@ -40,6 +40,11 @@ static HELPER: AtomicUsize = AtomicUsize::new(0);
 /// The scene's size, width << 32 | height (0: not seen yet).
 static SIZE: AtomicU64 = AtomicU64::new(0);
 
+/// Whether this version's scene size is known (resolution scaling works).
+pub fn installed() -> bool {
+    SITE.load(Ordering::Relaxed) != 0
+}
+
 /// Records where this version makes its scene targets.
 pub fn install(base: usize, scene: Scene) {
     HELPER.store(base + scene.helper, Ordering::Relaxed);
