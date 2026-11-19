@@ -58,6 +58,32 @@ mod tests {
         motion_clear(p);
     }
 
+    #[test]
+    fn a_set_orientation_reads_as_the_turn_to_it_and_gravity() {
+        // The mouse tilt's virtual controller: turned a quarter about up (Z) over 0.05 s, then pitched up 30 degrees.
+        let p = 6;
+        motion_clear(p);
+        motion_set(p, [1.0, 0.0, 0.0, 0.0], 1_000_000_000);
+        motion_set(p, qrot([0.0, 0.0, std::f64::consts::FRAC_PI_2]), 1_050_000_000);
+        let (acc, gyro, angle, dir) = motion_state(p).unwrap();
+        assert!((gyro[2] - 5.0).abs() < 1e-4, "{gyro:?}"); // a quarter turn in 0.05 s
+        assert!((angle[2] - 0.25).abs() < 1e-5, "{angle:?}");
+        assert!(dir[0].abs() < 1e-5 && (dir[1] - 1.0).abs() < 1e-5, "{dir:?}");
+        assert!(acc[0].abs() < 1e-5 && acc[1].abs() < 1e-5 && (acc[2] + 1.0).abs() < 1e-5, "{acc:?}");
+        let pitched = qmul(qrot([0.0, 0.0, std::f64::consts::FRAC_PI_2]), qrot([0.5236, 0.0, 0.0]));
+        motion_set(p, pitched, 1_150_000_000);
+        let (acc, gyro, _, _) = motion_state(p).unwrap();
+        // The turn in the controller's own axes: about its X, 30 degrees in 0.1 s.
+        assert!((gyro[0] as f64 - 0.5236 / 0.1 / std::f64::consts::TAU).abs() < 1e-4, "{gyro:?}");
+        // Gravity in its axes: its far end (Y) up, so gravity pulls along -Y and -Z.
+        assert!((acc[1] as f64 + 0.5236f64.sin()).abs() < 1e-4 && (acc[2] as f64 + 0.5236f64.cos()).abs() < 1e-4, "{acc:?}");
+        // The same orientation again: no turn.
+        motion_set(p, pitched, 1_160_000_000);
+        let (_, gyro, _, _) = motion_state(p).unwrap();
+        assert!(gyro.iter().all(|v| v.abs() < 1e-6), "{gyro:?}");
+        motion_clear(p);
+    }
+
     /// A touch's start and release each reach the game on exactly one read, however long apart the reads are.
     #[test]
     fn touch_start_and_end_are_settled_by_reads() {
