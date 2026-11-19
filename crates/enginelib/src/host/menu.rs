@@ -164,12 +164,18 @@ pub fn bar() -> Vec<Entry> {
                 item("Frame Rate in Title Bar", id::FPS_TITLE),
             ],
         ),
-        sub("Graphics", vec![
-            item("Asynchronous Shader Compilation", id::ASYNC_SHADERS),
-            sub("Anisotropic Filtering", ANISOTROPIES.iter().map(|&n| choice(anisotropy_label(n), id::ANISOTROPY + n as u16)).collect()),
-            sub("Resolution (next launch)", RESOLUTIONS.iter().map(|&k| choice(if k == 1 { "Game's own".to_string() } else { format!("{k}x") }, id::RESOLUTION + k as u16)).collect()),
-            sub("Draw Distance (Breath of the Wild)", DRAW_DISTANCES.iter().map(|&p| choice(if p == 100 { "Game's own".to_string() } else { format!("{p}%") }, id::DRAW_DISTANCE + (p / 25) as u16)).collect()),
-            Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]),
+        sub("Graphics", {
+            let mut g = vec![
+                item("Asynchronous Shader Compilation", id::ASYNC_SHADERS),
+                sub("Anisotropic Filtering", ANISOTROPIES.iter().map(|&n| choice(anisotropy_label(n), id::ANISOTROPY + n as u16)).collect()),
+                sub("Resolution (next launch)", RESOLUTIONS.iter().map(|&k| choice(if k == 1 { "Game's own".to_string() } else { format!("{k}x") }, id::RESOLUTION + k as u16)).collect()),
+            ];
+            if crate::profile::botw::draw_distance::installed() {
+                g.push(sub("Draw Distance", DRAW_DISTANCES.iter().map(|&p| choice(if p == 100 { "Game's own".to_string() } else { format!("{p}%") }, id::DRAW_DISTANCE + (p / 25) as u16)).collect()));
+            }
+            g.extend([Separator, item("Open Shader Cache Folder", id::SHADER_CACHE)]);
+            g
+        }),
         sub("Audio", vec![item("Mute", id::MUTE), sub("Volume", VOLUMES.iter().map(|&v| choice(format!("{v}%"), id::VOLUME + v as u16)).collect())]),
         sub(
             "Input",
