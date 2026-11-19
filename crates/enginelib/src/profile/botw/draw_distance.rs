@@ -85,6 +85,20 @@ pub const V1_0_0: &[Site] = &[
     Site::Call(0xbdaae4),
     Site::IntoS8(0xbdc2cc),
 ];
+/// 1.5.0: the same nine copies (ksys::map::Object::getDispDistance and its siblings, PlacementObj's distances), the
+/// scale at the actor debug manager's +0x310 through the GOT entry main+0x25848b0, the unset distance in s2 loaded from
+/// main+0x1da2358; checked one by one as for 1.0.0 (the Tail sites run after their frame was popped or in a leaf).
+pub const V1_5_0: &[Site] = &[
+    Site::Tail(0xd4a888),
+    Site::Tail(0xd4a8e4),
+    Site::Tail(0xd4a974),
+    Site::Tail(0xd4ab0c),
+    Site::Call(0xd4b0d0),
+    Site::Call(0xd4c14c),
+    Site::Call(0xd4c3a4),
+    Site::Call(0xd4c744),
+    Site::IntoS8(0xd4de14),
+];
 
 /// Makes every site's distance follow the setting.
 #[cfg(nx_runtime)]
