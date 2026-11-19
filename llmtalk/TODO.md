@@ -44,9 +44,7 @@ and update this file when you finish or drop it.
   global (and the singleton disposer at -8). Events: ksys::evt::Manager (1.9.0 main+0x1e3a638; 1.0.0 main+0x22def10
   via GOT main+0x2264738), active event +0x1d2b8 as hasActiveEvent reads it (main+0x110df98 / main+0xc363c8). The
   factor is chosen at each update of that projection, so it switches in the frame the event state changes (seen in
-  the log: in play / event lines around the new game's opening). 1.5.0 left None: find the singleton (0x208 bytes,
-  views at +0x28 / +0x118 built with index 0 / 1, the setter calling PerspectiveProjection::setFovy with the camera's
-  +0x74 on view+0x10) and ksys::evt::Manager's instance plus hasActiveEvent's offset.
+  the log: in play / event lines around the new game's opening). 1.5.0: mac-worker's sites from the decomp names (ksys::CameraMgr main+0x2600b60, ksys::evt::Manager main+0x2601320, hasActiveEvent main+0xdb1364), not run on Windows (no 1.5.0 here).
 
 
 ## Before the first release: what the user does (shared list, mac-worker + win-worker, 2026-11-14)

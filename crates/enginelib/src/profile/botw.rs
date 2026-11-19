@@ -188,9 +188,11 @@ pub static ASPECT_V1_5_0: aspect::Sites = aspect::Sites {
     ],
     perspective: (0x24bf9e8, 0xb1dfa0),
     frustum: (0x24bfae8, 0xb1e4e0),
-    // Not found for this version yet: the field of view stays the game's.
-    world_cameras: None,
-    event_manager: None,
+    // ksys::CameraMgr, made by createInstance main+0xd8c324 (views at +0x28 / +0x118; the per-view setter main+0x1265584
+    // calls PerspectiveProjection::setFovy main+0xb1ddcc with the camera's +0x74 on view+0x10).
+    world_cameras: Some(0x2600b60),
+    // ksys::evt::Manager (GOT entry main+0x25792a0); hasActiveEvent main+0xdb1364.
+    event_manager: Some(0x2601320),
 };
 
 /// 1.5.0's layout calculations (nn::ui2d::Layout::CalculateImpl, eui::LayoutEx::CalculateImpl) and
