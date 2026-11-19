@@ -65,6 +65,7 @@ pub(crate) unsafe extern "C" fn get_six_axis_sensor_state(out: *mut u8, _handle:
     if out.is_null() {
         return;
     }
+    crate::host::input::log_hid("GetSixAxisSensorState", if _handle.is_null() { u32::MAX } else { *_handle }, 1);
     let samp = (crate::horizon::os::get_system_tick() / 96_000) as i64; // ~5ms ticks at 19.2MHz
     let mut state = SixAxisSensorState::default();
     state.sampling_number = samp;
@@ -80,6 +81,8 @@ pub(crate) unsafe extern "C" fn get_six_axis_sensor_states(
     if out.is_null() || count <= 0 {
         return 0;
     }
+    // (the handle's first word: its type and npad id, as the game made it)
+    crate::host::input::log_hid("GetSixAxisSensorStates", if _handle.is_null() { u32::MAX } else { *_handle }, count);
     let n = count.min(16) as usize;
     let samp = (crate::horizon::os::get_system_tick() / 96_000) as i64;
     let states_ptr = out as *mut SixAxisSensorState;
