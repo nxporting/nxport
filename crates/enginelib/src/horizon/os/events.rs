@@ -670,8 +670,7 @@ pub(crate) unsafe extern "C" fn signal_event(ev: *mut u8) {
         e.signaled = true;
         e.signals += 1;
     }
-    drop(g);
-    SYNC_CV.notify_all();
+    sync_wake(g.as_ref().unwrap(), ev as usize);
 }
 
 pub(crate) unsafe extern "C" fn clear_event(ev: *mut u8) {
@@ -733,8 +732,7 @@ pub(crate) unsafe extern "C" fn link_multiwait_holder(mw: *mut u8, holder: *mut 
         .entry(mw as usize)
         .or_default()
         .push(holder as usize);
-    drop(g);
-    SYNC_CV.notify_all(); // a waiter may be blocked on a list that just grew
+    sync_wake(g.as_ref().unwrap(), mw as usize); // a waiter may be blocked on a list that just grew
 }
 
 pub(crate) unsafe extern "C" fn set_multiwait_holder_user_data(holder: *mut u8, data: usize) {
@@ -771,8 +769,10 @@ pub(crate) unsafe extern "C" fn wait_any(mw: *mut u8) -> *mut u8 {
             .get(&(mw as usize))
             .cloned()
             .unwrap_or_default();
+        let mut keys = vec![mw as usize];
         for h in holders {
             if let Some(&ev) = s.holders.get(&h) {
+                keys.push(ev);
                 if let Some(e) = s.events.get_mut(&ev) {
                     if e.signaled {
                         if e.auto_clear {
@@ -783,7 +783,7 @@ pub(crate) unsafe extern "C" fn wait_any(mw: *mut u8) -> *mut u8 {
                 }
             }
         }
-        g = SYNC_CV.wait(g).unwrap();
+        g = sync_wait(g, &keys, None);
     }
 }
 
@@ -810,13 +810,12 @@ pub(crate) unsafe extern "C" fn send_message_queue(mq: *mut u8, data: u64) {
             Some(q) if q.q.len() >= q.cap => {}
             Some(q) => {
                 q.q.push_back(data);
-                drop(g);
-                SYNC_CV.notify_all();
+                sync_wake(g.as_ref().unwrap(), mq as usize);
                 return;
             }
             None => return,
         }
-        g = SYNC_CV.wait(g).unwrap();
+        g = sync_wait(g, &[mq as usize], None);
     }
 }
 
@@ -830,14 +829,13 @@ pub(crate) unsafe extern "C" fn receive_message_queue(out: *mut u64, mq: *mut u8
                     if !out.is_null() {
                         *out = v;
                     }
-                    drop(g);
-                    SYNC_CV.notify_all();
+                    sync_wake(g.as_ref().unwrap(), mq as usize);
                     return;
                 }
             }
             None => return,
         }
-        g = SYNC_CV.wait(g).unwrap();
+        g = sync_wait(g, &[mq as usize], None);
     }
 }
 
