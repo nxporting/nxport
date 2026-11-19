@@ -234,6 +234,9 @@ impl Gfx {
                     ),
                 }
             };
+            if super::tex_scale(t) > 1 {
+                decline!("target c{}: scaled (gpu::scale)", i);
+            }
             w = w.min(tv.width() as u32);
             h = h.min(tv.height() as u32);
             out_subs.push((

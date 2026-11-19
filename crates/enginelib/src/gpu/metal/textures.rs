@@ -179,15 +179,34 @@ impl Gfx {
         }) as u32;
         let max_levels = (32 - max_dim.leading_zeros()) as usize;
         let levels = (t.levels.max(1) as usize).min(max_levels).max(1);
+        let is_compressed = crate::nvn::layout::format_info(t.format)
+            .map(|i| i.block_w > 1)
+            .unwrap_or(false);
+        // Render targets of the scene's size class are made larger (gpu::scale; 1 unless the setting asks for more).
+        let scale = crate::gpu::scale::scale(&crate::gpu::scale::Shape {
+            width: t.width as u32,
+            height: t.height as u32,
+            two_d: matches!(
+                tt,
+                MTLTextureType::Type2D
+                    | MTLTextureType::Type2DArray
+                    | MTLTextureType::Type2DMultisample
+                    | MTLTextureType::Type2DMultisampleArray
+            ),
+            compressed: is_compressed,
+            linear: t.flags & (crate::nvn::layout::NVN_TEXTURE_FLAGS_LINEAR_BIT | crate::nvn::layout::NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT) != 0,
+            image: t.flags & 0x4 != 0,
+            storage: t.storage as usize,
+        }) as usize;
         let desc = MTLTextureDescriptor::new();
         desc.setTextureType(tt);
         desc.setPixelFormat(pf);
-        desc.setWidth(t.width as usize);
+        desc.setWidth(t.width as usize * scale);
         desc.setHeight(
             if matches!(tt, MTLTextureType::Type1D | MTLTextureType::Type1DArray) {
                 1
             } else {
-                t.height as usize
+                t.height as usize * scale
             },
         );
         if tt == MTLTextureType::Type3D {
@@ -208,9 +227,6 @@ impl Gfx {
         if multisample {
             desc.setSampleCount(t.samples.max(1) as usize);
         }
-        let is_compressed = crate::nvn::layout::format_info(t.format)
-            .map(|i| i.block_w > 1)
-            .unwrap_or(false);
         let mut usage = MTLTextureUsage::ShaderRead;
         if wants_view_flag(pf) {
             usage |= MTLTextureUsage::PixelFormatView;
@@ -248,6 +264,14 @@ impl Gfx {
             ));
         }
         let tex = self.device.newTextureWithDescriptor(&desc)?;
+        if crate::gpu::scale::factor() > 1 {
+            set_tex_scale(&tex, scale as u32);
+            if let Some(old) = tc.demoted.remove(&(t.storage as usize)) {
+                if old.pixelFormat() == pf && scale == 1 {
+                    tc.downscale_pending.push((old, tex.clone()));
+                }
+            }
+        }
         TEXSTAT[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         journal(|| {
             format!(
@@ -1023,6 +1047,25 @@ impl Gfx {
 /// uploads and hashes included. On iOS (or with --tex-sweep-unshared; =0 turns it off there) textures alone at their
 /// storage are freed too once unused for UNSHARED_AGE frames (areas, characters, cutscenes left behind), for memory.
 /// Render targets bound at the present are never freed. --no-tex-sweep keeps everything.
+/// A scaled texture (gpu::scale) whose memory a use needs at the game's size (a copy across sizes, a read into guest
+/// memory): the memory stays at the game's size from now on, and its cached textures go so the next lookup makes it
+/// again; its contents follow (downscale.rs).
+pub(crate) fn demote_scaled(tc: &mut TexCache, tex: &Tex, guest_storage: usize) {
+    if tex_scale(tex) == 1 {
+        return;
+    }
+    crate::gpu::scale::demote(guest_storage);
+    let mut root = tex.clone();
+    while let Some(p) = root.parentTexture() {
+        root = p;
+    }
+    tc.demoted.insert(guest_storage, root);
+    let id = storage_id(tex);
+    tc.tex_by_desc.retain(|_, (t, _)| storage_id(t) != id);
+    tc.textures.retain(|_, t| storage_id(t) != id);
+    bump_tex_epoch();
+}
+
 pub(crate) fn sweep_shared_storage(tc: &mut TexCache, colors: &[RtRef], depth: Option<&RtRef>) {
     const SWEEP_EVERY: u64 = 300;
     const SWEEP_AGE: u64 = 300;
@@ -1144,6 +1187,27 @@ pub(crate) fn sweep_shared_storage(tc: &mut TexCache, colors: &[RtRef], depth: O
 }
 
 /// Identity of a texture's storage: a view's parent, else the texture itself.
+static TEX_SCALES: std::sync::Mutex<Option<rustc_hash::FxHashMap<u64, u32>>> = std::sync::Mutex::new(None);
+
+/// Records a new texture's scale (an earlier texture's entry at the same address goes).
+fn set_tex_scale(t: &Tex, scale: u32) {
+    let mut m = TEX_SCALES.lock().unwrap();
+    let m = m.get_or_insert_with(Default::default);
+    if scale > 1 {
+        m.insert(storage_id(t), scale);
+    } else {
+        m.remove(&storage_id(t));
+    }
+}
+
+/// The scale a Metal texture (or a view of it) was made at (gpu::scale): its size over the game's.
+pub(crate) fn tex_scale(t: &Tex) -> u32 {
+    if crate::gpu::scale::factor() == 1 {
+        return 1;
+    }
+    TEX_SCALES.lock().unwrap().as_ref().and_then(|m| m.get(&storage_id(t)).copied()).unwrap_or(1)
+}
+
 pub(crate) fn storage_id(t: &Tex) -> u64 {
     match t.parentTexture() {
         Some(p) => Retained::as_ptr(&p) as *const () as u64,
@@ -1207,6 +1271,11 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         let Some(tex) = g.texture(&mut st.tc, addr) else {
             continue;
         };
+        // Guest memory holds the game's size: a scaled target (gpu::scale) written back is made at that size instead.
+        if tex_scale(&tex) > 1 {
+            demote_scaled(&mut st.tc, &tex, t.storage as usize);
+            continue;
+        }
         let mut real = tex.clone();
         while let Some(p) = real.parentTexture() {
             real = p;

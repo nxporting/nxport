@@ -12,6 +12,7 @@ pub mod pipeline_list;
 #[cfg(nx_native)]
 pub mod report_guard;
 pub mod restart;
+pub mod scale;
 pub mod vulkan;
 
 #[cfg(not(nx_native))]

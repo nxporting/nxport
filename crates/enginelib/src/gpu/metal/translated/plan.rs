@@ -430,6 +430,12 @@ impl Gfx {
                     })
                     .or_else(|| targetless.map(|(w, h)| (w as f64, h as f64)))
                     .unwrap_or((0.0, 0.0));
+                let scales: smallvec::SmallVec<[u32; 9]> = color_texs
+                    .iter()
+                    .map(|(_, t, _)| super::tex_scale(t))
+                    .chain(depth_tex.iter().map(|(t, _)| super::tex_scale(t)))
+                    .collect();
+                let scale = crate::gpu::scale::pass_scale(&scales);
 
                 (
                     std::sync::Arc::new(super::CachedPassRts {
@@ -442,6 +448,7 @@ impl Gfx {
                         samples,
                         enc_key,
                         target_size,
+                        scale,
                         bc,
                     }),
                     targetless,
@@ -450,6 +457,7 @@ impl Gfx {
         let color_texs = &rts.color_texs;
         let depth_tex = &rts.depth_tex;
         let (color_pfs, depth_pf, target_size) = (rts.color_pfs, rts.depth_pf, rts.target_size);
+        let target_scale = rts.scale;
         let nvn_targets = (rts.nvn_colors, rts.nvn_depth, rts.samples);
         let enc_key = &rts.enc_key;
 
@@ -546,6 +554,9 @@ impl Gfx {
         if !st.tc.twin_pending.is_empty() {
             self.refresh_depth_twins(st);
         }
+        if !st.tc.downscale_pending.is_empty() {
+            self.run_downscales(st);
+        }
         // A draw whose samples of its pass's colour targets are all at its own pixel reads them from the tile with a
         // variant of its fragment stage (tile_feedback.rs): its pass stays open.
         let mut fs = fs;
@@ -587,6 +598,7 @@ impl Gfx {
                 fs_code,
                 Some(resolved),
                 target_size,
+                target_scale,
                 color_pfs,
                 depth_pf,
                 nvn_targets,
@@ -816,14 +828,14 @@ impl Gfx {
                     if let Some((gen, x)) = &info {
                         let _ = write!(
                             l,
-                            "[nvn {:x} gen {} fmt {} vfmt {} flags {:#x} lv {}]",
-                            rt.texture, gen, x.format, rt.view_format, x.flags, x.levels
+                            "[nvn {:x} gen {} {}x{} fmt {} vfmt {} flags {:#x} lv {}]",
+                            rt.texture, gen, x.width, x.height, x.format, rt.view_format, x.flags, x.levels
                         );
                     }
                 }
                 if let Some((t, d)) = &depth_tex {
-                    let storage =
-                        unsafe { super::tex_info(d.texture) }.map_or(0, |(_, x)| x.storage);
+                    let info = unsafe { super::tex_info(d.texture) };
+                    let storage = info.as_ref().map_or(0, |(_, x)| x.storage);
                     let _ = write!(
                         l,
                         " d={:x}@{:x}:{}x{}:l{}s{}:{}",
@@ -835,6 +847,13 @@ impl Gfx {
                         d.layer,
                         if clear_depth.is_some() { "C" } else { "L" }
                     );
+                    if let Some((gen, x)) = &info {
+                        let _ = write!(
+                            l,
+                            "[nvn {:x} gen {} {}x{} fmt {} flags {:#x} lv {}]",
+                            d.texture, gen, x.width, x.height, x.format, x.flags, x.levels
+                        );
+                    }
                 }
                 if targetless.is_some() {
                     l.push_str(" targetless");
@@ -959,6 +978,7 @@ impl Gfx {
             fs_code,
             resolved_tex,
             target_size,
+            target_scale,
             color_pfs,
             depth_pf,
             nvn_targets,

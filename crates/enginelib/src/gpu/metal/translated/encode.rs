@@ -348,9 +348,10 @@ impl Gfx {
         }
 
         let (tw, th) = p.target_size;
+        let k = p.target_scale as f64;
         let (vx, vy, vw, vh) = p
             .viewport
-            .map(|(x, y, w, h)| (x as f64, y as f64, w as f64, h as f64))
+            .map(|(x, y, w, h)| (x as f64 * k, y as f64 * k, w as f64 * k, h as f64 * k))
             .unwrap_or((0.0, 0.0, tw, th));
         env.cx.ec.viewport(
             &enc,
@@ -365,8 +366,11 @@ impl Gfx {
         );
         {
             let (mw, mh) = (tw as usize, th as usize);
-            let (mut sx, mut sy, mut sw, mut sh) =
-                p.scissor.unwrap_or((0, 0, mw as i32, mh as i32));
+            let k = p.target_scale as i32;
+            let (mut sx, mut sy, mut sw, mut sh) = p
+                .scissor
+                .map(|(x, y, w, h)| (x * k, y * k, w * k, h * k))
+                .unwrap_or((0, 0, mw as i32, mh as i32));
             // --replay-ab-scissor=s_a,...|all: replay side B gives those draws a 1x1 scissor (vertex work and binning
             // stay, fragments go): the same-frame GPU delta is their fragment cost. Measurement only.
             static SC_B: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
@@ -890,7 +894,34 @@ impl Gfx {
                     .viewport
                     .map(|(_, _, w, h)| (w.max(1) as f32, h.max(1) as f32))
                     .unwrap_or((1.0, 1.0));
-                let key = (vw.to_bits(), vh.to_bits());
+                // Render scales (gpu::scale; all 1 unless the setting asks for more): entry 0 the pass's, then each
+                // sampled texture's by descriptor index, then the images'. Each stage has its own buffer, so a vertex
+                // stage's textures start at 1 (FragmentRenderScaleCount 0).
+                let mut scales = [1.0f32; 73];
+                let mut scales_key = 0u64;
+                if crate::gpu::scale::factor() > 1 {
+                    scales[0] = p.target_scale as f32;
+                    let target = (
+                        (p.target_size.0 as u32) / p.target_scale.max(1),
+                        (p.target_size.1 as u32) / p.target_scale.max(1),
+                    );
+                    for (i, tb) in cached.textures.iter().chain(cached.images.iter()).enumerate().take(72) {
+                        let Some(tex) = resolved_tex
+                            .iter()
+                            .find(|r| r.0 == nvn_stage && r.1 == tb.binding)
+                            .and_then(|r| r.2.clone())
+                        else {
+                            continue;
+                        };
+                        let k = super::tex_scale(&tex);
+                        let size = ((tex.width() as u32) / k, (tex.height() as u32) / k);
+                        scales[1 + i] = crate::gpu::scale::sampled_scale(k, size, Some(target), !is_vs);
+                    }
+                    scales_key = scales.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, s| {
+                        (h ^ s.to_bits() as u64).wrapping_mul(0x100_0000_01b3)
+                    });
+                }
+                let key = (vw.to_bits(), vh.to_bits(), scales_key);
                 if !env.cx.support_cache.contains_key(&key) {
                     let mut sup = vec![0u8; SUPPORT_BUFFER_SIZE];
                     let put = |b: &mut Vec<u8>, off: usize, v: [f32; 4]| {
@@ -900,8 +931,8 @@ impl Gfx {
                     };
                     put(&mut sup, 144, [2.0 / vw, 2.0 / vh, 1.0, 0.0]); // ViewportInverse
                     put(&mut sup, 160, [vw, vh, 1.0, 0.0]); // ViewportSize
-                    for i in 0..73 {
-                        put(&mut sup, 192 + i * 16, [1.0, 0.0, 0.0, 0.0]); // RenderScale: native resolution
+                    for (i, s) in scales.iter().enumerate() {
+                        put(&mut sup, 192 + i * 16, [*s, 0.0, 0.0, 0.0]); // RenderScale
                     }
                     if env.cx.support_cache.len() > 64 {
                         env.cx.support_cache.clear();

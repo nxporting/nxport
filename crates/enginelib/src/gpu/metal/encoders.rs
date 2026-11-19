@@ -560,7 +560,12 @@ impl Gfx {
         // Whole-level clears of all channels stay deferred, to be folded into the next pass.
         let level = rt.level as usize;
         let (lw, lh) = ((tex.width() >> level).max(1), (tex.height() >> level).max(1));
-        let (sx, sy, sw, sh) = st.scissor.unwrap_or((0, 0, lw as i32, lh as i32));
+        // The scissor is in game pixels; a scaled target (gpu::scale) has k times as many.
+        let k = tex_scale(&tex) as i32;
+        let (sx, sy, sw, sh) = st
+            .scissor
+            .map(|(x, y, w, h)| (x * k, y * k, w * k, h * k))
+            .unwrap_or((0, 0, lw as i32, lh as i32));
         let scissored = sx > 0 || sy > 0 || (sx + sw) < lw as i32 || (sy + sh) < lh as i32;
         if scissored || mask & 0xF != 0xF {
             if mask & 0xF == 0 || sw <= 0 || sh <= 0 || sx >= lw as i32 || sy >= lh as i32 {
