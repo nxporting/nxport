@@ -306,7 +306,10 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   their cell list is: a heuristic, not taken); (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale; (6) motion controls: nxport has them
   (host/input.rs fuses a controller's gyro and accelerometer into the six-axis state); untried in BotW's aiming and
   tilt puzzles; SW also offers the mouse as motion (hold T); (7) anisotropic filtering and
-  sharpening; (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
+  sharpening (SW: AMD CAS, MIT, 0-100%, on the 3D image where the scene is composited, exec.c scene_post: after FSR 1's
+  EASU + RCAS or at window size without the upscaler, before the game draws the HUD; the processed copy keeps the
+  game texture's swizzle, else the weapon wheel's blurred backdrop went black. It goes with resolution scaling's
+  upscale pass); (8) graphics presets, settings in the game's own Options, save profiles and backups, menus in 13
   languages. VRR: vsync on presents with FIFO (vulkan/window.rs), which G-SYNC / FreeSync run at variable rate below
   the refresh, as SW's "VSync: On"; untested (no VRR display here). SW also offers Adaptive (FIFO_RELAXED).
 - **BotW white water vs the early fence (2026-11-16, win-worker).** The user saw milky water after a restart with the
