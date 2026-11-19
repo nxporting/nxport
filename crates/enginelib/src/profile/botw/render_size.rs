@@ -11,8 +11,12 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// The return address (offset in main) of the scene-target creation's first texture creation, per version.
 pub const SCENE_V1_9_0: usize = 0x1063cb4;
+/// 1.0.0: the function computes the size from its view (main+0xb86abc .. 0xb86acc, [sp+0x34], [sp+0x30]) and makes its
+/// targets through a general helper; textures made from this call are scene-sized only (1600x900, 1440x810, 1280x720
+/// seen).
+pub const SCENE_V1_0_0: usize = 0xb86bf8;
 
-/// How many callers above the texture's initialization the creation can be (1.9.0: the fifth).
+/// How many callers above the texture's initialization the creation can be (1.9.0 and 1.0.0: the fifth).
 const DEPTH: usize = 6;
 
 static SITE: AtomicUsize = AtomicUsize::new(0);
