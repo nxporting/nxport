@@ -256,48 +256,75 @@ impl Gfx {
             if !st.rts_dirty && st.enc.is_some() && st.cached_rts.is_some() {
                 (st.cached_rts.clone().unwrap(), None)
             } else {
-                // Inline storage for the per-draw temporaries: heap allocations were ~6% of the encoding thread.
-                let mut color_texs: smallvec::SmallVec<[(usize, Tex, RtRef); 8]> =
-                    smallvec::SmallVec::new();
-                let mut bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]> =
-                    smallvec::SmallVec::new();
-                let ncolors = st.colors.len().min(8);
-                for i in 0..ncolors {
-                    let rt = &st.colors[i].clone();
-                    if rt.texture == 0 {
+                let mut demoted = false;
+                let (color_texs, bc, depth_tex) = loop {
+                    // Inline storage for the per-draw temporaries: heap allocations were ~6% of the encoding thread.
+                    let mut color_texs: smallvec::SmallVec<[(usize, Tex, RtRef); 8]> =
+                        smallvec::SmallVec::new();
+                    let mut bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]> =
+                        smallvec::SmallVec::new();
+                    let ncolors = st.colors.len().min(8);
+                    for i in 0..ncolors {
+                        let rt = &st.colors[i].clone();
+                        if rt.texture == 0 {
+                            continue;
+                        }
+                        match self.texture(&mut st.tc, rt.texture) {
+                            // GPU texture compression: the game renders compressed blocks through an integer view of a BCn texture.
+                            Some(t) if rt.view_format != 0 && self.bc_proxy(st, &t, rt).is_some() => {
+                                let p = self.bc_proxy(st, &t, rt).unwrap();
+                                // Registered for resolve_bc_proxies when the pass opens: the previous pass ends after this
+                                // point and would copy the proxy before anything was drawn into it.
+                                bc.push((p.clone(), t.clone(), rt.level as usize));
+                                // The proxy is that one level (single-mip texture; resolve_bc_proxies copies it into rt.level of the
+                                // target): attach its level 0. Attaching rt.level was out of range (Metal validation abort; undefined
+                                // without validation, so GPU-compressed mips above 0 were never rendered correctly).
+                                let mut proxy_rt = *rt;
+                                proxy_rt.level = 0;
+                                color_texs.push((i, p, proxy_rt))
+                            }
+                            Some(t) => {
+                                let t = self.rt_format_view(st, &t, rt).unwrap_or(t);
+                                color_texs.push((i, t, *rt))
+                            }
+                            None => {
+                                if super::tracing_frame() {
+                                    println!("[ftrace] SKIP draw at translated.rs:932");
+                                }
+                                return Err(false);
+                            }
+                        }
+                    }
+                    let depth_tex = match st.depth {
+                        Some(d) if d.texture != 0 => {
+                            self.texture(&mut st.tc, d.texture).map(|t| (t, d))
+                        }
+                        _ => None,
+                    };
+                    // A pass renders at one scale (Ryujinx TextureManager.UpdateRenderTargetScale): scaled targets bound with
+                    // an unscaled one go to the game's size, contents included, and the targets are resolved again. Rendering
+                    // at 1x into a 2x target drew the whole scene into its top-left quarter (BotW's composite pass with its
+                    // depth demoted).
+                    let targets = || {
+                        color_texs
+                            .iter()
+                            .map(|(_, t, rt)| (t.clone(), rt.texture))
+                            .chain(depth_tex.iter().map(|(t, d)| (t.clone(), d.texture)))
+                    };
+                    let mut scales = targets().map(|(t, _)| super::tex_scale(&t));
+                    let first = scales.next();
+                    if !demoted && first.is_some_and(|f| scales.any(|s| s != f)) {
+                        let scaled: smallvec::SmallVec<[(Tex, usize); 4]> =
+                            targets().filter(|(t, _)| super::tex_scale(t) != 1).collect();
+                        for (t, obj) in scaled {
+                            if let Some((_, n)) = unsafe { super::tex_info(obj) } {
+                                super::demote_scaled(&mut st.tc, &t, n.storage as usize, "pass with unscaled targets");
+                            }
+                        }
+                        demoted = true;
                         continue;
                     }
-                    match self.texture(&mut st.tc, rt.texture) {
-                        // GPU texture compression: the game renders compressed blocks through an integer view of a BCn texture.
-                        Some(t) if rt.view_format != 0 && self.bc_proxy(st, &t, rt).is_some() => {
-                            let p = self.bc_proxy(st, &t, rt).unwrap();
-                            // Registered for resolve_bc_proxies when the pass opens: the previous pass ends after this
-                            // point and would copy the proxy before anything was drawn into it.
-                            bc.push((p.clone(), t.clone(), rt.level as usize));
-                            // The proxy is that one level (single-mip texture; resolve_bc_proxies copies it into rt.level of the
-                            // target): attach its level 0. Attaching rt.level was out of range (Metal validation abort; undefined
-                            // without validation, so GPU-compressed mips above 0 were never rendered correctly).
-                            let mut proxy_rt = *rt;
-                            proxy_rt.level = 0;
-                            color_texs.push((i, p, proxy_rt))
-                        }
-                        Some(t) => {
-                            let t = self.rt_format_view(st, &t, rt).unwrap_or(t);
-                            color_texs.push((i, t, *rt))
-                        }
-                        None => {
-                            if super::tracing_frame() {
-                                println!("[ftrace] SKIP draw at translated.rs:932");
-                            }
-                            return Err(false);
-                        }
-                    }
-                }
-                let depth_tex = match st.depth {
-                    Some(d) if d.texture != 0 => {
-                        self.texture(&mut st.tc, d.texture).map(|t| (t, d))
-                    }
-                    _ => None,
+                    break (color_texs, bc, depth_tex);
                 };
                 // No render target bound: TotK draws occlusion-query boxes this way (ResetCounter, draw, ReportCounter with
                 // SetRenderTargets(0 colors, no depth)); every rasterized sample counts. Metal does this with an attachment-less

@@ -122,48 +122,62 @@ impl Gfx {
         }
         st.issuer.sync(); // other command-buffer use: queued encoder ops first (metal/issuer.rs)
         for (src, dst) in pending {
-            let pf = dst.pixelFormat();
-            let kd = kind(pf);
-            if dst.textureType() != MTLTextureType::Type2D || src.textureType() != MTLTextureType::Type2D || kd.is_none() {
-                copy::warn_once("downscale", format!("scaled {:?} {:?} demoted without its contents", dst.textureType(), pf));
+            if !self.encode_downscale(&cb, &src, &dst) {
                 continue;
-            }
-            let kd = kd.unwrap();
-            let k = (src.width() / dst.width().max(1)).max(1) as u32;
-            let Some(pipe) = pipeline(&self.device, pf, kd) else { continue };
-            for level in 0..dst.mipmapLevelCount().min(src.mipmapLevelCount()) {
-                let pass = MTLRenderPassDescriptor::renderPassDescriptor();
-                if kd == Kind::Depth {
-                    let att = pass.depthAttachment();
-                    att.setTexture(Some(&dst));
-                    att.setLevel(level);
-                    att.setLoadAction(MTLLoadAction::DontCare);
-                    att.setStoreAction(MTLStoreAction::Store);
-                } else {
-                    let att = pass.colorAttachments().objectAtIndexedSubscript(0);
-                    att.setTexture(Some(&dst));
-                    att.setLevel(level);
-                    att.setLoadAction(MTLLoadAction::DontCare);
-                    att.setStoreAction(MTLStoreAction::Store);
-                }
-                let Some(enc) = cb.renderCommandEncoderWithDescriptor(&pass) else { continue };
-                enc.setRenderPipelineState(&pipe);
-                if kd == Kind::Depth {
-                    if let Some(ds) = depth_write_always(&self.device) {
-                        enc.setDepthStencilState(Some(&ds));
-                    }
-                }
-                enc.setFragmentTexture_atIndex(Some(&src), 0);
-                let kl = [k, level as u32];
-                enc.setFragmentBytes_length_atIndex(
-                    std::ptr::NonNull::new(kl.as_ptr() as *mut std::ffi::c_void).unwrap(),
-                    8,
-                    0,
-                );
-                enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
-                enc.endEncoding();
             }
             st.tc.mark_gpu_written(storage_id(&dst));
         }
+    }
+
+    /// Encodes `src` (a scaled texture) averaged down into `dst` (the game's size), every level they share. False: the
+    /// format or type has no downscale (warned once).
+    pub(crate) unsafe fn encode_downscale(
+        &self,
+        cb: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        src: &Tex,
+        dst: &Tex,
+    ) -> bool {
+        let pf = dst.pixelFormat();
+        let kd = kind(pf);
+        if dst.textureType() != MTLTextureType::Type2D || src.textureType() != MTLTextureType::Type2D || kd.is_none() {
+            copy::warn_once("downscale", format!("scaled {:?} {:?} demoted without its contents", dst.textureType(), pf));
+            return false;
+        }
+        let kd = kd.unwrap();
+        let k = (src.width() / dst.width().max(1)).max(1) as u32;
+        let Some(pipe) = pipeline(&self.device, pf, kd) else { return false };
+        for level in 0..dst.mipmapLevelCount().min(src.mipmapLevelCount()) {
+            let pass = MTLRenderPassDescriptor::renderPassDescriptor();
+            if kd == Kind::Depth {
+                let att = pass.depthAttachment();
+                att.setTexture(Some(dst));
+                att.setLevel(level);
+                att.setLoadAction(MTLLoadAction::DontCare);
+                att.setStoreAction(MTLStoreAction::Store);
+            } else {
+                let att = pass.colorAttachments().objectAtIndexedSubscript(0);
+                att.setTexture(Some(dst));
+                att.setLevel(level);
+                att.setLoadAction(MTLLoadAction::DontCare);
+                att.setStoreAction(MTLStoreAction::Store);
+            }
+            let Some(enc) = cb.renderCommandEncoderWithDescriptor(&pass) else { continue };
+            enc.setRenderPipelineState(&pipe);
+            if kd == Kind::Depth {
+                if let Some(ds) = depth_write_always(&self.device) {
+                    enc.setDepthStencilState(Some(&ds));
+                }
+            }
+            enc.setFragmentTexture_atIndex(Some(src), 0);
+            let kl = [k, level as u32];
+            enc.setFragmentBytes_length_atIndex(
+                std::ptr::NonNull::new(kl.as_ptr() as *mut std::ffi::c_void).unwrap(),
+                8,
+                0,
+            );
+            enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+            enc.endEncoding();
+        }
+        true
     }
 }
