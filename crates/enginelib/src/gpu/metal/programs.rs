@@ -182,10 +182,12 @@ fn queue_translation(data: u64, control: u64, index: usize) -> Translation {
                 *done.0.lock().unwrap() = Some(r);
                 done.1.notify_all();
                 IN_FLIGHT.get().unwrap().lock().unwrap().remove(&data);
+                crate::gpu::pipeline_list::stage_done();
             });
         }
         Mutex::new(tx)
     });
+    crate::gpu::pipeline_list::stage_queued();
     let _ = tx.lock().unwrap().send((data, control, index, t.clone()));
     t
 }
