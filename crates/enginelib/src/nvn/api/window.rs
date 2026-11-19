@@ -387,11 +387,27 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
                 wait.as_micros() as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+        }
+        // The texture becomes available after the wait: acquire itself returns, and the sync the game is given signals
+        // then (nvn.h: acquire blocks only for the GPU's previous frame on the texture; games pace themselves by waiting
+        // on the sync before presenting). Sleeping here held BotW's render thread inside a lock its main thread needs,
+        // every frame.
+        if _fence != 0 {
+            crate::nvn::api::sync::set_available_at(_fence as *mut crate::nvn::api::sync::NvnSync, wait);
+            if !wait.is_zero() {
+                return acquired(w, out_index);
+            }
+        } else if !wait.is_zero() {
             hle_sleep_ns(wait.as_nanos() as u64);
         }
     }
     #[cfg(nx_native)]
     crate::gpu::metal::frame_started();
+    acquired(w, out_index)
+}
+
+/// Hands out the window's next texture.
+unsafe fn acquired(w: *mut NvnWindow, out_index: *mut i32) -> i32 {
     let idx = (*w).next_index % ((*w).texture_count as u32);
     (*w).next_index = (*w).next_index.wrapping_add(1);
     if !out_index.is_null() {

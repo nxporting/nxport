@@ -12,6 +12,41 @@ pub struct NvnSync {
     pub _pad: [u8; 48],
 }
 
+// A window's texture-available sync (nvnWindowAcquireTexture) signals at a time rather than at a submit: the host
+// clock's ns in the first word of the padding (0: none).
+fn available_at(sync: *mut NvnSync) -> *mut u64 {
+    unsafe { (&raw mut (*sync)._pad) as *mut u64 }
+}
+
+/// The sync signals `after` from now (the window's texture becomes available then).
+pub(crate) unsafe fn set_available_at(sync: *mut NvnSync, after: std::time::Duration) {
+    (*sync).serial = 0;
+    let at = if after.is_zero() { 0 } else { crate::platform::clock::now_ns() + after.as_nanos() as u64 };
+    std::ptr::write_unaligned(available_at(sync), at);
+}
+
+/// nvnSyncWait on a texture-available sync: waits until its time (or the timeout). None: not such a sync.
+unsafe fn available_wait(sync: *mut NvnSync, timeout_ns: u64) -> Option<i32> {
+    let at = std::ptr::read_unaligned(available_at(sync));
+    if at == 0 {
+        return None;
+    }
+    let now = crate::platform::clock::now_ns();
+    if at <= now {
+        std::ptr::write_unaligned(available_at(sync), 0);
+        return Some(0);
+    }
+    if timeout_ns < at - now {
+        crate::horizon::hle::hle_sleep_ns(timeout_ns);
+        return Some(2);
+    }
+    crate::horizon::hle::hle_sleep_ns(at - now);
+    std::ptr::write_unaligned(available_at(sync), 0);
+    #[cfg(nx_native)]
+    crate::gpu::metal::frame_started();
+    Some(1)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSyncInitialize(sync: *mut NvnSync, device: usize) -> u8 {
     record_hle_call("hle_nvnSyncInitialize");
@@ -39,6 +74,12 @@ pub unsafe extern "C" fn hle_nvnSyncSetDebugLabel(_sync: *mut NvnSync, _label: *
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) -> i32 {
     record_hle_call("hle_nvnSyncWait");
+    if !sync.is_null() {
+        match available_wait(sync as *mut NvnSync, timeout_ns) {
+            Some(r) => return r,
+            None => {}
+        }
+    }
     // NVN_SYNC_WAIT_RESULT: ALREADY_SIGNALED 0, CONDITION_SATISFIED 1, TIMEOUT_EXPIRED 2.
     let serial = if sync.is_null() { 0 } else { (*sync).serial };
     let gpu = crate::gpu::backend();
