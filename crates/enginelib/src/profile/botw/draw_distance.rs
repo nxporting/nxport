@@ -155,9 +155,11 @@ pub unsafe extern "C" fn distant_trees(tree: usize, far: f32) {
             t.len() - 1
         }
     };
-    // What is not ours is the game's own (set again since our last write).
-    if cur != t[i].2 {
-        t[i].1 = cur;
+    // What is not ours is the game's own (set again since our last write), field by field.
+    for k in 0..2 {
+        if cur[k] != t[i].2[k] {
+            t[i].1[k] = cur[k];
+        }
     }
     let want = t[i].1.map(|v| (f32::from_bits(v) * f).to_bits());
     *r.add(3) = want[0];
@@ -174,5 +176,31 @@ pub unsafe fn install_trees(base: usize, mem_space: &mut crate::guest::loader::G
     match crate::profile::totk::frame_time::replace_with_call(base, mem_space, at, &expected, code, 1, crate::hle!(distant_trees(_, _))) {
         Ok(()) => println!("[+] Draw distance: the distant trees reach {}% of the game's distance", percent()),
         Err(e) => println!("[!] Draw distance: main+{at:#x}: {e}; the distant trees keep the game's distance"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distant_trees_scale_the_far_ranges_from_the_game_values() {
+        let mut obj = vec![0u32; (RANGES + 0x20) / 4];
+        let base = obj.as_mut_ptr() as usize;
+        let at = |obj: &Vec<u32>, i: usize| f32::from_bits(obj[RANGES / 4 + i]);
+        for (i, v) in [100.0f32, 100.0, 4000.0, 500.0, 4000.0].iter().enumerate() {
+            obj[RANGES / 4 + i] = v.to_bits();
+        }
+        set_percent(150);
+        unsafe { distant_trees(base, 4400.0) };
+        assert_eq!([at(&obj, 0), at(&obj, 2), at(&obj, 3), at(&obj, 4)], [100.0, 6600.0, 750.0, 6000.0]);
+        // Called again: scaled from the game's values, not from the scaled ones.
+        unsafe { distant_trees(base, 4000.0) };
+        assert_eq!([at(&obj, 2), at(&obj, 3), at(&obj, 4)], [6000.0, 750.0, 6000.0]);
+        // The game writes a new fade-out: that one is taken as its own.
+        obj[RANGES / 4 + 3] = 600.0f32.to_bits();
+        set_percent(100);
+        unsafe { distant_trees(base, 4000.0) };
+        assert_eq!([at(&obj, 2), at(&obj, 3), at(&obj, 4)], [4000.0, 600.0, 4000.0]);
     }
 }
