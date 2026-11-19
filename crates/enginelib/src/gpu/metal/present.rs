@@ -34,11 +34,20 @@ pub fn toggle_display_pacing() {
 
 /// How long to wait before starting the next frame so that it starts on the display's refresh grid (None: grid not known
 /// yet, or the last frame shown is too long ago to extrapolate from).
+/// The display's refresh period in seconds: from the rate the screen reports, else the smallest gap seen between frames
+/// shown. The smallest gap alone is the frame rate's on a display faster than the game (a 120 Hz screen under a 60 fps
+/// game reads as 60 Hz).
+pub fn display_period() -> Option<f64> {
+    let hz = crate::host::live::refresh_hz();
+    if hz > 1.0 {
+        return Some(1.0 / hz as f64);
+    }
+    let p = f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire));
+    (p > 0.0).then_some(p)
+}
+
 pub fn display_pacing_wait() -> Option<std::time::Duration> {
-    let (last, period) = (
-        f64::from_bits(SHOWN_LAST.load(Ordering::Acquire)),
-        f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire)),
-    );
+    let (last, period) = (f64::from_bits(SHOWN_LAST.load(Ordering::Acquire)), display_period().unwrap_or(0.0));
     let now = host_secs();
     if period <= 0.0 || last <= 0.0 || now < last || now - last > 0.25 {
         return None;
@@ -53,7 +62,7 @@ pub fn frame_started() {
 }
 
 /// Called when `drawable` reached the screen: learns the refresh grid; --log-frame-pacing prints the frame's times.
-pub(super) fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, n: u64, start: f64, presented: f64, paced: bool) {
+pub(super) fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, n: u64, start: f64, presented: f64, paced: bool, step: f64) {
     let shown: f64 = unsafe { objc2::msg_send![drawable, presentedTime] };
     if shown <= 0.0 {
         return; // dropped (never shown)
@@ -69,13 +78,14 @@ pub(super) fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, 
     }
     if crate::settings::get().log.log_frame_pacing {
         println!(
-            "[frame-pacing] #{} start {:.3} present +{:.2} ms shown +{:.2} ms (gap {:.2} ms) paced {}",
+            "[frame-pacing] #{} start {:.3} present +{:.2} ms shown +{:.2} ms (gap {:.2} ms) paced {} step {:.2} ms",
             n,
             start * 1e3,
             (presented - start) * 1e3,
             (shown - start) * 1e3,
             if prev > 0.0 { dt * 1e3 } else { 0.0 },
-            paced
+            paced,
+            step * 1e3
         );
     }
 }
@@ -206,20 +216,32 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             }
             crate::host::overlay::render(&g.device, &cb, &drawable.texture());
             {
-                let (n, start, presented, paced) = (
+                let (n, start, presented, paced, step) = (
                     presented_frames() + 1,
                     f64::from_bits(FRAME_START.load(Ordering::Acquire)),
                     host_secs(),
                     display_pacing(),
+                    crate::profile::frame_step::last_step_seconds() as f64,
                 );
                 let handler = block2::RcBlock::new(
                     move |d: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLDrawable>>| {
-                        on_shown(unsafe { d.as_ref() }, n, start, presented, paced)
+                        on_shown(unsafe { d.as_ref() }, n, start, presented, paced, step)
                     },
                 );
                 unsafe { objc2_metal::MTLDrawable::addPresentedHandler(&*drawable, block2::RcBlock::as_ptr(&handler)) };
             }
-            cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
+            // A frame time of n >= 2 refreshes: the frame stays on screen n refreshes, as a console's present interval
+            // holds it. The game presents a few ms into its frame, and a plain present flipped a frame ready early one
+            // refresh after the previous one. Displays flip only at refreshes, so any minimum between n - 1 and n periods
+            // means n; the middle one leaves the most margin both ways.
+            let target = crate::nvn::api::FRAME_TARGET_NS.load(Ordering::Relaxed) as f64 / 1e9;
+            let refreshes = display_period().map_or(0.0, |p| (target / p).round());
+            if refreshes >= 2.0 && display_pacing() && crate::host::overlay::is_vsync() {
+                let period = display_period().unwrap_or_default();
+                cb.presentDrawable_afterMinimumDuration(ProtocolObject::from_ref(&*drawable), (refreshes - 0.5) * period);
+            } else {
+                cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
+            }
             cb.commit();
             // Remember it: it is never waited on, so check how it ended when the next frame is presented. A failure here
             // would make the next rendering buffer an "innocent victim" in `submit`'s report.
