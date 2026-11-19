@@ -111,3 +111,54 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
 pub fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed)
 }
+
+// The terrain's distant trees (tera's tree object, 1.9.0 [[main+0x1e57bd8] + 0x360] + 0x140): drawn as far as the
+// ranges at +0x14cb0 say, five floats the constructor (main+0x13c76d8) sets: where they fade in and that fade (100 m,
+// 100 m), how far they go (4000 m), their fade out there (500 m) and where their blocks change detail (4000 m). Only
+// how far they go is set again in play, by a setter (main+0x13cbe9c: 4000 + 4000 x clamp(t, 0, 1), stored with `str
+// s0, [x0, x8]; ret`). The setting scales the last three, as Savage Wind does (its tree_ranges, at most its far
+// factor 1.5); the fade-in stays, since the actor trees, made farther out, already overlap it. The setter's store
+// becomes a tail call that writes them.
+
+/// 1.9.0: the setter's last words (its fmadd, then the store and the return).
+pub const TREES_V1_9_0: usize = 0x13cbecc;
+/// `fmadd s0, s1, s0, s0; str s0, [x0, x8]; ret`.
+const TREES_TAIL: [u32; 3] = [0x1f00_0020, 0xbc28_6800, 0xd65f_03c0];
+const RANGES: usize = 0x14cb0;
+
+/// Per tree object: the game's fade-out and detail switch (f32 bits) and what was last written over them.
+static TREES: std::sync::Mutex<Vec<(usize, [u32; 2], [u32; 2])>> = std::sync::Mutex::new(Vec::new());
+
+/// The game sets how far the distant trees of `tree` go (`far`, m): it and the two ranges after it, times the setting.
+pub unsafe extern "C" fn distant_trees(tree: usize, far: f32) {
+    let r = (tree + RANGES) as *mut u32;
+    let f = percent() as f32 / 100.0;
+    *r.add(2) = (far * f).to_bits();
+    let cur = [*r.add(3), *r.add(4)];
+    let mut t = TREES.lock().unwrap();
+    let i = match t.iter().position(|e| e.0 == tree) {
+        Some(i) => i,
+        None => {
+            t.push((tree, cur, cur));
+            t.len() - 1
+        }
+    };
+    // What is not ours is the game's own (set again since our last write).
+    if cur != t[i].2 {
+        t[i].1 = cur;
+    }
+    let want = t[i].1.map(|v| (f32::from_bits(v) * f).to_bits());
+    *r.add(3) = want[0];
+    *r.add(4) = want[1];
+    t[i].2 = want;
+}
+
+/// Makes the distant trees' ranges follow the setting (the setter's store at main+`at`).
+#[cfg(nx_runtime)]
+pub unsafe fn install_trees(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, at: usize) {
+    let code = vec![TREES_TAIL[0], B, TREES_TAIL[2]];
+    match crate::profile::totk::frame_time::replace_with_call(base, mem_space, at, &TREES_TAIL, code, 1, crate::hle!(distant_trees(_, _))) {
+        Ok(()) => println!("[+] Draw distance: the distant trees reach {}% of the game's distance", percent()),
+        Err(e) => println!("[!] Draw distance: main+{at:#x}: {e}; the distant trees keep the game's distance"),
+    }
+}
