@@ -214,6 +214,7 @@ unsafe fn install_v1_5_0_hooks(base: usize, mem_space: &mut crate::guest::loader
 #[cfg(nx_runtime)]
 unsafe fn install_v1_9_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     draw_distance::install(base, mem_space, draw_distance::V1_9_0);
+    draw_distance::install_trees(base, mem_space, draw_distance::TREES_V1_9_0);
     render_size::install(base, render_size::SCENE_V1_9_0);
     frame_time::install(base, mem_space, &SITES_V1_9_0);
     aspect::install(base, mem_space, &ASPECT_V1_9_0);
