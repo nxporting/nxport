@@ -132,6 +132,8 @@ pub const TREES_V1_9_0: Trees = Trees { at: 0x13cbecc, last: 0x1f00_0020 };
 /// 1.5.0 (main+0x10839c4, found by mac-worker; its only caller a tail branch at main+0xf06b38): `fmul s0, s0, s1; fadd
 /// s0, s0, s1`, the store's offset made with `mov w8, #0x10000; movk w8, #0x4cb8`.
 pub const TREES_V1_5_0: Trees = Trees { at: 0x10839f0, last: 0x1e21_2800 };
+/// 1.0.0 (its setter ends at main+0xeff7fc), as 1.5.0.
+pub const TREES_V1_0_0: Trees = Trees { at: 0xeff7f4, last: 0x1e21_2800 };
 /// `str s0, [x0, x8]; ret`.
 const TREES_TAIL: [u32; 2] = [0xbc28_6800, 0xd65f_03c0];
 const RANGES: usize = 0x14cb0;
