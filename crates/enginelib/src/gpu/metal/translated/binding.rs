@@ -13,15 +13,14 @@ impl Gfx {
     /// passes: R16Unorm / R32Float hold the bytes of Depth16Unorm / Depth32Float, and Metal blits colour into depth only
     /// through a buffer.
     pub(crate) unsafe fn refresh_depth_twins(&self, st: &mut State) {
-        use objc2_metal::MTLBlitCommandEncoder;
         let pending = std::mem::take(&mut st.tc.twin_pending);
         let Some(cb) = st.cur_cb.clone() else { return };
         if st.enc.is_some() {
             self.end_encoder_keep_clears(st);
         }
-        st.issuer.sync(); // other command-buffer use: queued encoder ops first (metal/issuer.rs)
-        let Some(blit) = cb.blitCommandEncoder() else { return };
-        objc2_metal::MTLCommandEncoder::setLabel(&*blit, Some(&objc2_foundation::NSString::from_str("depth twin copy")));
+        // Queued on the issuer thread after the encoder work before it (as copies are, copy.rs): waiting for that work
+        // here (issuer.sync) stalled BotW's Presentation Thread, ~6% of it, inside the game's render lock.
+        let mut copies = Vec::new();
         for (src, twin, key) in pending {
             let bpp = match src.pixelFormat() {
                 MTLPixelFormat::R16Unorm => 2,
@@ -41,28 +40,42 @@ impl Gfx {
             let Some(buf) = self.device.newBufferWithLength_options(total, MTLResourceOptions::StorageModePrivate) else {
                 continue;
             };
-            let mut off = 0;
-            for level in 0..levels {
-                let (w, h) = dims(level);
-                let (row, image) = (w * bpp, w * h * bpp);
-                for slice in 0..slices {
-                    let size = MTLSize { width: w, height: h, depth: 1 };
-                    let origin = MTLOrigin { x: 0, y: 0, z: 0 };
-                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
-                        &src, slice, level, origin, size, &buf, off, row, image,
-                    );
-                    blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
-                        &buf, off, row, image, size, &twin, slice, level, origin,
-                    );
-                    off += image;
-                }
-            }
             let seq = st.tc.gpu_write_seq.get(&key).copied().unwrap_or(0);
             if let Some(e) = st.tc.gpu_twins.get_mut(&key) {
                 e.1 = seq;
             }
+            copies.push((src, twin, buf, bpp, slices, levels));
         }
-        blit.endEncoding();
+        if copies.is_empty() {
+            return;
+        }
+        st.issuer.push(super::issuer::Op::Blit {
+            cb: cb.retain(),
+            label: "depth twin copy",
+            f: Box::new(move |blit| {
+                use objc2_metal::MTLBlitCommandEncoder;
+                for (src, twin, buf, bpp, slices, levels) in &copies {
+                    let dims = |l: usize| ((src.width() >> l).max(1), (src.height() >> l).max(1));
+                    let mut off = 0;
+                    for level in 0..*levels {
+                        let (w, h) = dims(level);
+                        let (row, image) = (w * bpp, w * h * bpp);
+                        for slice in 0..*slices {
+                            let size = MTLSize { width: w, height: h, depth: 1 };
+                            let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+                            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                                src, slice, level, origin, size, buf, off, row, image,
+                            );
+                            blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                                buf, off, row, image, size, twin, slice, level, origin,
+                            );
+                            off += image;
+                        }
+                    }
+                }
+            }),
+        });
+        self.note_encoder(st, "depth twin copy (blit)");
     }
 
     pub(crate) unsafe fn depth_twin(&self, tc: &mut TexCache, t: &Tex, v: &Tex, gen: u64, snap: &crate::nvn::api::NvnTexture) -> Option<Tex> {
