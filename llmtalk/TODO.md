@@ -301,9 +301,8 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   the terrain's distant trees follow it in 1.9.0 (ed7ce3d, testing): their ranges at tree +0x14cb0 (100 m fade-in and
   its length, 4000 m far, 500 m fade-out, 4000 m detail switch) are the constructor's (main+0x13c76d8) except the far
   one, set by one leaf setter (main+0x13cbe9c, 4000 + 4000 x clamp(t), `str s0, [x0, x8]; ret`): its store is a tail
-  call writing far, fade-out and detail switch times the setting (SW scales the same three). 1.0.0 and 1.5.0 have no
-  such leaf (searched by its shape and by its 4000.0 fmadd; its 1.9.0 caller is main+0x122c230, the object
-  [[main+0x1e57bd8] + 0x360] + 0x140): probably inlined, to find at run time. Grass not taken: SW's
+  call writing far, fade-out and detail switch times the setting (SW scales the same three). 1.0.0 (main+0xeff7d8..0xeff7fc)
+  and 1.5.0 (main+0x10839c4, mac-worker) have the same leaf with fmul + fadd where 1.9.0 has the fmadd. Grass not taken: SW's
   grass follows an adaptive factor stepped by how full its cell list is, a heuristic; (5) higher-resolution shadows: Savage Wind makes them a render-scale group of their own (vulkan/textures.c RS_SHADOW: the sun cascades, square D16 896x896x3, made at a chosen width 2048-8192 with their half-size R16 copy scaled alike, or its readers sampling the cascades directly), so it follows resolution scaling, as a per-class factor of gpu::scale. SW picks them by shape (square depth
   render targets of 512 or more; the copy: square R16 2D array of 3 layers, 256 or more), a heuristic here: take them
   instead from their creation call, as profile::scene_size takes the scene (a return-address pair on the texture
