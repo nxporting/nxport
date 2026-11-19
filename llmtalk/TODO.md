@@ -52,7 +52,14 @@ and update this file when you finish or drop it.
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
   history before the new one is published; the BotW shrink-into-a-corner flicker), and ce27f3c (depth-twin copies queued on the
-  issuer, Metal only: just check it builds). Already checked by you: cc38798, 4037bb8.
+  issuer, Metal only: just check it builds), 17c3ed6 (shader progress bar counts stage translations; shared
+  pipeline_list.rs) and ee6ed67 (shared gpu/scale.rs: demote takes a reason closure). Already checked by you: cc38798,
+  4037bb8.
+- 2026-11-19 scaling (ee6ed67, Metal): at 2x BotW drew the scene into the top-left quarter and fell back to 1x within
+  seconds. (1) A render-target write-back demoted its target for good: now a scaled target is averaged into a game-size
+  copy that is read back, and the target keeps its scale (as Ryujinx flushes). (2) A pass with mixed target scales now
+  demotes its scaled targets first (Ryujinx UpdateRenderTargetScale). BotW 2x: demotions 41 -> 0, GPU 10 -> 14.4 ms.
+  The same two rules are needed on Vulkan.
 - Async submit (branch async-submit, ../nxport-async on the Mac, Metal only, off by default): BotW 47.0 / 51.8 vs
   50.3 / 46.5 fps, no gain (its main thread waits for each frame's fence, which then covers the encode); TotK same fps.
   Not merged.
