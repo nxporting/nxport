@@ -63,13 +63,13 @@ pub fn scale(s: &Shape) -> u32 {
 
 /// The texture memory at `storage` is used at the game's size from now on (CPU access, storage image, a copy across
 /// size classes). The backend re-creates a scaled texture there at scale 1.
-pub fn demote(storage: usize) {
+pub fn demote(storage: usize, what: impl FnOnce() -> String) {
     if factor() == 1 {
         return;
     }
     let mut d = DEMOTED.lock().unwrap();
     if d.get_or_insert_with(HashSet::default).insert(storage) {
-        println!("[+] Scale: texture memory {storage:#x} stays at the game's resolution");
+        println!("[+] Scale: texture memory {storage:#x} stays at the game's resolution: {}", what());
     }
 }
 

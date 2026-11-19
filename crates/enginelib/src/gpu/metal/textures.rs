@@ -1050,11 +1050,13 @@ impl Gfx {
 /// A scaled texture (gpu::scale) whose memory a use needs at the game's size (a copy across sizes, a read into guest
 /// memory): the memory stays at the game's size from now on, and its cached textures go so the next lookup makes it
 /// again; its contents follow (downscale.rs).
-pub(crate) fn demote_scaled(tc: &mut TexCache, tex: &Tex, guest_storage: usize) {
+pub(crate) fn demote_scaled(tc: &mut TexCache, tex: &Tex, guest_storage: usize, why: &str) {
     if tex_scale(tex) == 1 {
         return;
     }
-    crate::gpu::scale::demote(guest_storage);
+    crate::gpu::scale::demote(guest_storage, || {
+        format!("{}x{} {:?}, {why}", tex.width(), tex.height(), tex.pixelFormat())
+    });
     let mut root = tex.clone();
     while let Some(p) = root.parentTexture() {
         root = p;
@@ -1241,6 +1243,51 @@ pub(crate) struct WritebackJob {
 /// memory once they ran. Reading the textures back on the CPU instead (getBytes) first waited for the frame's GPU work
 /// and then decompressed Apple's lossless framebuffer compression on the CPU, under the game's render-thread lock in
 /// Breath of the Wild (~20% of its Presentation Thread).
+/// A scaled render target's write-back: averaged down into a game-size texture and copied into buffers, in a command
+/// buffer of its own (queued after the frame's). False: not possible for its format.
+unsafe fn writeback_scaled(g: &Gfx, st: &mut State, real: &Tex, t: &NvnTexture, bpp: usize) -> bool {
+    use objc2_metal::MTLBlitCommandEncoder;
+    let levels = (t.levels.max(1) as usize).min(real.mipmapLevelCount());
+    let desc = MTLTextureDescriptor::new();
+    desc.setPixelFormat(real.pixelFormat());
+    desc.setWidth(t.width as usize);
+    desc.setHeight(t.height as usize);
+    desc.setMipmapLevelCount(levels);
+    desc.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+    desc.setStorageMode(MTLStorageMode::Private);
+    let Some(small) = g.device.newTextureWithDescriptor(&desc) else { return false };
+    let Some(cb) = g.queue.commandBuffer() else { return false };
+    if !g.encode_downscale(&cb, real, &small) {
+        return false;
+    }
+    let Some(b) = cb.blitCommandEncoder() else { return false };
+    objc2_metal::MTLCommandEncoder::setLabel(&*b, Some(&NSString::from_str("render-target write-back (scaled)")));
+    let mut out = Vec::new();
+    for level in 0..levels {
+        let (w, h) = (((t.width as usize) >> level).max(1), ((t.height as usize) >> level).max(1));
+        let len = w * h * bpp;
+        let Some(buf) = g.device.newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared) else {
+            continue;
+        };
+        b.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+            &small,
+            0,
+            level,
+            MTLOrigin { x: 0, y: 0, z: 0 },
+            MTLSize { width: w, height: h, depth: 1 },
+            &buf,
+            0,
+            w * bpp,
+            len,
+        );
+        out.push((level, buf, len));
+    }
+    b.endEncoding();
+    cb.commit();
+    st.writeback_jobs.push(WritebackJob { t: *t, cb, levels: out });
+    true
+}
+
 pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
     for job in std::mem::take(&mut st.writeback_jobs) {
         if job.cb.status() != objc2_metal::MTLCommandBufferStatus::Completed {
@@ -1293,14 +1340,24 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         let Some(tex) = g.texture(&mut st.tc, addr) else {
             continue;
         };
-        // Guest memory holds the game's size: a scaled target (gpu::scale) written back is made at that size instead.
-        if tex_scale(&tex) > 1 {
-            demote_scaled(&mut st.tc, &tex, t.storage as usize);
-            continue;
-        }
         let mut real = tex.clone();
         while let Some(p) = real.parentTexture() {
             real = p;
+        }
+        // Guest memory holds the game's size: a scaled target (gpu::scale) is averaged down into a copy at that size,
+        // which is what goes back; the target keeps its scale (Ryujinx flushes scaled textures through a scaled-down
+        // copy). Demoting it instead brought most of BotW's frame back to 1x within seconds.
+        if tex_scale(&tex) > 1 {
+            if real.sampleCount() > 1
+                || crate::gpu::metal::copy::is_depth_stencil(real.pixelFormat())
+                || real.textureType() != MTLTextureType::Type2D
+                || !writeback_scaled(g, st, &real, &t, info.bytes as usize)
+            {
+                demote_scaled(&mut st.tc, &tex, t.storage as usize, "written back to guest memory");
+            } else {
+                n += 1;
+            }
+            continue;
         }
         if objc2_metal::MTLResource::storageMode(&*real) == MTLStorageMode::Private
             || real.sampleCount() > 1

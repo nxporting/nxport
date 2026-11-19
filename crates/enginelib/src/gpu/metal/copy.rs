@@ -288,7 +288,7 @@ impl Gfx {
                 let t = &t;
                 // Guest memory takes the game's size (gpu::scale).
                 if super::tex_scale(&tex) > 1 {
-                    super::demote_scaled(&mut st.tc, &tex, t.storage as usize);
+                    super::demote_scaled(&mut st.tc, &tex, t.storage as usize, "copied to a buffer");
                     let Some(d) = self.texture(&mut st.tc, src.texture) else {
                         return;
                     };
@@ -349,8 +349,8 @@ impl Gfx {
                 // Scaled textures (gpu::scale): across scales the copy needs the game's size on both sides; within one
                 // scale regions are in game texels, times the scale.
                 if super::tex_scale(&stex) != super::tex_scale(&dtex) {
-                    super::demote_scaled(&mut st.tc, &stex, st_.storage as usize);
-                    super::demote_scaled(&mut st.tc, &dtex, dt_.storage as usize);
+                    super::demote_scaled(&mut st.tc, &stex, st_.storage as usize, "copy source, other scale");
+                    super::demote_scaled(&mut st.tc, &dtex, dt_.storage as usize, "copy target, other scale");
                     let (Some(s), Some(d)) = (
                         self.texture(&mut st.tc, src.texture),
                         self.texture(&mut st.tc, dst.texture),
