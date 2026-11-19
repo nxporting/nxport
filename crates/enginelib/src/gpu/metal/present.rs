@@ -105,29 +105,6 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             }
         }
         dump_main_image();
-        // With --early-fence the game's fence no longer guarantees that the targets written back below (drawn before the
-        // previous present) are finished: wait for them here, outside the state lock.
-        if early_fence() && rt_writeback_enabled() {
-            wait_serial(WRITEBACK_SERIAL.load(Ordering::Acquire), u64::MAX);
-        }
-        // A candidate drawn again in the frame just submitted is written back with that newer rendering, so all of it
-        // must have finished (see writeback_pass).
-        if rt_writeback_enabled() {
-            let redrawn = {
-                let st = g.state.lock().unwrap();
-                st.writeback.1.iter().any(|(addr, frame)| {
-                    unsafe { tex_info(*addr) }.is_some_and(|(_, t)| {
-                        st.rt_history
-                            .get(&t.storage)
-                            .is_some_and(|&last| last > *frame)
-                    })
-                })
-            };
-            if redrawn {
-                g.state.lock().unwrap().issuer.sync();
-                wait_serial(submitted_serial(), u64::MAX);
-            }
-        }
         let src = {
             let mut st = g.state.lock().unwrap();
             // The frame's last command buffers may still be queued on the issuer thread (commits go through it). Metal runs

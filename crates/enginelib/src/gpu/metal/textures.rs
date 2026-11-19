@@ -1228,15 +1228,37 @@ pub(crate) fn rt_writeback_enabled() -> bool {
     *E.get_or_init(|| !crate::settings::get().graphics.no_rt_writeback)
 }
 
-/// Writes last frame's write-back candidates into guest memory (their GPU work has completed: TotK waits for each
-/// frame's fence before presenting the next).
-/// Last command buffer holding draws into the render targets the next `writeback_pass` copies back.
-pub(crate) static WRITEBACK_SERIAL: AtomicU64 = AtomicU64::new(0);
+/// A write-back's GPU copy of a target into buffers, written into guest memory once the copy has run.
+pub(crate) struct WritebackJob {
+    t: NvnTexture,
+    cb: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    /// (level, the level's texels in rows of width x bytes per texel)
+    levels: Vec<(usize, Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
+}
 
+/// Copies last frame's write-back candidates into buffers on the GPU, after the frame's rendering (present synced the
+/// issuer, so their command buffers are committed ahead), and writes the copies an earlier present made into guest
+/// memory once they ran. Reading the textures back on the CPU instead (getBytes) first waited for the frame's GPU work
+/// and then decompressed Apple's lossless framebuffer compression on the CPU, under the game's render-thread lock in
+/// Breath of the Wild (~20% of its Presentation Thread).
 pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
+    for job in std::mem::take(&mut st.writeback_jobs) {
+        if job.cb.status() != objc2_metal::MTLCommandBufferStatus::Completed {
+            st.writeback_jobs.push(job);
+            continue;
+        }
+        // Still inside a live memory pool (see below): the game may have freed it since the copy was made.
+        if crate::nvn::api::containing_pool(job.t.storage, layout_of(&job.t).total as usize).is_none() {
+            continue;
+        }
+        for (level, buf, len) in &job.levels {
+            let data = std::slice::from_raw_parts(buf.contents().as_ptr() as *const u8, *len);
+            crate::nvn::api::guest_write_level(&job.t, *level, data);
+        }
+    }
     let done = std::mem::replace(&mut st.writeback.1, std::mem::take(&mut st.writeback.0));
-    // Everything the candidates now in writeback.1 were drawn in is committed (present synced the issuer).
-    WRITEBACK_SERIAL.store(submitted_serial(), Ordering::Release);
+    let mut blit = None;
+    let mut cb_new = None;
     let mut n = 0;
     for (addr, _frame) in done {
         let Some((_, t)) = tex_info(addr) else {
@@ -1287,29 +1309,40 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         {
             continue;
         }
+        if cb_new.is_none() {
+            let Some(cb) = g.queue.commandBuffer() else { break };
+            let Some(b) = cb.blitCommandEncoder() else { break };
+            objc2_metal::MTLCommandEncoder::setLabel(&*b, Some(&NSString::from_str("render-target write-back")));
+            blit = Some(b);
+            cb_new = Some(cb);
+        }
+        use objc2_metal::MTLBlitCommandEncoder;
+        let (Some(b), Some(cb)) = (blit.as_ref(), cb_new.as_ref()) else { break };
+        let mut levels = Vec::new();
         for level in 0..(t.levels.max(1) as usize).min(real.mipmapLevelCount()) {
             let (w, h) = (
                 ((t.width as usize) >> level).max(1),
                 ((t.height as usize) >> level).max(1),
             );
             let bpp = info.bytes as usize;
-            let mut buf = vec![0u8; w * h * bpp];
-            let region = MTLRegion {
-                origin: MTLOrigin { x: 0, y: 0, z: 0 },
-                size: MTLSize {
-                    width: w,
-                    height: h,
-                    depth: 1,
-                },
+            let len = w * h * bpp;
+            let Some(buf) = g.device.newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared) else {
+                continue;
             };
-            real.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                std::ptr::NonNull::new(buf.as_mut_ptr().cast()).unwrap(),
-                w * bpp,
-                region,
+            b.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                &real,
+                0,
                 level,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize { width: w, height: h, depth: 1 },
+                &buf,
+                0,
+                w * bpp,
+                len,
             );
-            crate::nvn::api::guest_write_level(&t, level, &buf);
+            levels.push((level, buf, len));
         }
+        st.writeback_jobs.push(WritebackJob { t, cb: cb.clone(), levels });
         if crate::settings::get().log.log_rt_writeback {
             println!(
                 "[writeback]   {}x{} fmt {} levels {} storage {:#x}",
@@ -1317,6 +1350,10 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
             );
         }
         n += 1;
+    }
+    if let (Some(b), Some(cb)) = (blit, cb_new) {
+        b.endEncoding();
+        cb.commit();
     }
     if n > 0 && crate::settings::get().log.log_rt_writeback {
         println!(
