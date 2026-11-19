@@ -43,6 +43,8 @@ pub(crate) struct State {
     /// Render targets to copy back into guest memory, with the frame they were bound in: (bound this frame, bound last
     /// frame); see `writeback_pass`.
     pub(crate) writeback: (HashMap<usize, u64>, HashMap<usize, u64>),
+    /// Write-back copies in flight (textures.rs writeback_pass).
+    pub(crate) writeback_jobs: Vec<super::WritebackJob>,
     /// Storage -> last frame a render target over it was bound (picks the rarely rendered ones for write-back).
     pub(crate) rt_history: HashMap<usize, u64>,
     /// nvnCommandBufferBindImage: (stage, image unit) -> image handle (pool id).
@@ -525,6 +527,7 @@ impl Default for State {
             textures_bound: BindTable::default(),
             images_bound: BindTable::default(),
             writeback: Default::default(),
+            writeback_jobs: Vec::new(),
             rt_history: HashMap::default(),
             render_enabled: true,
             rasterizer_discard: false,
