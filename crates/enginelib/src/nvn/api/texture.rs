@@ -300,10 +300,10 @@ pub unsafe extern "C" fn hle_nvnTextureInitialize(
     crate::profile::texture_initialized((*builder).width.max(0) as u32, (*builder).height.max(0) as u32, fp);
     if log_init {
         let b = &*builder;
-        // Up to four more callers through the guest frame pointers (main-relative where they are in main).
+        // Up to eight more callers through the guest frame pointers (main-relative where they are in main).
         let mut chain = String::new();
         let mut f = fp;
-        for _ in 0..4 {
+        for _ in 0..8 {
             if f == 0 || !crate::profile::readable(f, 16) {
                 break;
             }
