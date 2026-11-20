@@ -300,6 +300,14 @@ pub fn run_main_thread() -> ! {
     // (kCAGravityResizeAspect) and the black window background fills the bars.
     unsafe {
         let _: () = msg_send![&layer, setContentsGravity: &*NSString::from_str("resizeAspect")];
+        // Bars (a window of another shape) are black whatever lies behind the layer.
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            static kCGColorBlack: *const std::ffi::c_void;
+            fn CGColorGetConstantColor(name: *const std::ffi::c_void) -> *const std::ffi::c_void;
+        }
+        let black = CGColorGetConstantColor(kCGColorBlack);
+        let _: () = msg_send![&layer, setBackgroundColor: black];
     }
 
     // The content view takes keyboard input for the game (host/controls_ui.rs).
@@ -371,6 +379,19 @@ pub fn follow_window_shape(layer: &CAMetalLayer) -> bool {
         return false;
     }
     let a = b.width / b.height;
+    // A window within 1% of the picture's shape is filled (stretched by under 1%): fitted, it left a bar of a pixel or
+    // so (a window a pixel off 16:9), showing whatever lay behind the layer (user: a white or grey line at the top).
+    let d = layer.drawableSize();
+    if d.height > 0.0 {
+        static FILL: AtomicU64 = AtomicU64::new(2);
+        let fill = ((a / (d.width / d.height)) - 1.0).abs() < 0.01;
+        if FILL.swap(fill as u64, Ordering::Relaxed) != fill as u64 {
+            let g = if fill { "resize" } else { "resizeAspect" };
+            unsafe {
+                let _: () = msg_send![layer, setContentsGravity: &*NSString::from_str(g)];
+            }
+        }
+    }
     WINDOW_ASPECT.store(a.to_bits(), Ordering::Relaxed);
     crate::host::live::screen_shape(a)
 }
