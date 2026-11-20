@@ -85,9 +85,6 @@ pub(super) fn run(layer: &CAMetalLayer, fps: f32, max_hz: f32) {
             let link = CAMetalDisplayLink::initWithMetalLayer(CAMetalDisplayLink::alloc(), layer);
             let delegate: Retained<LinkDelegate> = msg_send![LinkDelegate::class(), new];
             link.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-            // Drawables two refreshes ahead: with one, a frame taking most of a refresh from its time step to its
-            // present missed the refresh it was stepped for.
-            link.setPreferredFrameLatency(2.0);
             std::mem::forget(delegate);
             link.addToRunLoop_forMode(&NSRunLoop::currentRunLoop(), NSDefaultRunLoopMode);
             LINK.store(Retained::into_raw(link), Ordering::Release);
