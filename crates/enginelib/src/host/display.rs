@@ -289,6 +289,11 @@ pub fn run_main_thread() -> ! {
     window.setTitle(&NSString::from_str(&app_name));
     unsafe { window.setReleasedWhenClosed(false) };
     window.setBackgroundColor(Some(&objc2_app_kit::NSColor::blackColor()));
+    // No separator line under the title bar: macOS drew one along the picture's top edge (user: a white line, grey or
+    // black in other presentation modes; the game's own top rows are clean). NSTitlebarSeparatorStyleNone = 1.
+    unsafe {
+        let _: () = msg_send![&window, setTitlebarSeparatorStyle: 1isize];
+    }
 
     let device = MTLCreateSystemDefaultDevice().expect("no Metal device");
     let layer = CAMetalLayer::new();
