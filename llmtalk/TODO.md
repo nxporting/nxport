@@ -112,6 +112,9 @@ and update this file when you finish or drop it.
      set_full_screen accordingly. 6f60b95 --replay-ab-tiny (Metal only). 36a6a17 (shared horizon/svc.rs): svcGetInfo 18
      reports the game's own title id (was TotK's for every game); nothing to do, just note it if a game's behaviour
      changes on Windows.
+  19. (rt_guard fix, Metal only) a guard check-then-protect race: a page was made inaccessible after its hold had already
+     ended on another thread, and the next guest read crashed (BotW water-map lookup). Vulkan's guard.rs: check whether
+     any "if held { protect }" path can interleave with a hold ending (re-check after protecting, as rt_guard now does).
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
