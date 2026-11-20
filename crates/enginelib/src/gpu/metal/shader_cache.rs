@@ -538,16 +538,26 @@ pub static DYNAMIC_STAGES: OnceLock<Mutex<HashMap<u64, &'static CachedStage>>> =
 static DYNAMIC_STAGES_BY_HASH: OnceLock<Mutex<HashMap<u64, &'static CachedStage>>> =
     OnceLock::new();
 
+/// The stage translated here for the code at `data`, if that code is still there. Games unload shader archives and load
+/// others into the same memory; the address alone would keep the old stage for a different program.
+unsafe fn dynamic_at(data: u64) -> Option<&'static CachedStage> {
+    let st = *DYNAMIC_STAGES.get()?.lock().unwrap().get(&data)?;
+    let full = u64::from_str_radix(st.entry.strip_prefix("s_")?, 16).ok()?;
+    let len = st.code_end;
+    if len == 0 || crate::guest::exec::crash_handler::readable_len(data as usize, len) < len {
+        return None;
+    }
+    (fnv1a64(std::slice::from_raw_parts(data as *const u8, len)) == full).then_some(st)
+}
+
 /// Resolves a stage by the code bytes at `data` (a host pointer to the NVN stage data).
 ///
 /// # Safety
 /// `data` must point at readable guest memory covering at least the stage's real size (the executor
 /// already reads a 64 KB window there for dumping).
 pub unsafe fn lookup(data: u64) -> Option<&'static CachedStage> {
-    if let Some(stages) = DYNAMIC_STAGES.get() {
-        if let Some(&st) = stages.lock().unwrap().get(&data) {
-            return Some(st);
-        }
+    if let Some(st) = dynamic_at(data) {
+        return Some(st);
     }
     if data < 0x1_0000_0000 {
         return None;
@@ -748,10 +758,8 @@ pub unsafe fn lookup_or_translate_dynamic(
     if data < 0x1_0000_0000 || !crate::settings::get().graphics.dynamic_shaders {
         return None;
     }
-    if let Some(stages) = DYNAMIC_STAGES.get() {
-        if let Some(&st) = stages.lock().unwrap().get(&data) {
-            return Some(st);
-        }
+    if let Some(st) = dynamic_at(data) {
+        return Some(st);
     }
 
     let RuntimeStage { stage, info, compute_fields, code_slice, total, full, entry, specialized, attrs, colors, varyings } =
