@@ -509,6 +509,7 @@ pub(crate) fn remember_snapshot(gen: u64, t: NvnTexture) {
                 if let Some(m) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
                     m.remove(&addr);
                 }
+                COPY_SOURCE.lock().unwrap().remove(&addr);
             }
         }
     }
@@ -552,6 +553,7 @@ pub fn resolve_texture_ref(addr: usize, gen: u32) -> usize {
     let copy = &*b as *const NvnTexture as usize;
     let g = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     TEX_SNAPSHOTS.lock().unwrap().get_or_insert_with(Default::default).insert(copy, (g, state));
+    COPY_SOURCE.lock().unwrap().insert(copy, gen as u64);
     h.copies.insert(gen, b);
     bump_tex_table_epoch();
     copy
@@ -1327,6 +1329,15 @@ pub struct NvnCopyRegion {
 pub(crate) static DIRTY_TEXTURES: std::sync::LazyLock<std::sync::Mutex<rustc_hash::FxHashSet<usize>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// The snapshot generations the guest wrote texels into (with DIRTY_TEXTURES): stable copies of a recorded state
+/// (resolve_texture_ref, pool slots) resolve to other addresses than the object written through, and find the mark by the
+/// generation they copy (COPY_SOURCE).
+pub(crate) static DIRTY_GENS: std::sync::LazyLock<std::sync::Mutex<rustc_hash::FxHashSet<u64>>> =
+    std::sync::LazyLock::new(Default::default);
+/// Stable copies (address) and the snapshot generation each holds.
+pub(crate) static COPY_SOURCE: std::sync::LazyLock<std::sync::Mutex<rustc_hash::FxHashMap<usize, u64>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// Bumped by every mark_texture_dirty (lets the executor's binding memo notice pending re-uploads without a lock).
 pub(crate) static DIRTY_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -1337,6 +1348,9 @@ pub fn texture_dirty_gen() -> u64 {
 pub fn mark_texture_dirty(tex: usize) {
     // Insert first: a reader that sees the new generation must also find the entry (memos record the generation and
     // skip take_texture_dirty while it is unchanged).
+    if let Some((g, _)) = texture_snapshot(tex) {
+        DIRTY_GENS.lock().unwrap().insert(g);
+    }
     DIRTY_TEXTURES.lock().unwrap().insert(tex);
     DIRTY_GEN.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 }
@@ -1344,11 +1358,15 @@ pub fn mark_texture_dirty(tex: usize) {
 /// Whether `tex` has an upload pending (without taking it).
 pub fn texture_dirty_pending(tex: usize) -> bool {
     DIRTY_TEXTURES.lock().unwrap().contains(&tex)
+        || COPY_SOURCE.lock().unwrap().get(&tex).is_some_and(|g| DIRTY_GENS.lock().unwrap().contains(g))
 }
 
 /// True (once) if the guest wrote into `tex` since the executor last looked.
 pub fn take_texture_dirty(tex: usize) -> bool {
-    DIRTY_TEXTURES.lock().unwrap().remove(&tex)
+    let source = COPY_SOURCE.lock().unwrap().get(&tex).copied();
+    let gen = source.or_else(|| texture_snapshot(tex).map(|(g, _)| g));
+    let by_gen = gen.is_some_and(|g| DIRTY_GENS.lock().unwrap().remove(&g));
+    DIRTY_TEXTURES.lock().unwrap().remove(&tex) || by_gen
 }
 
 /// Writes one full mip level (layer 0) of tightly packed texels into the texture's guest memory (render-target

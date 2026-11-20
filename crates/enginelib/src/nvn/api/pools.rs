@@ -165,10 +165,13 @@ pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
     let id = active_texture_slot(id);
     let mut map = POOL_TEXTURES.lock().unwrap();
     let slot = map.as_mut()?.get_mut(&id)?;
-    let live_gen = texture_snapshot(slot.obj).map_or(0, |(g, _)| g);
-    if live_gen == slot.gen || slot.obj == 0 {
-        return Some((slot.obj, slot.view));
+    if slot.obj == 0 {
+        return Some((0, slot.view));
     }
+    // Always the state registered (NVN wrote the descriptor into the pool then), as a stable copy: the live object is read
+    // again later (when a draw sampling it is planned), and game threads re-initialize transient objects meanwhile.
+    // Breath of the Wild sampled its 800x450 RGBA16F target through an object that had become another texture for a
+    // frame: the scene lit magenta.
     if slot.copy.is_none() {
         let b = Box::new(slot.state);
         let addr = &*b as *const NvnTexture as usize;
@@ -178,6 +181,7 @@ pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
             .unwrap()
             .get_or_insert_with(Default::default)
             .insert(addr, (gen, slot.state));
+        super::texture::COPY_SOURCE.lock().unwrap().insert(addr, slot.gen);
         slot.copy = Some(b);
         bump_tex_table_epoch();
     }
@@ -214,6 +218,14 @@ pub(crate) unsafe fn register_pool_slot(id: i32, texture: *const NvnTexture, vie
         {
             return; // re-registration of the same state: keep the slot (and any copy)
         }
+    }
+    // The slot's previous copy goes with it.
+    if let Some(c) = map.get(&id).and_then(|old| old.copy.as_ref()) {
+        let addr = &**c as *const NvnTexture as usize;
+        if let Some(m) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
+            m.remove(&addr);
+        }
+        super::texture::COPY_SOURCE.lock().unwrap().remove(&addr);
     }
     map.insert(
         id,
