@@ -153,7 +153,7 @@ fn report(frame: u64, frames: &[Parts]) {
     let all: Vec<&Parts> = frames.iter().collect();
     println!(
         "[frame-breakdown] frames {}..{}: median {:.1} ms, p90 {:.1}, slow (> 1.5x median) {}",
-        frame + 1 - frames.len() as u64,
+        (frame + 1).saturating_sub(frames.len() as u64),
         frame,
         median,
         iv[iv.len() * 9 / 10],
