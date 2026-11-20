@@ -115,6 +115,11 @@ and update this file when you finish or drop it.
   19. (rt_guard fix, Metal only) a guard check-then-protect race: a page was made inaccessible after its hold had already
      ended on another thread, and the next guest read crashed (BotW water-map lookup). Vulkan's guard.rs: check whether
      any "if held { protect }" path can interleave with a hold ending (re-check after protecting, as rt_guard now does).
+  20. 7465a40 (Metal shader_cache.rs): stages translated at run time were found by guest address alone; BotW unloads
+     shader archives and loads others into the same memory, so a later program could get the old stage. Now reused only
+     while the code at the address still hashes to the stage's name (s_<full hash> over its code). Vulkan: check whether
+     its run-time stage lookup (vulkan/shader.rs, vcache.rs) can return a stage for an address whose code changed (the
+     2026-10-24 notes say stages are named by full hash; the in-memory address key is the thing to check).
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
