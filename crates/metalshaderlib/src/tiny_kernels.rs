@@ -1,4 +1,3 @@
-// crates/builderlib/src/tiny_kernels.rs
 //! Compute versions of translated stages: a render pass costs ~40 us of fixed GPU time on Apple
 //! GPUs, a compute dispatch ~1 us, and TotK runs ~76 tiny render passes per frame. For a draw the engine runs as
 //! compute, the vertex stage's `tkv_<entry>` evaluates the draw's few vertices into a buffer and the fragment stage's
@@ -30,7 +29,7 @@ macro_rules! tk_try {
         match $e {
             Some(v) => v,
             None => {
-                if crate::translation::get().debug_kernels {
+                if debug() {
                     eprintln!("[tiny-kernels] declined at tiny_kernels.rs:{}", line!());
                 }
                 return None;
@@ -43,6 +42,17 @@ macro_rules! tk_try {
 pub const TK_VSTRIDE: usize = 33;
 
 /// Start of the appended kernel text (the builder cuts here to compile a stage without its kernels).
+static DEBUG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// --debug-kernels: log why stages get no kernel.
+pub fn set_debug(on: bool) {
+    DEBUG.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn debug() -> bool {
+    DEBUG.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub const MARKER: &str = "\n#ifndef TK_COMMON";
 
 const COMMON: &str = r#"
@@ -273,7 +283,7 @@ fn explicit_lod(body: &str, textures: &[(String, String)], implicit: &mut Vec<St
                 tex = &before[o + "spvDepthCast(".len()..before.len() - 1];
             }
         }
-        if crate::translation::get().debug_kernels && !textures.iter().any(|(n, _)| n == tex) {
+        if debug() && !textures.iter().any(|(n, _)| n == tex) {
             eprintln!("[tiny-kernels] texture {:?} not among {:?}", tex, textures);
         }
         let ty = tk_try!(textures.iter().find(|(n, _)| n == tex).map(|(_, t)| t.as_str()));
@@ -298,7 +308,7 @@ fn explicit_lod(body: &str, textures: &[(String, String)], implicit: &mut Vec<St
         let arrayed = ty.contains("_array");
         let base = 2 + arrayed as usize + (pat == ".sample_compare(") as usize;
         if args.len() < base {
-            if crate::translation::get().debug_kernels { eprintln!("[tiny-kernels] sample args {:?}", args); }
+            if debug() { eprintln!("[tiny-kernels] sample args {:?}", args); }
             return None;
         }
         let lod = args[base..].iter().position(|a| a.starts_with("level(") || a.starts_with("gradient") || a.starts_with("bias(") || a.starts_with("min_lod_clamp("));
@@ -375,7 +385,7 @@ pub fn implicit_tag(kernel: &str) -> Option<String> {
 // add / min / max reductions); simd_is_helper_thread() is false in a kernel (see fragment_kernel).
 /// None, logging the generator line with --debug-kernels.
 fn tk_none<T>(line: u32) -> Option<T> {
-    if crate::translation::get().debug_kernels {
+    if debug() {
         eprintln!("[tiny-kernels] declined at tiny_kernels.rs:{}", line);
     }
     None

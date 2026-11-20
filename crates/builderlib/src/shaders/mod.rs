@@ -8,7 +8,7 @@ pub mod extract_shaders;
 pub mod pipeline_archive;
 #[cfg(any(target_os = "macos", windows))]
 pub mod shader_cache_build;
-pub mod tiny_kernels;
+pub use nxport_metalshaderlib::tiny_kernels;
 pub mod translation;
 #[cfg(nx_runtime)]
 pub mod vulkan_precompile;
