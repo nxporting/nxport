@@ -268,10 +268,10 @@ static WIDEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(
 
 
 /// While listed pipelines compile or missing stages translate (gpu::pipeline_list::take_frame_progress): one small line
-/// on a translucent box in the bottom-left corner with how many are done (Display > Shader Compile Indicator). Draws skipped for other
+/// on a translucent box in the top-right corner with how many are done (Display > Shader Compile Indicator). Draws skipped for other
 /// compiling pipelines show in the performance window instead.
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
-pub fn draw_shader_progress(ui: &imgui::Ui, _w: f32, h: f32, done: usize, total: usize) {
+pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, done: usize, total: usize) {
     let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.0, 0.0, 0.0, 0.45]);
     // Sized by the picture's height in pixels (Retina windows have twice as many as their points): 1.6x the overlay
     // font at 1080 rows.
@@ -281,9 +281,9 @@ pub fn draw_shader_progress(ui: &imgui::Ui, _w: f32, h: f32, done: usize, total:
     let _border = ui.push_style_var(imgui::StyleVar::WindowBorderSize(0.0));
     unsafe {
         imgui::sys::igSetNextWindowPos(
-            imgui::sys::ImVec2 { x: 14.0 * s, y: h - 14.0 * s },
+            imgui::sys::ImVec2 { x: w - 14.0 * s, y: 14.0 * s },
             imgui::Condition::Always as i32,
-            imgui::sys::ImVec2 { x: 0.0, y: 1.0 },
+            imgui::sys::ImVec2 { x: 1.0, y: 0.0 },
         );
     }
     ui.window("Shaders##Progress")
