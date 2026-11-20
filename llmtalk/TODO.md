@@ -96,6 +96,12 @@ and update this file when you finish or drop it.
      times (Swappy's auto swap interval). Needs live::refresh_hz() on Windows (the monitor's rate); with it, check BotW
      at the 60 / 120 limits on a 120+ Hz monitor: the log prints "[pacing] N refreshes per frame". Display-link commits
      c22e7e8 / df37ae6 (prediction) were reverted in a later commit: ignore item 13's prediction part.
+  16. Pacing rework, later the same night (shared nvn/api/window.rs, sync.rs; Metal present.rs feeds presentedTime gaps):
+     the first divisor version estimated work from acquire timing and stepped BotW down to 4 fps; now one refresh more
+     per frame only when 3 of the last 10 frames really reached the screen late, one fewer when every one of the last
+     120 frames waited more than a refresh for the limiter, never more than twice the limit's refreshes (lower rates let
+     the GPU idle and clock down: a spiral to 20 fps). Windows: call crate::nvn::api::pacing_shown(gap) from your present
+     statistics (DXGI GetFrameStatistics / Vulkan present timing), else the rate never steps down there.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
