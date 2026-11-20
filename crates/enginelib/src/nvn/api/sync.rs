@@ -74,6 +74,13 @@ pub unsafe extern "C" fn hle_nvnSyncSetDebugLabel(_sync: *mut NvnSync, _label: *
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnSyncWait(sync: *const NvnSync, timeout_ns: u64) -> i32 {
     record_hle_call("hle_nvnSyncWait");
+    crate::gpu::frame_breakdown::sample_main_cpu();
+    let pacing = !sync.is_null() && std::ptr::read_unaligned(available_at(sync as *mut NvnSync)) != 0;
+    let _w = crate::gpu::frame_breakdown::wait(if pacing {
+        crate::gpu::frame_breakdown::Wait::Pacing
+    } else {
+        crate::gpu::frame_breakdown::Wait::Fence
+    });
     if !sync.is_null() {
         match available_wait(sync as *mut NvnSync, timeout_ns) {
             Some(r) => return r,

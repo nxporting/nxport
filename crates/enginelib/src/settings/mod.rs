@@ -521,6 +521,9 @@ group! {
         log_texcopy: bool = false,
         log_texref: bool = false,
         log_threads: bool = false,
+        /// Where each frame's time goes: the game's main thread's CPU and waits by kind, our encode, the GPU (slow
+        /// frames and a summary every 300 frames)
+        log_frame_breakdown: bool = false,
         log_timeline: bool = false,
         log_timestamps: bool = false,
         log_tiny_bufs: bool = false,
