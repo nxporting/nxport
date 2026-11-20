@@ -77,9 +77,27 @@ pub fn set_frame_limit(fps: u32) {
 }
 
 /// How frames reach the screen (Display > Presentation).
-pub fn present_mode() -> crate::settings::PresentMode {
+/// The presentation mode chosen in the menu.
+pub fn chosen_present_mode() -> crate::settings::PresentMode {
     use crate::settings::PresentMode::*;
     [Standard, Adaptive, DisplayLink][LIVE.present_mode.load(Relaxed).min(2) as usize]
+}
+
+/// The presentation mode in effect: adaptive presents as standard in a window, where macOS composites at the fixed
+/// refresh and variable refresh is not available (a windowed adaptive session: every frame 8.3 or 16.7 ms apart).
+pub fn present_mode() -> crate::settings::PresentMode {
+    let m = chosen_present_mode();
+    if m == crate::settings::PresentMode::Adaptive && !FULL_SCREEN.load(Relaxed) {
+        return crate::settings::PresentMode::Standard;
+    }
+    m
+}
+
+static FULL_SCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The game window is full screen (updated by the window's host twice a second).
+pub fn set_full_screen(on: bool) {
+    FULL_SCREEN.store(on, Relaxed);
 }
 
 pub fn set_present_mode(m: crate::settings::PresentMode) {
