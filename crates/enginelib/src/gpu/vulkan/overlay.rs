@@ -432,7 +432,8 @@ unsafe fn make(dev: &Dev, slots: usize) -> Result<Overlay, String> {
 /// COLOR_ATTACHMENT_OPTIMAL. `slot` is the window's slot, whose fence has been waited on.
 pub(super) unsafe fn record(dev: &Dev, cb: vk::CommandBuffer, image: vk::Image, extent: vk::Extent2D, slot: usize, slots: usize) -> bool {
     // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
-    let progress = crate::gpu::pipeline_list::take_frame_progress();
+    let progress = crate::gpu::pipeline_list::take_frame_progress()
+        .filter(|p| p.is_none() || crate::perf_stats::is_shader_indicator());
     let perf = crate::host::overlay::is_overlay_enabled();
     if (!perf && !matches!(progress, Some(Some(_)))) || FAILED.with(|f| f.get()) {
         return false;

@@ -143,6 +143,12 @@ fn sync_ios_settings() {
         let has_overlay: bool =
             if k_overlay_val.is_null() { crate::settings::get().display.perf_overlay } else { msg_send![defaults, boolForKey: &*k_overlay] };
         crate::host::overlay::set_overlay_enabled(has_overlay);
+        let k_ind = NSString::from_str("shader_indicator");
+        let k_ind_val: *mut AnyObject = msg_send![defaults, objectForKey: &*k_ind];
+        if !k_ind_val.is_null() {
+            let on: bool = msg_send![defaults, boolForKey: &*k_ind];
+            crate::host::overlay::set_shader_indicator(on);
+        }
 
         let k_vsync = NSString::from_str("vsync");
         let k_val: *mut AnyObject = msg_send![defaults, objectForKey: &*k_vsync];

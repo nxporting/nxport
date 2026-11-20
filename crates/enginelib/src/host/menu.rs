@@ -29,6 +29,7 @@ pub mod id {
     pub const FPS_TITLE: u16 = 22;
     pub const PERF_OVERLAY: u16 = 23;
     pub const LOW_LATENCY: u16 = 24;
+    pub const SHADER_INDICATOR: u16 = 25;
     /// + the limit in fps.
     pub const LIMIT: u16 = 100;
     /// + the window height (720, 1080, 1440).
@@ -177,6 +178,7 @@ pub fn bar() -> Vec<Entry> {
                 item("VSync", id::VSYNC),
                 item("Low Latency", id::LOW_LATENCY),
                 item("Performance Overlay", id::PERF_OVERLAY),
+                item("Shader Compile Indicator", id::SHADER_INDICATOR),
                 sub("Frame Rate Limit", LIMITS.iter().map(|&fps| choice(limit_label(fps), id::LIMIT + fps as u16)).collect()),
                 sub(
                     "Presentation",
@@ -400,6 +402,7 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::LOW_LATENCY => overlay::is_low_latency(),
         id::FPS_TITLE => live::fps_in_title(),
         id::PERF_OVERLAY => overlay::is_overlay_enabled(),
+        id::SHADER_INDICATOR => crate::perf_stats::is_shader_indicator(),
         c if (id::LIMIT..id::LIMIT + 200).contains(&c) => (c - id::LIMIT) as u32 == limit(),
         c if (id::PRESENT..id::PRESENT + 3).contains(&c) => (c - id::PRESENT) as u32 == live::present_mode() as u32,
         id::ASYNC_SHADERS => overlay::is_async_shaders(),
@@ -495,6 +498,10 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
         id::PERF_OVERLAY => {
             let on = overlay::toggle_overlay();
             crate::config::remember(|p| p.display.perf_overlay = Some(on));
+        }
+        id::SHADER_INDICATOR => {
+            let on = crate::perf_stats::toggle_shader_indicator();
+            crate::config::remember(|p| p.display.shader_indicator = Some(on));
         }
         id::FPS_TITLE => live::set_fps_in_title(!live::fps_in_title()),
         c if (id::LIMIT..id::LIMIT + 200).contains(&c) => {
@@ -612,7 +619,7 @@ mod tests {
             for b in &ranges[i + 1..] {
                 assert!(a.2 <= b.1 || b.2 <= a.1, "{} and {} overlap", a.0, b.0);
             }
-            for single in [id::VSYNC, id::LOW_LATENCY, id::PERF_OVERLAY, id::TOUCH, id::MOUSE_LOOK, id::EXACT_MOUSE_AIM, id::VIBRATION, id::LOG, id::CAPTURE] {
+            for single in [id::VSYNC, id::LOW_LATENCY, id::PERF_OVERLAY, id::SHADER_INDICATOR, id::TOUCH, id::MOUSE_LOOK, id::EXACT_MOUSE_AIM, id::VIBRATION, id::LOG, id::CAPTURE] {
                 assert!(!(a.1..a.2).contains(&single), "{} holds {single}", a.0);
             }
         }
