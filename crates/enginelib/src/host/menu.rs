@@ -404,7 +404,7 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::PERF_OVERLAY => overlay::is_overlay_enabled(),
         id::SHADER_INDICATOR => crate::perf_stats::is_shader_indicator(),
         c if (id::LIMIT..id::LIMIT + 200).contains(&c) => (c - id::LIMIT) as u32 == limit(),
-        c if (id::PRESENT..id::PRESENT + 3).contains(&c) => (c - id::PRESENT) as u32 == live::present_mode() as u32,
+        c if (id::PRESENT..id::PRESENT + 3).contains(&c) => (c - id::PRESENT) as u32 == live::chosen_present_mode() as u32,
         id::ASYNC_SHADERS => overlay::is_async_shaders(),
         c if (id::ANISOTROPY..id::ANISOTROPY + 17).contains(&c) => (c - id::ANISOTROPY) as u32 == crate::gpu::anisotropy(),
         c if (id::DRAW_DISTANCE..id::DRAW_DISTANCE + 9).contains(&c) => (c - id::DRAW_DISTANCE) as u32 * 25 == crate::profile::botw::draw_distance::percent(),

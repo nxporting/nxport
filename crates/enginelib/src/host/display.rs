@@ -47,6 +47,9 @@ define_class!(
         #[unsafe(method(updateTitle:))]
         fn update_title(&self, _timer: &objc2::runtime::AnyObject) {
             let mtm = MainThreadMarker::from(self);
+            if let Some(w) = game_window(mtm) {
+                crate::host::live::set_full_screen(w.styleMask().contains(NSWindowStyleMask::FullScreen));
+            }
             let fps = if crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Vulkan {
                 crate::gpu::vulkan::display_fps()
             } else {
