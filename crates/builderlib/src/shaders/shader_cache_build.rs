@@ -697,7 +697,7 @@ fn fingerprint() -> String {
     let mut bytes = Vec::new();
     bytes.extend(sass2spv::SOURCE_HASH.as_bytes());
     bytes.extend(include_str!("../../../metalshaderlib/src/msl_specialize.rs").as_bytes());
-    bytes.extend(include_str!("tiny_kernels.rs").as_bytes());
+    bytes.extend(include_str!("../../../metalshaderlib/src/tiny_kernels.rs").as_bytes());
     bytes.extend(include_str!("batch_kernels.rs").as_bytes());
     bytes.extend(crate::translation::fingerprint().as_bytes());
     bytes.extend(b"spirv-cross --msl-version 30000 --msl-decoration-binding");

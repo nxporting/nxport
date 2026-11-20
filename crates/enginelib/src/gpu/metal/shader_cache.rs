@@ -504,6 +504,18 @@ fn save_runtime_stage(weak: u64, full: u64, st: &CachedStage, msl: &str) {
     if st.tiny_samplers {
         r.push_str("tks\n");
     }
+    if st.tiny_kernel {
+        match &st.tiny_implicit {
+            Some(l) if l.is_empty() => r.push_str("tk -\n"),
+            Some(l) => {
+                let _ = writeln!(r, "tk {}", l.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(","));
+            }
+            None => r.push_str("tk\n"),
+        }
+        if st.tiny_clears {
+            r.push_str("tkc\n");
+        }
+    }
     for b in &st.sb_readonly {
         let _ = writeln!(r, "sr {b}");
     }
@@ -755,7 +767,24 @@ pub unsafe fn lookup_or_translate_dynamic(
         }
     }
 
-    let lib = compile_msl(&specialized, &entry)?;
+    // Compute versions for the tiny-pass path, as the cache builder appends them; a stage whose kernels do not compile is
+    // compiled without them.
+    let tiny = match stage {
+        sass2spv::ShaderStage::Fragment => nxport_metalshaderlib::tiny_kernels::fragment_kernel(&specialized),
+        sass2spv::ShaderStage::Vertex => nxport_metalshaderlib::tiny_kernels::vertex_kernel(&specialized),
+        _ => None,
+    };
+    let (specialized, lib, tiny) = match tiny.and_then(|k| {
+        let text = format!("{specialized}{k}");
+        let lib = compile_msl(&text, &entry)?;
+        Some((text, lib, k))
+    }) {
+        Some((text, lib, k)) => (text, lib, Some(k)),
+        None => {
+            let lib = compile_msl(&specialized, &entry)?;
+            (specialized, lib, None)
+        }
+    };
     super::translated::register_dynamic_library(&entry, lib);
     COMPILED.get_or_init(Default::default).lock().unwrap().insert(entry.clone());
 
@@ -841,10 +870,12 @@ pub unsafe fn lookup_or_translate_dynamic(
         sb_readonly,
         cbuf_limits,
         texture_heap: specialized.contains("nx_heaps["),
-        tiny_samplers: false,
-        tiny_kernel: false,
-        tiny_implicit: None,
-        tiny_clears: false,
+        tiny_samplers: tiny.as_deref().is_some_and(nxport_metalshaderlib::tiny_kernels::kernels_bind_samplers),
+        tiny_kernel: tiny.is_some(),
+        tiny_implicit: tiny.as_deref().and_then(nxport_metalshaderlib::tiny_kernels::implicit_tag).map(|l| {
+            l.split(',').filter_map(|b| b.parse().ok()).collect()
+        }),
+        tiny_clears: tiny.as_deref().is_some_and(nxport_metalshaderlib::tiny_kernels::applies_clears),
         batch_cbufs: None,
         args: None,
         local_size: compute_fields.map_or([1, 1, 1], |c| [c[0].max(1) as u32, c[1].max(1) as u32, c[2].max(1) as u32]),
