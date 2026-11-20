@@ -273,12 +273,15 @@ static WIDEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
 pub fn draw_shader_progress(ui: &imgui::Ui, _w: f32, h: f32, done: usize, total: usize) {
     let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.0, 0.0, 0.0, 0.45]);
-    let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(5.0));
-    let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([9.0, 5.0]));
+    // Sized by the picture's height in pixels (Retina windows have twice as many as their points): 1.6x the overlay
+    // font at 1080 rows.
+    let s = (h / 1080.0 * 1.6).max(1.2);
+    let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(5.0 * s));
+    let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([9.0 * s, 5.0 * s]));
     let _border = ui.push_style_var(imgui::StyleVar::WindowBorderSize(0.0));
     unsafe {
         imgui::sys::igSetNextWindowPos(
-            imgui::sys::ImVec2 { x: 14.0, y: h - 14.0 },
+            imgui::sys::ImVec2 { x: 14.0 * s, y: h - 14.0 * s },
             imgui::Condition::Always as i32,
             imgui::sys::ImVec2 { x: 0.0, y: 1.0 },
         );
@@ -297,7 +300,7 @@ pub fn draw_shader_progress(ui: &imgui::Ui, _w: f32, h: f32, done: usize, total:
                 | imgui::WindowFlags::NO_MOUSE_INPUTS,
         )
         .build(|| {
-            ui.set_window_font_scale(1.3);
+            ui.set_window_font_scale(s);
             ui.text_colored([1.0, 1.0, 1.0, 0.85], format!("Compiling shaders {done} / {total}"));
         });
 }
