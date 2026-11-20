@@ -102,6 +102,11 @@ and update this file when you finish or drop it.
      120 frames waited more than a refresh for the limiter, never more than twice the limit's refreshes (lower rates let
      the GPU idle and clock down: a spiral to 20 fps). Windows: call crate::nvn::api::pacing_shown(gap) from your present
      statistics (DXGI GetFrameStatistics / Vulkan present timing), else the rate never steps down there.
+  17. 5d914ca (shared profile/frame_step.rs): the step's rounding unit is the limiter's frame (n refreshes) whenever it has
+     one (a 120 limit held at 60 stepped 8.3 / 16.7 / 25). 8cfccbe (shared host/overlay.rs paces_to_refresh): whole-refresh
+     pacing with vsync off too, on Apple only; Windows keeps vsync off unpaced. a8e20f9 / aaea5d5 (shared pipeline_list.rs,
+     perf_stats.rs): the shader indicator shows after 0.5 s of compiling, top right. Display fixes (window shape fill,
+     no title-bar separator) are macOS only.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
