@@ -24,6 +24,8 @@ struct Live {
     mouse_look: AtomicBool,
     exact_mouse_aim: AtomicBool,
     fps_in_title: AtomicBool,
+    /// settings::PresentMode as its index.
+    present_mode: AtomicU32,
 }
 
 static LIVE: LazyLock<Live> = LazyLock::new(|| {
@@ -42,6 +44,7 @@ static LIVE: LazyLock<Live> = LazyLock::new(|| {
         mouse_look: AtomicBool::new(s.input.mouse_look),
         exact_mouse_aim: AtomicBool::new(s.totk.enhancements.exact_mouse_aim),
         fps_in_title: AtomicBool::new(s.display.fps_in_title),
+        present_mode: AtomicU32::new(s.display.present_mode as u32),
     }
 });
 
@@ -71,6 +74,17 @@ pub fn frame_limit() -> u32 {
 pub fn set_frame_limit(fps: u32) {
     LIVE.frame_limit.store(fps, Relaxed);
     crate::config::remember(|p| p.display.frame_limit = Some(fps));
+}
+
+/// How frames reach the screen (Display > Presentation).
+pub fn present_mode() -> crate::settings::PresentMode {
+    use crate::settings::PresentMode::*;
+    [Standard, Adaptive, DisplayLink][LIVE.present_mode.load(Relaxed).min(2) as usize]
+}
+
+pub fn set_present_mode(m: crate::settings::PresentMode) {
+    LIVE.present_mode.store(m as u32, Relaxed);
+    crate::config::remember(|p| p.display.present_mode = Some(m));
 }
 
 /// The output gain: 0 when muted.

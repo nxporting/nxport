@@ -28,6 +28,22 @@ static CARRY: AtomicU32 = AtomicU32::new(0);
 /// sizes the first one). Called once per game frame, by the game's clock update.
 pub fn step_seconds(interval: i32) -> f32 {
     let now = crate::platform::clock::now_ns();
+    // Display link: the time between the refreshes the last frames are shown at (a frame behind: the one being made has
+    // no refresh yet).
+    #[cfg(nx_native)]
+    if crate::host::live::present_mode() == crate::settings::PresentMode::DisplayLink {
+        if let Some(dt) = crate::gpu::metal::display_link::step() {
+            let last = LAST_NS.swap(now, Ordering::Relaxed);
+            let reuse = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
+            if last != 0 && now.saturating_sub(last) < SAME_FRAME_NS && reuse > 0.0 {
+                return reuse;
+            }
+            let dt = (dt as f32).clamp(MIN_STEP_S, MAX_STEP_S);
+            CARRY.store(0, Ordering::Relaxed);
+            LAST_STEP.store(dt.to_bits(), Ordering::Relaxed);
+            return dt;
+        }
+    }
     let last = LAST_NS.load(Ordering::Relaxed);
     let reuse = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
     if last != 0 && now.saturating_sub(last) < SAME_FRAME_NS && reuse > 0.0 {
@@ -70,7 +86,8 @@ pub fn last_step_seconds() -> f32 {
 fn vblank_period() -> Option<f32> {
     use crate::host::{live, overlay};
     let hz = live::refresh_hz();
-    if !overlay::is_vsync() || hz < 30.0 {
+    // Adaptive: a variable-refresh display shows frames when they are done, so the step is the real time.
+    if !overlay::is_vsync() || hz < 30.0 || live::present_mode() != crate::settings::PresentMode::Standard {
         return None;
     }
     let paced = overlay::fps_mode() != crate::settings::FpsMode::Stock30;

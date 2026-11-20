@@ -34,6 +34,7 @@ pub(crate) use debug::*;
 mod replay;
 pub(crate) use replay::*;
 mod present;
+pub mod display_link;
 pub use present::*;
 mod frame_stats;
 pub use frame_stats::*;

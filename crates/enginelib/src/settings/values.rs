@@ -467,6 +467,20 @@ choice!(
 );
 
 choice!(
+    /// How frames reach the screen (Metal).
+    PresentMode {
+        /// Each frame at the next refresh.
+        Standard,
+        /// Each frame with a minimum time on screen: lets a variable-refresh display (ProMotion, Adaptive-Sync) follow
+        /// the game's rate in full screen.
+        Adaptive,
+        /// Frames for the refreshes a display link schedules (CAMetalDisplayLink): the display's rate follows the
+        /// frame-rate limit, and the game's step is the time between the refreshes its frames are shown at.
+        DisplayLink,
+    }
+);
+
+choice!(
     /// Occlusion report pages held unreadable by the game until the GPU wrote them.
     ReportGuard {
         On,

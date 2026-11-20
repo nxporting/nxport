@@ -537,7 +537,8 @@ choice!(
     ReportGuard,
     TexBacking,
     FenceTrap,
-    FpsMode
+    FpsMode,
+    PresentMode
 );
 
 /// Optional values: each type says how it shows "not set".
