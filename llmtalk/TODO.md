@@ -68,6 +68,15 @@ and update this file when you finish or drop it.
   5. 7a63591 (Apple only): every guest thread asks for performance cores. Hybrid Intel CPUs might want the equivalent.
   6. b44f191 (Metal rt_guard): ended holds remembered as ranges, not their first 64 pages (SIGBUS crash). Vulkan's
      guard.rs: check for the same page-ring limit.
+  7. a18703c --log-frame-breakdown (shared: nvn/api/queue.rs, sync.rs, horizon/os/objects.rs, startup.rs; GPU time only
+     from Metal's inflight.rs, the guard wait only from Metal's rt_guard): check it builds on Windows (thread CPU time is
+     cfg(unix): reads 0 there; a Windows GetThreadTimes version would be welcome). Feed add_gpu_ns from Vulkan's
+     inflight watcher if you want GPU time in it. Note: a18703c alone does not build the builder (the tiny_kernels.rs
+     move landed there, its users in cc567cd): bisect over the pair.
+  8. cc567cd (builder + Metal): tiny_kernels.rs moved crates/builderlib/src/shaders -> crates/metalshaderlib/src (the
+     builder re-exports it, same paths); run-time translated Metal stages get tiny-pass kernels. BotW: every 10th frame was
+     slow (a probe's 132 tiny passes as render passes). Vulkan: if it has a tiny-pass path, its run-time stages need the
+     same; otherwise check BotW's every-10th-frame GPU spike with --log-frame-breakdown there.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
