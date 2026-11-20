@@ -28,16 +28,18 @@ static CARRY: AtomicU32 = AtomicU32::new(0);
 /// sizes the first one). Called once per game frame, by the game's clock update.
 pub fn step_seconds(interval: i32) -> f32 {
     let now = crate::platform::clock::now_ns();
-    // Display link: the time between the refreshes the last frames are shown at (a frame behind: the one being made has
-    // no refresh yet).
+    // Display link: the time from the previous frame's refresh to the one this frame takes now; without one (the previous
+    // frame not presented yet), the time between the last two frames shown.
     #[cfg(nx_native)]
     if crate::host::live::present_mode() == crate::settings::PresentMode::DisplayLink {
-        if let Some(dt) = crate::gpu::metal::display_link::step() {
-            let last = LAST_NS.swap(now, Ordering::Relaxed);
-            let reuse = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
-            if last != 0 && now.saturating_sub(last) < SAME_FRAME_NS && reuse > 0.0 {
-                return reuse;
-            }
+        let last = LAST_NS.load(Ordering::Relaxed);
+        let reuse = f32::from_bits(LAST_STEP.load(Ordering::Relaxed));
+        if last != 0 && now.saturating_sub(last) < SAME_FRAME_NS && reuse > 0.0 {
+            return reuse;
+        }
+        use crate::gpu::metal::display_link;
+        if let Some(dt) = display_link::begin_frame().or_else(display_link::step) {
+            LAST_NS.store(crate::platform::clock::now_ns(), Ordering::Relaxed);
             let dt = (dt as f32).clamp(MIN_STEP_S, MAX_STEP_S);
             CARRY.store(0, Ordering::Relaxed);
             LAST_STEP.store(dt.to_bits(), Ordering::Relaxed);
