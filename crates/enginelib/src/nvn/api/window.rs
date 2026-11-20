@@ -363,7 +363,13 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         };
         let wait = if frame.is_zero() {
             #[cfg(nx_native)]
-            let paced = interval == 0 && crate::gpu::metal::display_pacing() && crate::host::overlay::is_vsync();
+            // Frames start on the refresh grid when the game's time follows real time: an unlocked rate (interval 0),
+            // or a profile's real-time clock whatever interval the game still reports (Breath of the Wild keeps 1).
+            // Without it BotW's frames started anywhere between refreshes and judder at rates the display cannot hold
+            // evenly, where TotK (interval 0 once unlocked) did not.
+            let paced = (interval == 0 || crate::profile::real_time())
+                && crate::gpu::metal::display_pacing()
+                && crate::host::overlay::is_vsync();
             #[cfg(not(nx_native))]
             let paced = false;
             if paced {
