@@ -475,9 +475,6 @@ pub(crate) fn async_pipeline(key: &[u64], job: PipeJob) -> AsyncPipe {
     // Finished slots stay: the encode worker and the Presentation Thread keep separate pipeline caches (WorkerCtx), and
     // frames encoded on this thread (traces, captures, per-draw details) would otherwise find every pipeline missing
     // and skip nearly all draws while they compile again.
-    if matches!(r, AsyncPipe::Pending) {
-        ASYNC_SKIPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
     r
 }
 
@@ -498,9 +495,6 @@ pub(crate) fn async_pipeline_wait(key: &[u64]) -> AsyncPipe {
         SlotState::Failed => AsyncPipe::Failed,
         SlotState::Pending | SlotState::Running => AsyncPipe::Pending,
     };
-    if !matches!(r, AsyncPipe::Pending) {
-        ASYNC_SKIPS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-    }
     r
 }
 

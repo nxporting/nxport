@@ -220,6 +220,7 @@ impl Gfx {
                         AsyncPipe::Pending => {
                             {
                                 crate::gpu::pipeline_list::draw_skipped_compiling();
+                                super::ASYNC_SKIPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 if super::tracing_frame() {
                                     println!("[ftrace] SKIP draw: pipeline still compiling");
                                 }
