@@ -92,6 +92,10 @@ and update this file when you finish or drop it.
      lateness. The principle for any Windows equivalent: a frame's step must equal the time it is on screen; measure
      it as summed steps vs presentation times (work/tools/dev ... the judder count in the session log).
   14. e304b7b (Metal): hitch log skipped-draw counter no longer wraps. Vulkan has its own counter; check it.
+  15. (this commit, shared nvn/api/window.rs) vsync pacing in whole refreshes per frame, auto-chosen from measured frame
+     times (Swappy's auto swap interval). Needs live::refresh_hz() on Windows (the monitor's rate); with it, check BotW
+     at the 60 / 120 limits on a 120+ Hz monitor: the log prints "[pacing] N refreshes per frame". Display-link commits
+     c22e7e8 / df37ae6 (prediction) were reverted in a later commit: ignore item 13's prediction part.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
