@@ -176,11 +176,27 @@ pub fn begin_frame() -> Option<f64> {
 /// The drawable begin_frame took for this frame, if any.
 pub(super) fn take_reserved() -> Option<(Drawable, f64)> {
     let r = RESERVED.lock().unwrap().take()?;
+    // The frame cannot be ready before its present: at least that much lead.
     let lead = now() - f64::from_bits(BEGAN.load(Ordering::Relaxed));
-    let old = f64::from_bits(LEAD.load(Ordering::Relaxed));
-    let new = if lead > old { lead } else { old * 0.98 + lead * 0.02 };
-    LEAD.store(new.min(0.1).to_bits(), Ordering::Relaxed);
+    if lead > f64::from_bits(LEAD.load(Ordering::Relaxed)) {
+        LEAD.store(lead.min(0.1).to_bits(), Ordering::Relaxed);
+    }
     Some((r.0 .0, r.1))
+}
+
+/// A frame presented for the refresh at `predicted` was shown at `shown` (both host seconds). Frames are presented at
+/// their predicted time, so they are never early; one shown late (its GPU work ended after that refresh) moves later
+/// frames' predictions back by as much. Without lateness the lead shrinks slowly, so the latency stays low.
+pub(super) fn shown_at(predicted: f64, shown: f64) {
+    let period = f64::from_bits(PERIOD.load(Ordering::Relaxed));
+    let lead = f64::from_bits(LEAD.load(Ordering::Relaxed));
+    let late = shown - predicted;
+    let new = if period > 0.0 && late > period * 0.5 { lead + late } else { lead * 0.998 };
+    LEAD.store(new.min(0.1).to_bits(), Ordering::Relaxed);
+    // Later frames step from the refresh this one really took.
+    if shown > f64::from_bits(LAST_TARGET.load(Ordering::Relaxed)) {
+        LAST_TARGET.store(shown.to_bits(), Ordering::Relaxed);
+    }
 }
 
 /// The time between the last two frames presented through the link (seconds): the game's step.
