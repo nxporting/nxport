@@ -822,7 +822,8 @@ pub(crate) fn tiny_compute_on() -> bool {
 }
 
 pub(crate) fn tiny_enabled() -> bool {
-    tiny_compute_on()
+    static AB: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    tiny_compute_on() && !(*AB.get_or_init(|| crate::settings::get().replay.replay_ab_tiny) && super::super::replay_b())
 }
 
 pub(crate) fn tiny_reason(r: String) {

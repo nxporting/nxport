@@ -369,6 +369,8 @@ group! {
         replay_ab_split: Option<u32> = None,
         /// Replay side B reads feedback from the tile (--tile-feedback), side A ends the pass as without it
         replay_ab_tile: bool = false,
+        /// Replay side B renders tiny passes as render passes (side A as compute kernels, --tiny-compute)
+        replay_ab_tiny: bool = false,
         /// Capture presented frame N for GPU backend tests: its NVN commands, the memory they reach and the textures only
         /// the GPU holds
         capture_frame: Option<u64> = None,
