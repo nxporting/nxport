@@ -85,6 +85,13 @@ and update this file when you finish or drop it.
   11. 09a49c0 (Metal display link + shared profile/frame_step.rs): the display-link step is taken at the game's time step.
      Nothing to do on Windows unless you add a display-link-like mode (DXGI frame statistics): use the frame's own target
      time, not the last two shown.
+  12. 0e1007e, 0441292 (shared host/perf_stats.rs, gpu/frame_breakdown.rs): the shader indicator is a corner line on a
+     translucent box, sized by the picture height (font scale h/1080*1.6). Check its look on Windows (Vulkan overlay).
+  13. 14bd0dc..df37ae6 (Metal display link only): the link's rate range is capped at the limit; frames step to the
+     refresh they will make and are presented at it (presentDrawable atTime), the lead learnt from presentedTime
+     lateness. The principle for any Windows equivalent: a frame's step must equal the time it is on screen; measure
+     it as summed steps vs presentation times (work/tools/dev ... the judder count in the session log).
+  14. e304b7b (Metal): hitch log skipped-draw counter no longer wraps. Vulkan has its own counter; check it.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
