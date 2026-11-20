@@ -77,6 +77,14 @@ and update this file when you finish or drop it.
      builder re-exports it, same paths); run-time translated Metal stages get tiny-pass kernels. BotW: every 10th frame was
      slow (a probe's 132 tiny passes as render passes). Vulkan: if it has a tiny-pass path, its run-time stages need the
      same; otherwise check BotW's every-10th-frame GPU spike with --log-frame-breakdown there.
+  9. ea50579: cc567cd left the builder not compiling (tiny_kernels helpers crate-private after the move); fixed. Build
+     the builder on Windows past this commit.
+  10. 8a7e956 (shared host/perf_stats.rs, host/menu.rs, gpu/vulkan/overlay.rs, settings): the shader-compile bar is now one
+     small corner line; Display > Shader Compile Indicator (--shader-indicator, default on). Check on Windows: the menu
+     item toggles it, the Vulkan overlay draws the line bottom-left.
+  11. 09a49c0 (Metal display link + shared profile/frame_step.rs): the display-link step is taken at the game's time step.
+     Nothing to do on Windows unless you add a display-link-like mode (DXGI frame statistics): use the frame's own target
+     time, not the last two shown.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
