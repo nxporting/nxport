@@ -144,9 +144,20 @@ pub fn begin_frame() -> Option<f64> {
     if LINK.load(Ordering::Acquire).is_null() || RESERVED.lock().unwrap().is_some() {
         return None;
     }
-    let (d, t) = next(std::time::Duration::from_millis(100))?;
+    // At most one frame per limit interval: the display may run the link faster than asked (a 120 Hz display ran a 90
+    // limit at 120 Hz), and ~10 ms frames then landed one or two refreshes apart in no order. A refresh closer than that
+    // to the previous frame's is passed over, so frames keep a steady whole number of refreshes.
+    let rate = f32::from_bits(RATE.load(Ordering::Relaxed) as u32) as f64;
+    let min = if rate > 0.0 { 1.0 / rate - 0.0005 } else { 0.0 };
+    let last = f64::from_bits(LAST_TARGET.load(Ordering::Relaxed));
+    let (d, t) = loop {
+        let (d, t) = next(std::time::Duration::from_millis(100))?;
+        if last <= 0.0 || t - last >= min {
+            break (d, t);
+        }
+    };
     *RESERVED.lock().unwrap() = Some((Handed(d), t));
-    let last = f64::from_bits(LAST_TARGET.swap(t.to_bits(), Ordering::Relaxed));
+    LAST_TARGET.store(t.to_bits(), Ordering::Relaxed);
     (last > 0.0 && t > last).then_some(t - last)
 }
 
