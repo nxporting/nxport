@@ -77,10 +77,30 @@ static FRAME: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 /// Holds not touched for this many frames are written back in the background and end (render-once targets would
 /// otherwise keep their slots, and engine lookups scan the table).
 const AGE: u64 = 30;
-/// Pages whose hold ended recently (a fault racing with the opening is retried; see `fault`).
+/// Ranges whose hold ended recently (a fault racing with the opening is retried; see `fault`). Whole ranges: a ring of
+/// pages kept only a hold's first 64 pages, and a Worker faulting further into a large hold as it ended was reported as a
+/// crash (Breath of the Wild, SIGBUS reading its water maps, 2026-11-19).
 const RECENT: usize = 64;
-static RECENT_PAGES: [AtomicUsize; RECENT] = [const { AtomicUsize::new(0) }; RECENT];
+static RECENT_START: [AtomicUsize; RECENT] = [const { AtomicUsize::new(0) }; RECENT];
+static RECENT_END: [AtomicUsize; RECENT] = [const { AtomicUsize::new(0) }; RECENT];
 static RECENT_NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// Records [start, end) as recently opened (signal-safe: a reader sees a range only once both ends are stored).
+fn remember_opened(start: usize, end: usize) {
+    let k = RECENT_NEXT.fetch_add(1, Ordering::Relaxed) % RECENT;
+    RECENT_START[k].store(0, Ordering::Release);
+    RECENT_END[k].store(end, Ordering::Release);
+    RECENT_START[k].store(start, Ordering::Release);
+}
+
+/// Whether `page` lies in a range opened recently (signal-safe).
+fn recently_opened(page: usize) -> bool {
+    (0..RECENT).any(|k| {
+        let s = RECENT_START[k].load(Ordering::Acquire);
+        let e = RECENT_END[k].load(Ordering::Acquire);
+        s != 0 && page >= s && page < e && RECENT_START[k].load(Ordering::Acquire) == s
+    })
+}
 thread_local! {
     static LAST_RETRY: Cell<usize> = const { Cell::new(0) };
 }
@@ -250,11 +270,7 @@ unsafe fn finish(i: usize) {
         LIVE.fetch_sub(1, Ordering::AcqRel);
         REQ[i].store(0, Ordering::Release);
         count_holds(start, end, false);
-        let mut p = start;
-        while p < end && p < start + RECENT * PAGE {
-            RECENT_PAGES[RECENT_NEXT.fetch_add(1, Ordering::Relaxed) % RECENT].store(p, Ordering::Release);
-            p += PAGE;
-        }
+        remember_opened(start, end);
         open_range(start, end);
     }
 }
@@ -627,7 +643,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
     let page = addr & !(PAGE - 1);
     // Not near any hold and no hold ended recently: someone else's fault (write tracking, the write guard, ...).
     if (LIVE.load(Ordering::Acquire) == 0 || page >= HI.load(Ordering::Relaxed) || page + PAGE <= LO.load(Ordering::Relaxed))
-        && !RECENT_PAGES.iter().any(|p| p.load(Ordering::Relaxed) == page)
+        && !recently_opened(page)
     {
         return false;
     }
@@ -635,7 +651,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
     if !(0..n).any(|i| covers(i, page)) {
         // The hold ended between the fault and here: retry; a second fault there on a page left inaccessible is
         // repaired (opened) rather than reported as a crash.
-        if page != 0 && RECENT_PAGES.iter().any(|p| p.load(Ordering::Acquire) == page) {
+        if page != 0 && recently_opened(page) {
             // A write to a page write tracking or the write guard keeps read-only is theirs: claiming it here
             // reopened the page read-only on every retry and the writer faulted forever.
             if write && open_prot(page) & libc::PROT_WRITE == 0 {
