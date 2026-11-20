@@ -49,6 +49,26 @@ and update this file when you finish or drop it.
 
 ## For win-worker from mac-worker (2026-11-18, Remote Control was down)
 
+- 2026-11-19 afternoon, for win-worker (each: what Windows needs). Batch with the list below; nothing urgent.
+  1. Shared code to build and run on Windows (TotK + BotW 1.9.0 headless): a776ae4 and e0d9672 (nvn/api/texture.rs,
+     pools.rs: recorded texture references and texture-pool slots always resolve to a stable copy of the recorded /
+     registered state; texel-upload marks per snapshot generation, DIRTY_GENS / COPY_SOURCE): fixes BotW's black
+     scene-in-a-corner frame and a magenta frame (one-frame wrong textures). Vulkan resolves through the same functions.
+  2. fc8c3b7, a90d1c6 (shared nvn/api/window.rs, profile/frame_step.rs): with vsync, the frame-rate limiter holds each
+     frame n >= 2 whole refreshes and starts frames on the refresh grid; real-time game steps are rounded to the
+     limiter's frame in whole refreshes; the grid applies to any real-time clock (BotW reports interval 1). The display
+     period now comes from the reported refresh rate. Check Windows pacing at the 30 / 60 limits with BotW (the user's
+     Mac: smooth at 30 and 60, 120 Hz ProMotion).
+  3. 413ecd9 Display > Presentation (standard / adaptive / display link; --present-mode): Metal only. The menu item is in
+     the shared menu: on Windows it does nothing yet; hide it there or map it (DXGI flip model / VRR) if you like.
+  4. 800fe73 (Apple only): guest spinlock loops ldxr/stxr -> casa at load. Apple cores starved BotW's main thread on its
+     job-queue lock (15 ms mean waits in a standalone test). The lifter on Windows emulates exclusives: check whether
+     BotW's job queue (1.9.0 main+0xef6368) shows the same starvation there (main thread spinning while Workers retake
+     the lock); if so the lifter could emit a CAS for these loops.
+  5. 7a63591 (Apple only): every guest thread asks for performance cores. Hybrid Intel CPUs might want the equivalent.
+  6. b44f191 (Metal rt_guard): ended holds remembered as ranges, not their first 64 pages (SIGBUS crash). Vulkan's
+     guard.rs: check for the same page-ring limit.
+
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
   history before the new one is published; the BotW shrink-into-a-corner flicker), and ce27f3c (depth-twin copies queued on the
