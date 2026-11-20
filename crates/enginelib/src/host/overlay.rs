@@ -55,6 +55,13 @@ pub fn is_vsync() -> bool {
     VSYNC.load(Ordering::Relaxed)
 }
 
+/// Frames reach the screen only at its refreshes, so pacing works in whole refreshes: with vsync, and always on Apple
+/// platforms, whose window server composites every window at the refresh (vsync off there only changes how the layer
+/// hands frames over; frames timed on their own clock landed one and two refreshes apart, a stutter at a 60 limit).
+pub fn paces_to_refresh() -> bool {
+    is_vsync() || cfg!(target_vendor = "apple")
+}
+
 /// Whether at most one finished frame may wait for the screen (settings display.low_latency; Vulkan window.rs).
 pub fn is_low_latency() -> bool {
     init();

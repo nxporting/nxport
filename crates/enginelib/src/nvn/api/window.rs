@@ -333,7 +333,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         // a window's CAMetalLayer still paces presentation at the display's refresh rate).
         let interval = present_interval();
         let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
-        let vsync = crate::host::overlay::is_vsync();
+        let vsync = crate::host::overlay::paces_to_refresh();
         // The frame-rate limit paces (vsync only chooses how the swapchain presents). A title whose game time does not
         // follow real time is also held to its interval: running faster would run it fast. VSync off still stops at
         // UNPACED_MAX_FPS: above the audio renderer's 200 frames a second TotK starts no sounds at all.
@@ -388,7 +388,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             let paced = (interval == 0 || crate::profile::real_time())
                 && mode == crate::settings::PresentMode::Standard
                 && crate::gpu::metal::display_pacing()
-                && crate::host::overlay::is_vsync();
+                && crate::host::overlay::paces_to_refresh();
             #[cfg(not(nx_native))]
             let paced = false;
             if paced {
@@ -411,7 +411,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             // grid, as a console's present interval does: a schedule on the host clock drifted against the refreshes,
             // and frames started late in a refresh missed their slot (shown 3 refreshes apart instead of 2).
             #[cfg(nx_native)]
-            if mode == crate::settings::PresentMode::Standard && crate::gpu::metal::display_pacing() && crate::host::overlay::is_vsync() {
+            if mode == crate::settings::PresentMode::Standard && crate::gpu::metal::display_pacing() && crate::host::overlay::paces_to_refresh() {
                 if let (Some(to_grid), Some(period)) =
                     (crate::gpu::metal::display_pacing_wait(), crate::gpu::metal::display_period())
                 {

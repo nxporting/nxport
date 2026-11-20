@@ -269,7 +269,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 // A minimum time on screen (the limit's frame, a little under it; none without a limit): presenting this
                 // way lets a variable-refresh display follow the frames instead of its fixed refresh.
                 cb.presentDrawable_afterMinimumDuration(ProtocolObject::from_ref(&*drawable), (target - 0.002).max(0.0));
-            } else if refreshes >= 2.0 && display_pacing() && crate::host::overlay::is_vsync() {
+            } else if refreshes >= 2.0 && display_pacing() && crate::host::overlay::paces_to_refresh() {
                 let period = display_period().unwrap_or_default();
                 cb.presentDrawable_afterMinimumDuration(ProtocolObject::from_ref(&*drawable), (refreshes - 0.5) * period);
             } else {

@@ -87,7 +87,7 @@ fn vblank_period() -> Option<f32> {
     use crate::host::{live, overlay};
     let hz = live::refresh_hz();
     // Adaptive: a variable-refresh display shows frames when they are done, so the step is the real time.
-    if !overlay::is_vsync() || hz < 30.0 || live::present_mode() != crate::settings::PresentMode::Standard {
+    if !overlay::paces_to_refresh() || hz < 30.0 || live::present_mode() != crate::settings::PresentMode::Standard {
         return None;
     }
     // The limiter's frame (whole refreshes, nvn::api::window's divisor); none: the swapchain paces at every refresh.
