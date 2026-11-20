@@ -461,7 +461,7 @@ unsafe fn get_info(r: &mut [u64; 8]) -> u64 {
         13 => alias_size as u64,
         14 => 0, // stack region: none reserved
         15 => 0,
-        18 => 0x0100_F2C0_115B_6000, // program id
+        18 => crate::game::title_id().unwrap_or(0), // program id
         20 => {
             // User exception context area (newer SDKs' SetDyingMessageRegion writes to +0x1c0).
             static CTX: std::sync::OnceLock<Box<[u8; 0x1000]>> = std::sync::OnceLock::new();
