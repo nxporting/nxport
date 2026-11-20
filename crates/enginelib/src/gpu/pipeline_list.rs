@@ -379,6 +379,41 @@ pub fn take_frame_progress() -> Option<Option<(usize, usize)>> {
     let skipped = SKIPPED_DRAWS.swap(0, Relaxed) > 0;
     let done = LISTED_DONE.load(Relaxed) + STAGES_DONE.load(Relaxed);
     let total = LISTED_TOTAL.load(Relaxed) + STAGES_TOTAL.load(Relaxed);
-    let listed = (done < total).then_some((done, total));
+    let listed = shown_progress((done < total).then_some((done, total)));
     (skipped || listed.is_some()).then_some(listed)
+}
+
+/// The progress line appears once compiling has gone on for SHOW_AFTER and stays at least SHOW_FOR: a few shaders
+/// done within a frame or two flashed it too briefly to read (a black box in the corner).
+fn shown_progress(now_compiling: Option<(usize, usize)>) -> Option<(usize, usize)> {
+    use std::time::{Duration, Instant};
+    const SHOW_AFTER: Duration = Duration::from_millis(500);
+    const SHOW_FOR: Duration = Duration::from_secs(1);
+    struct Shown {
+        since: Option<Instant>,
+        until: Option<Instant>,
+        last: (usize, usize),
+    }
+    static S: std::sync::Mutex<Shown> = std::sync::Mutex::new(Shown { since: None, until: None, last: (0, 0) });
+    let mut s = S.lock().unwrap();
+    let now = Instant::now();
+    match now_compiling {
+        Some(p) => {
+            let since = *s.since.get_or_insert(now);
+            s.last = p;
+            if now.duration_since(since) >= SHOW_AFTER {
+                s.until = Some(now + SHOW_FOR);
+                return Some(p);
+            }
+            None
+        }
+        None => {
+            s.since = None;
+            // Finished while shown: the final count stays up a moment.
+            match s.until {
+                Some(u) if now < u => Some((s.last.1, s.last.1)),
+                _ => None,
+            }
+        }
+    }
 }
