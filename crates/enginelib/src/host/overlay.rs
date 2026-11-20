@@ -123,6 +123,7 @@ mod render_impl {
         // Taken at every present, drawn or not: the frame's skipped draws start again from zero.
         let progress = crate::gpu::pipeline_list::take_frame_progress();
         let perf = is_overlay_enabled();
+        let progress = progress.filter(|p| p.is_none() || is_shader_indicator());
         if !perf && !matches!(progress, Some(Some(_))) {
             return;
         }

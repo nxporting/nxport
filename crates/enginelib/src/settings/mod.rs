@@ -142,7 +142,7 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [no_vsync, low_latency, frame_limit, present_mode, perf_overlay, fps_in_title, launch_aspect, stretch, field_of_view] {
+    Window "Display" [no_vsync, low_latency, frame_limit, present_mode, perf_overlay, shader_indicator, fps_in_title, launch_aspect, stretch, field_of_view] {
         /// No window (frame dumps still work)
         headless: bool = false,
         /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
@@ -157,6 +157,8 @@ group! {
         present_mode: PresentMode = PresentMode::Standard,
         /// Show the performance overlay from the start (Windows: F10 toggles it)
         perf_overlay: bool = false,
+        /// While shaders compile, a line in the screen's bottom-left corner says how many are done
+        shader_indicator: bool = true,
         /// The window's title shows the frame rate
         fps_in_title: bool = true,
         /// Launch aspect ratio (W:H): initial window aspect ratio when the application launches

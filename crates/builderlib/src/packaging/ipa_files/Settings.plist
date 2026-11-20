@@ -46,6 +46,16 @@
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
+            <string>Shader Compile Indicator</string>
+            <key>Key</key>
+            <string>shader_indicator</string>
+            <key>DefaultValue</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
             <string>VSync</string>
             <key>Key</key>
             <string>vsync</string>

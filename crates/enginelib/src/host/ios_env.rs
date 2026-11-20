@@ -185,6 +185,7 @@ fn preferences() -> crate::settings::SettingsPatch {
         }
         prefs.display.low_latency = flag("low_latency");
         prefs.display.perf_overlay = flag("perf_overlay");
+        prefs.display.shader_indicator = flag("shader_indicator");
         prefs.input.no_rumble = flag("vibration").map(|on| !on);
         prefs.input.rumble_scale = number("vibration_strength").map(|p| p as f32 / 100.0);
         prefs.totk.enhancements.dynamic_fps = flag("totk_dynamic_fps");

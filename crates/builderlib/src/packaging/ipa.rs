@@ -456,6 +456,7 @@ fn settings_page_defaults(page: &str, s: &settings::Settings) -> String {
         ("vsync", flag(!s.display.no_vsync)),
         ("async_shaders", flag(s.graphics.async_pipelines)),
         ("perf_overlay", flag(s.display.perf_overlay)),
+        ("shader_indicator", flag(s.display.shader_indicator)),
         ("low_latency", flag(s.display.low_latency)),
         ("vibration", flag(!s.input.no_rumble)),
         ("frame_limit", format!("<string>{fps}</string>")),

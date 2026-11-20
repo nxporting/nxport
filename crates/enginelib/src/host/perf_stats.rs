@@ -20,6 +20,26 @@ pub fn toggle_overlay() -> bool {
     next
 }
 
+/// The shader-compile line (draw_shader_progress): 0 not read from the settings yet, 1 off, 2 on.
+static SHADER_INDICATOR: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn is_shader_indicator() -> bool {
+    match SHADER_INDICATOR.load(Ordering::Relaxed) {
+        0 => crate::settings::get().display.shader_indicator,
+        v => v == 2,
+    }
+}
+
+pub fn set_shader_indicator(on: bool) {
+    SHADER_INDICATOR.store(1 + on as u8, Ordering::Relaxed);
+}
+
+pub fn toggle_shader_indicator() -> bool {
+    let next = !is_shader_indicator();
+    SHADER_INDICATOR.store(1 + next as u8, Ordering::Relaxed);
+    next
+}
+
 // ---------------------------------------------------------------------------
 // Frame Performance Metrics
 // ---------------------------------------------------------------------------
@@ -247,37 +267,15 @@ pub fn draw_window(ui: &imgui::Ui, w: f32, stats: &FrameStats, times: &[f32], co
 static WIDEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 
-/// While listed pipelines compile or missing stages translate (gpu::pipeline_list::take_frame_progress): a bar at the
-/// bottom of the screen with how many are done. Draws skipped for other compiling pipelines show in the performance
-/// window instead.
+/// While listed pipelines compile or missing stages translate (gpu::pipeline_list::take_frame_progress): one small line
+/// in the bottom-left corner with how many are done (Display > Shader Compile Indicator). Draws skipped for other
+/// compiling pipelines show in the performance window instead.
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
-pub fn draw_shader_progress(ui: &imgui::Ui, w: f32, h: f32, done: usize, total: usize) {
-    let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.05, 0.05, 0.08, 0.85]);
-    let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(6.0));
-    let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([14.0, 10.0]));
-    unsafe {
-        imgui::sys::igSetNextWindowPos(
-            imgui::sys::ImVec2 { x: w / 2.0, y: h - 24.0 },
-            imgui::Condition::Always as i32,
-            imgui::sys::ImVec2 { x: 0.5, y: 1.0 },
-        );
-    }
-    ui.window("Shaders##Progress")
-        .flags(
-            imgui::WindowFlags::NO_TITLE_BAR
-                | imgui::WindowFlags::NO_RESIZE
-                | imgui::WindowFlags::NO_MOVE
-                | imgui::WindowFlags::NO_SCROLLBAR
-                | imgui::WindowFlags::ALWAYS_AUTO_RESIZE
-                | imgui::WindowFlags::NO_SAVED_SETTINGS
-                | imgui::WindowFlags::NO_FOCUS_ON_APPEARING
-                | imgui::WindowFlags::NO_NAV_INPUTS
-                | imgui::WindowFlags::NO_NAV_FOCUS
-                | imgui::WindowFlags::NO_MOUSE_INPUTS,
-        )
-        .build(|| {
-            ui.text(format!("Compiling shaders: {done} of {total}"));
-            let width = (w * 0.4).clamp(220.0, 520.0);
-            ui.progress_bar(done as f32 / total.max(1) as f32).size([width, 0.0]).overlay_text("").build();
-        });
+pub fn draw_shader_progress(ui: &imgui::Ui, _w: f32, h: f32, done: usize, total: usize) {
+    let text = format!("Compiling shaders {done} / {total}");
+    let size = ui.calc_text_size(&text);
+    let (x, y) = (12.0, h - 10.0 - size[1]);
+    let list = ui.get_foreground_draw_list();
+    list.add_text([x + 1.0, y + 1.0], [0.0, 0.0, 0.0, 0.6], &text);
+    list.add_text([x, y], [1.0, 1.0, 1.0, 0.75], &text);
 }
