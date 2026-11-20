@@ -171,10 +171,10 @@ static inline int4 tk_fetch_i(const device uchar* p, uint fmt) {
 #endif
 "#;
 
-pub(crate) struct Param {
-    pub(crate) decl: String, // type and name, without attributes
-    pub(crate) name: String,
-    pub(crate) attr: String, // the [[...]] text, or empty
+pub struct Param {
+    pub decl: String, // type and name, without attributes
+    pub name: String,
+    pub attr: String, // the [[...]] text, or empty
 }
 
 /// Splits at top-level commas. `angle`: '<' / '>' nest (declarations: texture2d<float, access::read>); in expressions
@@ -209,7 +209,7 @@ fn split_top(s: &str) -> Vec<String> {
     split_top_mode(s, true)
 }
 
-pub(crate) fn parse_params(s: &str) -> Vec<Param> {
+pub fn parse_params(s: &str) -> Vec<Param> {
     split_top(s)
         .into_iter()
         .map(|p| {
@@ -224,7 +224,7 @@ pub(crate) fn parse_params(s: &str) -> Vec<Param> {
 }
 
 /// The entry point's (kind, return type, name, parameter text, body including braces, start, end) in `msl`.
-pub(crate) fn entry(msl: &str, kind: &str) -> Option<(String, String, String, usize, usize)> {
+pub fn entry(msl: &str, kind: &str) -> Option<(String, String, String, usize, usize)> {
     let pat = format!("\n{} ", kind);
     let start = msl.find(&pat)? + 1;
     let line_end = start + msl[start..].find('\n')?;
@@ -256,7 +256,7 @@ pub(crate) fn entry(msl: &str, kind: &str) -> Option<(String, String, String, us
 }
 
 /// Struct body text of `struct <name>` in `msl`.
-pub(crate) fn struct_body<'a>(msl: &'a str, name: &str) -> Option<&'a str> {
+pub fn struct_body<'a>(msl: &'a str, name: &str) -> Option<&'a str> {
     let i = msl.find(&format!("struct {}\n{{", name))?;
     let b0 = i + msl[i..].find('{')? + 1;
     let b1 = b0 + msl[b0..].find("};")?;
