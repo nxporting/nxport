@@ -250,17 +250,9 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                     display_pacing(),
                     crate::profile::frame_step::last_step_seconds() as f64,
                 );
-                let predicted = link_shown;
                 let handler = block2::RcBlock::new(
                     move |d: std::ptr::NonNull<ProtocolObject<dyn objc2_metal::MTLDrawable>>| {
-                        let d = unsafe { d.as_ref() };
-                        if let Some(p) = predicted {
-                            let shown: f64 = unsafe { objc2::msg_send![d, presentedTime] };
-                            if shown > 0.0 {
-                                super::display_link::shown_at(p, shown);
-                            }
-                        }
-                        on_shown(d, n, start, presented, paced, step)
+                        on_shown(unsafe { d.as_ref() }, n, start, presented, paced, step)
                     },
                 );
                 unsafe { objc2_metal::MTLDrawable::addPresentedHandler(&*drawable, block2::RcBlock::as_ptr(&handler)) };
@@ -272,9 +264,8 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             let target = crate::nvn::api::FRAME_TARGET_NS.load(Ordering::Relaxed) as f64 / 1e9;
             let refreshes = display_period().map_or(0.0, |p| (target / p).round());
             if let Some(t) = link_shown {
-                // At the refresh the frame's step was taken for: never earlier.
                 super::display_link::presented(t);
-                cb.presentDrawable_atTime(ProtocolObject::from_ref(&*drawable), t);
+                cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
             } else if mode == crate::settings::PresentMode::Adaptive {
                 // A minimum time on screen (the limit's frame, a little under it; none without a limit): presenting this
                 // way lets a variable-refresh display follow the frames instead of its fixed refresh.
