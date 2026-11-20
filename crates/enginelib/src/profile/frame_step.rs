@@ -80,9 +80,9 @@ pub fn last_step_seconds() -> f32 {
     f32::from_bits(LAST_STEP.load(Ordering::Relaxed))
 }
 
-/// With vsync, the time between frames on screen: the display's refresh period when the swapchain paces frames (the
-/// frame-rate limit at or above the refresh rate), else the limiter's frame in whole refreshes (each frame is held that
-/// many: gpu::metal::present). Known on hosts that report the refresh rate.
+/// With vsync, the time between frames on screen: the limiter's frame in whole refreshes (each frame is held that many:
+/// gpu::metal::present), or the display's refresh period when the swapchain paces every refresh. Known on hosts that
+/// report the refresh rate.
 fn vblank_period() -> Option<f32> {
     use crate::host::{live, overlay};
     let hz = live::refresh_hz();
@@ -90,11 +90,11 @@ fn vblank_period() -> Option<f32> {
     if !overlay::is_vsync() || hz < 30.0 || live::present_mode() != crate::settings::PresentMode::Standard {
         return None;
     }
-    let paced = overlay::fps_mode() != crate::settings::FpsMode::Stock30;
-    if paced && live::frame_limit() + 1 >= live::refresh_rate() {
+    // The limiter's frame (whole refreshes, nvn::api::window's divisor); none: the swapchain paces at every refresh.
+    let target = crate::nvn::api::FRAME_TARGET_NS.load(Ordering::Relaxed) as f32 / 1e9;
+    if target <= 0.0 {
         return Some(1.0 / hz);
     }
-    let target = crate::nvn::api::FRAME_TARGET_NS.load(Ordering::Relaxed) as f32 / 1e9;
     let n = (target * hz).round();
     (n >= 1.0).then(|| n / hz)
 }
