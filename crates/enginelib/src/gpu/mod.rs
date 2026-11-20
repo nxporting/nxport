@@ -7,6 +7,7 @@
 pub mod history;
 #[cfg(nx_native)]
 pub mod metal;
+pub mod frame_breakdown;
 pub mod null;
 pub mod pipeline_list;
 #[cfg(nx_native)]

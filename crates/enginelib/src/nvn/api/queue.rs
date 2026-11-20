@@ -356,6 +356,7 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
     index: i32,
 ) {
     record_hle_call("hle_nvnQueuePresentTexture");
+    crate::gpu::frame_breakdown::frame_end(crate::gpu::backend().presented_frames());
     // No waiting here: NVN queues the present and returns; the vsync / present-interval wait happens when the game
     // acquires the next window texture (see hle_nvnWindowAcquireTexture). TotK's frame pacer measures its update +
     // draw time (excluding that wait) to pick the present interval, so a wait here locked it at 20 fps.
@@ -419,6 +420,13 @@ pub unsafe extern "C" fn hle_nvnQueueFenceSync(
 
 pub(crate) unsafe extern "C" fn hle_nvnQueueSubmitCommands(_queue: *mut (), num: i32, handles: *const u64) {
     record_hle_call("hle_nvnQueueSubmitCommands");
+    struct Encode(u64);
+    impl Drop for Encode {
+        fn drop(&mut self) {
+            crate::gpu::frame_breakdown::add_encode_ns(crate::platform::clock::now_ns().saturating_sub(self.0));
+        }
+    }
+    let _e = Encode(crate::platform::clock::now_ns());
     if handles.is_null() || num <= 0 {
         return;
     }

@@ -115,7 +115,10 @@ pub(crate) fn mutex_lock_contended(word: &std::sync::atomic::AtomicU32, tok: u32
             }
             w |= MUTEX_WAITERS;
         }
-        mutex_park(word, w);
+        {
+            let _w = crate::gpu::frame_breakdown::wait(crate::gpu::frame_breakdown::Wait::Lock);
+            mutex_park(word, w);
+        }
         w = word.load(Ordering::Relaxed);
     }
 }
@@ -476,6 +479,7 @@ pub(crate) fn sync_wait<'a>(
     keys: &[usize],
     deadline: Option<std::time::Instant>,
 ) -> MutexGuard<'a, Option<Sync>> {
+    let _w = crate::gpu::frame_breakdown::wait(crate::gpu::frame_breakdown::Wait::Event);
     let cv = WAKE.with(|w| w.clone());
     let s = g.as_mut().unwrap();
     for &k in keys {

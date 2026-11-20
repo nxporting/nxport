@@ -144,6 +144,7 @@ pub(super) fn retire_oldest(g: &Gfx, only_if_done: bool) -> bool {
             let busy = end - start.max(*last);
             if busy > 0.0 {
                 GPU_BUSY_US.fetch_add((busy * 1e6) as u64, std::sync::atomic::Ordering::Relaxed);
+                crate::gpu::frame_breakdown::add_gpu_ns((busy * 1e9) as u64);
             }
             *last = last.max(end);
         }

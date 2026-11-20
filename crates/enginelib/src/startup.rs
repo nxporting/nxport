@@ -251,6 +251,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         .stack_size(256 * 1024 * 1024)
         .spawn(move || {
             guest::exec::tls::mark_guest_thread();
+            crate::gpu::frame_breakdown::mark_main();
             guest_chain.run().map_err(|e| e.to_string())
         })
         .expect("spawn guest-main");
@@ -1309,6 +1310,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
             let chain = AssertSend(move || guest_chain(mem_space, mod_inits, dump_after_mods));
             move || {
                 guest::tls::mark_guest_thread();
+                crate::gpu::frame_breakdown::mark_main();
                 chain.run().map_err(|e| e.to_string())
             }
         })?;

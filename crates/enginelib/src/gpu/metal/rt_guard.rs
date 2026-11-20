@@ -720,6 +720,7 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
     GUEST_WAITING.fetch_add(1, Ordering::AcqRel);
     wake();
     let t0 = std::time::Instant::now();
+    let _w = crate::gpu::frame_breakdown::wait(crate::gpu::frame_breakdown::Wait::Guard);
     while held(page) {
         // Holds made on this page after the fault (another target sharing it, rendered again meanwhile) keep it
         // inaccessible too: request their write-back as well, or the wait runs into the timeout.
