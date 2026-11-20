@@ -444,6 +444,10 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
         // Write-tracked pages stay tracked: this module's fault handler runs before dirty_track's, and opening a page
         // gives it its tracking protection back (open_prot).
         libc::mprotect(start as *mut libc::c_void, end - start, libc::PROT_NONE);
+        // Ended meanwhile (supersede on another thread): its finish may have opened the pages before this protected them.
+        if STATE[i].load(Ordering::Acquire) != HELD {
+            open_range(start, end);
+        }
     }
     drop(table);
     OPEN.lock().unwrap().push(i);
@@ -763,9 +767,20 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
     let mut p = addr & !(PAGE - 1);
     while p < addr + len {
         if held(p) {
-            libc::mprotect(p as *mut libc::c_void, PAGE, libc::PROT_NONE);
+            protect_held(p);
         }
         p += PAGE;
+    }
+}
+
+/// Makes held page `p` inaccessible (signal-safe). A hold that ends between the caller's check and the mprotect has
+/// already opened the page in finish, and protecting it then left it inaccessible with no hold: the next guest read
+/// was reported as a crash (BotW's water lookup). finish frees the slot before it opens, so a second look after the
+/// mprotect sees every hold that ended before it.
+unsafe fn protect_held(p: usize) {
+    libc::mprotect(p as *mut libc::c_void, PAGE, libc::PROT_NONE);
+    if !held(p) {
+        libc::mprotect(p as *mut libc::c_void, PAGE, open_prot(p));
     }
 }
 
@@ -834,7 +849,7 @@ pub(crate) unsafe fn with_open<R>(addr: usize, len: usize, f: impl FnOnce() -> R
     let r = f();
     for p in opened {
         if held(p) {
-            libc::mprotect(p as *mut libc::c_void, PAGE, libc::PROT_NONE);
+            protect_held(p);
         }
     }
     r
