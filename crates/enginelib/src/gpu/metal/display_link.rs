@@ -37,17 +37,7 @@ static SHOWN: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 static RESERVED: Mutex<Option<(Handed, f64)>> = Mutex::new(None);
 /// The refresh the latest frame was given (f64 bits, host seconds).
 static LAST_TARGET: AtomicU64 = AtomicU64::new(0);
-/// The time between the link's refreshes (f64 bits, seconds), from consecutive drawables it handed out.
-static PERIOD: AtomicU64 = AtomicU64::new(0);
-static LAST_HANDED: AtomicU64 = AtomicU64::new(0);
-/// When the frame being made took its drawable, and how long frames take from then to their present (f64 bits,
-/// seconds; rises at once, falls slowly).
-static BEGAN: AtomicU64 = AtomicU64::new(0);
-static LEAD: AtomicU64 = AtomicU64::new(0);
 
-fn now() -> f64 {
-    objc2_quartz_core::CACurrentMediaTime()
-}
 
 define_class!(
     // SAFETY: NSObject has no subclassing requirements and LinkDelegate does not implement Drop.
@@ -62,10 +52,6 @@ define_class!(
         fn needs_update(&self, _link: &CAMetalDisplayLink, update: &CAMetalDisplayLinkUpdate) {
             let d = update.drawable();
             let t = update.targetPresentationTimestamp();
-            let prev = f64::from_bits(LAST_HANDED.swap(t.to_bits(), Ordering::Relaxed));
-            if prev > 0.0 && t > prev && t - prev < 0.05 {
-                PERIOD.store((t - prev).to_bits(), Ordering::Relaxed);
-            }
             *NEXT.lock().unwrap() = Some((Handed(d), t));
             NEXT_CV.notify_all();
         }
@@ -161,42 +147,14 @@ pub fn begin_frame() -> Option<f64> {
     }
     let last = f64::from_bits(LAST_TARGET.load(Ordering::Relaxed));
     let (d, t) = next(std::time::Duration::from_millis(100))?;
-    // The refresh the frame will make: its drawable's, or a later one if frames take longer from here to their present
-    // than that leaves (it is then shown at the first refresh after its present).
-    let start = now();
-    let ready = start + f64::from_bits(LEAD.load(Ordering::Relaxed)) + 0.001;
-    let period = f64::from_bits(PERIOD.load(Ordering::Relaxed));
-    let shown = if ready > t && period > 0.0 { t + ((ready - t) / period).ceil() * period } else { t };
-    BEGAN.store(start.to_bits(), Ordering::Relaxed);
-    *RESERVED.lock().unwrap() = Some((Handed(d), shown));
-    LAST_TARGET.store(shown.to_bits(), Ordering::Relaxed);
-    (last > 0.0 && shown > last).then_some(shown - last)
+    *RESERVED.lock().unwrap() = Some((Handed(d), t));
+    LAST_TARGET.store(t.to_bits(), Ordering::Relaxed);
+    (last > 0.0 && t > last).then_some(t - last)
 }
 
 /// The drawable begin_frame took for this frame, if any.
 pub(super) fn take_reserved() -> Option<(Drawable, f64)> {
-    let r = RESERVED.lock().unwrap().take()?;
-    // The frame cannot be ready before its present: at least that much lead.
-    let lead = now() - f64::from_bits(BEGAN.load(Ordering::Relaxed));
-    if lead > f64::from_bits(LEAD.load(Ordering::Relaxed)) {
-        LEAD.store(lead.min(0.1).to_bits(), Ordering::Relaxed);
-    }
-    Some((r.0 .0, r.1))
-}
-
-/// A frame presented for the refresh at `predicted` was shown at `shown` (both host seconds). Frames are presented at
-/// their predicted time, so they are never early; one shown late (its GPU work ended after that refresh) moves later
-/// frames' predictions back by as much. Without lateness the lead shrinks slowly, so the latency stays low.
-pub(super) fn shown_at(predicted: f64, shown: f64) {
-    let period = f64::from_bits(PERIOD.load(Ordering::Relaxed));
-    let lead = f64::from_bits(LEAD.load(Ordering::Relaxed));
-    let late = shown - predicted;
-    let new = if period > 0.0 && late > period * 0.5 { lead + late } else { lead * 0.998 };
-    LEAD.store(new.min(0.1).to_bits(), Ordering::Relaxed);
-    // Later frames step from the refresh this one really took.
-    if shown > f64::from_bits(LAST_TARGET.load(Ordering::Relaxed)) {
-        LAST_TARGET.store(shown.to_bits(), Ordering::Relaxed);
-    }
+    RESERVED.lock().unwrap().take().map(|(d, t)| (d.0, t))
 }
 
 /// The time between the last two frames presented through the link (seconds): the game's step.
