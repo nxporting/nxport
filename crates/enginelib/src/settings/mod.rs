@@ -142,7 +142,7 @@ group! {
 
 group! {
     /// The window and presentation.
-    Window "Display" [no_vsync, low_latency, frame_limit, perf_overlay, fps_in_title, launch_aspect, stretch, field_of_view] {
+    Window "Display" [no_vsync, low_latency, frame_limit, present_mode, perf_overlay, fps_in_title, launch_aspect, stretch, field_of_view] {
         /// No window (frame dumps still work)
         headless: bool = false,
         /// VSync off: frames go to the screen without waiting for its refresh (lower latency, possible tearing)
@@ -153,6 +153,8 @@ group! {
         /// Frame-rate limit (fps) where the title may run faster than 30: 60, 90, 120 or 144. With vsync, the display's
         /// refresh rate also limits it
         frame_limit: u32 = 60,
+        /// How frames reach the screen: standard, adaptive (variable-refresh displays in full screen) or display-link
+        present_mode: PresentMode = PresentMode::Standard,
         /// Show the performance overlay from the start (Windows: F10 toggles it)
         perf_overlay: bool = false,
         /// The window's title shows the frame rate

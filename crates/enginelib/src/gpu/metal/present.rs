@@ -162,8 +162,31 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                     crate::host::display::content_size_changed(layer, w as f64, h as f64);
                 }
             }
-            let Some(drawable) = layer.nextDrawable() else {
-                return;
+            // Display link: the drawable for the next refresh it scheduled (and when that is); else the layer's.
+            let mode = crate::host::live::present_mode();
+            let mut link_shown = None;
+            let drawable = if mode == crate::settings::PresentMode::DisplayLink {
+                let limit = if crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30 {
+                    30
+                } else {
+                    crate::host::live::frame_limit()
+                };
+                let hz = crate::host::live::refresh_hz().max(60.0);
+                super::display_link::run(layer, limit as f32, hz);
+                // No drawable in time: the frame is not shown (the layer's own nextDrawable is not allowed while a
+                // display link is attached).
+                let Some((d, t)) = super::display_link::next(std::time::Duration::from_millis(100)) else { return };
+                link_shown = Some(t);
+                d
+            } else {
+                super::display_link::stop();
+                if super::display_link::active() {
+                    return; // a link being made right now: skip this frame rather than raise
+                }
+                let Some(d) = layer.nextDrawable() else {
+                    return;
+                };
+                d
             };
             let pass = MTLRenderPassDescriptor::renderPassDescriptor();
             unsafe {
@@ -236,7 +259,14 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             // means n; the middle one leaves the most margin both ways.
             let target = crate::nvn::api::FRAME_TARGET_NS.load(Ordering::Relaxed) as f64 / 1e9;
             let refreshes = display_period().map_or(0.0, |p| (target / p).round());
-            if refreshes >= 2.0 && display_pacing() && crate::host::overlay::is_vsync() {
+            if let Some(t) = link_shown {
+                super::display_link::presented(t);
+                cb.presentDrawable(ProtocolObject::from_ref(&*drawable));
+            } else if mode == crate::settings::PresentMode::Adaptive {
+                // A minimum time on screen (the limit's frame, a little under it; none without a limit): presenting this
+                // way lets a variable-refresh display follow the frames instead of its fixed refresh.
+                cb.presentDrawable_afterMinimumDuration(ProtocolObject::from_ref(&*drawable), (target - 0.002).max(0.0));
+            } else if refreshes >= 2.0 && display_pacing() && crate::host::overlay::is_vsync() {
                 let period = display_period().unwrap_or_default();
                 cb.presentDrawable_afterMinimumDuration(ProtocolObject::from_ref(&*drawable), (refreshes - 0.5) * period);
             } else {

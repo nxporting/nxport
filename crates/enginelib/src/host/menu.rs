@@ -41,6 +41,8 @@ pub mod id {
     pub const DRAW_DISTANCE: u16 = 450;
     /// + the resolution scale (1-4).
     pub const RESOLUTION: u16 = 460;
+    /// Display > Presentation: + settings::PresentMode index.
+    pub const PRESENT: u16 = 470;
     pub const MUTE: u16 = 40;
     /// + the volume in percent.
     pub const VOLUME: u16 = 300;
@@ -176,6 +178,14 @@ pub fn bar() -> Vec<Entry> {
                 item("Low Latency", id::LOW_LATENCY),
                 item("Performance Overlay", id::PERF_OVERLAY),
                 sub("Frame Rate Limit", LIMITS.iter().map(|&fps| choice(limit_label(fps), id::LIMIT + fps as u16)).collect()),
+                sub(
+                    "Presentation",
+                    vec![
+                        choice("Standard", id::PRESENT),
+                        choice("Adaptive (variable-refresh displays, full screen)", id::PRESENT + 1),
+                        choice("Display Link", id::PRESENT + 2),
+                    ],
+                ),
                 Separator,
                 item("Full Screen", id::FULL_SCREEN),
                 sub("Window Size", SIZES.iter().map(|&h| item(&format!("{h}p"), id::SIZE + h as u16)).collect()),
@@ -391,6 +401,7 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::FPS_TITLE => live::fps_in_title(),
         id::PERF_OVERLAY => overlay::is_overlay_enabled(),
         c if (id::LIMIT..id::LIMIT + 200).contains(&c) => (c - id::LIMIT) as u32 == limit(),
+        c if (id::PRESENT..id::PRESENT + 3).contains(&c) => (c - id::PRESENT) as u32 == live::present_mode() as u32,
         id::ASYNC_SHADERS => overlay::is_async_shaders(),
         c if (id::ANISOTROPY..id::ANISOTROPY + 17).contains(&c) => (c - id::ANISOTROPY) as u32 == crate::gpu::anisotropy(),
         c if (id::DRAW_DISTANCE..id::DRAW_DISTANCE + 9).contains(&c) => (c - id::DRAW_DISTANCE) as u32 * 25 == crate::profile::botw::draw_distance::percent(),
@@ -496,6 +507,12 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
             }
             println!("[+] Display: frame-rate limit {fps} fps");
         }
+        c if (id::PRESENT..id::PRESENT + 3).contains(&c) => {
+            use crate::settings::PresentMode::*;
+            let m = [Standard, Adaptive, DisplayLink][(c - id::PRESENT) as usize];
+            live::set_present_mode(m);
+            println!("[+] Display: presentation {m:?}");
+        }
         c if (id::SIZE..id::SIZE + 2000).contains(&c) => return Err(Action::Size((c - id::SIZE) as u32)),
         id::ASYNC_SHADERS => {
             let on = overlay::toggle_async_shaders();
@@ -583,6 +600,7 @@ mod tests {
             ("anisotropy", id::ANISOTROPY, id::ANISOTROPY + 17),
             ("draw distance", id::DRAW_DISTANCE, id::DRAW_DISTANCE + 9),
             ("resolution", id::RESOLUTION, id::RESOLUTION + 5),
+            ("presentation", id::PRESENT, id::PRESENT + 3),
             ("strength", id::STRENGTH, id::STRENGTH + 201),
             ("bind", id::BIND, id::BIND + n),
             ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),

@@ -361,6 +361,9 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
                 std::time::Duration::from_nanos(1_000_000_000 / fps.max(1) as u64)
             }
         };
+        let mode = crate::host::live::present_mode();
+        // Display link: the link paces (present waits for its next drawable), the limit is the rate it asks the display for.
+        let frame = if mode == crate::settings::PresentMode::DisplayLink { std::time::Duration::ZERO } else { frame };
         let wait = if frame.is_zero() {
             #[cfg(nx_native)]
             // Frames start on the refresh grid when the game's time follows real time: an unlocked rate (interval 0),
@@ -368,6 +371,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             // Without it BotW's frames started anywhere between refreshes and judder at rates the display cannot hold
             // evenly, where TotK (interval 0 once unlocked) did not.
             let paced = (interval == 0 || crate::profile::real_time())
+                && mode == crate::settings::PresentMode::Standard
                 && crate::gpu::metal::display_pacing()
                 && crate::host::overlay::is_vsync();
             #[cfg(not(nx_native))]
@@ -392,7 +396,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             // grid, as a console's present interval does: a schedule on the host clock drifted against the refreshes,
             // and frames started late in a refresh missed their slot (shown 3 refreshes apart instead of 2).
             #[cfg(nx_native)]
-            if crate::gpu::metal::display_pacing() && crate::host::overlay::is_vsync() {
+            if mode == crate::settings::PresentMode::Standard && crate::gpu::metal::display_pacing() && crate::host::overlay::is_vsync() {
                 if let (Some(to_grid), Some(period)) =
                     (crate::gpu::metal::display_pacing_wait(), crate::gpu::metal::display_period())
                 {
