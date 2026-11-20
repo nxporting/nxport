@@ -268,14 +268,36 @@ static WIDEST: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(
 
 
 /// While listed pipelines compile or missing stages translate (gpu::pipeline_list::take_frame_progress): one small line
-/// in the bottom-left corner with how many are done (Display > Shader Compile Indicator). Draws skipped for other
+/// on a translucent box in the bottom-left corner with how many are done (Display > Shader Compile Indicator). Draws skipped for other
 /// compiling pipelines show in the performance window instead.
 #[cfg(any(target_os = "macos", target_os = "ios", windows))]
 pub fn draw_shader_progress(ui: &imgui::Ui, _w: f32, h: f32, done: usize, total: usize) {
-    let text = format!("Compiling shaders {done} / {total}");
-    let size = ui.calc_text_size(&text);
-    let (x, y) = (12.0, h - 10.0 - size[1]);
-    let list = ui.get_foreground_draw_list();
-    list.add_text([x + 1.0, y + 1.0], [0.0, 0.0, 0.0, 0.6], &text);
-    list.add_text([x, y], [1.0, 1.0, 1.0, 0.75], &text);
+    let _bg = ui.push_style_color(imgui::StyleColor::WindowBg, [0.0, 0.0, 0.0, 0.45]);
+    let _rounding = ui.push_style_var(imgui::StyleVar::WindowRounding(5.0));
+    let _padding = ui.push_style_var(imgui::StyleVar::WindowPadding([9.0, 5.0]));
+    let _border = ui.push_style_var(imgui::StyleVar::WindowBorderSize(0.0));
+    unsafe {
+        imgui::sys::igSetNextWindowPos(
+            imgui::sys::ImVec2 { x: 14.0, y: h - 14.0 },
+            imgui::Condition::Always as i32,
+            imgui::sys::ImVec2 { x: 0.0, y: 1.0 },
+        );
+    }
+    ui.window("Shaders##Progress")
+        .flags(
+            imgui::WindowFlags::NO_TITLE_BAR
+                | imgui::WindowFlags::NO_RESIZE
+                | imgui::WindowFlags::NO_MOVE
+                | imgui::WindowFlags::NO_SCROLLBAR
+                | imgui::WindowFlags::ALWAYS_AUTO_RESIZE
+                | imgui::WindowFlags::NO_SAVED_SETTINGS
+                | imgui::WindowFlags::NO_FOCUS_ON_APPEARING
+                | imgui::WindowFlags::NO_NAV_INPUTS
+                | imgui::WindowFlags::NO_NAV_FOCUS
+                | imgui::WindowFlags::NO_MOUSE_INPUTS,
+        )
+        .build(|| {
+            ui.set_window_font_scale(1.3);
+            ui.text_colored([1.0, 1.0, 1.0, 0.85], format!("Compiling shaders {done} / {total}"));
+        });
 }
