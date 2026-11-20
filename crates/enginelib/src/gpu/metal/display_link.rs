@@ -37,6 +37,17 @@ static SHOWN: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 static RESERVED: Mutex<Option<(Handed, f64)>> = Mutex::new(None);
 /// The refresh the latest frame was given (f64 bits, host seconds).
 static LAST_TARGET: AtomicU64 = AtomicU64::new(0);
+/// The time between the link's refreshes (f64 bits, seconds), from consecutive drawables it handed out.
+static PERIOD: AtomicU64 = AtomicU64::new(0);
+static LAST_HANDED: AtomicU64 = AtomicU64::new(0);
+/// When the frame being made took its drawable, and how long frames take from then to their present (f64 bits,
+/// seconds; rises at once, falls slowly).
+static BEGAN: AtomicU64 = AtomicU64::new(0);
+static LEAD: AtomicU64 = AtomicU64::new(0);
+
+fn now() -> f64 {
+    objc2_quartz_core::CACurrentMediaTime()
+}
 
 define_class!(
     // SAFETY: NSObject has no subclassing requirements and LinkDelegate does not implement Drop.
@@ -51,6 +62,10 @@ define_class!(
         fn needs_update(&self, _link: &CAMetalDisplayLink, update: &CAMetalDisplayLinkUpdate) {
             let d = update.drawable();
             let t = update.targetPresentationTimestamp();
+            let prev = f64::from_bits(LAST_HANDED.swap(t.to_bits(), Ordering::Relaxed));
+            if prev > 0.0 && t > prev && t - prev < 0.05 {
+                PERIOD.store((t - prev).to_bits(), Ordering::Relaxed);
+            }
             *NEXT.lock().unwrap() = Some((Handed(d), t));
             NEXT_CV.notify_all();
         }
@@ -70,6 +85,9 @@ pub(super) fn run(layer: &CAMetalLayer, fps: f32, max_hz: f32) {
             let link = CAMetalDisplayLink::initWithMetalLayer(CAMetalDisplayLink::alloc(), layer);
             let delegate: Retained<LinkDelegate> = msg_send![LinkDelegate::class(), new];
             link.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+            // Drawables two refreshes ahead: with one, a frame taking most of a refresh from its time step to its
+            // present missed the refresh it was stepped for.
+            link.setPreferredFrameLatency(2.0);
             std::mem::forget(delegate);
             link.addToRunLoop_forMode(&NSRunLoop::currentRunLoop(), NSDefaultRunLoopMode);
             LINK.store(Retained::into_raw(link), Ordering::Release);
@@ -144,26 +162,28 @@ pub fn begin_frame() -> Option<f64> {
     if LINK.load(Ordering::Acquire).is_null() || RESERVED.lock().unwrap().is_some() {
         return None;
     }
-    // At most one frame per limit interval: the display may run the link faster than asked (a 120 Hz display ran a 90
-    // limit at 120 Hz), and ~10 ms frames then landed one or two refreshes apart in no order. A refresh closer than that
-    // to the previous frame's is passed over, so frames keep a steady whole number of refreshes.
-    let rate = f32::from_bits(RATE.load(Ordering::Relaxed) as u32) as f64;
-    let min = if rate > 0.0 { 1.0 / rate - 0.0005 } else { 0.0 };
     let last = f64::from_bits(LAST_TARGET.load(Ordering::Relaxed));
-    let (d, t) = loop {
-        let (d, t) = next(std::time::Duration::from_millis(100))?;
-        if last <= 0.0 || t - last >= min {
-            break (d, t);
-        }
-    };
-    *RESERVED.lock().unwrap() = Some((Handed(d), t));
-    LAST_TARGET.store(t.to_bits(), Ordering::Relaxed);
-    (last > 0.0 && t > last).then_some(t - last)
+    let (d, t) = next(std::time::Duration::from_millis(100))?;
+    // The refresh the frame will make: its drawable's, or a later one if frames take longer from here to their present
+    // than that leaves (it is then shown at the first refresh after its present).
+    let start = now();
+    let ready = start + f64::from_bits(LEAD.load(Ordering::Relaxed)) + 0.001;
+    let period = f64::from_bits(PERIOD.load(Ordering::Relaxed));
+    let shown = if ready > t && period > 0.0 { t + ((ready - t) / period).ceil() * period } else { t };
+    BEGAN.store(start.to_bits(), Ordering::Relaxed);
+    *RESERVED.lock().unwrap() = Some((Handed(d), shown));
+    LAST_TARGET.store(shown.to_bits(), Ordering::Relaxed);
+    (last > 0.0 && shown > last).then_some(shown - last)
 }
 
 /// The drawable begin_frame took for this frame, if any.
 pub(super) fn take_reserved() -> Option<(Drawable, f64)> {
-    RESERVED.lock().unwrap().take().map(|(d, t)| (d.0, t))
+    let r = RESERVED.lock().unwrap().take()?;
+    let lead = now() - f64::from_bits(BEGAN.load(Ordering::Relaxed));
+    let old = f64::from_bits(LEAD.load(Ordering::Relaxed));
+    let new = if lead > old { lead } else { old * 0.98 + lead * 0.02 };
+    LEAD.store(new.min(0.1).to_bits(), Ordering::Relaxed);
+    Some((r.0 .0, r.1))
 }
 
 /// The time between the last two frames presented through the link (seconds): the game's step.
