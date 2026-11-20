@@ -426,7 +426,6 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             deadline.saturating_duration_since(now)
         };
         FRAME_TARGET_NS.store(frame.as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-        divisor::waited(wait);
         ACQUIRE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !wait.is_zero() {
             ACQUIRE_SLEEP_US.fetch_add(
@@ -444,6 +443,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
                 return acquired(w, out_index);
             }
         } else if !wait.is_zero() {
+            pacing_slack(wait.as_secs_f64());
             hle_sleep_ns(wait.as_nanos() as u64);
         }
     }
@@ -502,78 +502,89 @@ pub unsafe extern "C" fn hle_nvnWindowSetNumActiveTextures(w: *mut NvnWindow, co
     }
 }
 
+/// A frame reached the screen `gap` seconds after the previous one (vsync pacing in whole refreshes: divisor).
+pub(crate) fn pacing_shown(gap: f64) {
+    divisor::shown(gap);
+}
+
+/// The game waited `secs` for the frame-rate limit (the time it had to spare this frame).
+pub(crate) fn pacing_slack(secs: f64) {
+    divisor::slack(secs);
+}
+
 /// Refreshes per frame with vsync on a fixed-refresh display, chosen as Android's frame pacing library chooses swap
 /// intervals: a frame rate that does not divide the refresh shows frames one and two refreshes apart in no order (a
 /// 90 fps game on a 120 Hz screen), which no game step makes look even. So every frame stays the same whole number of
-/// refreshes: the fewest the frame-rate limit allows, more while the game's frames do not fit in that, back down once
-/// they clearly fit again.
+/// refreshes: the fewest the frame-rate limit allows; one more when frames really reached the screen late (3 of the
+/// last 10); one fewer once every frame of the last 120 waited more than a refresh for the limiter (it had that much
+/// time to spare).
 mod divisor {
     use std::collections::VecDeque;
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
 
     struct State {
         n: u32,
-        /// The game's work per frame (seconds): time between acquires less the pacing wait the frame was given.
-        work: VecDeque<f64>,
-        last: Option<Instant>,
-        wait: Duration,
+        period: f64,
+        /// The last frames shown: true if one came later than its n refreshes.
+        late: VecDeque<bool>,
+        /// Time each of the last frames waited for the limiter (seconds), and the frame being made's so far.
+        spare: VecDeque<f64>,
+        waiting: f64,
     }
 
-    static S: Mutex<State> = Mutex::new(State { n: 0, work: VecDeque::new(), last: None, wait: Duration::ZERO });
-
-    /// Frames that do not fit `n` refreshes: this many of the last ten move to more refreshes.
-    const MISSES: usize = 3;
-    /// Back to fewer refreshes when this share of a frame would hold 95% of the last 120 frames' work.
-    const FIT: f64 = 0.85;
-
-    fn percentile(v: &VecDeque<f64>, back: usize, p: f64) -> f64 {
-        let mut s: Vec<f64> = v.iter().rev().take(back).copied().collect();
-        s.sort_by(|a, b| a.total_cmp(b));
-        s[((s.len() - 1) as f64 * p) as usize]
-    }
+    static S: Mutex<State> =
+        Mutex::new(State { n: 0, period: 0.0, late: VecDeque::new(), spare: VecDeque::new(), waiting: 0.0 });
 
     /// The refreshes this frame stays on screen, for a limit frame of `limit_frame` and a refresh of `period` seconds.
     pub fn refreshes(limit_frame: f64, period: f64) -> u32 {
         let min = ((limit_frame / period) - 0.01).ceil().max(1.0) as u32;
         let mut s = S.lock().unwrap();
-        let now = Instant::now();
-        if let Some(last) = s.last {
-            let w = now.saturating_duration_since(last).saturating_sub(s.wait).as_secs_f64();
-            if w < 0.25 {
-                s.work.push_back(w);
-                if s.work.len() > 120 {
-                    s.work.pop_front();
-                }
-            }
+        let w = std::mem::take(&mut s.waiting);
+        s.spare.push_back(w);
+        if s.spare.len() > 120 {
+            s.spare.pop_front();
         }
-        s.last = Some(now);
+        s.period = period;
         let mut n = s.n.max(min);
-        // At one refresh the swapchain's own wait for the refresh is part of the measured time (a frame on time
-        // measures about a refresh, a missed one about two); above it the limiter's wait is taken off.
-        let cap = n as f64 * period + if n == 1 { 0.5 * period } else { 0.0 };
-        if s.work.iter().rev().take(10).filter(|&&w| w > cap).count() >= MISSES {
-            n = ((percentile(&s.work, 10, 0.9) / period).ceil() as u32).max(n + 1);
-            s.work.clear();
-            println!("[pacing] {} refreshes per frame ({:.1} fps): frames did not fit", n, 1.0 / (n as f64 * period));
-        } else if n > min && s.work.len() >= 120 && percentile(&s.work, 120, 0.95) < (n - 1) as f64 * period * FIT {
+        let changed = if s.late.iter().filter(|&&l| l).count() >= 3 {
+            n += 1;
+            true
+        } else if n > min && s.spare.len() >= 120 && s.spare.iter().all(|&w| w > period * 1.1) {
             n -= 1;
-            s.work.clear();
-            println!("[pacing] {} refreshes per frame ({:.1} fps): frames fit", n, 1.0 / (n as f64 * period));
+            true
+        } else {
+            false
+        };
+        if changed {
+            s.late.clear();
+            s.spare.clear();
+            println!("[pacing] {} refreshes per frame ({:.1} fps)", n, 1.0 / (n as f64 * period));
         }
         s.n = n;
         n
     }
 
-    /// The pacing wait this frame was given (taken off its work at the next acquire).
-    pub fn waited(w: Duration) {
-        S.lock().unwrap().wait = w;
+    pub fn shown(gap: f64) {
+        let mut s = S.lock().unwrap();
+        if s.n == 0 || gap <= 0.0 {
+            return;
+        }
+        let late = gap > (s.n as f64 + 0.5) * s.period;
+        s.late.push_back(late);
+        if s.late.len() > 10 {
+            s.late.pop_front();
+        }
+    }
+
+    pub fn slack(secs: f64) {
+        S.lock().unwrap().waiting += secs;
     }
 
     pub fn reset() {
         let mut s = S.lock().unwrap();
         s.n = 0;
-        s.work.clear();
-        s.last = None;
+        s.late.clear();
+        s.spare.clear();
+        s.waiting = 0.0;
     }
 }

@@ -40,6 +40,7 @@ unsafe fn available_wait(sync: *mut NvnSync, timeout_ns: u64) -> Option<i32> {
         crate::horizon::hle::hle_sleep_ns(timeout_ns);
         return Some(2);
     }
+    crate::nvn::api::pacing_slack((at - now) as f64 / 1e9);
     crate::horizon::hle::hle_sleep_ns(at - now);
     std::ptr::write_unaligned(available_at(sync), 0);
     #[cfg(nx_native)]

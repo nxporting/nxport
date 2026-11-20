@@ -69,6 +69,9 @@ pub(super) fn on_shown(drawable: &ProtocolObject<dyn objc2_metal::MTLDrawable>, 
     }
     let prev = f64::from_bits(SHOWN_LAST.swap(shown.to_bits(), Ordering::AcqRel));
     let dt = shown - prev;
+    if prev > 0.0 && dt < 1.0 {
+        crate::nvn::api::pacing_shown(dt);
+    }
     if prev > 0.0 && dt > 1.0 / 500.0 && dt < 0.1 {
         // Shown times are whole refreshes apart: the smallest gap seen is the period.
         let p = f64::from_bits(SHOWN_PERIOD.load(Ordering::Acquire));
@@ -175,11 +178,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 super::display_link::run(layer, limit as f32, hz);
                 // No drawable in time: the frame is not shown (the layer's own nextDrawable is not allowed while a
                 // display link is attached).
-                let Some((d, t)) = super::display_link::take_reserved()
-                    .or_else(|| super::display_link::next(std::time::Duration::from_millis(100)))
-                else {
-                    return;
-                };
+                let Some((d, t)) = super::display_link::next(std::time::Duration::from_millis(100)) else { return };
                 link_shown = Some(t);
                 d
             } else {

@@ -1,9 +1,6 @@
 // --present-mode=display-link: frames are presented into the drawables a CAMetalDisplayLink hands out for the refreshes it
 // schedules. The link asks the display for the frame-rate limit (a variable-refresh display then refreshes at the game's
-// rate), and each drawable carries the time it will be shown. A frame takes its drawable when the game takes its time step
-// (begin_frame), so the step is the time from the previous frame's refresh to this one's: what the frame will be on
-// screen for. A step from the last two frames shown is a frame behind, and when the display alternates one and two
-// refreshes each frame then moves by the other frame's time (back-and-forth judder).
+// rate), and each drawable carries the time it will be shown: the game's step is the time between the frames it shows.
 
 use objc2::rc::Retained;
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
@@ -33,10 +30,6 @@ static RATE: AtomicU64 = AtomicU64::new(0);
 static STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Presentation times of the last two frames presented (f64 bits; 0: none yet).
 static SHOWN: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
-/// The drawable the frame being made took at its time step, and when it will be shown.
-static RESERVED: Mutex<Option<(Handed, f64)>> = Mutex::new(None);
-/// The refresh the latest frame was given (f64 bits, host seconds).
-static LAST_TARGET: AtomicU64 = AtomicU64::new(0);
 
 
 define_class!(
@@ -106,8 +99,6 @@ pub(super) fn stop() {
         println!("[+] Display link: stopped");
     }
     NEXT.lock().unwrap().take();
-    RESERVED.lock().unwrap().take();
-    LAST_TARGET.store(0, Ordering::Relaxed);
 }
 
 /// Whether a display link is attached (or being started) now.
@@ -133,29 +124,8 @@ pub(super) fn next(timeout: std::time::Duration) -> Option<(Drawable, f64)> {
 pub(super) fn presented(shown: f64) {
     SHOWN[0].store(SHOWN[1].load(Ordering::Relaxed), Ordering::Relaxed);
     SHOWN[1].store(shown.to_bits(), Ordering::Relaxed);
-    if shown > f64::from_bits(LAST_TARGET.load(Ordering::Relaxed)) {
-        LAST_TARGET.store(shown.to_bits(), Ordering::Relaxed);
-    }
 }
 
-/// At the game's time step: takes the drawable for the next refresh the link scheduled and returns the time from the
-/// previous frame's refresh to it (seconds). None while no link runs, while the previous frame's drawable has not been
-/// presented yet, or before a first refresh to measure from.
-pub fn begin_frame() -> Option<f64> {
-    if LINK.load(Ordering::Acquire).is_null() || RESERVED.lock().unwrap().is_some() {
-        return None;
-    }
-    let last = f64::from_bits(LAST_TARGET.load(Ordering::Relaxed));
-    let (d, t) = next(std::time::Duration::from_millis(100))?;
-    *RESERVED.lock().unwrap() = Some((Handed(d), t));
-    LAST_TARGET.store(t.to_bits(), Ordering::Relaxed);
-    (last > 0.0 && t > last).then_some(t - last)
-}
-
-/// The drawable begin_frame took for this frame, if any.
-pub(super) fn take_reserved() -> Option<(Drawable, f64)> {
-    RESERVED.lock().unwrap().take().map(|(d, t)| (d.0, t))
-}
 
 /// The time between the last two frames presented through the link (seconds): the game's step.
 pub fn step() -> Option<f64> {
