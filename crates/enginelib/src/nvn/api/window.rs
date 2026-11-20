@@ -516,8 +516,8 @@ pub(crate) fn pacing_slack(secs: f64) {
 /// intervals: a frame rate that does not divide the refresh shows frames one and two refreshes apart in no order (a
 /// 90 fps game on a 120 Hz screen), which no game step makes look even. So every frame stays the same whole number of
 /// refreshes: the fewest the frame-rate limit allows; one more when frames really reached the screen late (3 of the
-/// last 10); one fewer once every frame of the last 120 waited more than a refresh for the limiter (it had that much
-/// time to spare).
+/// last 10), up to twice the fewest; one fewer once every frame of the last 120 waited more than a refresh for the
+/// limiter (it had that much time to spare).
 mod divisor {
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -546,7 +546,10 @@ mod divisor {
         }
         s.period = period;
         let mut n = s.n.max(min);
-        let changed = if s.late.iter().filter(|&&l| l).count() >= 3 {
+        // At most half the limit's rate: at lower rates the GPU idles longer between frames, macOS lowers its clock, the
+        // frames take longer and look late again (BotW stepped down to 20 fps under a 120 limit, the GPU at ~25 ms a
+        // frame instead of ~10).
+        let changed = if s.late.iter().filter(|&&l| l).count() >= 3 && n < 2 * min {
             n += 1;
             true
         } else if n > min && s.spare.len() >= 120 && s.spare.iter().all(|&w| w > period * 1.1) {
