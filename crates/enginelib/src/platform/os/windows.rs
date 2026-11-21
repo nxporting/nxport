@@ -43,7 +43,7 @@ fn flags(prot: Prot) -> u32 {
 
 pub fn random_bytes(buf: &mut [u8]) {
     // ProcessPrng (bcryptprimitives.dll): the system's random number generator, which never fails.
-    #[link(name = "bcryptprimitives")]
+    #[link(name = "bcryptprimitives", kind = "raw-dylib")] // no import library in the SDK (as std links it)
     extern "system" {
         fn ProcessPrng(data: *mut u8, len: usize) -> i32;
     }

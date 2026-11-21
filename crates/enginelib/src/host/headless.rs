@@ -63,6 +63,11 @@ pub mod overlay {
         VSYNC.store(on, Relaxed);
     }
 
+    /// Frames reach the screen only at its refreshes (host/overlay.rs): here only with vsync (vsync off presents at once).
+    pub fn paces_to_refresh() -> bool {
+        is_vsync()
+    }
+
     pub fn toggle_vsync() -> bool {
         !VSYNC.fetch_not(Relaxed)
     }
