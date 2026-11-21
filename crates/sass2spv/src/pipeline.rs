@@ -228,6 +228,9 @@ pub fn translate_stage_for(
     let mut gpu = GpuAccessor::new(sass, compute, stage, cb1);
     gpu.state = state;
     gpu.host = host;
+    if matches!(target, Target::Msl(_)) {
+        gpu.host.array_sets = false;
+    }
     if let Some(f) = compute_fields {
         gpu.local_size = [f[0].max(1), f[1].max(1), f[2].max(1)];
         gpu.shared_memory_size = f[3];

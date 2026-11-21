@@ -548,9 +548,7 @@ impl Gfx {
         for (nvn_stage, cached) in [(STAGE_VERTEX, Some(vs)), (STAGE_FRAGMENT, fs)] {
             let Some(cached) = cached else { continue };
             for tb in &cached.textures {
-                let k = tb.handle_index.wrapping_sub(8) / 2;
-                key.handles
-                    .push(st.textures_bound.get(&(nvn_stage, k as i32)).copied());
+                key.handles.push(super::binding::texture_handle(st, nvn_stage, tb));
             }
         }
         let reuse = st.tex_reuse.as_ref().is_some_and(|(k, _)| *k == key);

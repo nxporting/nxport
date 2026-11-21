@@ -1031,7 +1031,8 @@ impl Ctx {
                             self.st.textures.get(stage, k)
                         } else {
                             cbuf(self, *cbuf_slot).and_then(|c| {
-                                let o = (*handle_index as usize + j as usize) * 4;
+                                // Array elements are 8-byte handles (Ryujinx TextureHandleSizeInBytes).
+                                let o = (*handle_index as usize + 2 * j as usize) * 4;
                                 (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
                             })
                         };

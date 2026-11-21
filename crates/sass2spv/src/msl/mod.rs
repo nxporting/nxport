@@ -908,8 +908,21 @@ fn io_declarations(c: &mut Ctx) -> R<IoDecls> {
     for t in c.props.textures.values() {
         let key = SetBindingPair::new(t.set, t.binding);
         if t.array_length != 1 {
-            if main_uses.contains(&Global::Texture(key)) || main_uses.contains(&Global::Sampler(key)) {
-                unsupported!("texture arrays");
+            // Indexed textures (handles in a constant buffer array): `length` consecutive texture and sampler slots.
+            if t.array_length < 1 || t.ty.base() == SamplerType::TEXTURE_BUFFER {
+                if main_uses.contains(&Global::Texture(key)) || main_uses.contains(&Global::Sampler(key)) {
+                    unsupported!("texture arrays");
+                }
+                continue;
+            }
+            let n = t.array_length;
+            if t.ty != SamplerType::NONE && main_uses.contains(&Global::Texture(key)) {
+                let tt = texture_type(t.ty, "float", None)?;
+                textures.push((t.binding, Global::Texture(key), format!("array<{tt}, {n}> {} [[texture({})]]", t.name, t.binding), format!("array<{tt}, {n}> {}", t.name)));
+            }
+            if main_uses.contains(&Global::Sampler(key)) {
+                let s = if t.separate { t.name.clone() } else { format!("{}Smplr", t.name) };
+                samplers.push((t.binding, Global::Sampler(key), format!("array<sampler, {n}> {s} [[sampler({})]]", t.binding), format!("array<sampler, {n}> {s}")));
             }
             continue;
         }

@@ -64,25 +64,26 @@ pub fn operation(c: &mut Ctx, o: &AstOperation) -> Res {
 }
 
 /// The texture and sampler expressions (codegen sampled_image_load); reads the index sources of indexed ones.
-fn sampled_image(c: &mut Ctx, tex: AstTexture, _srcs: &mut Srcs) -> R<(String, String)> {
+fn sampled_image(c: &mut Ctx, tex: AstTexture, srcs: &mut Srcs) -> R<(String, String)> {
     let key = tex.texture_set_and_binding();
     let t = c.texture(key)?;
-    if t.array_length != 1 {
-        unsupported!("texture arrays");
-    }
-    let name = t.name.clone();
+    let (name, indexed) = (t.name.clone(), t.array_length != 1);
+    // An indexed texture's first source is its element (codegen sampled_image_load), then a separate sampler's.
+    let element = if indexed { Some(srcs.next(c, A::S32)?) } else { None };
+    let at = |n: String, e: &Option<String>| match e {
+        Some(e) => format!("{n}[{e}]"),
+        None => n,
+    };
     if tex.is_separate() {
         let sk = tex.sampler_set_and_binding();
         let s = c.texture(sk)?;
-        if s.array_length != 1 {
-            unsupported!("sampler arrays");
-        }
-        let sname = s.name.clone();
+        let (sname, s_indexed) = (s.name.clone(), s.array_length != 1);
+        let s_element = if s_indexed { Some(srcs.next(c, A::S32)?) } else { None };
         c.note_texture(key, Some(sk));
-        Ok((name, sname))
+        Ok((at(name, &element), at(sname, &s_element)))
     } else {
         c.note_texture(key, None);
-        Ok((name.clone(), format!("{name}Smplr")))
+        Ok((at(name.clone(), &element), at(format!("{name}Smplr"), &element)))
     }
 }
 

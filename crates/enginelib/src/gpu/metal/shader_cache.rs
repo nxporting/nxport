@@ -29,15 +29,56 @@ pub enum StageKind {
 
 #[derive(Clone, Debug)]
 pub struct TexBinding {
+    /// Its Metal texture / sampler slot (an array's element i is at the array's binding + i).
     pub binding: u32,
-    /// Word index of the handle within that constant buffer.
+    /// Word index of the handle within that constant buffer (packed with a separate sampler's offset and the handle
+    /// type, as the translator's TextureHandle::PackOffsets).
     pub handle_index: u32,
+    /// Where the handle is: -1 (or 2) the bound texture table, else the stage's constant buffer of that slot (the game
+    /// keeps texture handles in its own uniform buffers); a separate sampler's slot + 1 in the high 16 bits.
+    pub cbuf_slot: i32,
+    /// Element of an indexed texture array (its handle 8 bytes after the previous element's), and the array's length.
+    pub element: u32,
+    pub count: u32,
     pub ty: String,
     /// `ty` declares a depth-compare sampler ("+Shadow"), precomputed (checked for every binding of every draw).
     pub shadow: bool,
     /// Texture type `ty` declares (MTLTextureType raw value), precomputed for the same reason.
     pub declared: usize,
 }
+
+impl TexBinding {
+    /// The bindings of a texture the translator declared `count` long (one per array element).
+    pub fn expand(binding: u32, cbuf_slot: i32, handle_index: u32, ty: &str, count: u32) -> impl Iterator<Item = TexBinding> + '_ {
+        let count = count.max(1);
+        (0..count).map(move |element| TexBinding {
+            binding: binding + element,
+            handle_index,
+            cbuf_slot,
+            element,
+            count,
+            ty: ty.to_string(),
+            shadow: ty.contains("Shadow"),
+            declared: declared_texture_type(ty),
+        })
+    }
+
+    /// Whether the handle is in the bound texture table (cbuf 2) rather than one of the game's uniform buffers.
+    pub fn in_table(&self) -> bool {
+        self.cbuf_slot < 0 || self.cbuf_slot == 2
+    }
+
+    /// Its handle's key in the per-stage handle lists: the bound table entry, or (handles from uniform buffers) a key
+    /// of its own per binding.
+    pub fn handle_key(&self) -> i32 {
+        if self.in_table() {
+            (self.handle_index.wrapping_sub(8) / 2) as i32 + self.element as i32
+        } else {
+            0x4000_0000 | self.binding as i32
+        }
+    }
+}
+
 
 #[derive(Clone, Debug)]
 pub struct CachedStage {
@@ -296,24 +337,19 @@ fn parse_index(text: &str) -> Index {
                     st.cbuffers.push((b, s));
                 }
             }
-            [kind @ ("tex" | "img"), binding, cbuf_slot, handle, ty] => {
-                if let (Some((.., st)), Ok(binding), Ok(_), Ok(handle_index)) = (
+            [kind @ ("tex" | "img"), binding, cbuf_slot, handle, ty, rest @ ..] => {
+                if let (Some((.., st)), Ok(binding), Ok(cbuf_slot), Ok(handle_index)) = (
                     cur.as_mut(),
                     binding.parse(),
                     cbuf_slot.parse::<i32>(),
                     handle.parse(),
                 ) {
-                    let tb = TexBinding {
-                        binding,
-                        handle_index,
-                        ty: ty.to_string(),
-                        shadow: ty.contains("+Shadow"),
-                        declared: declared_texture_type(ty),
-                    };
+                    // Optional array length (indexed textures).
+                    let count = rest.first().and_then(|n| n.parse().ok()).unwrap_or(1);
                     if *kind == "tex" {
-                        st.textures.push(tb)
+                        st.textures.extend(TexBinding::expand(binding, cbuf_slot, handle_index, ty, count))
                     } else {
-                        st.images.push(tb)
+                        st.images.extend(TexBinding::expand(binding, cbuf_slot, handle_index, ty, 1))
                     }
                 }
             }
@@ -523,8 +559,9 @@ fn save_runtime_stage(weak: u64, full: u64, st: &CachedStage, msl: &str) {
         let _ = writeln!(r, "sb {b} {s} {c} {o}");
     }
     for (tag, list) in [("tex", &st.textures), ("img", &st.images)] {
-        for t in list {
-            let _ = writeln!(r, "{tag} {} 0 {} {}", t.binding, t.handle_index, t.ty);
+        for t in list.iter().filter(|t| t.element == 0) {
+            let n = if t.count > 1 { format!(" {}", t.count) } else { String::new() };
+            let _ = writeln!(r, "{tag} {} {} {} {}{n}", t.binding, t.cbuf_slot, t.handle_index, t.ty);
         }
     }
     r.push_str("E\n");
@@ -804,15 +841,10 @@ pub unsafe fn lookup_or_translate_dynamic(
     let textures: Vec<TexBinding> = info
         .textures
         .iter()
-        .map(|t| {
+        .flat_map(|t| {
             let ty = t.texture_type.replace(", ", "+").replace(',', "+").replace(' ', "");
-            TexBinding {
-                binding: t.binding,
-                handle_index: t.handle_index.max(0) as u32,
-                shadow: ty.contains("Shadow"),
-                declared: declared_texture_type(&ty),
-                ty,
-            }
+            TexBinding::expand(t.binding, t.cbuf_slot, t.handle_index.max(0) as u32, &ty, t.array_length.max(1) as u32)
+                .collect::<Vec<_>>()
         })
         .collect();
     let images: Vec<TexBinding> = info
@@ -823,6 +855,9 @@ pub unsafe fn lookup_or_translate_dynamic(
             TexBinding {
                 binding: im.binding,
                 handle_index: im.handle_index.max(0) as u32,
+                cbuf_slot: im.cbuf_slot,
+                element: 0,
+                count: 1,
                 shadow: false,
                 declared: declared_texture_type(&ty),
                 ty,
