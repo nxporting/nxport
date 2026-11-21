@@ -167,6 +167,8 @@ and update this file when you finish or drop it.
      (handle_index - 8) / 2 only: Unity stages (packed slots 2|2<<16, types 1) need the same word mapping there, and
      cbuf_slot must be compared by its low 16 bits. The libc file layer replaces the SDK's stdio / stat / dir functions
      for every game (console FILEs log [console] lines).
+  34. b624ec3 (shared nvn/cmd.rs): nvnCommandBufferBindVertexBuffers recorded as BindVertexBuffer per range (it was generic
+     and dropped). Vulkan executes BindVertexBuffer already, so nothing to do beyond a rebuild; Unity UI depends on it.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
