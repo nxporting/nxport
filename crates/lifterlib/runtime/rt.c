@@ -82,9 +82,58 @@ void rt_dispatch(Cpu *c) {
     __attribute__((musttail)) return dispatch_miss(c);
 }
 
+// C++ exception landing pads (<name>_lps: pad, its function's start and end, sorted by pad). The guest unwinder branches
+// to a pad from deep in its own frames, while the host stack still holds the lifted functions it unwound: the pad's
+// function is entered from the frame of its function instead. Reaching a pad, dispatch returns, and each lifted caller
+// after its call (RT_RETURNED) asks rt_dispatch_from; the frame whose return address lies in the pad's function enters
+// the pad in its place, and the host frames above it are gone as the guest's are.
+typedef struct {
+    const uint64_t *lps;
+    uint64_t count;
+} LpTable;
+
+static LpTable lp_tables[MAX_MODULES];
+static int lp_table_count;
+__thread uint64_t rt_from_ra;
+
+RT_EXPORT int nx_rt_add_landing_pads(const uint64_t *lps, uint64_t count) {
+    if (lp_table_count == MAX_MODULES) return -1;
+    if (count) lp_tables[lp_table_count++] = (LpTable){lps, count};
+    return 0;
+}
+
+static const uint64_t *find_lp(uint64_t pc) {
+    for (int t = 0; t < lp_table_count; t++) {
+        const LpTable *lt = &lp_tables[t];
+        if (pc < lt->lps[0] || pc > lt->lps[3 * (lt->count - 1)]) continue;
+        uint64_t lo = 0, hi = lt->count;
+        while (lo < hi) {
+            uint64_t mid = (lo + hi) / 2;
+            if (lt->lps[3 * mid] < pc) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo < lt->count && lt->lps[3 * lo] == pc) return &lt->lps[3 * lo];
+    }
+    return 0;
+}
+
+void rt_dispatch_from(Cpu *c) {
+    const uint64_t *lp = find_lp(c->pc);
+    // The call site is the instruction before the return address: in the pad's function, this is its frame.
+    if (lp && rt_from_ra > lp[1] && rt_from_ra <= lp[2]) {
+        GuestFn f = lookup(c->pc);
+        if (f) {
+            __attribute__((musttail)) return f(c);
+        }
+    }
+    __attribute__((musttail)) return rt_dispatch(c);
+}
+
 static RT_CC void dispatch_miss(Cpu *c) {
     uint64_t pc = c->pc;
     unsigned h = (unsigned)(pc >> 2) & (RT_CACHE_SIZE - 1);
+    // A landing pad: back to the caller (see find_lp).
+    if (find_lp(pc)) return;
     GuestFn f = lookup(pc);
     if (f) {
         rt_cache[h].pc = pc;
@@ -107,7 +156,14 @@ RT_EXPORT GuestFn nx_rt_dispatcher(void) { return rt_dispatch; }
 
 // The host's entry: runs guest code from c->pc until it returns to RT_RETURN_TO_HOST (x30 set by the host).
 RT_EXPORT void nx_rt_enter(Cpu *c) {
-    while (c->pc != RT_RETURN_TO_HOST) rt_dispatch(c);
+    while (c->pc != RT_RETURN_TO_HOST) {
+        // A landing pad no frame below took (an exception past where the host entered): the host's unknown-code report.
+        if (find_lp(c->pc)) {
+            host.call(c);
+            return;
+        }
+        rt_dispatch(c);
+    }
 }
 
 void rt_svc(Cpu *c, uint32_t imm, uint64_t pc) { host.svc(c, imm, pc); }

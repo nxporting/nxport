@@ -25,6 +25,9 @@ pub struct Module<'a> {
     /// Function starts known exactly (.eh_frame, symbols), among the seeds: the bounds of the real functions. Pieces the
     /// lifter splits a function into (at targets of other code, or block starts of unresolved branches) are not in it.
     pub functions: BTreeSet<u64>,
+    /// C++ exception landing pads: (pad, its function's start, end). Each pad is also a seed; the table exports them for
+    /// the dispatcher, which enters one only from a frame of its function (rt.c rt_dispatch_from).
+    pub landing_pads: Vec<(u64, u64, u64)>,
 }
 
 /// The lifted module: C sources and what was not lifted.
@@ -1269,6 +1272,17 @@ pub fn lift_module(m: &Module, opts: &Options) -> Output {
         let _ = writeln!(table, "    {},", fname(a));
     }
     table.push_str("};\n");
+    // Landing pads this library has functions for: (pad, function start, function end), sorted by pad.
+    let pads: Vec<&(u64, u64, u64)> = m.landing_pads.iter().filter(|(p, ..)| emitted.binary_search(p).is_ok()).collect();
+    let _ = writeln!(table, "RT_EXPORT const uint64_t {}_lp_count = {};", m.name, pads.len());
+    let _ = writeln!(table, "RT_EXPORT const uint64_t {}_lps[] = {{", m.name);
+    for (p, s, e) in &pads {
+        let _ = writeln!(table, "    {}, {}, {},", hx(*p), hx(*s), hx(*e));
+    }
+    if pads.is_empty() {
+        table.push_str("    0, 0, 0,\n");
+    }
+    table.push_str("};\n");
     files.push((format!("{}_table.c", m.name), table));
     Output {
         files,
@@ -1326,7 +1340,7 @@ mod tests {
     #[test]
     fn sample_module() {
         let (base, img, text) = sample_image();
-        let m = Module { name: "t".into(), base, image: &img, text, seeds: BTreeSet::from([base]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base, image: &img, text, seeds: BTreeSet::from([base]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!(out.functions, 3); // main, fact, switchy
         assert_eq!(out.jump_tables, 1);
@@ -1421,7 +1435,7 @@ mod tests {
         for w in [0x1e212000u32, 0x5400004c, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1010, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1010, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert!(body.contains("if (cc_s(c, (*(saf32 *)&gv0), (*(saf32 *)&gv1), FCC_GT))"), "{body}");
         assert!(!body.contains("nzcv"), "{body}");
@@ -1444,7 +1458,7 @@ mod tests {
         for w in [0x1e220820u32, 0x1e232800, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x100c, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x100c, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert!(body.contains("u128 gv0; u128 gv1 = c->v[1]; u128 gv2 = c->v[2]; u128 gv3 = c->v[3];"), "{body}");
         assert!(body.contains("(gv0 = fb_s(op_s(c, FOP_ADD, (*(saf32 *)&gv0), (*(saf32 *)&gv3), 0)))"), "{body}");
@@ -1458,7 +1472,7 @@ mod tests {
         for w in [0xb9400001u32, 0xb9400008, 0x7100051f, 0x54ffffc0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert_eq!(body.matches("LDV32(").count(), 1, "{body}");
         assert_eq!(body.matches(" LD32(").count() + body.matches("(LD32(").count(), 1, "{body}");
@@ -1471,7 +1485,7 @@ mod tests {
         for w in [0x7100041fu32, 0x5400006b, 0xb1000421, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1014, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let body = &lift_module(&m, &Options::default()).files[0].1;
         assert!(body.contains("if ((((int32_t)((uint32_t)((uint32_t)gx0))) < ((int32_t)((uint32_t)(0x1ull))))) { goto L_1010; }"), "{body}");
         assert!(!body.contains("subs32(c,") && !body.contains("COND_"));
@@ -1485,7 +1499,7 @@ mod tests {
         for w in [0x10000093u32, 0xb4000040, 0x10000073, 0xd61f0260, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (1, 0));
         let body = &out.files[0].1;
@@ -1500,7 +1514,7 @@ mod tests {
         for w in [0x10000089u32, 0x8b000929, 0xd61f0120, 0xd65f03c0, 0xd65f03c0, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1018, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (4, 1)); // a function per block
         let body = &out.files[0].1;
@@ -1515,7 +1529,7 @@ mod tests {
         for w in [0x10000089u32, 0x3860682a, 0x8b0a0929, 0xd61f0120, 0xd2800020, 0xd2800040, 0xd65f03c0] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x101c, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x101c, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (4, 1)); // a start at each instruction a byte reaches
         assert!(out.files[0].1.contains("RT_FN void f_1014(Cpu *c) {"));
@@ -1532,7 +1546,7 @@ mod tests {
         ] {
             img.extend_from_slice(&w.to_le_bytes());
         }
-        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1028, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new() };
+        let m = Module { name: "t".into(), base: 0x1000, image: &img, text: 0x1000..0x1028, seeds: BTreeSet::from([0x1000]), functions: BTreeSet::new(), landing_pads: Vec::new() };
         let out = lift_module(&m, &Options::default());
         assert_eq!((out.functions, out.unresolved_computed), (1, 0));
         let body = &out.files[0].1;

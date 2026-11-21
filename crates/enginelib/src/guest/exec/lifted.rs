@@ -117,6 +117,9 @@ struct FnTable {
     count: u64,
     addrs: *const u64,
     fns: *const usize,
+    /// C++ exception landing pads (pad, function start, end), from libraries lifted with them (none: null).
+    lps: *const u64,
+    lp_count: u64,
 }
 
 impl FnTable {
@@ -213,6 +216,11 @@ impl GuestLibrary {
                             count: *(sym(lib, path, &format!("{m}_fn_count"))? as *const u64),
                             addrs: sym(lib, path, &format!("{m}_fn_addrs"))? as *const u64,
                             fns: sym(lib, path, &format!("{m}_fn_ptrs"))? as *const usize,
+                            lps: lib.symbol(&format!("{m}_lps")) as *const u64,
+                            lp_count: {
+                                let n = lib.symbol(&format!("{m}_lp_count")) as *const u64;
+                                if n.is_null() { 0 } else { *n }
+                            },
                         })
                     })
                     .collect()
@@ -244,6 +252,12 @@ impl GuestLibrary {
                 for t in over_tables.iter().chain(&base_tables) {
                     if add(t.addrs, t.fns as *const c_void, t.count) != 0 {
                         return Err("lifted: too many modules".to_string());
+                    }
+                    if t.lp_count != 0 {
+                        let add_lps: unsafe extern "C" fn(*const u64, u64) -> i32 = std::mem::transmute(sym(l, p, "nx_rt_add_landing_pads")?);
+                        if add_lps(t.lps, t.lp_count) != 0 {
+                            return Err("lifted: too many modules".to_string());
+                        }
                     }
                 }
                 Ok(())

@@ -556,10 +556,18 @@ fn lift_image(
     seeds.extend(extra_seeds);
     // Exact function starts (.eh_frame, function symbols): the real functions' bounds (Module::functions).
     let mut functions = BTreeSet::new();
+    let mut landing_pads = Vec::new();
     // Both found through MOD0, which a bare code region has none of.
     if let Some(d) = dynamic {
         if let Some(hdr) = ehframe::mod0_eh_frame_hdr(img) {
             functions.extend(ehframe::hdr_functions(img, base, hdr));
+            // C++ exception landing pads: functions of their own, which the dispatcher enters from their function's frame.
+            for lp in ehframe::landing_pads(img, base, hdr) {
+                for &pad in &lp.pads {
+                    seeds.insert(pad);
+                    landing_pads.push((pad, lp.start, lp.end));
+                }
+            }
             seeds.extend(functions.iter().copied());
         }
         let u64_at = |o: usize| img.get(o..o + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap()));
@@ -606,7 +614,8 @@ fn lift_image(
             }
         }
     }
-    let m = Module { name: name.to_string(), base, image: img, text, seeds, functions };
+    landing_pads.sort_unstable();
+    let m = Module { name: name.to_string(), base, image: img, text, seeds, functions, landing_pads };
     lift_module(&m, &Options { overlay, ..Options::default() })
 }
 

@@ -80,6 +80,10 @@ typedef void (RT_CC *GuestFn)(Cpu *);
 
 // ---- provided by the runtime
 RT_CC void rt_dispatch(Cpu *c);  // continue at c->pc
+// After a call that came back elsewhere: continue at c->pc, entering an exception landing pad only from a frame of its
+// function (rt_from_ra: the return address that frame expected).
+extern __thread uint64_t rt_from_ra;
+RT_CC void rt_dispatch_from(Cpu *c);
 
 // The dispatcher's per-thread cache of lifted functions by address (rt.c), probed at each indirect call and jump: the
 // host branch to the function is then at that site, which the CPU predicts per site (all of them through rt_dispatch's
@@ -108,10 +112,12 @@ static inline void rt_fpcr(Cpu *c, uint64_t v) {
 #endif
 }
 
-// After a call: continue here only if the callee returned to `ra`.
-#define RT_RETURNED(c, ra)                                   \
-    if (__builtin_expect((c)->pc != (ra), 0)) {              \
-        __attribute__((musttail)) return rt_dispatch(c);     \
+// After a call: continue here only if the callee returned to `ra` (else a longjmp-style return, or an exception
+// unwinding to a landing pad: rt_dispatch_from).
+#define RT_RETURNED(c, ra)                                    \
+    if (__builtin_expect((c)->pc != (ra), 0)) {               \
+        rt_from_ra = (ra);                                    \
+        __attribute__((musttail)) return rt_dispatch_from(c); \
     }
 
 // ---- memory: guest addresses are host addresses

@@ -196,12 +196,18 @@ and update this file when you finish or drop it.
     fiber, the lifted Cpu saved per fiber, ThreadType::_currentFiber kept); Apple keeps the SDK's (os::FIBER_TABLE is
     empty there). Seen in the run: four job fibers (main+0x18d950), each yields to the thread and is resumed; a fiber
     whose function returned (null: the thread) is switched to again without InitializeFiber, so it starts over.
-  - **Open (win-worker): guest C++ exceptions in lifted code.** Next stop: boot::Scene::GameFlow throws (__cxa_throw ->
+  - Guest C++ exceptions in lifted code (done, win-worker): boot::Scene::GameFlow throws (__cxa_throw ->
     _Unwind_RaiseException), caught in the fiber function: the guest unwinder branches to the landing pad
-    main+0x18d970, mid-function, with the throwing functions' host frames still on the stack. Needs landing pads
-    (LSDA call-site tables) as resumable points of their functions and the host stack unwound to that activation (a
-    catch point in functions that have landing pads, matched by guest sp). The lifted crash report now names exports
+    main+0x18d970 from deep in its own frames. The lifter reads each FDE's LSDA (lifterlib ehframe.rs landing_pads),
+    lifts every pad as a function and exports <m>_lps (pad, function start, end); a dispatch miss on a pad returns, and
+    each lifted caller after its call (RT_RETURNED -> rt.c rt_dispatch_from, with the return address it expected)
+    passes it up until the frame whose return address lies in the pad's function enters the pad in its place. Changes
+    every call site's miss path: Windows apps need relifting. The lifted crash report names exports
     (module_loader::nearest_symbol) for pc, lr and each lifted frame.
+  - Jamboree v0 on Windows (Vulkan, headless, mac-worker's script) now runs 17000 frames without a stop: the board
+    overview with captions at f8000 / f17000 (still the intro at f17000, where the Mac reaches the plaza; v0 here,
+    2.3.0 there). **Open:** the caption box draws blocky magenta / white garbage on Vulkan (items 31 / 33 territory:
+    texture arrays, table handle words).
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
