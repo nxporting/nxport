@@ -1342,7 +1342,7 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
 /// guest's lr and fp are in its Cpu, not in the faulting host context: the Fault leaves them 0.
 #[cfg(all(nx_runtime, not(nx_native), windows))]
 unsafe fn lifted_access_fault(addr: usize, write: bool, pc: usize) -> bool {
-    let f = gpu::Fault { addr, pc, lr: 0, fp: 0, write };
+    let f = gpu::Fault { addr, pc, lr: 0, fp: 0, write, ctx: 0 };
     gpu::backend().access_fault(&f) || guest::dirty_track::handle_fault(addr) || gpu::backend().late_access_fault(&f)
 }
 

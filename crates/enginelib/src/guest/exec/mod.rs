@@ -7,6 +7,8 @@
 pub mod aot;
 #[cfg(all(nx_runtime, nx_native))]
 pub mod crash_handler;
+#[cfg(all(nx_runtime, nx_native))]
+pub mod load_emulate;
 #[cfg(all(nx_runtime, any(nx_native, windows)))]
 pub mod exclusive_rewrite;
 #[cfg(all(nx_runtime, any(nx_native, windows)))]

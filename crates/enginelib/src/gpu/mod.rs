@@ -30,6 +30,8 @@ pub struct Fault {
     pub lr: usize,
     pub fp: usize,
     pub write: bool,
+    /// The faulting thread's machine context (Darwin arm64 mcontext), 0 when there is none to resume through.
+    pub ctx: usize,
 }
 
 /// One stage of a program as the guest gave it (nvnProgramSetShaders): its code and its compiler control section.
