@@ -30,6 +30,11 @@ static MAIN_BASE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsiz
 pub fn main_base() -> usize {
     MAIN_BASE.load(std::sync::atomic::Ordering::Relaxed)
 }
+static GUEST_END: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The end of the guest's reservation (rtld slot, main, its gaps, the SDK slot), or 0 before it is allocated.
+pub fn guest_end() -> usize {
+    GUEST_END.load(std::sync::atomic::Ordering::Relaxed)
+}
 static RTLD_SLOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// The reserved rtld placeholder slot (PROT_NONE until main.rs maps it), or 0.
 pub fn rtld_slot() -> usize {
@@ -161,6 +166,7 @@ impl GuestMemorySpace {
         //               SIGBUS at startup).
         //   x18 island, generated code, the SDK slot
         RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
+        GUEST_END.store(slot + total_reserve, std::sync::atomic::Ordering::Relaxed);
         MAIN_BASE.store(ptr, std::sync::atomic::Ordering::Relaxed);
         let gap = ptr + main_end + ISLAND_SLOT_SIZE;
         let gen = ptr + main_end + SDK_GAP - GEN_SIZE;

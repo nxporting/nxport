@@ -167,6 +167,39 @@ and update this file when you finish or drop it.
      (handle_index - 8) / 2 only: Unity stages (packed slots 2|2<<16, types 1) need the same word mapping there, and
      cbuf_slot must be compared by its low 16 bits. The libc file layer replaces the SDK's stdio / stat / dir functions
      for every game (console FILEs log [console] lines).
+  **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
+  - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
+    only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
+    Workspace builds; workspace lib/bin tests pass.
+  - 31: Vulkan has one descriptor set per stage and matches resources by binding (shader.rs build_stage), so an array
+    in set 4 binding 0 could not work there at all (it read as the support buffer). Vulkan now uses array_sets = false:
+    an array is one binding of descriptor count `length` in the stage's set, fed per element by draw.rs (0906d84).
+  - 20: Vulkan's draw-side stage key (vulkan/mod.rs stage_hash) hashed only the first 0x130 bytes and the control
+    section; it now hashes up to Prep::code_len (code and constant bank) (0906d84).
+  - 6, 19: Vulkan's guard.rs holds whole ranges (no page ring), and reprotect_held / write_back re-check after
+    protecting; a fault on a released page opens it. Nothing to do.
+  - 21: BotW 1.9.0 on Vulkan draws the flower pair (s_fdcfb48a9468fac2 / s_d439cb011a8d2db4) 31 + 31 per frame in
+    the Shrine of Resurrection (save190, f2317-2320); the tower top (scale_save) has none in view. The Mac's 233 is from
+    botw-shrine-water, not on this PC: asked the user to copy it to nxport-build/botw/shrine-water.
+  - 15 / 16: the refresh rate is set on Windows (display_sdl.rs); pacing_shown is not fed (needs present times:
+    VK_KHR_present_wait / present_id). Open.
+  - 26 on the lifted path: NROs were never lifted (the builder lifts what guest_modules loads), so Jamboree died at
+    the first call into boot.nro ("a branch to code that was not lifted", pc 0x7001e5c0a0). Now every RomFS *.nro has
+    a slot (module_loader::ro_slots: path order, the module gap while they fit, then a range reserved exactly past
+    the guest's), the builder lifts each at its slot as nro_<path>, and the lifted runtime maps an image at the slot
+    whose build id (NRO header 0x40) matches; others still go to RO_NEXT. Jamboree v0 has 139 NROs. Apple native is
+    unchanged (slots only where code is lifted, and in guest_modules for a Mac building the Windows app).
+  - Jamboree then used nn::os fibers: the SDK's SwitchToFiber resumes a saved context mid-function, which lifted code
+    cannot. Windows binds InitializeFiber / SwitchToFiber / FinalizeFiber (horizon/os/fibers.rs: a host fiber per guest
+    fiber, the lifted Cpu saved per fiber, ThreadType::_currentFiber kept); Apple keeps the SDK's (os::FIBER_TABLE is
+    empty there). Seen in the run: four job fibers (main+0x18d950), each yields to the thread and is resumed; a fiber
+    whose function returned (null: the thread) is switched to again without InitializeFiber, so it starts over.
+  - **Open (win-worker): guest C++ exceptions in lifted code.** Next stop: boot::Scene::GameFlow throws (__cxa_throw ->
+    _Unwind_RaiseException), caught in the fiber function: the guest unwinder branches to the landing pad
+    main+0x18d970, mid-function, with the throwing functions' host frames still on the stack. Needs landing pads
+    (LSDA call-site tables) as resumable points of their functions and the host stack unwound to that activation (a
+    catch point in functions that have landing pads, matched by guest sp). The lifted crash report now names exports
+    (module_loader::nearest_symbol) for pc, lr and each lifted frame.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the

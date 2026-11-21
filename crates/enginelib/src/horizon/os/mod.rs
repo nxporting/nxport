@@ -13,6 +13,8 @@ pub(crate) mod suspend;
 pub(crate) mod locks;
 pub(crate) mod events;
 pub(crate) mod time;
+#[cfg(windows)]
+pub(crate) mod fibers;
 pub(crate) use events::*;
 pub(crate) use locks::*;
 pub(crate) use time::*;

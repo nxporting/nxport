@@ -81,6 +81,7 @@ static TABLES: &[&[Entry]] = &[
     nvn::TABLE,
     oe::TABLE,
     os::TABLE,
+    os::FIBER_TABLE,
     pdm::TABLE,
     pl::TABLE,
     prepo::TABLE,

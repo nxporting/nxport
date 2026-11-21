@@ -204,3 +204,16 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("nnosWaitThread", func!(crate::horizon::os::wait_thread(_))),
     Entry("nnosWaitTimerEvent", func!(crate::horizon::os::wait_timer_event(_))),
 ];
+
+/// Fibers where guest code runs lifted (horizon/os/fibers.rs); natively the SDK's own code runs.
+#[cfg(windows)]
+pub(super) static FIBER_TABLE: &[Entry] = &[
+    Entry("_ZN2nn2os13FinalizeFiberEPNS0_9FiberTypeE", func!(crate::horizon::os::fibers::finalize_fiber(_))),
+    Entry("_ZN2nn2os13SwitchToFiberEPNS0_9FiberTypeE", func!(crate::horizon::os::fibers::switch_to_fiber(_))),
+    Entry(
+        "_ZN2nn2os15InitializeFiberEPNS0_9FiberTypeEPFS2_PvES3_S3_mi",
+        func!(crate::horizon::os::fibers::initialize_fiber(_, _, _, _, _, _)),
+    ),
+];
+#[cfg(not(windows))]
+pub(super) static FIBER_TABLE: &[Entry] = &[];

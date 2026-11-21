@@ -217,7 +217,7 @@ pub unsafe fn load_segments(
     // Inside the reserved gap after main the spot is ours: commit it, so the layout is the same in every run. Elsewhere
     // only a hint is possible.
     let (gap, gap_end) = crate::guest::loader::mod_gap();
-    let fixed = gap != 0 && hint >= gap && hint + total <= gap_end;
+    let fixed = (gap != 0 && hint >= gap && hint + total <= gap_end) || in_ro_region(hint, total);
     let alloc_base = if fixed {
         hint
     } else {
@@ -436,6 +436,14 @@ pub fn set_symbols(map: std::collections::HashMap<String, usize>) {
     let _ = SYMBOLS.set(map);
 }
 
+/// The symbol at or below `addr` (the game's, the SDK's, run-time modules' exports) and the offset into it, for crash
+/// reports. Within 1 MiB, or none.
+pub fn nearest_symbol(addr: usize) -> Option<(String, usize)> {
+    let modules = RO_MODULES.lock().ok()?;
+    let all = SYMBOLS.get().into_iter().flatten().chain(modules.iter().flat_map(|(_, _, e)| e.iter()));
+    all.filter(|(_, &a)| a <= addr && addr - a < 0x10_0000).min_by_key(|(_, &a)| addr - a).map(|(n, &a)| (n.clone(), addr - a))
+}
+
 pub unsafe extern "C" fn ro_initialize() -> u32 {
     0
 }
@@ -548,6 +556,140 @@ pub fn set_ro_loader(l: RoLoader, first: usize) {
     let _ = RO_LOADER.set(l);
 }
 
+/// Where an NRO of the game's RomFS is mapped where code runs lifted: the builder lifts each one at its slot (as
+/// module `name`), so it must land there whatever order the game loads them in.
+pub struct RoSlot {
+    /// The NRO header's module id (0x40, 32 bytes): how an image the game passes is matched to its slot.
+    pub build_id: [u8; 32],
+    /// load_segments' hint (where its allocation starts).
+    pub hint: usize,
+    pub name: String,
+}
+
+/// RomFS NROs (path in the RomFS, image or at least its 0x60-byte header), in path order, each at its own slot: from
+/// `first` while they fit before `gap_end` (the reserved module gap), the rest from `region` on (a range set_ro_slots
+/// reserves). Returns the slots, the first address after them, and the region's end (`region`: none used).
+pub fn ro_slots(nros: &[(String, Vec<u8>)], first: usize, gap_end: usize, region: usize) -> (Vec<RoSlot>, usize, usize) {
+    let mut next = first;
+    let mut region_end = region;
+    let mut slots = Vec::new();
+    for (path, h) in nros {
+        if h.len() < 0x60 || &h[0x10..0x14] != b"NRO0" {
+            continue;
+        }
+        let image_size = r_u32(h, 0x30) as usize + r_u32(h, 0x34) as usize + r_u32(h, 0x38) as usize;
+        let image_aligned = (image_size + 0x3fff) & !0x3fff;
+        // As load_segments takes it: the allocation (image and stubs) from the hint.
+        if next < region && next + image_aligned + STUB_AREA > gap_end {
+            next = region;
+        }
+        let base = if image_aligned > 0x600_0000 { next + STUB_AREA } else { next };
+        if next >= region {
+            region_end = (next + image_aligned + STUB_AREA + 0xffff) & !0xffff;
+        }
+        let name: String = path.trim_end_matches(".nro").chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        slots.push(RoSlot { build_id: h[0x40..0x60].try_into().unwrap(), hint: next, name: format!("nro_{}", name.trim_matches('_')) });
+        next = (base + image_size + 0x20_0000) & !0x3fff;
+    }
+    (slots, next, region_end)
+}
+
+/// The RomFS's NROs as ro_slots takes them (path order), with their whole images.
+pub fn romfs_nros(romfs: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, std::path::PathBuf)>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                walk(&p, root, out);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("nro")) {
+                let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                out.push((rel, p));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(romfs, romfs, &mut files);
+    files.sort();
+    files.into_iter().filter_map(|(rel, p)| std::fs::read(&p).ok().map(|d| (rel, d))).collect()
+}
+
+/// The lifted runtime's slots (set at startup from the RomFS, as the builder laid them out).
+static RO_SLOTS: std::sync::OnceLock<Vec<RoSlot>> = std::sync::OnceLock::new();
+
+/// The range reserved for the slots that do not fit the module gap: [start, end).
+static RO_REGION: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0));
+
+fn in_ro_region(a: usize, len: usize) -> bool {
+    let (s, e) = *RO_REGION.lock().unwrap();
+    s != 0 && a >= s && a + len <= e
+}
+
+/// Lays out `nros` (romfs_nros) from `first`, the module gap then a range reserved right after the guest's, and maps
+/// them at their slots from here on; modules no slot holds go after them. Where code runs lifted (the runtime, and the
+/// builder lifting it), before any NRO is loaded.
+pub fn set_ro_slots(nros: &[(String, Vec<u8>)], first: usize) -> Result<(), String> {
+    if RO_SLOTS.get().is_some() {
+        return Ok(());
+    }
+    let region = (crate::guest::loader::guest_end() + 0xffff) & !0xffff;
+    let (slots, after, region_end) = ro_slots(nros, first, crate::guest::loader::mod_gap().1, region);
+    if region_end > region {
+        // Fixed: lifted code has these addresses built in.
+        unsafe { crate::platform::os::reserve(crate::platform::os::At::Exactly(region), region_end - region) }
+            .map_err(|e| format!("reserving {region:#x}+{:#x} for the RomFS's NROs: {e}", region_end - region))?;
+        *RO_REGION.lock().unwrap() = (region, region_end);
+    }
+    println!(
+        "[+] Run-time modules: {} RomFS NRO slots, {:#x}..{:#x} past the module gap",
+        slots.len(),
+        region,
+        region_end
+    );
+    if RO_SLOTS.set(slots).is_ok() {
+        RO_NEXT.store(after, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// The game loads modules at run time (startup set a loader): from where, and whether they have slots yet.
+pub fn ro_loader() -> Option<(usize, bool)> {
+    RO_LOADER.get().map(|_| (RO_NEXT.load(std::sync::atomic::Ordering::Relaxed), RO_SLOTS.get().is_some()))
+}
+
+/// Maps and links the NRO `image` (ro_load_module without running its initialisers): at its slot under its slot's
+/// name when it has one, else at RO_NEXT as `nro<index>`.
+pub unsafe fn ro_map(image: *const u8) -> Result<(String, LoadedModule), String> {
+    let l = RO_LOADER.get().ok_or("no run-time module loader")?;
+    // NRO header: text, rodata, data (file offset = memory offset, size) at 0x20, bss size at 0x38.
+    let seg = |i: usize| {
+        let o = ptr::read_unaligned(image.add(0x20 + i * 8) as *const u32) as usize;
+        let n = ptr::read_unaligned(image.add(0x24 + i * 8) as *const u32) as usize;
+        (o, std::slice::from_raw_parts(image.add(o), n).to_vec())
+    };
+    let segs = vec![seg(0), seg(1), seg(2)];
+    let bss = ptr::read_unaligned(image.add(0x38) as *const u32) as usize;
+    let id = std::slice::from_raw_parts(image.add(0x40), 32);
+    let slot = RO_SLOTS.get().and_then(|s| s.iter().find(|s| s.build_id == id));
+    let index = RO_MODULES.lock().unwrap().len();
+    let name = slot.map_or_else(|| format!("nro{index}"), |s| s.name.clone());
+    // rtld's global scope: main's definitions and imports, the SDK's, what horizon::sdk binds, then earlier modules.
+    let resolve = |n: &str| -> Option<usize> {
+        lookup(n).or_else(|| RO_MODULES.lock().unwrap().iter().rev().find_map(|(_, _, e)| e.get(n).copied()))
+    };
+    let hint = slot.map_or_else(|| RO_NEXT.load(std::sync::atomic::Ordering::Relaxed), |s| s.hint);
+    let m = load_segments(&name, segs, bss, hint, &resolve, l.svc_entry, l.unresolved, true)?;
+    if slot.is_none() {
+        RO_NEXT.store((m.base + m.image_size + 0x20_0000) & !0x3fff, std::sync::atomic::Ordering::Relaxed);
+        if RO_SLOTS.get().is_some() {
+            println!("[!] nn::ro::LoadModule: {name} is not one of the RomFS's NROs: its code was not lifted");
+        }
+    }
+    println!("[+] nn::ro::LoadModule: {name} at {:#x} ({} exports)", m.base, m.exports.len());
+    RO_MODULES.lock().unwrap().push((image as usize, m.base, m.exports.clone()));
+    Ok((name, m))
+}
+
 /// nn::ro::LoadModule(Module*, const void* image, void* buffer, size_t, int): maps the NRO, links its imports (the
 /// game's symbols, the SDK's, what horizon::sdk binds, modules loaded before it) and runs its initialiser, as rtld
 /// does for a module loaded at run time. Without a loader (no game here loads modules) it only records the module.
@@ -571,26 +713,11 @@ pub unsafe extern "C" fn ro_load_module(
         (*rm).image = image;
         (*rm).buffer = buf;
     }
-    let Some(l) = RO_LOADER.get() else { return 0 };
-    // NRO header: text, rodata, data (file offset = memory offset, size) at 0x20, bss size at 0x38.
-    let seg = |i: usize| {
-        let o = ptr::read_unaligned(image.add(0x20 + i * 8) as *const u32) as usize;
-        let n = ptr::read_unaligned(image.add(0x24 + i * 8) as *const u32) as usize;
-        (o, std::slice::from_raw_parts(image.add(o), n).to_vec())
-    };
-    let segs = vec![seg(0), seg(1), seg(2)];
-    let bss = ptr::read_unaligned(image.add(0x38) as *const u32) as usize;
-    let index = RO_MODULES.lock().unwrap().len();
-    let name = format!("nro{index}");
-    let resolve = |n: &str| -> Option<usize> {
-        lookup(n).or_else(|| RO_MODULES.lock().unwrap().iter().rev().find_map(|(_, _, e)| e.get(n).copied()))
-    };
-    let hint = RO_NEXT.load(std::sync::atomic::Ordering::Relaxed);
-    match load_segments(&name, segs, bss, hint, &resolve, l.svc_entry, l.unresolved, true) {
-        Ok(m) => {
-            RO_NEXT.store((m.base + m.image_size + 0x20_0000) & !0x3fff, std::sync::atomic::Ordering::Relaxed);
-            println!("[+] nn::ro::LoadModule: {name} ({} exports)", m.exports.len());
-            RO_MODULES.lock().unwrap().push((image as usize, m.base, m.exports));
+    if RO_LOADER.get().is_none() {
+        return 0;
+    }
+    match ro_map(image) {
+        Ok((_, m)) => {
             if let Some(init) = m.init {
                 crate::guest::call(init, &[]);
             }
@@ -600,7 +727,7 @@ pub unsafe extern "C" fn ro_load_module(
             0
         }
         Err(e) => {
-            println!("[!] nn::ro::LoadModule: {name} not loaded: {e}");
+            println!("[!] nn::ro::LoadModule: not loaded: {e}");
             0x816
         }
     }

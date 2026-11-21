@@ -106,6 +106,27 @@ pub fn guest_modules(s: settings::Settings, patched: Option<&[u8]>) -> Result<Ve
             patched: Vec::new(),
         });
     }
+    // NROs the game loads at run time: each of the RomFS's at its slot (as the lifted runtime maps them), lifted with the
+    // rest. On a lifted host load() set the slots already; a Mac making the Windows app sets them here.
+    if let Some((next, has_slots)) = guest::module_loader::ro_loader() {
+        let nros = guest::module_loader::romfs_nros(game::romfs());
+        if !has_slots {
+            guest::module_loader::set_ro_slots(&nros, next)?;
+        }
+        for (path, image) in nros {
+            // ro_map keeps the image's address (as the game's buffer would be): it stays for the process.
+            let image: &'static [u8] = Box::leak(image.into_boxed_slice());
+            let (name, m) = unsafe { guest::module_loader::ro_map(image.as_ptr()) }.map_err(|e| format!("{path}: {e}"))?;
+            modules.push(GuestModule {
+                name,
+                base: m.base as u64,
+                image: copy(m.base, m.image_size),
+                text: m.text.start as u64..m.text.end as u64,
+                dynamic: true,
+                patched: Vec::new(),
+            });
+        }
+    }
     let covered = |a: usize| modules.iter().any(|m| m.text.contains(&(a as u64)));
     let regions = guest::exec::aot::regions();
     let extra: Vec<GuestModule> = regions
@@ -1022,11 +1043,14 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         let svc_entry = mem_space.make_hle_trampoline(crate::hle!(horizon::svc::svc_dispatch(_, _))) as usize;
         let unresolved =
             mem_space.make_hle_trampoline(crate::hle!(guest::module_loader::unresolved_import())) as usize;
-        guest::module_loader::set_ro_loader(
-            guest::module_loader::RoLoader { svc_entry, unresolved },
-            guest::loader::mod_gap().0,
-        );
+        let first = guest::loader::mod_gap().0;
+        guest::module_loader::set_ro_loader(guest::module_loader::RoLoader { svc_entry, unresolved }, first);
         guest::module_loader::set_symbols(syms);
+        // Lifted code: every NRO of the RomFS has its own slot, where the builder lifted it (guest_modules).
+        #[cfg(not(nx_native))]
+        {
+            guest::module_loader::set_ro_slots(&guest::module_loader::romfs_nros(game::romfs()), first)?;
+        }
     }
 
     // 4a'. Guest reads of tpidr_el0 get XNU's per-CPU value after a reschedule; point them at the stable
@@ -1294,13 +1318,30 @@ fn lifted_handlers() -> guest::exec::lifted::Handlers {
         let main = guest::loader::main_base() as u64;
         let rel = |a: u64| if a >= main { format!("{a:#x} (main+{:#x})", a - main) } else { format!("{a:#x}") };
         eprintln!("[-] Lifted: {what}; pc {}, lr {}, sp {:#x}", rel(cpu.pc), rel(cpu.x[30]), cpu.sp);
+        for (reg, a) in [("pc", cpu.pc), ("lr", cpu.x[30])] {
+            if let Some((name, off)) = guest::module_loader::nearest_symbol(a as usize) {
+                eprintln!("    {reg} in {name}+{off:#x}");
+            }
+        }
         for (i, r) in cpu.x.chunks(4).enumerate() {
             eprintln!("    x{:<2} {:#018x} {:#018x} {:#018x} {:#018x}", i * 4, r[0], r[1], r[2], r[3]);
         }
         // The lifted functions on the host stack (guest.pdb names them f_<address>): which one dispatched the branch. An
         // unresolved computed branch hands its target to its caller to dispatch, so pc and lr alone do not say.
         let bt = std::backtrace::Backtrace::force_capture().to_string();
-        let lifted: Vec<&str> = bt.lines().filter(|l| l.contains(": f_")).map(str::trim).take(12).collect();
+        let lifted: Vec<String> = bt
+            .lines()
+            .filter(|l| l.contains(": f_"))
+            .map(str::trim)
+            .take(12)
+            .map(|l| {
+                let a = l.rsplit("f_").next().and_then(|h| usize::from_str_radix(h.trim(), 16).ok());
+                match a.and_then(guest::module_loader::nearest_symbol) {
+                    Some((n, off)) => format!("{l} ({n}+{off:#x})"),
+                    None => l.to_string(),
+                }
+            })
+            .collect();
         if !lifted.is_empty() {
             eprintln!("    lifted functions on the host stack, innermost first: {}", lifted.join(" < "));
         }
