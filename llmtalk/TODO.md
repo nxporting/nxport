@@ -134,6 +134,9 @@ and update this file when you finish or drop it.
      "Select a Mii") to the first race; Kirby's opening movie should pace as before.
   24. 8eb4f8c (shared horizon/sdk/v1_6): SDK 1.6 layer reporting NVN 53.5; Splatoon 2 1.0.0 now boots to its character
      creator (headless, A every 300 frames from 1500). Windows: try the same.
+  25. bdd25ce (shared horizon/: crypto, irsensor, account, hid, movie; platform::os::random_bytes uses ProcessPrng on
+     Windows, untested there): SDK functions Mario Party Jamboree reached over unemulated IPC. Windows: build check of
+     platform/os/windows.rs random_bytes (bcryptprimitives ProcessPrng).
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
