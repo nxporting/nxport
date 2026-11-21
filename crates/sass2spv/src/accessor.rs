@@ -60,8 +60,9 @@ pub struct Host {
     /// view type (low 20 bits) and one into the sampler array (high 12 bits), as NVN packs a handle. Not with
     /// sampler_slots.
     pub bindless_textures: bool,
-    /// Texture and image arrays get a descriptor set of their own (Vulkan); without, they take `length` consecutive
-    /// bindings like other textures (MSL: an array<> parameter over that many texture / sampler slots).
+    /// Texture and image arrays get descriptor set 4 (one set for every array of the stage); without (Vulkan, MSL),
+    /// they take `length` consecutive bindings like other textures (MSL: an array<> parameter over that many texture /
+    /// sampler slots; Vulkan: one binding of descriptor count `length` in the stage's set).
     pub array_sets: bool,
 }
 

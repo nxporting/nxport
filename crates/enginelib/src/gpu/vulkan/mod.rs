@@ -548,7 +548,13 @@ unsafe fn stage_hash(data: u64, control: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     if data >= 0x10000 {
-        std::slice::from_raw_parts(data as *const u8, 0x130).hash(&mut h);
+        // The whole code where the control section gives its length: draws find stages by (address, this hash), and
+        // BotW loads other shader archives into memory it freed, so code that differed only past the first 0x130 bytes
+        // got the stage of what was there before.
+        let code = shader::guest_code(data);
+        // Prep::code_len: from the data's start to the end of the constant bank the translator reads.
+        let len = shader::prep(code, shader::guest_ctrl(control), 0).code_len;
+        code[..len.max(0x130).min(code.len())].hash(&mut h);
     }
     if control >= 0x1_0000_0000 && *(control as *const u32) == 0x9876_1234 {
         std::slice::from_raw_parts(control as *const u8, 0x780).hash(&mut h);
