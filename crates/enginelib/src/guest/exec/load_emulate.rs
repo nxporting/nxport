@@ -1,6 +1,8 @@
 // Completing one faulting guest load without the page it touches being accessible: the plain load forms (register with
-// unsigned / unscaled / pre / post-indexed immediate, register offset, pair; general and SIMD registers). The caller
-// supplies where the bytes can be read instead; anything else (stores, exclusives, atomics, prefetches) is left alone.
+// unsigned / unscaled / pre / post-indexed immediate, register offset, pair; general and SIMD registers) and
+// load-acquire. The caller supplies where the bytes can be read instead; anything else (stores, exclusives, atomics,
+// prefetches) is left alone. Stores are left to wait on purpose: one wait opens the page for every store after it,
+// while completing each store here faults on every one of them (Breath of the Wild walking: 3% slower).
 
 /// Byte offset of the NEON registers in Darwin's arm64 mcontext: __es (16 bytes) then __ss (272 bytes).
 const NEON_OFFSET: usize = 16 + 272;
@@ -66,6 +68,10 @@ fn decode(insn: u32, reg: impl Fn(usize) -> u64) -> Option<Load> {
             gpr_load(size, opc)
         }
     };
+    // LDAR / LDAPR (load-acquire, not exclusive): no offset. The caller orders the read with an acquire fence.
+    if insn & 0x3fff_fc00 == 0x08df_fc00 || insn & 0x3fff_fc00 == 0x38bf_c000 {
+        return Some(Load { regs: [(rt, false), (0, false)], count: 1, bytes: 1 << size, sext: None, rn, offset: 0, writeback: None });
+    }
     if insn & 0x3b00_0000 == 0x3900_0000 {
         let (bytes, sx) = sized()?;
         let imm = ((insn >> 10) & 0xfff) as i64 * bytes as i64;
@@ -137,6 +143,7 @@ pub(crate) unsafe fn emulate(mc: *mut libc::__darwin_mcontext64, read: impl Fn(u
     if !read(addr, &mut buf[..total]) {
         return false;
     }
+    std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
     for k in 0..l.count {
         let (r, simd) = l.regs[k];
         let b = &buf[k * l.bytes..(k + 1) * l.bytes];
@@ -205,6 +212,11 @@ mod tests {
         // ldr x1, [x2], #16 (post-index)
         let l = decode(0xf841_0441, regs).unwrap();
         assert_eq!((l.offset, l.writeback), (0, Some(16)));
+        // ldar w8, [x0]
+        let l = decode(0x88df_fc08, regs).unwrap();
+        assert_eq!((l.regs[0], l.bytes, l.offset, l.rn), ((8, false), 4, 0, 0));
+        // ldaxr w8, [x0] (exclusive) is left alone
+        assert!(decode(0x885f_fc08, regs).is_none());
         // stp x9, x27, [x8] and str w0, [x1] are not loads
         assert!(decode(0xa900_6d09, regs).is_none());
         assert!(decode(0xb900_0020, regs).is_none());
