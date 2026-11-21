@@ -18,6 +18,7 @@ pub(crate) unsafe extern "C" fn detail_abort(res: *const u32) -> ! {
         code, module, desc
     );
     let mut fp = crate::guest_reg!(x29);
+    eprintln!("[!] Guest callers: {}", crate::horizon::call_log::guest_chain(fp));
     eprintln!("[!] Call trace for Abort:");
     for frame_idx in 0..15 {
         if fp < 0x10000 || (fp & 7) != 0 {
