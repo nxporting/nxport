@@ -97,7 +97,7 @@ pub(super) static PROCS: &[Entry] = &[
     Entry("nvnCommandBufferBindTransformFeedbackBuffer", func!(crate::nvn::api::hle_nvnCommandBufferBindTransformFeedbackBuffer(_, _, _, _, _, _))),
     Entry("nvnCommandBufferBindTransformFeedbackBuffers", func!(crate::nvn::api::hle_nvnCommandBufferBindTransformFeedbackBuffers(_, _, _, _, _, _))),
     Entry("nvnCommandBufferBindUniformBuffersDeferred", func!(crate::nvn::api::hle_nvnCommandBufferBindUniformBuffersDeferred(_, _, _, _, _, _))),
-    Entry("nvnCommandBufferBindVertexBuffers", func!(crate::nvn::api::hle_nvnCommandBufferBindVertexBuffers(_, _, _, _, _, _))),
+    Entry("nvnCommandBufferBindVertexBuffers", func!(crate::nvn::cmd::hle_typed_cb_BindVertexBuffers(_, _, _, _))),
     Entry("nvnCommandBufferClearColori", func!(crate::nvn::api::hle_nvnCommandBufferClearColori(_, _, _, _, _, _))),
     Entry("nvnCommandBufferClearColorui", func!(crate::nvn::api::hle_nvnCommandBufferClearColorui(_, _, _, _, _, _))),
     Entry("nvnCommandBufferCopyCommands", func!(crate::nvn::api::hle_nvnCommandBufferCopyCommands(_, _, _, _, _, _))),

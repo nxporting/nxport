@@ -972,6 +972,16 @@ pub unsafe extern "C" fn hle_nvnCommandBufferBindVertexBuffer(
         Cmd::BindVertexBuffer { index, addr, size }
     );
 }
+/// nvnCommandBufferBindVertexBuffers(cmd, first, count, const NVNbufferRange*): {address, size} each.
+#[no_mangle]
+pub unsafe extern "C" fn hle_typed_cb_BindVertexBuffers(cmd: usize, first: c_int, count: c_int, ranges: *const [u64; 2]) {
+    for i in 0..count.max(0) {
+        let [addr, size] = if ranges.is_null() { [0, 0] } else { std::ptr::read_unaligned(ranges.add(i as usize)) };
+        let index = first + i;
+        let size = size as usize;
+        rec!("nvnCommandBufferBindVertexBuffers", cmd, Cmd::BindVertexBuffer { index, addr, size });
+    }
+}
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnCommandBufferBindVertexAttribState(
     cmd: usize,
