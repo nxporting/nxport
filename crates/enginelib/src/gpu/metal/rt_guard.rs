@@ -168,6 +168,8 @@ static WAIT_LOG_US: [AtomicU64; WAIT_LOG] = [const { AtomicU64::new(0) }; WAIT_L
 static DROPS: AtomicU64 = AtomicU64::new(0);
 static WRITEBACKS: AtomicU64 = AtomicU64::new(0);
 static WAITS: AtomicU64 = AtomicU64::new(0);
+/// Guest loads of unheld bytes on held pages, completed through the second mapping.
+static EMULATED: AtomicU64 = AtomicU64::new(0);
 static WAIT_US: AtomicU64 = AtomicU64::new(0);
 static HOST_RELEASES: AtomicU64 = AtomicU64::new(0);
 static TIMEOUTS: AtomicU64 = AtomicU64::new(0);
@@ -194,6 +196,7 @@ extern "C" {
         inheritance: u32,
     ) -> i32;
     fn mach_vm_deallocate(task: u32, address: u64, size: u64) -> i32;
+    fn mach_vm_read_overwrite(task: u32, address: u64, size: u64, data: u64, out_size: *mut u64) -> i32;
 }
 
 /// A shared, writable second mapping of [start, end).
@@ -641,8 +644,35 @@ fn start_thread() {
 
 // ---- faults (signal context: atomics, mprotect, write and nanosleep only) -------------------------------------------
 
+/// Reads `buf.len()` bytes at `a` through a hold's second mapping when they lie on one held page and outside every
+/// hold's bytes there.
+unsafe fn read_unheld(a: usize, buf: &mut [u8]) -> bool {
+    let page = a & !(PAGE - 1);
+    if buf.is_empty() || (a + buf.len() - 1) & !(PAGE - 1) != page {
+        return false;
+    }
+    let n = HIGH.load(Ordering::Acquire).min(SLOTS);
+    let mut src = 0;
+    for i in 0..n {
+        if !covers(i, page) {
+            continue;
+        }
+        if a < BEND[i].load(Ordering::Acquire) && a + buf.len() > BSTART[i].load(Ordering::Acquire) {
+            return false;
+        }
+        let alias = ALIAS[i].load(Ordering::Acquire);
+        if src == 0 && alias != 0 {
+            src = alias + (a - START[i].load(Ordering::Acquire));
+        }
+    }
+    let mut got = 0u64;
+    src != 0
+        && mach_vm_read_overwrite(mach_task_self_, src as u64, buf.len() as u64, buf.as_mut_ptr() as u64, &mut got) == 0
+        && got == buf.len() as u64
+}
+
 /// Signal-handler hook: true if `addr` is on a held page (the access is then retried).
-pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write: bool) -> bool {
+pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write: bool, ctx: usize) -> bool {
     if !enabled() || HIGH.load(Ordering::Acquire) == 0 {
         return false;
     }
@@ -714,6 +744,12 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
             };
             format!("engine read of held page {:#x} (thread {}, pc {:#x}, lr {}): opened read-only, write-back requested", page, name, pc, sym)
         });
+        return true;
+    }
+    // A load of bytes no hold covers (other data on a held target's first or last page) needs no rendering: it reads
+    // them through the second mapping and goes on.
+    if !write && ctx != 0 && crate::guest::exec::load_emulate::emulate(ctx as *mut libc::__darwin_mcontext64, |a, buf| read_unheld(a, buf)) {
+        EMULATED.fetch_add(1, Ordering::Relaxed);
         return true;
     }
     WAITS.fetch_add(1, Ordering::Relaxed);
@@ -979,15 +1015,17 @@ pub(super) fn frame_end(frame: u64) {
         .filter(|&i| STATE[i].load(Ordering::Acquire) == HELD)
         .count();
     println!(
-        "[rt-guard] last 300 frames: {} holds, {} write-backs, {} superseded, {} waits ({:.2} ms per frame), engine opens {}, timeouts {}, overflows {}; held now {}",
+        "[rt-guard] last 300 frames: {} holds, {} write-backs, {} superseded, {} waits ({:.2} ms per frame), {} loads of unheld bytes served, engine opens {}, timeouts {}, overflows {}; held now {}",
         take(&HOLDS),
         take(&WRITEBACKS),
         take(&DROPS),
         take(&WAITS),
         take(&WAIT_US) as f64 / 300_000.0,
+        take(&EMULATED),
         take(&HOST_RELEASES),
         take(&TIMEOUTS),
         take(&OVERFLOW),
         held_now
     );
 }
+

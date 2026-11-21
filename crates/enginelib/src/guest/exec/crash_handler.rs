@@ -338,6 +338,7 @@ unsafe extern "C" fn handle_signal(
             lr: (*mc).__ss.__lr as usize,
             fp: (*mc).__ss.__fp as usize,
             write: (*mc).__es.__esr & (1 << 6) != 0,
+            ctx: mc as usize,
         })
     } else {
         None
