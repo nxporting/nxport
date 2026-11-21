@@ -955,53 +955,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
         let (pool, pool_len) = mem_space.trampoline_range();
         horizon::svc::add_hookable(pool, pool_len);
-        let mut syms = mem_space.symbol_targets();
-        // Only targets mods may patch: guest code and the HLE trampoline pool. Some game imports are bound straight to
-        // engine (Rust) functions; those names fall through to the SDK's own export below.
-        {
-            let sdk_range = sdk
-                .as_ref()
-                .map(|m| (m.base, m.base + m.total_size))
-                .unwrap_or((0, 0));
-            let ok = |a: usize| {
-                (a >= main_base && a < main_base + mem_space.total_size)
-                    || (a >= sdk_range.0 && a < sdk_range.1)
-                    || (a >= pool && a < pool + pool_len)
-            };
-            syms.retain(|_, a| ok(*a));
-        }
-        if let Some(sdk_mod) = sdk.as_ref() {
-            for (k, v) in &sdk_mod.symbols {
-                syms.entry(k.clone()).or_insert(*v);
-            }
-        }
-        // Everything horizon::sdk binds, as the game's imports get it.
-        for name in horizon::sdk::names() {
-            match horizon::sdk::lookup(name) {
-                Some(horizon::sdk::Target::Func(f, id)) => {
-                    syms.insert(name.to_string(), mem_space.shared_hle_trampoline(f as *const (), id) as usize);
-                }
-                Some(horizon::sdk::Target::Data(a)) => {
-                    syms.insert(name.to_string(), a);
-                }
-                None => {}
-            }
-        }
-        for name in [
-            "_ZN2nn2ro6detail15g_pAutoLoadListE",
-            "_ZN2nn2ro6detail35g_LookupGlobalManualFunctionPointerE",
-        ] {
-            syms.entry(name.to_string())
-                .or_insert(guest::module_loader::RO_DATA_ZERO.as_ptr() as usize);
-        }
-        syms.insert(
-            "_ZN4sead4QuatIfE4unitE".to_string(),
-            guest::module_loader::SEAD_QUAT_UNIT.as_ptr() as usize,
-        );
-        syms.insert(
-            "_ZN4sead7Vector3IfE4zeroE".to_string(),
-            guest::module_loader::SEAD_VEC3_ZERO.as_ptr() as usize,
-        );
+        let mut syms = module_symbols(&mut mem_space, sdk.as_ref(), main_base);
         let svc_entry =
             mem_space.make_hle_trampoline(crate::hle!(horizon::svc::svc_dispatch(_, _))) as usize;
         let unresolved = mem_space
@@ -1097,6 +1051,19 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 }
             }
         }
+        guest::module_loader::set_ro_loader(guest::module_loader::RoLoader { svc_entry, unresolved }, hint);
+        guest::module_loader::set_symbols(syms);
+    } else if mem_space.imports().iter().any(|(_, n)| n.starts_with("_ZN2nn2ro10LoadModule")) {
+        // A game that loads its own modules (NROs) at run time: nn::ro::LoadModule maps and links them.
+        let main_base = mem_space.base_ptr as usize;
+        let syms = module_symbols(&mut mem_space, sdk.as_ref(), main_base);
+        let svc_entry = mem_space.make_hle_trampoline(crate::hle!(horizon::svc::svc_dispatch(_, _))) as usize;
+        let unresolved =
+            mem_space.make_hle_trampoline(crate::hle!(guest::module_loader::unresolved_import())) as usize;
+        guest::module_loader::set_ro_loader(
+            guest::module_loader::RoLoader { svc_entry, unresolved },
+            guest::loader::mod_gap().0,
+        );
         guest::module_loader::set_symbols(syms);
     }
 
@@ -1383,4 +1350,64 @@ fn lifted_handlers() -> guest::exec::lifted::Handlers {
         stop(cpu, "a branch to code that was not lifted")
     }
     guest::exec::lifted::Handlers { svc, trap, unknown, ticks: guest::regs::lifted_ticks }
+}
+
+/// The names a module loaded next to the game resolves its imports against: the game's own definitions and import
+/// targets in guest code or the trampoline pool, the SDK's exports, everything horizon::sdk binds (as the game's
+/// imports get it), and a few data objects the engine provides.
+#[cfg(nx_runtime)]
+fn module_symbols(
+    mem_space: &mut GuestMemorySpace,
+    sdk: Option<&guest::sdk_loader::SdkModule>,
+    main_base: usize,
+) -> std::collections::HashMap<String, usize> {
+    let (pool, pool_len) = mem_space.trampoline_range();
+    let mut syms = mem_space.symbol_targets();
+    // Only targets mods may patch: guest code and the HLE trampoline pool. Some game imports are bound straight to
+    // engine (Rust) functions; those names fall through to the SDK's own export below.
+    {
+        let sdk_range = sdk
+            .as_ref()
+            .map(|m| (m.base, m.base + m.total_size))
+            .unwrap_or((0, 0));
+        let ok = |a: usize| {
+            (a >= main_base && a < main_base + mem_space.total_size)
+                || (a >= sdk_range.0 && a < sdk_range.1)
+                || (a >= pool && a < pool + pool_len)
+        };
+        syms.retain(|_, a| ok(*a));
+    }
+    if let Some(sdk_mod) = sdk.as_ref() {
+        for (k, v) in &sdk_mod.symbols {
+            syms.entry(k.clone()).or_insert(*v);
+        }
+    }
+    // Everything horizon::sdk binds, as the game's imports get it.
+    for name in horizon::sdk::names() {
+        match horizon::sdk::lookup(name) {
+            Some(horizon::sdk::Target::Func(f, id)) => {
+                syms.insert(name.to_string(), mem_space.shared_hle_trampoline(f as *const (), id) as usize);
+            }
+            Some(horizon::sdk::Target::Data(a)) => {
+                syms.insert(name.to_string(), a);
+            }
+            None => {}
+        }
+    }
+    for name in [
+        "_ZN2nn2ro6detail15g_pAutoLoadListE",
+        "_ZN2nn2ro6detail35g_LookupGlobalManualFunctionPointerE",
+    ] {
+        syms.entry(name.to_string())
+            .or_insert(guest::module_loader::RO_DATA_ZERO.as_ptr() as usize);
+    }
+    syms.insert(
+        "_ZN4sead4QuatIfE4unitE".to_string(),
+        guest::module_loader::SEAD_QUAT_UNIT.as_ptr() as usize,
+    );
+    syms.insert(
+        "_ZN4sead7Vector3IfE4zeroE".to_string(),
+        guest::module_loader::SEAD_VEC3_ZERO.as_ptr() as usize,
+    );
+    syms
 }

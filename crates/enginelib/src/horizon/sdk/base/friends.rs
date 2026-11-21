@@ -4,6 +4,10 @@ use super::super::Entry;
 
 pub(super) static TABLE: &[Entry] = &[
     // nn::friends (offline, no friends)
+    Entry(
+        "_ZN2nn7friends38TryPopFriendInvitationNotificationInfoEPNS_7account3UidEPmPvm",
+        func!(crate::horizon::friends::try_pop_friend_invitation_notification_info()),
+    ),
     Entry("_ZN2nn7friends10InitializeEv", func!(crate::horizon::friends::void())),
     Entry("_ZN2nn7friends12AsyncContext6CancelEv", func!(crate::horizon::friends::ok())),
     Entry("_ZN2nn7friends12AsyncContext14GetSystemEventEPNS_2os11SystemEventE", func!(crate::horizon::friends::get_system_event(_))),
