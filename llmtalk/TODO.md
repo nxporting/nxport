@@ -120,6 +120,11 @@ and update this file when you finish or drop it.
      while the code at the address still hashes to the stage's name (s_<full hash> over its code). Vulkan: check whether
      its run-time stage lookup (vulkan/shader.rs, vcache.rs) can return a stage for an address whose code changed (the
      2026-10-24 notes say stages are named by full hash; the in-memory address key is the thing to check).
+  21. 269bcaf (Metal rt_guard.rs): render targets in CPU-visible pools whose 16 KiB page range left the pool (pools are
+     4 KiB aligned) were never held: BotW 1.9.0 read its far grass density map (512x512 RGBA8 linear RT, redrawn every
+     frame) as zeros and never drew the small flowers / pebbles. Vulkan checks byte ranges already (guest_can_take), but
+     its CPU-visible write-back differs: check on Windows that BotW 1.9.0 at botw-shrine-water draws flowers around Link
+     (fragment weak hashes 2d760aaa / 4ebd2fa2, ~300+ draws a frame) and that the game reads the map's current contents.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
