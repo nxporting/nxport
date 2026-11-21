@@ -539,8 +539,17 @@ pub(crate) unsafe extern "C" fn d_acquire_output(
         if let Some(&slot) = d.ready.front() {
             let pts = d.outputs[slot].as_ref().map_or(0, |f| f.pts);
             let now = std::time::Instant::now();
+            // A frame due more than a second from now follows a seek (Mario Kart 8 Deluxe's menu jumps between previews
+            // in one movie): the clock restarts from it, as from a late frame. Timed from the old start it would wait out
+            // the whole jump (139 s there) while the menu waited for its preview. A contiguous stream cannot be that far
+            // ahead: the decoder holds only a few output slots of frames.
+            let jumped = d.clock.is_some_and(|(t0, p0)| (pts - p0) - (now - t0).as_micros() as i64 > 1_000_000);
             match d.clock {
                 None => d.clock = Some((now, pts)),
+                Some(_) if jumped => {
+                    d.clock = Some((now, pts));
+                    d.n_rebased += 1;
+                }
                 Some((t0, p0)) => {
                     let late = (now - t0).as_micros() as i64 - (pts - p0);
                     if late < 0 {
