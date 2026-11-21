@@ -260,33 +260,6 @@ pub(crate) unsafe extern "C" fn hle_cxa_deleted_virtual() {
     println!("[!] __cxa_deleted_virtual called (deleted virtual method)");
 }
 
-// Minimal RTTI vtable stand-ins for __cxxabiv1::__class_type_info /
-// __si_class_type_info. A real implementation of typeid/dynamic_cast needs
-// these to behave correctly, but the common failure mode we're guarding
-// against is simply "something calls through this vtable" -- so this is a
-// small block of safe no-op slots (bigger than either class actually needs)
-// rather than a faithful RTTI implementation.
-#[no_mangle]
-pub(crate) unsafe extern "C" fn hle_rtti_stub_slot() -> i64 {
-    0
-}
-
-pub(crate) const RTTI_VTABLE_LEN: usize = 12;
-
-pub(crate) static RTTI_CLASS_TYPE_INFO_VTABLE: [unsafe extern "C" fn() -> i64; RTTI_VTABLE_LEN] =
-    [hle_rtti_stub_slot; RTTI_VTABLE_LEN];
-
-pub(crate) static RTTI_SI_CLASS_TYPE_INFO_VTABLE: [unsafe extern "C" fn() -> i64; RTTI_VTABLE_LEN] =
-    [hle_rtti_stub_slot; RTTI_VTABLE_LEN];
-
-pub(crate) fn rtti_class_type_info_vtable_addr() -> usize {
-    RTTI_CLASS_TYPE_INFO_VTABLE.as_ptr() as usize
-}
-
-pub(crate) fn rtti_si_class_type_info_vtable_addr() -> usize {
-    RTTI_SI_CLASS_TYPE_INFO_VTABLE.as_ptr() as usize
-}
-
 pub(crate) static STD_NOTHROW: u8 = 0;
 
 #[cfg(test)]
