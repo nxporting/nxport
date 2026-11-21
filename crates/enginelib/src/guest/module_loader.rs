@@ -22,6 +22,8 @@ pub struct LoadedModule {
     /// The text segment (guest addresses).
     pub text: std::ops::Range<usize>,
     pub init: Option<usize>,
+    /// DT_INIT_ARRAY's constructors (relocated), which rtld runs after DT_INIT.
+    pub init_array: Vec<usize>,
     /// Defined dynamic symbols (name -> address).
     pub exports: std::collections::HashMap<String, usize>,
 }
@@ -187,6 +189,23 @@ pub unsafe fn load(
         segs.push((mo, data));
     }
     let bss = r_u32(&file, 0x3C) as usize;
+    load_segments(name, segs, bss, hint, resolve, svc_entry, unresolved, false)
+}
+
+/// Maps a module from its segments (memory offset, bytes: text, rodata, data) and bss size: relocated, its imports
+/// resolved through `resolve`, made runnable here. NSO files and NROs the game loads both come through here. With
+/// `preempt` the module's own global definitions are resolved through `resolve` first, as rtld does for a module loaded
+/// at run time (the global scope, main first, wins: template statics both define).
+pub unsafe fn load_segments(
+    name: &str,
+    segs: Vec<(usize, Vec<u8>)>,
+    bss: usize,
+    hint: usize,
+    resolve: &dyn Fn(&str) -> Option<usize>,
+    svc_entry: usize,
+    unresolved: usize,
+    preempt: bool,
+) -> Result<LoadedModule, String> {
     let image_size = segs[2].0 + segs[2].1.len() + bss;
     let image_aligned = (image_size + 0x3fff) & !0x3fff;
     // For modules with gigantic bss (> 96 MB, e.g. Metroid Dread or Unreal Engine games),
@@ -230,6 +249,7 @@ pub unsafe fn load(
     let mod0 = r_u32(&segs[0].1, 4) as usize;
     let rd = |a: usize| ptr::read((base + a) as *const u64);
     let mut init = None;
+    let mut init_array = Vec::new();
     let mut exports = std::collections::HashMap::new();
     if mod0 + 8 <= image_size
         && &*std::ptr::slice_from_raw_parts((base + mod0) as *const u8, 4) == b"MOD0"
@@ -283,8 +303,9 @@ pub unsafe fn load(
                     1027 => ptr::write(target, (base as i64 + addend) as usize),
                     257 | 1025 | 1026 => {
                         let (n, shndx, value) = sym_name((info >> 32) as usize);
+                        let local = ptr::read((base + symtab + (info >> 32) as usize * 24 + 4) as *const u8) >> 4 == 0;
                         let s = if shndx != 0 {
-                            base + value
+                            if preempt && !local { resolve(&n).unwrap_or(base + value) } else { base + value }
                         } else {
                             match resolve(&n) {
                                 Some(a) => a,
@@ -317,6 +338,9 @@ pub unsafe fn load(
                     p.write_unaligned(base + p.read_unaligned());
                 }
             }
+        }
+        if let (Some(&arr), Some(&sz)) = (tags.get(&25), tags.get(&27)) {
+            init_array = (0..sz / 8).map(|k| rd(arr + k * 8) as usize).filter(|&f| f != 0 && f != usize::MAX).collect();
         }
         for n in missing.iter().take(8) {
             println!(
@@ -395,6 +419,7 @@ pub unsafe fn load(
         image_size,
         text: base + text_mo..base + text_mo + text_len,
         init,
+        init_array,
         exports,
     })
 }
@@ -433,9 +458,20 @@ pub unsafe extern "C" fn ro_get_buffer_size(out: *mut usize, image: *const u8) -
 
 pub unsafe extern "C" fn ro_lookup_module_symbol(
     out: *mut usize,
-    _mod: *const (),
+    module: *const RoModule,
     name: *const libc::c_char,
 ) -> u32 {
+    // A module loaded at run time: its own exports (the game looks up its entry points there).
+    if !module.is_null() && !name.is_null() {
+        let image = (*module).image as usize;
+        let n = std::ffi::CStr::from_ptr(name).to_string_lossy();
+        if let Some(a) = RO_MODULES.lock().unwrap().iter().find(|(i, _, _)| *i == image).and_then(|(_, _, e)| e.get(n.as_ref()).copied()) {
+            if !out.is_null() {
+                *out = a;
+            }
+            return 0;
+        }
+    }
     ro_lookup_symbol(out, name)
 }
 
@@ -463,6 +499,28 @@ pub struct RoModule {
     pub buffer: *mut u8,
 }
 
+/// What loading a module the game asks for at run time needs from startup: the svc entry and the stand-in for imports
+/// nothing provides (HLE trampolines, made before the pool is sealed), and where the first one goes.
+pub struct RoLoader {
+    pub svc_entry: usize,
+    pub unresolved: usize,
+}
+
+static RO_LOADER: std::sync::OnceLock<RoLoader> = std::sync::OnceLock::new();
+/// Where the next run-time module is mapped (after main's module gap, or near it).
+static RO_NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Modules loaded at run time: (image the game passed, base, exports), newest last.
+static RO_MODULES: std::sync::Mutex<Vec<(usize, usize, std::collections::HashMap<String, usize>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+pub fn set_ro_loader(l: RoLoader, first: usize) {
+    RO_NEXT.store(first, std::sync::atomic::Ordering::Relaxed);
+    let _ = RO_LOADER.set(l);
+}
+
+/// nn::ro::LoadModule(Module*, const void* image, void* buffer, size_t, int): maps the NRO, links its imports (the
+/// game's symbols, the SDK's, what horizon::sdk binds, modules loaded before it) and runs its initialiser, as rtld
+/// does for a module loaded at run time. Without a loader (no game here loads modules) it only records the module.
 pub unsafe extern "C" fn ro_load_module(
     rm: *mut RoModule,
     image: *const u8,
@@ -483,7 +541,39 @@ pub unsafe extern "C" fn ro_load_module(
         (*rm).image = image;
         (*rm).buffer = buf;
     }
-    0
+    let Some(l) = RO_LOADER.get() else { return 0 };
+    // NRO header: text, rodata, data (file offset = memory offset, size) at 0x20, bss size at 0x38.
+    let seg = |i: usize| {
+        let o = ptr::read_unaligned(image.add(0x20 + i * 8) as *const u32) as usize;
+        let n = ptr::read_unaligned(image.add(0x24 + i * 8) as *const u32) as usize;
+        (o, std::slice::from_raw_parts(image.add(o), n).to_vec())
+    };
+    let segs = vec![seg(0), seg(1), seg(2)];
+    let bss = ptr::read_unaligned(image.add(0x38) as *const u32) as usize;
+    let index = RO_MODULES.lock().unwrap().len();
+    let name = format!("nro{index}");
+    let resolve = |n: &str| -> Option<usize> {
+        lookup(n).or_else(|| RO_MODULES.lock().unwrap().iter().rev().find_map(|(_, _, e)| e.get(n).copied()))
+    };
+    let hint = RO_NEXT.load(std::sync::atomic::Ordering::Relaxed);
+    match load_segments(&name, segs, bss, hint, &resolve, l.svc_entry, l.unresolved, true) {
+        Ok(m) => {
+            RO_NEXT.store((m.base + m.image_size + 0x20_0000) & !0x3fff, std::sync::atomic::Ordering::Relaxed);
+            println!("[+] nn::ro::LoadModule: {name} ({} exports)", m.exports.len());
+            RO_MODULES.lock().unwrap().push((image as usize, m.base, m.exports));
+            if let Some(init) = m.init {
+                crate::guest::call(init, &[]);
+            }
+            for f in &m.init_array {
+                crate::guest::call(*f, &[]);
+            }
+            0
+        }
+        Err(e) => {
+            println!("[!] nn::ro::LoadModule: {name} not loaded: {e}");
+            0x816
+        }
+    }
 }
 
 pub unsafe extern "C" fn ro_load_module_sdk19(
