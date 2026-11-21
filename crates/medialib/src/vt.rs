@@ -202,6 +202,12 @@ pub(crate) struct Session {
     flags: u32,
     /// Pictures the output callback handed over during the last decode (the callback's refcon).
     out: Box<Vec<Result<Decoded, OSStatus>>>,
+    /// Pictures decoded but not handed out yet, and how many may wait for an earlier one (the stream's reorder depth):
+    /// they leave in presentation order, as from a decoder's picture buffer. VideoToolbox's own temporal processing
+    /// does not hold them back when every frame is waited for (Mario Kart 8 Deluxe's menu movie came out in decode
+    /// order, B-frames after the frame following them).
+    held: Vec<Decoded>,
+    depth: usize,
 }
 
 // SAFETY: a decompression session may be used from any thread, one call at a time (the decoder is behind a lock).
@@ -282,7 +288,7 @@ impl Session {
             if st != 0 {
                 return Err(format!("VP9 format description: {st}"));
             }
-            Self::create(format, 0).map_err(|st| format!("no hardware VP9 decoder ({st})"))
+            Self::create(format, 0, 0).map_err(|st| format!("no hardware VP9 decoder ({st})"))
         }
     }
 
@@ -308,13 +314,15 @@ impl Session {
             // buffering: each frame comes out as it is decoded. Only when the SPS allows reordering, or cannot be read,
             // is TEMPORAL used so VideoToolbox hands pictures over in presentation order.
             let sps = sets.iter().find(|s| s.first().is_some_and(|b| b & 0x1f == 7));
-            let flags = if sps.and_then(|s| h264_reorder_depth(s)) == Some(0) { 0 } else { TEMPORAL };
-            Self::create(format, flags).map_err(|st| format!("no hardware H.264 decoder ({st})"))
+            let depth = sps.and_then(|s| h264_reorder_depth(s));
+            let flags = if depth == Some(0) { 0 } else { TEMPORAL };
+            // An unreadable SPS: the largest picture buffer H.264 allows.
+            Self::create(format, flags, depth.unwrap_or(16)).map_err(|st| format!("no hardware H.264 decoder ({st})"))
         }
     }
 
     /// The session for `format` (consumed), hardware only, decoding to NV12.
-    unsafe fn create(format: CFTypeRef, flags: u32) -> Result<Session, OSStatus> {
+    unsafe fn create(format: CFTypeRef, flags: u32, depth: usize) -> Result<Session, OSStatus> {
         let spec = dict();
         CFDictionarySetValue(spec, kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
         let attrs = dict();
@@ -331,7 +339,7 @@ impl Session {
             CFRelease(format);
             return Err(st);
         }
-        Ok(Session { session, format, flags, out })
+        Ok(Session { session, format, flags, out, held: Vec::new(), depth })
     }
 
     /// Decodes one sample; the picture it shows (if any) goes to `out`.
@@ -364,7 +372,7 @@ impl Session {
             let st = VTDecompressionSessionDecodeFrame(self.session, sample, self.flags, std::ptr::null_mut(), std::ptr::null_mut());
             VTDecompressionSessionWaitForAsynchronousFrames(self.session);
             CFRelease(sample);
-            self.take(out)?;
+            self.take(out, false)?;
             if st != 0 {
                 return Err(format!("hardware video decode: {st}"));
             }
@@ -378,17 +386,26 @@ impl Session {
             VTDecompressionSessionFinishDelayedFrames(self.session);
             VTDecompressionSessionWaitForAsynchronousFrames(self.session);
         }
-        let _ = self.take(out);
+        let _ = self.take(out, true);
     }
 
-    fn take(&mut self, out: &mut VecDeque<Decoded>) -> Result<(), String> {
+    /// Hands out the pictures no later-decoded one can precede any more (all of them at the end of the stream).
+    fn take(&mut self, out: &mut VecDeque<Decoded>, all: bool) -> Result<(), String> {
+        let mut err = None;
         for r in self.out.drain(..) {
             match r {
-                Ok(d) => out.push_back(d),
-                Err(e) => return Err(format!("hardware video decode: {e}")),
+                Ok(d) => self.held.push(d),
+                Err(e) => err = Some(format!("hardware video decode: {e}")),
             }
         }
-        Ok(())
+        let pts = |d: &Decoded| match d {
+            Decoded::Picture { pts_us, .. } | Decoded::Pcm { pts_us, .. } => *pts_us,
+        };
+        self.held.sort_by_key(|d| std::cmp::Reverse(pts(d)));
+        while self.held.len() > if all { 0 } else { self.depth } {
+            out.push_back(self.held.pop().unwrap());
+        }
+        err.map_or(Ok(()), Err)
     }
 }
 
@@ -593,6 +610,13 @@ mod tests {
             0x00, 0x03, 0x00, 0x78, 0x1e, 0x30, 0x63, 0x2c,
         ];
         assert_eq!(h264_reorder_depth(&sps), Some(2));
+        // Mario Kart 8 Deluxe's menu movie (Main profile, max_num_reorder_frames 1 in its VUI).
+        let mk8d = [
+            0x67, 0x4d, 0x40, 0x20, 0xe8, 0xe0, 0x40, 0x09, 0xb6, 0x02, 0xa4, 0x04, 0x04, 0x05, 0x00, 0x00, 0x03,
+            0x00, 0x01, 0x00, 0x00, 0x03, 0x00, 0x78, 0xe2, 0x60, 0x00, 0x2d, 0xc6, 0xc0, 0x00, 0x5b, 0x8d, 0xa4,
+            0xc4, 0x00, 0xf8, 0xc1, 0x88, 0xf0,
+        ];
+        assert_eq!(h264_reorder_depth(&mk8d), Some(1));
         // A truncated SPS must not panic.
         assert_eq!(h264_reorder_depth(&sps[..6]), None);
         assert_eq!(h264_reorder_depth(&[]), None);
