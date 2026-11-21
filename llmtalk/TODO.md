@@ -132,6 +132,8 @@ and update this file when you finish or drop it.
      seek without flush) restarts the movie clock; MK8D's mode menu froze waiting for its preview movie after the menu
      seeked 139 s ahead. Windows: run MK8D headless through Single Player -> Grand Prix (A presses, right once at
      "Select a Mii") to the first race; Kirby's opening movie should pace as before.
+  24. 8eb4f8c (shared horizon/sdk/v1_6): SDK 1.6 layer reporting NVN 53.5; Splatoon 2 1.0.0 now boots to its character
+     creator (headless, A every 300 frames from 1500). Windows: try the same.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
