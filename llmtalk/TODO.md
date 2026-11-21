@@ -128,6 +128,10 @@ and update this file when you finish or drop it.
   22. 4a2b468 (Metal rt_guard.rs, guest/exec/load_emulate.rs; shared gpu/mod.rs Fault gains `ctx`, 0 on Windows' lifted path):
      guest loads of other data on a held target's edge pages are emulated through the second mapping instead of waiting.
      Windows: nothing to do unless Vulkan's guard.rs adopts edge-page holds; load_emulate is Darwin mcontext only.
+  23. 6cd25de (shared horizon/movie/decoder.rs; Apple-only medialib vt.rs): a video frame due more than a second ahead (a
+     seek without flush) restarts the movie clock; MK8D's mode menu froze waiting for its preview movie after the menu
+     seeked 139 s ahead. Windows: run MK8D headless through Single Player -> Grand Prix (A presses, right once at
+     "Select a Mii") to the first race; Kirby's opening movie should pace as before.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
