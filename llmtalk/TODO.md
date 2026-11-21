@@ -125,6 +125,9 @@ and update this file when you finish or drop it.
      frame) as zeros and never drew the small flowers / pebbles. Vulkan checks byte ranges already (guest_can_take), but
      its CPU-visible write-back differs: check on Windows that BotW 1.9.0 at botw-shrine-water draws flowers around Link
      (fragment weak hashes 2d760aaa / 4ebd2fa2, ~300+ draws a frame) and that the game reads the map's current contents.
+  22. 4a2b468 (Metal rt_guard.rs, guest/exec/load_emulate.rs; shared gpu/mod.rs Fault gains `ctx`, 0 on Windows' lifted path):
+     guest loads of other data on a held target's edge pages are emulated through the second mapping instead of waiting.
+     Windows: nothing to do unless Vulkan's guard.rs adopts edge-page holds; load_emulate is Darwin mcontext only.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
