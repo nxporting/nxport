@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod call_log;
+pub mod crypto;
 pub mod cxx;
 pub mod fs;
 pub mod heap_layout;
@@ -12,6 +13,7 @@ pub mod movie;
 pub mod nn;
 pub mod os;
 pub mod hid;
+pub mod irsensor;
 pub mod ldn;
 pub mod time;
 pub mod bcat;

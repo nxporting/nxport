@@ -108,6 +108,8 @@ pub fn lookup(name: &str) -> Option<usize> {
         "_ZNK5movie6Buffer12GetInt64DataEv" => a!(buffer_get_i64(_)),
         "_ZN5movie6Buffer13SetUint32DataEj" => a!(buffer_set_u32(_, _)),
         "_ZNK5movie6Buffer13GetUint32DataEv" => a!(buffer_get_u32(_)),
+        "_ZN5movie6Buffer9SetNvnDevEPv" => a!(buffer_set_nvn_dev(_, _)),
+        "_ZN5movie6Buffer10SetNvnSyncEPv" => a!(buffer_set_nvn_sync(_, _)),
         "_ZN5movie17GetThreadPriorityEv" => a!(thread_priority()),
         "_ZN5movie12SetAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_"
         | "_ZN5movie11SetCoreMaskEm" => a!(noop()),

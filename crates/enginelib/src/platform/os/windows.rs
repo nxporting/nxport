@@ -41,6 +41,15 @@ fn flags(prot: Prot) -> u32 {
     }
 }
 
+pub fn random_bytes(buf: &mut [u8]) {
+    // ProcessPrng (bcryptprimitives.dll): the system's random number generator, which never fails.
+    #[link(name = "bcryptprimitives")]
+    extern "system" {
+        fn ProcessPrng(data: *mut u8, len: usize) -> i32;
+    }
+    unsafe { ProcessPrng(buf.as_mut_ptr(), buf.len()) };
+}
+
 pub fn page_size() -> usize {
     let mut info: SystemInfo = unsafe { std::mem::zeroed() };
     unsafe { GetSystemInfo(&mut info) };

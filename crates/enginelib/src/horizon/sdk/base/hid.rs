@@ -3,6 +3,10 @@
 use super::super::Entry;
 
 pub(super) static TABLE: &[Entry] = &[
+    Entry(
+        "_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS3_14EventClearModeE",
+        func!(crate::horizon::hid::bind_npad_style_set_update_event(_, _, _)),
+    ),
     Entry("_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj", func!(crate::guest::module_loader::hid_get_npad_state(_, _))),
     Entry("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj", func!(crate::guest::module_loader::hid_get_npad_state(_, _))),
     Entry("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj", func!(crate::guest::module_loader::hid_get_npad_state(_, _))),

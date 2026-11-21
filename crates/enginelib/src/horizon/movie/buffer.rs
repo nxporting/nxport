@@ -166,3 +166,15 @@ pub(crate) unsafe extern "C" fn buffer_set_u32(b: *mut Buffer, v: u32) {
 pub(crate) unsafe extern "C" fn buffer_get_u32(b: *const Buffer) -> u32 {
     (*b).uint32_data
 }
+/// SetNvnDev / SetNvnSync(void*): the NVN device and sync a hardware-decoding player hands its buffers (Super Mario
+/// Party Jamboree's player calls them; nothing here decodes through them, they are kept as the library keeps them).
+pub(crate) unsafe extern "C" fn buffer_set_nvn_dev(b: *mut Buffer, dev: usize) {
+    if buffer_has_nvn() {
+        (*b).nvn_device = dev
+    }
+}
+pub(crate) unsafe extern "C" fn buffer_set_nvn_sync(b: *mut Buffer, sync: usize) {
+    if buffer_has_nvn() {
+        (*b).nvn_sync = sync
+    }
+}

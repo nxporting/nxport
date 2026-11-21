@@ -23,6 +23,16 @@ pub(crate) unsafe extern "C" fn set_supported_npad_style_set(style_set: u32) {
     HID_SUPPORTED_STYLES.store(style_set, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// BindNpadStyleSetUpdateEvent(const NpadIdType&, SystemEventType*, EventClearMode): the event a game waits on to
+/// re-read an Npad's styles. Our controllers are connected from the start, so it begins signaled once (the update
+/// a connection gives on the console). The SDK's own implementation opens hid over IPC (Super Mario Party Jamboree
+/// aborted on it).
+pub(crate) unsafe extern "C" fn bind_npad_style_set_update_event(_id: *const u32, event: *mut u8, _clear_mode: i32) {
+    if !event.is_null() {
+        crate::horizon::os::objects::hle_system_event_register_signaled(event as usize);
+    }
+}
+
 pub(crate) unsafe extern "C" fn get_supported_npad_style_set() -> u32 {
     HID_SUPPORTED_STYLES.load(std::sync::atomic::Ordering::Relaxed)
 }

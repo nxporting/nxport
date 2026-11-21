@@ -13,6 +13,10 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn7account12ListAllUsersEPiPNS0_3UidEi", func!(crate::horizon::account::list_users(_, _, _))),
     // The one user, opened at startup (OpenPreselectedUser).
     Entry("_ZN2nn7account13ListOpenUsersEPiPNS0_3UidEi", func!(crate::horizon::account::list_users(_, _, _))),
+    Entry("_ZN2nn7account19ListPushedOpenUsersEPNS0_3UidEi", func!(crate::horizon::account::list_pushed_open_users(_, _))),
+    Entry("_ZN2nn7account12PopOpenUsersEPiPNS0_10UserHandleEi", func!(crate::horizon::account::pop_open_users(_, _, _))),
+    Entry("_ZN2nn7account27StoreSaveDataThumbnailImageERKNS0_3UidEPKvm", func!(crate::horizon::account::save_data_thumbnail_ok())),
+    Entry("_ZN2nn7account28DeleteSaveDataThumbnailImageERKNS0_3UidE", func!(crate::horizon::account::save_data_thumbnail_ok())),
     Entry("_ZN2nn7account16GetUserExistenceEPbRKNS0_3UidE", func!(crate::horizon::account::get_user_existence(_, _))),
     Entry("_ZN2nn7account16LoadProfileImageEPmPvmRKNS0_3UidE", func!(crate::horizon::account::load_profile_image(_))),
     Entry("_ZN2nn7account16ShowUserSelectorEPNS0_3UidERKNS0_21UserSelectionSettingsE", func!(crate::horizon::account::show_user_selector(_, _))),
