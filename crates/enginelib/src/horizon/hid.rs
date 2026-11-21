@@ -126,6 +126,32 @@ pub(crate) unsafe extern "C" fn get_npad_style_set(_npad_id: *const u32) -> u32 
     }
 }
 
+/// nn::hid ResultNpadColorNotAvailable (202, 603) and ResultNpadControllerNotConnected (202, 604).
+const RESULT_NPAD_COLOR_NOT_AVAILABLE: u32 = 202 | 603 << 9;
+const RESULT_NPAD_CONTROLLER_NOT_CONNECTED: u32 = 202 | 604 << 9;
+
+/// GetNpadControllerColor(NpadControllerColor*, const NpadIdType&): the body and button colours (RGBA, alpha 255) of
+/// the full-key controller each connected player reports (Ryujinx's default grey Pro Controller).
+pub(crate) unsafe extern "C" fn get_npad_controller_color(out: *mut [u8; 8], id: *const u32) -> u32 {
+    if id.is_null() || get_npad_style_set(id) == 0 {
+        return RESULT_NPAD_CONTROLLER_NOT_CONNECTED;
+    }
+    if !out.is_null() {
+        *out = [0x82, 0x82, 0x82, 0xff, 0x0f, 0x0f, 0x0f, 0xff];
+    }
+    0
+}
+
+/// GetNpadControllerColor(left, right, const NpadIdType&): Joy-Con colours, for Joy-Con and handheld styles only; our
+/// players are full-key controllers, so the colours are not available there. The SDK's own version aborted on the
+/// result of a shared-memory read the engine does not provide (Super Mario Party Jamboree after "Press L + R").
+pub(crate) unsafe extern "C" fn get_npad_controller_color_pair(_left: *mut [u8; 8], _right: *mut [u8; 8], id: *const u32) -> u32 {
+    if id.is_null() || get_npad_style_set(id) == 0 {
+        return RESULT_NPAD_CONTROLLER_NOT_CONNECTED;
+    }
+    RESULT_NPAD_COLOR_NOT_AVAILABLE
+}
+
 pub(crate) unsafe extern "C" fn get_npad_states(
     states: *mut NpadFullKeyState,
     count: i32,

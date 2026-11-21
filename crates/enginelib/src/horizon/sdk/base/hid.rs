@@ -24,6 +24,8 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn3hid14InitializeNpadEv", func!(crate::horizon::hid::initialize_npad())),
     // hid
     Entry("_ZN2nn3hid15GetNpadStyleSetERKj", func!(crate::horizon::hid::get_npad_style_set(_))),
+    Entry("_ZN2nn3hid22GetNpadControllerColorEPNS0_19NpadControllerColorERKj", func!(crate::horizon::hid::get_npad_controller_color(_, _))),
+    Entry("_ZN2nn3hid22GetNpadControllerColorEPNS0_19NpadControllerColorES2_RKj", func!(crate::horizon::hid::get_npad_controller_color_pair(_, _, _))),
     Entry("_ZN2nn3hid15InitializeMouseEv", func!(crate::horizon::hid::initialize_mouse())),
     Entry("_ZN2nn3hid16GetDebugPadStateEPNS0_13DebugPadStateE", func!(crate::horizon::hid::get_debug_pad_state(_))),
     Entry("_ZN2nn3hid16GetKeyboardStateEPNS0_13KeyboardStateE", func!(crate::horizon::hid::get_keyboard_state(_))),
