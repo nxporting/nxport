@@ -347,7 +347,9 @@ pub(super) unsafe fn hold(tex: &Tex, t: &NvnTexture, level: usize, layer: usize)
         // Rendered, but not reproducible: memory under it keeps no hold either (done above).
         return;
     }
-    if crate::nvn::api::containing_pool(start, end - start).is_none() {
+    // The target's bytes must lie in a pool. Its first and last pages may reach past the pool (pools are 4 KiB aligned,
+    // host pages 16 KiB): accesses to their other bytes wait for the write-back like any access to a held page.
+    if crate::nvn::api::containing_pool(a, size as usize).is_none() {
         return;
     }
     start_thread();
