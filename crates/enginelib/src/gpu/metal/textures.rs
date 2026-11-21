@@ -150,7 +150,7 @@ impl Gfx {
         let (pf, _) = metal_format(t.format);
         let layout = layout_of(t);
         let layers = layout.layers.max(1) as usize;
-        let (tt, array_len) = match t.target {
+        let (tt, array_len) = match crate::nvn::layout::storage_target(t.target, t.height) {
             crate::nvn::layout::NVN_TARGET_1D => (MTLTextureType::Type1D, 1),
             crate::nvn::layout::NVN_TARGET_2D | crate::nvn::layout::NVN_TARGET_RECTANGLE => {
                 (MTLTextureType::Type2D, 1)

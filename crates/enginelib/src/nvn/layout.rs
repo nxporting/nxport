@@ -25,6 +25,17 @@ pub const NVN_TARGET_CUBEMAP: i32 = 8;
 pub const NVN_TARGET_CUBEMAP_ARRAY: i32 = 9;
 pub const NVN_TARGET_BUFFER: i32 = 10;
 
+/// The image a texture's storage holds. A 1D texture keeps the height its builder was given (SetSize1D gives 1): the
+/// storage is sized for every row, and a texture with a 1D target but a 2D size is a 2D image the game views as 2D
+/// (Super Mario Party Jamboree's movie textures: no SetTarget, so the default 1D, with SetSize2D(1920, 1080)).
+pub fn storage_target(target: i32, height: i32) -> i32 {
+    if target == NVN_TARGET_1D && height > 1 {
+        NVN_TARGET_2D
+    } else {
+        target
+    }
+}
+
 const NVN_TEXTURE_FLAGS_COMPRESSIBLE_BIT: i32 = 0x08;
 pub const NVN_TEXTURE_FLAGS_LINEAR_BIT: i32 = 0x10;
 pub const NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT: i32 = 0x40;
@@ -333,7 +344,6 @@ fn compute_layout_uncached(p: &TextureParams) -> TextureLayout {
             (6, false)
         }
         NVN_TARGET_1D => {
-            h = 1;
             d = 1;
             (1, false)
         }

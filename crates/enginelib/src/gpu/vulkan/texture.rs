@@ -1090,7 +1090,7 @@ impl Textures {
             }
             return None;
         }
-        let (ity, _) = image_type(p.target);
+        let (ity, _) = image_type(layout::storage_target(p.target, p.height));
         let lay = layout::compute_layout(p);
         let layers = match p.target {
             layout::NVN_TARGET_3D => 1,

@@ -27,6 +27,9 @@ pub(crate) struct OutFrame {
 }
 pub(crate) struct Decoder {
     out_format: Format,
+    /// DecoderMode 2: output buffers name the client's NVN texture (Buffer data = NVNtexture*, with its device and
+    /// sync), into which the library blits each frame on the GPU (DecoderImpl::CopyOutputBufferToClientTextureAndRelease).
+    to_texture: bool,
     events: [usize; 4], // input available, output available, format changed, error
     dec: usize,         // media decoder handle
     is_video: bool,
@@ -612,6 +615,12 @@ pub(crate) unsafe extern "C" fn d_get_output(this: *mut usize, idx: i32, b: *mut
             f.data.len()
         );
     }
+    if d.to_texture && d.is_video {
+        // The library copies the frame into the texture and releases the slot in one step
+        // (CopyOutputBufferToClientTextureAndRelease): the game does not release it.
+        let r = copy_to_client_texture(d.width, d.height, d.out_format, &f.data, f.pts, b);
+        return if r == OK { release_output(d, idx) } else { r };
+    }
     if !(*b).data.is_null() {
         if (*b).capacity < f.data.len() {
             return ERR_BUFFER_TOO_SMALL;
@@ -623,6 +632,30 @@ pub(crate) unsafe extern "C" fn d_get_output(this: *mut usize, idx: i32, b: *mut
     (*b).range_offset = 0;
     (*b).range_length = f.data.len() as i32;
     (*b).int64_data = f.pts;
+    OK
+}
+/// A frame into the client's texture (DecoderMode 2): the Buffer's data is the NVNtexture, its sync is signaled when
+/// the copy is done (here at once: the texels are in the texture's memory when this returns). The game sizes these
+/// textures for 1080 rows (nvn::layout::storage_target).
+unsafe fn copy_to_client_texture(w: i32, h: i32, format: Format, data: &[u8], pts: i64, b: *mut Buffer) -> u32 {
+    use crate::nvn::api::{texture_write_texels, NvnCopyRegion, NvnSync, NvnTexture};
+    let tex = (*b).data as *const NvnTexture;
+    if tex.is_null() || format != Format::Rgba || data.len() < (w * h * 4) as usize {
+        return ERR_INVALID_RANGE;
+    }
+    let region = NvnCopyRegion { x: 0, y: 0, z: 0, w: w.min((*tex).width), h: h.min((*tex).height), d: 1 };
+    if region.w == w {
+        texture_write_texels(tex, std::ptr::null(), &region, data.as_ptr(), true);
+    } else {
+        let rows: Vec<u8> = data.chunks(w as usize * 4).take(region.h as usize).flat_map(|r| &r[..region.w as usize * 4]).copied().collect();
+        texture_write_texels(tex, std::ptr::null(), &region, rows.as_ptr(), true);
+    }
+    if (*b).nvn_sync != 0 {
+        (*((*b).nvn_sync as *mut NvnSync)).serial = 0;
+    }
+    (*b).range_offset = 0;
+    (*b).range_length = 0;
+    (*b).int64_data = pts;
     OK
 }
 pub(crate) unsafe extern "C" fn d_get_output_with_format(
@@ -675,6 +708,10 @@ pub(crate) unsafe extern "C" fn d_release_output(this: *mut usize, idx: i32) -> 
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
+    release_output(d, idx)
+}
+/// Frees an output slot (the decoder lock held).
+unsafe fn release_output(d: &mut Decoder, idx: i32) -> u32 {
     match d.outputs.get_mut(idx as usize) {
         Some(o) => *o = None,
         None => return ERR_INVALID_RANGE,
@@ -729,8 +766,14 @@ pub(crate) fn output_format_before_modes(raw: i32) -> Format {
         _ => Format::Argb,
     }
 }
-pub unsafe extern "C" fn decoder_ctor(this: *mut usize, ty: i32, format: i32, _mode: i32, _n: i32) {
+pub unsafe extern "C" fn decoder_ctor(this: *mut usize, ty: i32, format: i32, mode: i32, _n: i32) {
     new_decoder(this, ty, output_format(format));
+    if mode == 2 {
+        if let Some(d) = dec(this) {
+            d.to_texture = true;
+            println!("[movie] decoder outputs into the client's NVN textures");
+        }
+    }
 }
 /// The constructor before it took a mode.
 pub(crate) unsafe extern "C" fn decoder_ctor_before_modes(this: *mut usize, ty: i32, format: i32) {
@@ -741,6 +784,7 @@ pub(crate) unsafe fn new_decoder(this: *mut usize, ty: i32, format: Format) {
     *this = vtable(&DECODER_VTABLE, true);
     let d = Decoder {
         out_format: format,
+        to_texture: false,
         events: [0; 4],
         dec: 0,
         is_video: false,
