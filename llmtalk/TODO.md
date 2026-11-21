@@ -137,6 +137,9 @@ and update this file when you finish or drop it.
   25. bdd25ce (shared horizon/: crypto, irsensor, account, hid, movie; platform::os::random_bytes uses ProcessPrng on
      Windows, untested there): SDK functions Mario Party Jamboree reached over unemulated IPC. Windows: build check of
      platform/os/windows.rs random_bytes (bcryptprimitives ProcessPrng).
+  26. 0e7d350 (shared guest/module_loader.rs, startup.rs): nn::ro::LoadModule really loads NROs (Jamboree's boot.nro);
+     symbol table + loader set up when main imports LoadModule. Windows: the module loader core is shared; check a
+     Jamboree boot gets past "nn::ro::LoadModule: nro0".
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
