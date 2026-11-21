@@ -1307,7 +1307,7 @@ impl Gfx {
                     }
                     continue;
                 };
-                let k = tb.handle_index.wrapping_sub(8) / 2;
+                let k = tb.handle_key();
                 if super::tracing_frame()
                     && tex.width() * tex.height() <= 64
                     && tex.pixelFormat() == MTLPixelFormat::RGBA8Unorm
@@ -1432,7 +1432,7 @@ impl Gfx {
             for (nvn_stage, cached) in [(STAGE_VERTEX, Some(vs)), (STAGE_FRAGMENT, fs)] {
                 let Some(c) = cached else { continue };
                 for tb in &c.textures {
-                    let k = tb.handle_index.wrapping_sub(8) / 2;
+                    let k = tb.handle_key();
                     let h = p.handle(nvn_stage, k as i32).copied();
                     tex_info.push(format!(
                         "s{}:b{}:{}:k{}:h{:x?}",
@@ -1503,7 +1503,7 @@ impl Gfx {
             for (nvn_stage, cached) in [(STAGE_VERTEX, Some(vs)), (STAGE_FRAGMENT, fs)] {
                 let Some(c) = cached else { continue };
                 for tb in &c.textures {
-                    let k = tb.handle_index.wrapping_sub(8) / 2;
+                    let k = tb.handle_key();
                     if let Some(&h) = p.handle(nvn_stage, k as i32) {
                         let id = (h & 0xFFFFF) as i32;
                         println!(

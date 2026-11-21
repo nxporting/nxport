@@ -60,6 +60,9 @@ pub struct Host {
     /// view type (low 20 bits) and one into the sampler array (high 12 bits), as NVN packs a handle. Not with
     /// sampler_slots.
     pub bindless_textures: bool,
+    /// Texture and image arrays get a descriptor set of their own (Vulkan); without, they take `length` consecutive
+    /// bindings like other textures (MSL: an array<> parameter over that many texture / sampler slots).
+    pub array_sets: bool,
 }
 
 /// Driver constant buffer bytes used with Host::texture_heap: GPU addresses (u64) of one texture heap per
@@ -87,6 +90,7 @@ impl Default for Host {
             sampler_slots: 0,
             texture_heap: false,
             bindless_textures: false,
+            array_sets: true,
         }
     }
 }
@@ -274,7 +278,11 @@ impl GpuAccessor {
     }
 
     pub fn create_extra_set(&self) -> i32 {
-        4
+        if self.host.array_sets {
+            4
+        } else {
+            -1
+        }
     }
 
     pub fn graphics_state(&self) -> GraphicsState {

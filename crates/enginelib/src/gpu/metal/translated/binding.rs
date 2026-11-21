@@ -275,9 +275,7 @@ impl Gfx {
         stage: i32,
         tb: &TexBinding,
     ) -> (Option<Tex>, Option<i32>, Option<u64>) {
-        // Handle table entry k lives at byte 0x20 + 8k of the stage's cbuf 2 (see module docs).
-        let k = tb.handle_index.wrapping_sub(8) / 2;
-        let handle = st.textures_bound.get(&(stage, k as i32)).copied();
+        let handle = texture_handle(st, stage, tb);
         let r = self.bound_texture_handle(&mut st.cx.bind_memo, &mut &mut st.tc, handle, tb);
         if super::journal_on() {
             if let (Some(h), Some(t)) = (handle, &r.0) {
@@ -913,6 +911,43 @@ pub(crate) static TEX_REUSE_STATS: [std::sync::atomic::AtomicU64; 2] =
 pub(crate) type BindMemos = HashMap<(i32, usize), super::BindMemo>;
 
 /// Textures a draw binds: (stage, binding, texture, sampler id, root id).
+/// A texture binding's handle: from the bound texture table (entry k at byte 0x20 + 8k of the stage's cbuf 2, see
+/// module docs), or read from the game's own uniform buffer of the binding's slot (Ryujinx TextureHandle.ReadPackedId:
+/// the texture word at the handle's word offset, a separate sampler's word ORed in, a sampler id shifted into place).
+pub(crate) unsafe fn texture_handle(st: &State, stage: i32, tb: &TexBinding) -> Option<u64> {
+    if tb.in_table() {
+        return st.textures_bound.get(&(stage, tb.handle_key())).copied();
+    }
+    let slot0 = tb.cbuf_slot & 0xffff;
+    let slot1 = match (tb.cbuf_slot as u32 >> 16) as i32 {
+        0 => slot0,
+        s => s - 1,
+    };
+    let word = |slot: i32, w: u32| -> Option<u32> {
+        if slot < 3 {
+            return None;
+        }
+        let (addr, size) = st.uniform_buffers.get(&(stage, slot - 3)).copied()?;
+        let o = w as usize * 4;
+        if addr == 0 || o + 4 > size {
+            return None;
+        }
+        let p = crate::nvn::api::translate_virtual(addr as usize + o);
+        crate::guest::exec::crash_handler::readable(p, 4).then(|| std::ptr::read_unaligned(p as *const u32))
+    };
+    let h = tb.handle_index;
+    let mut handle = word(slot0, (h & 0x3fff) + 2 * tb.element)?;
+    match h >> 28 {
+        0 => {}
+        ty => {
+            if let Some(s) = word(slot1, (h >> 14) & 0x3fff) {
+                handle |= if ty == 2 { s << 20 } else { s };
+            }
+        }
+    }
+    Some(handle as u64)
+}
+
 pub(crate) type ResolvedTex =
     smallvec::SmallVec<[(i32, u32, Option<Tex>, Option<i32>, Option<u64>); 16]>;
 

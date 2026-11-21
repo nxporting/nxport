@@ -831,7 +831,8 @@ fn write_index(path: &Path, records: &[&StageRecord]) -> std::io::Result<()> {
             f.push_str(&format!("ab {}\n", a.join(" ")));
         }
         for t in &mf.textures {
-            let _ = writeln!(f, "tex {} {} {} {}", t.binding, t.cbuf_slot, t.handle_index, t.texture_type.replace(", ", "+").replace(' ', ""));
+            let n = if t.array_length > 1 { format!(" {}", t.array_length) } else { String::new() };
+            let _ = writeln!(f, "tex {} {} {} {}{n}", t.binding, t.cbuf_slot, t.handle_index, t.texture_type.replace(", ", "+").replace(' ', ""));
         }
         for img in &mf.images {
             let _ = writeln!(f, "img {} {} {} {}", img.binding, img.cbuf_slot, img.handle_index, img.texture_type.replace(", ", "+").replace(' ', ""));

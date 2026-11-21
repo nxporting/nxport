@@ -180,7 +180,13 @@ pub fn move_extra_samplers(msl: &str) -> String {
         .map(|c| (c[1].to_string(), c[2].parse::<usize>().unwrap()))
         .filter(|(_, k)| *k >= EXTRA_SAMPLER_BASE)
         .collect();
-    if extra.is_empty() {
+    // Sampler arrays (indexed textures) reaching slot 16: their elements from slot 16 on come from the buffer too.
+    let arrays: Vec<(String, usize, usize)> = re!(r",\s*array<sampler, (\d+)> (\w+) \[\[sampler\((\d+)\)\]\]")
+        .captures_iter(msl)
+        .map(|c| (c[2].to_string(), c[3].parse::<usize>().unwrap(), c[1].parse::<usize>().unwrap()))
+        .filter(|(_, k, n)| k + n > EXTRA_SAMPLER_BASE)
+        .collect();
+    if extra.is_empty() && arrays.is_empty() {
         return msl.to_string();
     }
     let mut msl = msl.to_string();
@@ -193,7 +199,23 @@ pub fn move_extra_samplers(msl: &str) -> String {
         .unwrap();
         msl = r.replace_all(&msl, "").into_owned();
     }
-    let count = extra.iter().map(|(_, k)| *k).max().unwrap() - EXTRA_SAMPLER_BASE + 1;
+    for (name, k, n) in &arrays {
+        let r = Regex::new(&format!(r",\s*array<sampler, {n}> {} \[\[sampler\({k}\)\]\]", regex::escape(name))).unwrap();
+        let lo = if *k < EXTRA_SAMPLER_BASE {
+            format!(", array<sampler, {}> {name}_lo [[sampler({k})]]", EXTRA_SAMPLER_BASE - k)
+        } else {
+            String::new()
+        };
+        msl = r.replace_all(&msl, regex::NoExpand(&lo)).into_owned();
+    }
+    let count = extra
+        .iter()
+        .map(|(_, k)| *k)
+        .chain(arrays.iter().map(|(_, k, n)| k + n - 1))
+        .max()
+        .unwrap()
+        - EXTRA_SAMPLER_BASE
+        + 1;
     let Some(entry) = re!(r"(?ms)^(fragment|vertex|kernel) .*?(\)\s*\n\{\n)").captures(&msl) else {
         return msl;
     };
@@ -202,7 +224,7 @@ pub fn move_extra_samplers(msl: &str) -> String {
         entry.get(0).unwrap().end(),
         entry.get(2).unwrap().start(),
     );
-    let locals: String = extra
+    let mut locals: String = extra
         .iter()
         .map(|(name, k)| {
             format!(
@@ -211,6 +233,18 @@ pub fn move_extra_samplers(msl: &str) -> String {
             )
         })
         .collect();
+    for (name, k, n) in &arrays {
+        let elems: Vec<String> = (0..*n)
+            .map(|e| {
+                if k + e < EXTRA_SAMPLER_BASE {
+                    format!("{name}_lo[{e}]")
+                } else {
+                    format!("spvExtraSmpl.s[{}]", k + e - EXTRA_SAMPLER_BASE)
+                }
+            })
+            .collect();
+        locals.push_str(&format!("    array<sampler, {n}> {name} = {{ {} }};\n", elems.join(", ")));
+    }
     let msl = format!(
         "{}, constant spvExtraSamplers& spvExtraSmpl [[buffer({EXTRA_SAMPLER_BUFFER})]]{}{}{}",
         &msl[..g2_start],

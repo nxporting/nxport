@@ -433,6 +433,7 @@ impl Dev {
                 sampler_slots: 0,
                 texture_heap: false,
                 bindless_textures: false,
+                array_sets: true,
             };
             // Stages that may be required to run 32 lanes wide (Module::stage): sass2spv writes subgroup operations for 32.
             let subgroup_32 = {
@@ -614,6 +615,7 @@ impl Dev {
                     reduced_precision: has_portability,
                     sampler_slots: if has_portability { 16 } else { 0 },
                     bindless_textures: bindless.is_some(),
+                    array_sets: true,
                     ..shader_host
                 },
                 vertex_align,

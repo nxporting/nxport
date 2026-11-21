@@ -558,9 +558,8 @@ impl DrawPacket {
                 }
             }
             for tb in &c.textures {
-                let k = (tb.handle_index.wrapping_sub(8) / 2) as i32;
                 self.handles
-                    .push((stage, k, st.textures_bound.get(&(stage, k)).copied()));
+                    .push((stage, tb.handle_key(), unsafe { binding::texture_handle(st, stage, tb) }));
             }
         }
         self.blend_states = st.blend_states;
