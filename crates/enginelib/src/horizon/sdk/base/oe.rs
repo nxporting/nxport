@@ -24,6 +24,9 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2oe25TryPopNotificationMessageEPj", func!(crate::horizon::oe::try_pop_notification_message(_))),
     Entry("_ZN2nn2oe27GetPerformanceConfigurationENS0_15PerformanceModeE", func!(crate::horizon::oe::get_performance_configuration(_))),
     Entry("_ZN2nn2oe27SetPerformanceConfigurationENS0_15PerformanceModeEi", func!(crate::horizon::oe::set_performance_configuration(_, _))),
+    Entry("_ZN2nn2oe27SetPerformanceConfigurationEi", func!(crate::horizon::oe::set_performance_configuration_all(_))),
+    Entry("_ZN2nn2oe27GetNotificationMessageEventEv", func!(crate::horizon::oe::get_notification_message_event())),
+    Entry("_ZN2nn2oe27GetDefaultDisplayResolutionEPiS1_", func!(crate::horizon::oe::get_default_display_resolution(_, _))),
     Entry("_ZN2nn2oe28SetResumeNotificationEnabledEb", func!(crate::horizon::oe::set_resume_notification_enabled(_))),
     // Tells the system how to rotate captured screenshots (IPC to the applet manager); there is none to tell.
     Entry("_ZN2nn2oe29SetScreenShotImageOrientationENS_5album16ImageOrientationE", func!(crate::horizon::nn::noop_void())),

@@ -107,14 +107,65 @@ pub(crate) fn push_notification_message(msg: u32) {
     let mut g = OE_MESSAGES.lock().unwrap();
     let q = g.get_or_insert_with(|| VecDeque::from([15u32]));
     q.push_back(msg);
+    drop(g);
+    message_event_update();
 }
 
 pub(crate) fn pop() -> Option<u32> {
-    OE_MESSAGES
+    let m = OE_MESSAGES
         .lock()
         .unwrap()
         .get_or_insert_with(|| VecDeque::from([15u32]))
-        .pop_front()
+        .pop_front();
+    message_event_update();
+    m
+}
+
+/// The SystemEventType GetNotificationMessageEvent hands out: signaled while messages are queued.
+static MESSAGE_EVENT: Mutex<[u64; 8]> = Mutex::new([0; 8]);
+
+fn message_event_addr() -> usize {
+    MESSAGE_EVENT.lock().unwrap().as_ptr() as usize
+}
+
+fn message_event_update() {
+    let addr = message_event_addr();
+    let Some(ev) = crate::horizon::os::objects::hle_system_event_lookup(addr) else {
+        return;
+    };
+    let pending = OE_MESSAGES.lock().unwrap().as_ref().map_or(true, |q| !q.is_empty());
+    *ev.signaled.lock().unwrap() = pending;
+    if pending {
+        ev.cv.notify_all();
+    }
+}
+
+/// nn::oe::GetNotificationMessageEvent(): the event games wait on before TryPopNotificationMessage; manual-clear and
+/// kept in step with the message queue.
+pub(crate) unsafe extern "C" fn get_notification_message_event() -> usize {
+    let addr = message_event_addr();
+    if crate::horizon::os::objects::hle_system_event_lookup(addr).is_none() {
+        let ev = crate::horizon::os::objects::hle_system_event_register(addr);
+        ev.manual.store(true, std::sync::atomic::Ordering::Relaxed);
+        message_event_update();
+    }
+    addr
+}
+
+/// nn::oe::GetDefaultDisplayResolution(int* width, int* height): the resolution of the current operation mode.
+pub(crate) unsafe extern "C" fn get_default_display_resolution(w: *mut i32, h: *mut i32) {
+    let (rw, rh) = if is_handheld() { (1280, 720) } else { (1920, 1080) };
+    if !w.is_null() {
+        *w = rw;
+    }
+    if !h.is_null() {
+        *h = rh;
+    }
+}
+
+/// nn::oe::SetPerformanceConfiguration(int config): the form without a mode (both modes).
+pub(crate) unsafe extern "C" fn set_performance_configuration_all(config: i32) {
+    println!("[+] HLE: nn::oe::SetPerformanceConfiguration(config={})", config);
 }
 
 /// The launch parameter channel: a game started normally has none (the native call reached the applet manager's

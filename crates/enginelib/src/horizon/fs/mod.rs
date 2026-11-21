@@ -11,6 +11,7 @@ mod mods;
 mod romfs;
 mod dirs;
 mod storage;
+pub(crate) mod posix;
 pub use mods::*;
 pub(crate) use romfs::*;
 pub use dirs::*;

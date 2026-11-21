@@ -130,10 +130,39 @@ pub(crate) fn blocked_table() -> &'static StdMutex<rustc_hash::FxHashMap<u64, Bl
 /// calls that leave the guest registers as they were).
 pub(crate) unsafe fn first_guest_fp(fp: usize) -> usize {
     if cfg!(nx_native) {
-        *(fp as *const usize)
+        if frame_ok(fp) {
+            *(fp as *const usize)
+        } else {
+            0
+        }
     } else {
         fp
     }
+}
+
+/// Whether `a` can be a frame record of the calling thread: on its guest stack, or on its host stack above the current
+/// stack pointer. x29 is not always a frame pointer (code built without frame pointers keeps data in it), so the frame
+/// walks below check every record before reading it.
+pub(crate) fn frame_ok(a: usize) -> bool {
+    if a & 7 != 0 || a < 0x1_0000_0000 {
+        return false;
+    }
+    if let Some((lo, hi)) = crate::horizon::thread_stack::current_bounds() {
+        if a >= lo && a + 16 <= hi {
+            return true;
+        }
+    }
+    let sp: usize;
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        std::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags))
+    };
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let x = 0u8;
+        sp = &x as *const u8 as usize;
+    }
+    a >= sp && a < sp + (16 << 20)
 }
 
 pub(crate) struct BlockGuard(u64);
@@ -144,7 +173,7 @@ impl BlockGuard {
         let mut chain = [0usize; 4];
         let mut gfp = first_guest_fp(fp);
         for slot in chain.iter_mut() {
-            if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
+            if !frame_ok(gfp) {
                 break;
             }
             *slot = *((gfp + 8) as *const usize);
@@ -257,7 +286,7 @@ pub(crate) fn guest_chain(fp: usize) -> String {
     unsafe {
         let mut gfp = first_guest_fp(fp);
         for _ in 0..6 {
-            if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
+            if !frame_ok(gfp) {
                 break;
             }
             chain.push(fmt(*((gfp + 8) as *const usize)));
@@ -283,7 +312,7 @@ pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::t
     unsafe {
         let mut gfp = first_guest_fp(fp);
         for _ in 0..6 {
-            if gfp < 0x1_0000_0000 || gfp & 7 != 0 {
+            if !frame_ok(gfp) {
                 break;
             }
             chain.push(fmt(*((gfp + 8) as *const usize)));

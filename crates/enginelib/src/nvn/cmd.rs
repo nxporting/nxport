@@ -1177,6 +1177,38 @@ pub unsafe extern "C" fn hle_typed_cb_BindTextures(
         );
     }
 }
+/// Separate textures and samplers (nvnCommandBufferBindSeparateTexture / Sampler) live in the bound texture table
+/// beside the combined textures; they are kept with them under these index bases (TexBinding lookups map the table's
+/// words to them).
+pub const SEPARATE_TEXTURE_INDEX: i32 = 0x1000;
+pub const SEPARATE_SAMPLER_INDEX: i32 = 0x2000;
+
+#[no_mangle]
+pub unsafe extern "C" fn hle_typed_cb_BindSeparateTexture(cmd: usize, stage: c_int, index: c_int, handle: u64) {
+    let index = SEPARATE_TEXTURE_INDEX + index;
+    rec!("nvnCommandBufferBindSeparateTexture", cmd, Cmd::BindTexture { stage, index, handle });
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_typed_cb_BindSeparateSampler(cmd: usize, stage: c_int, index: c_int, handle: u64) {
+    let index = SEPARATE_SAMPLER_INDEX + index;
+    rec!("nvnCommandBufferBindSeparateSampler", cmd, Cmd::BindTexture { stage, index, handle });
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_typed_cb_BindSeparateTextures(cmd: usize, stage: c_int, first: c_int, count: c_int, handles: *const u64) {
+    for i in 0..count.max(0) {
+        let handle = if handles.is_null() { 0 } else { std::ptr::read_unaligned(handles.add(i as usize)) };
+        let index = SEPARATE_TEXTURE_INDEX + first + i;
+        rec!("nvnCommandBufferBindSeparateTextures", cmd, Cmd::BindTexture { stage, index, handle });
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn hle_typed_cb_BindSeparateSamplers(cmd: usize, stage: c_int, first: c_int, count: c_int, handles: *const u64) {
+    for i in 0..count.max(0) {
+        let handle = if handles.is_null() { 0 } else { std::ptr::read_unaligned(handles.add(i as usize)) };
+        let index = SEPARATE_SAMPLER_INDEX + first + i;
+        rec!("nvnCommandBufferBindSeparateSamplers", cmd, Cmd::BindTexture { stage, index, handle });
+    }
+}
 #[no_mangle]
 pub unsafe extern "C" fn hle_typed_cb_BindTexturesDeferred(
     cmd: usize,

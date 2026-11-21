@@ -8,3 +8,8 @@ pub(crate) unsafe extern "C" fn aoc_list(_out_indices: *mut i32, _offset: i32, _
 pub(crate) unsafe extern "C" fn aoc_list_changed_event(event: *mut u8) {
     crate::horizon::os::objects::hle_system_event_register_addr(event as usize);
 }
+
+/// CountAddOnContent(): none installed.
+pub(crate) unsafe extern "C" fn aoc_count() -> i32 {
+    0
+}

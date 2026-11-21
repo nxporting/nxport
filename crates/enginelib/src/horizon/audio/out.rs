@@ -44,6 +44,8 @@ struct Out {
     released: VecDeque<usize>,
     /// When the last scheduled buffer finishes.
     tail: Option<Instant>,
+    /// The SystemEvent signaled when buffers are released (OpenDefaultAudioOut with an event).
+    event: Option<usize>,
 }
 
 static OUTS: Mutex<Option<HashMap<usize, Out>>> = Mutex::new(None);
@@ -111,10 +113,71 @@ unsafe extern "C" fn open_default(o: *mut AudioOutHead, p: *const i32) -> u32 {
             queue: VecDeque::new(),
             released: VecDeque::new(),
             tail: None,
+            event: None,
         },
     );
     0
 }
+
+/// OpenDefaultAudioOut(AudioOut*, SystemEvent*, const AudioOutParameter&): the event is signaled whenever played
+/// buffers are released (by a thread that retires them on time; the service does the same).
+unsafe extern "C" fn open_default_with_event(o: *mut AudioOutHead, event: *mut (), p: *const i32) -> u32 {
+    let r = open_default(o, p);
+    if r == 0 && !event.is_null() {
+        crate::horizon::os::objects::hle_system_event_register(event as usize);
+        with(o, |s| s.event = Some(event as usize));
+        static RELEASER: std::sync::Once = std::sync::Once::new();
+        RELEASER.call_once(|| {
+            let _ = std::thread::Builder::new().name("audout-release".into()).spawn(|| loop {
+                std::thread::sleep(Duration::from_millis(2));
+                let mut signal = Vec::new();
+                {
+                    let mut g = OUTS.lock().unwrap_or_else(|e| e.into_inner());
+                    let now = Instant::now();
+                    for s in g.get_or_insert_with(HashMap::new).values_mut() {
+                        if let Some(ev) = s.event {
+                            s.retire(now);
+                            if !s.released.is_empty() {
+                                signal.push(ev);
+                            }
+                        }
+                    }
+                }
+                for ev in signal {
+                    crate::horizon::os::objects::hle_system_event_signal_addr(ev);
+                }
+            });
+        });
+    }
+    r
+}
+/// ListAudioOuts(AudioOutInfo*, int): the one output, "DeviceOut" (AudioOutInfo is a 256-byte name).
+unsafe extern "C" fn list(out: *mut [u8; 256], count: i32) -> i32 {
+    if out.is_null() || count < 1 {
+        return 0;
+    }
+    let mut name = [0u8; 256];
+    name[..10].copy_from_slice(b"DeviceOut\0");
+    *out = name;
+    1
+}
+
+/// ListAudioIns(AudioInInfo*, int): no microphone.
+unsafe extern "C" fn list_ins(_out: *mut u8, _count: i32) -> i32 {
+    0
+}
+
+/// GetSampleByteSize(SampleFormat): PcmInt8 1, PcmInt16 2, PcmInt24 3, PcmInt32 4, PcmFloat 4; others 0.
+unsafe extern "C" fn sample_byte_size(format: i32) -> usize {
+    match format {
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        4 | 5 => 4,
+        _ => 0,
+    }
+}
+
 unsafe extern "C" fn close(o: *mut AudioOutHead) {
     let mut g = OUTS.lock().unwrap_or_else(|e| e.into_inner());
     g.get_or_insert_with(HashMap::new).remove(&(o as usize));
@@ -244,7 +307,13 @@ pub fn lookup(name: &str) -> Option<usize> {
         "_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutERKNS0_17AudioOutParameterE" => {
             a!(open_default(_, _))
         }
+        "_ZN2nn5audio19OpenDefaultAudioOutEPNS0_8AudioOutEPNS_2os11SystemEventERKNS0_17AudioOutParameterE" => {
+            a!(open_default_with_event(_, _, _))
+        }
         "_ZN2nn5audio13CloseAudioOutEPNS0_8AudioOutE" => a!(close(_)),
+        "_ZN2nn5audio13ListAudioOutsEPNS0_12AudioOutInfoEi" => a!(list(_, _)),
+        "_ZN2nn5audio12ListAudioInsEPNS0_11AudioInInfoEi" => a!(list_ins(_, _)),
+        "_ZN2nn5audio17GetSampleByteSizeENS0_12SampleFormatE" => a!(sample_byte_size(_)),
         "_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE" => a!(start(_)),
         "_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE" => a!(stop(_)),
         "_ZN2nn5audio21GetAudioOutSampleRateEPKNS0_8AudioOutE" => a!(sample_rate(_)),

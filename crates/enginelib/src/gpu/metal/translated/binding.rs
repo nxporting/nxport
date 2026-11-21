@@ -916,7 +916,28 @@ pub(crate) type BindMemos = HashMap<(i32, usize), super::BindMemo>;
 /// the texture word at the handle's word offset, a separate sampler's word ORed in, a sampler id shifted into place).
 pub(crate) unsafe fn texture_handle(st: &State, stage: i32, tb: &TexBinding) -> Option<u64> {
     if tb.in_table() {
-        return st.textures_bound.get(&(stage, tb.handle_key())).copied();
+        // The table's words: combined textures from word 8 (two words each, after them the images), separate textures
+        // from word 90 (128 of them), separate samplers from word 346. A separate-sampler handle (type 1 or 2) ORs a
+        // second word in.
+        let word = |w: u32| -> Option<u64> {
+            let key = match w {
+                90..=345 => crate::nvn::cmd::SEPARATE_TEXTURE_INDEX + ((w - 90) / 2) as i32,
+                346.. => crate::nvn::cmd::SEPARATE_SAMPLER_INDEX + ((w - 346) / 2) as i32,
+                _ => (w.wrapping_sub(8) / 2) as i32,
+            };
+            st.textures_bound.get(&(stage, key)).copied()
+        };
+        let h = tb.handle_index;
+        let mut handle = word((h & 0x3fff) + 2 * tb.element)?;
+        match h >> 28 {
+            0 => {}
+            ty => {
+                if let Some(s) = word((h >> 14) & 0x3fff) {
+                    handle |= if ty == 2 { s << 20 } else { s };
+                }
+            }
+        }
+        return Some(handle);
     }
     let slot0 = tb.cbuf_slot & 0xffff;
     let slot1 = match (tb.cbuf_slot as u32 >> 16) as i32 {

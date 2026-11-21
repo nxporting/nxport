@@ -65,13 +65,13 @@ impl TexBinding {
 
     /// Whether the handle is in the bound texture table (cbuf 2) rather than one of the game's uniform buffers.
     pub fn in_table(&self) -> bool {
-        self.cbuf_slot < 0 || self.cbuf_slot == 2
+        self.cbuf_slot < 0 || self.cbuf_slot & 0xffff == 2
     }
 
     /// Its handle's key in the per-stage handle lists: the bound table entry, or (handles from uniform buffers) a key
     /// of its own per binding.
     pub fn handle_key(&self) -> i32 {
-        if self.in_table() {
+        if self.in_table() && self.handle_index >> 14 == 0 {
             (self.handle_index.wrapping_sub(8) / 2) as i32 + self.element as i32
         } else {
             0x4000_0000 | self.binding as i32
