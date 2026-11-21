@@ -160,6 +160,13 @@ and update this file when you finish or drop it.
      Windows (lifted) version is needed for any Unity game: suspend = park the lifted thread at its next safe point or
      SuspendThread on its host thread; context = the lifted CPU state (x0-x28, fp, lr, sp, pc; layout in suspend.rs).
      f171575: comment cleanups only.
+  33. 5bc3b3c (shared nvn/cmd.rs separate-bind recorders, horizon/fs/posix.rs, oe.rs, audio/out.rs, aoc; Metal-only lookup
+     in gpu/metal/translated/binding.rs texture_handle): separate textures / samplers are recorded as BindTexture under
+     index bases 0x1000 / 0x2000; the bound table's words map to them (combined from word 8, separate textures from
+     90, separate samplers from 346; handle types 1/2 OR a sampler word in). Vulkan's draw.rs reads table handles as
+     (handle_index - 8) / 2 only: Unity stages (packed slots 2|2<<16, types 1) need the same word mapping there, and
+     cbuf_slot must be compared by its low 16 bits. The libc file layer replaces the SDK's stdio / stat / dir functions
+     for every game (console FILEs log [console] lines).
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
