@@ -140,6 +140,8 @@ and update this file when you finish or drop it.
   26. 0e7d350 (shared guest/module_loader.rs, startup.rs): nn::ro::LoadModule really loads NROs (Jamboree's boot.nro);
      symbol table + loader set up when main imports LoadModule. Windows: the module loader core is shared; check a
      Jamboree boot gets past "nn::ro::LoadModule: nro0".
+  27. bdd7928 (shared): nn::ro::detail::GetExceptionInfo bound (module ranges registered at startup and by the module
+     loader). Windows: lifted code may handle svc itself; check the binding does not change TotK / BotW there.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
