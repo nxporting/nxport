@@ -197,13 +197,7 @@ pub unsafe extern "C" fn hle_nvnWindowGetCrop(w: *const NvnWindow, crop: *mut [i
 
 // ---------------------------------------------------------------------------
 // NVN Window family. NVNwindow is 384 bytes, NVNwindowBuilder 0x40 (64)
-// bytes. This is the actual framebuffer presentation path -- Present pushes
-// a real packet into the compositor channel that already exists
-// (compositor.rs) but has never been fed real data before now. Nothing
-// consumes that channel into real pixels yet (that's the dedicated Metal-
-// translation follow-up this session has flagged twice already), but the
-// data now genuinely flows end-to-end from the game's present call instead
-// of being silently dropped.
+// bytes: the game's swap chain textures and present interval.
 #[repr(C)]
 pub(crate) struct NvnWindowBuilder {
     device: usize,

@@ -4,13 +4,8 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
-// Global, always-on HLE call-history ring buffer. Every NVN HLE function
-// (both the real implementations and the labeled-stub pool) reports here on
-// every call, not just on resolution. Answers "what HLE functions were
-// called, in order, before this crash?" directly from the crash dump instead
-// of requiring a fresh live-tracing session each time -- the silent-stub gap
-// and the "we don't have call-time visibility" gap were really the same
-// problem, just found from two different angles this session.
+// The HLE call history, always on: every NVN HLE function (implemented ones and the labelled stubs) records each call,
+// so crash and hang reports list the calls made before them.
 pub(crate) const HLE_CALL_HISTORY_SIZE: usize = 4096;
 
 // Each thread records into a ring of its own, with plain stores: one ring for all threads had its lock contended by

@@ -4,10 +4,7 @@ use super::*;
 
 // ---------------------------------------------------------------------------
 // NVN Buffer family. NVNbuffer is 0x30 (48) bytes, NVNbufferBuilder is 0x40
-// (64) bytes -- both opaque, same freedom as MemoryPool/CommandBuffer. This
-// was the single highest-volume unimplemented call this session
-// (nvnBufferGetAddress: 4365 calls, always returning 0) -- almost certainly
-// why guest code elsewhere was dereferencing a null "buffer address" field.
+// (64) bytes; both are opaque to the game, so the layout inside is ours.
 #[repr(C)]
 pub(crate) struct NvnBufferBuilder {
     device: usize,

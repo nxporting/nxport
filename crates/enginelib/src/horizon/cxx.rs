@@ -11,16 +11,9 @@ use std::sync::{Arc, Condvar, Mutex as StdMutex, OnceLock};
 // f; return f; }`, extremely common in sead:: manager classes). The Itanium
 // ABI *requires* this to be safe under real concurrent access: if two
 // threads race to initialize the same static local, exactly one must run
-// the constructor while the other blocks until it's done. The previous
-// implementation was a plain unsynchronized read-then-branch with no
-// locking at all -- with two genuinely concurrent OS threads (main +
-// VibrationThread), both could observe *guard == 0 at once, both would be
-// told to proceed, and both would run the constructor: a double-init race
-// that can leave a "singleton" partially or doubly constructed. That
-// produces exactly the class of symptom this session kept running into --
-// an object whose vtable and relocations are all individually correct, yet
-// whose live state doesn't match what a single-threaded reading of the code
-// would predict.
+// the constructor while the other blocks until it's done. Guest threads are
+// real host threads here, so the guard is a real lock with a condition
+// variable per guard address.
 pub(crate) struct GuardState {
     in_progress: StdMutex<bool>,
     cv: Condvar,

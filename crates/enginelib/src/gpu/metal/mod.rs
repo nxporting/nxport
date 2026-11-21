@@ -239,7 +239,7 @@ impl Drop for SlowTimer {
 /// uniform buffer copies cached within a submit are dropped when it changes.
 pub(super) static GUEST_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 16 KiB pages holding uniform data copied in this session (metal/translated.rs notes them): counter writes elsewhere cannot
+/// 16 KiB pages holding uniform data copied so far in the run (metal/translated notes them): counter writes elsewhere cannot
 /// change a cached copy, so only writes to these pages advance GUEST_WRITES. Counters and timestamps (~54 per Hateno
 /// frame) used to drop every copy (~5000 copies per frame against ~16000 reuses). --ubo-epoch-all: every write
 /// advances it (A/B).

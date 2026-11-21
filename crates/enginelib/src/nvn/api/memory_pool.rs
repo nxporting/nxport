@@ -3,25 +3,14 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// NVN Memory Pool family -- real implementation, not a stub.
-//
-// Root cause this session: the game's own GPU memory-pool wrapper object
-// (sead::gfx-style, dispatched through a C++ vtable at guest+0xCB2500/+0xCB2B88)
-// never got constructed because `nvnMemoryPoolInitialize` -- which it calls
-// internally via a real function pointer fetched through
-// nvnDeviceGetProcAddress -- was silently falling through to
-// hle_nvn_generic_stub (always returns 0 = NVN_FALSE). The game read that
-// as "pool init failed" and never finished its own construction, leaving the
-// wrapper's vtable pointer permanently null. Implementing this family for
-// real (not just making it return success) fixes that at the source.
+// NVN Memory Pool family.
 //
 // NVNmemoryPool (0x100 bytes) and NVNmemoryPoolBuilder (0x40 bytes) are
 // opaque, driver-defined storage (NVN declares them as
 // `char reserved[...]`) -- the game never reads their fields directly, only
 // ever hands the pointer back into other nvn* calls. That means we're free
 // to define our own internal layout, as long as our own Set*/Get*/Initialize
-// implementations agree with each other -- same freedom nn::vi's opaque
-// Display/Layer handles already gave us.
+// implementations agree with each other.
 #[repr(C)]
 pub(crate) struct NvnMemoryPoolBuilder {
     device: usize,
