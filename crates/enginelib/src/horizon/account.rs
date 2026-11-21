@@ -87,25 +87,18 @@ pub(crate) unsafe extern "C" fn list_users(out_count: *mut i32, out: *mut [u64; 
 
 /// ListPushedOpenUsers(Uid*, int): the users the game was launched with (count returned), our one user. The SDK's own
 /// version reads the account service object, which is not created here (Super Mario Party Jamboree crashed on it).
-pub(crate) unsafe extern "C" fn list_pushed_open_users(out: *mut [u64; 2], max: i32) -> i32 {
-    if max > 0 && !out.is_null() {
-        *out = USER_UID;
-        1
-    } else {
-        0
-    }
+/// ListPushedOpenUsers(Uid*, int): users a previous program of a multi-program application kept open with
+/// PushOpenUsers. The engine runs one program, so there are none.
+pub(crate) unsafe extern "C" fn list_pushed_open_users(_out: *mut [u64; 2], _max: i32) -> i32 {
+    0
 }
 
-/// PopOpenUsers(int*, UserHandle*, int): the user handles opened for the game at launch, our one user's (as OpenUser).
-pub(crate) unsafe extern "C" fn pop_open_users(out_count: *mut i32, out: *mut u128, max: i32) -> u32 {
-    let n = if max > 0 && !out.is_null() {
-        *out = 1;
-        1
-    } else {
-        0
-    };
+/// PopOpenUsers(int*, UserHandle*, int): the handles of users kept open by PushOpenUsers in a previous program; none
+/// without one ("no program can get the UserHandle, but an error does not occur"). Reporting our user here made Super
+/// Mario Party Jamboree take its "returned from another program" path and never seat player 1.
+pub(crate) unsafe extern "C" fn pop_open_users(out_count: *mut i32, _out: *mut u128, _max: i32) -> u32 {
     if !out_count.is_null() {
-        *out_count = n;
+        *out_count = 0;
     }
     RESULT_SUCCESS
 }
