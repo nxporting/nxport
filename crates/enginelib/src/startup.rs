@@ -913,46 +913,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
                 println!("[!] Mods: no room for the rtld placeholder below main; exlaunch may misidentify modules");
             }
         }
-        let (ro, data, end) = (mem_space.ro_off, mem_space.data_off, mem_space.total_size);
-        add_region(Region {
-            start: main_base,
-            size: ro,
-            mem_type: MEM_CODE_STATIC,
-            perm: PERM_RX,
-        });
-        add_region(Region {
-            start: main_base + ro,
-            size: data - ro,
-            mem_type: MEM_CODE_STATIC,
-            perm: PERM_R,
-        });
-        add_region(Region {
-            start: main_base + data,
-            size: end - data,
-            mem_type: MEM_CODE_MUTABLE,
-            perm: PERM_RW,
-        });
-        if let Some(m) = sdk.as_ref() {
-            // text, rodata, data+bss exactly as the NSO lays them out (exlaunch counts a module only with all three).
-            add_region(Region {
-                start: m.text_start,
-                size: m.ro_off - (m.text_start - m.base),
-                mem_type: MEM_CODE_STATIC,
-                perm: PERM_RX,
-            });
-            add_region(Region {
-                start: m.base + m.ro_off,
-                size: m.data_off - m.ro_off,
-                mem_type: MEM_CODE_STATIC,
-                perm: PERM_R,
-            });
-            add_region(Region {
-                start: m.base + m.data_off,
-                size: ((m.image_size + 0xfff) & !0xfff) - m.data_off,
-                mem_type: MEM_CODE_MUTABLE,
-                perm: PERM_RW,
-            });
-        }
+        add_module_regions(&mem_space, sdk.as_ref());
         let (pool, pool_len) = mem_space.trampoline_range();
         horizon::svc::add_hookable(pool, pool_len);
         let mut syms = module_symbols(&mut mem_space, sdk.as_ref(), main_base);
@@ -1056,6 +1017,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     } else if mem_space.imports().iter().any(|(_, n)| n.starts_with("_ZN2nn2ro10LoadModule")) {
         // A game that loads its own modules (NROs) at run time: nn::ro::LoadModule maps and links them.
         let main_base = mem_space.base_ptr as usize;
+        add_module_regions(&mem_space, sdk.as_ref());
         let syms = module_symbols(&mut mem_space, sdk.as_ref(), main_base);
         let svc_entry = mem_space.make_hle_trampoline(crate::hle!(horizon::svc::svc_dispatch(_, _))) as usize;
         let unresolved =
@@ -1097,6 +1059,12 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
         }
         let n = unsafe { guest::exec::exclusive_rewrite::rewrite(&ranges) };
         println!("[+] load-exclusive rewrite: {n} sites now acquire");
+    }
+
+    // The modules the SDK's unwinder can find (nn::ro::detail::GetExceptionInfo).
+    guest::module_loader::add_module_range(mem_space.base_ptr as usize, mem_space.total_size);
+    if let Some(m) = sdk.as_ref() {
+        guest::module_loader::add_module_range(m.text_start, m.image_size - (m.text_start - m.base));
     }
 
     // 4b. Install inline HLE trampolines & version hooks via profile.
@@ -1410,4 +1378,53 @@ fn module_symbols(
         guest::module_loader::SEAD_VEC3_ZERO.as_ptr() as usize,
     );
     syms
+}
+
+/// Registers main's and the SDK's segments for svcQueryMemory (text, rodata, data + bss as the NSOs lay them out), as
+/// the kernel reports them: exlaunch counts modules that way, and the SDK's unwinder finds a module's unwind table from
+/// the code region holding a PC (nn::ro::detail::GetExceptionInfo).
+#[cfg(nx_runtime)]
+fn add_module_regions(mem_space: &GuestMemorySpace, sdk: Option<&guest::sdk_loader::SdkModule>) {
+    use horizon::svc::{add_region, Region, MEM_CODE_MUTABLE, MEM_CODE_STATIC, PERM_R, PERM_RW, PERM_RX};
+    let main_base = mem_space.base_ptr as usize;
+    let (ro, data, end) = (mem_space.ro_off, mem_space.data_off, mem_space.total_size);
+    add_region(Region {
+        start: main_base,
+        size: ro,
+        mem_type: MEM_CODE_STATIC,
+        perm: PERM_RX,
+    });
+    add_region(Region {
+        start: main_base + ro,
+        size: data - ro,
+        mem_type: MEM_CODE_STATIC,
+        perm: PERM_R,
+    });
+    add_region(Region {
+        start: main_base + data,
+        size: end - data,
+        mem_type: MEM_CODE_MUTABLE,
+        perm: PERM_RW,
+    });
+    if let Some(m) = sdk.as_ref() {
+        // text, rodata, data+bss exactly as the NSO lays them out (exlaunch counts a module only with all three).
+        add_region(Region {
+            start: m.text_start,
+            size: m.ro_off - (m.text_start - m.base),
+            mem_type: MEM_CODE_STATIC,
+            perm: PERM_RX,
+        });
+        add_region(Region {
+            start: m.base + m.ro_off,
+            size: m.data_off - m.ro_off,
+            mem_type: MEM_CODE_STATIC,
+            perm: PERM_R,
+        });
+        add_region(Region {
+            start: m.base + m.data_off,
+            size: ((m.image_size + 0xfff) & !0xfff) - m.data_off,
+            mem_type: MEM_CODE_MUTABLE,
+            perm: PERM_RW,
+        });
+    }
 }

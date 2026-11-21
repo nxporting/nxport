@@ -414,6 +414,7 @@ pub unsafe fn load_segments(
         "[+] Module {}: loaded at {:#x} ({:#x} bytes): {} rewritten",
         name, base, image_size, rewritten
     );
+    add_module_range(base, image_size);
     Ok(LoadedModule {
         base,
         image_size,
@@ -512,6 +513,35 @@ static RO_NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize:
 /// Modules loaded at run time: (image the game passed, base, exports), newest last.
 static RO_MODULES: std::sync::Mutex<Vec<(usize, usize, std::collections::HashMap<String, usize>)>> =
     std::sync::Mutex::new(Vec::new());
+
+/// Every module's image range (main, the SDK, modules loaded beside them): what GetExceptionInfo searches.
+static MODULE_RANGES: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn add_module_range(base: usize, size: usize) {
+    MODULE_RANGES.lock().unwrap().push((base, size));
+}
+
+/// nn::ro::detail::GetExceptionInfo(ExceptionInfo*, uintptr_t pc) -> bool: the unwind table of the module holding `pc`
+/// for the SDK's unwinder. ExceptionInfo is { module base, module size, eh_frame_hdr offset from the base, its size },
+/// the last two from the module's MOD0 header. The SDK's own version asks svcQueryMemory, which its code cannot reach
+/// here (only mods' svc instructions are rewritten): every C++ exception aborted.
+pub unsafe extern "C" fn ro_get_exception_info(out: *mut u64, pc: usize) -> bool {
+    let Some((base, size)) = MODULE_RANGES.lock().unwrap().iter().copied().find(|&(b, s)| pc >= b && pc < b + s) else {
+        return false;
+    };
+    let mod0 = ptr::read((base + 4) as *const u32) as usize;
+    if &*std::ptr::slice_from_raw_parts((base + mod0) as *const u8, 4) != b"MOD0" {
+        return false;
+    }
+    let (start, end) = (ptr::read((base + mod0 + 0x10) as *const i32), ptr::read((base + mod0 + 0x14) as *const i32));
+    if !out.is_null() {
+        *out = base as u64;
+        *out.add(1) = size as u64;
+        *out.add(2) = (mod0 as i64 + start as i64) as u64;
+        *out.add(3) = (end - start) as u64;
+    }
+    true
+}
 
 pub fn set_ro_loader(l: RoLoader, first: usize) {
     RO_NEXT.store(first, std::sync::atomic::Ordering::Relaxed);

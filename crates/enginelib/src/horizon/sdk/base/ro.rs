@@ -4,6 +4,7 @@ use super::super::Entry;
 
 pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2ro10InitializeEv", func!(crate::guest::module_loader::ro_initialize())),
+    Entry("_ZN2nn2ro6detail16GetExceptionInfoEPNS1_13ExceptionInfoEm", func!(crate::guest::module_loader::ro_get_exception_info(_, _))),
     Entry("_ZN2nn2ro8FinalizeEv", func!(crate::guest::module_loader::ro_finalize())),
     Entry("_ZN2nn2ro13GetBufferSizeEPmPKv", func!(crate::guest::module_loader::ro_get_buffer_size(_, _))),
     Entry("_ZN2nn2ro12LookupSymbolEPmPKc", func!(crate::guest::module_loader::ro_lookup_symbol(_, _))),
