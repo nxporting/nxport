@@ -147,6 +147,12 @@ and update this file when you finish or drop it.
      nvn::layout::storage_target makes 1D textures with height > 1 2D images (Vulkan image_type uses it). Windows: the
      Vulkan side compiles the same; check a TotK movie still plays (CPU mode, should be unchanged).
   30. 5afabfb (shared): PopOpenUsers / ListPushedOpenUsers return none. Nothing Windows-specific.
+  31. 693d96b (shared horizon/hid.rs, diag.rs): GetNpadControllerColor bound (Jamboree's L+R abort); Abort prints guest
+     callers. 177ccd4: Metal reads texture handles from the game's uniform buffers (cbuf slot >= 3) and supports indexed
+     texture arrays; shared parts: sass2spv Host::array_sets (new field, Vulkan keeps true), msl backend, specializer.
+     Vulkan fix in gpu/vulkan/draw.rs: cbuf array elements are 8 bytes apart (was 4). Windows: build; Jamboree on
+     Vulkan to the plaza tutorial (title needs L+R: keys 14 + 32 together). Also note create_extra_set returns 4 for
+     every array: two arrays in one stage (Jamboree has 35 such stages) collide on Vulkan.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
