@@ -403,6 +403,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         } else {
             let mut g = NEXT.lock().unwrap();
             let now = std::time::Instant::now();
+            #[cfg_attr(not(nx_native), allow(unused_mut))] // moved onto the refresh grid only with Metal display pacing
             let mut deadline = match *g {
                 Some(d) if d > now && d < now + frame * 2 => d,
                 _ => now,
