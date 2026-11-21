@@ -548,7 +548,7 @@ pub(crate) unsafe extern "C" fn try_wait_timer_event(ev: *mut ()) -> bool {
 pub(crate) unsafe extern "C" fn try_wait_system_event(event: *mut ()) -> u8 {
     record_hle_call("os::try_wait_system_event");
     match hle_system_event_lookup(event as usize) {
-        Some(ev) => std::mem::replace(&mut *ev.signaled.lock().unwrap(), false) as u8,
+        Some(ev) => std::mem::replace(&mut *ev.signaled.lock().unwrap(), ev.after_wait()) as u8,
         None => {
             static SEEN: StdMutex<Vec<usize>> = StdMutex::new(Vec::new());
             let mut seen = SEEN.lock().unwrap();
@@ -588,7 +588,11 @@ pub(crate) unsafe extern "C" fn timed_wait_system_event(event: *mut (), timeout_
         Some(ev) => {
             let g = ev.signaled.lock().unwrap();
             let (mut g, _) = ev.cv.wait_timeout_while(g, timeout, |s| !*s).unwrap();
-            std::mem::replace(&mut *g, false)
+            let signaled = *g;
+            if signaled {
+                *g = ev.after_wait();
+            }
+            signaled
         }
         None => {
             static SEEN: StdMutex<Vec<usize>> = StdMutex::new(Vec::new());
@@ -621,7 +625,7 @@ pub(crate) unsafe extern "C" fn wait_system_event(event: *mut ()) {
             while !*g {
                 g = ev.cv.wait(g).unwrap();
             }
-            *g = false;
+            *g = ev.after_wait();
         }
         None => {
             // An event nothing initialised through HLE. Log once per address and rate-limit instead of
@@ -635,6 +639,29 @@ pub(crate) unsafe extern "C" fn wait_system_event(event: *mut ()) {
             drop(seen);
             hle_sleep_ns(5_000_000);
         }
+    }
+}
+
+/// nn::os::CreateSystemEvent(SystemEventType*, EventClearMode, bool interprocess): an event the game signals and waits
+/// on itself (EventClearMode 0 ManualClear, 1 AutoClear). The SDK's version creates a kernel event by syscall.
+pub(crate) unsafe extern "C" fn create_system_event(event: *mut (), clear_mode: i32, _interprocess: bool) -> u32 {
+    let ev = hle_system_event_register(event as usize);
+    ev.manual.store(clear_mode == 0, std::sync::atomic::Ordering::Relaxed);
+    0
+}
+
+/// nn::os::SignalSystemEvent(SystemEventType*).
+pub(crate) unsafe extern "C" fn signal_system_event(event: *mut ()) {
+    if let Some(ev) = hle_system_event_lookup(event as usize) {
+        hle_system_event_signal(&ev);
+    }
+}
+
+/// nn::os::ClearSystemEvent(SystemEventType*), for events the engine tracks (the SDK's version only knows events it
+/// created itself). Unity clears the vsync event after each TryWait.
+pub(crate) unsafe extern "C" fn clear_system_event(event: *mut ()) {
+    if let Some(ev) = hle_system_event_lookup(event as usize) {
+        *ev.signaled.lock().unwrap() = false;
     }
 }
 
@@ -785,6 +812,26 @@ pub(crate) unsafe extern "C" fn wait_any(mw: *mut u8) -> *mut u8 {
         }
         g = sync_wait(g, &keys, None);
     }
+}
+
+/// nn::os::TryWaitAny(MultiWaitType*): wait_any without blocking; null when no linked holder is signaled.
+pub(crate) unsafe extern "C" fn try_wait_any(mw: *mut u8) -> *mut u8 {
+    let mut g = lock();
+    let s = g.as_mut().unwrap();
+    let holders: Vec<usize> = s.multiwaits.get(&(mw as usize)).cloned().unwrap_or_default();
+    for h in holders {
+        if let Some(&ev) = s.holders.get(&h) {
+            if let Some(e) = s.events.get_mut(&ev) {
+                if e.signaled {
+                    if e.auto_clear {
+                        e.signaled = false;
+                    }
+                    return h as *mut u8;
+                }
+            }
+        }
+    }
+    std::ptr::null_mut()
 }
 
 // ── nn::os::MessageQueue ─────────────────────────────────────────────────────────────────────

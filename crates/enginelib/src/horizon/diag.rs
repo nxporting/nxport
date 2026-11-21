@@ -54,6 +54,23 @@ pub(crate) unsafe extern "C" fn get_backtrace(_out: *mut usize, _count: i32) -> 
     0
 }
 
+/// nn::diag::detail::PrintDebugString(const char*, size_t): where the SDK's log observers (and its stdio) end, a
+/// debug-output syscall that goes nowhere here. Printed as the game's log.
+pub(crate) unsafe extern "C" fn print_debug_string(msg: *const u8, len: usize) {
+    if !msg.is_null() && len > 0 && len < 0x10000 {
+        let s = String::from_utf8_lossy(std::slice::from_raw_parts(msg, len));
+        println!("[nn::diag] {}", s.trim_end());
+    }
+}
+
+/// PrintDebugString(const char*): the same for a NUL-terminated string.
+pub(crate) unsafe extern "C" fn print_debug_string_z(msg: *const u8) {
+    if !msg.is_null() {
+        let s = std::ffi::CStr::from_ptr(msg.cast());
+        print_debug_string(msg, s.to_bytes().len());
+    }
+}
+
 /// nn::diag::detail::PutImpl(const LogMetaData&, const char* msg, size_t len): the game's log sink.
 pub(crate) unsafe extern "C" fn put_impl(_meta: *const u8, msg: *const u8, len: usize) {
     if !msg.is_null() && len > 0 && len < 0x10000 {

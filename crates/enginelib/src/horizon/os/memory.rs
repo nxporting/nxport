@@ -360,6 +360,24 @@ pub(crate) unsafe extern "C" fn allocate_memory_pages(address: usize, size: usiz
     0
 }
 
+/// nn::os::GenerateRandomBytes(void*, size_t): bytes from the host's random source (the SDK's version seeds its
+/// generator from a syscall).
+pub(crate) unsafe extern "C" fn generate_random_bytes(buf: *mut u8, size: usize) {
+    if !buf.is_null() && size != 0 {
+        crate::platform::os::random_bytes(std::slice::from_raw_parts_mut(buf, size));
+    }
+}
+
+/// SetMemoryPermission(address, size, MemoryPermission): accepted, not enforced. The pages live in the region arena,
+/// where write tracking and the GPU guards set host page protection themselves (16 KiB pages, the guest's are 4 KiB);
+/// a game would only notice if it relied on faulting on its own pages.
+pub(crate) unsafe extern "C" fn set_memory_permission(address: usize, size: usize, permission: u32) {
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    LOGGED.call_once(|| {
+        println!("[+] HLE: nn::os::SetMemoryPermission(addr=0x{address:x}, size={size}, perm={permission}): not enforced");
+    });
+}
+
 pub(crate) unsafe extern "C" fn free_address_region(address: usize) {
     let size = address_regions().lock().unwrap().remove(&address);
     if let Some(size) = size {

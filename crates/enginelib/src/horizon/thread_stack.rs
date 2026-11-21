@@ -58,6 +58,7 @@ pub fn allocate(size: usize) -> (usize, usize) {
 #[cfg(nx_native)]
 pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     BOUNDS.with(|b| b.set((lo, hi)));
+    crate::horizon::os::suspend::register_current(crate::horizon::os::get_current_thread(), lo, hi);
     let tsd: *mut u8;
     std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tsd);
     nxport_call_on_stack(arg, entry, hi & !15, tsd.add(crate::guest::exec::tls::hle_stack_offset()) as *mut usize);

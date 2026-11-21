@@ -99,6 +99,7 @@ pub unsafe extern "C" fn mount_system_data(name: *const c_char, id: u64, _cache:
         return RESULT_TARGET_NOT_FOUND;
     };
     println!("[+] HLE: nn::fs::MountSystemData('{name}', {id:016x}) -> {}", dir.display());
+    super::note_mounted(&name);
     let mut m = READ_ONLY_MOUNTS.lock().unwrap();
     m.retain(|(n, _)| *n != name);
     m.push((name, dir));

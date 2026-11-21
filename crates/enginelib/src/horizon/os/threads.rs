@@ -8,18 +8,8 @@ use std::os::raw::c_char;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::cell::RefCell;
 
-// Layout of nn::os::ThreadType (0x1B8 bytes in current titles; no `_lockHistory` field).
-//
-// This replaced a struct that was 1056 bytes with a completely invented field
-// order/layout against a real 440-byte type. Every one of our HLE functions
-// only ever touched it through our own field names, so those specific writes
-// stayed harmlessly in-bounds -- but ANY authentic, unmodified guest code
-// that reads a ThreadType field *directly* (e.g. sead's stack-guard checks,
-// which are routine, expected defensive bookkeeping, not a bug) would read
-// whatever happened to sit at that byte offset in our fictional layout
-// instead of the real field. That's a plausible source of exactly the kind
-// of "everything I can verify is correct, yet the live state doesn't match"
-// symptom this session kept running into elsewhere in the engine.
+// Layout of nn::os::ThreadType (0x1B8 bytes in current titles; no `_lockHistory` field). Guest code reads its fields
+// directly (sead's stack checks read the stack and its size), so the layout must be the SDK's.
 #[repr(C, align(8))]
 pub(crate) struct NnThreadType {
     pub _all_threads_list_node: [u8; 16], // 0x00 TypedStorage<IntrusiveListNode,16,8>
@@ -363,6 +353,7 @@ pub(crate) unsafe extern "C" fn create_thread(
         (*thread).current_fiber = std::ptr::null_mut();
         (*thread).initial_fiber = std::ptr::null_mut();
     }
+    LIVE_THREADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     0
 }
 
@@ -515,8 +506,23 @@ pub(crate) unsafe extern "C" fn try_wait_thread(thread: *mut NnThreadType) -> bo
     }
 }
 
+/// Threads the game created and has not destroyed (the main thread not included).
+static LIVE_THREADS: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// The process's thread limit: Ryujinx's (KernelInit: LimitableResource.Thread 800).
+const THREAD_LIMIT: i32 = 800;
+
+/// nn::os::GetFreeThreadCount(): threads the process may still create, the limit minus the threads in use (the main
+/// thread included).
+pub(crate) unsafe extern "C" fn get_free_thread_count() -> i32 {
+    (THREAD_LIMIT - 1 - LIVE_THREADS.load(std::sync::atomic::Ordering::Relaxed)).max(0)
+}
+
 pub(crate) unsafe extern "C" fn destroy_thread(thread: *mut NnThreadType) {
     if !thread.is_null() {
+        if (*thread).state != THREAD_STATE_NOT_INITIALIZED {
+            LIVE_THREADS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
         join_guest_thread(thread);
         THREAD_EXITS
             .lock()

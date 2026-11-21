@@ -12,20 +12,9 @@ pub unsafe extern "C" fn hle_nvn_generic_stub() -> usize {
     0
 }
 
-// Labeled, nameable unimplemented-NVN-function stubs.
-//
-// The *resolution* of an unmapped NVN name was already logged
-// ("NVN ProcAddress: requested 'X'"), but that only fires once, when the
-// game fetches the function pointer -- not each time it's actually called
-// afterward, and every unmapped name used to resolve to the exact same
-// anonymous hle_nvn_generic_stub, which has no way to know which function
-// it's pretending to be. That made tracking an unimplemented-function bug
-// down require manual disassembly every time (see the 0xCB2500 investigation
-// this session). Fixed properly: each unmapped name gets its own slot from
-// this pool of distinct, genuinely-nameable functions, so every actual call
-// -- not just the resolution -- prints its real NVN name, a running call
-// count, its first two arguments, and the guest return address (so the call
-// site is directly addressable without hunting for it).
+// Labelled stubs for unimplemented NVN functions: each unimplemented name the game looks up gets a slot of its own
+// from this pool, so every call logs the function's name, a call count, its first two arguments and the guest return
+// address.
 pub(crate) const NVN_LABELED_STUB_POOL_SIZE: usize = 320;
 
 pub(crate) static NVN_STUB_NAMES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
@@ -549,8 +538,13 @@ pub unsafe extern "C" fn hle_nvnDeviceGetProcAddress(
 }
 
 /// The engine function nvnDeviceGetProcAddress hands out for `func_name` (horizon::sdk's NVN tables).
+/// The device functions the bootstrap loader serves are device procs too: newer NVN versions look up
+/// nvnDeviceGetProcAddress itself this way.
 pub fn resolve_proc(func_name: &str) -> *const () {
-    crate::horizon::sdk::nvn_proc(func_name).map_or_else(|| resolve_unimplemented_nvn(func_name), |a| a as *const ())
+    crate::horizon::sdk::nvn_proc(func_name)
+        .map(|a| a as *const ())
+        .or_else(|| bootstrap_fn(func_name))
+        .unwrap_or_else(|| resolve_unimplemented_nvn(func_name))
 }
 
 #[no_mangle]

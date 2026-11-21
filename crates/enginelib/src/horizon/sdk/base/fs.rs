@@ -11,6 +11,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2fs11MountSdCardEPKc", func!(crate::guest::module_loader::fs_mount_sdcard(_))),
     Entry("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", func!(crate::horizon::fs::set_file_size(_, _))),
     Entry("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", func!(crate::horizon::fs::get_entry_type(_, _))),
+    Entry("_ZN2nn2fs9IsMountedEPKc", func!(crate::horizon::fs::is_mounted(_))),
     Entry("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", func!(crate::horizon::fs::mount_save_data(_, _))),
     Entry("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", func!(crate::horizon::fs::open_directory(_, _, _))),
     Entry("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", func!(crate::horizon::fs::read_directory(_, _, _, _))),

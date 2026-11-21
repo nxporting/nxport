@@ -706,6 +706,15 @@ pub(crate) fn rw_write_held_by_me(addr: usize) -> bool {
 pub(crate) struct HleSystemEvent {
     pub(crate) signaled: StdMutex<bool>,
     pub(crate) cv: std::sync::Condvar,
+    /// EventClearMode ManualClear: waits do not consume the signal (only ClearSystemEvent does).
+    pub(crate) manual: std::sync::atomic::AtomicBool,
+}
+
+impl HleSystemEvent {
+    /// The signal a successful wait leaves: cleared for auto-clear events.
+    pub(crate) fn after_wait(&self) -> bool {
+        self.manual.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 pub(crate) static HLE_SYSTEM_EVENTS: StdMutex<Vec<(usize, std::sync::Arc<HleSystemEvent>)>> =
@@ -732,6 +741,7 @@ pub(crate) fn hle_system_event_register(addr: usize) -> std::sync::Arc<HleSystem
     let ev = std::sync::Arc::new(HleSystemEvent {
         signaled: StdMutex::new(false),
         cv: std::sync::Condvar::new(),
+        manual: std::sync::atomic::AtomicBool::new(false),
     });
     let mut v = HLE_SYSTEM_EVENTS.lock().unwrap();
     v.retain(|(a, _)| *a != addr);

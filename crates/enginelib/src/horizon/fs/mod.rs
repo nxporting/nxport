@@ -85,6 +85,27 @@ const RESULT_PATH_NOT_FOUND: i32 = 0x202; // 2002-0001
 const RESULT_PATH_ALREADY_EXISTS: i32 = 0x402; // 2002-0002
 const RESULT_TARGET_NOT_FOUND: i32 = 2 | (1002 << 9); // 2002-1002
 
+/// Every mount name the game has mounted and not unmounted (nn::fs::IsMounted). The routing tables below are kept
+/// separately: a path under a name stays resolvable after an unmount, as before.
+static MOUNTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub(crate) fn note_mounted(name: &str) {
+    let mut m = MOUNTED.lock().unwrap();
+    if !m.iter().any(|n| n == name) {
+        m.push(name.to_string());
+    }
+}
+
+/// nn::fs::IsMounted(const char*), from the names the engine's mount calls recorded (the SDK's own mount table is
+/// not filled by them). Unity's IL2CPP checks "rom" before opening its metadata.
+pub unsafe extern "C" fn is_mounted(name: *const c_char) -> bool {
+    if name.is_null() {
+        return false;
+    }
+    let name = CStr::from_ptr(name).to_string_lossy();
+    MOUNTED.lock().unwrap().iter().any(|n| *n == name)
+}
+
 /// Mount names the guest registered through the writable mount calls (MountSaveData & co). "save"/"data" are
 /// always writable; any other name the game mounts (e.g. "prsv") gets its own subdirectory of the save root.
 static EXTRA_MOUNTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -97,6 +118,7 @@ pub(crate) unsafe fn register_writable_mount(kind: &str, name: *const c_char) {
         .to_string_lossy()
         .into_owned();
     println!("[+] HLE: nn::fs::{} name='{}'", kind, name);
+    note_mounted(&name);
     if name != "save" && name != "data" {
         // A mounted storage's root exists on the console. Without it TotK's CreateDirectory('savc:/icon') at mount time
         // failed, and saving the game later retried CreateFile('savc:/icon/...png') forever (the save hung).
@@ -260,6 +282,7 @@ pub unsafe extern "C" fn mount_rom(
             mounts.push(name_str.clone());
         }
     }
+    note_mounted(&name_str);
     println!(
         "[+] HLE: nn::fs::MountRom('{}') -> mapped to '{}'",
         name_str,
@@ -656,7 +679,11 @@ pub unsafe extern "C" fn commit(_name: *const c_char) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn unmount(_name: *const c_char) -> i32 {
+pub unsafe extern "C" fn unmount(name: *const c_char) -> i32 {
+    if !name.is_null() {
+        let name = CStr::from_ptr(name).to_string_lossy();
+        MOUNTED.lock().unwrap().retain(|n| *n != name);
+    }
     0
 }
 

@@ -9,6 +9,7 @@ use crate::horizon::hle::*;
 pub(crate) mod objects;
 pub(crate) mod memory;
 pub(crate) mod threads;
+pub(crate) mod suspend;
 pub(crate) mod locks;
 pub(crate) mod events;
 pub(crate) mod time;
