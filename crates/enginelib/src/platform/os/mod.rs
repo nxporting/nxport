@@ -22,6 +22,11 @@ pub fn page_size() -> usize {
     imp::page_size()
 }
 
+/// Fills `buf` from the host's cryptographically secure random source.
+pub fn random_bytes(buf: &mut [u8]) {
+    imp::random_bytes(buf)
+}
+
 /// `size` bytes of zeroed memory anywhere, with protection `prot`. Released with `free(p, size)`.
 /// # Safety
 /// The caller owns the memory until it frees it.

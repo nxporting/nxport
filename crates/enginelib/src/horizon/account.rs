@@ -85,6 +85,36 @@ pub(crate) unsafe extern "C" fn list_users(out_count: *mut i32, out: *mut [u64; 
     RESULT_SUCCESS
 }
 
+/// ListPushedOpenUsers(Uid*, int): the users the game was launched with (count returned), our one user. The SDK's own
+/// version reads the account service object, which is not created here (Super Mario Party Jamboree crashed on it).
+pub(crate) unsafe extern "C" fn list_pushed_open_users(out: *mut [u64; 2], max: i32) -> i32 {
+    if max > 0 && !out.is_null() {
+        *out = USER_UID;
+        1
+    } else {
+        0
+    }
+}
+
+/// PopOpenUsers(int*, UserHandle*, int): the user handles opened for the game at launch, our one user's (as OpenUser).
+pub(crate) unsafe extern "C" fn pop_open_users(out_count: *mut i32, out: *mut u128, max: i32) -> u32 {
+    let n = if max > 0 && !out.is_null() {
+        *out = 1;
+        1
+    } else {
+        0
+    };
+    if !out_count.is_null() {
+        *out_count = n;
+    }
+    RESULT_SUCCESS
+}
+
+/// Store / DeleteSaveDataThumbnailImage: the picture the system's data management shows for a save. Nothing reads it here.
+pub(crate) unsafe extern "C" fn save_data_thumbnail_ok() -> u32 {
+    RESULT_SUCCESS
+}
+
 pub(crate) unsafe extern "C" fn get_user_count(out: *mut i32) -> u32 {
     if !out.is_null() {
         *out = 1;

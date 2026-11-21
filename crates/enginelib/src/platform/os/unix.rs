@@ -12,6 +12,13 @@ fn flags(prot: Prot) -> libc::c_int {
     }
 }
 
+pub fn random_bytes(buf: &mut [u8]) {
+    // getentropy fills at most 256 bytes a call.
+    for chunk in buf.chunks_mut(256) {
+        unsafe { libc::getentropy(chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+    }
+}
+
 pub fn page_size() -> usize {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
 }

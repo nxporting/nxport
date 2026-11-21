@@ -7,6 +7,7 @@ mod apm;
 mod audio;
 mod bcat;
 mod codec;
+mod crypto;
 mod cxx;
 mod detail;
 mod diag;
@@ -15,6 +16,7 @@ mod err;
 mod friends;
 mod fs;
 mod hid;
+mod irsensor;
 mod libc;
 mod ldn;
 mod mii;
@@ -59,6 +61,7 @@ static TABLES: &[&[Entry]] = &[
     audio::TABLE,
     bcat::TABLE,
     codec::TABLE,
+    crypto::TABLE,
     cxx::TABLE,
     detail::TABLE,
     diag::TABLE,
@@ -67,6 +70,7 @@ static TABLES: &[&[Entry]] = &[
     friends::TABLE,
     fs::TABLE,
     hid::TABLE,
+    irsensor::TABLE,
     libc::TABLE,
     ldn::TABLE,
     mii::TABLE,
