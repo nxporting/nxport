@@ -41,8 +41,8 @@ pub(crate) fn mutex_park(word: &std::sync::atomic::AtomicU32, held: u32) {
             )
         };
     }
-    // The kernel's compare-and-wait on the word (a bare trap, as guest threads need: see hle_sleep_ns). It used to sleep
-    // 5 us and poll, and a sleep lasts far longer: BotW's main thread spent 42% of its time there while running.
+    // The kernel's compare-and-wait on the word (a bare trap, as guest threads need: see hle_sleep_ns); a short sleep and
+    // poll instead lasts far longer than the wait (BotW's main thread waits here often).
     #[cfg(target_vendor = "apple")]
     unsafe {
         __ulock_wait(UL_COMPARE_AND_WAIT | ULF_NO_ERRNO, word as *const _ as *mut std::ffi::c_void, held as u64, 0);
@@ -83,8 +83,8 @@ pub(crate) fn mutex_unpark(word: &std::sync::atomic::AtomicU32) {
 }
 
 /// LockMutex once the first compare-and-swap failed. TotK's waits for a held mutex are a couple of microseconds, so a
-/// short spin takes most; then the thread parks on the lock word. It used to spin, yield and sleep-spin instead, which
-/// with every processor busy kept a core while the owner sat preempted in the ready queue behind it.
+/// short spin takes most; then the thread parks on the lock word rather than keep spinning, which with every processor
+/// busy would hold a core while the owner sits preempted in the ready queue behind it.
 #[cold]
 pub(crate) fn mutex_lock_contended(word: &std::sync::atomic::AtomicU32, tok: u32) {
     use std::sync::atomic::Ordering;
@@ -131,8 +131,7 @@ pub(crate) struct LightMsgQueueInner {
 // nn::os::LightMessageQueue: a bounded, blocking SPSC/MPMC queue. Real hardware backs
 // it with the guest-supplied buffer; we keep the actual
 // ring storage host-side, keyed by the guest queue pointer, and use a real Condvar so
-// Receive blocks instead of busy-spinning (this was causing VibrationThread to spin at
-// ~1M calls/sec on an unbound GOT stub before these were wired up).
+// Receive blocks instead of busy-spinning.
 pub(crate) struct LightMsgQueueState {
     pub(crate) inner: StdMutex<LightMsgQueueInner>,
     pub(crate) not_empty: Condvar,
@@ -185,17 +184,8 @@ pub(crate) unsafe fn light_mq_timed_put(mq: *mut (), data: u64, front: bool, tim
     true
 }
 
-// nn::os::ConditionVariable: was previously a complete no-op pair --
-// SignalConditionVariable did nothing at all, and WaitConditionVariable never
-// actually waited for a signal (just unlock/yield-once/relock regardless of
-// whether the awaited condition was ever set). Any guest code using the
-// standard `while (!condition) WaitConditionVariable(&cv, &mutex);` pattern
-// got no real synchronization: it would spin, see whatever state happened to
-// be there, and proceed -- exactly the shape of bug that produces
-// "impossible" cross-thread state without there being a genuine memory-
-// corruption bug anywhere. Implemented the same way as LightMessageQueue
-// earlier: a real Condvar keyed by the guest cv pointer, in a side table
-// since the actual wait/notify state doesn't need to live in guest memory.
+// nn::os::ConditionVariable: a real Condvar keyed by the guest cv pointer, in a side table (the wait / notify state
+// does not need to live in guest memory).
 pub(crate) struct CondVarState {
     pub(crate) generation: StdMutex<u64>,
     pub(crate) cv: Condvar,

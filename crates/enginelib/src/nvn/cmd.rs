@@ -48,8 +48,7 @@ pub struct Region {
     pub d: i32,
 }
 
-/// Bound vertex attribute states, inline (Cmd stays 72 bytes): the executor used to copy them out of a separate heap
-/// allocation for every bind, a cache miss each.
+/// Bound vertex attribute states, inline (Cmd stays 72 bytes): no separate heap allocation (a cache miss) per bind.
 #[derive(Clone, Copy, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AttribState {
     pub n: u8,

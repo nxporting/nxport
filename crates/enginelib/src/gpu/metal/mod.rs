@@ -240,9 +240,8 @@ impl Drop for SlowTimer {
 pub(super) static GUEST_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 16 KiB pages holding uniform data copied so far in the run (metal/translated notes them): counter writes elsewhere cannot
-/// change a cached copy, so only writes to these pages advance GUEST_WRITES. Counters and timestamps (~54 per Hateno
-/// frame) used to drop every copy (~5000 copies per frame against ~16000 reuses). --ubo-epoch-all: every write
-/// advances it (A/B).
+/// change a cached copy, so only writes to these pages advance GUEST_WRITES (counters and timestamps, written many
+/// times a frame, do not drop the cached copies). --ubo-epoch-all: every write advances it (A/B).
 pub(super) static UBO_PAGES: std::sync::Mutex<Option<rustc_hash::FxHashSet<u64>>> =
     std::sync::Mutex::new(None);
 

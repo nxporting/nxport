@@ -141,19 +141,7 @@ pub unsafe extern "C" fn hle_nvnQueueAcquireTexture(
 
 // ---------------------------------------------------------------------------
 // NVN Queue family. NVNqueue is 0x2000 (8192) bytes, NVNqueueBuilder 0x40
-// (64) bytes. This was the real gap behind the free-list crash this
-// session: `nvnQueueInitialize` and the rest of this family were requested
-// (resolved via nvnDeviceGetProcAddress early in startup) but never
-// implemented -- only `nvnQueueSubmitCommands` had a real body. Every other
-// Queue call silently went to the unimplemented-stub pool, which never even
-// got invoked (zero "unimplemented NVN function called" log lines for any
-// nvnQueue* name across a full run) -- meaning the game's own Queue object
-// never finished real construction, and whatever internal resource-
-// recycling pool it owns was never seeded. `nvnQueuePresentTexture` was
-// also previously misimplemented under an invented name
-// (`hle_nvnWindowPresentTexture`, wrong owner type, wrong argument order)
-// that doesn't exist in the real API, so the game's real present call would
-// never have matched it either.
+// (64) bytes. The game's own queue object finishes its construction only once these succeed.
 #[repr(C)]
 pub(crate) struct NvnQueueBuilder {
     device: usize,

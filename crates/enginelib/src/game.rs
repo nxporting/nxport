@@ -122,8 +122,7 @@ pub fn npdm_program_id(path: &Path) -> Option<u64> {
 }
 
 /// The default game (TotK 1.1.2): engine code with TotK-specific patches (frame pacer, ...) checks this; those patches
-/// also verify the instructions they replace. Identified by its title id (any game without Kirby's RomFS/basil used to
-/// count as TotK, so Super Mario Bros. Wonder got TotK's patches written past the end of its image).
+/// also verify the instructions they replace. Identified by its title id, never by what a game lacks.
 pub fn is_totk() -> bool {
     crate::profile::is_totk()
 }

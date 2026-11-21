@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(relr_slots(&table), vec![0x10000, 0x10008, 0x10018, 0x10008 + 63 * 8]);
     }
 
-    /// TotK 1.1.2's main against the layout the loader used to hard-code. Needs a dump: NXPORT_TEST_GAME_DIR names it
+    /// TotK 1.1.2's main against its known layout. Needs a dump: NXPORT_TEST_GAME_DIR names it
     /// (skipped without).
     #[test]
     fn main_matches_known_layout() {

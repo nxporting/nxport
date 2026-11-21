@@ -254,12 +254,11 @@ pub(crate) unsafe extern "C" fn allocate_memory_block(out_addr: *mut usize, size
 }
 
 pub(crate) unsafe extern "C" fn query_memory_info(info: *mut NnMemoryInfo) {
-    // Every field: games read more than the first two (only those used to be written; the rest was stack garbage, and
-    // Super Mario Bros. Wonder then asked for a negative-size heap block).
+    // Every field: games read more than the first two (Super Mario Bros. Wonder sizes its heap from them).
     if !info.is_null() {
         // Used memory as Horizon counts it: the program image, the main thread's stack and the memory heap once its size
         // is set. Super Mario Bros. Wonder aborts at boot unless what is used before its heap fits its 85 MB "Program"
-        // budget (the old flat 512 MB did not), then sizes the heap as available - used - its reserve.
+        // budget, then sizes the heap as available - used - its reserve.
         let allocated: usize = MEMORY_BLOCKS.lock().unwrap().iter().map(|b| b.1).sum();
         let heap = MEMORY_HEAP_SIZE.load(std::sync::atomic::Ordering::Relaxed) as u64;
         let program = PROGRAM_SIZE.load(std::sync::atomic::Ordering::Relaxed) as u64;

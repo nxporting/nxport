@@ -83,7 +83,7 @@ pub fn mod_gap() -> (usize, usize) {
 pub struct GuestMemorySpace {
     pub base_ptr: *mut u8,
     /// Reserved with main, within branch range of main and the SDK: the tpidr rewrite island (ISLAND_SLOT_SIZE) and
-    /// the SDK image (SDK_SLOT_SIZE). Hinted mmaps used to land elsewhere when the spot was taken.
+    /// the SDK image (SDK_SLOT_SIZE): a hinted mmap lands elsewhere when the spot is taken.
     pub island_slot: usize,
     pub sdk_slot: usize,
     /// (start, size) of the address space reserved for all of the above (crate::platform::os::reserve).
@@ -160,10 +160,8 @@ impl GuestMemorySpace {
         // The whole range stays reserved; what is usable now is committed (fresh pages read as zero):
         //   rtld slot   reserved until the placeholder module is mapped into it (lib.rs)
         //   main        main's image, then the island slot
-        //   gap         reserved until module_loader maps the subsdk modules into it. It used to be unmapped for hinted
-        //               mmaps; when another allocation took the spot first, the game's subsdk0 landed a few MB higher
-        //               and UltraCam's patcher wrote main's patches through a view of the wrong module (intermittent
-        //               SIGBUS at startup).
+        //   gap         reserved until module_loader maps the subsdk modules into it, so no other allocation takes
+        //               the spot (mods such as UltraCam patch modules at the addresses they expect).
         //   x18 island, generated code, the SDK slot
         RTLD_SLOT.store(slot, std::sync::atomic::Ordering::Relaxed);
         GUEST_END.store(slot + total_reserve, std::sync::atomic::Ordering::Relaxed);

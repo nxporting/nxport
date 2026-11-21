@@ -9,8 +9,7 @@ use super::*;
 // nvnProgramSetShaders[Ext] and treats a false return from SetShaders as
 // "this variation is unusable" -- it then falls through to the next
 // binary/IR/source probe and, with none left, executes the compiler-inserted
-// null dereference at guest+0x51400. Both used to hit the unimplemented-stub
-// pool (returns 0), which is exactly that failure.
+// null dereference at guest+0x51400: both must succeed.
 #[repr(C)]
 pub struct NvnProgram {
     device: usize,

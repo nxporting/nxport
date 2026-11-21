@@ -3,7 +3,7 @@
 use super::*;
 
 /// What the open render encoder has bound, so draws skip Objective-C calls for state that did not change (TotK's
-/// consecutive draws share most of it; every draw used to set ~11 fixed-function states and every binding). Reset when
+/// consecutive draws share most of it). Reset when
 /// an encoder is created. Objects are compared by pointer: the encoder retains what it was given, so a pointer cannot
 /// be reused for another object while it is bound.
 pub(crate) struct EncCache {

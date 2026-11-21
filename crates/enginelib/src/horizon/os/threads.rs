@@ -205,8 +205,7 @@ pub(crate) unsafe fn join_guest_thread(thread: *mut NnThreadType) {
 }
 
 // Per-thread core assignment. TotK's task system dispatches per core (0..2), so a thread must
-// report the core its affinity selected: GetCurrentCoreNumber used to return a constant 1 for
-// every thread, which left per-core task queues stranded (worker threads waited forever).
+// report the core its affinity selected (a constant core would strand per-core task queues).
 pub(crate) static THREAD_CORES: OnceLock<StdMutex<rustc_hash::FxHashMap<usize, i32>>> = OnceLock::new();
 
 pub(crate) const DEFAULT_CORE: i32 = 1;

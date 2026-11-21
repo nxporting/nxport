@@ -54,9 +54,8 @@ pub unsafe fn rewrite(
     let _ = &sites_only;
     let island_len = (sites.len() * 12 + 0x3fff) & !0x3fff;
     // Every 1 MiB-aligned address from which a branch reaches all of the guest text, nearest first, taken with a fixed
-    // allocation that fails rather than moving or overwriting. A few mmap hints used to be tried instead: the kernel
-    // places a hinted mapping elsewhere when the spot is taken (it varies per run), the rewrite was then skipped, and
-    // guest TLS reads got XNU's CPU number: crashes reading [thread pointer + 0x10] with pointers 0..7.
+    // allocation that fails rather than moving or overwriting: the kernel places a hinted mapping elsewhere when the spot
+    // is taken, and without the island guest TLS reads would get XNU's CPU number.
     let mut island = 0usize;
     let step = 0x10_0000usize;
     let span = BRANCH_RANGE as usize - step;

@@ -781,7 +781,7 @@ impl TrampolineIsland {
         }
 
         // 1. Indirect branch: BR x18. The target goes through x17 (IP1, which AAPCS lets veneers clobber at any branch
-        // to another function); this used to borrow d31, which can be live in guest code.
+        // to another function), not a SIMD register, which can be live in guest code.
         if is_br {
             words.push(0xD53BD060u32 | 17); // mrs x17, tpidrro_el0
             words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (17 << 5) | 17); // ldr x17, [x17, #x18 slot]
@@ -797,8 +797,8 @@ impl TrampolineIsland {
         if is_blr {
             words.push(0xD53BD060u32 | 17); // mrs x17, tpidrro_el0 (x17: free at a call, see BR above)
             words.push(0xF9400000u32 | ((imm_scaled & 0xFFF) << 10) | (17 << 5) | 17); // ldr x17, [x17, #x18 slot]
-                                                                                       // Call; the callee returns here and we branch back. (The return address used to be an absolute literal,
-                                                                                       // which made the stub differ per launch; see guest/exec/aot.rs.)
+                                                                                       // Call; the callee returns here and we branch back (no absolute return address:
+                                                                                       // the stub must be the same every launch, see guest/exec/aot.rs).
             words.push(0xD63F0220u32); // blr x17
             let current_stub_pc = stub_addr + (words.len() * 4);
             let return_diff = ((original_pc + 4) as i64) - (current_stub_pc as i64);

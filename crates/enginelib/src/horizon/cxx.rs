@@ -225,19 +225,9 @@ pub(crate) fn format_printf(fmt: &[u8], args: &[u64]) -> Vec<u8> {
     out
 }
 
-// 12. Symbol-based (R_AARCH64_ABS64 / R_AARCH64_GLOB_DAT) relocation targets.
-//
-// The loader previously only applied R_AARCH64_RELATIVE relocations. The other
-// 1,444 entries in the binary's .rela.dyn are symbol-based, resolving against
-// *external* symbols the linker expected some other module to provide -- on a
-// real Switch, the C++ runtime (libc++abi-equivalent, linked in via `sdk`).
-// Two symbols alone account for 1,344 of those (95%): `__cxa_pure_virtual` and
-// `__cxa_deleted_virtual`, the Itanium C++ ABI's standard vtable-slot fillers
-// for any pure-virtual or deleted method a derived class doesn't override --
-// completely routine in any real C++ binary. Leaving them unresolved meant
-// those vtable slots sat at raw zero instead of a safe handler, so calling an
-// unoverridden method (an expected, frequent occurrence, not a bug in the
-// guest code) crashed the whole engine on a null function pointer.
+// 12. Symbol-based (R_AARCH64_ABS64 / R_AARCH64_GLOB_DAT) relocation targets: __cxa_pure_virtual and
+// __cxa_deleted_virtual, the Itanium C++ ABI's vtable-slot fillers for pure-virtual or deleted methods a class does
+// not override. Their slots must hold a callable function.
 //
 // These are called with whatever "this"/args the original virtual call used;
 // since we don't know the real signature at the call site, they take no

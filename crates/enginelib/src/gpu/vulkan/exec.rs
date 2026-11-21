@@ -284,8 +284,8 @@ pub struct Ctx {
     #[allow(clippy::type_complexity)]
     ubo_slot_memo: Box<[[(u64, (u64, usize, i32), UboMemo); draw::UBO_MEMO]; 6]>,
     /// The epoch of the last write by this submit's commands to each 4 KiB block of guest memory (inline uniform
-    /// updates, reports), and of the last write at all. The epoch used to key the copies: every inline update (TotK
-    /// interleaves them with its draws) made every draw copy its uniform buffers again, ~2.4 ms a frame.
+    /// updates, reports), and of the last write at all: a draw copies its uniform buffers again only when a block it
+    /// reads was written (TotK interleaves inline updates with its draws).
     ubo_writes: rustc_hash::FxHashMap<usize, u64>,
     ubo_last_write: u64,
     /// Vertex and index data found in the device copies (vcache.rs) in this epoch is used again unchecked; a new one
