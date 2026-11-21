@@ -78,8 +78,8 @@ static FRAME: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 /// otherwise keep their slots, and engine lookups scan the table).
 const AGE: u64 = 30;
 /// Ranges whose hold ended recently (a fault racing with the opening is retried; see `fault`). Whole ranges: a ring of
-/// pages kept only a hold's first 64 pages, and a Worker faulting further into a large hold as it ended was reported as a
-/// crash (Breath of the Wild, SIGBUS reading its water maps, 2026-11-19).
+/// pages would keep only a hold's first pages, and a thread faulting further into a large hold as it ended would be
+/// reported as a crash.
 const RECENT: usize = 64;
 static RECENT_START: [AtomicUsize; RECENT] = [const { AtomicUsize::new(0) }; RECENT];
 static RECENT_END: [AtomicUsize; RECENT] = [const { AtomicUsize::new(0) }; RECENT];

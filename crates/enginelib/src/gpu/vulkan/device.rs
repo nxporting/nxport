@@ -44,8 +44,7 @@ pub struct Dev {
     /// Fewest swapchain images: 3 on MoltenVK, whose image is acquirable again once its present's command buffer completes
     /// but whose drawable is let go only once on screen: with 2 images and its own submit thread an image came back
     /// still holding a presented drawable ("addPresentedHandler cannot be called after drawable has been presented"),
-    /// then a crash in its present handler (2026-11-09: 1055 such warnings in 150 s with 2 images, none with 3 or with
-    /// synchronous submits). Elsewhere 2.
+    /// and its present handler crashes. Elsewhere 2.
     pub min_swapchain_images: u32,
     /// Occlusion queries count samples exactly (else only zero / nonzero).
     pub precise_occlusion: bool,

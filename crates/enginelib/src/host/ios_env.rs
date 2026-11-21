@@ -74,8 +74,7 @@ pub fn setup() -> (
     } else if game.join("system_data").is_dir() {
         env.files.system_data_dir = Some(game.join("system_data"));
     }
-    // Texture backing (metal/tex_backing.rs) stays off for now: the first phone session with it crashed on an unclaimed
-    // fault in the occlusion reader (2026-10-16), with 2.4 GB of memory still available.
+    // Texture backing (metal/tex_backing.rs) stays off on iOS: it hit an unclaimed fault in the occlusion reader there.
     let image = b.join("Frameworks/NxportGuest.framework/NxportGuest");
     if image.is_file() {
         env.guest.aot_image = Some(image.clone());

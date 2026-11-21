@@ -19,8 +19,8 @@ pub const ISLAND_SLOT_SIZE: usize = 0x0010_0000;
 pub const GEN_SIZE: usize = 0x0010_0000;
 /// Guest base for AOT images with mods (GuestMemorySpace::allocate). It must be free in both address spaces when the
 /// reservation (main, the module gap, the SDK: ~150 MB) is made, first thing in main. Both kernels start an address
-/// range at 0x70_0000_0000 (macOS pushes hints just below it up to it; an iPhone on iOS 27 ignored a hint at
-/// 0x4_0000_0000 and put the reservation at 0x70_0000_0000, 2026-10-11): the rtld placeholder slot (RTLD_SLOT_SIZE)
+/// range at 0x70_0000_0000 (macOS pushes hints just below it up to it; iOS ignores lower hints such as 0x4_0000_0000
+/// and places the reservation there too): the rtld placeholder slot (RTLD_SLOT_SIZE)
 /// takes the range's first MB and main follows.
 pub const FIXED_GUEST_BASE: usize = 0x70_0010_0000;
 /// The slot right below main for the placeholder rtld module mods expect (main.rs), reserved with a fixed guest base.

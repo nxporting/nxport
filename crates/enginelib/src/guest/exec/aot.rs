@@ -15,8 +15,8 @@
 //
 // Mods (exlaunch plugins such as UltraCam) patch guest code through writable views of it (horizon_svc), from their
 // initialisers and for a while after (a one-shot hook on nnMain that removes itself, more hooks over the first frames),
-// and read back what they wrote. iOS maps signed code once: an iPhone refused to map a different signed page
-// where signed code had been mapped before, even after unmapping it (EACCES, 2026-10-11), so the image holds one static
+// and read back what they wrote. iOS maps signed code once: it refuses to map a different signed page where signed
+// code was mapped before, even after unmapping it (EACCES), so the image holds one static
 // state of that code and nothing is swapped while the game runs. The dump run forces the mods' views of image code into
 // copy mode (writes reach the code only at flushes, at every map/unmap syscall) and records each content each page goes
 // through (`record_page`); the image holds the code as it stands at the dump frame, plus every patch the mods removed

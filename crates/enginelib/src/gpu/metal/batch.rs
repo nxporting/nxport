@@ -10,9 +10,8 @@
 // run becomes the batched draw, after which the bindings the encoding side believes are bound are restored.
 //
 // Off by default: --batch turns it on (needs a cache with tb_ variants); --replay-ab-batch: off on replay side B.
-// 2026-10-17, M4, Hateno phone configuration, same-frame A/B: 1,862 draws in 420 batches, image at the noise floor, GPU
-// busy unchanged (8.97 vs 8.93 ms) and gfx-issuer +0.6 ms (pipeline switch and re-binds around each batch): no gain on
-// the Mac. Untested on the iPhone, whose GPU is ~3x slower.
+// On Apple M-series GPUs it gives no gain (GPU time unchanged, the issuer pays for a pipeline switch and re-binds
+// around each batch); slower GPUs are untested.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};

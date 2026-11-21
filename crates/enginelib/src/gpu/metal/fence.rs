@@ -320,15 +320,15 @@ pub(super) fn note_committed(serial: u64) {
     COMMITTED_SERIAL.fetch_max(serial, std::sync::atomic::Ordering::AcqRel);
 }
 
-/// --early-fence (on by default since 2026-10-10, =0 disables; changes behaviour): guest-main's nvnSyncWait returns once the frame's
+/// --early-fence (on by default, =0 disables; changes behaviour): guest-main's nvnSyncWait returns once the frame's
 /// work is committed instead of when the GPU has finished it, so the game's next frame overlaps the GPU's work on this
 /// one (TotK waits on each frame's fence before starting the next); at most one frame overlaps. The game then reads GPU
 /// results a frame late (occlusion reports, compute outputs: see note_gpu_guest_write) and may write data the GPU is
 /// still reading (seen in the opening). The engine's own readers wait or keep GPU order: render-target write-back
 /// waits for its targets, uniform buffers in memory GPU work of earlier submits writes stay zero-copy until it
 /// completed (State::carried_dirty).
-/// Without it the GPU idles between frames and macOS lowers its clock: walking in Hateno 2026-10-14, GPU ~29 ms per frame
-/// instead of ~13 and ~26 fps instead of ~65-70. Each GPU result the game reads right after its fence still needs a
+/// Without it the GPU idles between frames and macOS lowers its clock (about twice the GPU time per frame, under half
+/// the frame rate in TotK's Hateno). Each GPU result the game reads right after its fence still needs a
 /// special case until guest memory the GPU writes is kept coherent for CPU reads in general.
 pub(crate) fn early_fence() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

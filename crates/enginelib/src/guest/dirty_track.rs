@@ -248,9 +248,8 @@ pub unsafe fn protect(start: usize, len: usize) -> Option<u64> {
                 continue;
             }
             // PG_NONE (or PG_PROT) -> PG_BUSY. Protected pages are claimed too: the mprotect below covers them, and a
-            // fault that opened one between a look at it and the mprotect (PG_NONE) was left read-only as PG_NONE, which
-            // the fault handler takes for already opened: every later write to the page faulted forever (the Vulkan
-            // watcher's write-back copy spun, 2026-10-31).
+            // fault that opened one between a look at it and the mprotect (PG_NONE) would be left read-only as PG_NONE,
+            // which the fault handler takes for already opened: every later write to the page would fault forever.
             let next = (cur & !STATE_MASK) | PG_BUSY | EVER;
             if f[p].compare_exchange_weak(cur, next, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                 if cur & EVER == 0 {
@@ -337,8 +336,8 @@ pub unsafe fn handle_fault(addr: usize) -> bool {
 
 /// Another page guard made [start, start+len) writable: the pages tracked here are made read-only again (signal-safe:
 /// atomics and mprotect only). Each page is claimed (PG_PROT -> PG_BUSY) around the mprotect: unclaimed, a fault that
-/// made the page writable between the state check and the mprotect left it read-only as PG_NONE, and every later write
-/// to it faulted and was retried forever (the Vulkan watcher's write-back copy spun, 2026-10-28).
+/// made the page writable between the state check and the mprotect would leave it read-only as PG_NONE, and every later
+/// write to it would fault and be retried forever.
 pub unsafe fn reprotect_held(start: usize, len: usize) {
     let Some((_, f, first, last)) = locate(start, len) else { return };
     let claim = |p: usize| {
@@ -525,8 +524,8 @@ mod tests {
     use super::*;
 
     /// The order vulkan/texture.rs take_baseline relies on: generations read before `protect` stop matching once a write
-    /// opens a page; read after that write, they come out None, which a later None would match (the lost writes of
-    /// 2026-11-08: TotK's menu text missing letters).
+    /// opens a page; read after that write, they come out None, which a later None would match (and the write would be
+    /// lost).
     #[test]
     fn a_write_after_reading_the_generations_is_seen() {
         let _ = crate::settings::try_install(crate::settings::resolve([]));

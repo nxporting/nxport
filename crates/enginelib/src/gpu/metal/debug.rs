@@ -398,8 +398,7 @@ pub(super) fn glitch_analyze(pn: u64, raw: Vec<u8>, w: usize, h: usize, fmt: MTL
         }
     }
     // Fourth test: sky dips. The top third of the frame (the sky in most scenes) darkens or brightens for one frame while
-    // its neighbours agree; TotK's env-cubemap update frames did this in 2026-10-13 sessions (~10 levels, one frame).
-    // Logged and counted only ([glitch] sky dip).
+    // its neighbours agree (TotK's environment-cubemap update frames). Logged and counted only ([glitch] sky dip).
     let sky = |f: &[u8]| {
         let (mut m, mut k) = (0f64, 0f64);
         for y in (0..h / 3).step_by(4) {
@@ -543,8 +542,8 @@ pub(super) fn frame_history(g: &Gfx, pn: u64, src: &Tex) {
         history_targets_write(&dir);
     }
     // Frames are kept at half resolution, drawn with the present's blit pipeline (linear filtering: each pixel the average
-    // of a 2x2 block, the bytes the window shows), in memory row order. Full-size copies made the 360-frame ring of play
-    // sessions ~3 GB of Metal memory (2026-10-16); captures were written at half resolution anyway.
+    // of a 2x2 block, the bytes the window shows), in memory row order: a 360-frame ring of full-size frames would take
+    // several GB of Metal memory, and captures are written at half resolution anyway.
     let (hw, hh) = ((src.width() / 2).max(1), (src.height() / 2).max(1));
     let slot = if ring.len() >= n {
         let i = ring

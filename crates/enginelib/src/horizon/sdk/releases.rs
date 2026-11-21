@@ -1,5 +1,5 @@
-// Every SDK release games are known to use (the sdk module versions in titledb.nintendo-research.com's tables,
-// 2026-11-15), oldest first. A release here with no layer of its own runs on the closest older layers; the log says
+// Every SDK release games are known to use (the sdk module versions in titledb.nintendo-research.com's tables), oldest
+// first. A release here with no layer of its own runs on the closest older layers; the log says
 // which.
 
 use super::SdkVersion;

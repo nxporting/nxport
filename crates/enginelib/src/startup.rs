@@ -685,9 +685,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
     guest::exec::crash_handler::set_main_size(mem_space.bss_off + mem_space.bss_size);
 
     // 2a. Guest x18 starts at 0: guest code uses it as an ordinary register (guest::exec::trampoline), macOS preserves
-    // it, and the HLE trampolines reload this value after each call. (It used to point at a 32 KiB block whose every
-    // slot pointed into it, from an x9 <-> x18 register swap removed on 2026-10-08, so stray loads through x18 could not
-    // fault; booting to gameplay without it changed nothing, 2026-10-15.)
+    // it, and the HLE trampolines reload this value after each call.
     let x18_ctx_ptr: usize = 0;
 
     // 2b. The trampoline pool for all HLE calls (make_hle_trampoline): restores the guest's TLS register and x18 on return.

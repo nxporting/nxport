@@ -832,9 +832,8 @@ impl Gfx {
         // would evaluate it after the report; Metal has no predication, so such draws render (Ryujinx's
         // fallback when a counter is not available). Skipping them instead culled TotK's Hyrule Field grass
         // patches (both reports still read 0).
-        // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them
-        // (they used to be missed here: conditions on them read stale memory and skipped the draw, e.g. a
-        // signpost's new LOD for one frame, 2026-10-14).
+        // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them; a
+        // condition on one reads stale memory until then, so it counts as unresolved too.
         let unresolved = |a: u64| {
             st.occl.pending.iter().any(|(_, r)| *r == a)
                 || st.inflight.iter().any(|f| {

@@ -706,9 +706,8 @@ impl TrampolineIsland {
         let imm_scaled = (self.pthread_key_offset / 8) as u32;
 
         // 0. A jump table through x18: the dispatch must preserve every register. Guest code keeps live values in x16 /
-        // x17 inside a function (TotK 1.1.2 main+0x1415a18 kept a 12-byte stride in w17 across a switch; the old stub's
-        // `br x17` replaced it with the target, and the loop computed a pointer far outside its array: SIGBUS on the
-        // iPhone, 2026-10-16). x16 / x17 are saved on the stack, the target's offset from BASE picks a landing that
+        // x17 inside a function (TotK 1.1.2 main+0x1415a18 keeps a 12-byte stride in w17 across a switch). x16 / x17 are
+        // saved on the stack, the target's offset from BASE picks a landing that
         // restores them and branches on. Offsets come from a byte or halfword table: landings for the offsets it holds
         // (jump_table_of), at most JT_LANDINGS; a larger offset takes the slow path, a brk the signal handler continues
         // from (jump_table_trap). No flags are changed (sub / add / lsr / cbnz, no compare).

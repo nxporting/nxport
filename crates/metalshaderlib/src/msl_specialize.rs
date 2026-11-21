@@ -272,7 +272,7 @@ pub fn no_contraction(msl: &str) -> String {
     let mut msl = msl.replace("[[clang::optnone]] ", "");
     // --contract-fast: let the compiler fuse multiplies and adds. The helpers' fma(l, r, 0) / fma(1, l, r) keep every
     // Maxwell FMUL/FADD a separate instruction; as plain operators under contract(fast) they can become one FMA. Default
-    // "vertex" (2026-10-05: ~12% less GPU time in Hateno, frames match); =off restores contract(off) everywhere, =1 fuses
+    // "vertex" (less GPU time, identical frames); =off restores contract(off) everywhere, =1 fuses
     // fragment shaders too (white specks on characters).
     let fuse = match opts.contract_fast {
         Contract::None => false,
@@ -296,8 +296,8 @@ pub fn no_contraction(msl: &str) -> String {
         };
         // Fused math must not change the position: TotK draws foliage (and other alpha-tested geometry) in a depth-only
         // pre-pass and then a colour pass with an EQUAL depth test, through different vertex shaders. Rounding the same
-        // position computation differently in the two left whole 16x16 tiles of tree canopy without colour (black
-        // squares, 2026-10-10). [[invariant]] plus -fpreserve-invariance (the cache build) keeps the position
+        // position computation differently in the two leaves whole 16x16 tiles of tree canopy without colour.
+        // [[invariant]] plus -fpreserve-invariance (the cache build) keeps the position
         // bit-identical across shaders while everything else stays fused. --no-invariant disables (A/B).
         if !opts.no_invariant {
             msl = msl.replace(
@@ -614,8 +614,8 @@ pub fn uses_cbuf_limits(msl: &str) -> bool {
 /// A fragment shader that can discard writes its depth explicitly (gl_FragCoord.z, [[depth(greater)]]). On Apple GPUs
 /// the depth a discarding shader leaves in the depth buffer is not always bit-identical to the depth a later draw of the
 /// same triangle is tested with; on Maxwell both are the rasterized depth. TotK draws foliage in an alpha-tested depth
-/// pre-pass and then a colour pass with depth EQUAL, which failed at scattered pixels: rows of dark dots in every tree
-/// canopy (2026-10-10). depth(greater) is a true promise (the value is equal) and keeps early rejection for LESS tests.
+/// pre-pass and then a colour pass with depth EQUAL, which would fail at scattered pixels (dark dots in tree canopies).
+/// depth(greater) is a true promise (the value is equal) and keeps early rejection for LESS tests.
 /// Off without a depth target (constant 43). --no-discard-depth disables.
 pub fn discard_depth(msl: &str) -> String {
     if get_options().no_discard_depth

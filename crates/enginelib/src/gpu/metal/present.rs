@@ -7,11 +7,9 @@ use super::*;
 /// next. Started whenever the previous frame was done, a frame that just missed a display refresh stayed on screen a
 /// whole extra refresh the game had not counted, so motion ran ahead and fell behind in a slow wave (frame times
 /// drifting around the 8.3 ms of a 120 Hz display). Frames now start on the refresh grid, learned from when drawables
-/// actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen.
-/// Measured in windowed play (--log-frame-pacing, 2026-10-24, walking in Hateno at 65-70 fps): the spread of the time
-/// from a frame's start to its appearance on screen went from 10.7 to 4.6 ms (frames shown 4 or 5 refreshes after their
-/// start). A 60 fps cap (8.3 ms) and presenting each frame a fixed time after its start (11.9 ms: Metal did not keep the
-/// times, and frames held back stalled the drawable queue) were worse. --display-pacing (default on), F6 toggles.
+/// actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen
+/// (--log-frame-pacing shows the spread). Presenting each frame a fixed time after its start does not work: Metal does
+/// not keep the times, and frames held back stall the drawable queue. --display-pacing (default on), F6 toggles.
 pub(super) static DISPLAY_PACING: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
 /// Host time (seconds, f64 bits) of the latest frame shown, and the display's refresh period.
 pub(super) static SHOWN_LAST: AtomicU64 = AtomicU64::new(0);

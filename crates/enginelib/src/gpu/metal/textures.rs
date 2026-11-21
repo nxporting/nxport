@@ -1093,8 +1093,8 @@ pub(crate) fn sweep_shared_storage(tc: &mut TexCache, colors: &[RtRef], depth: O
         *per_storage.entry(k.storage).or_default() += 1;
     }
     // Memory the game released (pool finalized, virtual range remapped, address region freed): copies of guest data
-    // there are dead (the cache otherwise kept them until their storage was reused: walking around for ~9000 frames,
-    // 1.5 GB of copies over 0.95 GB of resident guest memory, 2026-10-16). GPU-written textures stay: their content
+    // there are dead (the cache would otherwise keep them until their storage is reused, more Metal memory than the
+    // guest memory they copy). GPU-written textures stay: their content
     // exists only in Metal, and on the Switch it would still be in that memory.
     let mut released = crate::nvn::api::take_tex_released();
     released.sort_unstable();
@@ -1315,11 +1315,10 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
             continue;
         };
         // Drawn again since (the game rendered it in the frame just submitted too): present waited for that rendering
-        // to finish, so the write-back copies the newest contents now. Postponing it until the game stopped drawing the
-        // target (dc6c9bf) wrote textures back long after the game had moved them (tera::ImageResourceMgr compacts its
-        // terrain textures with CPU copies) into memory it had reused: SIGSEGV at TotK 1.1.2 main+0xbecbf8 on a list node full of
-        // texels, reliably after unequipping a weapon in the inventory (2026-10-14). Skipping it (b743568) lost targets
-        // rendered over a few consecutive frames and then kept.
+        // to finish, so the write-back copies the newest contents now. Postponing it until the game stops drawing the
+        // target would write textures back after the game moved them (TotK's tera::ImageResourceMgr compacts its
+        // terrain textures with CPU copies) into memory it reused; skipping it would lose targets rendered over a few
+        // consecutive frames and then kept.
         let Some(info) = crate::nvn::layout::format_info(t.format) else {
             continue;
         };
@@ -1327,9 +1326,8 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
             continue;
         }
         // The texture may have been freed since it was drawn (the descriptor is the one recorded at initialization) and
-        // its memory returned to the game's heap: writing there corrupted live game data (2026-10-14: a list node of
-        // tera::ImageResourceMgr overwritten with texels, SIGSEGV at TotK 1.1.2 main+0xbecbf8 after ~7 minutes of play). On the
-        // Switch the GPU wrote this memory while it was still a texture; only memory still inside a live memory pool
+        // its memory returned to the game's heap, where writing would corrupt live game data. On the Switch the GPU
+        // wrote this memory while it was still a texture; only memory still inside a live memory pool
         // is written now.
         if crate::nvn::api::containing_pool(t.storage, layout_of(&t).total as usize).is_none() {
             if crate::settings::get().log.log_rt_writeback {

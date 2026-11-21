@@ -39,7 +39,7 @@ pub fn mouse_look_moved(dx: f32, dy: f32) {
     // Only while the camera storing them is the one the profile takes them for (ANGLE_ROUTE): another camera (TotK's
     // bow aim) gets the movement through the stick.
     // While the game is paused its camera stores no angles: movement then is dropped, as a stick moved then would turn
-    // nothing (the user's choice, 2026-11-08). Running means the camera stored its angles this frame or the last.
+    // nothing. Running means the camera stored its angles this frame or the last.
     let deg = || MOUSE_DEG_PER_PX * crate::settings::try_get().map_or(1.0, |s| s.input.mouse_look_speed);
     // The exact route is experimental and switched in the game's menu; off, the mouse moves the stick.
     let route = ANGLE_ROUTE.load(Ordering::Acquire) && crate::host::live::exact_mouse_aim();

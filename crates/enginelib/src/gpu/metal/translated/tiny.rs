@@ -358,8 +358,8 @@ impl Gfx {
         if x1 <= x0 || y1 <= y0 {
             decline!("empty rectangle");
         }
-        // Large passes are slower as kernels than as tile-based fragment shading (2026-10-17: full-resolution post passes
-        // as compute nearly doubled the frame's GPU time); the gain is the per-pass overhead of small ones.
+        // Large passes are slower as kernels than as tile-based fragment shading (full-resolution post passes as compute
+        // take about twice the GPU time); the gain is the per-pass overhead of small ones.
         // --tiny-max-px: largest rectangle in pixels (default 640x360).
         static MAX_PX: OnceLock<u64> = OnceLock::new();
         let max_px = *MAX_PX.get_or_init(|| crate::settings::get().graphics.tiny_max_px);

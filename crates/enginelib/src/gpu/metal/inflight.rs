@@ -182,12 +182,9 @@ pub(super) fn retire_oldest(g: &Gfx, only_if_done: bool) -> bool {
 /// command buffer per submit).
 /// --split-draws=N (default 600, 0 = off): end a render encoder after N draws and commit, continuing in a new encoder
 /// that loads the targets. The GPU cannot start an encoder before it ends and its command buffer is committed: TotK's
-/// G-buffer pass (~1000 draws, ~10 ms to encode) ran entirely after it was encoded, in the GPU tail the game waits for.
-/// Each cut stores and reloads every attachment (~50 MB for the G-buffer): 600 beat 250 in GPU-bound Hyrule Field
-/// (42.6 / 38.2 vs 37.7 / 36.0 fps) and matched it in Hateno; 1500 left a ~13 ms GPU tail.
-/// Re-measured 2026-10-09 in Hateno (feedback in place, GPU ~10.8 ms): 150 / 300 / 600 / 1200 gave tail 3.7 / 3.8 / 4.4 /
-/// 4.9 ms, total GPU 12.4 / 11.6 / 10.8 / 10.6 ms, 57.9 / 58.4 / 57.4 / 56.9 fps; 0 = a 21 ms tail. 300 wins ~1 fps where
-/// encode dominates but costs GPU time, which GPU-bound scenes pay: 600 kept.
+/// G-buffer pass (~1000 draws) would otherwise run entirely after it was encoded, in the GPU tail the game waits for.
+/// Each cut stores and reloads every attachment, so smaller values cost GPU time (which GPU-bound scenes pay) and
+/// larger ones lengthen the tail; 600 balances the two in TotK.
 pub(super) fn split_draws() -> u32 {
     let s = crate::settings::get();
     // Profiling: --split-draws-from=F gives every draw its own encoder from presented frame F on, so a GPU trace times
@@ -223,8 +220,8 @@ pub(super) fn push_inflight(st: &mut State, cb: Retained<ProtocolObject<dyn MTLC
     rt_guard::committed(serial, &cb);
     // Occlusion reports are written as soon as the command buffer completes (on the fence watcher thread) instead of
     // when the executor later retires it: with --early-fence the game reads them before its next submit, and a
-    // report still unwritten then read as stale memory (an object that just came into range or switched LOD was culled
-    // for a frame: Hateno signposts, 2026-10-13). Retiring then skips them: it runs later, and rewriting a report the
+    // report still unwritten then reads as stale memory (an object that just came into range or switched LOD is culled
+    // for a frame). Retiring then skips them: it runs later, and rewriting a report the
     // game reuses next frame would put the older value back over the newer one.
     let mut occl = std::mem::take(&mut st.occl.pending);
     if journal_on() && !occl.is_empty() {

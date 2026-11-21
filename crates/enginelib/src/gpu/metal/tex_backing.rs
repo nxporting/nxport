@@ -151,7 +151,7 @@ unsafe fn open_pages(s: usize, e: usize) {
 }
 
 /// Opens range `i` of table `t`. Always does the mprotect, also for a range already marked open: a fault there means
-/// the pages are inaccessible anyway (answering "retry" without opening looped forever in memmove, 2026-10-15).
+/// the pages are inaccessible anyway (answering "retry" without opening would fault again forever).
 unsafe fn open_range(t: &Table, i: usize) {
     let first = t.open[i].swap(1, Ordering::AcqRel) == 0;
     let (s, e) = (
@@ -284,8 +284,7 @@ pub(super) fn rebuild(frame: u64, texs: Vec<TexRec>) {
     }
     // Held ranges are the unions rounded out to whole pages, so every texture of a union lies inside its held range
     // and its change checks are skipped (`holds`); with ranges rounded in, textures sticking out over an end were hashed
-    // as a whole by refresh_cpu_written, which read the discarded pages and rebuilt them again and again (2026-10-15:
-    // ~2300 rebuilds in 1400 frames). Only the pages wholly inside a union are discarded (`inner`); the edge pages may
+    // as a whole by refresh_cpu_written, which read the discarded pages and rebuilt them again and again. Only the pages wholly inside a union are discarded (`inner`); the edge pages may
     // hold other data, whose use just opens the held range. Unions sharing an edge page make one held range.
     let mut held_groups: Vec<(usize, usize, Vec<(usize, usize, Vec<TexRec>)>)> = Vec::new();
     for (a, b, t) in groups {
@@ -633,9 +632,8 @@ unsafe fn verify(s: usize, e: usize, texs: &[TexRec]) -> bool {
         return false;
     };
     let guest = std::slice::from_raw_parts(alias.0 as *const u8, e - s);
-    // Exact comparison only. (Accepting image textures by an unchanged upload hash and rebuilding them from Metal crashed
-    // tera::ImageResourceMgr during loading, 2026-10-15: an unchanged guest hash does not prove the Metal copy holds every
-    // byte, e.g. levels or layers it lacks come back as zeros.)
+    // Exact comparison only: an unchanged guest hash does not prove the Metal copy holds every byte (levels or layers it
+    // lacks would come back as zeros, and the game reads them: TotK's tera::ImageResourceMgr).
     let mismatch = guest != &bytes[..];
     if mismatch {
         // --tex-backing-log: where the first difference is (which texture, how many bytes differ).
@@ -987,8 +985,8 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
         if let Some(i) = find(t, addr) {
             let first = t.open[i].load(Ordering::Acquire) == 0;
             // Already open, and a write to a page the early-fence write guard holds read-only: that fault is the write
-            // guard's (it waits for the GPU, then allows the write). Claiming it reopened the page read-only forever
-            // (a fault loop at the title screen, 2026-10-15).
+            // guard's (it waits for the GPU, then allows the write). Claiming it would reopen the page read-only and
+            // fault forever.
             if !first && write && super::fence_guard::holds(addr & !(PAGE - 1)) {
                 return false;
             }

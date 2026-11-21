@@ -58,7 +58,7 @@ pub(crate) fn address_regions() -> &'static StdMutex<rustc_hash::FxHashMap<usize
 #[cfg(not(target_os = "ios"))]
 pub(crate) const REGION_ARENA_SIZES: &[usize] = &[16 << 30, 8 << 30, 4 << 30, 2 << 30];
 
-/// iPhone 16e without the entitlement (probe, 2026-10-08): 4 GB largest reservation, ~7 GB in total; the game heap
+/// iOS without the extended-address-space entitlement: 4 GB largest reservation, ~7 GB in total; the game heap
 /// (AllocateMemoryBlock, 3.2 GB for Kirby) must still fit next to the arena.
 #[cfg(target_os = "ios")]
 pub(crate) const REGION_ARENA_SIZES: &[usize] = &[2 << 30, 1 << 30];

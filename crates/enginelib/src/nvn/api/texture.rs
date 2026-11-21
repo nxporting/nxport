@@ -354,8 +354,8 @@ pub unsafe extern "C" fn hle_nvnTextureInitialize(
     snapshot_texture(tex as usize, std::ptr::read(tex));
     // A pending upload belonged to the object's previous texture (the game wrote / flushed texels into that one):
     // TotK re-initializes texture objects for other textures constantly, render targets included, and a mark carried
-    // over made the next resolve upload guest memory over a render target the GPU had just drawn (one-frame magenta
-    // tiles over an unlit scene, 2026-10-13). The new texture's initial contents come from its creation path.
+    // over would make the next resolve upload guest memory over a render target the GPU had just drawn. The new
+    // texture's initial contents come from its creation path.
     DIRTY_TEXTURES.lock().unwrap().remove(&(tex as usize));
     1
 }
@@ -1387,7 +1387,7 @@ pub unsafe fn guest_write_level(t: &NvnTexture, level: usize, data: &[u8]) {
     view.min_level = level as _;
     view.num_levels = 1;
     // Not marked dirty: the Metal texture already holds these texels (they were read from it), and the upload a dirty
-    // mark triggers replaced newer GPU output with this copy (one-frame magenta tiles, 2026-10-13).
+    // mark triggers would replace newer GPU output with this copy.
     texture_write_texels(t, &view, &region, data.as_ptr(), false);
 }
 

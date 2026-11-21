@@ -16,12 +16,11 @@
 // index copies (translated::Arena), conditional rendering. Any other host-code fault on a guarded page (an engine thread,
 // or our HLE code on a game thread, which may hold the gfx state lock the producing submit needs) releases that page and
 // is counted ("host releases"): such a page is unguarded until its reports are written. Zero-copy Metal buffers
-// made before the protection keep working (GPU access ignores it; a standalone test, 2026-10-15); creating one over a
-// protected page fails and the draw falls back to an arena copy.
+// made before the protection keep working (GPU access ignores it); creating one over a protected page fails and the
+// draw falls back to an arena copy.
 //
-// On by default since 2026-10-15 (--report-guard=0: off). Walking in Hateno (fence on), with the occlusion wait it
-// replaces: 72.6 fps (three runs) vs 65.9 (two, interleaved), guest blocked in SyncWait 0 vs 5 ms; the reading workers
-// wait ~5.5 ms per frame off the critical path. Sky dips over frames 8500-12500: 0. =log never waits and logs each
+// On by default (--report-guard=0: off). Only the threads that read reports wait, off the critical path; guest-main no
+// longer waits for the reports at its frame fence. =log never waits and logs each
 // first fault per page with thread, PC, caller and whether it hit a pending report slot (to see what shares report pages).
 
 use std::cell::Cell;
@@ -94,8 +93,7 @@ pub(crate) fn in_hle_stubs(addr: usize) -> bool {
 /// Guest code waits, and so does a library function the guest called straight through an HLE stub (its return address
 /// is the stub, its code is not ours: memcpy, which TotK copies its freshly rendered terrain normal maps with; reading
 /// them before the write-back gave the copies zeros). Our own code never waits: a game thread inside it may hold a lock
-/// the submit producing the reports needs (the gfx state lock), which deadlocked until the timeout at gameplay start
-/// (2026-10-15).
+/// the submit producing the reports needs (the gfx state lock), and would deadlock.
 pub(crate) fn may_wait(pc: usize, lr: usize) -> bool {
     crate::guest::exec::tls::is_guest_thread()
         && !IN_ENGINE.with(|e| e.get())
@@ -185,8 +183,8 @@ fn open_prot(page: usize) -> i32 {
 }
 
 /// Per slot: a protection change is in progress. The flag and the page's protection change together under it (a waiter
-/// that saw the flag clear before the mprotect opened the page retried into a still-inaccessible page; if the slot was
-/// freed meanwhile the fault was no longer recognised and the game crashed, 2026-10-15). Held only around one or two
+/// that saw the flag clear before the mprotect opened the page would retry into a still-inaccessible page, and if the
+/// slot was freed meanwhile the fault would no longer be recognised). Held only around one or two
 /// mprotect calls, never while taking another lock; spun on in the signal handler.
 static BUSY: [AtomicU8; SLOTS] = [const { AtomicU8::new(0) }; SLOTS];
 
@@ -260,8 +258,8 @@ unsafe fn free_slot(i: usize) {
     unlock_slot(i);
     let alias = ALIAS[i].swap(0, Ordering::AcqRel);
     if alias != 0 {
-        // Not unmapped yet: an engine copy that looked the alias up just before may still read it (gfx-encoder crashed
-        // in memcpy on an unmapped alias after ~12,000 frames of play, 2026-10-15). frame_end unmaps it later.
+        // Not unmapped yet: an engine copy that looked the alias up just before may still read it. frame_end unmaps it
+        // later.
         RETIRED
             .lock()
             .unwrap()
