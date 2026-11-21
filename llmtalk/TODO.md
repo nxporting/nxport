@@ -153,6 +153,13 @@ and update this file when you finish or drop it.
      Vulkan fix in gpu/vulkan/draw.rs: cbuf array elements are 8 bytes apart (was 4). Windows: build; Jamboree on
      Vulkan to the plaza tutorial (title needs L+R: keys 14 + 32 together). Also note create_extra_set returns 4 for
      every array: two arrays in one stage (Jamboree has 35 such stages) collide on Vulkan.
+  32. 3e3b4a8 (shared horizon/: fs IsMounted + mount names, os events / memory / threads, diag PrintDebugString, nvn
+     device proc lookup; new horizon/os/suspend.rs): Unity on SDK 21.4.7 (Silver Pines) boots to its first frames on
+     the Mac. Windows: suspend.rs has only an Apple (Mach) implementation; nn::os::SuspendThread / ResumeThread /
+     GetThreadContext log "not implemented" elsewhere. Unity's garbage collector stops the world with them, so a
+     Windows (lifted) version is needed for any Unity game: suspend = park the lifted thread at its next safe point or
+     SuspendThread on its host thread; context = the lifted CPU state (x0-x28, fp, lr, sp, pc; layout in suspend.rs).
+     f171575: comment cleanups only.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
