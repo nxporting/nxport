@@ -142,6 +142,11 @@ and update this file when you finish or drop it.
      Jamboree boot gets past "nn::ro::LoadModule: nro0".
   27. bdd7928 (shared): nn::ro::detail::GetExceptionInfo bound (module ranges registered at startup and by the module
      loader). Windows: lifted code may handle svc itself; check the binding does not change TotK / BotW there.
+  28. 194288b (shared): typeinfo vtables from the SDK (engine stubs removed). Nothing Windows-specific.
+  29. cce5da0 (shared + gpu/vulkan/texture.rs): movie DecoderMode 2 writes frames into the client NVN texture;
+     nvn::layout::storage_target makes 1D textures with height > 1 2D images (Vulkan image_type uses it). Windows: the
+     Vulkan side compiles the same; check a TotK movie still plays (CPU mode, should be unchanged).
+  30. 5afabfb (shared): PopOpenUsers / ListPushedOpenUsers return none. Nothing Windows-specific.
 
 - 2026-11-19, batch Windows check at the end (user: no need to be up meanwhile): run the workspace tests and a TotK +
   BotW 1.9.0 headless run on main: 54f420f (nvn/api/texture.rs, shared: a replaced texture snapshot now goes into the
