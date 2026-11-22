@@ -226,6 +226,8 @@ and update this file when you finish or drop it.
      found by pattern and overridden; the vsync event follows the rate). Native only, like 51. Check Windows pacing.
   55. 6cddc77 (shared horizon/vi.rs): the vsync event's ticks land on the display's refresh grid (Metal display pacing
      only; cfg nx_native). Windows/Vulkan: free-running as before; the same snap would need Vulkan's present timing.
+  56. 912712e (metal textures.rs storage_id -> root_id): Metal only. Vulkan: check whether its GPU-written tracking keys
+     by the real texture for views of views (BotW 1.5.0 shadow-map depth twins).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
