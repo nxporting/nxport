@@ -195,6 +195,8 @@ and update this file when you finish or drop it.
      frame only for frames at the limit and lowers it past isolated stalls; games that wait for the window texture on
      the GPU (nvnQueueWaitSync, Unity) are held at the next acquire until the last texture's available time, which
      counts as spare time. Windows: needs pacing_shown fed (15 / 16 above) before any of it applies there.
+  44. (shared nvn/api/window.rs divisor) raises of the refreshes per frame need 30 late frames of 120 (was 3 of 10):
+     Apple GPUs clock down when idle and the old rule turned a clock dip into a permanent 30 fps. Same Windows caveat.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
