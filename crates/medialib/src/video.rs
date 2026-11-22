@@ -1,4 +1,5 @@
-// Video: VP9 through vp9-mt (bit-exact with libvpx, tile columns on worker threads), H.264 through OpenH264.
+// Video: VP8 through vp8-decoder, VP9 through vp9-mt (both bit-exact with libvpx; VP9 tile columns on worker threads),
+// H.264 through OpenH264.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
@@ -107,6 +108,42 @@ impl Decode for Vp9 {
 
     fn reset(&mut self) {
         self.dec.flush();
+    }
+}
+
+pub(crate) struct Vp8 {
+    dec: vp8_decoder::Decoder,
+}
+
+impl Vp8 {
+    pub(crate) fn new() -> Vp8 {
+        Vp8 { dec: vp8_decoder::Decoder::new() }
+    }
+}
+
+impl Decode for Vp8 {
+    fn decode(&mut self, data: &[u8], pts_us: i64, out: &mut VecDeque<Decoded>) -> Result<(), String> {
+        // VP8 does not reorder: a sample shows one picture, or none when it only updates reference frames.
+        match self.dec.decode(data) {
+            Ok(Some(p)) => {
+                let (w, h) = (p.width as usize, p.height as usize);
+                let (cw, ch) = (p.chroma_width() as usize, p.chroma_height() as usize);
+                let (y, u, v) =
+                    planes((w, h), (p.y, p.y_stride), [(p.u, p.uv_stride, cw, ch), (p.v, p.uv_stride, cw, ch)]);
+                out.push_back(Decoded::Picture { pts_us, width: w as u32, height: h as u32, y, u, v });
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            // After a seek the stream resumes mid-way: pictures come once a key frame arrives.
+            Err(vp8_decoder::DecodeError::NeedKeyframe) => Ok(()),
+            Err(e) => Err(format!("vp8: {e:?}")),
+        }
+    }
+
+    fn drain(&mut self, _out: &mut VecDeque<Decoded>) {}
+
+    fn reset(&mut self) {
+        self.dec = vp8_decoder::Decoder::new();
     }
 }
 

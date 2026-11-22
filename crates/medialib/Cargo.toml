@@ -11,3 +11,4 @@ vp9-mt = "0.1.1"
 openh264 = "0.9.9"
 opus-decoder = "0.1.1"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "vorbis"] }
+vp8-decoder = "0.1.2"

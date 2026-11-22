@@ -837,6 +837,7 @@ dependencies = [
  "openh264",
  "opus-decoder",
  "symphonia",
+ "vp8-decoder",
  "vp9-mt",
 ]
 
@@ -1648,6 +1649,12 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vp8-decoder"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e75d02b41ef642b8fb67d0ea86ce2b5555f1b94bf5d664df9b03adee9cae1ed9"
 
 [[package]]
 name = "vp9-mt"

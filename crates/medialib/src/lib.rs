@@ -173,6 +173,7 @@ pub struct Decoder {
 impl Decoder {
     pub fn new(track: &Track, format: Format) -> Result<Decoder, String> {
         let codec: Box<dyn Decode> = match track.codec {
+            Codec::Vp8 => Box::new(video::Vp8::new()),
             Codec::Vp9 => Box::new(video::Vp9::new()),
             Codec::Avc => Box::new(video::Avc::new(&track.private)?),
             Codec::Aac | Codec::Vorbis => Box::new(audio::Symphonia::new(track)?),
