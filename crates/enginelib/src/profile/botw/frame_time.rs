@@ -16,7 +16,8 @@
 //   30 fps instead (as Cemu's FPS++ does on the Wii U).
 // - The controllers' hold counters (sead::ControllerBase::updateDerivativeParams_) go up by a float the game keeps at 1
 //   (read through a GOT slot): it is set to the frame's step in frames at 30 fps, so holds last as long as on the
-//   console. 1.5.0 counts whole frames in integers: not changed there.
+//   console. 1.5.0 counts whole frames in integers: there hold_counters runs the counting loop only on frames that
+//   complete a console frame (1/30 s of the frame's step), as the console counts them at 30 fps.
 // - The frame loop's vsync wait (it waits for vblanks until interval / 60 s have passed; only the first frames after
 //   start-up reach it) returns at once: the engine's present pacer paces.
 // - Arrows: once in their fall, an arrow adds its gravity (0, ArrowGravity, 0) to its velocity once per update, with no
@@ -64,6 +65,9 @@ pub struct Sites {
     /// The controllers' step: code that loads it (adrp x8; mov x21, xzr; ldr x8, [x8, #<slot>]; mov w22, #1;
     /// ldr s8, [x8]), and the float's offset in main the GOT slot holds.
     pub controller_step: Option<(usize, usize)>,
+    /// 1.5.0's hold counting loop in updateDerivativeParams_ (x19 = the controller): from `ldr w8, [x19, #0x100]` before
+    /// it (HOLD_LOOP_CODE) to the loop's end, which `b` reaches.
+    pub hold_counters: Option<(usize, usize)>,
     /// Arrows: the dead call `bl <returns 0>; tbz w0, #0, +0x1c` (and the four words after it) at arrow.0, the function it
     /// calls at arrow.1, and the gravity's load `ldr s1, [x20, #0x108]` at arrow.2.
     pub arrow: Option<(usize, usize, usize)>,
@@ -130,6 +134,11 @@ pub const VFR_RATIO_CALL_V1_5: [u32; 24] = [
     NOP,
 ];
 
+/// The words before 1.5.0's hold counting loop: ldr w8, [x19, #0x100]; cmp w8, #1; str w10, [x19, #0x114];
+/// str wzr, [x19, #0x10]; b.lt <end>; mov x8, xzr; mov w9, #1; b <loop>.
+pub const HOLD_LOOP_CODE: [u32; 8] =
+    [0xb941_0268, 0x7100_051f, 0xb901_166a, 0xb900_127f, 0x5400_046b, 0xaa1f_03e8, 0x3200_03e9, 0x1400_0002];
+
 /// The GUI speed code with the version's adrp and add x19 as words 1 and 2.
 pub const fn gui_speed_code(adrp: u32, add: u32) -> [u32; 8] {
     [
@@ -186,6 +195,9 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 static CONTROLLER_STEP: AtomicU64 = AtomicU64::new(0);
 /// The interval VFR held at its last update (the stock step, with real-time game speed off).
 static LAST_INTERVAL: AtomicU32 = AtomicU32::new(2);
+/// Console frames stepped and not yet counted by the hold counters, and whether the latest frame completed one.
+static HOLD_FRAMES: AtomicU32 = AtomicU32::new(0);
+static HOLD_TICK: AtomicBool = AtomicBool::new(true);
 /// The game's floor of the sound frame, in frames at 30 fps (f32 bits).
 static SND_FLOOR: AtomicU32 = AtomicU32::new(0x3f00_0000);
 
@@ -221,10 +233,49 @@ pub unsafe extern "C" fn vfr_update(vfr: usize) {
     if step != 0 {
         *(step as *mut f32) = frames_at_30(interval);
     }
+    // Steps of 1/n console frame add up to 1 within float rounding.
+    let frames = f32::from_bits(HOLD_FRAMES.load(Ordering::Relaxed)) + frames_at_30(interval);
+    let tick = frames >= 1.0 - 1e-4;
+    HOLD_TICK.store(tick, Ordering::Relaxed);
+    HOLD_FRAMES.store(if tick { (frames - 1.0).clamp(0.0, 1.0) } else { frames }.to_bits(), Ordering::Relaxed);
     static CALLED: AtomicBool = AtomicBool::new(false);
     if !CALLED.swap(true, Ordering::Relaxed) {
         println!("[+] Game time: the game steps by real time ({:.1} ms this frame)", dt * 1000.0);
     }
+}
+
+/// 1.5.0's hold counting (x0 = the sead::ControllerBase): per button (count at +0x100, held bits at +0x114), a held
+/// button's counter (+0x30, 4 bytes each) goes up and its repeat bit (+0x10) is set when the counter reaches the repeat
+/// start (+0xb0, a byte each) and every repeat interval (+0xd0, a byte each; 0: no repeats) after it; a released
+/// button's counter goes back to 0. Held buttons count only on frames that complete a console frame.
+pub unsafe extern "C" fn hold_counters(ctrl: usize) {
+    if ctrl == 0 {
+        return;
+    }
+    let tick = HOLD_TICK.load(Ordering::Relaxed);
+    let n = *((ctrl + 0x100) as *const i32);
+    let held = *((ctrl + 0x114) as *const u32);
+    let mut repeat = 0u32;
+    for i in 0..n.clamp(0, 32) as usize {
+        let count = (ctrl + 0x30 + 4 * i) as *mut u32;
+        if held & 1 << i == 0 {
+            *count = 0;
+            continue;
+        }
+        if !tick {
+            continue;
+        }
+        let interval = *((ctrl + 0xd0 + i) as *const u8) as u32;
+        if interval != 0 {
+            let start = *((ctrl + 0xb0 + i) as *const u8) as u32;
+            let c = *count;
+            if c == start || (c > start && (c - start) % interval == 0) {
+                repeat |= 1 << i;
+            }
+        }
+        *count = count.read().wrapping_add(1);
+    }
+    *((ctrl + 0x10) as *mut u32) = repeat;
 }
 
 /// The GUI speed (w0 = the frame loop's interval): the frame's step in frames at 30 fps.
@@ -377,6 +428,15 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     }
     if let Some((code, float)) = s.controller_step {
         install_controller_step(base, code, float);
+    }
+    if let Some((at, end)) = s.hold_counters {
+        // str w10; str wzr (as before); mov x0, x19; bl <hold_counters>; b <the loop's end>.
+        let b = 0x1400_0000 | ((end - (at + 16)) / 4) as u32;
+        let code = vec![HOLD_LOOP_CODE[2], HOLD_LOOP_CODE[3], 0xaa13_03e0, BL, b];
+        match replace_with_call(base, mem_space, at, &HOLD_LOOP_CODE, code, 3, crate::hle!(hold_counters(_))) {
+            Ok(()) => println!("[+] Controllers: hold times count console frames"),
+            Err(e) => println!("[!] Controllers: main+{at:#x}: {e}; holds count frames"),
+        }
     }
     match apply(mem_space, &s.gui_speed, crate::hle!(gui_speed(_))) {
         Ok(()) => println!("[+] Menus: their speed follows the frame's step"),

@@ -98,6 +98,7 @@ pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
         call: 0,
     },
     controller_step: Some((0xeb0f78, 0x1dad0e0)),
+    hold_counters: None,
     arrow: Some((0x5ee6d0, 0xb325c0, 0x5ee734)),
     snd_floor: Some((
         frame_time::Patch { at: 0x1551004, expected: &frame_time::SND_FLOOR_CODE, code: &frame_time::SND_FLOOR_CALL, call: 1 },
@@ -244,8 +245,9 @@ pub static SITES_V1_5_0: frame_time::Sites = frame_time::Sites {
         code: &frame_time::GUI_SPEED_CALL_V1_5,
         call: 1,
     },
-    // sead::ControllerBase::updateDerivativeParams_ (main+0xb19ee4) counts holds in whole frames.
+    // sead::ControllerBase::updateDerivativeParams_ (main+0xb19ee4) counts holds in whole frames: its loop.
     controller_step: None,
+    hold_counters: Some((0xb19fe4, 0xb1a080)),
     // uking::action::ArrowShootMove::advanceTargetPosAndSetVelocity main+0xa369c.
     arrow: Some((0xa3718, 0x674764, 0xa3794)),
     // The function after ksys::snd::SoundMgr::calc2 (main+0x11fb69c).
