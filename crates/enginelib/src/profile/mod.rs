@@ -5,6 +5,7 @@ pub mod botw;
 pub mod unity;
 pub mod silver_pines;
 pub mod frame_step;
+pub mod jamboree;
 pub mod kirby;
 pub mod smo;
 pub mod totk;
@@ -22,6 +23,7 @@ pub enum GameKind {
     SuperMarioOdyssey,
     BotW,
     SilverPines,
+    MarioPartyJamboree,
     Unknown(u64),
 }
 
@@ -188,9 +190,17 @@ pub const WONDER_TITLE_ID: u64 = 0x0100_1510_0B51_4000;
 pub const SMO_TITLE_ID: u64 = 0x0100_0000_0001_0000;
 pub const BOTW_TITLE_ID: u64 = 0x0100_7EF0_0011_E000;
 pub const SILVER_PINES_TITLE_ID: u64 = 0x0100_D5B0_2684_4000;
+pub const JAMBOREE_TITLE_ID: u64 = 0x0100_9650_1733_8000;
 
-pub static PROFILES: &[GameProfile] =
-    &[totk::PROFILE, kirby::PROFILE, wonder::PROFILE, smo::PROFILE, botw::PROFILE, silver_pines::PROFILE];
+pub static PROFILES: &[GameProfile] = &[
+    totk::PROFILE,
+    kirby::PROFILE,
+    wonder::PROFILE,
+    smo::PROFILE,
+    botw::PROFILE,
+    silver_pines::PROFILE,
+    jamboree::PROFILE,
+];
 
 /// What a game dump is: its program id, profile and version (by the main module's build id), if known.
 pub struct Identified {

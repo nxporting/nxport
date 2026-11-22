@@ -536,6 +536,11 @@ impl GuestMemorySpace {
         let slot = |off: usize| ((off / 8) as u32) << 10;
         let hle = slot(crate::guest::exec::tls::hle_stack_offset());
         let tls = slot(crate::guest::exec::tls::guest_tls_offset());
+        #[cfg(nx_native)]
+        if crate::settings::get().guest.guest_cores {
+            self.write_hle_entry_stub_cores(lit, hle, tls);
+            return;
+        }
         let code: [u32; 22] = [
             0x9100_03E9,             // mov x9, sp
             0xD53B_D06A,             // mrs x10, tpidrro_el0
@@ -565,6 +570,48 @@ impl GuestMemorySpace {
             ptr::write(base.add(k), *w);
         }
         ptr::write(base.add(19), crate::guest::exec::aot::ldr_literal(base.add(19) as usize, lit + 8, 18));
+        for k in code.len()..HLE_STUB_ENTRIES * TRAMPOLINE_WORDS {
+            ptr::write(base.add(k), 0xD420_0000u32); // brk #0
+        }
+    }
+
+    /// The entry stub with guest cores (horizon/cores.rs): outermost calls go through the cores' glue, which lends the
+    /// thread's core for the call (x16 is the function). One word longer than the plain stub.
+    #[cfg(nx_native)]
+    unsafe fn write_hle_entry_stub_cores(&mut self, lit: usize, hle: u32, tls: u32) {
+        // A literal, not code: an image made elsewhere does not hold it.
+        ptr::write((lit + 16) as *mut usize, crate::horizon::cores::entry() as usize);
+        let code: [u32; 23] = [
+            0x9100_03E9,             // mov x9, sp
+            0xD53B_D06A,             // mrs x10, tpidrro_el0
+            0xF940_014B | hle,       // ldr x11, [x10, #hle]
+            0xB400_018B,             // cbz x11, +48
+            0xF900_015F | hle,       // str xzr, [x10, #hle]
+            0xD100_416C,             // sub x12, x11, #16
+            0xA900_2D89,             // stp x9, x11, [x12]
+            0x9100_019F,             // mov sp, x12
+            0,                       // ldr x17, <entry glue>
+            0xD63F_0220,             // blr x17
+            0xA940_2FE9,             // ldp x9, x11, [sp]
+            0x9100_013F,             // mov sp, x9
+            0xD53B_D06A,             // mrs x10, tpidrro_el0
+            0xF900_014B | hle,       // str x11, [x10, #hle]
+            0x1400_0002,             // b +8
+            0xD63F_0200,             // blr x16
+            0xD53B_D070,             // mrs x16, tpidrro_el0
+            0xF940_0210 | tls,       // ldr x16, [x16, #tls]
+            0xB400_0050,             // cbz x16, +8
+            0xD51B_D050,             // msr tpidr_el0, x16
+            0,                       // ldr x18, <literal>
+            0xA8C1_7BFD,             // ldp x29, x30, [sp], #16
+            0xD65F_03C0,             // ret
+        ];
+        let base = self.trampoline_pool;
+        for (k, w) in code.iter().enumerate() {
+            ptr::write(base.add(k), *w);
+        }
+        ptr::write(base.add(8), crate::guest::exec::aot::ldr_literal(base.add(8) as usize, lit + 16, 17));
+        ptr::write(base.add(20), crate::guest::exec::aot::ldr_literal(base.add(20) as usize, lit + 8, 18));
         for k in code.len()..HLE_STUB_ENTRIES * TRAMPOLINE_WORDS {
             ptr::write(base.add(k), 0xD420_0000u32); // brk #0
         }

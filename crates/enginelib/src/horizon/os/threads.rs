@@ -210,6 +210,9 @@ pub(crate) static THREAD_CORES: OnceLock<StdMutex<rustc_hash::FxHashMap<usize, i
 
 pub(crate) const DEFAULT_CORE: i32 = 1;
 
+/// Bumped whenever a thread's core changes (cores.rs caches each thread's core against it).
+pub(crate) static CORES_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub(crate) fn thread_cores() -> &'static StdMutex<rustc_hash::FxHashMap<usize, i32>> {
     THREAD_CORES.get_or_init(|| StdMutex::new(rustc_hash::FxHashMap::default()))
 }
@@ -571,6 +574,7 @@ pub(crate) unsafe extern "C" fn create_thread_with_core(
             .lock()
             .unwrap()
             .insert(thread as usize, ideal_core);
+        CORES_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     r
 }
@@ -594,6 +598,7 @@ pub(crate) unsafe extern "C" fn set_thread_core_mask(
         thread as usize
     };
     thread_cores().lock().unwrap().insert(t, core);
+    CORES_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     println!(
         "[+] HLE: nn::os::SetThreadCoreMask(thread={:#x}, ideal={}, affinity={:#x}) -> core {}",
         t, ideal_core, affinity, core
