@@ -200,6 +200,14 @@ and update this file when you finish or drop it.
   45. d48a1bd (shared horizon/sdk/base/nvn): eleven NVN proc names c106af0 dropped are back, among them
      nvnWindowSetPresentInterval (BotW 1.5.0 ran up to 2x fast: its interval 2 never arrived). Windows: same tables,
      nothing to do but check BotW 1.5.0 holds 30 there.
+  46. 96a092f (shared settings/mod.rs): unknown keys in settings files are left out with a warning (a renamed setting
+     dropped the whole game settings file). Nothing to do.
+  47. 7be18f7 (shared horizon/movie/extractor.rs): SetDataSource(ClientStreamReader*) reads through the game's reader
+     (Unity's archive:/ bundle videos). Nothing to do; check Silver Pines' logo video plays on Windows.
+  48. 68fdba5 (shared profile/silver_pines.rs, profile main_thread_tick from horizon/os waits, menu Texture Size): calls
+     game code from an HLE wait on guest-main. On the lifted Windows path calling guest code directly does not work:
+     needs the lifted library's call (thread_stack::run's non-native branch shows how). Until then the tick should not
+     run there (silver_pines texture_size is a direct native call).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
