@@ -177,6 +177,14 @@ and update this file when you finish or drop it.
      only. One doc moved: translated::feedback_snapshots (Metal) now documents the in-place reads it does.
   36. ad0e4c8 (shared host/audio.rs): --audio-wav also writes nn::audio::AudioOut streams to <name>_audioout.wav
      (headless too). Unity / FMOD games play through AudioOut only; on Windows the same capture works unchanged.
+  37. 40d3c07 (shared crates/medialib): VP8 video through the vp8-decoder crate (pure Rust, no system library). Silver
+     Pines' title screen is a VP8 WebM; it builds on Windows unchanged (check cargo build there).
+  38. adad7a6 (shared horizon/movie/decoder.rs): nn::movie AcquireInputBuffer reserves the slot it hands out (Unity
+     acquires every free input before filling any: it spun forever and grew to 13 GB).
+  39. fbbc90a (gpu/restart.rs shared, Metal plan / encode): line loops, triangle fans, quads, quad strips and polygons
+     drawn as lists through generated indices (restart::emulated_indices / emulated_elements). Vulkan: check how it
+     handles NVN modes 2 / 6 / 7 / 8 / 9 (Silver Pines converts video frames from YUV with a quad); the shared helpers
+     are there to use if it skips them.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
