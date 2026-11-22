@@ -511,8 +511,11 @@ pub(crate) fn pacing_slack(secs: f64) {
 /// intervals: a frame rate that does not divide the refresh shows frames one and two refreshes apart in no order (a
 /// 90 fps game on a 120 Hz screen), which no game step makes look even. So every frame stays the same whole number of
 /// refreshes: the fewest the frame-rate limit allows; one more when frames really reached the screen late (3 of the
-/// last 10), up to twice the fewest; one fewer once every frame of the last 120 waited more than a refresh for the
-/// limiter (it had that much time to spare).
+/// last 10) while the typical frame had under a quarter refresh to spare (the median of the last 10 waits: more, and
+/// the late ones were hitches, not frames that need longer), up to twice the fewest;
+/// one fewer once nearly every frame of the last 120 (all but 12) waited more than a refresh for the limiter (it had that
+/// much time to spare). Isolated stalls (a loading screen's) then neither raise it nor hold it up: a game whose loading
+/// advances per frame would load at a fraction of its speed.
 mod divisor {
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -543,10 +546,16 @@ mod divisor {
         let mut n = s.n.max(min);
         // At most half the limit's rate: at lower rates the GPU idles longer between frames, macOS lowers its clock, the
         // frames take longer and look late again.
-        let changed = if s.late.iter().filter(|&&l| l).count() >= 3 && n < 2 * min {
+        let typical_spare = {
+            let mut recent: Vec<f64> = s.spare.iter().rev().take(10).copied().collect();
+            recent.sort_by(|a, b| a.total_cmp(b));
+            recent.get(recent.len() / 2).copied().unwrap_or(0.0)
+        };
+        let raise = s.late.iter().filter(|&&l| l).count() >= 3 && typical_spare < period / 4.0 && n < 2 * min;
+        let changed = if raise {
             n += 1;
             true
-        } else if n > min && s.spare.len() >= 120 && s.spare.iter().all(|&w| w > period * 1.1) {
+        } else if n > min && s.spare.len() >= 120 && s.spare.iter().filter(|&&w| w <= period * 1.1).count() <= 12 {
             n -= 1;
             true
         } else {
@@ -555,7 +564,12 @@ mod divisor {
         if changed {
             s.late.clear();
             s.spare.clear();
-            println!("[pacing] {} refreshes per frame ({:.1} fps)", n, 1.0 / (n as f64 * period));
+            println!(
+                "[pacing] {} refreshes per frame ({:.1} fps; typical spare {:.1} ms)",
+                n,
+                1.0 / (n as f64 * period),
+                typical_spare * 1e3
+            );
         }
         s.n = n;
         n

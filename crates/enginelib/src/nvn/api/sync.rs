@@ -37,6 +37,8 @@ unsafe fn available_wait(sync: *mut NvnSync, timeout_ns: u64) -> Option<i32> {
         return Some(0);
     }
     if timeout_ns < at - now {
+        // Time spent waiting is time the frame had to spare, also when the game waits in several shorter calls.
+        crate::nvn::api::pacing_slack(timeout_ns as f64 / 1e9);
         crate::horizon::hle::hle_sleep_ns(timeout_ns);
         return Some(2);
     }
