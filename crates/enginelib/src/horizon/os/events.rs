@@ -61,6 +61,7 @@ pub(crate) unsafe extern "C" fn try_jam_light_message_queue(mq: *mut (), data: u
 }
 
 pub(crate) unsafe extern "C" fn receive_light_message_queue(out: *mut u64, mq: *mut ()) {
+    crate::profile::main_thread_tick("receive_light_message_queue");
     let fp = crate::guest_reg!(x29);
     let state = light_mq_get(mq);
     let mut inner = state.inner.lock().unwrap();
@@ -130,6 +131,7 @@ pub(crate) unsafe extern "C" fn timed_jam_light_message_queue(mq: *mut (), data:
 }
 
 pub(crate) unsafe extern "C" fn timed_receive_light_message_queue(out: *mut u64, mq: *mut (), timeout_ns: i64) -> bool {
+    crate::profile::main_thread_tick("timed_receive_light_message_queue");
     let state = light_mq_get(mq);
     let inner = state.inner.lock().unwrap();
     let (mut inner, _) = state
@@ -224,6 +226,7 @@ pub(crate) unsafe extern "C" fn clear_light_event(ev: *mut ()) {
 }
 
 pub(crate) unsafe extern "C" fn wait_light_event(ev: *mut ()) {
+    crate::profile::main_thread_tick("wait_light_event");
     let fp = crate::guest_reg!(x29);
     let state = light_event_get(ev);
     light_event_spin(&state);
@@ -265,6 +268,7 @@ pub(crate) unsafe extern "C" fn try_wait_light_event(ev: *mut ()) -> bool {
 }
 
 pub(crate) unsafe extern "C" fn timed_wait_light_event(ev: *mut (), timeout_ns: i64) -> bool {
+    crate::profile::main_thread_tick("timed_wait_light_event");
     let state = light_event_get(ev);
     let guard = state.signaled.lock().unwrap();
     let manual = !state.auto_clear.load(std::sync::atomic::Ordering::Relaxed);
@@ -412,6 +416,7 @@ pub(crate) unsafe extern "C" fn clear_timer_event(ev: *mut ()) {
 }
 
 pub(crate) unsafe extern "C" fn wait_timer_event(ev: *mut ()) {
+    crate::profile::main_thread_tick("wait_timer_event");
     if (ev as usize) < 0x10000 {
         return;
     }
@@ -567,6 +572,7 @@ pub(crate) unsafe extern "C" fn try_wait_system_event(event: *mut ()) -> u8 {
 /// nn::os::TimedWaitSystemEvent(SystemEventType*, TimeSpan): WaitSystemEvent with a timeout (nanoseconds); true when
 /// the event was signaled (and, as an auto-clear event, consumed).
 pub(crate) unsafe extern "C" fn timed_wait_system_event(event: *mut (), timeout_ns: i64) -> bool {
+    crate::profile::main_thread_tick("timed_wait_system_event");
     record_hle_call("os::timed_wait_system_event");
     if crate::settings::get().log.log_sysevent_waits {
         static SEEN: StdMutex<Vec<usize>> = StdMutex::new(Vec::new());
@@ -612,6 +618,7 @@ pub(crate) unsafe extern "C" fn timed_wait_system_event(event: *mut (), timeout_
 }
 
 pub(crate) unsafe extern "C" fn wait_system_event(event: *mut ()) {
+    crate::profile::main_thread_tick("wait_system_event");
     record_hle_call("os::wait_system_event");
     let fp = crate::guest_reg!(x29);
     match hle_system_event_lookup(event as usize) {
@@ -707,6 +714,7 @@ pub(crate) unsafe extern "C" fn clear_event(ev: *mut u8) {
 }
 
 pub(crate) unsafe extern "C" fn wait_event(ev: *mut u8) {
+    crate::profile::main_thread_tick("wait_event");
     event_wait(ev as usize, None);
 }
 
@@ -715,6 +723,7 @@ pub(crate) unsafe extern "C" fn try_wait_event(ev: *mut u8) -> bool {
 }
 
 pub(crate) unsafe extern "C" fn timed_wait_event(ev: *mut u8, timeout_ns: i64) -> bool {
+    crate::profile::main_thread_tick("timed_wait_event");
     event_wait(
         ev as usize,
         Some(std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns.max(0) as u64)),
@@ -788,6 +797,7 @@ pub(crate) unsafe extern "C" fn unlink_multiwait_holder(holder: *mut u8) {
 
 /// Blocks until any linked holder's event is signaled; returns that holder (auto-clear events are consumed).
 pub(crate) unsafe extern "C" fn wait_any(mw: *mut u8) -> *mut u8 {
+    crate::profile::main_thread_tick("wait_any");
     let mut g = lock();
     loop {
         let s = g.as_mut().unwrap();
@@ -867,6 +877,7 @@ pub(crate) unsafe extern "C" fn send_message_queue(mq: *mut u8, data: u64) {
 }
 
 pub(crate) unsafe extern "C" fn receive_message_queue(out: *mut u64, mq: *mut u8) {
+    crate::profile::main_thread_tick("receive_message_queue");
     let mut g = lock();
     loop {
         let s = g.as_mut().unwrap();
@@ -903,6 +914,7 @@ pub(crate) unsafe extern "C" fn timed_receive_message_queue(
     mq: *mut u8,
     timeout_ns: i64,
 ) -> bool {
+    crate::profile::main_thread_tick("timed_receive_message_queue");
     mq_receive(
         out,
         mq as usize,

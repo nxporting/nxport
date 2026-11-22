@@ -24,6 +24,8 @@ struct Live {
     mouse_look: AtomicBool,
     exact_mouse_aim: AtomicBool,
     fps_in_title: AtomicBool,
+    /// settings graphics.texture_size, as i32 bits.
+    texture_size: AtomicU32,
     /// settings::PresentMode as its index.
     present_mode: AtomicU32,
 }
@@ -44,6 +46,7 @@ static LIVE: LazyLock<Live> = LazyLock::new(|| {
         mouse_look: AtomicBool::new(s.input.mouse_look),
         exact_mouse_aim: AtomicBool::new(s.totk.enhancements.exact_mouse_aim),
         fps_in_title: AtomicBool::new(s.display.fps_in_title),
+        texture_size: AtomicU32::new(s.graphics.texture_size.clamp(-1, 3) as u32),
         present_mode: AtomicU32::new(s.display.present_mode as u32),
     }
 });
@@ -221,6 +224,18 @@ pub fn set_real_time_speed(on: bool) {
 
 /// TotK: the game renders at the window's shape and follows it (profile/totk/aspect.rs); off, its own 16:9 picture,
 /// letterboxed.
+/// Texture size (graphics.texture_size: 0 full .. 3 an eighth, -1 the game's own) in games whose profile can change it
+/// while they run.
+pub fn texture_size() -> i32 {
+    LIVE.texture_size.load(Relaxed) as i32
+}
+
+pub fn set_texture_size(size: i32) {
+    let size = size.clamp(-1, 3);
+    LIVE.texture_size.store(size as u32, Relaxed);
+    crate::config::remember(|p| p.graphics.texture_size = Some(size));
+}
+
 pub fn dynamic_aspect() -> bool {
     LIVE.dynamic_aspect.load(Relaxed)
 }

@@ -24,4 +24,5 @@ pub static PROFILE: GameProfile = GameProfile {
     platform_options: None,
     presets: &[],
     module_patches: &[],
+    main_thread_tick: None,
 };

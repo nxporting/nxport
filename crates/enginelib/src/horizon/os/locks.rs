@@ -161,6 +161,7 @@ pub(crate) unsafe extern "C" fn timed_wait_condition_variable(
     mutex: *mut NnMutex,
     timeout_ns: i64,
 ) -> i32 {
+    crate::profile::main_thread_tick("timed_wait_condition_variable");
     let state = condvar_get(cv);
     let seen_gen = *state.generation.lock().unwrap();
     crate::horizon::os::unlock_mutex(mutex);
@@ -183,6 +184,7 @@ pub(crate) unsafe extern "C" fn timed_wait_condition_variable(
 }
 
 pub(crate) unsafe extern "C" fn wait_condition_variable(cv: *mut (), mutex: *mut NnMutex) {
+    crate::profile::main_thread_tick("wait_condition_variable");
     let fp = crate::guest_reg!(x29);
     let state = condvar_get(cv);
     let seen_gen = *state.generation.lock().unwrap();
@@ -207,6 +209,7 @@ pub(crate) unsafe extern "C" fn try_acquire_semaphore(sem: *mut ()) -> bool {
 }
 
 pub(crate) unsafe extern "C" fn timed_acquire_semaphore(sem: *mut (), timeout_ns: i64) -> bool {
+    crate::profile::main_thread_tick("timed_acquire_semaphore");
     semaphore_try_acquire(sem, timeout_ns)
 }
 
@@ -223,6 +226,7 @@ pub(crate) unsafe extern "C" fn finalize_semaphore(sem: *mut ()) {
 }
 
 pub(crate) unsafe extern "C" fn acquire_semaphore(sem: *mut ()) {
+    crate::profile::main_thread_tick("acquire_semaphore");
     let fp = crate::guest_reg!(x29);
     semaphore_acquire(sem, fp);
 }
@@ -240,6 +244,7 @@ pub(crate) unsafe extern "C" fn finalize_light_semaphore(sem: *mut ()) {
 }
 
 pub(crate) unsafe extern "C" fn acquire_light_semaphore(sem: *mut ()) {
+    crate::profile::main_thread_tick("acquire_light_semaphore");
     let fp = crate::guest_reg!(x29);
     semaphore_acquire(sem, fp);
 }

@@ -77,6 +77,7 @@ pub static PROFILE: GameProfile = GameProfile {
     platform_options: None,
     presets: &[],
     module_patches: &[],
+    main_thread_tick: None,
 };
 
 /// 1.9.0's clock code (frame_time.rs).

@@ -645,3 +645,11 @@ pub(crate) unsafe extern "C" fn get_current_fiber() -> *mut u8 {
         (*t).current_fiber as *mut u8
     }
 }
+
+/// Whether the calling thread is the game's main thread (the one that runs nnMain: startup.rs names it guest-main).
+pub(crate) fn on_guest_main() -> bool {
+    thread_local! {
+        static MAIN: bool = std::thread::current().name() == Some("guest-main");
+    }
+    MAIN.with(|m| *m)
+}

@@ -2,6 +2,7 @@
 // and matches the version via the main NSO module Build ID.
 
 pub mod botw;
+pub mod silver_pines;
 pub mod frame_step;
 pub mod kirby;
 pub mod smo;
@@ -19,6 +20,7 @@ pub enum GameKind {
     MarioWonder,
     SuperMarioOdyssey,
     BotW,
+    SilverPines,
     Unknown(u64),
 }
 
@@ -67,6 +69,33 @@ pub struct GameProfile {
     /// Patches of this game's code modules, run on each as it loads (patch_module): fixes for known mods' own bugs,
     /// and changes to the game that an nxport feature needs (TotK: the right stick past full deflection).
     pub module_patches: &'static [ModulePatch],
+    /// Runs on the game's main thread, at most every MAIN_THREAD_TICK, from its system calls (it makes some every
+    /// frame: waits for its other threads): where a profile calls the game's own code to change something while it
+    /// runs.
+    pub main_thread_tick: Option<fn()>,
+}
+
+const MAIN_THREAD_TICK: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// The active game's main_thread_tick, from a wait (horizon/os) on the game's main thread.
+pub fn main_thread_tick(_from: &'static str) {
+    let Some(f) = active().main_thread_tick else { return };
+    if !crate::horizon::os::on_guest_main() {
+        return;
+    }
+    thread_local! {
+        static LAST: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+        // The game code a tick calls waits too: no tick inside a tick.
+        static IN_TICK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    let now = std::time::Instant::now();
+    if IN_TICK.with(|t| t.get()) || LAST.with(|l| l.get().is_some_and(|t| now - t < MAIN_THREAD_TICK)) {
+        return;
+    }
+    LAST.with(|l| l.set(Some(now)));
+    IN_TICK.with(|t| t.set(true));
+    f();
+    IN_TICK.with(|t| t.set(false));
 }
 
 /// A patch of a module's code: given its name and its text as loaded (before it is relocated, lifted or run), it changes
@@ -120,8 +149,10 @@ pub const KIRBY_TITLE_ID: u64 = 0x0100_4D30_0C5A_E000;
 pub const WONDER_TITLE_ID: u64 = 0x0100_1510_0B51_4000;
 pub const SMO_TITLE_ID: u64 = 0x0100_0000_0001_0000;
 pub const BOTW_TITLE_ID: u64 = 0x0100_7EF0_0011_E000;
+pub const SILVER_PINES_TITLE_ID: u64 = 0x0100_D5B0_2684_4000;
 
-pub static PROFILES: &[GameProfile] = &[totk::PROFILE, kirby::PROFILE, wonder::PROFILE, smo::PROFILE, botw::PROFILE];
+pub static PROFILES: &[GameProfile] =
+    &[totk::PROFILE, kirby::PROFILE, wonder::PROFILE, smo::PROFILE, botw::PROFILE, silver_pines::PROFILE];
 
 /// What a game dump is: its program id, profile and version (by the main module's build id), if known.
 pub struct Identified {
@@ -205,6 +236,7 @@ static DEFAULT_PROFILE: GameProfile = GameProfile {
     platform_options: None,
     presets: &[],
     module_patches: &[],
+    main_thread_tick: None,
 };
 
 /// Returns the detected GameProfile for the current run (by the title id in main.npdm).
@@ -241,6 +273,7 @@ pub fn active() -> &'static GameProfile {
         platform_options: None,
         presets: &[],
         module_patches: &[],
+        main_thread_tick: None,
     }));
     let _ = ACTIVE.set(prof);
     prof

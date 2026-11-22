@@ -253,6 +253,10 @@ group! {
         /// Render the game's scene at this multiple of its own resolution (1-4; games whose profile knows their scene
         /// size; applies at launch)
         resolution_scale: u32 = 1,
+        /// Texture size in games whose profile can change it while they run: 0 full size, 1 half, 2 a quarter, 3 an
+        /// eighth of each texture's width and height (Unity's texture mipmap limit); -1 the game's own (Silver Pines:
+        /// a quarter). Full size takes about 16x the texture memory of a quarter
+        texture_size: i32 = -1,
         /// Compile new shaders in the background instead of pausing the game. Smoother, but for now everything
         /// waiting on a compile is skipped until it is ready, which can cause visual glitches (missing objects or
         /// passes, flashes) the first time something is drawn.

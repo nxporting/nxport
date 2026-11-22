@@ -335,10 +335,7 @@ pub(crate) fn early_fence() -> bool {
 }
 
 pub(super) fn on_guest_main() -> bool {
-    thread_local! {
-        static MAIN: bool = std::thread::current().name() == Some("guest-main");
-    }
-    MAIN.with(|m| *m)
+    crate::horizon::os::on_guest_main()
 }
 
 /// The game's fence wait: GPU completion of `serial`, or with --early-fence its commit.

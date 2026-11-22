@@ -57,6 +57,8 @@ pub mod id {
     pub const REAL_TIME: u16 = 60;
     pub const DYNAMIC_ASPECT: u16 = 62;
     pub const EXACT_MOUSE_AIM: u16 = 63;
+    /// + 1 + the texture size (0 the game's own, 1.. full, half, quarter, eighth).
+    pub const TEXTURE_SIZE: u16 = 64;
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
@@ -156,6 +158,14 @@ pub fn bar() -> Vec<Entry> {
             ));
         }
         title.push(Separator);
+    } else if crate::profile::active().kind == crate::profile::GameKind::SilverPines {
+        title.extend([
+            sub(
+                "Texture Size",
+                TEXTURE_SIZES.iter().map(|&(s, label)| choice(label.to_string(), id::TEXTURE_SIZE + (s + 1) as u16)).collect(),
+            ),
+            Separator,
+        ]);
     }
     let mods = mods();
     let mut listed: Vec<Entry> = mods.iter().map(|(name, code)| Entry::Note(mod_label(name, *code))).collect();
@@ -359,6 +369,10 @@ pub fn anisotropy_label(samples: u32) -> String {
 }
 
 /// A field of view choice's label.
+/// The Texture Size menu's choices: (graphics.texture_size, label).
+const TEXTURE_SIZES: [(i32, &str); 5] =
+    [(-1, "Game's own"), (0, "Full"), (1, "Half"), (2, "Quarter"), (3, "Eighth")];
+
 pub fn field_of_view_label(percent: u32) -> String {
     if percent == 100 {
         "Game's own (100%)".to_string()
@@ -425,6 +439,7 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::TOUCH => live::touch(),
         id::REAL_TIME => live::real_time_speed(),
         id::DYNAMIC_ASPECT => live::dynamic_aspect(),
+        c if (id::TEXTURE_SIZE..id::TEXTURE_SIZE + 5).contains(&c) => (c - id::TEXTURE_SIZE) as i32 - 1 == live::texture_size(),
         c if (id::FIELD_OF_VIEW..id::FIELD_OF_VIEW + 151).contains(&c) => {
             (c - id::FIELD_OF_VIEW) as u32 == crate::profile::botw::aspect::field_of_view()
         }
@@ -565,6 +580,7 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
         id::TOUCH => live::set_touch(!live::touch()),
         id::REAL_TIME => live::set_real_time_speed(!live::real_time_speed()),
         id::DYNAMIC_ASPECT => live::set_dynamic_aspect(!live::dynamic_aspect()),
+        c if (id::TEXTURE_SIZE..id::TEXTURE_SIZE + 5).contains(&c) => live::set_texture_size((c - id::TEXTURE_SIZE) as i32 - 1),
         c if (id::FIELD_OF_VIEW..id::FIELD_OF_VIEW + 151).contains(&c) => {
             let p = (c - id::FIELD_OF_VIEW) as u32;
             crate::profile::botw::aspect::set_field_of_view(p);

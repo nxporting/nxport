@@ -33,4 +33,5 @@ pub static PROFILE: GameProfile = GameProfile {
         ("iPhone SE", include_str!("presets/iPhone SE.toml")),
     ],
     module_patches: &[ultracam::patch, camera_ease::patch],
+    main_thread_tick: None,
 };
