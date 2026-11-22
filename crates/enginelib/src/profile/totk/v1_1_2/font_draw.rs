@@ -4,8 +4,9 @@
 //   x0 RectDrawer*, x1 nn::gfx::CommandBuffer*, x2 vertex buffer data (8 texture-use records + count),
 //   w3 content flags, x4 GpuAddress* constant buffer, x5 GpuAddress* per-character records, x6 pipelines (TotK: null)
 //
-// --native-font-draws records the same commands the function would; --verify-font-draws lets the game record them and
-// compares, call by call, with what the native path would have recorded.
+// --native-font-draws records the same commands the function would (on Metal as native items, one Cmd::ModelDraw per
+// call, as the model ports record theirs; elsewhere through the NVN entry points); --verify-font-draws lets the game
+// record them and compares, call by call, with what the NVN form of the native path would have recorded.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -74,8 +75,82 @@ unsafe fn buffer_address(gfx_buffer: usize) -> u64 {
     crate::nvn::api::hle_nvnBufferGetAddress(rd::<usize>(gfx_buffer + 8) as *const _)
 }
 
-/// Records what the function records into `cmd` (an NVNcommandBuffer).
-unsafe fn record(drawer: usize, cmd: usize, vb_data: usize, flags: u32, cb_addr: u64, chars_addr: u64) {
+/// Where the commands go: the NVN entry points, or native items of one model draw.
+enum Out {
+    Nvn(usize),
+    Native(crate::nvn::cmd::ModelDraw),
+}
+
+impl Out {
+    unsafe fn program(&mut self, program: usize, stages: i32) {
+        match self {
+            Out::Nvn(cmd) => hle_nvnCommandBufferBindProgram(*cmd, program, stages),
+            Out::Native(d) => d.items.push(crate::nvn::cmd::ModelItem::Program { program, stages }),
+        }
+    }
+
+    unsafe fn vertex_state(&mut self, attribs: i32, attrib_states: usize, streams: i32, stream_states: usize) {
+        match self {
+            Out::Nvn(cmd) => {
+                hle_nvnCommandBufferBindVertexAttribState(*cmd, attribs, attrib_states as *const u32);
+                hle_nvnCommandBufferBindVertexStreamState(*cmd, streams, stream_states as *const u64);
+            }
+            Out::Native(d) => {
+                let mut a = crate::nvn::cmd::AttribState::default();
+                a.n = attribs.clamp(0, crate::nvn::cmd::AttribState::MAX as i32) as u8;
+                for i in 0..a.n as usize {
+                    a.v[i] = rd(attrib_states + i * 4);
+                }
+                d.items.push(crate::nvn::cmd::ModelItem::VertexAttribs(a));
+                let s = (0..streams.max(0) as usize).map(|i| rd::<u64>(stream_states + i * 8)).collect();
+                d.items.push(crate::nvn::cmd::ModelItem::VertexStreams(s));
+            }
+        }
+    }
+
+    unsafe fn bind(&mut self, stage: i32, index: i32, kind: crate::nvn::cmd::ModelBindKind) {
+        use crate::nvn::cmd::ModelBindKind as K;
+        match self {
+            Out::Nvn(cmd) => match kind {
+                K::Vertex { addr, size } => hle_nvnCommandBufferBindVertexBuffer(*cmd, index, addr, size),
+                K::Uniform { addr, size } => hle_nvnCommandBufferBindUniformBuffer(*cmd, stage, index, addr, size),
+                K::Storage { addr, size } => hle_typed_cb_BindStorageBuffer(*cmd, stage, index, addr, size),
+                K::Texture(handle) => hle_nvnCommandBufferBindTexture(*cmd, stage, index, handle),
+            },
+            Out::Native(d) => d.items.push(crate::nvn::cmd::ModelItem::Bind { stage, index, kind }),
+        }
+    }
+
+    unsafe fn draw(&mut self, r: crate::nvn::cmd::ModelRange) {
+        match self {
+            Out::Nvn(cmd) => hle_typed_cb_DrawElementsInstanced(
+                *cmd,
+                r.mode,
+                r.index_type,
+                r.count,
+                r.index_addr,
+                r.base_vertex,
+                r.base_instance,
+                r.instances,
+            ),
+            Out::Native(d) => d.items.push(crate::nvn::cmd::ModelItem::Draw(r)),
+        }
+    }
+}
+
+/// Records what the function records into `cmd` (an NVNcommandBuffer); `native`: as native items.
+unsafe fn record(drawer: usize, cmd: usize, vb_data: usize, flags: u32, cb_addr: u64, chars_addr: u64, native: bool) {
+    let mut out = if native { Out::Native(Default::default()) } else { Out::Nvn(cmd) };
+    record_to(&mut out, drawer, vb_data, flags, cb_addr, chars_addr);
+    if let Out::Native(d) = out {
+        if !d.items.is_empty() {
+            crate::nvn::api::record_typed("nvnCommandBufferModelDraw", cmd, crate::nvn::cmd::Cmd::ModelDraw(Box::new(d)));
+        }
+    }
+}
+
+unsafe fn record_to(out: &mut Out, drawer: usize, vb_data: usize, flags: u32, cb_addr: u64, chars_addr: u64) {
+    use crate::nvn::cmd::ModelBindKind as K;
     let slot = |base: usize, v: usize| rd::<i32>(drawer + base + v * 4);
     let uses = rd::<i32>(vb_data + TEXTURE_USE_MAX * 16).clamp(0, TEXTURE_USE_MAX as i32) as usize;
     let mut chars = chars_addr;
@@ -98,38 +173,38 @@ unsafe fn record(drawer: usize, cmd: usize, vb_data: usize, flags: u32, cb_addr:
         }
         if v != last {
             let (prog, stages) = program(drawer, v);
-            hle_nvnCommandBufferBindProgram(cmd, prog, stages);
+            out.program(prog, stages);
             let vs = drawer + RD_VERTEX_STATES + v * 0x20;
-            hle_nvnCommandBufferBindVertexAttribState(cmd, rd(vs + 8), rd(vs + 0x18));
-            hle_nvnCommandBufferBindVertexStreamState(cmd, rd(vs + 4), rd(vs + 0x10));
-            hle_nvnCommandBufferBindVertexBuffer(cmd, 0, buffer_address(drawer + RD_VERTEX_BUFFER), (VERTEX_STRIDE * 4) as usize);
-            hle_nvnCommandBufferBindUniformBuffer(cmd, STAGE_VERTEX, slot(RD_VS_UNIFORM_SLOTS, v), cb_addr, CONSTANT_BUFFER_SIZE);
-            hle_nvnCommandBufferBindUniformBuffer(cmd, STAGE_FRAGMENT, slot(RD_PS_UNIFORM_SLOTS, v), cb_addr, CONSTANT_BUFFER_SIZE);
+            out.vertex_state(rd(vs + 8), rd(vs + 0x18), rd(vs + 4), rd(vs + 0x10));
+            let vb = K::Vertex { addr: buffer_address(drawer + RD_VERTEX_BUFFER), size: (VERTEX_STRIDE * 4) as usize };
+            out.bind(0, 0, vb);
+            let uniforms = K::Uniform { addr: cb_addr, size: CONSTANT_BUFFER_SIZE };
+            out.bind(STAGE_VERTEX, slot(RD_VS_UNIFORM_SLOTS, v), uniforms);
+            out.bind(STAGE_FRAGMENT, slot(RD_PS_UNIFORM_SLOTS, v), uniforms);
             last = v;
         }
         let record_size = if flags & PER_CHARACTER_TRANSFORM != 0 { CHAR_RECORD_TRANSFORM_SIZE } else { CHAR_RECORD_SIZE };
         let instances = count as usize * if flags & SHADOW != 0 { 2 } else { 1 };
         let size = record_size * instances;
-        hle_typed_cb_BindStorageBuffer(cmd, STAGE_VERTEX, slot(RD_VS_CHAR_SLOTS, v), chars, size);
+        out.bind(STAGE_VERTEX, slot(RD_VS_CHAR_SLOTS, v), K::Storage { addr: chars, size });
         chars += size as u64;
         let handle = crate::nvn::state::hle_nvnDeviceGetTextureHandle(
             std::ptr::null(),
             rd::<u64>(tex_obj + 0x20) as i32,
             rd::<u64>(drawer + RD_SAMPLER_SLOT) as i32,
         );
-        hle_nvnCommandBufferBindTexture(cmd, STAGE_FRAGMENT, slot(RD_TEXTURE_SLOTS, v), handle);
+        out.bind(STAGE_FRAGMENT, slot(RD_TEXTURE_SLOTS, v), K::Texture(handle));
         let bw = if use_flags & USE_BW_INTERPOLATION != 0 { RD_BW_ENABLED_BUFFER } else { RD_BW_DISABLED_BUFFER };
-        hle_nvnCommandBufferBindUniformBuffer(cmd, STAGE_FRAGMENT, slot(RD_BW_SLOTS, v), buffer_address(drawer + bw), 4);
-        hle_typed_cb_DrawElementsInstanced(
-            cmd,
-            TRIANGLES,
-            UNSIGNED_SHORT,
-            6,
-            buffer_address(drawer + RD_INDEX_BUFFER),
-            0,
-            0,
-            instances as i32,
-        );
+        out.bind(STAGE_FRAGMENT, slot(RD_BW_SLOTS, v), K::Uniform { addr: buffer_address(drawer + bw), size: 4 });
+        out.draw(crate::nvn::cmd::ModelRange {
+            mode: TRIANGLES,
+            index_type: UNSIGNED_SHORT,
+            count: 6,
+            index_addr: buffer_address(drawer + RD_INDEX_BUFFER),
+            base_vertex: 0,
+            base_instance: 0,
+            instances: instances as i32,
+        });
     }
 }
 
@@ -154,11 +229,14 @@ pub unsafe extern "C" fn on_rect_drawer_add_draw(
         if let Some(left) = crate::nvn::api::capture_finish() {
             report(&left.0, &left.1);
         }
-        let expected = crate::nvn::api::capture_dry(|| record(drawer, cmd, vb_data, flags, cb_addr, chars_addr));
+        let expected = crate::nvn::api::capture_dry(|| record(drawer, cmd, vb_data, flags, cb_addr, chars_addr, false));
         crate::nvn::api::capture_watch(expected, report);
         return 0;
     }
-    record(drawer, cmd, vb_data, flags, cb_addr, chars_addr);
+    // Native items on Metal, which runs them (Cmd::ModelDraw); the NVN form elsewhere.
+    static METAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let metal = *METAL.get_or_init(|| crate::settings::get().graphics.gpu == crate::settings::GpuBackend::Metal);
+    record(drawer, cmd, vb_data, flags, cb_addr, chars_addr, metal);
     1
 }
 
