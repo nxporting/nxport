@@ -1,5 +1,5 @@
 // What the translator asks about the GPU and the guest: the stage's code and constant bank, and fixed answers for
-// state only known at draw time. The answers are the ones the engine's shader cache has always been built with.
+// state only known at draw time. The answers are the ones the engine's shader cache is built with.
 
 use std::cell::Cell;
 
@@ -36,7 +36,7 @@ pub struct Host {
     pub cbuf_limits: bool,
     /// No NoContraction on floating-point results except those a position output depends on (transforms::
     /// position_precise), invariant positions: for hosts whose shader compiler turns NoContraction into unoptimized calls
-    /// (MoltenVK's SPIRV-Cross, one call per add or multiply: about 3x the GPU time in TotK's Hateno).
+    /// (MoltenVK's SPIRV-Cross, one call per add or multiply: several times the GPU time).
     pub reduced_precision: bool,
     /// Every resource of the stage in this descriptor set, textures numbered from TEXTURE_BASE_ONE_SET (Vulkan, one set
     /// per stage). None: Ryujinx's sets (uniform buffers 0, images 1, storage buffers 2, textures 3).

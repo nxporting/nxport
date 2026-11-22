@@ -116,7 +116,7 @@ impl<'a> EmitterContext<'a> {
     /// A barrier waits for every thread of the workgroup, and on Maxwell threads that exited count as arrived. Here a
     /// thread exiting before a barrier sets the exited flag (flag register 4) and jumps to the barrier, and after it
     /// threads with the flag set return: every thread reaches the barrier in uniform control flow. (A barrier only some
-    /// threads reach is undefined: TotK's 8x8 tile depth reduction read shared memory the other warp had not written.)
+    /// threads reach is undefined: a reduction across warps then reads shared memory the other warp has not written.)
     /// The next barrier after `address` in the main function.
     pub fn barrier_after(&self, address: u64) -> Option<u64> {
         self.barriers.iter().copied().find(|&b| b > address)

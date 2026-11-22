@@ -286,7 +286,7 @@ fn emit_fadd(c: &mut Ctx, fp: I, a: OperandId, b: OperandId, rd: i32, neg_a: boo
 /// `.FMZ` (FP32 FFMA/FMUL): a zero operand makes the product +0, whatever the other operand holds (infinity or NaN
 /// too), as the Maxwell ALU computes it. Shaders built for it multiply by factors that are 0 where a value is
 /// undefined (a scale animating from 0, a weight of 0 on an infinite term), so the IEEE product, NaN, would reach
-/// positions and colours: one corner of a UI quad at NaN drew a triangle over half the screen.
+/// positions and colours (a UI quad with one corner at NaN draws a triangle over half the screen).
 fn zero_product(c: &mut Ctx, a: OperandId, b: OperandId, if_zero: OperandId, otherwise: OperandId, fp: I) -> OperandId {
     let z = c.const_f(0.0);
     let a_zero = c.fp_compare_equal(a, z, fp);

@@ -1,4 +1,4 @@
-// Generated from Spv.Generator's CoreGrammar.cs and GlslStd450Grammar.cs (work/tools/re/gen_spv_grammar.py).
+// Generated from Spv.Generator's CoreGrammar.cs and GlslStd450Grammar.cs.
 // One method per instruction: the operands in order, the instruction in its section.
 
 #![allow(clippy::too_many_arguments, clippy::all)]
