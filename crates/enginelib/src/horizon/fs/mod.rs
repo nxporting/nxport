@@ -121,8 +121,8 @@ pub(crate) unsafe fn register_writable_mount(kind: &str, name: *const c_char) {
     println!("[+] HLE: nn::fs::{} name='{}'", kind, name);
     note_mounted(&name);
     if name != "save" && name != "data" {
-        // A mounted storage's root exists on the console. Without it TotK's CreateDirectory('savc:/icon') at mount time
-        // failed, and saving the game later retried CreateFile('savc:/icon/...png') forever (the save hung).
+        // A mounted storage's root exists on the console: TotK creates savc:/icon at mount time and saves its icons
+        // there.
         let root = Path::new(save_root()).join(format!("mount_{}", name));
         if let Err(e) = std::fs::create_dir_all(&root) {
             println!(

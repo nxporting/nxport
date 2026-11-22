@@ -1095,8 +1095,8 @@ fn keep_registers(lines: &mut [Line]) -> (Regs, Regs) {
 }
 
 /// Loads inside a loop read memory every time round. Other threads may change it, which C does not know: from a plain load
-/// the compiler made `read once; if (held) for (;;);` of spinlocks' `ldr; cmp; b.eq` loops (203 such jumps to themselves in
-/// TotK), and a thread that found the lock held spun forever, however soon it was released.
+/// the compiler would make `read once; if (held) for (;;);` of spinlocks' `ldr; cmp; b.eq` loops, and a thread that found
+/// the lock held would spin forever, however soon it was released.
 fn reload_in_loops(lines: &mut [Line]) {
     let labels: BTreeMap<u64, usize> = lines.iter().enumerate().filter_map(|(i, l)| l.label.map(|a| (a, i))).collect();
     let mut in_loop = vec![false; lines.len()];

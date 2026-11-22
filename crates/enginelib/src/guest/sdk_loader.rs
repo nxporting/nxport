@@ -63,8 +63,8 @@ impl SdkModule {
             println!("[interpose] {name}");
         }
         // The long patch is 16 bytes: a shorter function (a thunk, a field setter) would have its neighbour's first
-        // instructions overwritten. Kirby crashed with SIGILL in HardwareOpusDecoder::GetWorkBufferSize after the
-        // 12-byte ResetHardwareOpusDecoder before it was patched. Short functions get a single `b` to a 16-byte stub in
+        // instructions overwritten (Kirby's 12-byte ResetHardwareOpusDecoder is followed by GetWorkBufferSize). Short
+        // functions get a single `b` to a 16-byte stub in
         // a code island within branch range instead.
         if let Some(&size) = self.sizes.get(&addr) {
             if size != 0 && size < 16 {

@@ -220,8 +220,8 @@ pub(crate) unsafe extern "C" fn get_six_axis_sensor_handles(
 ) -> i32 {
     // Returns the number of handles obtained, which depends on the style (count is only the
     // buffer's capacity). Per style as in Ryujinx's Npad: FullKey 1, Handheld 2 (both Joy-Con), JoyDual 2, JoyLeft /
-    // JoyRight 1. Returning `count` (8) made Kirby loop over eight sensors and overwrite the controller state it had
-    // just read on its stack: every button press was lost.
+    // JoyRight 1. Kirby loops over the count returned, writing each sensor's state into a stack array sized for the
+    // real count.
     let sensors = if style & 0b0110 != 0 { 2 } else { 1 }; // Handheld (bit 1) / JoyDual (bit 2)
     let n = sensors.min(count.max(0));
     if !handles.is_null() {

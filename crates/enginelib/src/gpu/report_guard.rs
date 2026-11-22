@@ -480,7 +480,7 @@ unsafe fn record_hit(pc: usize, lr: usize, addr: usize, guest: bool, write: bool
 }
 
 /// Whether this fault is the retry of the one just answered at `addr`, rather than a new access: the game touches the
-/// same report slot every frame, and taking a retry that had worked frames ago for this one crashed on writes.
+/// same report slot every frame, so a retry that worked frames ago must not be taken for this one.
 fn repeated(addr: usize) -> bool {
     let now = std::time::Instant::now();
     let (last, at) = LAST_RETRY.with(|r| r.replace((addr, Some(now))));

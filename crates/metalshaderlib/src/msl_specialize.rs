@@ -514,7 +514,7 @@ fn entry_params_re() -> &'static Regex {
 /// Constant buffer reads with a computed index return zero beyond the buffer's bound size, as the GPU does. Skinning
 /// shaders compute palette offsets such as bone * 48 - 16, which go negative (a huge unsigned index) for bone 0; Super
 /// Mario Bros. Wonder's tiled lighting reads a light count one tile past its 45056-byte buffer at the screen edge: zero on
-/// the GPU, on Metal whatever lies next in memory (the arena's next copy), which made 65536-iteration light loops and hung
+/// the GPU, on Metal whatever lies next in memory (the arena's next copy), which can make huge light loops that hang
 /// the GPU. In the entry function the limit is the bound size the engine writes into the driver cbuf (binding 17; added
 /// as a parameter when the stage has none, index line `cl`); reads in helper functions keep the 64 KiB bank limit.
 /// Literal indices are left alone. --no-cbuf-limits: the bank limit everywhere.

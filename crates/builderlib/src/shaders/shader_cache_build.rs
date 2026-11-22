@@ -322,7 +322,7 @@ fn u32_at(d: &[u8], o: usize) -> u32 {
 /// from the extractor and the engine's miss dumps; older dumps kept only 0x400 bytes), then <ctrl_dir>/<weak>.ctrl. The
 /// latter holds the section of whichever stage with that weak hash was seen first, so it is not used for the
 /// extractor's _<n> variants (same first WEAK_LEN bytes, different code): a variant read with another one's cbuf 1
-/// offset gets bogus jump tables, and the decompiler crashed (IndexOutOfRange) on them.
+/// offset gets bogus jump tables, which the decompiler cannot translate.
 fn stage_ctrl(code: &Path, head: &[u8], ctrl_dir: Option<&Path>) -> Option<Vec<u8>> {
     let valid = |d: &[u8]| d.len() >= 0x768 && u32_at(d, 0) == 0x9876_1234;
     if let Ok(own) = std::fs::read(code.with_extension("ctrl")) {

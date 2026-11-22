@@ -444,9 +444,8 @@ pub(crate) unsafe extern "C" fn start_thread(thread: *mut NnThreadType) {
             crate::guest::tls::mark_guest_thread();
             println!("[+] HLE: Guest thread '{}' starting execution", name_str);
             // Every guest thread asks for performance cores: the console runs game threads on identical cores, and with
-            // the default QoS macOS put some on efficiency cores. Breath of the Wild's main thread then spun on its job
-            // queue's spinlock while a Worker holding it ran slowly or was preempted (a third of guest-main's game-code
-            // time while running; frames over 25 ms 10-16% -> 6-9%).
+            // the default QoS macOS puts some on efficiency cores, where a thread holding a spinlock (Breath of the
+            // Wild's job queue) runs slowly while others spin on it.
             #[cfg(target_vendor = "apple")]
             {
                 extern "C" {

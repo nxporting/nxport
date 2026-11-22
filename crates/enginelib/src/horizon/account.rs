@@ -85,8 +85,6 @@ pub(crate) unsafe extern "C" fn list_users(out_count: *mut i32, out: *mut [u64; 
     RESULT_SUCCESS
 }
 
-/// ListPushedOpenUsers(Uid*, int): the users the game was launched with (count returned), our one user. The SDK's own
-/// version reads the account service object, which is not created here (Super Mario Party Jamboree crashed on it).
 /// ListPushedOpenUsers(Uid*, int): users a previous program of a multi-program application kept open with
 /// PushOpenUsers. The engine runs one program, so there are none.
 pub(crate) unsafe extern "C" fn list_pushed_open_users(_out: *mut [u64; 2], _max: i32) -> i32 {

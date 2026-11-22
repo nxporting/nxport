@@ -476,8 +476,7 @@ pub unsafe fn before_host_write(addr: usize, len: usize) {
 }
 
 /// GPU work will access [addr, addr+len) through a buffer (it may write, and GPU writes cannot fault): unprotect its
-/// pages and never protect them again until released. A texture's memory reused for GPU data otherwise stayed
-/// read-only, GPU writes into it were lost and the game stalled on its loading screen.
+/// pages and never protect them again until released: GPU writes into read-only memory would be lost.
 pub fn release_for_gpu(addr: usize, len: usize) {
     crate::gpu::backend().release_for_gpu(addr, len);
     if ANY.load(Ordering::Relaxed) == 0 {

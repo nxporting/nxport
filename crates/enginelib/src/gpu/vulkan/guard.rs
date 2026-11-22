@@ -445,8 +445,8 @@ unsafe fn fault_held(addr: usize) -> bool {
     }
     if find(&TABLES[(gen + 1) & 1], addr).is_some() {
         // Possibly a hot page held while a submit is recorded too: opened for the backend's threads as below. Left
-        // read-only, the watcher's write-back faulted until the recording ended, and the recording was waiting for the
-        // watcher (three submits in flight): the game hung.
+        // read-only, the watcher's write-back would fault until the recording ended while the recording waits for the
+        // watcher: a deadlock.
         // The previous generation's ranges were all released at the rebuild: a page of one still read-only (a reprotect
         // that raced a release) is opened, else every write to it faulted forever.
         if !hot_fault(addr) {
@@ -523,8 +523,8 @@ pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
         std::ptr::copy_nonoverlapping(src.add(at - addr), at as *mut u8, n);
         // Unless a fault released it meanwhile (it stays open then, as release_slot left it). A release between the
         // check and the mprotect (release_slot marks the slot, then opens the page) is seen after it: the page is opened
-        // again. Left read-only with the slot released, no rebuild opened it, and once no table held it every write to
-        // it faulted forever (the watcher's next write-back copy spun, the game stopped).
+        // again. Left read-only with the slot released, no rebuild would open it, and once no table held it every write
+        // to it would fault forever.
         if held && holds(at) {
             let _ = crate::platform::os::protect(page, PAGE, crate::platform::os::Prot::Read);
             if !holds(at) {

@@ -331,7 +331,7 @@ pub(crate) struct EncodeCtx {
         std::sync::Arc<translated::LayoutMemo>,
     )>,
     /// The last driver cbuf (binding 17 / guest cbuf 0) per stage by its inputs: consecutive draws share one copy (a
-    /// fresh one per draw cost a 4 KB fill and broke batched runs, metal/batch.rs). Same lifetime as support_cache.
+    /// fresh one per draw costs a 4 KB fill and splits batched runs, metal/batch.rs). Same lifetime as support_cache.
     pub(super) driver_cb_memo: [Option<(
         translated::DriverCbKey,
         (Retained<ProtocolObject<dyn MTLBuffer>>, usize),

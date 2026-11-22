@@ -1112,8 +1112,7 @@ pub unsafe extern "C" fn hle_nvnTextureBuilderGetViewOffset(
 // NVN Texture View family. NVNtextureView must be 0x10 bytes (or smaller): the game
 // builds views in a stack slot directly followed by a live container (count / heap /
 // array pointer at view+0x10, initialised *before* SetDefaults/SetLevels/SetLayers run
-// in the per-subresource loop at guest+0x86cc60). Earlier 0x28/0x20-byte layouts
-// clobbered that container and crashed its release at guest+0x18B7B38.
+// in the per-subresource loop at guest+0x86cc60), which a larger layout would overwrite.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct NvnTextureView {

@@ -56,8 +56,7 @@ pub(crate) unsafe extern "C" fn not_found() -> u32 {
 pub(crate) static FRIENDS_EMPTY: [u8; 0x100] = [0; 0x100];
 
 /// TryPopFriendInvitationNotificationInfo(Uid*, u64*, void*, size_t): pops a pending friend invitation; there are none
-/// offline. The SDK's own version reads the friends service object, which is not created here (Super Mario Party
-/// Jamboree crashed on it).
+/// offline. The SDK's own version reads the friends service object, which is not created here.
 pub(crate) unsafe extern "C" fn try_pop_friend_invitation_notification_info() -> bool {
     false
 }

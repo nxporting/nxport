@@ -316,8 +316,8 @@ impl Gfx {
                 storage_id(&tex)
             );
         }
-        // Uploaded even for GPU-only (CPU_NO_ACCESS) memory: skipping it broke the HUD (hearts, minimap), whose textures
-        // live in such pools and depend on these contents (the pool's initial bytes). Except for a COMPRESSIBLE texture
+        // Uploaded even for GPU-only (CPU_NO_ACCESS) memory: games keep textures in such pools that depend on these
+        // contents (TotK's HUD) (the pool's initial bytes). Except for a COMPRESSIBLE texture
         // (render targets) where a texture we rendered into had the same storage: NVN requires such textures to be
         // cleared before the GPU reads or writes them when they reuse memory, so their old bytes are never used, and the
         // CPU cannot have written them since (CPU_NO_ACCESS). Dynamic resolution (Kirby) re-creates ~22 full-screen
