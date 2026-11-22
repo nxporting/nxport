@@ -27,15 +27,20 @@ pub(crate) unsafe extern "C" fn x_dtor(this: *mut usize) {
     }
 }
 pub(crate) unsafe fn x_open(this: *mut usize, uri: *const c_char) -> u32 {
-    let _guard = EXTRACTOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let u = key(uri);
+    match crate::horizon::fs::resolve_to_file(&u) {
+        Some(path) => open_file(this, &u, &path),
+        None => ERR_IO,
+    }
+}
+
+/// Opens the media file at `path` (the game's `u`) for extractor `this`.
+unsafe fn open_file(this: *mut usize, u: &str, path: &std::path::Path) -> u32 {
+    let _guard = EXTRACTOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(e) = ext(this) else {
         return NULL_EXTRACTOR;
     };
     let s = media();
-    let Some(path) = crate::horizon::fs::resolve_to_file(&u) else {
-        return ERR_IO;
-    };
     let Ok(cpath) = CString::new(path.display().to_string()) else {
         return ERR_IO;
     };
@@ -70,10 +75,55 @@ pub(crate) unsafe extern "C" fn x_set_source_uri(this: *mut usize, uri: *const c
 }
 pub(crate) unsafe extern "C" fn x_set_source_reader(
     this: *mut usize,
-    _reader: usize,
+    reader: usize,
     uri: *const c_char,
 ) -> u32 {
-    x_open(this, uri)
+    if reader == 0 {
+        return x_open(this, uri);
+    }
+    let u = key(uri);
+    match read_client_stream(reader, uri) {
+        Some(path) => open_file(this, &u, &path),
+        None => {
+            println!("[!] movie: the game's stream reader could not read {u}");
+            ERR_IO
+        }
+    }
+}
+
+/// The whole stream of a movie::ClientStreamReader (the game's object, called through its vtable: ~D1, ~D0, Open, ReadAt,
+/// Close, GetSize), copied to a file for the demuxer. The uri means something only to the reader: Unity passes paths in
+/// its asset bundles' file system (archive:/CAB-...), which only its reader can open.
+unsafe fn read_client_stream(reader: usize, uri: *const c_char) -> Option<std::path::PathBuf> {
+    let vt = *(reader as *const *const usize);
+    let open: unsafe extern "C" fn(usize, *const c_char, *mut usize) -> bool = std::mem::transmute(*vt.add(2));
+    let read_at: unsafe extern "C" fn(usize, usize, i64, *mut u8, usize) -> usize = std::mem::transmute(*vt.add(3));
+    let close: unsafe extern "C" fn(usize, usize) -> bool = std::mem::transmute(*vt.add(4));
+    let get_size: unsafe extern "C" fn(usize, usize, *mut i64) = std::mem::transmute(*vt.add(5));
+    let mut handle = 0usize;
+    if !open(reader, uri, &mut handle) || handle == 0 {
+        return None;
+    }
+    let mut size = 0i64;
+    get_size(reader, handle, &mut size);
+    let mut data = vec![0u8; size.max(0) as usize];
+    let mut done = 0usize;
+    while done < data.len() {
+        let n = read_at(reader, handle, done as i64, data[done..].as_mut_ptr(), (data.len() - done).min(1 << 20));
+        if n == 0 {
+            break;
+        }
+        done += n;
+    }
+    close(reader, handle);
+    data.truncate(done);
+    if data.is_empty() {
+        return None;
+    }
+    let name = key(uri).bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    let path = std::env::temp_dir().join(format!("nxport_movie_{}_{name:016x}", std::process::id()));
+    std::fs::write(&path, &data).ok()?;
+    Some(path)
 }
 pub(crate) unsafe extern "C" fn x_set_source_buffer(_this: *mut usize, _buf: usize, _len: i32) -> u32 {
     ERR_NOT_SUPPORTED
