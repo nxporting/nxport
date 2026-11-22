@@ -220,6 +220,8 @@ and update this file when you finish or drop it.
   52. b17823f (shared profile/botw.rs, botw/frame_time.rs): BotW 1.5.0 game time from real time (the 1.9.0 clock hooks
      at 1.5.0's sites; Sites now carries per-version code patches). Windows: the lifted BotW 1.5.0 image needs these
      sites patched before lifting, as 1.9.0's are; check 1.5.0 runs above 30 at normal speed.
+  53. (shared botw/frame_time.rs) BotW 1.5.0 hold counters count console frames (hold_counters replaces its loop).
+     Windows: same as 52.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
