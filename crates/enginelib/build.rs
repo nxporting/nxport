@@ -1,6 +1,6 @@
 fn main() {
-    // nx_native: hosts that run guest code natively (cpu/, horizon/, host/, the Metal backend). Apple Silicon only so
-    // far; Windows on arm64 is meant to join (docs/windows-port.md). Other hosts build the platform-independent parts.
+    // nx_native: hosts that run guest code natively (guest/exec/, horizon/, host/, the Metal backend): Apple Silicon.
+    // Other hosts build the platform-independent parts.
     // nx_runtime: hosts that run games at all, natively or as lifted code (guest/, horizon/, nvn/, gpu/): the native
     // hosts and Windows so far.
     println!("cargo::rustc-check-cfg=cfg(nx_native)");

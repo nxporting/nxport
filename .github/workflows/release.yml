@@ -16,7 +16,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
-  # crates/builderlib/src/zig.rs: the version and checksum the builder would download. Beside it, none is downloaded.
+  # crates/builderlib/src/packaging/zig.rs: the version and checksum the builder would download. Beside it, none is downloaded.
   ZIG_NAME: zig-x86_64-windows-0.17.1
   ZIG_VERSION: "0.17.1"
   ZIG_SHA256: b03f477a1943673e02aca0f570e8030dffd536ce1f45cbc4d3326ec31159562e
@@ -167,8 +167,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # Windows is required; a macOS failure leaves its archive out and says so, as nobody here can build for a Mac to fix
-  # it before a release. This is the only job with write access, and it runs no third-party code.
+  # Windows is required; a macOS failure leaves its archive out and says so rather than hold the release back. This is the only job with write access, and it runs no third-party code.
   publish:
     needs: [windows, macos, macos-with-windows]
     if: ${{ !cancelled() && github.ref_type == 'tag' && needs.windows.result == 'success' }}
