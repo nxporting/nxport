@@ -13,6 +13,8 @@ use std::sync::Mutex;
 struct HostFile {
     file: std::fs::File,
     eof: bool,
+    /// The guest path, for RomFS patches in mods (romfs_patch).
+    path: String,
 }
 
 struct HostDir {
@@ -93,7 +95,7 @@ pub(crate) unsafe extern "C" fn fopen(path: *const c_char, mode: *const c_char) 
     match o.open(&host) {
         Ok(file) => {
             let h = new_handle();
-            FILES.lock().unwrap().get_or_insert_with(HashMap::new).insert(h, HostFile { file, eof: false });
+            FILES.lock().unwrap().get_or_insert_with(HashMap::new).insert(h, HostFile { file, eof: false, path: path.to_string() });
             h
         }
         Err(_) => 0,
@@ -118,6 +120,7 @@ pub(crate) unsafe extern "C" fn fread(buf: *mut u8, size: usize, count: usize, f
     }
     let out = std::slice::from_raw_parts_mut(buf, want);
     with_file(f, |h| {
+        let start = h.file.stream_position().unwrap_or(0);
         let mut got = 0;
         while got < want {
             match h.file.read(&mut out[got..]) {
@@ -129,6 +132,7 @@ pub(crate) unsafe extern "C" fn fread(buf: *mut u8, size: usize, count: usize, f
                 Err(_) => break,
             }
         }
+        super::romfs_patch::patch_read(&h.path, start, &mut out[..got]);
         got / size
     })
     .unwrap_or(0)

@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 mod mods;
 mod romfs;
+pub(crate) mod romfs_patch;
 mod dirs;
 mod storage;
 pub(crate) mod posix;
@@ -545,6 +546,7 @@ pub unsafe extern "C" fn read_file(
         if !out_bytes_read.is_null() {
             *out_bytes_read = bytes_read;
         }
+        romfs_patch::patch_read(&entry.path, offset as u64, std::slice::from_raw_parts_mut(buffer, bytes_read));
         println!(
             "[+] HLE: nn::fs::ReadFile handle={} '{}' off={} sz={} -> read={} buf={:p}",
             handle, entry.path, offset, size, bytes_read, buffer

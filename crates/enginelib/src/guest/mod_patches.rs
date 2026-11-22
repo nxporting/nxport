@@ -25,6 +25,23 @@ struct Patch {
 }
 
 fn parse_ips(data: &[u8]) -> Option<Vec<Patch>> {
+    let mut out = Vec::new();
+    for (offset, bytes) in ips_records(data)? {
+        // What falls in the NSO header is nothing in memory.
+        let skip = 0x100usize.saturating_sub(offset).min(bytes.len());
+        if skip < bytes.len() {
+            out.push(Patch {
+                offset: (offset + skip) - 0x100,
+                bytes: bytes[skip..].to_vec(),
+            });
+        }
+    }
+    Some(out)
+}
+
+/// The records of an IPS ("PATCH" ... "EOF") or IPS32 ("IPS32" ... "EEOF") file: (offset, bytes), RLE records expanded.
+/// None: not such a file, or cut short.
+pub(crate) fn ips_records(data: &[u8]) -> Option<Vec<(usize, Vec<u8>)>> {
     let (ips32, mut p) = if data.starts_with(b"IPS32") {
         (true, 5)
     } else if data.starts_with(b"PATCH") {
@@ -56,14 +73,7 @@ fn parse_ips(data: &[u8]) -> Option<Vec<Patch>> {
             p += size;
             b
         };
-        // What falls in the NSO header is nothing in memory.
-        let skip = 0x100usize.saturating_sub(offset).min(bytes.len());
-        if skip < bytes.len() {
-            out.push(Patch {
-                offset: (offset + skip) - 0x100,
-                bytes: bytes[skip..].to_vec(),
-            });
-        }
+        out.push((offset, bytes));
     }
 }
 

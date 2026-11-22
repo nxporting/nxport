@@ -64,6 +64,8 @@ pub(crate) fn romfs_path(rel: &str) -> PathBuf {
 /// A folder to list, in a RomFS merge or on its own.
 pub(crate) enum ListedDir<'a> {
     Host(PathBuf),
+    /// A mod's romfs folder: its patches of other files (romfs_patch) are not files of the game.
+    ModHost(PathBuf),
     Image(&'a [ImageDirEntry]),
 }
 
@@ -73,7 +75,7 @@ pub(crate) fn romfs_dirs_in<'a>(layers: &'a [RomfsLayer], game: &Path, rel: &str
     let mut v: Vec<ListedDir> = layers
         .iter()
         .filter_map(|l| match l {
-            RomfsLayer::Dir(r) => Some(r.join(rel)).filter(|p| p.is_dir()).map(ListedDir::Host),
+            RomfsLayer::Dir(r) => Some(r.join(rel)).filter(|p| p.is_dir()).map(ListedDir::ModHost),
             RomfsLayer::Image(i) => i.dir(rel).map(ListedDir::Image),
         })
         .collect();
@@ -86,11 +88,15 @@ pub(crate) fn merged_listing(dirs: &[ListedDir]) -> Option<Vec<(String, Option<(
     let (mut found, mut seen, mut out) = (false, std::collections::HashSet::new(), Vec::new());
     for d in dirs {
         match d {
-            ListedDir::Host(p) => {
+            ListedDir::Host(p) | ListedDir::ModHost(p) => {
                 let Ok(rd) = std::fs::read_dir(p) else { continue };
                 found = true;
+                let of_mod = matches!(d, ListedDir::ModHost(_));
                 for e in rd.flatten() {
                     let name = e.file_name().to_string_lossy().into_owned();
+                    if of_mod && super::romfs_patch::is_patch_file(&name) {
+                        continue;
+                    }
                     if seen.insert(name.clone()) {
                         out.push((name, e.metadata().ok().map(|m| (m.is_dir(), m.len()))));
                     }
