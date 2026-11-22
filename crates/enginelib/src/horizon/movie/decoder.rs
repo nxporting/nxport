@@ -419,8 +419,10 @@ pub(crate) unsafe extern "C" fn d_acquire_input(this: *mut usize, idx: *mut i32,
     if !remaining.is_null() {
         *remaining = free.len().saturating_sub(1) as i32;
     }
+    // An acquired buffer is the client's until it sends it: a client may acquire every free buffer before filling any.
     match free.first() {
         Some(&i) => {
+            d.inputs[i].1 = false;
             *idx = i as i32;
             OK
         }
@@ -435,7 +437,6 @@ pub(crate) unsafe extern "C" fn d_get_input(this: *mut usize, idx: i32, b: *mut 
     let Some(slot) = d.inputs.get_mut(idx as usize) else {
         return ERR_INVALID_RANGE;
     };
-    slot.1 = false;
     buffer_set_data_and_capacity(b, slot.0.as_mut_ptr(), slot.0.len());
     (*b).range_offset = 0;
     (*b).range_length = 0;
