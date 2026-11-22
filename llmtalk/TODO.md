@@ -191,6 +191,10 @@ and update this file when you finish or drop it.
   41. 6d25891 (shared crates/medialib mkv.rs): WebM tracks without DefaultDuration get their frame rate from the first
      frames' timestamps (it was 0; Unity stopped the video after one frame).
   42. 7226910 (Metal only): no CPU uploads into Depth32Float_Stencil8 / Stencil8.
+  43. 6e7cb96 + 904265f (shared nvn/api/window.rs divisor, nvn/api/sync.rs): vsync pacing raises the refreshes per
+     frame only for frames at the limit and lowers it past isolated stalls; games that wait for the window texture on
+     the GPU (nvnQueueWaitSync, Unity) are held at the next acquire until the last texture's available time, which
+     counts as spare time. Windows: needs pacing_shown fed (15 / 16 above) before any of it applies there.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
