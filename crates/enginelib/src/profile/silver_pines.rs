@@ -45,6 +45,10 @@ static SETTER: AtomicUsize = AtomicUsize::new(0);
 /// Texture size (graphics.texture_size, the menu's Texture Size): Unity's global texture mipmap limit, set through its
 /// own QualitySettings setter on the main thread, where a game's options menu would set it.
 fn texture_size() {
+    // Calls the game's code directly: only where it runs natively (a lifted game's code runs through its library).
+    if !cfg!(nx_native) {
+        return;
+    }
     let size = crate::host::live::texture_size();
     let want = if size < 0 { GAME_MIPMAP_LIMIT } else { size };
     let applied = APPLIED.load(Relaxed);

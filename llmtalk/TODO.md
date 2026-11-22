@@ -206,8 +206,8 @@ and update this file when you finish or drop it.
      (Unity's archive:/ bundle videos). Nothing to do; check Silver Pines' logo video plays on Windows.
   48. 68fdba5 (shared profile/silver_pines.rs, profile main_thread_tick from horizon/os waits, menu Texture Size): calls
      game code from an HLE wait on guest-main. On the lifted Windows path calling guest code directly does not work:
-     needs the lifted library's call (thread_stack::run's non-native branch shows how). Until then the tick should not
-     run there (silver_pines texture_size is a direct native call).
+     needs the lifted library's call (thread_stack::run's non-native branch shows how). Until then texture_size returns
+     at once off nx_native (next commit), so Texture Size does nothing on Windows.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
