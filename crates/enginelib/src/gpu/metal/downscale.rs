@@ -129,8 +129,8 @@ impl Gfx {
         }
     }
 
-    /// Encodes `src` (a scaled texture) averaged down into `dst` (the game's size), every level they share. False: the
-    /// format or type has no downscale (warned once).
+    /// Encodes `src` (a scaled texture) averaged down into `dst` (the game's size), every level and array slice they
+    /// share. False: the format or type has no downscale (warned once).
     pub(crate) unsafe fn encode_downscale(
         &self,
         cb: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -139,30 +139,68 @@ impl Gfx {
     ) -> bool {
         let pf = dst.pixelFormat();
         let kd = kind(pf);
-        if dst.textureType() != MTLTextureType::Type2D || src.textureType() != MTLTextureType::Type2D || kd.is_none() {
-            copy::warn_once("downscale", format!("scaled {:?} {:?} demoted without its contents", dst.textureType(), pf));
+        let ty = dst.textureType();
+        if !matches!(ty, MTLTextureType::Type2D | MTLTextureType::Type2DArray) || src.textureType() != ty || kd.is_none() {
+            copy::warn_once("downscale", format!("scaled {:?} {:?} demoted without its contents", ty, pf));
             return false;
         }
         let kd = kd.unwrap();
         let k = (src.width() / dst.width().max(1)).max(1) as u32;
         let Some(pipe) = pipeline(&self.device, pf, kd) else { return false };
-        for level in 0..dst.mipmapLevelCount().min(src.mipmapLevelCount()) {
+        let levels = dst.mipmapLevelCount().min(src.mipmapLevelCount());
+        let slices = if ty == MTLTextureType::Type2DArray { dst.arrayLength().min(src.arrayLength()) } else { 1 };
+        for slice in 0..slices {
+            // The shaders read a 2D texture: one slice of an array as a 2D view (same format, all levels).
+            let src_slice = if ty == MTLTextureType::Type2DArray {
+                match src.newTextureViewWithPixelFormat_textureType_levels_slices(
+                    pf,
+                    MTLTextureType::Type2D,
+                    objc2_foundation::NSRange::new(0, src.mipmapLevelCount()),
+                    objc2_foundation::NSRange::new(slice, 1),
+                ) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            } else {
+                src.clone()
+            };
+            self.encode_downscale_slice(cb, &src_slice, dst, slice, levels, k, kd, &pipe);
+        }
+        true
+    }
+
+    /// One slice of encode_downscale: `src` a 2D texture, `dst` level `level` of slice `slice` per level.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn encode_downscale_slice(
+        &self,
+        cb: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
+        src: &Tex,
+        dst: &Tex,
+        slice: usize,
+        levels: usize,
+        k: u32,
+        kd: Kind,
+        pipe: &ProtocolObject<dyn MTLRenderPipelineState>,
+    ) {
+        for level in 0..levels {
             let pass = MTLRenderPassDescriptor::renderPassDescriptor();
             if kd == Kind::Depth {
                 let att = pass.depthAttachment();
                 att.setTexture(Some(dst));
                 att.setLevel(level);
+                att.setSlice(slice);
                 att.setLoadAction(MTLLoadAction::DontCare);
                 att.setStoreAction(MTLStoreAction::Store);
             } else {
                 let att = pass.colorAttachments().objectAtIndexedSubscript(0);
                 att.setTexture(Some(dst));
                 att.setLevel(level);
+                att.setSlice(slice);
                 att.setLoadAction(MTLLoadAction::DontCare);
                 att.setStoreAction(MTLStoreAction::Store);
             }
             let Some(enc) = cb.renderCommandEncoderWithDescriptor(&pass) else { continue };
-            enc.setRenderPipelineState(&pipe);
+            enc.setRenderPipelineState(pipe);
             if kd == Kind::Depth {
                 if let Some(ds) = depth_write_always(&self.device) {
                     enc.setDepthStencilState(Some(&ds));
@@ -178,6 +216,5 @@ impl Gfx {
             enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
             enc.endEncoding();
         }
-        true
     }
 }
