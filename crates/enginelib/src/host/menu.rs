@@ -258,8 +258,12 @@ pub enum Action {
 pub fn title_label() -> String {
     let p = crate::profile::active();
     let name = p.name.strip_prefix("The Legend of Zelda: ").unwrap_or(p.name);
-    match crate::profile::active_version() {
-        Some(v) => format!("{name} {}", v.version_string),
+    // The version the profile matched, else the game's control data's display version.
+    let version = crate::profile::active_version().map(|v| v.version_string.to_string()).or_else(|| {
+        crate::settings::get().files.game_dir.as_deref().and_then(|d| crate::game::control_of(d)).and_then(|c| c.version)
+    });
+    match version {
+        Some(v) => format!("{name} {v}"),
         None => name.to_string(),
     }
 }

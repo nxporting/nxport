@@ -221,7 +221,13 @@ pub fn active() -> &'static GameProfile {
         let _ = ACTIVE.set(p);
         return p;
     }
-    let name: &'static str = Box::leak(format!("Switch title {tid:016X}").into_boxed_str());
+    // A game without a profile is named by its control data, as the window's title names it.
+    let name = crate::settings::try_get()
+        .and_then(|s| s.files.game_dir.as_deref())
+        .and_then(|dir| crate::game::control_of(dir))
+        .and_then(|c| c.title)
+        .unwrap_or_else(|| format!("Switch title {tid:016X}"));
+    let name: &'static str = Box::leak(name.into_boxed_str());
     let prof: &'static GameProfile = Box::leak(Box::new(GameProfile {
         kind: GameKind::Unknown(tid),
         name,
