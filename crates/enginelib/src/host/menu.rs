@@ -58,7 +58,9 @@ pub mod id {
     pub const DYNAMIC_ASPECT: u16 = 62;
     pub const EXACT_MOUSE_AIM: u16 = 63;
     /// + 1 + the texture size (0 the game's own, 1.. full, half, quarter, eighth).
-    pub const TEXTURE_SIZE: u16 = 64;
+    pub const TEXTURE_SIZE: u16 = 480;
+    /// + the mod's index in the Mods list.
+    pub const MOD: u16 = 5000;
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
@@ -87,6 +89,8 @@ static RESOLUTION_CHOSEN: std::sync::atomic::AtomicU32 = std::sync::atomic::Atom
 pub const FIELDS_OF_VIEW: [u32; 8] = [70, 80, 90, 100, 110, 120, 135, 150];
 /// Room for the cheats' ids: eight mods' files of dmnt's 0x7F cheats each.
 pub const CHEATS: u16 = 1024;
+/// Room for the mods' ids.
+pub const MODS: u16 = 256;
 
 /// One entry of the menu bar, declared once here and drawn by each desktop host (host/display.rs with AppKit,
 /// host/menu_win.rs with Win32). What a host adds is its own: shortcuts by command id, and how Controls looks.
@@ -168,11 +172,12 @@ pub fn bar() -> Vec<Entry> {
         ]);
     }
     let mods = mods();
-    let mut listed: Vec<Entry> = mods.iter().map(|(name, code)| Entry::Note(mod_label(name, *code))).collect();
+    let mut listed: Vec<Entry> =
+        mods.iter().take(MODS as usize).enumerate().map(|(i, (name, code))| item(&mod_label(name, *code), id::MOD + i as u16)).collect();
     if listed.is_empty() {
         listed.push(Entry::Note("None".into()));
     }
-    title.push(sub("Mods", listed));
+    title.push(sub("Mods (changes apply at the next launch)", listed));
     let cheats = cheats();
     if !cheats.is_empty() {
         title.push(sub("Cheats", cheats));
@@ -281,30 +286,40 @@ pub fn title_label() -> String {
 /// The app's mods (one folder each, or one mod's romfs/exefs at the top), and whether each has code (ExeFS: on Windows
 /// built-in mods' code is lifted into the app, later mods' is compiled while the game runs; loaded at start natively).
 pub fn mods() -> Vec<(String, bool)> {
-    let s = crate::settings::get();
-    if s.files.no_mods {
+    if crate::settings::get().files.no_mods {
         return Vec::new();
     }
-    let has_code = |d: &std::path::Path| ["exefs", "ExeFS"].iter().any(|e| d.join(e).is_dir()) || crate::mods::has_exefs_nsp(d);
-    // The app's built-in mods and those added to the data directory after the build (horizon::fs::mod_roots).
-    let mut list: Vec<(String, bool)> = Vec::new();
-    for dir in crate::horizon::fs::mod_roots() {
-        if crate::mods::is_mod_dir(dir) {
-            let name = dir.file_name().map_or_else(|| "Mod".to_string(), |n| n.to_string_lossy().into_owned());
-            list.push((name, has_code(dir)));
-            continue;
-        }
-        list.extend(
-            std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| (e.file_name().to_string_lossy().into_owned(), has_code(&e.path()))),
-        );
+    let has_code = |d: &std::path::Path| crate::mods::mod_subdir(d, "exefs").is_dir() || crate::mods::has_exefs_nsp(d);
+    // The app's built-in mods and those added to the data directory after the build (horizon::fs::mod_roots), turned
+    // off or not, by the names files.disabled_mods holds.
+    crate::horizon::fs::all_mods().into_iter().map(|(name, dir)| (name, has_code(&dir))).collect()
+}
+
+/// Mods turned off (files.disabled_mods), as the menu has changed them since the launch.
+static DISABLED_MODS: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+fn mod_enabled(name: &str) -> bool {
+    let mut d = DISABLED_MODS.lock().unwrap();
+    !d.get_or_insert_with(|| crate::settings::get().files.disabled_mods.clone()).iter().any(|n| n == name)
+}
+
+/// Turns mod `name` on or off at the next launch (files.disabled_mods, remembered for the game).
+fn toggle_mod(name: &str) {
+    let mut d = DISABLED_MODS.lock().unwrap();
+    let list = d.get_or_insert_with(|| crate::settings::get().files.disabled_mods.clone());
+    if let Some(i) = list.iter().position(|n| n == name) {
+        list.remove(i);
+    } else {
+        list.push(name.to_string());
     }
-    list.sort();
-    list
+    let list = list.clone();
+    crate::config::remember(|p| p.files.disabled_mods = Some(list));
+}
+
+/// The mod behind menu command `cmd`.
+fn mod_of(cmd: u16) -> Option<String> {
+    let i = cmd.checked_sub(id::MOD).filter(|&i| i < MODS)?;
+    mods().into_iter().nth(i as usize).map(|(name, _)| name)
 }
 
 /// The cheats of the mods' cheat files, each a switch (guest/cheats; master cheats always run and are not listed).
@@ -445,6 +460,7 @@ pub fn checked(cmd: u16) -> Option<bool> {
         }
         id::MOUSE_LOOK => live::mouse_look(),
         id::EXACT_MOUSE_AIM => live::exact_mouse_aim(),
+        c if mod_of(c).is_some() => mod_enabled(&mod_of(c).unwrap()),
         c if cheat_of(c).is_some() => {
             let (f, n) = cheat_of(c).unwrap();
             crate::guest::cheats::is_enabled(f, n)
@@ -601,6 +617,7 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
             println!("[+] Input: controls reset to the defaults");
         }
         id::CONTROLS => return Err(Action::Controls),
+        c if mod_of(c).is_some() => toggle_mod(&mod_of(c).unwrap()),
         c if cheat_of(c).is_some() => {
             let (f, n) = cheat_of(c).unwrap();
             crate::guest::cheats::set_enabled(f, n, !crate::guest::cheats::is_enabled(f, n));
@@ -631,6 +648,8 @@ mod tests {
             ("reset controls", id::RESET_CONTROLS, id::RESET_CONTROLS + 1),
             ("controls", id::CONTROLS, id::CONTROLS + 1),
             ("cheats", id::CHEAT, id::CHEAT + CHEATS),
+            ("mods", id::MOD, id::MOD + MODS),
+            ("texture size", id::TEXTURE_SIZE, id::TEXTURE_SIZE + 5),
             ("field of view", id::FIELD_OF_VIEW, id::FIELD_OF_VIEW + 151),
         ];
         for (i, a) in ranges.iter().enumerate() {

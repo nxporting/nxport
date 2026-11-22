@@ -282,10 +282,15 @@ pub fn mods() -> &'static [(String, PathBuf)] {
         if crate::settings::get().files.no_mods {
             return Vec::new();
         }
-        // A mod's main.npdm does not say which game it is for: Atmosphere overwrites its program ids with the running
-        // program's (ldr_meta.cpp), and exlaunch's template names a fixed one. Which folder it is in decides (discover_mods).
-        let mut v: Vec<(String, PathBuf)> = mod_roots().iter().flat_map(|r| discover_mods(r, crate::game::title_id())).collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut v = all_mods();
+        let disabled = &crate::settings::get().files.disabled_mods;
+        v.retain(|(name, _)| {
+            let off = disabled.contains(name);
+            if off {
+                println!("[+] Mods: '{name}' turned off");
+            }
+            !off
+        });
         for (name, path) in &v {
             let parts: Vec<&str> = ["romfs", "exefs", "cheats"].into_iter().filter(|d| mod_subdir(path, d).is_dir()).collect();
             println!("[+] Mods: '{}' ({})", name, parts.join(" "));
@@ -297,6 +302,15 @@ pub fn mods() -> &'static [(String, PathBuf)] {
         }
         v
     })
+}
+
+/// Every mod in the mod folders, turned off or not, by name (the order of priority: alphabetical).
+pub fn all_mods() -> Vec<(String, PathBuf)> {
+    // A mod's main.npdm does not say which game it is for: Atmosphere overwrites its program ids with the running
+    // program's (ldr_meta.cpp), and exlaunch's template names a fixed one. Which folder it is in decides (discover_mods).
+    let mut v: Vec<(String, PathBuf)> = mod_roots().iter().flat_map(|r| discover_mods(r, crate::game::title_id())).collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
 }
 
 /// Puts the folders a mod carries for the SD card (UltraCam/TOTK/Config) on the game's SD card, for the mod's code to

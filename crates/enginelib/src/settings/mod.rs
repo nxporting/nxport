@@ -109,6 +109,9 @@ group! {
         mods_dir: Option<PathBuf> = None,
         /// Load no mods
         no_mods: bool = false,
+        /// Mods not loaded, by the names the Mods menu lists them under (the menu's check marks; a change applies at
+        /// the next launch)
+        disabled_mods: Vec<String> = Vec::new(),
         /// Apply no ExeFS code patches (IPS / pchtxt) from mods
         no_exefs_patches: bool = false,
         /// Leave out mods' code modules (exefs/subsdkN, exlaunch plugins); their other files still apply
