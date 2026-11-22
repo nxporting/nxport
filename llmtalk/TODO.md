@@ -173,6 +173,10 @@ and update this file when you finish or drop it.
      comments now (sass2spv::source_text::code_only). The hash changed once: every vulkan_stages/<hash> cache on Windows
      is rebuilt once at the next start (expected, not a regression). Comment-only edits no longer drop caches.
      f738ba8..7095a81: comment-only commits across crates (no code changes).
+     b810abc..f2fd65e: the rest of the comment audit (horizon, guest, nvn, host, gpu incl. vulkan/, profile): comments
+     only. One doc moved: translated::feedback_snapshots (Metal) now documents the in-place reads it does.
+  36. ad0e4c8 (shared host/audio.rs): --audio-wav also writes nn::audio::AudioOut streams to <name>_audioout.wav
+     (headless too). Unity / FMOD games play through AudioOut only; on Windows the same capture works unchanged.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
