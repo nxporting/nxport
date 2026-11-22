@@ -1,5 +1,5 @@
 // A backend that draws nothing: submitted work completes at once, and presents only count frames. For running a game
-// where there is no GPU backend yet (lifted hosts: docs/windows-port.md, step 6), so its CPU side can be brought up,
+// where there is no GPU backend, so its CPU side can be brought up,
 // and for measuring that side alone (--gpu=null).
 
 use std::sync::atomic::{AtomicU64, Ordering};

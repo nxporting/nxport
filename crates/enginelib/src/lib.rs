@@ -1,9 +1,8 @@
-// Until lifted hosts run games (docs/windows-port.md, steps 5 and 6), much of the runtime has no caller there: what
-// only the game loop and the GPU backend reach.
+// Where guest code is lifted, part of the runtime has no caller: what only native execution reaches.
 #![cfg_attr(all(nx_runtime, not(nx_native)), allow(dead_code))]
 
-// Two layers, see build.rs and docs/windows-port.md: cfg(nx_runtime) hosts load and run games (guest/, horizon/, nvn/,
-// gpu/), and of those cfg(nx_native) ones run guest code on the host CPU (the code rewriting in cpu/, host/, the Metal
+// Two layers, see build.rs: cfg(nx_runtime) hosts load and run games (guest/, horizon/, nvn/, gpu/), and of those
+// cfg(nx_native) ones run guest code on the host CPU (the code rewriting in guest/exec/, host/, the Metal
 // backend). Other hosts get the platform-independent parts the builder and the command line use.
 #[cfg(nx_runtime)]
 pub mod capture;

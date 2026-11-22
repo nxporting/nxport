@@ -1,5 +1,5 @@
-// Direct In-Place Memory Loader, Relocation Engine, & GOT Linker for the game's main module (layout and dynamic
-// tables come from the NSO, see guest/nso.rs; --game-dir picks the dump, see game.rs).
+// Loading the game's main module: its image in place, relocated, its imports bound (layout and dynamic tables come
+// from the NSO, see guest/nso.rs; --game-dir picks the dump).
 
 use std::ptr;
 
@@ -14,7 +14,7 @@ pub const JUMP_SLOT: u32 = 1026;
 pub const SDK_SLOT_SIZE: usize = 0x0100_0000;
 pub const ISLAND_SLOT_SIZE: usize = 0x0010_0000;
 /// Generated-code area at the end of the module gap (just below the SDK slot): code the engine writes (HLE trampolines,
-/// the SDK's short-function island) and the literal pool that code loads per-run addresses from (cpu::aot::literal). At a
+/// the SDK's short-function island) and the literal pool that code loads per-run addresses from (guest::exec::aot::literal). At a
 /// fixed distance from main and the SDK, so the generated code is the same on every launch.
 pub const GEN_SIZE: usize = 0x0010_0000;
 /// Guest base for AOT images with mods (GuestMemorySpace::allocate). It must be free in both address spaces when the
@@ -137,7 +137,7 @@ impl GuestMemorySpace {
         // AOT images with mods (guest/exec/aot.rs): exlaunch plugins write absolute addresses (trampoline pointers) into their
         // code, so the guest must sit at the same address in the run that dumps the image (macOS) and the runs that load
         // it (iOS). A fixed spot both address spaces leave free; any other run lets the kernel choose.
-        // Lifted code (docs/windows-port.md) has the guest addresses it was lifted at built in: always fixed there.
+        // Lifted code has the guest addresses it was lifted at built in: always fixed there.
         let fixed = !crate::guest::exec::aot::native_rewrites()
             || (crate::guest::exec::aot::active()
                 && crate::horizon::fs::mods().iter().any(|(_, d)| crate::horizon::fs::mod_has_plugin(d)))
@@ -420,9 +420,7 @@ impl GuestMemorySpace {
     /// Resolves dynamic symbol table entry `idx` to an absolute host-callable
     /// address, and whether that is an engine function. Locally-defined symbols (st_shndx != 0) resolve directly to
     /// base + st_value, same as a real dynamic linker. Undefined (external)
-    /// symbols are looked up by name against the small set this binary
-    /// actually references -- see horizon/hle.rs section 12 for what each provides
-    /// and why.
+    /// symbols are looked up by name (horizon::sdk).
     unsafe fn resolve_dynsym(
         &self,
         idx: usize,
@@ -500,7 +498,7 @@ impl GuestMemorySpace {
     /// The code every HLE trampoline branches to, in the pool's first entries (x16 = the Rust function; the caller's
     /// x29 / x30 are pushed). On a thread whose guest code runs on its own stack (horizon/thread_stack.rs) the call
     /// runs on the thread's host stack, as Horizon's kernel calls do not use the caller's stack: our frames are far
-    /// larger than the SDK's and overwrote memory the game still reads below its stack pointer. The TSD slot holding
+    /// larger than the SDK's and would overwrite memory the game still reads below its stack pointer. The TSD slot holding
     /// that stack is cleared for the call, so HLE calls from guest callbacks stay where they are. x29 is left alone:
     /// HLE code walks the guest's frame chain from it. Afterwards it restores the guest's tpidr_el0 and x18.
     ///   mov  x9, sp                  ; guest sp
@@ -521,7 +519,7 @@ impl GuestMemorySpace {
     ///   blr  x16
     /// restore:
     ///   mrs  x16, tpidrro_el0
-    ///   ldr  x16, [x16, #guest TLS]   ; cpu::tls::guest_tls_offset
+    ///   ldr  x16, [x16, #guest TLS]   ; guest::exec::tls::guest_tls_offset
     ///   cbz  x16, #8
     ///   msr  tpidr_el0, x16
     ///   ldr  x18, <x18 value>         ; literal of entry 0

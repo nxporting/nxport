@@ -1155,13 +1155,13 @@ pub fn main() -> std::process::ExitCode {
     }
 }
 
-/// Runs a game. This host has no runtime (docs/windows-port.md).
+/// Runs a game. This host has no runtime.
 #[cfg(not(nx_runtime))]
 pub fn run(_layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::error::Error>> {
-    Err("nxport cannot run games on this host yet (see docs/windows-port.md)".into())
+    Err("nxport cannot run games on this host".into())
 }
 
-/// Runs a game whose code is lifted (docs/windows-port.md): resolves the settings as the native run does, loads and
+/// Runs a game whose code is lifted: resolves the settings as the native run does, loads and
 /// patches the game, then runs its entry chain in the guest library `files.guest_library` (nxport-builder lift-game and
 /// compile-guest, with the same settings: the code was lifted as these patch it). The main thread then runs the window
 /// (host/display_sdl.rs) and never returns; with --headless it returns when nnMain does.

@@ -214,9 +214,8 @@ pub unsafe fn install_signal_handlers() {
     let mut sa: libc::sigaction = std::mem::zeroed();
     sa.sa_sigaction = handle_signal as *const () as usize;
     // No SA_RESETHAND: this process takes frequent *recoverable* faults (Darwin clobbering tpidr_el0, the
-    // tracer's brk, watchpoints) on many threads at once. With a one-shot handler the second thread to
-    // fault before the first re-installed it hit SIG_DFL and the whole process died silently (exit 139,
-    // no report). A fault inside the handler still terminates: the signal is blocked while it runs.
+    // tracer's brk, watchpoints) on many threads at once. With a one-shot handler a second thread faulting
+    // before the first re-installed it would hit SIG_DFL, and the process would die without a report. A fault inside the handler still terminates: the signal is blocked while it runs.
     // SA_ONSTACK: run on the thread's alternate signal stack (ensure_altstack). Without it a stack overflow cannot be
     // reported: the kernel finds no room for the signal frame and kills the process with a bare SIGILL.
     sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
@@ -296,8 +295,8 @@ pub static WRITER_RING: [(
 /// A store-exclusive (stxr / stlxr / stxp / stlxp) that faulted on a page a handler just made writable is not retried:
 /// it reports failure (status register 1) and is stepped over, and the guest's loop starts again at its load-exclusive.
 /// The faulting thread slept in the handler, maybe on another core, between its load-exclusive and this store; a replayed
-/// store could succeed although another thread took the location meanwhile (two threads then held a game spinlock:
-/// Breath of the Wild ran the same jobs twice). A store-exclusive may always fail spuriously.
+/// store could succeed although another thread took the location meanwhile (two threads would then hold a game
+/// spinlock). A store-exclusive may always fail spuriously.
 unsafe fn fail_store_exclusive(ucontext: *mut libc::c_void) {
     if ucontext.is_null() {
         return;
@@ -629,7 +628,7 @@ unsafe extern "C" fn handle_signal(
 
     // A fault no handler claimed, on a page that is accessible now: delivered late, after a page guard (report guard,
     // texture backing, write guard, write tracking) had already opened the page again. Retry once (a second fault at the
-    // same address on this thread is a real one). Three iPhone crashes in the occlusion reader were such late faults.
+    // same address on this thread is a real one).
     if (sig == libc::SIGSEGV || sig == libc::SIGBUS) && !ucontext.is_null() {
         let mc = (*(ucontext as *mut libc::ucontext_t)).uc_mcontext;
         let write = !mc.is_null() && (*mc).__es.__esr & (1 << 6) != 0;

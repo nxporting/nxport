@@ -1,6 +1,6 @@
 // Guest thread-local storage: each guest thread's TPIDR_EL0 block (the ELF/musl thread pointer), built from the main
 // module's TLS template, and its fake Horizon thread-local region. How a thread's guest code gets the block into
-// TPIDR_EL0 depends on the CPU path: natively cpu::tls (Darwin TSD slots), lifted the thread's Cpu.
+// TPIDR_EL0 depends on the CPU path: natively guest::exec::tls (Darwin TSD slots), lifted the thread's Cpu.
 
 use std::cell::Cell;
 
@@ -29,7 +29,7 @@ pub fn current_fake_tlr() -> usize {
 }
 
 /// The main module's TLS initialization image (.tdata) and its offset from the thread pointer (AArch64 variant I: the
-/// 16-byte TCB, rounded up to the segment's alignment), set by __nnmusl_init_dso (horizon/hle.rs).
+/// 16-byte TCB, rounded up to the segment's alignment), set by __nnmusl_init_dso (horizon/cxx.rs).
 static TLS_TEMPLATE: std::sync::Mutex<(Vec<u8>, usize)> = std::sync::Mutex::new((Vec::new(), 16));
 
 /// `image`: the segment's initialized part; `size`: the whole segment (.tdata and .tbss), which must fit below the thread

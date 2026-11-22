@@ -13,7 +13,7 @@
 // listing the pages mods patch (count u64, then {region index u32, page index u32}), then each region's bytes at 16 KiB-
 // aligned offsets.
 //
-// Mods (exlaunch plugins such as UltraCam) patch guest code through writable views of it (horizon_svc), from their
+// Mods (exlaunch plugins such as UltraCam) patch guest code through writable views of it (horizon::svc), from their
 // initialisers and for a while after (a one-shot hook on nnMain that removes itself, more hooks over the first frames),
 // and read back what they wrote. iOS maps signed code once: it refuses to map a different signed page where signed
 // code was mapped before, even after unmapping it (EACCES), so the image holds one static
@@ -271,8 +271,8 @@ pub fn defer_dump() {
 }
 
 /// Dump run with mods: the image is written at this presented frame (--aot-dump-frame, default 300). UltraCam keeps
-/// patching code after its initialiser (111 code views in one run, the last before frame 50), so the image must hold
-/// the code as it stands once the game is running.
+/// patching code after its initialiser (over its first frames), so the image must hold the code as it stands once the
+/// game is running.
 pub fn deferred_dump_frame() -> Option<u64> {
     if !(matches!(mode(), Mode::Dump(_)) && DEFER_DUMP.load(std::sync::atomic::Ordering::Relaxed)) {
         return None;
@@ -590,7 +590,7 @@ unsafe fn load(path: &str, regions: &[Region]) -> Result<(), String> {
         let len = u64::from_le_bytes(img[e + 56..e + 64].try_into().unwrap()) as usize;
         entries.insert(name, (off, len));
     }
-    // Pages mods patch: this run has not run the mods yet, so they are not checked here (horizon_svc checks the mods'
+    // Pages mods patch: this run has not run the mods yet, so they are not checked here (horizon::svc checks the mods'
     // writes against the image).
     let npatched = u64::from_le_bytes(img[PAGE..PAGE + 8].try_into().unwrap()) as usize;
     let mut skip: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();

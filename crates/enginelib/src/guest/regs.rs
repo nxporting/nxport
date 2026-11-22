@@ -1,4 +1,4 @@
-// The guest's registers as HLE code reads them (docs/windows-port.md, "The guest boundary"): the caller's frame
+// The guest's registers as HLE code reads them: the caller's frame
 // pointer and return address (logs, backtraces, a few call-site checks), x16 / x17 (what PLT stubs and the HLE
 // trampolines leave there), the thread's thread-local region (TPIDRRO_EL0) and the counter.
 //
@@ -80,7 +80,7 @@ pub fn lifted_ticks() -> u64 {
 
 /// TPIDRRO_EL0: the guest thread's Horizon thread-local region (IPC buffer, the thread pointer at +0x1f8). Natively
 /// that is the host thread's Darwin thread-specific data page, shared with Darwin's own slots and the engine's
-/// (cpu::tls); lifted, the guest thread's own region.
+/// (guest::exec::tls); lifted, the guest thread's own region.
 pub fn tpidrro() -> usize {
     #[cfg(nx_native)]
     {

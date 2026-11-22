@@ -23,8 +23,7 @@ pub mod sdk_loader;
 /// Calls the guest function at `addr` with up to eight integer or pointer arguments, on the calling thread's current
 /// stack, and returns its x0 (unspecified for a function that returns nothing). The engine enters guest code through
 /// here (module initialisers, constructors, nninitStartup, svc threads) or through horizon::thread_stack::run (guest
-/// threads on their own stacks), so a runtime that runs lifted guest code has these two places to implement
-/// (docs/windows-port.md).
+/// threads on their own stacks), so a runtime that runs lifted guest code has these two places to implement.
 /// # Safety
 /// `addr` is guest code that takes the given arguments.
 #[cfg(nx_native)]

@@ -2,7 +2,7 @@
 //
 // HLE functions are ordinary `extern "C"` Rust functions. On arm64 hosts guest code calls them directly through an
 // arm64 trampoline (GuestMemorySpace::make_hle_trampoline): guest and host share AAPCS64, so x0-x7 / v0-v7 already
-// are the arguments. A host with another calling convention (x86-64, running lifted guest code: docs/windows-port.md)
+// are the arguments. A host with another calling convention (x86-64, running lifted guest code)
 // has the guest's registers in a `Cpu` and needs each function's signature to call it. `Hle` keeps both: the
 // function's address, and an adapter generated from its type that reads the arguments out of a `Cpu` in AAPCS64 order
 // and writes the result back.
@@ -165,7 +165,7 @@ impl Ret for U64Pair {
 }
 
 // Guest function pointers (callbacks) are guest addresses: the HLE function gets the address, as on arm64 hosts where
-// it calls it directly. A runtime running lifted code calls such pointers through guest::call (docs/windows-port.md).
+// it calls it directly. A runtime running lifted code calls such pointers through guest::call.
 macro_rules! guest_fn_arg {
     ($($a:ident),*) => {
         impl<R, $($a),*> Arg for unsafe extern "C" fn($($a),*) -> R {

@@ -1,5 +1,5 @@
-// The host operating system's memory primitives, for the runtime (docs/windows-port.md, "OS layer"). On Unix hosts
-// each is the libc / Darwin call the runtime made directly before; Windows gets the VirtualAlloc family.
+// The host operating system's memory primitives, for the runtime. On Unix hosts each is the libc / Darwin call;
+// Windows gets the VirtualAlloc family.
 //
 // The API states what a caller needs, not mmap's flags, because Windows differs where it matters: memory is released
 // only as whole allocations, and mapping over part of a reservation takes placeholders. Operations that only make

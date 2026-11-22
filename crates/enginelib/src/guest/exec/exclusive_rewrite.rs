@@ -2,9 +2,8 @@
 //
 // Game spinlocks take the lock with a plain ldxr / stxr pair and read the protected data right after, without an acquire
 // barrier. The architecture lets those reads be satisfied before the lock is held; the console's cores do not reorder
-// them in practice, Apple's do: Breath of the Wild's job queue then handed one chunk of jobs to two threads (both read
-// the old position under the "lock"). A standalone test on an M4 loses updates with that lock and none with ldaxr.
-// Acquire is strictly stronger, so code that was correct stays correct.
+// them in practice, Apple's do (Breath of the Wild's job queue would hand one chunk of jobs to two threads, both
+// reading the old position under the "lock"). Acquire is strictly stronger, so code that was correct stays correct.
 
 /// Load/store exclusive class with o2 = 0, L = 1, o0 = 0: ldxr, ldxrb, ldxrh, ldxp. Setting o0 (bit 15) makes the
 /// acquire form.
@@ -49,9 +48,9 @@ pub unsafe fn rewrite(ranges: &[(usize, usize, bool)]) -> usize {
 
 // Spinlock loops built from load-exclusive / store-exclusive pairs become compare-and-swap (ARMv8.1 LSE). On Apple
 // cores a store-exclusive keeps failing while other cores load and store the same line: a thread that must take a lock
-// two others take and drop in a tight loop waited 15 ms on average and up to 553 ms (standalone test on an M4; with
-// casa 0.5 us and 2 us). Breath of the Wild's job queue (sead::FixedSizeJQ::run) reserves its first job for the main
-// thread while the Workers retake the lock until it is gone: its frames took 40-260 ms in menus and while running.
+// two others take and drop in a tight loop waits milliseconds for it (with casa, microseconds). Breath of the Wild's
+// job queue (sead::FixedSizeJQ::run) reserves its first job for the main thread while the Workers retake the lock
+// until it is gone.
 // Each loop is replaced by the same number of instructions doing the same thing, only when no branch from elsewhere
 // lands inside it.
 

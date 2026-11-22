@@ -146,8 +146,8 @@ impl State {
             return false;
         }
         // Asked at every call and branch target of interpreted code: with a plugin hooking the game's NVN calls, on the
-        // job threads all the time, and each answer took two locks and a binary search of every function table (TotK
-        // with UltraCam: ~1 ms a frame per job thread). Answers are kept per thread until any of their inputs change
+        // job threads all the time, and each answer takes two locks and a binary search of every function table.
+        // Answers are kept per thread until any of their inputs change
         // (ANSWERS_GEN, bumped after every change of the tables, the patched set or the hooked trampolines).
         thread_local! {
             static ANSWERS: std::cell::RefCell<(u64, rustc_hash::FxHashMap<u64, bool>)> =
@@ -395,7 +395,7 @@ extern "system" {
 struct ThreadContext([u8; 1232]);
 
 /// Handles of the process's other threads, opened for suspending. Walked from the process itself: a snapshot of the
-/// system's threads took about 50 ms each time, and a mod's start applies over a hundred patches.
+/// system's threads takes tens of milliseconds, and a mod's start applies many patches.
 unsafe fn other_threads() -> Vec<*mut c_void> {
     // Suspend/resume, get context, query limited information (for GetThreadId).
     const ACCESS: u32 = 0x0002 | 0x0008 | 0x0800;
@@ -689,8 +689,7 @@ fn compiled(state: &State, name: &str, func: u64, end: u64, seeds: &BTreeSet<u64
     let module = nxport_lifterlib::Module { name: name.to_string(), base: func, image, text: func..end, seeds: seeds.clone(), functions: std::collections::BTreeSet::new(), landing_pads: Vec::new() };
     let out = nxport_lifterlib::lift_module(&module, &Default::default());
     // The cache name hashes the function's bytes, and some differ from run to run without changing the lifted code (a
-    // plugin's trampoline area holds this run's pointers, read at run time): 6 of a start's compiles with UltraCam were
-    // of C an earlier run had compiled. The same C compiles to the same library.
+    // plugin's trampoline area holds this run's pointers, read at run time). The same C compiles to the same library.
     let source_key = by_source_key(state, name, &out.files);
     if let Some(found) = by_source(source_key) {
         return Ok(found);

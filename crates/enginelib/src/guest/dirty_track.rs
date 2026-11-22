@@ -1,6 +1,6 @@
 // Write tracking for guest textures the CPU may write behind our back (TotK's font glyph atlas: glyphs are rasterized
 // straight into it; terrain tile maps streamed into reused memory). Hashing every such texture each frame to notice
-// changes cost ~45 MB of hashing per frame in Hateno (260 terrain textures of 260x260) on the encoding thread.
+// changes would take tens of megabytes of hashing per frame on the encoding thread.
 // Instead a texture's pages are made read-only after each check; the first write to a page faults, the signal handler
 // (guest/exec/crash_handler.rs) makes the page writable again and bumps the page's write generation, and a check is skipped while
 // the generations of the texture's pages sum to what they were when it was last hashed.
@@ -161,10 +161,9 @@ pub fn tracking(addr: usize) -> bool {
 
 /// Whether [start, start+len) can be tracked.
 /// Guest memory imported as GPU buffers (VK_EXT_external_memory_host), from before the import until its GPU memory is
-/// freed. Its pages must stay writable: on an RTX 4080, read-only pages under a live import lose the device, even with
-/// nothing using the import (a fresh 64 MB import with some pages made read-only: lost one frame later; the same import
-/// left alone: fine). TotK's 252 MB pool holds textures this tracking protected, and importing it lost the device on
-/// entering the Depths. Textures there are checked by hash instead.
+/// freed. Its pages must stay writable: with NVIDIA's Windows driver, read-only pages under a live import lose the
+/// device, even with nothing using the import (TotK imports a pool holding textures this tracking would protect).
+/// Textures there are checked by hash instead.
 static IMPORTED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
 
 pub fn imported_add(start: usize, len: usize) {

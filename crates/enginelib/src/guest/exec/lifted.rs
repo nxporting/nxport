@@ -1,5 +1,5 @@
 // Running lifted guest code (nxport-lifterlib's C, compiled into one library): loading the library, handing it the
-// runtime's callbacks, and entering it (docs/windows-port.md). The library's own side, the dispatcher, is the lifter's
+// runtime's callbacks, and entering it. The library's own side, the dispatcher, is the lifter's
 // runtime/rt.c.
 //
 // Guest code that branches to an address no lifted module contains reaches `call`: HLE functions (through their

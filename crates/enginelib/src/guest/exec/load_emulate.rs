@@ -2,7 +2,7 @@
 // unsigned / unscaled / pre / post-indexed immediate, register offset, pair; general and SIMD registers) and
 // load-acquire. The caller supplies where the bytes can be read instead; anything else (stores, exclusives, atomics,
 // prefetches) is left alone. Stores are left to wait on purpose: one wait opens the page for every store after it,
-// while completing each store here faults on every one of them (Breath of the Wild walking: 3% slower).
+// while completing each store here faults on every one of them.
 
 /// Byte offset of the NEON registers in Darwin's arm64 mcontext: __es (16 bytes) then __ss (272 bytes).
 const NEON_OFFSET: usize = 16 + 272;

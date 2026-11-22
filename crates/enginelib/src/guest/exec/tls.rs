@@ -26,9 +26,9 @@ type Key = libc::pthread_key_t;
 type Key = u32;
 
 /// Byte offset from tpidrro_el0 (Darwin's TSD array) of the slot holding this thread's guest TLS block, read by every
-/// rewritten `mrs Xt, tpidr_el0`. It is a pthread key created for the purpose: the fixed slot 60 used before is
-/// Foundation's TSD key (__PTK_FRAMEWORK_FOUNDATION_KEY0, libpthread tsd_private.h), so Foundation code on a guest
-/// thread could replace the guest's thread pointer (crashes reading [thread pointer + 0x10] with a pointer of 3).
+/// rewritten `mrs Xt, tpidr_el0`. It is a pthread key created for the purpose: low fixed slots belong to libSystem and
+/// the frameworks (slot 60 is Foundation's, __PTK_FRAMEWORK_FOUNDATION_KEY0), whose code on a guest thread would
+/// replace the guest's thread pointer.
 pub fn guest_tls_offset() -> usize {
     static OFF: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| tsd_key_offset("guest TLS", GUEST_TLS_KEY))

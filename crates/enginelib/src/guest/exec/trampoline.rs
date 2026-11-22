@@ -1,13 +1,11 @@
-// Static Out-Of-Line Trampoline Rewriter for x18.
-//
-// Uniformly replaces all instructions touching x18 with direct branches to
-// an out-of-line trampoline island, emulating x18 safely via thread-local storage.
+// x18 rewriting: every instruction that touches x18 becomes a branch to a stub in an island, which keeps the value in a
+// thread-specific slot.
 //
 // Guest code uses x18 as an ordinary register (Kirby main ~6.6k instructions, its SDK ~12k, TotK main ~31k). Darwin
 // may clear x18 on a context switch. macOS keeps it for processes linked against a macOS SDK older than 13
 // (task->preserve_x18; .cargo/config.toml links with -platform_version macos,11.0,12.0), so macOS builds run guest
 // code as is. iOS (and the iOS simulator) never preserve it: there every x18 use is rewritten to a stub that keeps
-// the value in a TSD slot (cpu::tls::x18_slot_offset). See x18_trampolines().
+// the value in a TSD slot (guest::exec::tls::x18_slot_offset). See x18_trampolines().
 
 use capstone::arch::arm64::{Arm64OperandType, Arm64Reg};
 use capstone::prelude::*;
@@ -76,7 +74,7 @@ pub fn set_thread_x18(val: usize) {
 pub static ISLAND: std::sync::Mutex<Option<TrampolineIsland>> = std::sync::Mutex::new(None);
 
 /// Landings a jump table stub holds at most (8 bytes each). TotK's main has ~50 halfword tables whose entries are out of
-/// sight of jump_table_of (bases loaded before a loop): 65536 landings each was 25 MB, three times the island.
+/// sight of jump_table_of (bases loaded before a loop): 65536 landings each would take 25 MB, three times the island.
 pub const JT_LANDINGS: usize = 4096;
 /// The slow path of a jump table stub past its landings: `brk #0x7a2`, followed by BASE as its distance from the brk
 /// (two words, signed): code holds no absolute address, so an image made at one address matches a run at another
@@ -148,7 +146,7 @@ unsafe impl Send for TrampolineIsland {}
 
 impl TrampolineIsland {
     /// An island in writable memory the caller reserved (guest::loader::x18_island_area: a fixed place, so the stubs are the
-    /// same on every launch, see guest/exec/aot.rs). The x18 slot is the fixed TSD key cpu::tls::x18_key.
+    /// same on every launch, see guest/exec/aot.rs). The x18 slot is the fixed TSD key guest::exec::tls::x18_key.
     pub fn new(base: usize, capacity_bytes: usize) -> Result<Self, &'static str> {
         if base == 0 {
             return Err("no memory for the x18 island");
@@ -747,8 +745,8 @@ impl TrampolineIsland {
             adrp_add(&mut words, 16, l0); // x16 = L0
             words.push(0x8B11_0611); // add x17, x16, x17, lsl #1  (L0 + 8 * offset)
             words.push(0xD61F_0220); // br x17
-                                     // L0 must follow the dispatch exactly (a miscount by one landed every jump on a landing's branch, skipping
-                                     // the restore: SP off by 16, a null pointer in the SDK's CFF interpreter at startup).
+            // L0 must follow the dispatch exactly (one instruction off lands every jump on a landing's branch, skipping the
+            // restore).
             if words.len() != dispatch {
                 return Err(format!(
                     "jump table dispatch is {} instructions, expected {}",
@@ -1130,7 +1128,7 @@ impl TrampolineIsland {
             rename_checked(original_word, repl_idx)
         };
 
-        // If instruction accesses SP, adjust immediate offset by +16 because SP was pushed by 16 bytes!
+        // If instruction accesses SP, adjust immediate offset by +16 because SP was pushed by 16 bytes.
         if touches_sp {
             let adjusted = adjust_sp_offset(modified_insn);
             if adjusted != modified_insn {
@@ -1437,8 +1435,7 @@ fn get_arm64_gpr_offsets(fw: u32) -> ([usize; 4], usize) {
             return (offs, n);
         }
 
-        // Load/store pair (LDP/STP/LDPSW, every addressing form: bits 29:27 == 0b101; the old op2 == 2 test only
-        // covered the signed-offset form, so a pre/post-indexed pair kept x18 as its second register).
+        // Load/store pair (LDP/STP/LDPSW, every addressing form: bits 29:27 == 0b101).
         let _ = op2;
         if (fw & 0x38000000) == 0x28000000 {
             offs[n] = 0;
@@ -1470,8 +1467,7 @@ fn get_arm64_gpr_offsets(fw: u32) -> ([usize; 4], usize) {
         n += 1;
         offs[n] = 16;
         n += 1;
-        // 3-source (MADD / MSUB / SMADDL ...): bits 28:24 == 0b11011, Ra at 10. (The old test, mask 0x11000000, could
-        // never match, so Ra stayed x18: the stub then read the real register.)
+        // 3-source (MADD / MSUB / SMADDL ...): bits 28:24 == 0b11011, Ra at 10.
         if (fw & 0x1F000000) == 0x1B000000 {
             offs[n] = 10;
             n += 1;
@@ -1750,7 +1746,7 @@ unsafe fn jump_table_of(text: *const u32, i: usize, text_size: usize, image_end:
     }
     let (base, width) = (base?, width?);
     // Landings for the offsets the table holds (its entries, read through its bounds check), not all its entry size
-    // allows: 65536 per halfword table filled the island on the iPhone.
+    // allows: 65536 per halfword table would fill the island.
     let mem = ImageMemory { text: text as usize, text_end: text as usize + text_size, end: image_end };
     let pc = text.add(i) as u64;
     let landings = nxport_lifterlib::jt::resolve(&mem, &|_, _| None, text as u64, pc, 18)

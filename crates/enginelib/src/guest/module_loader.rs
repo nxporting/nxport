@@ -5,7 +5,7 @@
 // runnable on macOS the way the engine treats the game's code:
 //   - x18 uses are rewritten when the kernel does not preserve x18 (guest/exec/trampoline.rs)
 //   - `mrs xN, tpidr_el0` loads the guest TLS pointer (as guest/exec/tpidr_rewrite.rs does for main/SDK)
-//   - `mrs xN, tpidrro_el0` loads the thread's fake Horizon thread-local region (IPC buffer; cpu::tls::FAKE_TLR_SLOT)
+//   - `mrs xN, tpidrro_el0` loads the thread's fake Horizon thread-local region (IPC buffer; guest::tls::FAKE_TLR_SLOT)
 //     instead of Darwin's TSD
 //   - `svc #n` branches to a stub that calls svc::svc_dispatch with the saved x0-x7
 // Stubs live in the module's own mapping (after its image), so every site is within branch range. The caller runs
@@ -42,7 +42,7 @@ fn r_u32(d: &[u8], off: usize) -> u32 {
 }
 
 
-/// The rewrites guest code needs to run natively (docs/windows-port.md): x18 uses (cpu::trampoline), svc into
+/// The rewrites guest code needs to run natively: x18 uses (guest::exec::trampoline), svc into
 /// calls of horizon::svc, reads of TPIDR_EL0 / TPIDRRO_EL0 / CTR_EL0 into stubs (in `stubs`, STUB_AREA bytes), and
 /// load-exclusives into acquire forms. Returns what was rewritten, for the log.
 #[cfg(any(nx_native, windows))]
@@ -532,7 +532,7 @@ pub fn add_module_range(base: usize, size: usize) {
 /// nn::ro::detail::GetExceptionInfo(ExceptionInfo*, uintptr_t pc) -> bool: the unwind table of the module holding `pc`
 /// for the SDK's unwinder. ExceptionInfo is { module base, module size, eh_frame_hdr offset from the base, its size },
 /// the last two from the module's MOD0 header. The SDK's own version asks svcQueryMemory, which its code cannot reach
-/// here (only mods' svc instructions are rewritten): every C++ exception aborted.
+/// here (only mods' svc instructions are rewritten), so every C++ exception would abort.
 pub unsafe extern "C" fn ro_get_exception_info(out: *mut u64, pc: usize) -> bool {
     let Some((base, size)) = MODULE_RANGES.lock().unwrap().iter().copied().find(|&(b, s)| pc >= b && pc < b + s) else {
         return false;
@@ -1149,7 +1149,7 @@ pub unsafe extern "C" fn sys_tls_create(
     dtor: Option<unsafe extern "C" fn(*mut libc::c_void)>,
 ) -> i32 {
     // The destructor is guest code: the host calls it directly only where guest code runs natively. A lifted runtime
-    // needs a host destructor that calls it through guest::call (docs/windows-port.md, "Host calls guest").
+    // needs a host destructor that calls it through guest::call.
     #[cfg(not(nx_native))]
     let dtor = {
         let _ = dtor;

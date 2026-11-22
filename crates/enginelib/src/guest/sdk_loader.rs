@@ -1,21 +1,13 @@
 // Loads the ExeFS sdk module alongside the game's main module.
 //
-// The sdk module is a position-independent shared library (NSO0 format) that
-// TotK's RTLD loads before running the main binary.  Without it, every vtable
-// slot that dispatches through a sead / nn::gfx / nn::audio function is null,
-// causing immediate null-pointer crashes.
-//
-// We load it by:
-//  1. LZ4-decompressing all three NSO sections
-//  2. mmapping a ~14.5 MB region for the SDK
-//  3. Applying SDK-internal R_AARCH64_RELATIVE relocations (via MOD0→DT_DYNAMIC)
-//  4. Building a HashMap<name → host address> from the SDK's DYNSYM/DYNSTR
-//  5. Patching x18 in SDK .text (macOS reserves x18; Switch uses it freely)
-//  6. mprotecting SDK .text as PROT_READ|PROT_EXEC
-//
-// The caller (main.rs) passes &SdkModule to apply_relocations so that
-// resolve_dynsym can resolve undefined symbols in the main binary by looking
-// them up in the SDK symbol map instead of falling back to HLE stubs.
+// The sdk module is a position-independent shared library (NSO0 format) that rtld loads before running the main binary;
+// the game's sead / nn::gfx / nn::audio vtables point into it. Loading it:
+//  1. LZ4-decompressing the three NSO sections into the slot reserved with main
+//  2. applying its relocations (via MOD0 -> DT_DYNAMIC)
+//  3. building a name -> host address map from its DYNSYM / DYNSTR
+//  4. mprotecting its .text read + execute
+// The main binary's undefined symbols then resolve through that map (resolve_dynsym), and the SDK's definitions of
+// functions the engine replaces are interposed.
 
 use crate::guest::loader::GuestMemorySpace;
 use std::collections::HashMap;
