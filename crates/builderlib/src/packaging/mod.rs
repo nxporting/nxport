@@ -8,7 +8,7 @@ pub mod ipa;
 pub(crate) mod bundle_zip;
 pub mod adhoc_sign;
 pub mod macho;
-// The macOS app, packed on any host (PARITY #1).
+// The macOS app, packed on any host.
 #[cfg(any(target_os = "macos", windows))]
 pub mod pack;
 pub mod pe_exports;

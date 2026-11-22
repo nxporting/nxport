@@ -1,11 +1,10 @@
-// crates/engine/src/gpu/metal/msl_specialize.rs
 // Makes a translated stage's vertex inputs / fragment outputs format-agnostic, and the other MSL passes the Metal
-// backend needs (port of the former tools/msl_specialize.py; its output is byte-identical, checked over ~4,800 stages).
+// backend needs.
 //
 // The Switch GPU's registers are untyped: vertex fetch and the ROP convert to/from raw 32-bit words according to the
 // bound format, and the shader code decides what the bits mean. MSL inputs and outputs are typed, and Metal rejects a
 // vertex format whose class differs from the declared type. sass2spv therefore translates with raw `uint4` inputs and
-// outputs (see Program.cs, QueryGraphicsState); this pass rewrites each into three declarations at the same location, of
+// outputs (sass2spv's GraphicsState); this pass rewrites each into three declarations at the same location, of
 // which exactly one exists in a given pipeline, selected by a function constant that the engine sets from the real vertex
 // / render target format:
 //
@@ -27,8 +26,8 @@
 // Vertex stages also get the NVN -> Metal clip-space fix-up before each `return out;`. With NVN's UPPER_LEFT window
 // origin (TotK; the D3D convention) clip y = +1 is framebuffer row 0, as in Metal, so y is kept; with LOWER_LEFT (the GL
 // default) row 0 is clip y = -1 and y is negated (`y_negate`, which also reverses triangle winding: the engine flips the
-// front-face setting to match). A [-w, w] clip z is remapped to Metal's [0, w]. Ryujinx's own remap is left disabled
-// (DepthMode=false in Program.cs) because the mode is runtime device state. The shader body keeps seeing the raw uint4
+// front-face setting to match). A [-w, w] clip z is remapped to Metal's [0, w]. The translator's own remap is left off
+// (GraphicsState::depth_mode false) because the mode is runtime device state. The shader body keeps seeing the raw uint4
 // it had before: inputs are bit-cast at function entry and outputs are written to a raw local that is converted just
 // before each `return out;`.
 
@@ -115,8 +114,8 @@ fn decl(indent: &str, name: &str, loc_attr: &str, const_name: &str) -> String {
 pub const LOOP_GUARD_LIMIT: usize = 65536;
 
 /// Caps every unbounded loop (`do {} while`, `for (;;)`, `while (true)`) at LOOP_GUARD_LIMIT iterations. A decompiler
-/// control-flow bug can turn a forward branch into a loop that never exits (seen in a TotK UI vertex shader:
-/// `do { ... if (_57) continue; } while (true || _57);`). On the GPU that hangs the device, which stalls the whole macOS
+/// control-flow bug can turn a forward branch into a loop that never exits
+/// (`do { ... if (_57) continue; } while (true || _57);`). On the GPU that hangs the device, which stalls the whole macOS
 /// display. Real shader loops run far fewer iterations, so the guard only ever fires on such bugs.
 pub fn guard_loops(msl: &str) -> String {
     let head = re!(r"^(\s*)(do|for \(;;\)|while \(true\))\s*$");
@@ -258,7 +257,7 @@ pub fn move_extra_samplers(msl: &str) -> String {
 
 /// Ryujinx marks Maxwell's separate FMUL/FADD as NoContraction (the hardware never fuses them into an FMA); spirv-cross
 /// implements that with [[clang::optnone]] helper functions (spvFMul, spvFAdd, ...), one non-inlined call per operation,
-/// which made fragment shaders several times slower. Instead, turn contraction off for the whole file: separate
+/// which makes fragment shaders several times slower. Instead, turn contraction off for the whole file: separate
 /// multiplies and adds then stay separate everywhere (as on Maxwell), explicit fma() calls are unaffected, and the
 /// helpers inline. --keep-optnone keeps spirv-cross's helpers (for A/B; needs a cache rebuild).
 pub fn no_contraction(msl: &str) -> String {
@@ -267,7 +266,7 @@ pub fn no_contraction(msl: &str) -> String {
         return msl.to_string();
     }
     // The helpers were also never optimized under fast math's no-NaN/no-infinity assumptions; inlined into fast-math code
-    // they are, and TotK's shaders rely on IEEE inf/NaN there (fast math rendered every frame black). Relaxed mode keeps
+    // they are, and TotK's shaders rely on IEEE inf/NaN there (full fast math renders every frame black). Relaxed mode keeps
     // the other fast-math freedoms but honours inf/NaN.
     let mut msl = msl.replace("[[clang::optnone]] ", "");
     // --contract-fast: let the compiler fuse multiplies and adds. The helpers' fma(l, r, 0) / fma(1, l, r) keep every
@@ -313,8 +312,7 @@ pub fn no_contraction(msl: &str) -> String {
 }
 
 /// Marks the fragment entry point [[early_fragment_tests]]. Used for stages whose GLSLC control section sets the
-/// early-fragment-tests flag (+0x718 bit 0): the NVN driver then sets Maxwell's EarlyZForce (confirmed against the
-/// register value Ryujinx sees for all 210 fragment stages of the opening). Without it Metal runs the depth test after
+/// early-fragment-tests flag (+0x718 bit 0): the NVN driver then sets Maxwell's EarlyZForce. Without it Metal runs the depth test after
 /// any fragment shader that writes memory, which disables early-Z and hidden surface removal for those draws.
 pub fn early_fragment_tests(msl: &str) -> String {
     let frag = re!(r"(?m)^fragment ");
@@ -325,7 +323,7 @@ pub fn early_fragment_tests(msl: &str) -> String {
         .into_owned()
 }
 
-/// Inserts `text` after the `using namespace metal;` line (the end of its match, as the original did).
+/// Inserts `text` after the `using namespace metal;` line.
 fn after_using(msl: &str, text: &str) -> String {
     let end = using_re()
         .find(msl)
@@ -504,7 +502,8 @@ pub fn finish(msl: &str) -> String {
 }
 
 /// Driver cbuf (guest cbuf 0, Metal buffer 17): the engine writes each stage's constant buffer sizes there, in float4
-/// units, one u32 per Metal binding 0..17 from this vec4 index on (must match CBUF_LIMITS_OFFSET in gfx/translated.rs).
+/// units, one u32 per Metal binding 0..17 from this vec4 index on (must match CBUF_LIMITS_OFFSET in the engine's
+/// gpu/metal/translated).
 pub const CBUF_LIMITS_VEC4: usize = 0xF0;
 
 fn entry_params_re() -> &'static Regex {
@@ -523,7 +522,7 @@ pub fn bound_cbuf_reads(msl: &str) -> String {
     let use_limits = em.is_some() && !get_options().no_cbuf_limits;
     let entry_start = em.as_ref().map_or(msl.len(), |c| c.get(0).unwrap().start());
     // Constant buffer variable -> Metal binding, from the entry signature (the driver cbuf is named after guest slot 0
-    // but bound at 17); in first-seen order, later duplicates updating the binding (as a dict did).
+    // but bound at 17); in first-seen order, later duplicates updating the binding.
     let mut slots: Vec<(String, i64)> = Vec::new();
     let mut c17 = String::from("nx_c17");
     if use_limits {

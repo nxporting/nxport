@@ -1,4 +1,4 @@
-// Fast standalone SARC archive reader and unpacker in Rust.
+// SARC archives: reading and unpacking.
 
 use std::collections::HashMap;
 

@@ -43,9 +43,8 @@ pub(crate) struct Vp9 {
 impl Vp9 {
     pub(crate) fn new() -> Vp9 {
         Vp9 {
-            // Four threads: TotK's 1080p opening movie (4 tile columns) on an M4 took 12.6 ms a picture on 1 thread, 8.0
-            // on 2, 6.3 on 4 or more, the CPU time spent growing with each thread (~38 ms at 6). On the iPhone 16e (no
-            // VP9 hardware) all 6 cores gave 11.5-13 ms, 2 threads 19-23 ms with 15% of pictures over 33 ms.
+            // Four threads: 1080p VP9 streams have four tile columns, so more threads add CPU time without speed, and
+            // fewer cannot keep up with 30 pictures a second on phone CPUs.
             dec: vp9_mt::Vp9Decoder::with_threads(4),
             #[cfg(target_vendor = "apple")]
             hw: None,
@@ -77,8 +76,8 @@ impl Decode for Vp9 {
         }
         self.dec.push(data, Some(pts_us)).map_err(|e| format!("vp9: {e:?}"))?;
         // VP9 does not reorder: a sample shows at most one picture (a superframe's hidden frames show none). The decoder
-        // decodes one coded frame per call and answers Again after a hidden one while the shown frame is still pending:
-        // stopping there left it for the next sample, which then gave two pictures with that sample's pts.
+        // decodes one coded frame per call and answers Again after a hidden one while the shown frame is still pending, so
+        // it is asked again until the shown frame comes out (else the next sample would give two pictures).
         loop {
             let p = match self.dec.next_picture() {
                 Ok(p) => p,

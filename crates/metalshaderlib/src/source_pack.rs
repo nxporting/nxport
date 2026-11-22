@@ -1,7 +1,7 @@
 // The shader cache's source pack (<cache>/source.pack): translated stages as Metal source for an app built without
 // Apple's Metal compiler (an .ipa built on Windows). The app compiles a stage from it the first time the game uses it,
 // without translating it. Each stage is compressed on its own with one shared dictionary, so a stage is read without
-// the rest; loose files were ~1 GB for TotK's 25,000 stages.
+// the rest (loose files would take about 1 GB for TotK's stages).
 //
 // Layout (little-endian): "NXMSRC01", u32 dictionary length, the dictionary, u32 stage count, then per stage sorted by
 // name: u16 name length, the name (the entry point, s_<hash>), u64 offset from the start of the file, u32 compressed

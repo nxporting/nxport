@@ -1,5 +1,5 @@
-//! Compute versions of translated stages: a render pass costs ~40 us of fixed GPU time on Apple
-//! GPUs, a compute dispatch ~1 us, and TotK runs ~76 tiny render passes per frame. For a draw the engine runs as
+//! Compute versions of translated stages: a render pass costs tens of microseconds of fixed GPU time on Apple GPUs, a
+//! compute dispatch about one, and games run dozens of tiny render passes per frame. For a draw the engine runs as
 //! compute, the vertex stage's `tkv_<entry>` evaluates the draw's few vertices into a buffer and the fragment stage's
 //! `tkf_<entry>` shades every pixel of the viewport rectangle: coverage and perspective-correct interpolation from those
 //! vertices, then the original fragment body. Both kernels reuse the stage's own code: the entry point is turned into
@@ -343,8 +343,7 @@ fn heap_textures(body: &str) -> Vec<(String, String, u32)> {
 }
 
 /// Kernels take the samplers a stage reads from the descriptor heap as parameters bound at their texture's binding: a
-/// sampler read from the sampler heap in a compute kernel gave varying results between runs of the same frame (TotK's
-/// atmosphere LUT kernel). Returns the body without those locals, and the parameters (None: a binding Metal cannot bind).
+/// sampler read from the sampler heap in a compute kernel gives varying results between runs of the same frame. Returns the body without those locals, and the parameters (None: a binding Metal cannot bind).
 fn heap_samplers_as_params(body: &str) -> Option<(String, Vec<Param>)> {
     let heap = heap_textures(body);
     let re = re!(r"(?m)^\s*sampler (\w+) = reinterpret_cast<const device NxSamplerHeap\*>[^\n]*\n");
@@ -361,7 +360,7 @@ fn heap_samplers_as_params(body: &str) -> Option<(String, Vec<Param>)> {
 }
 
 /// The tiny kernels appended to a stage (from MARKER, before any other variants) read no sampler from the sampler heap:
-/// what the index line `tks` tells the engine. Kernels generated before heap_samplers_as_params did.
+/// what the index line `tks` tells the engine (kernels in caches without it do read them).
 pub fn kernels_bind_samplers(kernels: &str) -> bool {
     !kernels.contains("NxSamplerHeap")
 }

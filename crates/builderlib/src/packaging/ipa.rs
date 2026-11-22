@@ -443,7 +443,7 @@ fn framework_plist(bundle_id: &str) -> String {
 
 /// The Settings page with each choice's default set to what the app is built with. iOS keeps no value for a choice the
 /// player never changed, and the engine then takes the app's own setting (host/ios_env.rs), so a default that differs
-/// would show one thing and do another (the page said 60 fps and Asynchronous Shaders on; the app ran at 30, async off).
+/// would show one thing and do another.
 fn settings_page_defaults(page: &str, s: &settings::Settings) -> String {
     let flag = |on: bool| if on { "<true/>".to_string() } else { "<false/>".to_string() };
     let fps = if s.system.fps == settings::FpsMode::Stock30 {

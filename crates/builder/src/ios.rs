@@ -3,7 +3,7 @@
 //   this checkout first (nxport_builderlib::apple_engine).
 // - the shaders: on a Mac, Apple's Metal compiler compiles the shader cache for iOS (and, for a chosen GPU, its listed
 //   pipelines); on Windows, without that compiler, the stages are translated and packed as Metal source, which the app
-//   compiles the first time the game uses each (metal/source_pack.rs), as the macOS app built on Windows does.
+//   compiles the first time the game uses each (nxport_metalshaderlib::source_pack), as the macOS app built on Windows does.
 // - the app (nxport_builderlib::ipa): on a Mac in this process; on Windows in a worker process, as every Windows step that
 //   sets up the guest image (windows.rs).
 

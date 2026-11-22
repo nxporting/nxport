@@ -1,6 +1,4 @@
-// crates/builderlib/src/ppm2png.rs
-// Fast standalone PPM to PNG converter in pure Rust.
-// Replaces tools/ppm2png.py with zero external python dependencies.
+// PPM frame dumps to PNG, optionally downscaled; raw BGRA pixels to PNG.
 
 use std::fs::File;
 use std::io::{Read, Write};

@@ -1,5 +1,4 @@
-// crates/builderlib/src/vulkan_precompile.rs
-// Offline shader and pipeline precompiler for Vulkan (docs/windows-port.md Step 4).
+// Offline shader and pipeline precompiler for Vulkan.
 //
 // Extracts shader stages from a game dump (RomFS), translates Maxwell SASS to SPIR-V using sass2spv,
 // populates the Vulkan stage cache (stages.txt, code/, t/), compiles graphics and compute pipelines

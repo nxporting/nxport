@@ -1,8 +1,7 @@
 // Video through VideoToolbox, the system's video decoder hardware: the console decodes movies in hardware too, and
-// decoding 1080p VP9 on the CPU took every core of an iPhone for ~12 ms a frame, beside the game. H.264: every Apple
-// device. VP9: Macs (the supplemental decoder, registered on request); iOS keeps it to apps with Apple's private
-// entitlement com.apple.developer.coremedia.allow-alternate-video-decoder-selection (-12906 without). Only a hardware
-// decoder is used (RequireHardwareAcceleratedVideoDecoder): without one, a session fails and the caller decodes in
+// decoding 1080p VP9 on the CPU takes most of a phone's cores beside the game. H.264: every Apple device. VP9: Macs and
+// iOS 26.2+ once the supplemental decoder is registered (register_vp9); older iOS keeps it to apps with a
+// private entitlement (-12906 without). Only a hardware decoder is used (RequireHardwareAcceleratedVideoDecoder): without one, a session fails and the caller decodes in
 // software.
 
 use std::collections::VecDeque;
@@ -123,8 +122,7 @@ extern "C" {
 }
 
 /// Register the supplemental VP9 decoder so VideoToolbox will vend it. The SDK marks the call macOS-only, but iOS 26.2+
-/// exports it and then allows VP9 without the private entitlement (confirmed on an iPhone 16e, iOS 27.3), so it is
-/// resolved at runtime. A no-op where the symbol is absent (older iOS), leaving the caller to fall back to software.
+/// exports it and then allows VP9 without the private entitlement, so it is resolved at runtime. A no-op where the symbol is absent (older iOS), leaving the caller to fall back to software.
 unsafe fn register_vp9() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
@@ -204,8 +202,8 @@ pub(crate) struct Session {
     out: Box<Vec<Result<Decoded, OSStatus>>>,
     /// Pictures decoded but not handed out yet, and how many may wait for an earlier one (the stream's reorder depth):
     /// they leave in presentation order, as from a decoder's picture buffer. VideoToolbox's own temporal processing
-    /// does not hold them back when every frame is waited for (Mario Kart 8 Deluxe's menu movie came out in decode
-    /// order, B-frames after the frame following them).
+    /// does not hold them back when every frame is waited for (a stream with B-frames, such as Mario Kart 8 Deluxe's menu
+    /// movie, would come out in decode order).
     held: Vec<Decoded>,
     depth: usize,
 }
@@ -310,7 +308,7 @@ impl Session {
             if st != 0 {
                 return Err(format!("H.264 format description: {st}"));
             }
-            // A stream that never reorders (no B-frames, as our re-encoded movies are built) needs no temporal
+            // A stream that never reorders (no B-frames) needs no temporal
             // buffering: each frame comes out as it is decoded. Only when the SPS allows reordering, or cannot be read,
             // is TEMPORAL used so VideoToolbox hands pictures over in presentation order.
             let sps = sets.iter().find(|s| s.first().is_some_and(|b| b & 0x1f == 7));

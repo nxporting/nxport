@@ -1,6 +1,4 @@
-// crates/builderlib/src/extract_shaders.rs
-// Pure Rust RomFS shader extractor.
-// Extracts every shader stage from RomFS (port of the former tools/extract_romfs_shaders.py; identical output).
+// Extracts every shader stage embedded in a game's RomFS.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
@@ -141,7 +139,7 @@ fn unpacked(data: Vec<u8>) -> Vec<Vec<u8>> {
     let Ok(files) = crate::sarc::read_sarc(&data) else {
         return vec![data];
     };
-    // Archives of plain files are scanned whole, as before (stages keep the order they are found in).
+    // Archives of plain files are scanned whole (stages keep the order they are found in).
     if !files.values().any(|f| f.starts_with(b"Yaz0") || f.starts_with(b"SARC")) {
         return vec![data];
     }

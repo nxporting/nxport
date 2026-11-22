@@ -1,6 +1,6 @@
 // nxport-builder: turns a game dump into a native app, and runs the steps of one as commands (cli.rs).
 
-// A window, not a console program: Explorer opens no console window with it (app.rs attaches to a parent's console).
+// A window, not a console program: Explorer opens no console window with it (app/mod.rs attaches to a parent console).
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;

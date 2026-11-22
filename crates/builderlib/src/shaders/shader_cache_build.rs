@@ -1,12 +1,10 @@
-// crates/builderlib/src/shader_cache_build.rs
-// `nxport-builder shaders build`: the ahead-of-time shader cache for the Metal backend (port of the former
-// tools/build_shader_cache.py).
+// `nxport-builder shaders build`: the ahead-of-time shader cache for the Metal backend.
 //
 // Input : directories of stage dumps (NAME_sN.code, optional NAME_sN.ctrl), written by the engine
 //         (--dump-shaders=<dir>, missing-stage dumps) or extracted from RomFS (`nxport-builder shaders extract`).
 //         The index covers exactly the stages in the given directories.
 // Output: <out>/shaders_NNNN.metallib   libraries of LINK_CHUNK stages each, entry point `s_<hash>`
-//         <out>/index.txt               lookup index + resource bindings, parsed by crates/enginelib/src/shader_cache.rs
+//         <out>/index.txt               lookup index + resource bindings, parsed by the engine (gpu/metal/shader_cache.rs)
 //         <out>/failures.txt            stages not translated, with the phase and message
 //         <out>/work/                   per-stage MSL and AIR, state.json (what the next build can reuse)
 //
@@ -33,7 +31,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 const PREAMBLE: usize = 0x30; // NVN stage data: 0x12345678 preamble, then the 0x50-byte SPH, then code
 const WEAK_LEN: usize = 0x130;
 const MAX_RSS_MB: u64 = 3072; // a tool that grows past this is killed rather than allowed to push the machine into swap
-const LINK_CHUNK: usize = 50; // AIR files per metallib; one giant link of ~2,800 shaders used >100 GB of memory
+const LINK_CHUNK: usize = 50; // AIR files per metallib; a link of thousands of stages takes over 100 GB of memory
 const BATCH: usize = 256; // stages per decompiler process
 const COMPILE_BATCH: usize = 24; // MSL files per Metal compiler launch (startup, not compilation, dominated)
 
@@ -435,14 +433,14 @@ pub fn cbuf_extents(msl: &str) -> BTreeMap<u32, usize> {
     let mut out = BTreeMap::new();
     let Some(m) = entry_line_re().find(msl) else { return out };
     // Only the stage's own code: the tiny-pass kernels appended after it (tiny_kernels::COMMON onwards) pass every
-    // buffer whole to a copy of the body, which read as a whole-buffer use and dropped every tiny-capable stage's extents.
+    // buffer whole to a copy of the body, which would read as a whole-buffer use.
     let body = &msl[m.end()..];
     let body = [crate::tiny_kernels::MARKER, crate::batch_kernels::MARKER, crate::arg_kernels::MARKER].iter().filter_map(|m| body.find(m)).min().map_or(body, |e| &body[..e]);
     for c in param.captures_iter(m.as_str()) {
         let use_re = Regex::new(&format!(r"\b{}\b", regex::escape(&c[1]))).unwrap();
         let mut top = Some(0usize);
         for u in use_re.find_iter(body) {
-            // A literal read `NAME._m0[<digits>]` not followed by a word character or '[' (the original's lookahead).
+            // A literal read `NAME._m0[<digits>]` not followed by a word character or '['.
             let rest = &body[u.end()..];
             let lit = rest.strip_prefix("._m0[").and_then(|r| {
                 let n = r.bytes().take_while(|b| b.is_ascii_digit()).count();
@@ -519,8 +517,7 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
     };
     let (mut text, attrs, colors, varyings) = specialize(&raw);
     // --early-tests: honour the early-fragment-tests flag. Off by default: with it TotK's tile classification
-    // (fragment shaders marking tiles in a storage buffer) loses marks and most of the screen goes unlit
-    // (cause not found). -13% GPU time in gameplay.
+    // (fragment shaders marking tiles in a storage buffer) loses marks and most of the screen goes unlit.
     if stage == ShaderStage::Fragment && crate::translation::get().early_tests && early_tests_flag(code, o.ctrl_dir.as_deref()) {
         text = early_fragment_tests(&text); // last: earlier passes insert declarations before the entry point
     }
@@ -579,7 +576,7 @@ fn prepare_stage(code: &Path, work: &Path, spv_dir: &Path, stage: ShaderStage, s
             let _ = std::fs::remove_file(&manifest_path);
             ("sass2spv".to_string(), "no binding manifest".to_string())
         })?;
-    // Flush the intermediate .spv and .spv.json as soon as the stage is translated!
+    // Flush the intermediate .spv and .spv.json as soon as the stage is translated.
     let _ = std::fs::remove_file(&spv);
     let _ = std::fs::remove_file(&manifest_path);
     let local = (stage == ShaderStage::Compute).then(|| {

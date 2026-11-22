@@ -65,7 +65,7 @@ pub fn windows_cc(toolchains: &Path, on_download: &dyn Fn(u64, u64)) -> Result<V
 pub const CACHE_CAP: u64 = 4 << 30;
 
 /// The folder `dir` for zig's object cache (lift::compile sets it for each compiler it runs), emptied first when it holds
-/// more than `cap` bytes. zig's own default (%LOCALAPPDATA%\zig) is never trimmed: it reached 27 GB on one PC. Emptied
+/// more than `cap` bytes. zig's own default (%LOCALAPPDATA%\zig) is never trimmed and grows without bound. Emptied
 /// whole: zig's manifests name objects by hash, and a cache missing some of them is not one to rely on. Returns whether
 /// it was emptied.
 pub fn bounded_cache(dir: &Path, cap: u64) -> std::io::Result<bool> {

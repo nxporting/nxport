@@ -1,4 +1,4 @@
-// Guest code -> C through nxport-lifterlib, for hosts without the native runtime (docs/windows-port.md).
+// Guest code -> C through nxport-lifterlib, for hosts without the native runtime.
 //
 // lift_game lifts what the runtime will run: the patched image (relocations, ExeFS patches, SDK interposition, game
 // hooks; nxport_enginelib::guest_modules). lift_nso lifts a module as its NSO file holds it. Function starts are seeded from
@@ -192,9 +192,8 @@ pub fn compile(
     // The x86-64-v3 features, spelled out: above all hardware FMA, which the lifted floating-point code needs to round
     // like the guest's. zig cc builds any of -O1 to -O3 as clang -O2, tunes for generic x86-64 once any -m flag is given,
     // and keeps frame pointers (a register) unless told not to.
-    // -grow-region-complexity-budget: a few lifted functions of megabytes of C spent most of a build in the register
-    // allocator's region splitting (TotK main_033: 923 s against 411 s with the budget at 100; the whole build about 19
-    // minutes against 13.4). The same scene ran at the same speed (99.4 and 99.3 fps against 100.1 and 100.2).
+    // -grow-region-complexity-budget: a few lifted functions of megabytes of C otherwise spend most of a build in the
+    // register allocator's region splitting; the budget cuts that without slowing the code.
     let flags = [
         "-O1", "-g0", "-fno-strict-aliasing", "-fomit-frame-pointer", "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mlzcnt",
         "-mmovbe", "-mf16c", "-mpopcnt", "-msse4.2", "-mcx16", "-mllvm", "-grow-region-complexity-budget=100",
@@ -260,8 +259,7 @@ pub fn compile(
                     continue;
                 }
                 // Into a part file, renamed over the object once the compiler succeeds: an object cut off while it was
-                // written (a killed build, a power cut) would otherwise be newer than its source and taken as built
-                // (seen: a zero-filled main_048.o, and the link then missing its functions).
+                // written (a killed build, a power cut) would otherwise be newer than its source and taken as built.
                 let part = obj.with_extension("o.part");
                 // In the C directory, by the file's bare name: a profile names static functions by the path they were
                 // compiled from, and one made on another machine must find them.
@@ -309,9 +307,9 @@ pub fn compile(
     std::fs::write(&rsp, quoted)?;
     let link = || command(prog).args(pre).arg("-shared").arg("-o").arg(out).arg(format!("@{}", rsp.display())).output();
     let mut o = link()?;
-    // A build cut off while zig wrote its cache (a power cut) can leave a broken runtime library there, and every later
-    // link then fails (seen: an empty compiler_rt.lib, "undefined symbol: ___chkstk_ms"). The cache holds only what zig
-    // can make again, so the link is tried once more without it.
+    // A build cut off while zig wrote its cache (a power cut) can leave a broken runtime library there (an empty
+    // compiler_rt.lib), and every later link then fails. The cache holds only what zig can make again, so the link is
+    // tried once more without it.
     if !o.status.success() {
         if let Some(dir) = cache.filter(|d| d.is_dir()) {
             println!("  Linking failed; trying again with zig's cache ({}) cleared", dir.display());
@@ -452,8 +450,7 @@ fn write_files(out_dir: &Path, outputs: &[&Output], whole: bool) -> std::io::Res
         write(file, body)?;
     }
     // C files an earlier lift left that this one did not write: compile takes every .c here, so one left by a lift of
-    // another game version (more modules or files) linked calls to functions this code does not have (BotW 1.0.0 after
-    // 1.6.0: 751 undefined symbols).
+    // another game version (more modules or files) would link calls to functions this code does not have.
     let written: std::collections::HashSet<&str> =
         nxport_lifterlib::RUNTIME_FILES.iter().map(|(f, _)| *f).chain(outputs.iter().flat_map(|o| o.files.iter().map(|(f, _)| f.as_str()))).collect();
     for e in std::fs::read_dir(out_dir)?.flatten() {
