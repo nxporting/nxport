@@ -208,7 +208,7 @@ group! {
         audio: bool = true,
         /// Output volume, percent
         volume: u32 = 100,
-        /// Write the output as a stereo WAV file
+        /// Write the output as a stereo WAV file (AudioOut streams beside it, as <name>_audioout.wav)
         audio_wav: Option<PathBuf> = None,
     }
 }

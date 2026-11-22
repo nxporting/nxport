@@ -50,21 +50,25 @@ pub fn init() {
 /// Appends 16-bit PCM from an AudioOut buffer (interleaved, `channels` per frame, 48 kHz) to the second ring: mono is
 /// duplicated, more than two channels keep the first two.
 pub fn push_audio_out(pcm: &[i16], channels: usize) {
-    if !playback_enabled() || channels == 0 {
+    if channels == 0 {
+        return;
+    }
+    let stereo: Vec<f32> = pcm
+        .chunks_exact(channels)
+        .flat_map(|f| {
+            let l = f[0] as f32 / 32768.0;
+            [l, if channels > 1 { f[1] as f32 / 32768.0 } else { l }]
+        })
+        .collect();
+    if crate::settings::get().audio.audio_wav.is_some() {
+        wav_write(&WAV_OUT, open_wav_out, &stereo);
+    }
+    if !playback_enabled() {
         return;
     }
     let start = {
         let mut r = RING2.lock().unwrap();
-        for f in pcm.chunks_exact(channels) {
-            let l = f[0] as f32 / 32768.0;
-            let rr = if channels > 1 {
-                f[1] as f32 / 32768.0
-            } else {
-                l
-            };
-            r.push_back(l);
-            r.push_back(rr);
-        }
+        r.extend(stereo.iter().copied());
         let max = MAX_MS * 48 * 2;
         if r.len() > max {
             let drop = r.len() - TARGET_MS * 48 * 2;
@@ -83,6 +87,25 @@ struct Wav {
 }
 
 static WAV: OnceLock<Option<Mutex<Wav>>> = OnceLock::new();
+/// The AudioOut streams' WAV: beside the renderer's (`<name>_audioout.wav`), as the two have clocks of their own.
+static WAV_OUT: OnceLock<Option<Mutex<Wav>>> = OnceLock::new();
+
+/// Appends interleaved stereo frames to a WAV, keeping its header valid every second (the process is usually killed,
+/// not closed).
+fn wav_write(wav: &OnceLock<Option<Mutex<Wav>>>, open: fn() -> Option<Mutex<Wav>>, stereo: &[f32]) {
+    if let Some(w) = wav.get_or_init(open) {
+        let mut w = w.lock().unwrap();
+        let bytes: Vec<u8> = stereo
+            .iter()
+            .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+            .collect();
+        let _ = w.file.write_all(&bytes);
+        w.frames += (stereo.len() / 2) as u32;
+        if w.frames % 48000 < (stereo.len() / 2) as u32 {
+            finish_wav(&mut w);
+        }
+    }
+}
 
 fn playback_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -92,18 +115,7 @@ fn playback_enabled() -> bool {
 
 /// Appends interleaved stereo frames (float, ±1.0 full scale).
 pub fn push(stereo: &[f32]) {
-    if let Some(w) = WAV.get_or_init(open_wav) {
-        let mut w = w.lock().unwrap();
-        let bytes: Vec<u8> = stereo
-            .iter()
-            .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
-            .collect();
-        let _ = w.file.write_all(&bytes);
-        w.frames += (stereo.len() / 2) as u32;
-        if w.frames % 48000 < (stereo.len() / 2) as u32 {
-            finish_wav(&mut w); // keep the header valid every second (the process is usually killed, not closed)
-        }
-    }
+    wav_write(&WAV, open_wav, stereo);
     if !playback_enabled() {
         return;
     }
@@ -159,6 +171,16 @@ fn open_wav() -> Option<Mutex<Wav>> {
         "[+] host_audio: writing renderer output to {}",
         path.display()
     );
+    Some(Mutex::new(Wav { file, frames: 0 }))
+}
+
+fn open_wav_out() -> Option<Mutex<Wav>> {
+    let path = crate::settings::get().audio.audio_wav.as_ref()?;
+    let stem = path.file_stem()?.to_string_lossy().into_owned();
+    let path = path.with_file_name(format!("{stem}_audioout.wav"));
+    let mut file = std::fs::File::create(&path).ok()?;
+    let _ = file.write_all(&[0u8; 44]);
+    println!("[+] host_audio: writing AudioOut streams to {}", path.display());
     Some(Mutex::new(Wav { file, frames: 0 }))
 }
 
