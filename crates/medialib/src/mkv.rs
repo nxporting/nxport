@@ -74,8 +74,30 @@ pub(crate) fn open(path: &Path) -> Result<(Vec<Track>, Box<dyn Demux>), String> 
         index.push((t.track_number().get(), tracks.len()));
         tracks.push(track);
     }
+    // Without DefaultDuration (common in WebM) the frame rate is the frame interval of the track's first frames.
+    for &(number, i) in &index {
+        if tracks[i].kind == Kind::Video && tracks[i].fps == 0.0 {
+            if let Some(interval_ns) = frame_interval_ns(path, number, scale_ns) {
+                tracks[i].fps = 1e9 / interval_ns as f64;
+            }
+        }
+    }
     let demux = Mkv { path: path.to_path_buf(), file, index, scale_ns, video, keyframes: None, frame: Frame::default() };
     Ok((tracks, Box::new(demux)))
+}
+
+/// The shortest interval between the first frames of track `number` (presentation order may differ from file order).
+fn frame_interval_ns(path: &Path, number: u64, scale_ns: u64) -> Option<u64> {
+    let mut f = open_file(path).ok()?;
+    let mut frame = Frame::default();
+    let mut times = Vec::new();
+    while times.len() < 16 && matches!(f.next_frame(&mut frame), Ok(true)) {
+        if frame.track == number {
+            times.push(frame.timestamp);
+        }
+    }
+    times.sort_unstable();
+    times.windows(2).map(|w| w[1] - w[0]).filter(|&d| d > 0).min().map(|d| d * scale_ns)
 }
 
 impl Mkv {
