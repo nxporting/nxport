@@ -231,7 +231,6 @@ thread_local! {
     // "clock_get_time() failed: (ipc/send) invalid reply port" inside nanosleep.
     static TSD_SHADOW: std::cell::Cell<Option<[usize; 4]>> = const { std::cell::Cell::new(None) };
 }
-// 9. Threading & TLS Management
 pub(crate) static NEXT_TLS_SLOT: AtomicU32 = AtomicU32::new(0);
 pub(crate) unsafe extern "C" fn get_current_thread() -> *mut NnThreadType {
     CURRENT_NN_THREAD.with(|cell| {
@@ -242,8 +241,7 @@ pub(crate) unsafe extern "C" fn get_current_thread() -> *mut NnThreadType {
             if *handle == 0 {
                 *handle = 1;
             }
-            // Populate the REAL host stack bounds at the REAL field offsets
-            // (_stack/_stackSize), not a placeholder. See struct doc comment.
+            // The thread's real stack bounds, at the SDK's field offsets (_stack / _stackSize; see the struct).
             let (lo, hi) = crate::horizon::thread_stack::current_bounds().unwrap_or_else(crate::platform::os::current_thread_stack);
             (*ptr).stack = lo as *mut ();
             (*ptr).original_stack = (*ptr).stack;
@@ -316,9 +314,9 @@ pub(crate) unsafe extern "C" fn sleep_thread(nano: i64) {
 pub(crate) unsafe extern "C" fn yield_thread() {
     // A few pauses, not SwitchToThread. The console yields to the game's own ready threads on that core, and TotK's job
     // threads poll with yields hundreds of thousands of times a second. Windows yields to whatever is ready on the
-    // processor: with all of them busy that is another process, for its whole quantum (~10 ms a yield, ~1 fps). The
-    // game's threads that are ready get a processor from the scheduler anyway; an idle machine's SwitchToThread
-    // returned at once (0.1-0.2 us), about what these pauses take.
+    // processor: with all of them busy that is another process, for its whole quantum (milliseconds a yield). The game's
+    // threads that are ready get a processor from the scheduler anyway; on an idle machine SwitchToThread returns at
+    // once, in about the time these pauses take.
     for _ in 0..8 {
         std::hint::spin_loop();
     }
@@ -437,8 +435,7 @@ pub(crate) unsafe extern "C" fn start_thread(thread: *mut NnThreadType) {
     std::thread::Builder::new()
         .name(name_str.clone())
         // The thread's own stack is where its HLE calls run (thread_stack.rs): they call into Metal and other system
-        // libraries, and compiling a render pipeline (synchronous, on the calling thread) took the Presentation Thread
-        // past 512 KiB in long play sessions.
+        // libraries, and compiling a render pipeline (synchronous, on the calling thread) can take a thread past 512 KiB.
         .stack_size(8 << 20)
         .spawn(move || {
             crate::guest::tls::mark_guest_thread();

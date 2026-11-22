@@ -336,5 +336,5 @@ pub unsafe extern "C" fn rename_file(
 }
 
 pub(crate) unsafe extern "C" fn fs_is_save_data_existing(_uid: *const u8) -> bool {
-    true // saves live in the save directory (horizon/fs.rs); EnsureSaveData / MountSaveData create it
+    true // saves live in the save directory (horizon/fs); EnsureSaveData / MountSaveData create it
 }

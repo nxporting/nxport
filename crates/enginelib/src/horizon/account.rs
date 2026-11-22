@@ -92,8 +92,8 @@ pub(crate) unsafe extern "C" fn list_pushed_open_users(_out: *mut [u64; 2], _max
 }
 
 /// PopOpenUsers(int*, UserHandle*, int): the handles of users kept open by PushOpenUsers in a previous program; none
-/// without one ("no program can get the UserHandle, but an error does not occur"). Reporting our user here made Super
-/// Mario Party Jamboree take its "returned from another program" path and never seat player 1.
+/// without one ("no program can get the UserHandle, but an error does not occur"). A user reported here sends Super
+/// Mario Party Jamboree down its "returned from another program" path, where player 1 is never seated.
 pub(crate) unsafe extern "C" fn pop_open_users(out_count: *mut i32, _out: *mut u128, _max: i32) -> u32 {
     if !out_count.is_null() {
         *out_count = 0;

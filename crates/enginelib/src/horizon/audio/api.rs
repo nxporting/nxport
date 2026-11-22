@@ -55,7 +55,7 @@ pub(crate) unsafe extern "C" fn open_audio_renderer(
     NN_RESULT_SUCCESS
 }
 
-/// The client state block SDK 20.5's OpenAudioRenderer (BotW 1.9.0 sdk+0x221580) puts in the handle's second word, filled
+/// The client state block SDK 20.5's OpenAudioRenderer puts in the handle's second word, filled
 /// as it fills it: +0x08 / +0x0c / +0x10 sample rate, sample count and mix buffer count from the parameter; +0x14 1;
 /// +0x18 the rendering time limit, 100 (%); +0x1c / +0x20 the parameter's words at +0x2c / +0x30; +0x24 the voice drop
 /// parameter, 1.0; +0x00 the system event; the rest 0. Lives as long as the process (one renderer).

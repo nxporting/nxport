@@ -58,7 +58,6 @@ pub(crate) unsafe extern "C" fn get_native_window(
     }
     0
 }
-// 6. NVN Graphics Bootstrap Loader & NV / VI Subsystems
 pub(crate) static mut DUMMY_DISPLAY: usize = 0x1000;
 
 pub(crate) static mut DUMMY_LAYER: usize = 0x2000;

@@ -349,7 +349,7 @@ pub(crate) unsafe extern "C" fn get_hardware_opus_multi_stream_decoder_processin
     0
 }
 // ── nn::codec hardware Opus decoder (IPC to hwopus) ─────────────────────────
-// Same story as audren: the decoder object lives in another sysmodule, so every
+// As with audren, the decoder object lives in another sysmodule, so every
 // entry point that touches it is HLE. Per-decoder state (sample rate, channels)
 // is kept in a side table keyed by address and the getters are HLE too. Decoding goes through
 // the SDK's software Opus decoder (zero external dependencies), falling back to libopus

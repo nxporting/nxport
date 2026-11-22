@@ -1,5 +1,5 @@
 // Real Opus decoding for the HLE'd hardware Opus decoder (horizon/hle.rs, nn::codec::DecodeOpusInterleavedWithHardware): TotK
-// streams its music and ambience as Opus and mixes them on the CPU, so a decoder that only accounted for samples made
+// streams its music and ambience as Opus and mixes them on the CPU, so a decoder that only accounts for samples leaves
 // every stream silent.
 //
 // One decoder per guest HardwareOpusDecoderType (keyed by its address), created on first use with the guest's sample rate

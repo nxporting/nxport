@@ -1,4 +1,4 @@
-// Server side of the audio renderer (the "audren" sysmodule), timing only.
+// Server side of the audio renderer (the "audren" sysmodule).
 //
 // The game's nn::audio code runs natively: it serializes its AudioRendererConfig into an update buffer,
 // calls IAudioRenderer::RequestUpdate (vtable slot 8 of the service object behind the AudioRendererHandle),
@@ -8,17 +8,17 @@
 // sound waits forever).
 //
 // This module implements that service call. Wire format and state machines follow Ryujinx
-// (Ryujinx.Audio/Renderer/Server: StateUpdater, VoiceInfo, PoolMapper, Dsp/DataSourceHelper). No samples
-// voice samples are decoded yet: each 5 ms renderer frame advances every playing voice through its wave buffers at its
-// sample rate and pitch, exactly as the DSP would, which is what the game observes.
+// (Ryujinx.Audio/Renderer/Server: StateUpdater, VoiceInfo, PoolMapper, Dsp/DataSourceHelper): each 5 ms renderer frame
+// advances every playing voice through its wave buffers at its sample rate and pitch, as the DSP does, which is what
+// the game observes, and decodes and resamples what it consumed.
 //
 // Sound: TotK mixes on the CPU and hands its output to the renderer through auxiliary-buffer (Aux) effects: the DSP
 // writes a mix's buffers into the effect's send ring and reads the game's samples from its return ring (Ryujinx
 // AuxiliaryBufferCommand). Each frame the mix graph is processed as Ryujinx's CommandGenerator orders it (submixes
 // farthest from the final mix first: effects by processing order, then the mix into its destination through the volume
 // matrix; then the final mix's effects and volume) and the device sink's channels go to host_audio (5.1 downmixed to
-// stereo as DownMixSurroundToStereoCommand). Not implemented yet: voice sample decoding, splitters, and every effect but
-// Aux (Reverb3d, Limiter, ... pass their input through).
+// stereo as DownMixSurroundToStereoCommand). Voices and mixes reach their destinations directly or through splitters.
+// Effects: Aux, Reverb3d, Delay, Limiter and BiquadFilter; any other passes its input through.
 
 use std::sync::Mutex;
 
@@ -514,9 +514,7 @@ impl Renderer {
         // Splitters and mixes only configure routing; nothing to report.
         // Splitters: header {magic 'SNDH', splitter count, destination count}, then the changed splitters (SNDI: id,
         // sample rate, destination count, destination ids, then 12 unused bytes: SplitterContext.UpdateState) and
-        // destinations (SNDD, version 1 before revision 12). Without the 12-byte skip only the first splitter of each
-        // update was read, and the destination loop started inside the next SNDI record (TotK sounds routed through
-        // the dropped splitters were silent, e.g. taking out the paraglider).
+        // destinations (SNDD, version 1 before revision 12).
         if splitter_sz >= 0x20 && rd32(inp, i) == 0x4844_4E53 {
             let (nsplit, ndest) = (rd32(inp, i + 4) as usize, rd32(inp, i + 8) as usize);
             let end = i + splitter_sz;
@@ -997,7 +995,7 @@ impl Renderer {
             if n == 0 {
                 continue;
             }
-            // Burst detector (a user heard two loud right-ear bursts): a jump or peak no game sound should make.
+            // Burst detector: a jump or peak no game sound makes.
             let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
             let jump = out
                 .windows(2)
@@ -1131,7 +1129,6 @@ impl Renderer {
             if dest < 0 || dest as usize >= self.mixes.len() {
                 // Through a splitter (Ryujinx CommandGenerator.GenerateSubMix): destination k takes the mix's buffer
                 // k % buffer count, scaled by the mix volume and the destination's volume per destination buffer.
-                // Super Mario Bros. Wonder routes most mixes this way; they were dropped (no dry sound, no music).
                 if mix.dest_splitter < 0 || mix.buffer_count == 0 {
                     continue;
                 }
@@ -1225,8 +1222,8 @@ impl Renderer {
                 }
             }
         }
-        // Output check: a valid mix never leaves 16-bit range. A user heard right-ear blasts that stayed loud at the
-        // lowest system volume (only samples far beyond full scale do that): find where they come from.
+        // Output check: a valid mix never leaves 16-bit range; samples far beyond full scale are logged with where they
+        // come from.
         let worst = stereo.iter().fold(0.0f32, |m, v| {
             if v.is_finite() {
                 m.max(v.abs())
@@ -1304,7 +1301,7 @@ impl Renderer {
             } else if effect.kind == EFFECT_BIQUAD {
                 self.biquad_effect(e, &effect, off, count, n);
             } else {
-                // Not implemented (Reverb3d, Limiter, ...): pass the input through. Input[6] at +0, Output[6] at +6,
+                // Other effects, and disabled ones: the input passes through. Input[6] at +0, Output[6] at +6,
                 // channel count at +0xE for every effect with six-channel mappings.
                 let chans =
                     (u16::from_le_bytes([effect.params[0xE], effect.params[0xF]]) as usize).min(6);
@@ -1322,8 +1319,7 @@ impl Renderer {
     /// BiquadFilter effect (Ryujinx CommandGenerator.GenerateBiquadFilterEffect). BiquadFilterEffectParameter:
     /// Input[6] +0, Output[6] +6, Numerator[3] +0xC and Denominator[2] +0x12 in Q14, ChannelCount +0x16, Status +0x17
     /// (UsageState: 0 invalid, 1 new). Enabled: each channel is filtered from its input to its output buffer; disabled:
-    /// copied. Super Mario Bros. Wonder routes most of its mixes through these: read with the other effects' channel count
-    /// offset (+0xE, a coefficient here) they dropped the dry signal and the music, leaving only the reverb.
+    /// copied. The channel count is not at the other effects' offset (+0xE is a coefficient here).
     fn biquad_effect(&mut self, slot: usize, e: &Effect, off: usize, count: usize, n: usize) {
         let p = &e.params;
         let chans = (p[0x16] as usize).min(6);

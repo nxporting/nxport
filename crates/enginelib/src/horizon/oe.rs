@@ -4,13 +4,11 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::collections::VecDeque;
 
-// 7. Horizon Memory & Heap Management
 pub(crate) unsafe extern "C" fn set_cpu_boost_mode(mode: u32) -> i32 {
     println!("[+] HLE: nn::oe::SetCpuBoostMode(mode={})", mode);
     0
 }
 
-// 8. Operation Environment (nn::oe) and Account
 pub(crate) unsafe extern "C" fn initialize() {
     println!("[+] HLE: nn::oe::Initialize() called");
 }
@@ -168,8 +166,8 @@ pub(crate) unsafe extern "C" fn set_performance_configuration_all(config: i32) {
     println!("[+] HLE: nn::oe::SetPerformanceConfiguration(config={})", config);
 }
 
-/// The launch parameter channel: a game started normally has none (the native call reached the applet manager's
-/// storage objects, which do not exist here, and read through null).
+/// The launch parameter channel: a game started normally has none (the native call reads the applet manager's storage
+/// objects, which do not exist here).
 pub(crate) unsafe extern "C" fn try_pop_launch_parameter(out_size: *mut usize, _buf: *mut u8, _cap: usize) -> bool {
     if !out_size.is_null() {
         *out_size = 0;
@@ -250,5 +248,5 @@ pub(crate) fn is_handheld() -> bool {
 }
 /// Notification messages for the application. After launch the system reports the focus
 /// state once (MessageFocusStateChanged = 15; GetCurrentFocusState then says InFocus), as Ryujinx's applet state
-/// manager does. Kirby and the Forgotten Land (FocusHandlingMode_SuspendAndNotify) ignored all input without it.
+/// manager does. Kirby and the Forgotten Land (FocusHandlingMode_SuspendAndNotify) ignores all input without it.
 pub(crate) static OE_MESSAGES: Mutex<Option<VecDeque<u32>>> = Mutex::new(None);

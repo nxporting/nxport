@@ -1,7 +1,6 @@
 // nn::sm as the game calls it: service handles.
 
 
-// 7b. Service Manager (nn::sm) & Diagnostic Abort
 pub(crate) unsafe extern "C" fn initialize() -> i32 {
     println!("[+] HLE: nn::sm::Initialize() called -> returning ResultSuccess (0)");
     0

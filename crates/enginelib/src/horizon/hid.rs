@@ -25,8 +25,7 @@ pub(crate) unsafe extern "C" fn set_supported_npad_style_set(style_set: u32) {
 
 /// BindNpadStyleSetUpdateEvent(const NpadIdType&, SystemEventType*, EventClearMode): the event a game waits on to
 /// re-read an Npad's styles. Our controllers are connected from the start, so it begins signaled once (the update
-/// a connection gives on the console). The SDK's own implementation opens hid over IPC (Super Mario Party Jamboree
-/// aborted on it).
+/// a connection gives on the console). The SDK's own implementation opens hid over IPC, which is not emulated.
 pub(crate) unsafe extern "C" fn bind_npad_style_set_update_event(_id: *const u32, event: *mut u8, _clear_mode: i32) {
     if !event.is_null() {
         crate::horizon::os::objects::hle_system_event_register_signaled(event as usize);
@@ -143,8 +142,8 @@ pub(crate) unsafe extern "C" fn get_npad_controller_color(out: *mut [u8; 8], id:
 }
 
 /// GetNpadControllerColor(left, right, const NpadIdType&): Joy-Con colours, for Joy-Con and handheld styles only; our
-/// players are full-key controllers, so the colours are not available there. The SDK's own version aborted on the
-/// result of a shared-memory read the engine does not provide (Super Mario Party Jamboree after "Press L + R").
+/// players are full-key controllers, so the colours are not available there. The SDK's own version reads shared memory
+/// the engine does not provide, and aborts on the result.
 pub(crate) unsafe extern "C" fn get_npad_controller_color_pair(_left: *mut [u8; 8], _right: *mut [u8; 8], id: *const u32) -> u32 {
     if id.is_null() || get_npad_style_set(id) == 0 {
         return RESULT_NPAD_CONTROLLER_NOT_CONNECTED;
@@ -488,7 +487,7 @@ pub(crate) unsafe extern "C" fn get_states_zero(_out: *mut u8, _count: i32, _id:
         },
         _count,
     );
-    0 // no controller input source yet: report zero new states
+    0 // no single Joy-Con or six-axis source: zero new states
 }
 
 pub(crate) unsafe extern "C" fn set_handheld_activation_mode(mode: i64) {

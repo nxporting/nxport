@@ -1,5 +1,4 @@
-// HLE of nn::audio's AudioOut API, timing only like horizon/audio/renderer.rs: the SDK
-// implementation talks to the audout service over IPC. Appended buffers are "played" back to back in real time at the
+// HLE of nn::audio's AudioOut API: the SDK implementation talks to the audout service over IPC. Appended buffers are "played" back to back in real time at the
 // output's sample rate and released when their samples would have finished; a queue that runs dry stops the clock, as
 // on hardware. Kirby's movie player feeds its audio track through this and paces video against it. 48 kHz 16-bit
 // buffers are also played (host::audio::push_audio_out, mixed with the audio renderer's output).

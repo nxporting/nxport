@@ -5,8 +5,7 @@ use super::*;
 // ── horizon::movie::Buffer (private members) ─────────────────────────────────────────────────────────────────────
 // The NVN device and sync members came with a later library version: 4.4.0's Buffer is 0x30 bytes (its constructor
 // zeroes 0x0..0x30), 7.3.2's, 11.4.0's and 15.3.1's are 0x40. Writing the newer layout into an older game's Buffer
-// overwrote the 16 bytes after it on the caller's stack (Mario Kart 8 Deluxe: a saved register holding a multi-wait
-// holder, so its movie player never recognised "output available").
+// would overwrite the 16 bytes after it (Mario Kart 8 Deluxe's are on the caller's stack).
 #[repr(C)]
 pub(crate) struct Buffer {
     pub(crate) range_offset: i32,

@@ -2,7 +2,6 @@
 
 use super::nn::*;
 
-// ── nn::swkbd / nn::nfp / nn::hid / nn::prepo ────────────────────────────────────────────────
 pub(crate) unsafe extern "C" fn get_required_work_buffer_size(_is_unicode: bool) -> usize {
     0x4000
 }

@@ -3,7 +3,7 @@
 use super::nn::*;
 
 // ── nn::friends: an offline user with an empty friend list (the SDK's own Initialize opens friend:u itself, whose IPC
-// is not emulated: Super Mario Bros. Wonder aborted there at boot) ──────────────────────────────────────────────────────
+// is not emulated) ──────────────────────────────────────────────────────────────────────────
 pub(crate) unsafe extern "C" fn void() {}
 
 pub(crate) unsafe extern "C" fn ok() -> u32 {

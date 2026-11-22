@@ -1,10 +1,10 @@
 // The C and C++ runtime pieces the engine provides: static-initialisation guards, atexit, pure / deleted virtual
-// calls, RTTI vtables, the musl DSO init, and the string / memory / printf routines it replaces.
+// calls, the musl DSO init, and the string / memory / printf routines it replaces.
 
 use std::os::raw::c_char;
 use std::sync::{Arc, Condvar, Mutex as StdMutex, OnceLock};
 
-// 1. C++ ABI Guards
+// C++ ABI guards
 //
 // __cxa_guard_acquire/release gate C++11 thread-safe static-local
 // initialization (Meyer's singletons, `static Foo& instance() { static Foo
@@ -106,7 +106,7 @@ pub(crate) unsafe extern "C" fn hle_nnmusl_init_dso(
         16
     };
     let n = tdata_end.saturating_sub(tdata_start);
-    // The block holds at most 0x1f0 bytes of it (guest/tls.rs reports a larger segment), so no more is read.
+    // The block holds at most 0x1f0 bytes of it (guest/exec/tls.rs reports a larger segment), so no more is read.
     let template = if n > 0 && n <= 0x1f0 && tdata_start >= 0x10000 {
         std::slice::from_raw_parts(tdata_start as *const u8, n).to_vec()
     } else {
@@ -122,7 +122,7 @@ pub(crate) unsafe extern "C" fn hle_nnmusl_init_dso(
     1
 }
 
-// 3. Libc / standard math pass-throughs
+// Libc / standard math pass-throughs
 #[no_mangle]
 pub(crate) unsafe extern "C" fn hle_memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
     #[cfg(nx_native)]
@@ -225,7 +225,7 @@ pub(crate) fn format_printf(fmt: &[u8], args: &[u64]) -> Vec<u8> {
     out
 }
 
-// 12. Symbol-based (R_AARCH64_ABS64 / R_AARCH64_GLOB_DAT) relocation targets: __cxa_pure_virtual and
+// Symbol-based (R_AARCH64_ABS64 / R_AARCH64_GLOB_DAT) relocation targets: __cxa_pure_virtual and
 // __cxa_deleted_virtual, the Itanium C++ ABI's vtable-slot fillers for pure-virtual or deleted methods a class does
 // not override. Their slots must hold a callable function.
 //

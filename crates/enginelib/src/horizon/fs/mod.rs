@@ -1,5 +1,4 @@
-// Horizon OS High-Level Emulation for File System (nn::fs)
-// Maps RomFS and game paths directly to the local dumped assets.
+// nn::fs: RomFS and game paths mapped to the dump's files (mods layered over them), and writable save mounts.
 
 use std::ffi::CStr;
 use std::fs::File;
@@ -34,7 +33,7 @@ fn read_at(f: &File, buf: &mut [u8], off: u64) -> std::io::Result<usize> {
             Ok(0) => break,
             Ok(n) => done += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            // The caller retries a buffer fault from the start (horizon/fs.rs ReadFile).
+            // The caller retries a buffer fault from the start (ReadFile below).
             Err(e) => return Err(e),
         }
     }
@@ -87,7 +86,7 @@ const RESULT_PATH_ALREADY_EXISTS: i32 = 0x402; // 2002-0002
 const RESULT_TARGET_NOT_FOUND: i32 = 2 | (1002 << 9); // 2002-1002
 
 /// Every mount name the game has mounted and not unmounted (nn::fs::IsMounted). The routing tables below are kept
-/// separately: a path under a name stays resolvable after an unmount, as before.
+/// separately: a path under a name stays resolvable after an unmount.
 static MOUNTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub(crate) fn note_mounted(name: &str) {
@@ -133,7 +132,7 @@ pub(crate) unsafe fn register_writable_mount(kind: &str, name: *const c_char) {
             );
         }
         if name == "sd" {
-            // Seed UltraCam config if present in mods/
+            // UltraCam's config from the mods, when the SD card has none yet.
             let target_cfg = root.join("UltraCam/TOTK/Config/maxlastbreath.ini");
             if !target_cfg.exists() {
                 for (_, mod_path) in mods() {
@@ -351,8 +350,7 @@ pub unsafe extern "C" fn open_file(
         None => {}
     }
 
-    // Try the bare path first, then fall back to the .zs compressed variant
-    // (TotK's RomFS dump stores all files with an extra .zs suffix).
+    // The bare path first, then the .zs compressed variant (TotK's RomFS stores its files with an extra .zs suffix).
     let candidates = [
         host_path.clone(),
         host_path.with_extension(
@@ -396,7 +394,7 @@ pub unsafe extern "C" fn open_file(
     // Decompress only when we did a transparent fallback: the game requested a
     // plain file but on disk it only exists as a .zs archive.  If the game
     // explicitly asked for the .zs file it will decompress it itself via its
-    // built-in Zstandard decompressor (0xa7e768).
+    // built-in Zstandard decompressor.
     let used_zs_fallback =
         chosen_path != candidates[0] && chosen_path.extension().map(|e| e == "zs").unwrap_or(false);
 
@@ -668,8 +666,8 @@ pub unsafe extern "C" fn get_entry_type(out_type: *mut i32, path: *const c_char)
         return RESULT_PATH_NOT_FOUND;
     };
 
-    // nn::fs::DirectoryEntryType: Directory = 0, File = 1. Reporting 1/2 made an existing save file
-    // look like "not a file": TotK's album code then retried CreateFile on it forever (loading never finished).
+    // nn::fs::DirectoryEntryType: Directory = 0, File = 1 (TotK's album code retries CreateFile forever on a save file
+    // that does not read as a file).
     *out_type = if meta.is_dir() { 0 } else { 1 };
     0
 }
@@ -757,7 +755,7 @@ pub unsafe extern "C" fn write_file(
 #[no_mangle]
 pub unsafe extern "C" fn flush_file(handle: u64) -> i32 {
     // Synced through a second handle to the same file, outside OPEN_FILES: a sync waits on the disk (tens of
-    // milliseconds), and under the lock every other file call of the game waited with it (reads of game data included).
+    // milliseconds), and under the lock every other file call of the game would wait with it.
     let file = {
         let files = OPEN_FILES.lock().unwrap();
         match files.get((handle.wrapping_sub(1)) as usize) {

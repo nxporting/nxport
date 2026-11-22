@@ -9,8 +9,7 @@ pub(crate) const MAX_PENDING: usize = 4;
 
 /// Decoder calls come from the game's input threads (send) and its output side (acquire / release): one lock for the
 /// decoders' queues and slots. A frame is decoded outside it, under its decoder's Codec lock (d_send_input): a VP9 frame
-/// takes tens of milliseconds, and under this lock the game could neither take ready frames nor decode audio meanwhile
-/// (movies played slow, then fast). Lock order: a Codec, then this.
+/// takes tens of milliseconds, and under this lock the game could neither take ready frames nor decode audio meanwhile. Lock order: a Codec, then this.
 pub(crate) static DECODER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A decoder's decoding side: held while it decodes or drains, and while its frames are queued (so they keep their order).
@@ -382,7 +381,7 @@ pub(crate) unsafe fn receive_all(handle: usize, codec: &mut Codec) -> (Vec<Recei
 pub(crate) fn deliver(d: &mut Decoder, received: Vec<Received>, done: bool) {
     for r in received {
         // formatChangedEvent before the first output (and on size changes), as MediaCodec-style decoders report the
-        // output format first: Kirby's guide movies (no audio track) waited ~5 s for it before starting playback.
+        // output format first: Kirby's guide movies (no audio track) wait for it before starting playback.
         if d.is_video && (r.width != d.width || r.height != d.height || !d.format_reported) {
             d.width = r.width;
             d.height = r.height;
@@ -532,19 +531,19 @@ pub(crate) unsafe extern "C" fn d_acquire_output(
         return NULL_DECODER;
     };
     // A video frame is handed out once its presentation time has come, counted from the first one. The game's player
-    // shows the newest frame it has each time it draws (TotK: one per draw, so its movies played at the draw rate,
-    // twice as fast at 60 fps); the console draws them at the video's 30. Without a new frame the player keeps showing
-    // the last one. A frame that comes out a whole frame interval (frame_us) or more after its time (the decoder fell
-    // behind, the game stalled, or it took the first frame long before playing: TotK decodes a movie's first frame
-    // while its event loads) restarts the clock from it: the console shows the next frame one draw later and never catches up, and
-    // handing out every late frame played them at the draw rate, twice the video's speed at 60 fps.
+    // shows the newest frame it has each time it draws (TotK takes one per draw: frames handed out as decoded would
+    // play at the draw rate, twice as fast at 60 fps); the console draws them at the video's 30. Without a new frame the
+    // player keeps showing the last one. A frame that comes out a whole frame interval (frame_us) or more after its time
+    // (the decoder fell behind, the game stalled, or it took the first frame long before playing: TotK decodes a
+    // movie's first frame while its event loads) restarts the clock from it: the console shows the next frame one draw
+    // later and never catches up, and handing out every late frame would play them at the draw rate.
     if d.is_video {
         if let Some(&slot) = d.ready.front() {
             let pts = d.outputs[slot].as_ref().map_or(0, |f| f.pts);
             let now = std::time::Instant::now();
             // A frame due more than a second from now follows a seek (Mario Kart 8 Deluxe's menu jumps between previews
             // in one movie): the clock restarts from it, as from a late frame. Timed from the old start it would wait out
-            // the whole jump (139 s there) while the menu waited for its preview. A contiguous stream cannot be that far
+            // the whole jump while the menu waits for its preview. A contiguous stream cannot be that far
             // ahead: the decoder holds only a few output slots of frames.
             let jumped = d.clock.is_some_and(|(t0, p0)| (pts - p0) - (now - t0).as_micros() as i64 > 1_000_000);
             match d.clock {
@@ -717,7 +716,7 @@ unsafe fn release_output(d: &mut Decoder, idx: i32) -> u32 {
         None => return ERR_INVALID_RANGE,
     }
     // Input becomes available here only if the back-pressure on pending frames held it (the event reports a change,
-    // not a level: signalling it on every release woke the game's input handler after it had shut down).
+    // not a level: signalling it on every release would wake the game's input handler after it shut down).
     let held = !input_available(d);
     distribute(d);
     if held {

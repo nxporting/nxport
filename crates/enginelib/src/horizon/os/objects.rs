@@ -211,19 +211,10 @@ pub(crate) unsafe fn condvar_get(cv: *mut ()) -> Arc<CondVarState> {
     table.entry(key).or_insert_with(condvar_new).clone()
 }
 
-// nn::os::LightEvent: a simple signaled/not-signaled event with manual or
-// auto clear-on-wait semantics (EventClearMode_ManualClear = 0,
-// EventClearMode_AutoClear = 1). Previously a complete no-op across
-// Initialize/Signal/Wait, with Finalize/Clear/TimedWait not even bound to
-// GOT -- so any producer/consumer pair coordinating through one (e.g. a
-// worker thread signaling "data ready" to a decompression thread) never
-// actually blocked or woke correctly: Wait returned immediately regardless
-// of real state, letting a consumer run ahead and read memory its producer
-// hadn't written yet. That's exactly the shape of the wild-garbage-pointer
-// crash observed on the native ZstdDecompThread once TLS setup stopped
-// masking it. Implemented the same way as LightMessageQueue/ConditionVariable:
-// real state (signaled bool + clear mode) in a side table keyed by the guest
-// event pointer, with a Condvar for real blocking.
+// nn::os::LightEvent: a signaled / not-signaled event with manual or auto clear-on-wait (EventClearMode_ManualClear =
+// 0, EventClearMode_AutoClear = 1). Producer / consumer pairs (a worker signaling "data ready" to a decompression
+// thread) rely on Wait blocking until the signal. As LightMessageQueue / ConditionVariable: the state (signaled, clear
+// mode) in a side table keyed by the guest event pointer, with a Condvar to block on.
 pub(crate) struct LightEventState {
     pub(crate) signaled: StdMutex<bool>,
     pub(crate) auto_clear: std::sync::atomic::AtomicBool,
@@ -289,12 +280,9 @@ pub(crate) struct TimerEventInner {
 
 // ── nn::os::TimerEvent ─────────────────────────────────────────────────────────
 //
-// TimerEvent is a timed synchronization primitive supporting one-shot and
-// periodic intervals with automatic or manual clear semantics.
-// Native Switch implementations use Horizon kernel condition variables
-// and critical sections which issue Switch SVCs (svc 0x1c, 0x1d) and check
-// thread handles, causing aborts on Darwin. This HLE provides complete
-// standard condition variable and deadline based blocking.
+// A timed event, one-shot or periodic, with automatic or manual clear. The SDK's implementation waits on kernel
+// condition variables and critical sections (svc 0x1c, 0x1d) with thread handles; here a condition variable and a
+// deadline.
 pub(crate) struct TimerEventState {
     pub(crate) inner: StdMutex<TimerEventInner>,
     pub(crate) cv: Condvar,
@@ -330,17 +318,9 @@ pub(crate) unsafe fn timer_event_get(ev: *mut ()) -> Arc<TimerEventState> {
         .clone()
 }
 
-// nn::os::Semaphore / nn::os::LightSemaphore: a real counting semaphore
-// (Acquire blocks while count == 0, then decrements; Release adds N up to
-// max). Previously a complete no-op for the (bound) Semaphore family, and
-// InitializeLightSemaphore/AcquireLightSemaphore/ReleaseLightSemaphore/
-// FinalizeLightSemaphore weren't even bound to GOT -- so a producer/consumer
-// pair coordinating a bounded work queue through one (exactly the pattern
-// TotK's DecompThread/MeshCodecDecompresionThread/ZstdDecompThread use to
-// hand off compressed chunks) never actually blocked: Acquire returned
-// immediately with whatever count happened to be there, letting a consumer
-// run past data its producer hadn't produced yet. Same side-table + Condvar
-// approach as LightEvent/ConditionVariable above.
+// nn::os::Semaphore / nn::os::LightSemaphore: a counting semaphore (Acquire blocks while count == 0, then decrements;
+// Release adds N up to max). TotK's DecompThread / MeshCodecDecompresionThread / ZstdDecompThread hand off compressed
+// chunks through bounded work queues guarded by them. The same side table + Condvar as LightEvent / ConditionVariable.
 pub(crate) struct SemaphoreState {
     count: StdMutex<i32>,
     max: i32,
@@ -462,8 +442,8 @@ thread_local! {
 }
 
 /// Waits (releasing SYNC) until an object in `keys` changes, `deadline` passes, or a spurious wake; callers re-check.
-/// Only the threads waiting on a changed object wake: one shared condition variable woke every waiting thread at every
-/// signal, and they all queued for SYNC (BotW has ~15 in these waits).
+/// Only the threads waiting on a changed object wake: a shared condition variable would wake every waiting thread at
+/// every signal, and they would all queue for SYNC.
 pub(crate) fn sync_wait<'a>(
     mut g: MutexGuard<'a, Option<Sync>>,
     keys: &[usize],
@@ -769,8 +749,7 @@ pub(crate) struct NnMutex {
     pub _pad3: u32,
 }
 
-// Reader-writer lock: real exclusion, tracked in a side table keyed by the lock's address
-// (horizon/nn.rs).
+// Reader-writer lock: real exclusion, tracked in a side table keyed by the lock's address.
 #[repr(C)]
 pub(crate) struct NnReaderWriterLock {
     pub lock_state: u32,

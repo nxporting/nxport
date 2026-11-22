@@ -4,7 +4,7 @@ use super::super::Entry;
 
 pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn6socket10GetSockOptEiiiPvPj", func!(crate::horizon::socket::fail())),
-    // nn::socket (no network; Socket / Connect / Send / Recv / Initialize are module_loader's runtime overrides)
+    // nn::socket (no network; Initialize is guest::module_loader's)
     Entry("_ZN2nn6socket10InitializeEPvmmi", func!(crate::guest::module_loader::socket_initialize_pool(_, _, _, _))),
     Entry("_ZN2nn6socket10InitializeERKNS0_6ConfigE", func!(crate::guest::module_loader::socket_initialize(_))),
     Entry("_ZN2nn6socket10SetSockOptEiiiPKvj", func!(crate::horizon::socket::fail())),

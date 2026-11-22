@@ -1,6 +1,6 @@
 // nn::irsensor: the Joy-Con IR camera. Our controllers have none, so the camera reports itself unsupported and every
-// state query answers ResultIrsensorUnsupported with no data. The SDK's own versions open the irs service over IPC
-// (Super Mario Party Jamboree aborted at GetIrCameraHandle).
+// state query answers ResultIrsensorUnsupported with no data. The SDK's own versions open the irs service over IPC,
+// which is not emulated.
 
 /// ResultIrsensorUnsupported: module 205, description 111.
 const RESULT_UNSUPPORTED: u32 = 205 | 111 << 9;

@@ -51,8 +51,8 @@ pub(crate) fn address_regions() -> &'static StdMutex<rustc_hash::FxHashMap<usize
 /// Horizon hands out address regions from a dedicated part of the address space, never interleaved with the
 /// memory heap. TotK's page-allocator heap (TotK 1.1.2 vtable main+0x45b43c8) depends on that: its isInclude() is just
 /// [lowest chunk, highest chunk end), so with regions from plain mmap() one chunk could land below the memory heap
-/// and another above it, the heap then claimed ordinary heap pointers, and sead::HeapMgr::findContainHeap routed
-/// their frees to it (the intermittent crash at TotK 1.1.2 main+0xAFCEB4). All regions now come from one reserved arena.
+/// and another above it, the heap would then claim ordinary heap pointers, and sead::HeapMgr::findContainHeap would route
+/// their frees to it. All regions come from one reserved arena.
 /// Largest arena tried first; smaller ones after it (iOS apps without the extended-virtual-addressing entitlement get
 /// far less address space than macOS processes).
 #[cfg(not(target_os = "ios"))]
@@ -429,7 +429,6 @@ pub(crate) unsafe extern "C" fn free_memory_pages(address: usize, size: usize) {
     );
 }
 
-// 10. Stack, Core, Mutex TryLock, and ReaderWriterLock
 pub(crate) unsafe extern "C" fn get_current_stack_info(
     out_stack: *mut usize,
     out_stack_size: *mut usize,

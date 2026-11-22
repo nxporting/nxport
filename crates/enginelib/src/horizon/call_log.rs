@@ -8,9 +8,9 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 // so crash and hang reports list the calls made before them.
 pub(crate) const HLE_CALL_HISTORY_SIZE: usize = 4096;
 
-// Each thread records into a ring of its own, with plain stores: one ring for all threads had its lock contended by
-// every guest thread making HLE calls (2.4% of all samples in TotK's gameplay on the lifted runtime), and a lock per
-// thread (and a shared sequence counter) still cost 4-5% of the busy time of guest-main and the module workers.
+// Each thread records into a ring of its own, with plain stores: a ring for all threads has its lock contended by every
+// guest thread making HLE calls, and even a lock per thread (or a shared sequence counter) costs a few percent of the
+// busy time of the game's busiest threads.
 // Readers merge the rings by sequence number (on x86-64 the time stamp counter, synchronized across cores) and skip a
 // slot written while they read it. Names are 'static (literals,
 // and the rare formatted name interned once), so a slot is a sequence number and a str's pointer and length.
@@ -75,8 +75,7 @@ pub(crate) fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
     #[cfg(target_arch = "x86_64")]
     let seq = unsafe { core::arch::x86_64::_rdtsc() };
     // The virtual counter (synchronized across cores) with the ring position below it: a thread's calls within one tick
-    // stay in order. A shared atomic counter here was 2% of guest-main's time in BotW (its cache line moving between
-    // every thread making HLE calls).
+    // stay in order. A shared atomic counter would move its cache line between every thread making HLE calls.
     #[cfg(target_arch = "aarch64")]
     let seq = {
         let cnt: u64;
