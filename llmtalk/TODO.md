@@ -233,6 +233,11 @@ and update this file when you finish or drop it.
      task-queue race (1 in 6 runs on the Mac) can hit there; a lifted equivalent would be needed.
   58. 936fc2d (metal downscale.rs) demotion of 2D array textures keeps contents. Vulkan on main has no resolution scaling
      yet (no gpu::scale calls): when it gets demotion, include 2D arrays (BotW 1.5.0 at 2x, botw-sunk, frame ~3300).
+  59. 7a2970c (TotK native ports, shared): native mode no longer crashes opening the inventory. Nothing for Windows.
+  60. b6bba5f (profile/totk font_draw.rs): text is native items on Metal only; Vulkan keeps the NVN form (nothing to do
+     until Vulkan runs Cmd::ModelDraw).
+  61. be6acec (guest/exec/crash_handler.rs, shared): crash reports walk engine frames with dladdr (unix only; check it
+     is unix-only already; nothing for Windows).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
