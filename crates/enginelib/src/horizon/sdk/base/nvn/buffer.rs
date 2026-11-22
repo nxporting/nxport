@@ -19,4 +19,5 @@ pub(super) static PROCS: &[Entry] = &[
     Entry("nvnBufferBuilderGetDevice", func!(crate::nvn::api::hle_nvnBufferBuilderGetDevice(_))),
     Entry("nvnBufferGetMemoryPool", func!(crate::nvn::api::hle_nvnBufferGetMemoryPool(_))),
     Entry("nvnBufferGetMemoryOffset", func!(crate::nvn::api::hle_nvnBufferGetMemoryOffset(_))),
+    Entry("nvnBufferSetDebugLabel", func!(crate::nvn::api::hle_nvn_noop_setter(_, _, _))),
 ];

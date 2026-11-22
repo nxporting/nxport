@@ -36,4 +36,5 @@ pub(super) static PROCS: &[Entry] = &[
     Entry("nvnQueueAcquireTexture", func!(crate::nvn::api::hle_nvnQueueAcquireTexture(_, _, _))),
     Entry("nvnQueueWaitSync", func!(crate::nvn::api::hle_nvnQueueWaitSync(_, _))),
     Entry("nvnQueueFenceSync", func!(crate::nvn::api::hle_nvnQueueFenceSync(_, _, _, _))),
+    Entry("nvnQueueSetDebugLabel", func!(crate::nvn::api::hle_nvn_noop_setter(_, _, _))),
 ];

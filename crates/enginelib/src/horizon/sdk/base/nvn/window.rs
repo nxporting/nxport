@@ -5,6 +5,11 @@ use super::super::super::Entry;
 pub(super) static PROCS: &[Entry] = &[
     Entry("nvnWindowBuilderSetPresentInterval", func!(crate::nvn::api::hle_nvnWindowSetPresentInterval(_, _))),
     Entry("nvnWindowBuilderGetPresentInterval", func!(crate::nvn::api::hle_nvnWindowGetPresentInterval(_))),
+    Entry("nvnWindowSetPresentInterval", func!(crate::nvn::api::hle_nvnWindowSetPresentInterval(_, _))),
+    Entry("nvnWindowGetPresentInterval", func!(crate::nvn::api::hle_nvnWindowGetPresentInterval(_))),
+    Entry("nvnWindowSetPresentInterval2", func!(crate::nvn::api::hle_nvn_noop_setter(_, _, _))),
+    Entry("nvnWindowSetDebugLabel", func!(crate::nvn::api::hle_nvn_noop_setter(_, _, _))),
+    Entry("nvnWindowBuilderSetNativeWindow", func!(crate::nvn::api::hle_nvn_noop_setter(_, _, _))),
     Entry("nvnWindowBuilderSetNumActiveTextures", func!(crate::nvn::api::hle_nvnWindowBuilderSetNumActiveTextures(_, _))),
     Entry("nvnWindowBuilderGetDevice", func!(crate::nvn::api::hle_nvnWindowBuilderGetDevice(_))),
     Entry("nvnWindowBuilderGetNumTextures", func!(crate::nvn::api::hle_nvnWindowBuilderGetNumTextures(_))),
