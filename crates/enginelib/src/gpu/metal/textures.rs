@@ -1220,10 +1220,9 @@ pub(crate) fn tex_scale(t: &Tex) -> u32 {
 }
 
 pub(crate) fn storage_id(t: &Tex) -> u64 {
-    match t.parentTexture() {
-        Some(p) => Retained::as_ptr(&p) as *const () as u64,
-        None => Retained::as_ptr(t) as *const () as u64,
-    }
+    // The real texture under any chain of views: a tiny pass writes a layer view of a target that may itself be a view,
+    // and a mark on the view in between would not be found under the texture the binding resolves.
+    super::translated::root_id(t)
 }
 
 /// GPU-rendered textures in guest memory. On the Switch the GPU writes render targets into memory the CPU shares, and
