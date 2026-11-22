@@ -76,6 +76,22 @@ pub(crate) fn set_vsync_rate(hz: u32) {
     }
 }
 
+/// `wait` moved to the display's nearest refresh when the window shows frames on it: the console's vsync is its
+/// screen's refresh, and games that pace by the vsync event (Unity's player) would otherwise drift against the refreshes
+/// our presents land on (a 60 Hz game on a 120 Hz screen then misses every so many refreshes and shows 40 fps).
+fn on_refresh(wait: std::time::Duration) -> std::time::Duration {
+    #[cfg(nx_native)]
+    if crate::gpu::metal::display_pacing() && crate::host::overlay::paces_to_refresh() {
+        if let (Some(to_grid), Some(period)) = (crate::gpu::metal::display_pacing_wait(), crate::gpu::metal::display_period()) {
+            if wait.as_secs_f64() >= 0.75 * period {
+                let j = ((wait.as_secs_f64() - to_grid.as_secs_f64()) / period).round().max(0.0);
+                return to_grid + std::time::Duration::from_secs_f64(j * period);
+            }
+        }
+    }
+    wait
+}
+
 pub(crate) fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
     static EVENTS: StdMutex<Vec<std::sync::Arc<HleSystemEvent>>> = StdMutex::new(Vec::new());
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -91,7 +107,7 @@ pub(crate) fn nn_vi_start_vsync_pacer(ev: std::sync::Arc<HleSystemEvent>) {
             loop {
                 let now = std::time::Instant::now();
                 if next > now {
-                    std::thread::sleep(next - now);
+                    std::thread::sleep(on_refresh(next - now));
                 }
                 // A late wake-up (or a change of rate) starts the grid again rather than signalling to catch up.
                 next = (next + period()).max(std::time::Instant::now());
