@@ -259,7 +259,7 @@ fn describe_handle(handle: u64) -> String {
 static MAPPED: std::sync::OnceLock<(usize, u64)> = std::sync::OnceLock::new();
 
 /// Maps the capture's memory at its addresses before anything else takes them: a backend's own allocations at startup
-/// landed on a capture's ranges ("is not free").
+/// could land on a capture's ranges.
 pub fn map_early(dir: &Path) -> Result<(), String> {
     let m = map_memory(dir)?;
     let _ = MAPPED.set(m);
@@ -289,7 +289,7 @@ fn map_memory(dir: &Path) -> Result<(usize, u64), String> {
         },
     )?;
     // Write tracking over the captured memory, as over the guest heap in a live run: texture checks are skipped while
-    // their pages are untouched (without it every texture was hashed at every submit and replay timings meant little).
+    // their pages are untouched (without it every texture would be hashed at every submit).
     if lo < hi {
         crate::guest::dirty_track::register_domain(lo as usize, (hi - lo) as usize);
     }

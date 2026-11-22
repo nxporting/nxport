@@ -208,8 +208,8 @@ pub fn run(layers: Vec<settings::SettingsPatch>) -> Result<(), Box<dyn std::erro
         std::env::set_var("MTL_SHADER_VALIDATION", "1");
         std::env::set_var("MTL_SHADER_VALIDATION_REPORT_TO_STDERR", "1");
     }
-    // Open-file limit up to the hard limit: every loaded shader library keeps its file open (336 for Kirby), and the
-    // soft limit is 256 on iOS ("Too many open files" for the last libraries).
+    // Open-file limit up to the hard limit: every loaded shader library keeps its file open, and the soft limit is 256
+    // on iOS.
     unsafe {
         let mut r = libc::rlimit {
             rlim_cur: 0,
@@ -444,7 +444,7 @@ fn guest_chain(
     // Mod modules' initialisers. rtld initialises the modules main depends on before main's own initialisers, and
     // exlaunch installs its hooks here: with an AOT image (guest/exec/aot.rs) the hooks are in the code from the start, so the
     // mods must have set up the state their hooks use before any game code can reach them (main's static
-    // constructors ran into an UltraCam trampoline whose target was still null). A dump run snapshots the code
+    // constructors reach UltraCam's trampolines). A dump run snapshots the code
     // first and writes the image once they patched it.
     macro_rules! run_mod_inits {
         () => {
@@ -890,7 +890,7 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
 
     // 4a''. Mod modules (exefs/subsdk0..9 of the enabled mods, e.g. exlaunch plugins like UltraCam). Their imports
     //       resolve to whatever the game's own imports resolved to (so they reach the same HLE), then SDK exports and
-    //       what horizon::sdk binds. QueryMemory (horizon_svc) presents the guest
+    //       what horizon::sdk binds. QueryMemory (horizon::svc) presents the guest
     //       modules in rtld/main/mods/sdk order, as exlaunch expects when it locates the game's code.
     let mut mod_inits: Vec<(String, usize)> = Vec::new();
     let mut mod_modules: Vec<(String, usize, usize, std::ops::Range<usize>)> = Vec::new();

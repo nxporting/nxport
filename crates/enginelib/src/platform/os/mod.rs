@@ -293,7 +293,7 @@ pub fn flush_icache(addr: usize, len: usize) {
     imp::flush_icache(addr, len)
 }
 
-/// How many bytes from `addr` (up to `max`) can be read without faulting. Native hosts ask cpu::crash_handler, which
+/// How many bytes from `addr` (up to `max`) can be read without faulting. Native hosts ask guest::exec::crash_handler, which
 /// also knows the guest's page guards.
 #[cfg(windows)]
 pub fn readable_len(addr: usize, max: usize) -> usize {
@@ -301,7 +301,7 @@ pub fn readable_len(addr: usize, max: usize) -> usize {
 }
 
 /// Prints what an exception nothing handled was, where (module and offset) and the thread's stack, before the process
-/// ends (native hosts report crashes in cpu::crash_handler).
+/// ends (native hosts report crashes in guest::exec::crash_handler).
 #[cfg(windows)]
 pub fn report_crashes() {
     imp::report_crashes()
@@ -323,7 +323,7 @@ pub fn writable_len(addr: usize, max: usize) -> usize {
 pub type FaultHandler = unsafe fn(addr: usize, write: bool, pc: usize) -> bool;
 
 /// Has `handler` see every access fault in the process before anything else does (the page guards: write tracking, the
-/// GPU backends' guards). Native hosts handle faults in cpu::crash_handler, which also rewrites the guest's registers.
+/// GPU backends' guards). Native hosts handle faults in guest::exec::crash_handler, which also rewrites the guest's registers.
 #[cfg(windows)]
 pub fn on_access_fault(handler: FaultHandler) {
     imp::on_access_fault(handler)

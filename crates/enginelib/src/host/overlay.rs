@@ -1,14 +1,6 @@
-// In-game lean performance overlay and dynamic runtime settings.
-//
-// Maintains rolling frame times and GPU performance stats, rendered directly onto the Metal
-// drawable during presentation when enabled. Provides atomic runtime switches for:
-// - Performance overlay HUD (FPS, 1% low, avg, frame-time graph, GPU & wait metrics)
-// - Dynamic aspect ratio (window-following FOV/HUD vs fixed 16:9)
-// - FPS mode (Unlocked vs Stock 30)
-// - Display mode (Docked 1080p vs Handheld 720p)
-// - VSync
-// - Asynchronous shader pipeline compilation
-// iOS has no menu bar: its settings screen sets some of these at launch, and the rest go unused there.
+// The overlays on Metal (the performance window, drawn onto the presented frame when enabled, and the shader progress
+// line), and runtime switches the menus set: the frame-rate mode (unlocked or stock 30), vsync, low latency,
+// asynchronous pipeline compilation. iOS has no menu bar: its settings screen sets some of these at launch, and the rest go unused there.
 #![cfg_attr(target_os = "ios", allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -57,7 +49,7 @@ pub fn is_vsync() -> bool {
 
 /// Frames reach the screen only at its refreshes, so pacing works in whole refreshes: with vsync, and always on Apple
 /// platforms, whose window server composites every window at the refresh (vsync off there only changes how the layer
-/// hands frames over; frames timed on their own clock landed one and two refreshes apart, a stutter at a 60 limit).
+/// hands frames over; frames timed on their own clock would land one and two refreshes apart, a stutter at a 60 limit).
 pub fn paces_to_refresh() -> bool {
     is_vsync() || cfg!(target_vendor = "apple")
 }

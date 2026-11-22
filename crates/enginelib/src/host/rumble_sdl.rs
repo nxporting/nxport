@@ -1,4 +1,4 @@
-// Rumble on Windows: the game's HD Rumble values (nn::hid::SendVibrationValue[s], HLE'd in horizon/hle.rs) drive the
+// Rumble on Windows: the game's HD Rumble values (nn::hid::SendVibrationValue[s], HLE'd in horizon/hid.rs) drive the
 // controllers' motors through SDL (host/display_sdl.rs polls controllers on the main thread).
 //
 // As on macOS (host/rumble.rs), each Switch motor (handle 1 = left, 2 = right) becomes one intensity: the larger band

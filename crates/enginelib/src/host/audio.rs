@@ -2,7 +2,7 @@
 // that the platform's output device plays: an AudioQueue (AudioToolbox, audio_queue.rs) on macOS and iOS, an SDL3 audio
 // stream (audio_sdl.rs) where guest code is lifted. Playback starts with the first pushed frame, only in windowed
 // runs (never with --headless) and not with --audio=0. --audio-wav=path also writes everything pushed to a
-// WAV file (works headless: how agent runs check the output without making sound).
+// WAV file (works headless).
 //
 // The renderer produces frames on the guest's schedule (wall-clock 5 ms frames), the device consumes them on its own
 // clock: the ring absorbs the difference and is trimmed back to TARGET_MS when it grows past MAX_MS, so latency

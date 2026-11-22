@@ -60,8 +60,7 @@ pub mod id {
     pub const SAVE_FOLDER: u16 = 61;
     pub const CAPTURE: u16 = 70;
     pub const LOG: u16 = 71;
-    /// + the input's index in input::SWITCH_INPUTS. Clear of the ranges above (STRENGTH's covers 500..=700: at 600 these
-    /// were taken for vibration strengths, and no click started a capture).
+    /// + the input's index in input::SWITCH_INPUTS. Clear of the ranges above (STRENGTH's covers 500..=700).
     pub const BIND: u16 = 800;
     pub const RESET_CONTROLS: u16 = 900;
     /// The Controls window (macOS; Windows lists the bindings in the menu instead).
@@ -595,8 +594,7 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
 mod tests {
     use super::*;
 
-    /// The id ranges `command` matches never overlap, or a click is taken for another item (the Controls items once
-    /// set vibration strengths).
+    /// The id ranges `command` matches never overlap, or a click is taken for another item.
     #[test]
     fn menu_id_ranges_are_apart() {
         let n = input::SWITCH_INPUTS.len() as u16;

@@ -10,7 +10,7 @@
 // Threading: AppKit and GameController objects are only touched on the main thread (keyboard events arrive there; a
 // 250 Hz timer polls controllers), and guest threads must not call into Objective-C (they clobber thread-local state
 // libobjc relies on). The main thread therefore folds keyboard + controller state through the bindings into a finished
-// Npad state kept in atomics, which nn::hid::GetNpadStates (horizon/hle.rs) reads. On Windows SDL's event loop on the
+// Npad state kept in atomics, which nn::hid::GetNpadStates (horizon/hid.rs) reads. On Windows SDL's event loop on the
 // main thread does the same (host/display_sdl.rs).
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};

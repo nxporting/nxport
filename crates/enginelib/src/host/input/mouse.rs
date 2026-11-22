@@ -177,7 +177,7 @@ pub(crate) fn update_mouse_look() {
         let moved = m.pending;
         m.pending = (0.0, 0.0);
         let v = (moved.0 / dt, moved.1 / dt);
-        // 10 ms: enough to even out reads at uneven times, little lag (30 ms was felt as camera latency).
+        // 10 ms: enough to even out reads at uneven times, little lag (30 ms is felt as camera latency).
         let a = 1.0 - (-dt / 0.01).exp();
         m.smooth.0 += (v.0 - m.smooth.0) * a;
         m.smooth.1 += (v.1 - m.smooth.1) * a;

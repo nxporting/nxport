@@ -445,9 +445,9 @@ choice!(
     /// The GPU backend.
     GpuBackend {
         Metal,
-        /// Vulkan (headless where there is no window support for it yet).
+        /// Vulkan (MoltenVK on Apple hosts).
         Vulkan,
-        /// Nothing drawn, work completes at once (gpu::null; lifted hosts, headless): measures the CPU side alone.
+        /// Nothing drawn, work completes at once (gpu::null): measures the CPU side alone.
         Null,
     }
 );

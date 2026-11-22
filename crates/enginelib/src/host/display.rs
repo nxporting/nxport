@@ -1,6 +1,6 @@
 // In-process presentation: a window with a CAMetalLayer, owned by the process main thread
 // (AppKit requires window/view creation and the event loop there), and a render thread that
-// hands the Metal device/layer to metal/mod.rs, which presents on the guest's `nvnQueuePresentTexture`.
+// hands the Metal device/layer to gpu::metal, which presents on the guest's `nvnQueuePresentTexture`.
 //
 // CAMetalLayer itself is thread-agnostic (nextDrawable / encode / present may run anywhere); only
 // the NSApplication run loop, NSWindow and NSView need the main thread. The guest therefore runs
@@ -292,8 +292,8 @@ pub fn run_main_thread() -> ! {
     window.setTitle(&NSString::from_str(&app_name));
     unsafe { window.setReleasedWhenClosed(false) };
     window.setBackgroundColor(Some(&objc2_app_kit::NSColor::blackColor()));
-    // No separator line under the title bar: macOS drew one along the picture's top edge (user: a white line, grey or
-    // black in other presentation modes; the game's own top rows are clean). NSTitlebarSeparatorStyleNone = 1.
+    // No separator line under the title bar: macOS draws one along the picture's top edge. NSTitlebarSeparatorStyleNone
+    // = 1.
     unsafe {
         let _: () = msg_send![&window, setTitlebarSeparatorStyle: 1isize];
     }
@@ -387,8 +387,8 @@ pub fn follow_window_shape(layer: &CAMetalLayer) -> bool {
         return false;
     }
     let a = b.width / b.height;
-    // A window within 1% of the picture's shape is filled (stretched by under 1%): fitted, it left a bar of a pixel or
-    // so (a window a pixel off 16:9), showing whatever lay behind the layer (user: a white or grey line at the top).
+    // A window within 1% of the picture's shape is filled (stretched by under 1%): fitted, it would leave a bar of a
+    // pixel or so (a window a pixel off 16:9) showing whatever lies behind the layer.
     let d = layer.drawableSize();
     if d.height > 0.0 {
         static FILL: AtomicU64 = AtomicU64::new(2);

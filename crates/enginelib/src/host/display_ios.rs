@@ -1,5 +1,5 @@
 // iOS presentation (host/display.rs is the macOS one; same interface): UIApplicationMain on the process main thread, one
-// full-screen landscape window whose root view hosts a CAMetalLayer, handed to metal/mod.rs like the macOS window's layer.
+// full-screen landscape window whose root view hosts a CAMetalLayer, handed to gpu::metal like the macOS window's layer.
 // Game controllers are polled on the main thread at 250 Hz (host/input.rs, GameController.framework).
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

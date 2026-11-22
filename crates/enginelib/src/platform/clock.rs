@@ -75,8 +75,8 @@ pub fn frequency() -> u64 {
 
 /// t * a / b rounded down, as a 64-bit multiply and divide: (t / b) * a + (t % b) * a / b, exact while a * b fits in 64
 /// bits (the remainder times a stays below b * a). A clock read converts with one: through 128 bits, x86-64 calls a
-/// library division (__udivti3) every time, which totk-pc-recomp measured at a tenth of a guest thread's time in a fight.
-/// A fraction too large for that keeps the 128-bit form. Results past 64 bits wrap, as the 128-bit form's `as u64` did.
+/// library division (__udivti3) every time. A fraction too large for that keeps the 128-bit form. Results past 64 bits
+/// wrap, as the 128-bit form's `as u64` does.
 #[derive(Clone, Copy, Debug)]
 pub struct Scale {
     a: u64,
@@ -183,7 +183,7 @@ pub fn sleep_ns(ns: u64) {
         }
         // The timer wakes up to about half a millisecond late, so it covers all but the last TIMER_SLACK and the thread
         // yields its core until the deadline. Games sleep tens of microseconds while polling for other threads' work
-        // (TotK's main thread a few times a frame), which the timer alone turned into half a millisecond each.
+        // (TotK's main thread a few times a frame), which the timer alone would turn into half a millisecond each.
         const TIMER_SLACK: u64 = 700_000;
         let deadline = ticks().saturating_add(ns_to_ticks(ns));
         if ns > TIMER_SLACK {
@@ -199,7 +199,7 @@ pub fn sleep_ns(ns: u64) {
         // The wait is pause instructions, which leave the core to the thread on its other hardware thread (the game's
         // chain threads; TotK sleeps 20 us thousands of times a second). No yields: with every processor busy (other
         // programs), SwitchToThread hands the rest of the quantum to another process's thread and the sleeper gets its
-        // core back tens of milliseconds later; one yield per 20 us sleep took TotK from 110 to ~1 fps that way.
+        // core back tens of milliseconds later.
         while ticks() < deadline {
             for _ in 0..16 {
                 std::hint::spin_loop();
@@ -256,8 +256,8 @@ mod tests {
         assert_eq!(ticks_to_ns(ns_to_ticks(1_000_000_000)), 1_000_000_000);
         // 2 ms, which a sleep rounded to the 15.6 ms Windows tick would overshoot many times over, every time. A busy
         // machine (other tests in parallel) delays some sleeps too, so the fastest of a few counts. That bound is
-        // Windows' concern: on macOS, GitHub's virtual machines coalesce a background process's timers (every one of five
-        // 2 ms sleeps took 16-19 ms in a Release run), which a game in the foreground does not see.
+        // Windows' concern: on macOS, GitHub's virtual machines coalesce a background process's timers, which a game in
+        // the foreground does not see.
         let took: Vec<u64> = (0..5)
             .map(|_| {
                 let t0 = now_ns();

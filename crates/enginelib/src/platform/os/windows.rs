@@ -175,7 +175,7 @@ mod heap {
     }
 
     /// Reserves `size` as the block committed on demand. None if it is small or there is one already: those commit
-    /// whole, as before.
+    /// whole.
     pub unsafe fn adopt(size: usize) -> io::Result<Option<usize>> {
         let _g = lock();
         if LEN.load(Ordering::Acquire) != 0 || size < 256 << 20 || size > CHUNKS * CHUNK {

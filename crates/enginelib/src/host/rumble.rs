@@ -1,4 +1,4 @@
-// Rumble: the game's HD Rumble values (nn::hid::SendVibrationValue[s], HLE'd in horizon/hle.rs) drive Core Haptics.
+// Rumble: the game's HD Rumble values (nn::hid::SendVibrationValue[s], HLE'd in horizon/hid.rs) drive Core Haptics.
 //
 // Each Switch motor gets a VibrationValue (low / high band amplitude and frequency).
 // The HLE stores per motor (handle 1 = left, 2 = right, as GetVibrationDeviceHandles hands them out) an intensity
