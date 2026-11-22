@@ -217,6 +217,9 @@ and update this file when you finish or drop it.
      patches into account if a profile ever ships one (none does yet: Silver Pines' is romfs only).
   51. (shared profile/unity.rs, settings unity.*, menu) Unity IL2CPP settings found by pattern and applied from the
      main thread's waits. Native only (cfg nx_native): on the lifted path the calls need the lifted library.
+  52. b17823f (shared profile/botw.rs, botw/frame_time.rs): BotW 1.5.0 game time from real time (the 1.9.0 clock hooks
+     at 1.5.0's sites; Sites now carries per-version code patches). Windows: the lifted BotW 1.5.0 image needs these
+     sites patched before lifting, as 1.9.0's are; check 1.5.0 runs above 30 at normal speed.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
