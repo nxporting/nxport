@@ -276,11 +276,8 @@ pub unsafe extern "C" fn hle_nvnQueueFinalize(q: *mut NvnQueue) {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnQueueFlush(_q: *mut NvnQueue) {
     record_hle_call("hle_nvnQueueFlush");
-    // Real NVN kicks the GPU to start processing submitted command buffers.
-    // Nothing is actually deferred on our side yet (no async GPU execution
-    // model exists until the Metal-translation follow-up), so there's
-    // nothing to flush -- a no-op is correct for the current execution
-    // model, not a gap.
+    // Real NVN kicks the GPU to start on submitted command buffers. Submits are encoded and committed during
+    // nvnQueueSubmitCommands, so there is nothing left to flush.
 }
 
 #[no_mangle]
@@ -347,7 +344,7 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
     crate::gpu::frame_breakdown::frame_end(crate::gpu::backend().presented_frames());
     // No waiting here: NVN queues the present and returns; the vsync / present-interval wait happens when the game
     // acquires the next window texture (see hle_nvnWindowAcquireTexture). TotK's frame pacer measures its update +
-    // draw time (excluding that wait) to pick the present interval, so a wait here locked it at 20 fps.
+    // draw time (excluding that wait) to pick the present interval, so a wait here would lock it at 20 fps.
     {
         static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let f = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

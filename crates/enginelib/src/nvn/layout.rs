@@ -2,9 +2,9 @@
 // nvnTextureBuilderGetViewOffset, nvnTextureGetViewOffset).
 //
 // The game uploads pre-swizzled BNTX/txtg data straight into texture storage at offsets it gets
-// from NVN, so these must match the toolchain's layout exactly. The rules below were validated
-// against all 216 BNTX files in TexToGo (mip offsets and image sizes, including array and 3D
-// textures); see the test vectors at the bottom.
+// from NVN, so these must match the layout the data was made in exactly. The rules below were checked against all 216
+// BNTX files in TotK's TexToGo (mip offsets and image sizes, including array and 3D textures); see the test vectors at
+// the bottom.
 //
 // Layout summary (per mip level, in 4x4-block / pixel units of the format):
 //   pitch  = align(widthInBlocks * bytesPerBlock, 64)           (a GOB is 64B x 8 rows = 512B)
@@ -60,8 +60,8 @@ fn is_linear(flags: i32) -> bool {
     flags & (NVN_TEXTURE_FLAGS_LINEAR_BIT | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET_BIT) != 0
 }
 /// Alignment for textures with the compressible bit (extra hardware mappings): 64 KB, as the real NVN driver places
-/// TotK's compressible render targets (Ryujinx render-target addresses: 64 KB steps, e.g. 0x2147b0000). 128 KB wasted
-/// enough of the game's 111 MB dynamic texture pool that UltraCam's 1080p targets no longer fit (null G-buffer).
+/// TotK's compressible render targets (Ryujinx render-target addresses: 64 KB steps, e.g. 0x2147b0000). 128 KB would
+/// waste enough of the game's 111 MB dynamic texture pool that UltraCam's 1080p targets no longer fit.
 pub const COMPRESSIBLE_STORAGE_ALIGNMENT: usize = 0x10000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,7 +173,7 @@ fn align(v: u64, a: u64) -> u64 {
     (v + a - 1) / a * a
 }
 
-/// Block height in GOBs (8 rows each) chosen by the toolchain for a level of `hb` block rows.
+/// Block height in GOBs (8 rows each) of a level of `hb` block rows.
 fn block_height_gobs(hb: u64) -> u64 {
     let mut bh = 1;
     while bh < 16 && hb * 3 > 32 * bh {
@@ -184,8 +184,8 @@ fn block_height_gobs(hb: u64) -> u64 {
 
 /// Level-0 block height in GOBs of a 2D texture. MINIMAL_LAYOUT ("prefer the smallest tile size") takes one GOB.
 /// Ground truth is the size only: TotK packs its 320x320 R16 Depths terrain maps (minimal layout) 0x32000 bytes apart,
-/// the size with a block height of at most 8 GOBs; the usual 16 made each 0x3c000 bytes and its texel writes overran
-/// the next map. Heights 1 and 8 render the same there (nothing reads those maps raw); which one the driver picks is
+/// the size with a block height of at most 8 GOBs; the usual 16 would make each 0x3c000 bytes and its texel writes
+/// overrun the next map. Heights 1 and 8 render the same there (nothing reads those maps raw); which one the driver picks is
 /// unverified.
 fn level0_bh(hb0: u64, flags: i32) -> u64 {
     if flags & NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT_BIT != 0 {
@@ -206,8 +206,7 @@ fn block_depth_gobs(d: u64) -> u64 {
 /// (block height, block depth) in GOBs for a 3D texture level: blocks hold at most 16 GOBs, so the height shrinks as
 /// the depth grows. Ground truth: the texture packager's layout descriptor for TotK's 64x64x64 BC4 volume says
 /// height 1, depth 16 (descriptor byte 0x40), and the 256x32x16 RGBA16F atmosphere table (no descriptor: the driver's
-/// default) is only smooth deswizzled with height 1, depth 16. The 2D rule alone (height 4 there) scrambled 3D
-/// textures, which turned the sky an olive grey.
+/// default) is only smooth deswizzled with height 1, depth 16. The 2D rule alone (height 4 there) scrambles them.
 fn block_dims_3d(hb: u64, d: u64) -> (u64, u64) {
     let bd = block_depth_gobs(d);
     let mut bh = block_height_gobs(hb);
@@ -219,9 +218,8 @@ fn block_dims_3d(hb: u64, d: u64) -> (u64, u64) {
 
 /// (block height, block depth) in GOBs of every level: the texture's block shape is chosen for level 0 and the hardware
 /// derives each level's from it (Ryujinx SizeCalculator): the height halves while the level's block rows fit in half
-/// a block, the depth halves at most once per level. Recomputing the level-0 rule per level matched only for
-/// power-of-two sizes: a 160x160 BC3 (40 block rows, 4 GOBs) has 4 / 2 GOBs at levels 1 / 2, not 2 / 1, and its
-/// scrambled mips put dark streaks and a black rim on the shrine travel-gate disc.
+/// a block, the depth halves at most once per level. Recomputing the level-0 rule per level matches only for
+/// power-of-two sizes: a 160x160 BC3 (40 block rows, 4 GOBs) has 4 / 2 GOBs at levels 1 / 2, not 2 / 1.
 fn level_block_dims(
     hb0: u64,
     d0: u64,
@@ -291,8 +289,7 @@ pub fn layer_count(p: &TextureParams) -> u32 {
 }
 
 /// The layout of a texture with parameters `p`: a function of `p` alone, so each thread keeps the layouts it computed
-/// (the texture cache's overlap checks ask for the same ones over and over: with exact overlaps on, computing them was
-/// most of the frame's recording time).
+/// (the texture cache's overlap checks ask for the same ones over and over).
 pub fn compute_layout(p: &TextureParams) -> std::rc::Rc<TextureLayout> {
     thread_local! {
         static LAYOUTS: std::cell::RefCell<rustc_hash::FxHashMap<TextureParams, std::rc::Rc<TextureLayout>>> =
@@ -775,7 +772,7 @@ pub unsafe fn read_texels_2d(
         return true;
     }
     // Within a GOB row, every aligned 16-byte run is contiguous: copy runs, not bytes (one address computation per
-    // 16 bytes; the per-byte loop made streamed-texture uploads a visible share of the encoding thread).
+    // 16 bytes).
     for r in 0..rows {
         let dst_row = out_data.add(r * row_bytes);
         let mut x = 0usize;
@@ -1035,7 +1032,7 @@ mod tests {
     use super::*;
 
     // (w, h, d, mips, array layers, block w, block h, bytes per block, expected level offsets, expected total)
-    // Taken from BNTX headers in the game's TexToGo directory (Nintendo toolchain output).
+    // Taken from BNTX headers in the game's TexToGo directory.
     #[allow(clippy::type_complexity)]
     const BNTX_VECTORS: &[(i32, i32, i32, i32, i32, u32, u32, u32, &[u64], u64)] = &[
         (
@@ -1149,7 +1146,7 @@ mod tests {
     }
 
     /// Non-power-of-two mip chains: level offsets from Ryujinx's SizeCalculator (level block heights derived from
-    /// level 0's), which the per-level rule got wrong.
+    /// level 0's).
     #[test]
     fn npot_mip_chains_follow_the_hardware_rule() {
         let cases: &[(i32, i32, i32, i32, &[u64], u64)] = &[

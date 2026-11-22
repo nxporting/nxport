@@ -2,7 +2,7 @@
 
 use super::*;
 
-// ── remaining window / queue / device setters (no rendering state to keep yet) ──────────────
+// ── window / queue / device setters ──────────────────────────────────────────────────────────
 // Clip-space conventions set on the NVNdevice (NVNwindowOriginMode LOWER_LEFT=0 / UPPER_LEFT=1,
 // NVNdepthMode NEAR_IS_MINUS_W=0 / NEAR_IS_ZERO=1). The executor needs them to map NVN clip space onto Metal's.
 pub(crate) static WINDOW_ORIGIN_MODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
@@ -346,8 +346,8 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
                 }
             }
             // With vsync at or above the display's refresh, the swapchain's wait for the vblank paces: a limiter above it
-            // let frames out faster than the display takes them, and the swapchain then held the game back unevenly
-            // (microstutter: game time follows those uneven frames); at it, two clocks of the same rate drift apart.
+            // would let frames out faster than the display takes them, and the swapchain would hold the game back
+            // unevenly (microstutter: game time follows those uneven frames); at it, two clocks of the same rate drift apart.
             let refresh = crate::host::live::refresh_rate();
             if vsync && refresh != 0 && fps + 1 >= refresh {
                 std::time::Duration::ZERO
@@ -377,8 +377,8 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             #[cfg(nx_native)]
             // Frames start on the refresh grid when the game's time follows real time: an unlocked rate (interval 0),
             // or a profile's real-time clock whatever interval the game still reports (Breath of the Wild keeps 1).
-            // Without it BotW's frames started anywhere between refreshes and judder at rates the display cannot hold
-            // evenly, where TotK (interval 0 once unlocked) did not.
+            // Without it BotW's frames would start anywhere between refreshes and judder at rates the display cannot hold
+            // evenly.
             let paced = (interval == 0 || crate::profile::real_time())
                 && mode == crate::settings::PresentMode::Standard
                 && crate::gpu::metal::display_pacing()
@@ -403,8 +403,8 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
                 _ => now,
             };
             // A frame time of whole refreshes (the 30 fps limit on a 60 Hz display) starts on the display's refresh
-            // grid, as a console's present interval does: a schedule on the host clock drifted against the refreshes,
-            // and frames started late in a refresh missed their slot (shown 3 refreshes apart instead of 2).
+            // grid, as a console's present interval does: a schedule on the host clock would drift against the refreshes,
+            // and frames started late in a refresh would miss their slot (shown 3 refreshes apart instead of 2).
             #[cfg(nx_native)]
             if mode == crate::settings::PresentMode::Standard && crate::gpu::metal::display_pacing() && crate::host::overlay::paces_to_refresh() {
                 if let (Some(to_grid), Some(period)) =
@@ -430,8 +430,8 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         }
         // The texture becomes available after the wait: acquire itself returns, and the sync the game is given signals
         // then (nvn.h: acquire blocks only for the GPU's previous frame on the texture; games pace themselves by waiting
-        // on the sync before presenting). Sleeping here held BotW's render thread inside a lock its main thread needs,
-        // every frame.
+        // on the sync before presenting). Sleeping here would hold BotW's render thread inside a lock its main thread
+        // needs, every frame.
         if _fence != 0 {
             crate::nvn::api::sync::set_available_at(_fence as *mut crate::nvn::api::sync::NvnSync, wait);
             if !wait.is_zero() {
@@ -542,8 +542,7 @@ mod divisor {
         s.period = period;
         let mut n = s.n.max(min);
         // At most half the limit's rate: at lower rates the GPU idles longer between frames, macOS lowers its clock, the
-        // frames take longer and look late again (BotW stepped down to 20 fps under a 120 limit, the GPU at ~25 ms a
-        // frame instead of ~10).
+        // frames take longer and look late again.
         let changed = if s.late.iter().filter(|&&l| l).count() >= 3 && n < 2 * min {
             n += 1;
             true

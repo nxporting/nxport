@@ -33,8 +33,8 @@ fn put(bits: &mut u64, shift: u32, width: u32, v: u64) {
 
 /// NVNblendFunc values are 1..=0x13 plus the constant-color factors 0x61..=0x64 (CONSTANT_COLOR,
 /// ONE_MINUS_CONSTANT_COLOR, CONSTANT_ALPHA, ONE_MINUS_CONSTANT_ALPHA). The blend state keeps each factor in
-/// 6 bits, so those four are stored as 0x21..=0x24 (no other value uses that range). Storing them
-/// unconverted truncated them to 33..36, which decoded as ONE.
+/// 6 bits, so those four are stored as 0x21..=0x24 (no other value uses that range); unconverted they would truncate
+/// to 33..36, which decodes as ONE.
 pub fn blend_func_encode(v: u64) -> u64 {
     if (0x61..=0x64).contains(&v) {
         v - 0x40

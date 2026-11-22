@@ -80,13 +80,10 @@ pub unsafe extern "C" fn hle_nvnTexturePoolGetSize(pool: *const NvnTexturePool) 
     }
 }
 
-/// Texture pool entries: texture address and the view as it was at registration. NVN writes the descriptor when
-/// RegisterTexture is called, so the view is copied: games pass views on the stack and reuse that memory.
 /// A texture pool slot. Real NVN writes the texture's descriptor into the pool at RegisterTexture time, so
 /// re-initializing the NVNtexture afterwards (TotK's texture streamer reuses objects for other textures) does not
-/// affect draws that use the slot until the game registers again. Resolving slots to the live object made materials
-/// sample whatever texture the object held later (stair edges drawn with the gloom-crystal texture, Zelda's hair
-/// green). The slot therefore remembers the object's generation and state at registration: while the object is
+/// affect draws that use the slot until the game registers again (resolved to the live object, materials would sample
+/// whatever texture the object holds later). The slot therefore remembers the object's generation and state at registration: while the object is
 /// unchanged it resolves to the object itself (the executor's fast, cached path); once the object has been
 /// re-initialized it resolves to a private copy of the registered state. The view is copied too: games pass views on
 /// the stack and reuse that memory.
@@ -170,8 +167,6 @@ pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
     }
     // Always the state registered (NVN wrote the descriptor into the pool then), as a stable copy: the live object is read
     // again later (when a draw sampling it is planned), and game threads re-initialize transient objects meanwhile.
-    // Breath of the Wild sampled its 800x450 RGBA16F target through an object that had become another texture for a
-    // frame: the scene lit magenta.
     if slot.copy.is_none() {
         let b = Box::new(slot.state);
         let addr = &*b as *const NvnTexture as usize;

@@ -411,8 +411,8 @@ pub(crate) fn known_device_info(pname: i32) -> Option<i32> {
         14 => 16,     // VERTEX_ATTRIBUTES
         // Descriptor pools. Maxwell texture (TIC) and sampler (TSC) descriptors are 32 bytes each (as in libnx's deko3d).
         // Reserved entries: 256 each (TotK's own handles start at 258 in both pools). Maximum entries: the handle has
-        // 20 bits of texture id and 12 of sampler id (nvnDeviceGetTextureHandle). The old flat 256 for all six made
-        // Kirby and the Forgotten Land size its pools to 256 entries, all reserved: every texture id it allocated was -1.
+        // 20 bits of texture id and 12 of sampler id (nvnDeviceGetTextureHandle). Kirby and the Forgotten Land sizes its
+        // pools from these: maximum entries equal to the reserved ones leave it no texture id to allocate.
         15 | 16 => 32,   // TEXTURE_DESCRIPTOR_SIZE / SAMPLER_DESCRIPTOR_SIZE
         17 | 18 => 256,  // RESERVED_TEXTURE_DESCRIPTORS / RESERVED_SAMPLER_DESCRIPTORS
         36 => 1 << 20,   // MAX_TEXTURE_POOL_SIZE
@@ -437,9 +437,9 @@ pub(crate) fn known_device_info(pname: i32) -> Option<i32> {
         // form (68) and programmable sample locations exist (76). The other feature flags are second-generation Maxwell
         // features the header lists as unsupported only on older GPUs (passthrough GS 66, viewport swizzle 67, advanced
         // blend 69, draw texture 71, target-independent rasterization 72, coverage to color 73, post-depth coverage 74,
-        // images through texture handles 75). The old default (256) was truthy as well.
+        // images through texture handles 75).
         59 | 66 | 67 | 68 | 69 | 71 | 72 | 73 | 74 | 75 | 76 => 1,
-        87 => 1, // SUPPORTS_FRAGMENT_SHADER_INTERLOCK (Maxwell 2 / GM20B has it; the old 256 default was also truthy)
+        87 => 1, // SUPPORTS_FRAGMENT_SHADER_INTERLOCK (Maxwell 2 / GM20B has it)
         90 => 0, // SUPPORTS_DEBUG_LAYER: retail consoles have no debug layer
         _ => return None,
     })
@@ -448,12 +448,8 @@ pub(crate) fn known_device_info(pname: i32) -> Option<i32> {
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnDeviceGetInteger(_device: *const (), pname: i32, v: *mut i32) {
     record_hle_call("hle_nvnDeviceGetInteger");
-    // Real NVNdeviceInfo values, not guesses. Returning a flat 256
-    // for every property regardless of what's being asked (the previous
-    // implementation) is exactly the kind of HLE gap that produces silent,
-    // hard-to-trace downstream corruption: a wrong MEMORY_POOL_PAGE_SIZE in
-    // particular feeds directly into the game's own GPU memory-pool size/
-    // alignment math.
+    // Real NVNdeviceInfo values: a wrong one is silent corruption downstream (MEMORY_POOL_PAGE_SIZE in particular feeds
+    // the game's own GPU memory-pool size and alignment math).
     const UNIFORM_BUFFER_ALIGNMENT: i32 = 0x4;
     const COUNTER_ALIGNMENT: i32 = 0xA;
     const TRANSFORM_FEEDBACK_BUFFER_ALIGNMENT: i32 = 0xB;

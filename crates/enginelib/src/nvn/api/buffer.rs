@@ -76,8 +76,7 @@ pub unsafe extern "C" fn hle_nvnBufferBuilderGetMemoryOffset(b: *const NvnBuffer
 #[no_mangle]
 pub unsafe extern "C" fn hle_nvnBufferBuilderGetMemoryPool(b: *const NvnBufferBuilder) -> usize {
     record_hle_call("hle_nvnBufferBuilderGetMemoryPool");
-    // returns the NVNmemoryPool* passed to SetStorage (returning the struct by value made the caller read x0
-    // while we wrote through x8).
+    // The NVNmemoryPool* passed to SetStorage, returned in x0 (not a struct returned through x8).
     if b.is_null() {
         0
     } else {

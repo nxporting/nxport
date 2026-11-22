@@ -45,8 +45,7 @@ pub(crate) static MEMORY_POOL_FLAGS: std::sync::Mutex<std::collections::BTreeMap
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// Bumped whenever MEMORY_POOLS, MEMORY_POOL_FLAGS or VIRTUAL_MAPS change; invalidates the per-thread lookup caches
-/// below (the executor resolves pools for every buffer and texture binding, and a linear scan per lookup was ~9% of the
-/// presentation thread).
+/// below (the executor resolves pools for every buffer and texture binding: a linear scan per lookup is too slow).
 pub(crate) static POOLS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub(crate) fn bump_pools_gen() {
@@ -457,9 +456,9 @@ pub fn translate_virtual(addr: usize) -> usize {
         return addr;
     }
     // Each thread keeps a copy of the mappings sorted by start, refreshed when the pool generation changes (every
-    // mapping change bumps it): this runs several times per draw binding on the encoding threads, and the global lock
-    // plus a linear scan of every mapping showed up in their profiles. Mappings never overlap (a new one splits what
-    // was there), so the binary search finds the same one the scan did.
+    // mapping change bumps it): this runs several times per draw binding on the encoding threads, too often for the
+    // global lock and a linear scan. Mappings never overlap (a new one splits what was there), so a binary search finds
+    // the one mapping.
     thread_local! {
         static MAPS: std::cell::RefCell<(u64, Vec<(usize, usize, usize)>)> = const { std::cell::RefCell::new((0, Vec::new())) };
     }

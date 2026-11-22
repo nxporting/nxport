@@ -4,10 +4,8 @@ use super::*;
 
 // ---------------------------------------------------------------------------
 // NVN Texture family. NVNtexture and NVNtextureBuilder are both 0x80 bytes.
-// Storage size, alignment and view offsets come from nvn_layout (Tegra block-linear,
-// validated against the toolchain's BNTX output): the game memcpy's pre-swizzled
-// data to the offsets reported here, so they must be exact. An earlier flat
-// 4-bytes-per-pixel estimate asked the allocator for ~700MB for one texture.
+// Storage size, alignment and view offsets come from nvn::layout (Tegra block-linear, checked against games' BNTX
+// textures): the game memcpys pre-swizzled data to the offsets reported here, so they must be exact.
 #[repr(C)]
 pub struct NvnTextureBuilder {
     pub device: usize,
@@ -199,9 +197,7 @@ pub unsafe extern "C" fn hle_nvnTextureBuilderSetDepthStencilMode(
         (*_b).depth_stencil_mode = _mode;
     }
     record_hle_call("hle_nvnTextureBuilderSetDepthStencilMode");
-    // Selects which aspect (depth vs stencil) a combined depth/stencil
-    // texture samples as -- affects shader reads, not storage layout, so
-    // irrelevant until real Metal translation exists (same as SetSwizzle).
+    // Selects which aspect (depth vs stencil) a combined depth / stencil texture samples as: shader reads, not storage.
 }
 
 #[no_mangle]
@@ -399,9 +395,8 @@ pub(crate) fn bump_tex_table_epoch() {
 
 pub(crate) fn snapshot_texture(addr: usize, t: NvnTexture) {
     // The state being replaced goes into the history before the new one is published: a recorded command resolved in
-    // between (another thread encodes while the game re-initializes the object) found neither and took the object's new
-    // texture (BotW's scene composite drew with the half-size depth target its object had just become: the scene shrunk
-    // into a corner for a frame, ~10 times a minute in headless runs).
+    // between (another thread encodes while the game re-initializes the object) would find neither and take the object's
+    // new texture.
     let prev = texture_snapshot(addr);
     if let Some((og, ot)) = prev {
         remember_snapshot(og, ot);
@@ -523,15 +518,13 @@ pub fn texture_ref_gen(addr: usize) -> u32 {
 /// The texture object a recorded reference (`addr` as captured with generation `gen`) names: a stable copy of the recorded
 /// description (one per generation, freed with its history entry; `addr` itself when the description is gone). Super Mario Odyssey records command lists once
 /// and calls them every frame while the NVNtexture structs they named are re-initialized for other textures (its mip
-/// chain and volume passes then targeted levels the new textures do not have).
+/// chain and volume passes would otherwise target levels the new textures do not have).
 pub fn resolve_texture_ref(addr: usize, gen: u32) -> usize {
     if addr == 0 || gen == 0 {
         return addr;
     }
     // The state is taken now, also when the object still describes it: the executor reads the object again later (when
-    // a pass using it is planned), and game threads re-initialize transient objects meanwhile. Breath of the Wild's scene
-    // composite, resolved to its 1600x900 depth object, then read the 800x450 texture the object had just become: the
-    // scene drawn into the top-left quarter for a frame.
+    // a pass using it is planned), and game threads re-initialize transient objects meanwhile.
     let current = texture_snapshot(addr).and_then(|(g, s)| (g as u32 == gen).then_some(s));
     let mut h = TEX_HISTORY.lock().unwrap();
     let h = h.get_or_insert_with(|| SnapshotHistory {
@@ -642,8 +635,7 @@ pub fn textures_reaching(storage: usize, span: usize) -> Vec<(usize, u64, NvnTex
 /// Called when a command naming the NVNtexture at `addr` is recorded. Real NVN reads the texture then; the executor
 /// reads its snapshot later. Games copy initialized NVNtexture structs (they hold their descriptor inline) and bind the
 /// copies, which never went through nvnTextureInitialize: the copy is snapshotted here, before the game frees or reuses
-/// its memory (Super Mario Odyssey's opening demo: a 1600x900 target read back as garbage dimensions, gigabytes of
-/// layout). A new copy at an address that held another texture gets a new generation.
+/// its memory. A new copy at an address that held another texture gets a new generation.
 pub fn capture_texture(addr: usize) {
     if addr < 0x10000 {
         return;
@@ -672,14 +664,14 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
     // The snapshot stays (recorded commands may still name this object), but it no longer anchors aliases. It gets a
     // new generation: the game may free the object while pool slots registered from it stay in use (NVN copied the
     // descriptor into the pool), and those slots must resolve to their registered state, not to whatever reuses the
-    // memory (Super Mario Odyssey's opening demo read heap data as texture dimensions and allocated gigabytes).
+    // memory.
     if let Some((og, t)) = texture_snapshot(tex as usize) {
         if let Some(idx) = TEX_BY_STORAGE.lock().unwrap().as_mut() {
             unindex_texture(idx, tex as usize, t.storage);
             log_index_change(t.storage, texture_span(&t));
         }
         // Commands recorded before the finalize name the old generation (BotW initializes one object for each of its
-        // water maps, records a pass into it and finalizes it again: without this every pass drew into the last map).
+        // water maps, records a pass into it and finalizes it again).
         // Remembered before the new generation is published (snapshot_texture).
         remember_snapshot(og, t);
         let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -862,9 +854,7 @@ pub unsafe extern "C" fn hle_nvnTextureGetSwizzle(
     a: *mut i32,
 ) {
     record_hle_call("hle_nvnTextureGetSwizzle");
-    // Four separate outputs. Writing all four through `r` as an array left g/b/a holding stale stack bytes:
-    // TotK copies a texture's swizzle into a new texture this way, and the garbage (e.g. B = 156, G = ONE) turned
-    // albedo textures cyan in Hateno.
+    // Four separate outputs, not an array through `r`: TotK copies a texture's swizzle into a new texture this way.
     let sw = if tex.is_null() {
         [2, 3, 4, 5]
     } else {
@@ -907,8 +897,7 @@ pub unsafe extern "C" fn hle_nvnTextureSetDebugLabel(_tex: *mut NvnTexture, _lab
 pub unsafe extern "C" fn hle_nvnTextureCompare(a: *const NvnTexture, b: *const NvnTexture) -> u8 {
     record_hle_call("hle_nvnTextureCompare");
     // NVN compares what the two objects describe, not where they are: BotW rebuilds a texture into a new object and keeps
-    // its texture pool slot only when the two compare equal (Savage Wind #16: comparing addresses freed the slot each
-    // time, and cuttable tree trunks then drew whatever texture took it).
+    // its texture pool slot only when the two compare equal (compared by address, the slot would be freed each time).
     if a == b {
         return 1;
     }
@@ -1322,9 +1311,9 @@ pub struct NvnCopyRegion {
 }
 
 // Textures the guest wrote texels into after the executor may have created their Metal copy; the executor
-// re-uploads them from guest storage on next use (see metal/mod.rs, `texture`).
-/// A set: texture() asks for every texture it resolves, and entries of textures never resolved again stay (the Vec this
-/// was made the linear search ~6% of the encoding thread while walking).
+// re-uploads them from guest storage on next use (see gpu/metal, `texture`).
+/// A set: texture() asks for every texture it resolves, and entries of textures never resolved again stay (a linear
+/// search of them would be too slow).
 pub(crate) static DIRTY_TEXTURES: std::sync::LazyLock<std::sync::Mutex<rustc_hash::FxHashSet<usize>>> =
     std::sync::LazyLock::new(Default::default);
 
@@ -1460,8 +1449,7 @@ pub(crate) unsafe fn texel_region_pitches(t: &NvnTexture, r: &NvnCopyRegion) -> 
 }
 
 /// nvnTextureReadTexels: the inverse of texture_write_texels, from the texture's (block-linear) storage into linear
-/// `data`. TotK copies baked lighting (TexToGo/RBake_*) this way into its lightmap atlas; left unimplemented, the
-/// atlas stayed zero and lit surfaces as fully occluded.
+/// `data`. TotK copies baked lighting (TexToGo/RBake_*) this way into its lightmap atlas.
 pub(crate) unsafe fn texture_read_texels(
     tex: *const NvnTexture,
     view: *const NvnTextureView,

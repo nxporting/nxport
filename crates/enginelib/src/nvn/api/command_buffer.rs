@@ -5,23 +5,12 @@ use super::*;
 // ---------------------------------------------------------------------------
 // NVN CommandBuffer family.
 //
-// NVNcommandBuffer (0xA0 = 160 bytes) is opaque driver storage, same freedom
-// as MemoryPool. Every CommandBuffer method takes the command buffer pointer
-// as its first argument (x0), and the ~130 Bind*/Set*/Draw*/Clear*/Copy*/
-// Dispatch* methods all return void in the real API -- NVN defers error
-// reporting to a debug callback rather than synchronous return values, so a
-// generic recorder is both safe (no return-value contract to violate, unlike
-// the MemoryPoolInitialize bug) and faithful to how real NVN actually works.
-//
-// Scope for this pass: get the lifecycle and memory accounting exactly right
-// (Initialize/BeginRecording/EndRecording/memory tracking -- these DO have
-// real return values and real downstream consumers, like EndRecording's
-// handle feeding into nvnQueueSubmitCommands), and record every drawing/
-// state command into a real per-buffer list instead of dropping it, so
-// nvnQueueSubmitCommands has real data to work with. Translating that
-// recorded stream into actual Metal draw calls via the compositor channel is
-// a separate, larger follow-up (it's the whole other half of the engine);
-// this gets the NVN-facing contract correct without faking success.
+// NVNcommandBuffer (0xA0 = 160 bytes) is opaque driver storage, laid out as the engine likes. Every CommandBuffer
+// method takes the command buffer pointer as its first argument (x0), and the ~130 Bind* / Set* / Draw* / Clear* /
+// Copy* / Dispatch* methods return void (NVN reports errors through a debug callback), so they are recorded into the
+// command buffer's list for the GPU backend to execute at submit. Initialize / BeginRecording / EndRecording and the
+// memory queries do return values the game uses (EndRecording's handle goes to nvnQueueSubmitCommands and
+// CallCommands), and model the driver's memory accounting exactly.
 #[repr(C)]
 pub(crate) struct NvnCommandBuffer {
     device: usize,
@@ -210,11 +199,11 @@ impl RecordedCommandList {
 /// Visits every list reachable from `handles` through CallCommands once (under one lock: a submit reaches ~4,500 lists),
 /// returning the number of distinct lists.
 ///
-/// The walk is on the Presentation Thread before recording starts, and the lists were made on the game's threads (another
-/// L3 cache on Zen 2): it is cache misses, a few per list. So it touches the map entry and the list's reference count
+/// The walk is on the Presentation Thread before recording starts, and the lists were made on the game's threads (maybe
+/// another L3 cache): it is cache misses, a few per list. So it touches the map entry and the list's reference count
 /// only: the entry's last use (unique to this walk, written under the lock) says it was visited, and the entry carries
-/// the handles the list calls. A visit stamp in the list and its summary read there were two lines more per list:
-/// TotK on Great Sky Island 1.03 -> 0.62 ms a frame for 4,460 lists (Ryzen 7 3700X).
+/// the handles the list calls. A visit stamp in the list and its summary read there would be two cache lines more per
+/// list.
 pub(crate) fn walk_command_lists(
     handles: &[u64],
     stack: &mut Vec<u64>,
@@ -305,8 +294,8 @@ pub(crate) fn fetch_command_lists_at(now: u64, handles: &[u64], cache: &mut rust
 ///   LIST_CALLED     run through CallCommands: TotK records each mesh's state/bind list once and calls it whenever the
 ///                   mesh is drawn, possibly after minutes off screen,
 ///   LIST_NEW        never executed yet (some are recorded at load time and first replayed much later).
-/// Plain LRU evicted the per-mesh lists of everything out of view; looking back drew those meshes with the previous
-/// draw's vertex buffers (geometry streaks that accumulated while moving the camera).
+/// Plain LRU would evict the per-mesh lists of everything out of view; looking back would then draw those meshes with
+/// the previous draw's vertex buffers.
 pub(crate) static COMMAND_LISTS: std::sync::LazyLock<
     StdMutex<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize, Box<[u64]>)>>,
 > = std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
@@ -445,9 +434,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferAddCommandMemory(
 /// GetCommandMemory* queries describe only that block. TotK measures its lists with those queries and sub-allocates
 /// its command memory accordingly, so the byte range each list occupies here is the range the game believes it
 /// occupies. A list stays valid until memory overlapping that range is added to a command buffer again; then it is
-/// dead and the first to go when the list cache needs room. (Before, usage reset at every BeginRecording and sizes
-/// summed over blocks, lists were matched by whole blocks, and the cache evicted lists the game still called: meshes
-/// drawn with another mesh's vertex buffers.)
+/// dead and the first to go when the list cache needs room.
 pub(crate) struct CommandMemory {
     /// Command buffer -> current block (pool, offset, size) and the block-relative offset its current recording began at.
     pub(crate) cur: rustc_hash::FxHashMap<usize, (usize, i64, usize, usize)>,
@@ -488,9 +475,9 @@ pub(crate) fn kill_overlapping_lists(m: &mut CommandMemory, pool: usize, start: 
     if hit.is_empty() {
         return;
     }
-    // Removed right away (they cannot run validly any more): keeping them until the cache budget forced an eviction
-    // held ~480 MB of dead lists, and each eviction then sorted ~48k entries and freed 128 MB under COMMAND_LISTS,
-    // blocking the Presentation Thread's list lookups (~118 evictions in 150 s in Hateno). Freed after the lock.
+    // Removed right away (they cannot run validly any more): kept until the cache budget forced an eviction, dead lists
+    // would pile up by the hundreds of megabytes, and each eviction would sort and free them under COMMAND_LISTS,
+    // blocking the Presentation Thread's list lookups. Freed after the lock.
     let mut freed: Vec<std::sync::Arc<RecordedCommandList>> = Vec::with_capacity(hit.len());
     let mut bytes = 0usize;
     {
@@ -512,8 +499,8 @@ pub(crate) fn kill_overlapping_lists(m: &mut CommandMemory, pool: usize, start: 
         ev.insert(h, LIST_DEAD);
     }
     drop(ev);
-    // Off the game's thread, as a replaced list: EndRecording made about 1,400 frees a frame in TotK, and here they were
-    // under the COMMAND_MEMORY lock.
+    // Off the game's thread, as a replaced list: EndRecording makes many frees a frame, and here they would be under the
+    // COMMAND_MEMORY lock.
     for l in freed {
         free_later(l);
     }
@@ -602,8 +589,8 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
     }
     let snapshot = Box::new(RecordedCommandList {
         // Exactly sized: the recording buffer keeps its reserved capacity (2048+ commands) for the next recording. Taking
-        // the Vec itself stored that capacity with every list (~2048 x size_of::<RecordedNvnCommand>() per list, however
-        // short) and made the next BeginRecording allocate it again.
+        // the Vec itself would store that capacity with every list, however short, and make the next BeginRecording
+        // allocate it again.
         ops: ops_vec.drain(..).collect(),
         summary: std::sync::OnceLock::new(),
         pass_events: std::sync::OnceLock::new(),
@@ -636,8 +623,8 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         drop(g);
         if let Some(old) = old {
             COMMAND_LIST_BYTES.fetch_sub(old.3, std::sync::atomic::Ordering::Relaxed);
-            // The replaced list is freed outside the lock, and off the game's thread (its commands' memory, freed one
-            // allocation at a time, was ~2% of guest-main).
+            // The replaced list is freed outside the lock, and off the game's thread (its commands' memory is freed one
+            // allocation at a time).
             free_later(old.0);
         }
         command_list_recorded(cmd as usize, handle, (*cmd).command_used);
@@ -769,13 +756,10 @@ pub unsafe extern "C" fn hle_nvnCommandBufferGetControlMemorySize(
     }
 }
 
-// Generic recorder for every void-returning Bind*/Set*/Draw*/Clear*/Copy*/
-// Dispatch*/Push*/Pop*/Insert*/Report*/Wait*/Signal* method (~130 names, see
-// the dispatch table below). x0 is always the command buffer; x1-x5 are
-// recorded uninterpreted for whichever follow-up pass adds real Metal
-// translation. `name` is baked in per-registration via a thin per-name
-// wrapper generated by the macro below, so logging/debugging can tell them
-// apart.
+// Generic recorder for the void-returning Bind* / Set* / Draw* / Clear* / Copy* / Dispatch* / Push* / Pop* / Insert* /
+// Report* / Wait* / Signal* methods without a typed decoder (nvn/cmd.rs): x0 is the command buffer, x1-x5 are recorded
+// uninterpreted. `name` is baked in per registration by a thin per-name wrapper (the macro below), so traces can tell
+// them apart.
 pub(crate) unsafe fn record_generic(
     name: &'static str,
     cmd: *mut NvnCommandBuffer,
@@ -791,8 +775,8 @@ pub(crate) unsafe fn record_generic(
     if cmd.is_null() || (*cmd).ops == 0 {
         return;
     }
-    // Settings of the command buffer object itself, not commands: they write no command memory. Counting them made
-    // TotK's re-recorded display lists longer than the slots it sized for them, so they seemed to overwrite the next list.
+    // Settings of the command buffer object itself, not commands: they write no command memory. Counting them would make
+    // TotK's re-recorded display lists longer than the slots it sizes for them.
     if matches!(
         name,
         "nvnCommandBufferSetMemoryCallback"
@@ -1094,7 +1078,7 @@ pub(crate) unsafe fn record_typed(name: &'static str, cmd: usize, typed: crate::
 
 /// The command memory a recorded command takes (GetCommandMemoryUsed). Games size buffers by it and record into them
 /// later, so a command must always cost the same: the driver's size where the game's SDK layer has it, else 32 (a
-/// guess, far above the driver's sizes for binds: Breath of the Wild 1.0.0 overflowed its actor heaps with it).
+/// guess, far above the driver's sizes for binds: with it Breath of the Wild 1.0.0 overflows its actor heaps).
 fn command_cost(name: &str) -> usize {
     crate::horizon::sdk::nvn_command_cost(name).unwrap_or(32)
 }

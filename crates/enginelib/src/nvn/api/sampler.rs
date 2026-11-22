@@ -3,10 +3,8 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// NVN Sampler family. NVNsampler 0x30 (48) bytes, NVNsamplerBuilder 0x60 (96)
-// bytes. Sampler state (filtering, wrap mode, anisotropy, LOD) only matters
-// once real Metal translation samples a texture -- for now this just needs
-// to not crash and hold the state faithfully for that later pass.
+// NVN Sampler family. NVNsampler 0x30 (48) bytes, NVNsamplerBuilder 0x60 (96) bytes: the sampler state (filtering,
+// wrap mode, anisotropy, LOD) the GPU backend builds its samplers from.
 #[repr(C)]
 pub struct NvnSamplerBuilder {
     pub device: usize,
