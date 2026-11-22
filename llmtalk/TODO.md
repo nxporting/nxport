@@ -208,6 +208,9 @@ and update this file when you finish or drop it.
      game code from an HLE wait on guest-main. On the lifted Windows path calling guest code directly does not work:
      needs the lifted library's call (thread_stack::run's non-native branch shows how). Until then texture_size returns
      at once off nx_native (next commit), so Texture Size does nothing on Windows.
+  49. (shared horizon/movie/decoder.rs, settings graphics.movie_frame_pacing, TotK profile options) video frames go out
+     as decoded unless the profile asks for pacing (TotK does). Windows: nothing to do; Silver Pines' title should hold
+     30 there too.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
