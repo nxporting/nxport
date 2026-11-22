@@ -1703,8 +1703,8 @@ fn ldst_struct(w: u32) -> R {
                 }
             };
             total = selem << scale;
-            // Lane by lane, as c->v[N] lane accesses: a vector register kept in a local stays there (sl_lds / sl_sts,
-            // which take the register by number, made every kept register go to the Cpu and back).
+            // Lane by lane, as c->v[N] lane accesses: a vector register kept in a local stays there (sl_lds / sl_sts
+            // take the register by number, so every kept register would go to the Cpu and back).
             let (ty, bits) = [("uint8_t", 8), ("sa16", 16), ("sa32", 32), ("sa64", 64)][scale as usize];
             acc = (0..selem)
                 .map(|s| {

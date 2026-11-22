@@ -217,8 +217,8 @@ fn scan(l: &Lifted, entry: u64, end: u64) -> Scan {
         }
     }
     // A function of more than SPLIT_ABOVE instructions is split at the first block end after every SPLIT_EVERY of them:
-    // the C compiler's register allocation grows far faster than a function's size (TotK's largest, a megabyte or two of
-    // C each, took two minutes each to compile). The pieces reach each other as any function start is reached.
+    // the C compiler's register allocation grows far faster than a function's size (functions of a megabyte or more
+    // of C take minutes each to compile). The pieces reach each other as any function start is reached.
     if (end - entry) / 4 > SPLIT_ABOVE {
         let (mut a, mut since) = (entry, 0);
         while a + 4 < end {
@@ -251,8 +251,8 @@ fn branch_table(
 ) -> Option<Table> {
     let r = bits(jt::Memory::word(l.m, br_pc)?, 5, 5);
     // The definitions reaching `pc`: in this piece, else, when the piece is part of a real function (Module::functions)
-    // that starts earlier, in that function (BotW 1.9.0 main+0x15dbfc: the table base x22 is set in the function's first
-    // piece, before a loop the lifter split into pieces).
+    // that starts earlier, in that function (a table base set in the function's first piece, before a loop the lifter
+    // split into pieces).
     let defs_of = |pc: u64, r: u32| {
         reaching_defs(l, entry, preds, pc, r).or_else(|| {
             let start = *l.m.functions.range(..=pc).next_back()?;
@@ -333,8 +333,8 @@ fn reaching_defs(l: &Lifted, entry: u64, preds: &BTreeMap<u64, Vec<u64>>, pc: u6
         if !seen.insert(a) {
             continue;
         }
-        // A bound on the work, not on the answer (past it the definitions are unknown): 512 was too small for a table
-        // base set before a loop of a ~1000-instruction function (BotW 1.9.0 main+0x15db24).
+        // A bound on the work, not on the answer (past it the definitions are unknown); large enough for a table base
+        // set before a loop of a function of a thousand instructions.
         if seen.len() > 8192 {
             return None;
         }

@@ -1,4 +1,4 @@
-// Guest CPU state and the helpers lifted code uses (nxport-lifterlib; docs/windows-port.md). Compiled with clang (zig cc
+// Guest CPU state and the helpers lifted code uses (nxport-lifterlib). Compiled with clang (zig cc
 // for players): GNU C, __int128, musttail. Based on LAS Recomp's runtime/cpu.h (MIT, see LICENSE-LASRecomp).
 //
 // Calls and returns: a call sets x30 to the return address and calls the target's C function (or rt_dispatch for a
@@ -47,7 +47,7 @@ _Static_assert(sizeof(Cpu) == 1024, "size");
 #endif
 
 // yield and wfe: the guest waits on another thread. The CPU's own spin-wait hint: on x86-64 `pause`, which also lends the
-// core to its other hardware thread (often the one being waited on); on arm64 `yield`. Lifted code had nothing there.
+// core to its other hardware thread (often the one being waited on); on arm64 `yield`.
 #if defined(__x86_64__) || defined(__i386__)
 #define RT_PAUSE() __builtin_ia32_pause()
 #elif defined(__aarch64__)
@@ -86,8 +86,8 @@ extern __thread uint64_t rt_from_ra;
 RT_CC void rt_dispatch_from(Cpu *c);
 
 // The dispatcher's per-thread cache of lifted functions by address (rt.c), probed at each indirect call and jump: the
-// host branch to the function is then at that site, which the CPU predicts per site (all of them through rt_dispatch's
-// one branch mispredicted constantly). An entry of an HLE target is kept as pc | 1 and so never hits here.
+// host branch to the function is then at that site, which the CPU predicts per site (through rt_dispatch's one branch they
+// all mispredict constantly). An entry of an HLE target is kept as pc | 1 and so never hits here.
 #define RT_CACHE_SIZE 4096
 typedef struct { uint64_t pc; GuestFn fn; } RtCacheEntry;
 extern __thread RtCacheEntry rt_cache[RT_CACHE_SIZE];

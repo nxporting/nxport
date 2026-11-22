@@ -184,9 +184,9 @@ fn value(mem: &dyn Memory, defs: Defs, entry: u64, pc: u64, r: u32, depth: u32) 
 /// register copies and zero extensions: `cmp w0, #5; b.hi ..; mov w8, w0; .. ldrsw x8, [x9, x8, lsl #2]`).
 ///
 /// The check is the first compare before the bounds branch (the one whose flags it reads). It may compare a register the
-/// index is copied from further back, with no write to that register in between: BotW 1.0.0 main+0x109b90c
-/// `mov w12, w11; cmp w11, #3; b.hi ..; ldrsw x11, [x26, x12, lsl #2]`, where an earlier `cmp w11, #1` (for a ccmp)
-/// was taken for the bound and two of the four cases were left unlifted.
+/// index is copied from further back, with no write to that register in between:
+/// `mov w12, w11; cmp w11, #3; b.hi ..; ldrsw x11, [x26, x12, lsl #2]`; an earlier `cmp w11, #1` (for a ccmp) is not
+/// the bound.
 fn bound(mem: &dyn Memory, entry: u64, load_pc: u64, mut idx: u32) -> Option<u64> {
     let mut a = load_pc;
     let mut limit_cond = None;
@@ -292,8 +292,8 @@ pub(crate) fn writes(w: u32, r: u32) -> bool {
     }
     if op0 & 0b0111 == 0b0111 {
         // floating point and SIMD: only conversions to integers (fmov w, s; fcvtzs ..) and smov / umov (imm4 0101 /
-        // 0111) have a general register as Rd. dup and ins, in the same copy group, write a vector register (BotW 1.9.0
-        // main+0x1440a4, dup v25: taken for a write of x25, it hid a jump table's base).
+        // 0111) have a general register as Rd. dup and ins, in the same copy group, write a vector register (taken
+        // for a write of the general register of that number, `dup v25` would hide a table base kept in x25).
         let to_general =
             w & 0x7f20_fc00 == 0x1e20_0000 || (w & 0xbfe0_8400 == 0x0e00_0400 && matches!(bits(w, 11, 4), 0b0101 | 0b0111));
         return to_general && bits(w, 0, 5) == r;

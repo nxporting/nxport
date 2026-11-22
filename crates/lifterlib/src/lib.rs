@@ -1,5 +1,5 @@
 // nxport-lifterlib: AArch64 -> C static recompilation of guest modules, for hosts that cannot run guest code natively
-// (x86-64; docs/windows-port.md). The generated C includes runtime/cpu.h (`CPU_H`) and calls into the runtime through
+// (x86-64). The generated C includes runtime/cpu.h (`CPU_H`) and calls into the runtime through
 // rt_dispatch / rt_svc / rt_brk / rt_udf / rt_ticks.
 
 pub mod abi;
