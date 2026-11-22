@@ -1,5 +1,6 @@
-// Game time in Breath of the Wild (1.9.0; the sites were found by Savage Wind, MIT, tools/game_sites.py and
-// runtime/hle/framepace.c, and checked here against the code).
+// Game time in Breath of the Wild (1.9.0: the sites were found by Savage Wind, MIT, tools/game_sites.py and
+// runtime/hle/framepace.c, and checked here against the code; 1.5.0: the same code found by its shape, names from the
+// decomp of that version).
 //
 // The game's clock is ksys::VFR: each frame VFR::updateInterval sets the interval ratio (+0x3c: interval / 2, 1.0 at
 // 30 fps, 1.5 at 20) from the present interval the frame loop picked (+0x34), then hands it to each core's clock (the
@@ -15,7 +16,7 @@
 //   30 fps instead (as Cemu's FPS++ does on the Wii U).
 // - The controllers' hold counters (sead::ControllerBase::updateDerivativeParams_) go up by a float the game keeps at 1
 //   (read through a GOT slot): it is set to the frame's step in frames at 30 fps, so holds last as long as on the
-//   console.
+//   console. 1.5.0 counts whole frames in integers: not changed there.
 // - The frame loop's vsync wait (it waits for vblanks until interval / 60 s have passed; only the first frames after
 //   start-up reach it) returns at once: the engine's present pacer paces.
 // - Arrows: once in their fall, an arrow adds its gravity (0, ArrowGravity, 0) to its velocity once per update, with no
@@ -23,9 +24,10 @@
 //   land short. The gravity is scaled by the frame's step in frames at 30 fps (slow motion left out, as on the console).
 //   The code calls a function that always returns 0 just before (the branch it guards is never taken); that call and
 //   its dead branch make room for the call that scales it.
-// - The sound system's frame: the game hands it the delta frame, at least 0.5 (a 60 fps frame), and every sound timer
-//   and fade steps by it: above 60 fps the sound's clock would run ahead of the game's (the field battle music would
-//   start each segment over the last). The floor is 0.5 x the frame's step in frames at 30 fps: the console's at 30 fps.
+// - The sound system's frame: the game hands it the delta frame, at least 0.5 (a 60 fps frame; 1.5.0: 1, a 30 fps
+//   frame), and every sound timer and fade steps by it: above that rate the sound's clock would run ahead of the game's
+//   (the field battle music would start each segment over the last). The floor is the game's times the frame's step in
+//   frames at 30 fps: the console's at 30 fps.
 // - Keyframed bodies (lifts, gates, a Divine Beast tilting) get each physics step the angular velocity that takes them to
 //   their target, from the angle of the turn left: 2 acos(|w|) of its quaternion (hkQuaternion::getAngle), which rounds
 //   to 0 below about a milliradian. The smaller turns of shorter steps read as none, and a tilting floor would stand
@@ -40,24 +42,34 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+/// Words replaced at main+`at`: `expected` there, `code` instead, whose word `call` is a BL to the hook.
+pub struct Patch {
+    pub at: usize,
+    pub expected: &'static [u32],
+    pub code: &'static [u32],
+    pub call: usize,
+}
+
 /// Where one version's clock code is (offsets in main), and the code expected there.
 pub struct Sites {
-    /// The frame loop's vsync wait: its first word, stp x29, x30, [sp, #-0x30]!.
-    pub frame_wait: usize,
-    /// In VFR::updateInterval, after the ratio is worked out (x19 = VFR): fcmp s1, s0; strb w8, [x19, #0x28];
-    /// b.eq +8; str s1, [x19, #0x3c]; ldr w8, [x19, #0x78].
-    pub vfr_ratio: usize,
-    /// The GUI speed: ucvtf s0, w0 (w0 = the interval) .. str s0, [x8, #0xb20]; words 1 and 2 (adrp, add x19) stay.
-    pub gui_speed: usize,
-    pub gui_speed_code: [u32; 8],
+    /// The frame loop's vsync wait (it waits for a vblank, then for vblanks until interval / 60 s have passed): words
+    /// (offset, the game's, ours) that skip it. 1.9.0 has it in one function, 1.5.0 inlines it twice.
+    pub frame_wait: &'static [(usize, u32, u32)],
+    /// In VFR::updateInterval, from where the ratio (+0x3c) is set to where the cores take it: the same, then a call of
+    /// vfr_update with x0 = the VFR, and the ratio in s1 again for 1.5.0's loop over the cores.
+    pub vfr_ratio: Patch,
+    /// The GUI speed: the interval in w0 for a call of gui_speed, its result in s0 where the game stores
+    /// interval x 0.5 at +0xb20.
+    pub gui_speed: Patch,
     /// The controllers' step: code that loads it (adrp x8; mov x21, xzr; ldr x8, [x8, #<slot>]; mov w22, #1;
     /// ldr s8, [x8]), and the float's offset in main the GOT slot holds.
-    pub controller_step: (usize, usize),
+    pub controller_step: Option<(usize, usize)>,
     /// Arrows: the dead call `bl <returns 0>; tbz w0, #0, +0x1c` (and the four words after it) at arrow.0, the function it
     /// calls at arrow.1, and the gravity's load `ldr s1, [x20, #0x108]` at arrow.2.
     pub arrow: Option<(usize, usize, usize)>,
-    /// The sound frame's floor: fmov s1, #0.5; fcmp s0, s1; fcsel s8, s1, s0, mi (s0 = the delta frame).
-    pub snd_floor: Option<usize>,
+    /// The sound frame's floor (s8 = max(the delta frame, snd_floor()) after it) and the game's floor in frames at
+    /// 30 fps.
+    pub snd_floor: Option<(Patch, f32)>,
     /// The keyframed body's `bl hkQuaternion::getAngle` (x0 = the quaternion), and the function it calls.
     pub kf_angle: Option<(usize, usize)>,
     /// Havok's deactivation: the world step's counter update (PHYS_WORLD_TICK_CODE, x8 = the hkpWorld), in the step and
@@ -71,12 +83,51 @@ pub struct Sites {
 }
 
 pub const STP_FRAME_WAIT: u32 = 0xa9bd_7bfd;
+/// 1.9.0's VFR::updateInterval after the ratio is worked out (x19 = VFR).
 pub const VFR_RATIO_CODE: [u32; 5] = [
     0x1e20_2020, // fcmp s1, s0
     0x3900_a268, // strb w8, [x19, #0x28]
     0x5400_0040, // b.eq +8
     0xbd00_3e61, // str s1, [x19, #0x3c]
     0xb940_7a68, // ldr w8, [x19, #0x78]
+];
+/// strb; str (unconditional: the same value); mov x0, x19; bl <vfr_update>; ldr.
+pub const VFR_RATIO_CALL: [u32; 5] = [VFR_RATIO_CODE[1], VFR_RATIO_CODE[3], 0xaa13_03e0, BL, VFR_RATIO_CODE[4]];
+
+/// 1.5.0's VFR::updateInterval from the interval check to the ratio's store (x0 = VFR, a leaf function: no frame, the
+/// ratio stays in s1 for the first core).
+pub const VFR_RATIO_CODE_V1_5: [u32; 24] = [
+    0x1e27_0120, 0x3400_0201, 0x6b01_011f, 0x5400_01c0, 0xbd41_5002, 0x7e21_d842, 0x1e2e_1003, 0x1e22_1862, 0x3200_03e8,
+    0x1e23_0021, 0x1e22_0821, 0xb900_3401, 0x3900_a008, 0xbd00_3001, 0x1e20_2020, 0x5400_00c1, 0x1400_0007, 0xbd40_3001,
+    0x3900_a01f, 0x1e20_2020, 0x5400_0060, 0xbd00_3c01, 0x1400_0002, 0x4ea0_1c01,
+];
+/// The same choice of the ratio in fewer words (without the old ratio in s0: the store is unconditional), then
+/// stp x0, x30, [sp, #-0x10]!; bl <vfr_update>; ldp x0, x30, [sp], #0x10; ldr s1, [x0, #0x3c].
+pub const VFR_RATIO_CALL_V1_5: [u32; 24] = [
+    0x3400_01c1, // cbz w1, <same>
+    0x6b01_011f, // cmp w8, w1
+    0x5400_0180, // b.eq <same>
+    0xbd41_5002, // ldr s2, [x0, #0x150]
+    0x7e21_d842, // ucvtf s2, s2
+    0x1e2e_1003, // fmov s3, #1.0
+    0x1e22_1862, // fdiv s2, s3, s2
+    0x3200_03e8, // mov w8, #1
+    0x1e23_0021, // ucvtf s1, w1
+    0x1e22_0821, // fmul s1, s1, s2
+    0xb900_3401, // str w1, [x0, #0x34]
+    0x3900_a008, // strb w8, [x0, #0x28]
+    0xbd00_3001, // str s1, [x0, #0x30]
+    0x1400_0003, // b <store>
+    0xbd40_3001, // same: ldr s1, [x0, #0x30]
+    0x3900_a01f, // strb wzr, [x0, #0x28]
+    0xbd00_3c01, // store: str s1, [x0, #0x3c]
+    0xa9bf_7be0,
+    BL,
+    0xa8c1_7be0,
+    0xbd40_3c01,
+    NOP,
+    NOP,
+    NOP,
 ];
 
 /// The GUI speed code with the version's adrp and add x19 as words 1 and 2.
@@ -93,8 +144,40 @@ pub const fn gui_speed_code(adrp: u32, add: u32) -> [u32; 8] {
     ]
 }
 
-const RET: u32 = 0xd65f_03c0;
-const NOP: u32 = 0xd503_201f;
+/// The same with ucvtf s0, w0 -> bl <gui_speed> (s0), fmov s1 and fmul -> nop.
+pub const fn gui_speed_call(adrp: u32, add: u32) -> [u32; 8] {
+    let mut c = gui_speed_code(adrp, add);
+    c[0] = BL;
+    c[3] = NOP;
+    c[6] = NOP;
+    c
+}
+
+/// 1.5.0's GUI speed (w8 = the interval; 0.5 when it is 0), from fmov s1, #0.5 to the fcsel before the store.
+pub const GUI_SPEED_CODE_V1_5: [u32; 8] = [
+    0x1e2c_1001, // fmov s1, #0.5
+    0x1e23_0100, // ucvtf s0, w8
+    0xf947_4273, // ldr x19, [x19, #0xe80]
+    0xf940_0269, // ldr x9, [x19]
+    0x7100_011f, // cmp w8, #0
+    0x2a1f_03e0, // mov w0, wzr
+    0x1e21_0800, // fmul s0, s0, s1
+    0x1e20_0c20, // fcsel s0, s1, s0, eq
+];
+/// mov w0, w8; bl <gui_speed>; the two loads and mov w0, wzr in place.
+pub const GUI_SPEED_CALL_V1_5: [u32; 8] = [0x2a08_03e0, BL, 0xf947_4273, 0xf940_0269, NOP, 0x2a1f_03e0, NOP, NOP];
+
+/// 1.9.0's sound floor: fmov s1, #0.5; fcmp s0, s1; fcsel s8, s1, s0, mi (s0 = the delta frame), and
+/// fmov s8, s0; bl <snd_floor>; fmax s8, s8, s0 (max(delta frame, floor), NaN as fcsel gave it).
+pub const SND_FLOOR_CODE: [u32; 3] = [0x1e2c_1001, 0x1e21_2000, 0x1e20_4c28];
+pub const SND_FLOOR_CALL: [u32; 3] = [0x1e20_4008, BL, 0x1e20_4908];
+/// 1.5.0's: ldr s0, [x8] (the delta frame); fmov s1, #1.0; fmax s8, s0, s1, and ldr s8, [x8]; bl <snd_floor>;
+/// fmax s8, s8, s0.
+pub const SND_FLOOR_CODE_V1_5: [u32; 3] = [0xbd40_0100, 0x1e2e_1001, 0x1e21_4808];
+pub const SND_FLOOR_CALL_V1_5: [u32; 3] = [0xbd40_0108, BL, 0x1e20_4908];
+
+pub const RET: u32 = 0xd65f_03c0;
+pub const NOP: u32 = 0xd503_201f;
 const BL: u32 = 0x9400_0000;
 
 /// Whether the running title has the clock hook (installed when it was loaded; a lifted game also had it when lifted).
@@ -103,6 +186,8 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 static CONTROLLER_STEP: AtomicU64 = AtomicU64::new(0);
 /// The interval VFR held at its last update (the stock step, with real-time game speed off).
 static LAST_INTERVAL: AtomicU32 = AtomicU32::new(2);
+/// The game's floor of the sound frame, in frames at 30 fps (f32 bits).
+static SND_FLOOR: AtomicU32 = AtomicU32::new(0x3f00_0000);
 
 /// Whether the game steps by real time now: then it may run at any frame rate without running fast or slow.
 pub fn real_time() -> bool {
@@ -152,9 +237,9 @@ pub unsafe extern "C" fn arrow_gravity(arrow: usize) -> f32 {
     *((arrow + 0x108) as *const f32) * frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed))
 }
 
-/// The floor of the sound system's frame: half a frame at 30 fps, times the frame's step.
+/// The floor of the sound system's frame: the game's, times the frame's step.
 pub unsafe extern "C" fn snd_floor() -> f32 {
-    0.5 * frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed))
+    f32::from_bits(SND_FLOOR.load(Ordering::Relaxed)) * frames_at_30(LAST_INTERVAL.load(Ordering::Relaxed))
 }
 
 /// The world step's deactivation counter update (hkpWorld +0x3ef, flags at +0x3ed / +0x3ee), 21 words from the counter's
@@ -277,20 +362,65 @@ pub unsafe extern "C" fn kf_angle(q: usize) -> f32 {
 #[cfg(nx_runtime)]
 pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) {
     use crate::profile::totk::frame_time::replace_with_call;
-    // fcmp; strb; b.eq; str -> strb; str (unconditional: the same value); mov x0, x19; bl <vfr_update>.
-    let vfr = vec![VFR_RATIO_CODE[1], VFR_RATIO_CODE[3], 0xaa13_03e0, BL, VFR_RATIO_CODE[4]];
-    match replace_with_call(base, mem_space, s.vfr_ratio, &VFR_RATIO_CODE, vfr, 3, crate::hle!(vfr_update(_))) {
+    let apply = |mem_space: &mut crate::guest::loader::GuestMemorySpace, p: &Patch, hle: *const ()| {
+        replace_with_call(base, mem_space, p.at, p.expected, p.code.to_vec(), p.call, hle)
+    };
+    match apply(mem_space, &s.vfr_ratio, crate::hle!(vfr_update(_))) {
         Ok(()) => {
             INSTALLED.store(true, Ordering::Relaxed);
             println!("[+] Game time: each frame steps by the real time since the last one (1/240 to 1/15 s)");
         }
         Err(e) => {
-            println!("[!] Game time: main+{:#x}: {e}; the step stays tied to the present interval", s.vfr_ratio);
+            println!("[!] Game time: main+{:#x}: {e}; the step stays tied to the present interval", s.vfr_ratio.at);
             return;
         }
     }
-    // The controllers' step: the GOT slot the code loads must hold the float's address.
-    let (code, float) = s.controller_step;
+    if let Some((code, float)) = s.controller_step {
+        install_controller_step(base, code, float);
+    }
+    match apply(mem_space, &s.gui_speed, crate::hle!(gui_speed(_))) {
+        Ok(()) => println!("[+] Menus: their speed follows the frame's step"),
+        Err(e) => println!("[!] Menus: main+{:#x}: {e}; their speed stays tied to the present interval", s.gui_speed.at),
+    }
+    if let Some((dead, zero, load)) = s.arrow {
+        install_arrow(base, mem_space, dead, zero, load);
+    }
+    if let Some(at) = s.demo_move {
+        install_demo_move(base, mem_space, at);
+    }
+    if let Some((p, floor)) = &s.snd_floor {
+        SND_FLOOR.store(floor.to_bits(), Ordering::Relaxed);
+        match apply(mem_space, p, crate::hle!(snd_floor())) {
+            Ok(()) => println!("[+] Sound: its frame follows the frame's step"),
+            Err(e) => println!("[!] Sound: main+{:#x}: {e}; its frame stays at least the game's floor", p.at),
+        }
+    }
+    install_phys(base, mem_space, s);
+    if let Some((at, get_angle)) = s.kf_angle {
+        // bl <getAngle> -> bl <kf_angle> (same argument and result).
+        let expected = BL | ((get_angle as i64 - at as i64) >> 2) as u32 & 0x03ff_ffff;
+        match replace_with_call(base, mem_space, at, &[expected], vec![BL], 0, crate::hle!(kf_angle(_))) {
+            Ok(()) => println!("[+] Keyframed bodies: small turns are kept at any frame rate"),
+            Err(e) => println!("[!] Keyframed bodies: main+{at:#x}: {e}; not patched"),
+        }
+    }
+    let ours = |&(at, _, to): &(usize, u32, u32)| std::ptr::read((base + at) as *const u32) == to;
+    let game = |&(at, from, _): &(usize, u32, u32)| std::ptr::read((base + at) as *const u32) == from;
+    if s.frame_wait.iter().all(game) {
+        for &(at, _, to) in s.frame_wait {
+            let p = (base + at) as *mut u32;
+            std::ptr::write(p, to);
+            crate::platform::os::flush_icache(p as usize, 4);
+        }
+        println!("[+] Frame loop: its vsync wait is left to the present pacer");
+    } else if !s.frame_wait.iter().all(ours) {
+        println!("[!] Frame loop: unexpected code at main+{:#x}; its vsync wait stays", s.frame_wait[0].0);
+    }
+}
+
+/// The controllers' step: the GOT slot the code loads must hold the float's address.
+#[cfg(nx_runtime)]
+unsafe fn install_controller_step(base: usize, code: usize, float: usize) {
     let w = |k: usize| std::ptr::read((base + code + 4 * k) as *const u32);
     let (adrp, ldr) = (w(0), w(2));
     if adrp & 0x9f00_001f == 0x9000_0008 && w(1) == 0xaa1f_03f5 && ldr & 0xffc0_03ff == 0xf940_0108 && w(4) == 0xbd40_0108 {
@@ -307,30 +437,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     } else {
         println!("[!] Controllers: unexpected code at main+{code:#x}; holds count frames");
     }
-    // ucvtf s0, w0 -> bl <gui_speed> (s0); fmov s1 and fmul -> nop.
-    let mut gui = s.gui_speed_code.to_vec();
-    gui[0] = BL;
-    gui[3] = NOP;
-    gui[6] = NOP;
-    match replace_with_call(base, mem_space, s.gui_speed, &s.gui_speed_code, gui, 0, crate::hle!(gui_speed(_))) {
-        Ok(()) => println!("[+] Menus: their speed follows the frame's step"),
-        Err(e) => println!("[!] Menus: main+{:#x}: {e}; their speed stays tied to the present interval", s.gui_speed),
-    }
-    if let Some((dead, zero, load)) = s.arrow {
-        install_arrow(base, mem_space, dead, zero, load);
-    }
-    if let Some(at) = s.demo_move {
-        install_demo_move(base, mem_space, at);
-    }
-    if let Some(at) = s.snd_floor {
-        // fmov s1, #0.5; fcmp s0, s1; fcsel s8, s1, s0, mi -> fmov s8, s0; bl <snd_floor>; fmax s8, s8, s0
-        // (max(delta frame, floor), NaN as fcsel gave it).
-        const CODE: [u32; 3] = [0x1e2c_1001, 0x1e21_2000, 0x1e20_4c28];
-        match replace_with_call(base, mem_space, at, &CODE, vec![0x1e20_4008, BL, 0x1e20_4908], 1, crate::hle!(snd_floor())) {
-            Ok(()) => println!("[+] Sound: its frame follows the frame's step"),
-            Err(e) => println!("[!] Sound: main+{at:#x}: {e}; its frame stays at least half a 30 fps frame"),
-        }
-    }
+}
+
+#[cfg(nx_runtime)]
+unsafe fn install_phys(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, s: &Sites) {
+    use crate::profile::totk::frame_time::replace_with_call;
     // Havok's deactivation: mov x0, x8; bl <phys_world_tick>; b <past the update> (the rest stays, unreached), and in each
     // body: mov x0, xM; bl <phys_body_tick>; mov w8, w0; and w9, w8, #3 (its cbnz follows).
     let mut phys = 0;
@@ -352,29 +463,11 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
     if phys == 4 {
         println!("[+] Physics: deactivation checks at the console's pace");
     }
-    if let Some((at, get_angle)) = s.kf_angle {
-        // bl <getAngle> -> bl <kf_angle> (same argument and result).
-        let expected = BL | ((get_angle as i64 - at as i64) >> 2) as u32 & 0x03ff_ffff;
-        match replace_with_call(base, mem_space, at, &[expected], vec![BL], 0, crate::hle!(kf_angle(_))) {
-            Ok(()) => println!("[+] Keyframed bodies: small turns are kept at any frame rate"),
-            Err(e) => println!("[!] Keyframed bodies: main+{at:#x}: {e}; not patched"),
-        }
-    }
-    let p = (base + s.frame_wait) as *mut u32;
-    match std::ptr::read(p) {
-        STP_FRAME_WAIT => {
-            std::ptr::write(p, RET);
-            crate::platform::os::flush_icache(p as usize, 4);
-            println!("[+] Frame loop: its vsync wait is left to the present pacer");
-        }
-        RET => {}
-        w => println!("[!] Frame loop: unexpected instruction {w:#010x} at main+{:#x}; its vsync wait stays", s.frame_wait),
-    }
 }
 
 /// Arrows' gravity: the dead call (`bl <mov w0, wzr; ret>`, `tbz w0, #0, +0x1c` and the four words of its branch)
 /// becomes `mov x0, x20; bl <arrow_gravity>; fmov s4, s0; b +0x14`, and the gravity's load `ldr s1, [x20, #0x108]`
-/// becomes `fmov s1, s4` (s4 is not touched between them).
+/// becomes `fmov s1, s4` (s4 is not touched between them; 1.5.0 calls sqrtf there only for a NaN velocity).
 #[cfg(nx_runtime)]
 unsafe fn install_arrow(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace, dead: usize, zero: usize, load: usize) {
     use crate::profile::totk::frame_time::replace_with_call;

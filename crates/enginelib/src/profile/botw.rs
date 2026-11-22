@@ -83,13 +83,26 @@ pub static PROFILE: GameProfile = GameProfile {
 
 /// 1.9.0's clock code (frame_time.rs).
 pub static SITES_V1_9_0: frame_time::Sites = frame_time::Sites {
-    frame_wait: 0xe9487c,
-    vfr_ratio: 0x151d484,
-    gui_speed: 0x1280ecc,
-    gui_speed_code: frame_time::gui_speed_code(0xf000_5db3, 0x9112_e273), // adrp x19, main+0x1e37000; add x19, #0x4b8
-    controller_step: (0xeb0f78, 0x1dad0e0),
+    frame_wait: &[(0xe9487c, frame_time::STP_FRAME_WAIT, frame_time::RET)],
+    vfr_ratio: frame_time::Patch {
+        at: 0x151d484,
+        expected: &frame_time::VFR_RATIO_CODE,
+        code: &frame_time::VFR_RATIO_CALL,
+        call: 3,
+    },
+    // adrp x19, main+0x1e37000; add x19, #0x4b8
+    gui_speed: frame_time::Patch {
+        at: 0x1280ecc,
+        expected: &frame_time::gui_speed_code(0xf000_5db3, 0x9112_e273),
+        code: &frame_time::gui_speed_call(0xf000_5db3, 0x9112_e273),
+        call: 0,
+    },
+    controller_step: Some((0xeb0f78, 0x1dad0e0)),
     arrow: Some((0x5ee6d0, 0xb325c0, 0x5ee734)),
-    snd_floor: Some(0x1551004),
+    snd_floor: Some((
+        frame_time::Patch { at: 0x1551004, expected: &frame_time::SND_FLOOR_CODE, code: &frame_time::SND_FLOOR_CALL, call: 1 },
+        0.5,
+    )),
     kf_angle: Some((0x12d57fc, 0xb06d4)),
     phys_world_tick: [0xf5e20, 0x12644c],
     phys_body_tick: [(0x11f95c, 20), (0x1207cc, 26)],
@@ -207,11 +220,59 @@ pub static HUD_V1_5_0: hud::Sites = hud::Sites {
     texgen: Some((0xac4530, hud::TEXGEN_CODE_V1_0)),
 };
 
+/// 1.5.0's clock code (frame_time.rs; names from the decomp of this version).
+pub static SITES_V1_5_0: frame_time::Sites = frame_time::Sites {
+    // sead::GameFrameworkNx::waitForGpuDone_ (main+0xaf95d0) has the vsync wait inlined on both of its paths: the first
+    // vblank wait (bl -> nop) and the loop (`cmp w8, #2; b.lo <past it>` -> b <past it>).
+    frame_wait: &[
+        (0xaf96e8, 0x9434_1bf2, frame_time::NOP),
+        (0xaf96f4, 0x5400_07c3, 0x1400_003e),
+        (0xaf9758, 0x9434_1bd6, frame_time::NOP),
+        (0xaf9764, 0x5400_02c3, 0x1400_0016),
+    ],
+    // ksys::VFR::updateInterval main+0x11c10fc.
+    vfr_ratio: frame_time::Patch {
+        at: 0x11c1148,
+        expected: &frame_time::VFR_RATIO_CODE_V1_5,
+        code: &frame_time::VFR_RATIO_CALL_V1_5,
+        call: 18,
+    },
+    // ksys::CalcControllerAndUi main+0xf3eeac.
+    gui_speed: frame_time::Patch {
+        at: 0xf3efc4,
+        expected: &frame_time::GUI_SPEED_CODE_V1_5,
+        code: &frame_time::GUI_SPEED_CALL_V1_5,
+        call: 1,
+    },
+    // sead::ControllerBase::updateDerivativeParams_ (main+0xb19ee4) counts holds in whole frames.
+    controller_step: None,
+    // uking::action::ArrowShootMove::advanceTargetPosAndSetVelocity main+0xa369c.
+    arrow: Some((0xa3718, 0x674764, 0xa3794)),
+    // The function after ksys::snd::SoundMgr::calc2 (main+0x11fb69c).
+    snd_floor: Some((
+        frame_time::Patch {
+            at: 0x11fb6f4,
+            expected: &frame_time::SND_FLOOR_CODE_V1_5,
+            code: &frame_time::SND_FLOOR_CALL_V1_5,
+            call: 1,
+        },
+        1.0,
+    )),
+    // ksys::phys::RigidBody::computeVelocities(Vector3f*, Vector3f*, Matrix34f const&) main+0xf9210c;
+    // hkQuaternionf::getAngleSr main+0x15959c0.
+    kf_angle: Some((0xf9248c, 0x15959c0)),
+    phys_world_tick: [0x160f1ac, 0x161f5b8],
+    phys_body_tick: [(0x162bdf4, 20), (0x162cc64, 26)],
+    // PlayerRailMove::calc_ (main+0x808058) has older arrival code (a 2D distance under a player parameter).
+    demo_move: None,
+};
+
 #[cfg(nx_runtime)]
 unsafe fn install_v1_5_0_hooks(base: usize, mem_space: &mut crate::guest::loader::GuestMemorySpace) {
     draw_distance::install(base, mem_space, draw_distance::V1_5_0);
     draw_distance::install_trees(base, mem_space, draw_distance::TREES_V1_5_0);
     render_size::install(base, render_size::SCENE_V1_5_0);
+    frame_time::install(base, mem_space, &SITES_V1_5_0);
     aspect::install(base, mem_space, &ASPECT_V1_5_0);
     hud::install(base, mem_space, &HUD_V1_5_0);
 }
