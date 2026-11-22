@@ -42,6 +42,7 @@ fn main() {
         }
     }
 
+    bundle_profile_mods();
     compile_shader("src/gpu/vulkan/astc.comp", naga::ShaderStage::Compute, "astc.spv");
     compile_shader("src/gpu/vulkan/relayout.comp", naga::ShaderStage::Compute, "relayout.spv");
     compile_shader("src/gpu/vulkan/overlay.vert", naga::ShaderStage::Vertex, "overlay_vert.spv");
@@ -67,3 +68,59 @@ fn compile_shader(src: &str, stage: naga::ShaderStage, out: &str) {
     std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join(out), bytes).unwrap();
 }
 
+
+/// The mods profiles carry (src/profile/<game>/mods/<mod>/romfs|exefs/...) as tables in OUT_DIR/profile_mods.rs, one per
+/// game: `pub static <GAME>: &[BundledMod]`. They may hold only patches (.ips, .pchtxt) under romfs/ or exefs/, never
+/// game content: anything else fails the build.
+fn bundle_profile_mods() {
+    use std::fmt::Write;
+    let root = std::path::Path::new("src/profile");
+    println!("cargo::rerun-if-changed={}", root.display());
+    let mut out = String::new();
+    let mut games: Vec<_> = std::fs::read_dir(root).unwrap().flatten().filter(|e| e.path().join("mods").is_dir()).collect();
+    games.sort_by_key(|e| e.file_name());
+    for game in games {
+        let game_name = game.file_name().to_string_lossy().into_owned();
+        let mods_dir = game.path().join("mods");
+        println!("cargo::rerun-if-changed={}", mods_dir.display());
+        writeln!(out, "pub static {}: &[BundledMod] = &[", game_name.to_ascii_uppercase()).unwrap();
+        let mut mods: Vec<_> = std::fs::read_dir(&mods_dir).unwrap().flatten().filter(|e| e.path().is_dir()).collect();
+        mods.sort_by_key(|e| e.file_name());
+        for m in mods {
+            let name = m.file_name().to_string_lossy().into_owned();
+            let mut files = Vec::new();
+            collect_files(&m.path(), &m.path(), &mut files);
+            files.sort();
+            writeln!(out, "    BundledMod {{ name: {name:?}, files: &[").unwrap();
+            for rel in files {
+                let ok_dir = rel.starts_with("romfs/") || rel.starts_with("exefs/");
+                let ext = rel.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                if !ok_dir || !(ext == "ips" || ext == "pchtxt") {
+                    panic!("{}/{rel}: a profile's mods hold only patches (.ips, .pchtxt) under romfs/ or exefs/", m.path().display());
+                }
+                let abs = std::fs::canonicalize(m.path().join(&rel)).unwrap();
+                println!("cargo::rerun-if-changed={}", abs.display());
+                writeln!(out, "        ({rel:?}, include_bytes!({:?})),", abs.display().to_string()).unwrap();
+            }
+            writeln!(out, "    ] }},").unwrap();
+        }
+        writeln!(out, "];").unwrap();
+    }
+    std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("profile_mods.rs"), out).unwrap();
+}
+
+/// Files under `dir` (paths relative to `base`, with '/').
+fn collect_files(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if e.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if p.is_dir() {
+            collect_files(base, &p, out);
+        } else {
+            let rel = p.strip_prefix(base).unwrap().components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            out.push(rel);
+        }
+    }
+}

@@ -21,12 +21,20 @@ pub static PROFILE: GameProfile = GameProfile {
     compute_has_preamble: true,
     versions: &[V1_0_0],
     shader_dirs: &[],
-    options: None,
+    options: Some(options),
     platform_options: None,
     presets: &[],
     module_patches: &[],
     main_thread_tick: Some(texture_size),
+    mods: super::bundled::SILVER_PINES,
 };
+
+fn options() -> crate::settings::SettingsPatch {
+    let mut s = crate::settings::SettingsPatch::default();
+    // Off until the player turns it on (the Texture Size menu changes the size while the game runs).
+    s.files.disabled_mods = Some(vec!["Full-size textures at launch".into()]);
+    s
+}
 
 /// IL2CPP's internal-call lookup in 1.0.0 (il2cpp::vm::InternalCalls::Resolve): a name ("Class::method(signature)")
 /// to the engine function, or null. il2cpp_codegen_resolve_icall (main+0x27b9d0) calls it and throws when it fails.

@@ -240,13 +240,18 @@ pub fn mod_roots() -> &'static [PathBuf] {
     ROOTS.get_or_init(|| {
         let s = crate::settings::get();
         let data = crate::profile::data_subdir("mods").filter(|d| d.is_dir());
-        match s.files.mods_dir.clone() {
+        let mut roots: Vec<PathBuf> = match s.files.mods_dir.clone() {
             Some(own) if crate::config::app_resources().is_some() => {
                 [Some(own.clone()), data.filter(|d| *d != own)].into_iter().flatten().collect()
             }
             Some(own) => vec![own],
             None => data.into_iter().collect(),
+        };
+        // The game profile's own mods (patches only), in a folder of the engine's.
+        if let Some(dir) = crate::profile::data_subdir("bundled_mods").filter(|d| crate::profile::write_bundled_mods(d)) {
+            roots.push(dir);
         }
+        roots
     })
 }
 

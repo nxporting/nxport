@@ -41,4 +41,5 @@ pub static PROFILE: GameProfile = GameProfile {
     ],
     module_patches: &[ultracam::patch, camera_ease::patch],
     main_thread_tick: None,
+    mods: &[],
 };

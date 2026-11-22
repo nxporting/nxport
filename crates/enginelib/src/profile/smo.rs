@@ -25,4 +25,5 @@ pub static PROFILE: GameProfile = GameProfile {
     presets: &[],
     module_patches: &[],
     main_thread_tick: None,
+    mods: &[],
 };
