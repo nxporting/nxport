@@ -222,6 +222,8 @@ and update this file when you finish or drop it.
      sites patched before lifting, as 1.9.0's are; check 1.5.0 runs above 30 at normal speed.
   53. (shared botw/frame_time.rs) BotW 1.5.0 hold counters count console frames (hold_counters replaces its loop).
      Windows: same as 52.
+  54. d4fc1c7 (shared profile/unity.rs, horizon/vi.rs, menu): Unity Frame Rate 120 / Unlimited (Unity's frame interval
+     found by pattern and overridden; the vsync event follows the rate). Native only, like 51. Check Windows pacing.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
