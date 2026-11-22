@@ -143,7 +143,7 @@ pub struct Trees {
 }
 /// 1.9.0: `fmadd s0, s1, s0, s0`.
 pub const TREES_V1_9_0: Trees = Trees { at: 0x13cbecc, last: 0x1f00_0020 };
-/// 1.5.0 (main+0x10839c4, found by mac-worker; its only caller a tail branch at main+0xf06b38): `fmul s0, s0, s1; fadd
+/// 1.5.0 (main+0x10839c4; its only caller a tail branch at main+0xf06b38): `fmul s0, s0, s1; fadd
 /// s0, s0, s1`, the store's offset made with `mov w8, #0x10000; movk w8, #0x4cb8`.
 pub const TREES_V1_5_0: Trees = Trees { at: 0x10839f0, last: 0x1e21_2800 };
 /// 1.0.0 (its setter ends at main+0xeff7fc), as 1.5.0.

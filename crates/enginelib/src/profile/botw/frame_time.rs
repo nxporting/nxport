@@ -11,7 +11,7 @@
 //
 // Other steps that count frames:
 // - The menus' speed: once a frame the game stores interval x 0.5 as the GUI speed (the float at +0xb20 of a UI
-//   object): 1 at 30 fps, and its cursor and animations ran faster above. gui_speed gives the frame's step in frames at
+//   object): 1 at 30 fps, so its cursor and animations would run faster above. gui_speed gives the frame's step in frames at
 //   30 fps instead (as Cemu's FPS++ does on the Wii U).
 // - The controllers' hold counters (sead::ControllerBase::updateDerivativeParams_) go up by a float the game keeps at 1
 //   (read through a GOT slot): it is set to the frame's step in frames at 30 fps, so holds last as long as on the
@@ -19,17 +19,17 @@
 // - The frame loop's vsync wait (it waits for vblanks until interval / 60 s have passed; only the first frames after
 //   start-up reach it) returns at once: the engine's present pacer paces.
 // - Arrows: once in their fall, an arrow adds its gravity (0, ArrowGravity, 0) to its velocity once per update, with no
-//   step (the straight part before it scales by the delta frame): above 30 fps they fell 2 or 4 times as fast and landed
-//   short. The gravity is scaled by the frame's step in frames at 30 fps (slow motion left out, as on the console).
+//   step (the straight part before it scales by the delta frame): above 30 fps they would fall 2 or 4 times as fast and
+//   land short. The gravity is scaled by the frame's step in frames at 30 fps (slow motion left out, as on the console).
 //   The code calls a function that always returns 0 just before (the branch it guards is never taken); that call and
 //   its dead branch make room for the call that scales it.
 // - The sound system's frame: the game hands it the delta frame, at least 0.5 (a 60 fps frame), and every sound timer
-//   and fade steps by it: above 60 fps the sound's clock ran ahead of the game's (the field battle music started each
-//   segment over the last). The floor is 0.5 x the frame's step in frames at 30 fps: the console's at 30 fps.
+//   and fade steps by it: above 60 fps the sound's clock would run ahead of the game's (the field battle music would
+//   start each segment over the last). The floor is 0.5 x the frame's step in frames at 30 fps: the console's at 30 fps.
 // - Keyframed bodies (lifts, gates, a Divine Beast tilting) get each physics step the angular velocity that takes them to
 //   their target, from the angle of the turn left: 2 acos(|w|) of its quaternion (hkQuaternion::getAngle), which rounds
-//   to 0 below about a milliradian. The smaller turns of shorter steps read as none, and a tilting floor stood still
-//   for some steps and caught up at once (Link hopped on it). kf_angle gives 2 atan2(|xyz|, |w|), the same angle
+//   to 0 below about a milliradian. The smaller turns of shorter steps read as none, and a tilting floor would stand
+//   still for some steps and catch up at once (Link hops on it). kf_angle gives 2 atan2(|xyz|, |w|), the same angle
 //   without the rounding.
 //
 // - Havok's deactivation checks (phys_world_tick, phys_body_tick) count console frames, not physics steps.
@@ -187,7 +187,7 @@ const PHYS_CLASSES: usize = 0x314;
 
 /// Havok's deactivation at the console's pace (Savage Wind #398). Havok judges whether a body came to rest once per
 /// physics step, and the game takes one step a frame: a body still for 24 steps (0.8 s at 30 fps) puts its island to
-/// sleep, 0.07 s at 360 fps, and Ree Dahee Shrine's ball fell asleep on its ramp for good above ~120 fps. Only the steps
+/// sleep, 0.07 s at 360 fps, and Ree Dahee Shrine's ball falls asleep on its ramp for good above ~120 fps. Only the steps
 /// that complete a console frame (1/30 s of the frame's step, slow motion left out as on the console) run the world's
 /// and the bodies' check counters; every step at 30 fps and slower. In every step the solver slows a body under its
 /// deactivation class's speed by a multiplier and stops it under the class's sleep speed (hkpWorld +0x314, 0x20 a
@@ -422,7 +422,7 @@ static DEMO_MOVE_SLACK: AtomicU64 = AtomicU64::new(0);
 /// it with one change. The move (PlayerRailMove / PlayerDestinationMove's shared step, x19) ends when the distance left
 /// is under one console frame of walking (speed), or, when it no longer shrinks by more than the game's slack, under
 /// 2 x speed x the delta frame. Above ~100 fps a frame's step is short enough for Link to come within one console
-/// frame of an intermediate point of a rail, and the walk ended there for good (leaving the Shrine of Resurrection).
+/// frame of an intermediate point of a rail, and the walk ends there for good (leaving the Shrine of Resurrection).
 /// So the first test takes speed x the delta frame when the frame is shorter than a console frame (0 < delta < 1);
 /// a zero delta (paused, loading) or a longer frame keeps the game's test. Savage Wind's finding (MIT, #364).
 pub unsafe extern "C" fn demo_move_arrive(mv: usize, delta: f32, speed: f32, left: f32) -> u32 {

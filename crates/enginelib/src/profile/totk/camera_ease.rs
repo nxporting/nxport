@@ -3,9 +3,8 @@
 // TotK eases its camera's yaw in: while the right stick is held, a timer (+0x84 of the camera's input state) grows by
 // the frame's time times a rate until 1, and the yaw speed is scaled by (cos(timer * a + b) + 1) / 2 (1.0.0:
 // main+0x9abc34..0x9abc58, the timer's step at main+0x9ac5f0), so a turn reaches full speed after about 20 frames.
-// Pitch has no such ramp. With a mouse the ramp is felt as lag on every sideways movement (the user: "up and down
-// movement is not smoothed while side to side movement has a slight easing"; they want none), and it starts over each
-// time the stick comes back to rest. The patch sets the timer to 1 instead of stepping it: the scale is 1 from the
+// Pitch has no such ramp. With a mouse the ramp is felt as lag on every sideways movement, and it starts over each time
+// the stick comes back to rest. The patch sets the timer to 1 instead of stepping it: the scale is 1 from the
 // first frame. It applies to a controller too: a code patch is the same at build and run time, whatever the settings.
 //
 // The step is found by its instructions, not by address, so other builds compiled the same way get the patch too.

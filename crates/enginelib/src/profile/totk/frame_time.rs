@@ -13,21 +13,21 @@
 // their own step from the interval (through a pointer the code loads); it follows the same real-time step.
 //
 // With vsync pacing frames (frame_step.rs), frames reach the screen a whole number of refreshes apart, but the game's
-// frames start unevenly between them (the swapchain lets a frame start once an image frees): real-time steps then moved
+// frames start unevenly between them (the swapchain lets a frame start once an image frees): real-time steps would move
 // things unevenly across evenly shown frames, a stutter. There the step is rounded to whole refreshes, the remainder
 // carried into the next frames' steps, so game time keeps to real time.
 //
 // Camera rate: a getter the camera code reads a per-frame amount through (1.1.2: main+0x1d3675c, 1.0.0: main+0x1cd3678;
-// UltraCam scales it the same way in 1.1.2: docs/ultracam-totk-112.md) is not stepped by the time manager, so the camera turned faster the faster
-// the game ran (Ultrahand's vertical camera). It branches to camera_rate, which scales the amount by the frame's step
+// UltraCam scales it the same way in 1.1.2) is not stepped by the time manager, so the camera would turn faster the
+// faster the game runs (Ultrahand's vertical camera). It branches to camera_rate, which scales the amount by the frame's step
 // in frames at 30 fps (1 at 30 fps).
 //
 // Ground carry: a slow-motion check on the velocity Link keeps from what he stands on compares a value that grows with
-// the frame rate (30 / (step * time scale)) with 100; above 100 fps he slid off moving platforms. ground_carry takes out
+// the frame rate (30 / (step * time scale)) with 100; above 100 fps he would slide off moving platforms. ground_carry takes out
 // the step (the same fix as MacNativeGames' and SkyboundTOTK's for 1.0.0).
 //
 // Hair and cloth (1.0.0): the actor animation update builds a clock {seconds = factor / 30, ratio = factor} each rendered
-// frame from a 1/30 s constant, so above 30 fps hair and cloth swung too fast. Its four places (three inline, one before a
+// frame from a 1/30 s constant, so above 30 fps hair and cloth would swing too fast. Its four places (three inline, one before a
 // call) load two words time_step keeps at {step seconds, step frames} instead, and scale both by the factor at once
 // (`ldr d`, `fmul v.2s, v.2s, v.s[0]`, `str d`): the same instruction count, no call. 1.1.2 leaves that clock unset.
 //
@@ -176,8 +176,8 @@ pub unsafe extern "C" fn time_step(timer: usize, interval: i32) {
 /// The ability wheel's background (layout ShortCutBG_00) is a capture of the screen behind it: capture panes take the
 /// picture the first time they are drawn, and its opening animation (In) shows them with visibility steps at frame 1.
 /// The sequence that opens it (ShortCutPauseOn) pauses the world a fixed number of updates later. At 30 fps frame 1 is
-/// the first update after opening; with shorter steps it came after the world stopped being drawn, and the background
-/// was black. The steps move to just after frame 0 in the loaded animation: the panes show on the first update the
+/// the first update after opening; with shorter steps it comes after the world stopped being drawn, and the background
+/// would be black. The steps move to just after frame 0 in the loaded animation: the panes show on the first update the
 /// animation advances, as at 30 fps, and the rest of the animation keeps its timing. Called before each layout
 /// calculation (aspect.rs's hook).
 pub unsafe fn short_cut_bg_keys(layout: usize) {
@@ -261,7 +261,7 @@ pub unsafe extern "C" fn camera_rate(obj: usize) -> f32 {
 
 /// The ground-carry check's value (x0 = the time object): Link keeps a tenth of the velocity of what he stands on when
 /// the object's +0x28, 30 / (step * time scale), is over 100: meant for time slowed below 0.3, but above 100 fps the
-/// step alone got it there and he slid off moving platforms and trampolines. Times the step (+0x38) it is 30 / time
+/// step alone gets it there and he would slide off moving platforms and trampolines. Times the step (+0x38) it is 30 / time
 /// scale: the same at 30 fps, and independent of the frame rate.
 pub unsafe extern "C" fn ground_carry(obj: usize) -> f32 {
     *((obj + 0x28) as *const f32) * *((obj + 0x38) as *const f32)
@@ -458,8 +458,8 @@ unsafe fn equip_cooldown(base: usize, at: usize, load_at: usize) {
 /// The rotate module's update (the AI's check that a gear or water wheel turns, which shrine doors at Riogok, Turakamik
 /// and the Wind Temple wait on) reports turning when the angle turned since its last update is above RotateStartDeg / 30:
 /// the angle of one 30 Hz frame. It is called with the AI's update context, whose +8 is the frame delta in 30 Hz frames
-/// (the frame-counter node adds it up each update), but ignores it: above 30 fps a gear turned less than that per update,
-/// read as stopped, and the doors never opened. The threshold becomes the angle of the update's own delta, one 30 Hz
+/// (the frame-counter node adds it up each update), but ignores it: above 30 fps a gear would turn less than that per
+/// update, read as stopped, and the doors would never open. The threshold becomes the angle of the update's own delta, one 30 Hz
 /// frame's times the delta (1.4.3 divides the angle by the delta instead: the same test).
 ///
 /// The update's first words (rotate_entry_code) load the module's axis, keep the module and normalise the axis into a
@@ -567,7 +567,7 @@ pub const fn map_pan_code(stick_x: u32, stick_y: u32, fmov_old_x: u32, ldr_bound
 
 /// The map screen's update eases the cursor's pan speed towards its target with the frame's 30 Hz ratio (0.75 to the
 /// power of the ratio: the same speed after the same time at any frame rate) but steps the position by speed * stick
-/// each update, so the cursor panned 2x as fast at 60 fps and 4x at 120. The step is speed * ratio * stick: the ratio
+/// each update, so the cursor would pan 2x as fast at 60 fps and 4x at 120. The step is speed * ratio * stick: the ratio
 /// the easing reads ([[x23] + 8]), the same at 30 fps (1.0) bit for bit. Room for the two loads and the multiply comes
 /// from the code itself: the position's x and y load as one pair through x21 (the update set it to x19 + 0x2c8 on the
 /// one way here), the first store of the unclamped x goes (the clamped x is stored over it before anything reads it),
@@ -601,7 +601,7 @@ unsafe fn map_pan(base: usize, at: usize, code: &[u32; 16]) {
 
 /// The aim update for Ultrahand and Recall turns the gyro's vertical movement ([x22 + <gyro pitch>], loaded into s9 at
 /// its join) into aim without the frame's 30 Hz ratio, which the update loaded into s10 ([x20 + 8]) and multiplies its
-/// stick aim by: above 30 fps the vertical gyro aim moved 2x as fast at 60 fps and 4x at 120. s9 is read twice after: the
+/// stick aim by: above 30 fps the vertical gyro aim would move 2x as fast at 60 fps and 4x at 120. s9 is read twice after: the
 /// Recall aim's vertical step and the Ultrahand gyro aim's, whose step totk-pc-recomp scales after it is divided by the
 /// aim's range (where nxport's camera_rate already scales the stick's: scaling there would count it twice). Scaling s9
 /// by s10 at the join scales both by the ratio once. s10 holds [x20 + 8] there on every way in (nothing writes it before

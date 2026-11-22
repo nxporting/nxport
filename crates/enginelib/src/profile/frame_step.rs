@@ -2,8 +2,8 @@
 // the previous frame, so game time keeps to real time at any frame rate.
 //
 // With vsync, frames reach the screen a whole number of refreshes apart (or, under the frame-rate limit, a whole limiter
-// frame apart), but the game's frames start unevenly between them: real-time steps then moved things unevenly across
-// evenly shown frames, a stutter (Breath of the Wild at the 30 fps limit: starts 26-42 ms apart, frames shown 33.3 ms
+// frame apart), but the game's frames start unevenly between them: real-time steps would move things unevenly across
+// evenly shown frames, a stutter (Breath of the Wild at the 30 fps limit starts frames 26-42 ms apart, shown 33.3 ms
 // apart). There the step is rounded to that period, the remainder carried into the next frames' steps, so game time
 // keeps to real time.
 

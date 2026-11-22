@@ -10,8 +10,8 @@
 //   which writes the panes' scale and marks them for recalculation. A value the game or an animation wrote since
 //   becomes the new base.
 // - Panes that clip what they hold (the minimap) turn their rectangle into a scissor of the 16:9 canvas
-//   (main+0xf66f0c): that rectangle is moved to where the layout is shown (scissor_pane), or the clip stayed at the 16:9
-//   place while the minimap moved inward.
+//   (main+0xf66f0c): that rectangle is moved to where the layout is shown (scissor_pane), else the clip would stay at the
+//   16:9 place while the minimap moves inward.
 // - Panes the game keeps just past the 16:9 screen's right edge (OUTSIDE: the pause menu's strips that show its pages
 //   sliding in, captured from beyond the screen) come into view on a wider screen, as dark bands: they are hidden
 //   while the screen is wider than 16:9.
@@ -19,7 +19,7 @@
 //   P_Capture_00 shows it with texture coordinates projected from its place on the screen) are fitted to the layout's
 //   size, as the 16:9 screen in layout units. The screen shows the layout F times as wide (1 / f as tall), so they are
 //   fitted to that (layout_fit, in the texture projection's choice of the size, main+0x2df24): the copy already holds
-//   the whole screen, and showed it 1 / F as narrow before.
+//   the whole screen, and would show it 1 / F as narrow.
 // The panes are the layouts' own (names, sizes and places as the game's layout files have them: each FILL pane is as
 // large as the 1280x720 layout, each OUTSIDE pane lies wholly right of x = 640).
 

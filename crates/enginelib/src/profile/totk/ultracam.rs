@@ -6,19 +6,18 @@
 // thread from whatever DisplaySize holds at that moment. When a render thread's pass lands just before, the overlay is
 // laid out for 800x450, 180x112 and the like for a frame: its right-edge scrollbar strip lands mid screen as a dark
 // vertical line and its menu jumps. On a Switch (and in Ryujinx) the last viewport before the overlay is nearly always
-// the 1920x1080 UI pass; nxport's render threads run further ahead, so the race shows. Measured on the user's save:
-// 233 strips at a wrong size in 3000 frames, 1 with DisplaySize held at the window's size.
+// the 1920x1080 UI pass; nxport's render threads run further ahead, so the race shows.
 //
 // The patch removes the hook's store (the one instruction), so DisplaySize keeps the size UltraCam sets when its overlay
 // starts (the window's size, at least 1280x720). The hook still calls the real function. Only the plugin's code changes,
 // once, as it loads. The cost: after a docked/handheld switch while the game runs, the overlay keeps the size it started
 // with. With this UltraCam a switch to handheld crashes the game first (its resolution hook, called every frame from
-// main+0xc5fd5c; the user saw the same crash in Ryujinx), so the cost cannot show until that is fixed.
+// main+0xc5fd5c; Ryujinx crashes the same way), so the cost cannot show until that is fixed.
 //
 // The hook is found by its instructions, not by address, so other builds compiled the same way get the patch too.
 
-/// UltraCam's nvnCommandBufferSetViewport hook (cmd, x, y, width, height), as compiled in the UltraCam build in the
-/// user's TotK mods (subsdk of 1,251,511 bytes, at +0xbbf90). None: words that differ between builds (the call to
+/// UltraCam's nvnCommandBufferSetViewport hook (cmd, x, y, width, height), as compiled in the UltraCam build the patch
+/// is for (subsdk of 1,251,511 bytes, at +0xbbf90). None: words that differ between builds (the call to
 /// ImGui::GetIO and the load of the real function's address).
 const HOOK: [Option<u32>; 18] = [
     Some(0xa9bd_7bfd), // stp   x29, x30, [sp, #-0x30]!

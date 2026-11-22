@@ -411,7 +411,7 @@ pub unsafe extern "C" fn aim_pitch_native(s0: f32, s1: f32, s9: f32) -> f32 {
     turn + AIM_PITCH_SIGN * crate::host::input::take_mouse_angle(1)
 }
 
-/// How the aim camera's angles turn for the normal camera's: measured against the stick (see the commit adding them).
+/// How the aim camera's angles turn for the normal camera's: measured against the stick.
 const AIM_YAW_SIGN: f32 = 1.0;
 const AIM_PITCH_SIGN: f32 = 1.0;
 
