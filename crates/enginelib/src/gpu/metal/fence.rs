@@ -22,8 +22,8 @@ pub(super) enum GuestWrite {
 /// buffer being encoded. --early-fence does not wait for it: TotK reads such results right after each frame fence
 /// (occlusion report slots; small compute storage buffers, e.g. s_e7935105553f7e48's 0x160-byte outputs, read by
 /// TotK 1.1.2 main+0x10c4xxx), so it gets them one frame late, as emulators' asynchronous GPU modes do. --early-fence-strict
-/// falls back to a full wait while any is pending: correct, but in Hateno play every frame has some (one buffer copy,
-/// ~77 occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
+/// falls back to a full wait while any is pending: correct, but in play nearly every frame has some (buffer copies,
+/// occlusion reports, compute storage), so it gains nothing there. --early-fence-trap traps their pages.
 pub(super) fn note_gpu_guest_write(kind: GuestWrite, addr: u64, len: usize) {
     if !matches!(kind, GuestWrite::Occlusion) {
         // (Reports end holds where they are recorded, Cmd::ReportCounter / ReportValue.)
@@ -324,11 +324,10 @@ pub(super) fn note_committed(serial: u64) {
 /// work is committed instead of when the GPU has finished it, so the game's next frame overlaps the GPU's work on this
 /// one (TotK waits on each frame's fence before starting the next); at most one frame overlaps. The game then reads GPU
 /// results a frame late (occlusion reports, compute outputs: see note_gpu_guest_write) and may write data the GPU is
-/// still reading (seen in the opening). The engine's own readers wait or keep GPU order: render-target write-back
+/// still reading. The engine's own readers wait or keep GPU order: render-target write-back
 /// waits for its targets, uniform buffers in memory GPU work of earlier submits writes stay zero-copy until it
 /// completed (State::carried_dirty).
-/// Without it the GPU idles between frames and macOS lowers its clock (about twice the GPU time per frame, under half
-/// the frame rate in TotK's Hateno). Each GPU result the game reads right after its fence still needs a
+/// Without it the GPU idles between frames and macOS lowers its clock (about twice the GPU time per frame). Each GPU result the game reads right after its fence still needs a
 /// special case until guest memory the GPU writes is kept coherent for CPU reads in general.
 pub(crate) fn early_fence() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -355,7 +354,7 @@ pub fn wait_fence(serial: u64, timeout_ns: u64) -> bool {
 
 pub(super) fn wait_fence_inner(serial: u64, timeout_ns: u64) -> bool {
     // Only the frame loop's wait (guest-main): other threads wait for GPU work whose results they read back (loading
-    // stalled when their fences returned early).
+    // would stall if their fences returned early).
     if !early_fence() || !on_guest_main() {
         return wait_serial(serial, timeout_ns);
     }

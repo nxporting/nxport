@@ -1,7 +1,7 @@
 // Render-encoder calls of translated draws, executed on a second thread.
 //
 // The Presentation Thread both resolves draws (NVN state -> Metal objects) and makes the Metal calls; the calls
-// (encoder creation, state, draws) were ~20% of its time. Here they are queued in order and a worker thread executes
+// (encoder creation, state, draws) are a large share of its time. Here they are queued in order and a worker thread executes
 // them while the Presentation Thread resolves the next draws. Ops are batched on the encoding side without locks (only
 // the encoding thread touches the batch) and handed over in chunks.
 //
@@ -698,7 +698,7 @@ impl Issuer {
     }
 
     /// Commits `cb` after the queued ops, without waiting for them: the GPU starts on it as soon as the worker gets there,
-    /// and the encoding thread goes on resolving draws (a sync here cost ~5% of the Presentation Thread). Retirement only
+    /// and the encoding thread goes on resolving draws. Retirement only
     /// polls the buffer's status, which stays uncommitted until then. --sync-commit: sync, then commit here.
     pub(super) fn commit(&self, cb: Retained<ProtocolObject<dyn MTLCommandBuffer>>) {
         self.commit_serial(cb, None);

@@ -7,14 +7,14 @@
 // frame's HUD and text after the submit, and the GPU must see that.
 //
 // Uniform data is copied when recorded (only the extent each stage reads), never read in place, as on Metal: in place,
-// the game's next-frame writes to those pages waited for the GPU for milliseconds per frame. Vertex, index and buffer
-// data stay in place. Copies of all of them (pages the game had written while GPU work read them, "hot") drew HUD and
-// inventory text from other strings (the "L" key icon as a digit, wrong item counts), and holding every submit's pages
-// from the submit on drew UI elements scaled up (a screen-sized apple icon) when the inventory opened.
+// the game's next-frame writes to those pages would wait for the GPU for milliseconds per frame. Vertex, index and buffer
+// data stay in place. Copies of all of them (pages the game had written while GPU work read them, "hot") would draw HUD
+// and inventory text from other strings, and holding every submit's pages from the submit on would draw UI elements
+// scaled up when the inventory opens.
 //
 // A page the game wrote while GPU work read it is hot. The recording's copies must hold what such pages held when the
-// submit was made, but recording takes milliseconds and the game's other threads go on writing meanwhile (TotK swimming:
-// per-frame constants copied half rewritten blended whole frames to cyan). So hot pages are read-only while a submit is
+// submit was made, but recording takes milliseconds and the game's other threads go on writing meanwhile (per-frame
+// constants would be copied half rewritten). So hot pages are read-only while a submit is
 // recorded: the first write to one saves the page's contents (still the submit's) and goes ahead, and the recording's
 // copies of guest memory take the saved pages (patch). The backend's own writes (reports, inline updates) are not saved.
 //
@@ -368,7 +368,7 @@ unsafe fn release_slot(gen: usize, i: usize) {
     }
     let (s, e, serial) = (t.start[i].load(Ordering::Acquire), t.end[i].load(Ordering::Acquire), t.serial[i].load(Ordering::Acquire));
     // The watcher writing back an earlier submit's results cannot wait for a later one (it completes them itself: each
-    // such fault waited out the 2 s timeout).
+    // such fault would wait out the 2 s timeout).
     if !WATCHER.with(|w| w.get()) {
         wait_done(serial);
     }
@@ -385,7 +385,7 @@ unsafe fn release_slot(gen: usize, i: usize) {
 pub(super) unsafe fn fault(addr: usize) -> bool {
     let handled = fault_held(addr);
     // The watcher (write-backs) leaves with the page open whatever held it: every submit waits for it, so a page left
-    // read-only under it (a race with a protect, a hot page) faulted forever and the game stopped.
+    // read-only under it (a race with a protect, a hot page) would fault forever and the game would stop.
     if handled && WATCHER.with(|w| w.get()) {
         set_prot(addr & !(PAGE - 1), PAGE, true);
         crate::guest::dirty_track::handle_fault(addr);
@@ -433,7 +433,7 @@ unsafe fn fault_held(addr: usize) -> bool {
         }
         mark_hot(addr);
         // Released already, yet the page faulted: a reprotect raced the release and left it read-only. Retrying
-        // without opening it faulted forever.
+        // without opening it would fault forever.
         let stale = TABLES[gen & 1].released[i].load(Ordering::Acquire) != 0;
         release_slot(gen, i);
         if stale && ACTIVE.load(Ordering::Acquire) == gen {
@@ -448,7 +448,7 @@ unsafe fn fault_held(addr: usize) -> bool {
         // read-only, the watcher's write-back would fault until the recording ended while the recording waits for the
         // watcher: a deadlock.
         // The previous generation's ranges were all released at the rebuild: a page of one still read-only (a reprotect
-        // that raced a release) is opened, else every write to it faulted forever.
+        // that raced a release) is opened, else every write to it would fault forever.
         if !hot_fault(addr) {
             set_prot(addr & !(PAGE - 1), PAGE, true);
         }
@@ -509,8 +509,8 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
 /// this thread sees complete.
 pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
     // No table is rebuilt meanwhile (protect, release_all): a page checked as held and released by a rebuild before the
-    // copy was made read-only again here with no table holding it, and every later write to it, the watcher's and the
-    // game's, faulted forever (the write tracking takes such a page for one already opened).
+    // copy would be made read-only again here with no table holding it, and every later write to it, the watcher's and
+    // the game's, would fault forever (the write tracking takes such a page for one already opened).
     let _records = RECORDS.lock().unwrap();
     let mut at = addr;
     while at < addr + len {

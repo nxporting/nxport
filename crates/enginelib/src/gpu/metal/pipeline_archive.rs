@@ -433,10 +433,9 @@ pub fn build(out: &Path, script: bool) -> Result<(), String> {
                         for &i in group {
                             let p = &planned[i];
                             // Pipelines only, no separately added specialised functions: opening an archive that holds
-                            // them costs ~23x its size in memory (TotK, M4: 2.3 GB per 100 MB archive, ten archives
-                            // 23 GB before the first frame; the app reached 30-40 GB), while a pipelines-only archive
-                            // opens in milliseconds for next to nothing and still serves the pipelines (5575 of 5877
-                            // listed ones). For the script they would also take the specialisation's name.
+                            // them costs ~23x its size in memory (tens of gigabytes for TotK's archives), while a
+                            // pipelines-only archive opens in milliseconds for next to nothing and still serves nearly
+                            // all the listed pipelines. For the script they would also take the specialisation's name.
                             let desc = descriptor(&device, &lib, p);
                             let Some(desc) = desc else {
                                 failed.fetch_add(1, Ordering::Relaxed);

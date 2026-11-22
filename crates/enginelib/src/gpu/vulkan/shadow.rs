@@ -1,8 +1,8 @@
 // Guest memory GPU work writes, kept in GPU memory while a submit uses it (shadows).
 //
 // Imported guest memory is host memory the GPU snoops (the driver gives imported host pointers HOST_CACHED memory),
-// and shaders that write it often (atomics into small counters and histograms) spent most of a frame there: TotK's
-// title screen on an RTX 4080 took 46 ms of GPU time per frame, 21 ms with those buffers elsewhere. So a range GPU work
+// and shaders that write it often (atomics into small counters and histograms) spend much of a frame there (TotK's
+// title screen takes over twice the GPU time with those buffers in place). So a range GPU work
 // writes gets a slot in device-local memory the CPU can map (the BAR window where there is one), filled from guest
 // memory, or on the GPU from the slot of a submit still running that wrote it last (queue order: that submit's writes
 // come first), and copied back to guest memory once the submit completed. Other uses of the range in the same submit
@@ -49,7 +49,7 @@ impl Shadows {
     const ALIGN: u64 = 256;
     /// The largest range given a slot. The buffers that wanted one are small (TotK: 128 B to 58 KB of counters and
     /// histograms); storage bindings sized by the memory mapped after them run to 1 MiB, and a slot each, filled and
-    /// copied back with every submit, made the in-flight watcher copy for a second per frame. Those stay in place.
+    /// copied back with every submit, would make the in-flight watcher copy for a second per frame. Those stay in place.
     const MAX_SLOT: usize = 64 << 10;
 
     unsafe fn alloc(&mut self, dev: &Dev, len: usize) -> Option<(vk::Buffer, u64, *mut u8)> {

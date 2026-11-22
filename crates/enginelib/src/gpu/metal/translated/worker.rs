@@ -34,8 +34,8 @@ pub(crate) fn pool_buffers_len() -> usize {
 }
 
 /// The issuer thread's own encode state: its arena, uniform copies and redundant-state filter, and its own copies of the
-/// shared caches (pipelines, samplers, constant banks, pool buffers): sharing them with the encoding thread made its
-/// compute dispatches wait for whole draws (~20% of its time).
+/// shared caches (pipelines, samplers, constant banks, pool buffers): shared with the encoding thread, its compute
+/// dispatches would wait for whole draws.
 #[derive(Default)]
 pub(crate) struct WorkerCtx {
     cx: super::EncodeCtx,

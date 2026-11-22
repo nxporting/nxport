@@ -33,8 +33,8 @@ impl Gfx {
 
     /// Commits the command buffer being encoded once it holds `split_encoders()` encoders and continues in a new one, so
     /// the GPU starts on the first passes of a frame while the rest is still being encoded. TotK waits for each frame's
-    /// GPU work right after submitting it; encoding everything before committing kept the GPU idle during encoding and
-    /// the CPU idle during execution (frame time = encode + GPU).
+    /// GPU work right after submitting it; encoding everything before committing would keep the GPU idle during encoding
+    /// and the CPU idle during execution (frame time = encode + GPU).
     /// Runs before every command. With a render encoder open only force_split can split: the time, report and count
     /// rules wait for a pass boundary.
     #[inline(always)]
@@ -48,9 +48,9 @@ impl Gfx {
     #[inline(never)]
     pub(super) fn maybe_split_slow(&self, st: &mut State) -> bool {
         let k = split_encoders();
-        // Also by time, between passes: encoders differ widely in encode time (a run of shadow-map passes took 3.2 ms to
-        // encode without reaching 24 encoders while the GPU idled; from there the GPU was the bottleneck to the frame's
-        // end), so the GPU gets work every split_ms of encoding without cutting a pass.
+        // Also by time, between passes: encoders differ widely in encode time (a run of shadow-map passes can take
+        // milliseconds without reaching the encoder count while the GPU idles), so the GPU gets work every split_ms of
+        // encoding without cutting a pass.
         let ms = split_ms();
         let by_time = ms > 0.0
             && st.enc.is_none()
@@ -59,8 +59,8 @@ impl Gfx {
             && st
                 .cb_started
                 .is_some_and(|t| t.elapsed().as_secs_f64() * 1e3 >= ms);
-        // The encoder-count rule also waits for a pass boundary: cutting an open pass to commit stored and reloaded all its
-        // attachments (~6 times per Hateno frame). --split-cuts-passes: cut as before (A/B).
+        // The encoder-count rule also waits for a pass boundary: cutting an open pass to commit would store and reload all
+        // its attachments. --split-cuts-passes: cut anyway (A/B).
         let by_count = k > 0 && st.lb.enc_labels.len() >= k && st.enc.is_none();
         // --report-guard: game threads wait for the occlusion reports of this submit (metal/report_guard.rs), so the command
         // buffer holding them is committed at the first pass boundary after them (on the Switch the GPU writes each
@@ -265,7 +265,7 @@ impl Gfx {
                 CLEARS_FLUSHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             CLEAR_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // Queued like any pass (an issuer sync here was ~18 waits per Hateno frame).
+            // Queued like any pass (no issuer sync).
             let label = if has_color { "clear" } else { "clear_depth" };
             st.issuer.push(issuer::Op::Begin {
                 cb: cb.clone(),
@@ -632,7 +632,7 @@ impl Gfx {
         );
         let has_depth = !matches!(pf, MTLPixelFormat::Stencil8);
         // The view's mip level and array layer: shadow cascades live in layers and levels of one depth array, and a
-        // clear of layer 0 / level 0 only left the others at their initial 0.0, so their LESS-tested casters never drew.
+        // clear of layer 0 / level 0 only would leave the others at their initial 0.0, where LESS-tested casters never draw.
         let (level, slice) = (rt.level as usize, rt.layer as usize);
         if tracing_frame() {
             println!("[ftrace] CLEAR DEPTH nvn {:#x} -> mtl {:?} {:?} {}x{} arr{} lvls{} parent={} | level {} slice {} | depth {} mask {} stencil {} smask {}",

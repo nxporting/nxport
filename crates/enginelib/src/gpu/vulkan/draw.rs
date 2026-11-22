@@ -188,7 +188,7 @@ impl Ctx {
 
     /// The vertex stage's state: attribute types from the bound attribute formats, NVN's clip conventions, and for a
     /// draw of points the point size the game set (Vulkan takes it from the stage, which writes it in every vertex stage:
-    /// left at 1, a pass the game splats with large points kept single pixels).
+    /// left at 1, a pass the game splats with large points would keep single pixels).
     fn vertex_state(&self, points: bool) -> (GraphicsState, u64) {
         let mut s = vertex_graphics_state(self.st.attribs.as_slice().iter().copied().enumerate(), crate::nvn::api::depth_mode() == 0);
         // An array hashes as the slice a Vec would (length included): the same keys, without an allocation per draw.
@@ -380,7 +380,6 @@ impl Ctx {
             _ => {
                 // Games switch back and forth between a few programs and state blocks, and passes follow each other with
                 // the same targets: earlier draws with the same state, by its contents, in this submit or earlier ones
-                // (sky2203: a fifth of the draws changed the generations, into some 600 states a frame).
                 let content_key = (mode, self.pipe_state_hash(), self.pass_state_hash(), memo_key.3, memo_key.4);
                 let m = match self.draw_memos.get(&content_key) {
                     Some(m) => m.clone(),
@@ -455,7 +454,7 @@ impl Ctx {
                 }
             }
         }
-        // The stages, the target size and how many storage buffers it binds (writes there are what lost devices so far).
+        // The stages, the target size and how many storage buffers it binds (writes there are the usual cause of a lost device).
         let extent = self.pass.as_ref().map_or(0, |p| (p.extent.0 as u64) << 32 | p.extent.1 as u64);
         self.checkpoint_each("draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
         match call {
@@ -907,9 +906,9 @@ impl Ctx {
                                 }
                                 self.warn("a uniform buffer the GPU writes in the same submit could not be bound in place");
                             }
-                            // A binding not seen before in this submit (most misses: TotK's per-object constants, ~5,500
-                            // a frame): copied straight from the address found here, without the content memo (it
-                            // missed for these too, and its lookups and inserts were most of the cost).
+                            // A binding not seen before in this submit (most misses: TotK's per-object constants):
+                            // copied straight from the address found here, without the content memo (it would miss for
+                            // these too, at the cost of its lookups and inserts).
                             if a > 0x10000 && len > 0 {
                                 let n = if b.extent >= 0 { (b.extent as usize).max(16).min(len) } else { len };
                                 let x = self.arena.reserve(&self.dev, n).map(|(buf, off, p)| {
@@ -930,7 +929,7 @@ impl Ctx {
                         }
                     }
                     // Others are copied (only the extent the stage reads), as on Metal: in place, the game's writes to their
-                    // pages for the next frame waited for the GPU (the write guard), several milliseconds per frame.
+                    // pages for the next frame would wait for the GPU (the write guard), milliseconds per frame.
                     let bytes = cbuf(self, *slot);
                     let x = match &bytes {
                         // The driver buffer changes per draw; others are copied once per contents (the same memory
@@ -1001,8 +1000,8 @@ impl Ctx {
                         })
                     });
                     // Only the driver's descriptors (constant buffer 0) carry a size; in the game's own buffers the
-                    // word after the address is whatever the game keeps there (TotK's Depths walls: a texture handle,
-                    // read as 258 MB). Those are sized by the memory mapped from the address, at most 1 MiB, as
+                    // word after the address is whatever the game keeps there (TotK's Depths terrain keeps a texture
+                    // handle there). Those are sized by the memory mapped from the address, at most 1 MiB, as
                     // Ryujinx does (StateUpdater: GetMappedSize, MaxUnknownStorageSize).
                     let desc = desc.and_then(|(addr, size)| {
                         if *cb_slot == 0 {
@@ -1151,7 +1150,7 @@ impl Ctx {
     /// A storage buffer over guest memory: in place when its pool is imported and the offset aligned, else a copy that is
     /// written back after the submit.
     /// `write`: the stage writes it; read-only ones leave the write tracking and the write guard as they are (bindings
-    /// from the game's own buffers are sized up to 1 MiB past their address and covered unrelated textures).
+    /// from the game's own buffers are sized up to 1 MiB past their address and cover unrelated textures).
     unsafe fn storage_buffer(&mut self, addr: usize, size: usize, write: bool) -> Option<vk::DescriptorBufferInfo> {
         let a = crate::nvn::api::translate_virtual(addr);
         if write {
@@ -1161,8 +1160,8 @@ impl Ctx {
             crate::gpu::vulkan::guard::note_write(a, size);
         }
         // Read-only ones are not held by the write guard either: their bound sizes overstate what the GPU reads (up to
-        // 1 MiB for bindings from the game's own buffers), and holding all of it made the game fault on every
-        // neighbouring write (walking in Hateno: 49 -> 29 fps).
+        // 1 MiB for bindings from the game's own buffers), and holding all of it would make the game fault on every
+        // neighbouring write.
         let align = self.dev.limits.min_storage_buffer_offset_alignment.max(1);
         let rw = if write { "write" } else { "read" };
         if let Some((buf, off)) = self.shadow(a, size, write).filter(|(_, o)| o % align == 0) {
@@ -1189,7 +1188,7 @@ impl Ctx {
 
     /// `at`: the bound texture slot (stage, index) it was read from, whose last resolution (Ctx::tex_memo) is tried first.
     /// `shadow`: the shader samples it with depth comparison, which only depth formats allow (the console compares a
-    /// colour texture's red channel): a colour texture then binds nothing, as on Metal (metal/translated.rs).
+    /// colour texture's red channel): a colour texture then binds nothing, as on Metal (gpu/metal).
     unsafe fn texture_binding(&mut self, handle: Option<u64>, declared: vk::ImageViewType, shadow: bool, blended: bool, at: Option<(i32, i32)>) -> (vk::ImageView, vk::Sampler) {
         let Some(h) = handle else { return (vk::ImageView::null(), self.default_sampler) };
         // The handle with the pools it resolves in: the same handle in another pool is another texture.
@@ -1279,8 +1278,7 @@ impl Ctx {
             self.bl_by_slot.clear();
             self.bl_epoch = samplers;
         } else {
-            // By the slots' own resolutions (bl_by_slot): a pass over the whole cache, every submit, was ~1 ms a frame
-            // of the Presentation Thread on Great Sky Island.
+            // By the slots' own resolutions (bl_by_slot): a pass over the whole cache every submit would be too slow.
             for id in changed {
                 for k in self.bl_by_slot.remove(&id).unwrap_or_default() {
                     self.bl_cache.remove(&k);
@@ -1365,7 +1363,7 @@ impl Ctx {
         let Some((obj, _)) = crate::nvn::api::lookup_pool_texture((h & 0xFFFFF) as i32) else { return };
         let Some((_, t)) = crate::nvn::api::texture_snapshot(obj) else { return };
         // Looked up, not refreshed: the journal records what the draw binds and must not change it (a refresh here
-        // hashed guest memory and could upload or rebuild textures the draw itself skipped).
+        // would hash guest memory and could upload or rebuild textures the draw itself skipped).
         let (d, level, layer) = self.tex.locate(&t);
         let Some(image) = self.tex.images.get(&d).map(|i| i.image) else { return };
         let fb = self.renders_to(&image);
@@ -1677,9 +1675,8 @@ impl Ctx {
                     self.vertex_buffer(v.stream, b.0, b.1);
                     continue;
                 }
-                // A copy, once per submit; never the imported pool in place. Vertex data read in place lost the device on
-                // NVIDIA (TotK's title, ~45 s in, every time: the first draw from a 20 MB pool the game had just filled;
-                // the replay of that frame and runs with copies never did), and copies cost nothing measurable here.
+                // A copy, once per submit; never the imported pool in place. Vertex data read in place loses the device on
+                // NVIDIA (the first draw from a pool the game has just filled), and copies cost nothing measurable here.
                 let key = super::hash_of(&(a, size, u32::MAX));
                 let b = match self.repacked.get(&key) {
                     Some(&b) => Some(b),
@@ -1854,7 +1851,7 @@ impl Ctx {
             }
             1 => {
                 // In place only at 4-byte aligned offsets: Metal (under MoltenVK) needs them for 16-bit indices too, and
-                // passed 2-mod-4 offsets through (Super Mario Odyssey's Cap Kingdom ground: draws with garbage indices).
+                // would pass 2-mod-4 offsets through (garbage indices).
                 if let Some((b, o)) = self.shadow(a, n * 2, false).filter(|(_, o)| o % 4 == 0) {
                     return Some((b, o, vk::IndexType::UINT16));
                 }

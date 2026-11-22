@@ -1,9 +1,9 @@
 // Same-pass feedback read from the tile (MSL side).
 //
 // TotK's G-buffer decals sample targets of the pass they draw into, at their own pixel, after a barrier that makes the
-// pass's earlier rendering visible to texture reads (translated.rs feedback_snapshots). Metal keeps a pass's writes in
-// tile memory, so the engine ends the pass before such a draw (13 times a frame in Hateno, far more in shrines; each
-// end stores every attachment and the next pass loads them again, which costs most on the phone's GPU). Apple GPUs can
+// pass's earlier rendering visible to texture reads (translated::feedback_snapshots). Metal keeps a pass's writes in
+// tile memory, so the engine ends the pass before such a draw (often a dozen times a frame; each end stores every
+// attachment and the next pass loads them again, which costs most on the phone's GPU). Apple GPUs can
 // read the pixel's own attachment value in the fragment shader instead ([[color(k)]], programmable blending): it holds
 // every earlier fragment of the pass in order, which is what NVN guarantees such a draw after a barrier.
 //

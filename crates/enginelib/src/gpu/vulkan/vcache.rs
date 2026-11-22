@@ -1,6 +1,6 @@
 // Vertex and index data in device memory. Imported guest memory is host memory the GPU snoops (HOST_CACHED, the type
-// the driver gives imported host pointers), and TotK's main geometry pass read its meshes from there with every draw
-// (609 draws beneath Hyrule Castle: 8 ms of GPU time at 1280x720 on an RTX 4080). Most of that data is written once and
+// the driver gives imported host pointers), and TotK's main geometry pass would read its meshes from there with every
+// draw (milliseconds of GPU time a frame). Most of that data is written once and
 // drawn for many frames, so a range drawn from is copied into device-local memory and used from there while it is
 // unchanged: the write tracking (guest::dirty_track) watches ranges large enough for its pages, smaller ones are
 // compared by content hash once per submit. A range written again is copied again, into a new block (submits still
@@ -153,7 +153,7 @@ impl VCache {
                 return None;
             }
             // Small ranges are drawn from as they were and hashed before the submit (verify), on several threads:
-            // hashing them here, one by one, was over a millisecond of each frame's recording.
+            // hashing them here, one by one, would take over a millisecond of each frame's recording.
             let fresh = e.checked == serial
                 || match e.token {
                     Some(t) => crate::guest::dirty_track::generation(a, len) == Some(t),
@@ -206,7 +206,7 @@ impl VCache {
             return;
         }
         // The batches the hashing threads took while recording went on first (each thread answers in the order it was
-        // sent them): waiting for all of them here, at every chunk, was ~8% of the Presentation Thread.
+        // sent them): waiting for all of them here, at every chunk, would stall the Presentation Thread.
         let (mut done, mut done_hashes): (Vec<(usize, usize)>, Vec<u64>) = (Vec::new(), Vec::new());
         if !self.hashing.is_empty() {
             let pool = hash_pool().lock().ok();
@@ -306,7 +306,7 @@ unsafe impl Send for HashJob {}
 
 type HashPool = std::sync::Mutex<Vec<(std::sync::mpsc::Sender<HashJob>, std::sync::mpsc::Receiver<Vec<u64>>)>>;
 
-/// Threads hashing for verify (vk-hash): spawning them for each submit cost more than the hashing.
+/// Threads hashing for verify (vk-hash): spawning them for each submit costs more than the hashing.
 fn hash_pool() -> &'static HashPool {
     static POOL: std::sync::OnceLock<HashPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {

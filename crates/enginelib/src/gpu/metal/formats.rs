@@ -103,8 +103,8 @@ pub(crate) fn metal_format(fmt: i32) -> (MTLPixelFormat, Option<MTLPixelFormat>)
         50 => (MTLPixelFormat::Depth16Unorm, None),
         51 | 52 => (MTLPixelFormat::Depth32Float, None),
         53 | 54 => (MTLPixelFormat::Depth32Float_Stencil8, None), // Apple GPUs have no D24S8
-        // 16-bit packed formats. They fell through to RGBA8: uploads of their 2-byte texels were rejected and the
-        // textures stayed empty (Mario Kart 8 Deluxe's cup emblems and countdown, RGB565, drew black). NVN names them
+        // 16-bit packed formats (Mario Kart 8 Deluxe's cup emblems are RGB565): as RGBA8 their 2-byte texels' uploads
+        // would be rejected. NVN names them
         // from the low bits (red lowest); Metal has no such layouts, so sampling reorders the channels
         // (translated::packed_channels).
         57 => (MTLPixelFormat::ABGR4Unorm, None),       // RGBA4
@@ -176,7 +176,7 @@ pub(crate) fn is_color_renderable(tex: &ProtocolObject<dyn MTLTexture>) -> bool 
     tex.usage().contains(MTLTextureUsage::RenderTarget) && !depth_stencil
 }
 
-/// Snapshot of the NVNtexture at `addr` (see horizon/hle.rs `texture_snapshot`); falls back to the live struct for objects the
+/// Snapshot of the NVNtexture at `addr` (nvn::api::texture_snapshot); falls back to the live struct for objects the
 /// HLE never saw initialized.
 pub(crate) unsafe fn tex_info(addr: usize) -> Option<(u64, NvnTexture)> {
     if addr == 0 {
@@ -187,7 +187,7 @@ pub(crate) unsafe fn tex_info(addr: usize) -> Option<(u64, NvnTexture)> {
 }
 
 /// A texture's guest layout, cached by shape (it allocates, and texture resolution needs it for a texture and every
-/// alias candidate each time an object is resolved: TotK re-initializes ~1,400 bound objects per frame).
+/// alias candidate each time an object is resolved, and TotK re-initializes bound objects constantly).
 pub(crate) fn layout_of(t: &NvnTexture) -> std::sync::Arc<crate::nvn::layout::TextureLayout> {
     type Key = (i32, i32, i32, i32, i32, i32, i32, i32, i64);
     thread_local! {
@@ -265,8 +265,8 @@ pub(crate) fn log_view_format(from: MTLPixelFormat, to: MTLPixelFormat) {
 }
 
 /// Pixel formats (raw values) whose textures are created with MTLTextureUsagePixelFormatView. The usage makes Metal store
-/// a texture without its lossless compression / optimized layout (a 1080p RGBA8 copy took 0.16 ms with it, 0.045 ms
-/// without, on an M4), and TotK needs it for no view at all: same-format, sRGB <-> linear, slice, level and swizzle views
+/// a texture without its lossless compression / optimized layout (a 1080p RGBA8 copy takes several times as long with
+/// it), and TotK needs it for no view at all: same-format, sRGB <-> linear, slice, level and swizzle views
 /// work without it. A format joins this set the first time a view needing the usage is requested from a texture of that
 /// format (that one view is not made).
 pub(crate) static VIEW_FLAG_FORMATS: OnceLock<Mutex<std::collections::HashSet<usize>>> = OnceLock::new();

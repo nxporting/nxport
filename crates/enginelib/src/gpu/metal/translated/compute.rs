@@ -108,10 +108,10 @@ impl Gfx {
         }
         let mut notes: Vec<String> = Vec::new();
         // Per-draw detail text is only for traces and GPU-error reports (first 16 draws of an encoder); formatting it for
-        // every draw cost ~20% of the executor.
+        // every draw would be a large share of the executor's time.
         let want_notes = super::tracing_frame()
             || (draw_details() && st.lb.enc_details.last().map_or(false, |d| d.len() < 16));
-        // Encoded on the issuer thread like render passes (no sync: a sync per dispatch cost ~2% of the thread).
+        // Encoded on the issuer thread like render passes (no sync per dispatch).
         let _ = cb;
         let Some(cur_cb) = st.cur_cb.clone() else {
             return;

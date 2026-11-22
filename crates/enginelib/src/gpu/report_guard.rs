@@ -3,9 +3,10 @@
 // On the Switch nvnQueueSubmitCommands hands the command list to the GPU, which writes each SAMPLES_PASSED report as it
 // reaches it. TotK reads its occlusion queries on a worker ~1.3 ms after the submit that holds them starts (the main
 // view expects a query issued in one frame to be readable at the next frame's read); the
-// Switch GPU has run the culling pass by then. We translate the submit to Metal first and write reports on the CPU
-// once the command buffer completed, so the read always came first: every query read the count of three frames earlier,
-// and a new query read the zeros its fresh slots held (signposts culled for three frames at their LOD switch).
+// Switch GPU has run the culling pass by then. Here the submit is translated to Metal first and reports are written on
+// the CPU once the command buffer completed, so without the guard the read comes first: every query would read the
+// count of three frames earlier, and a new query the zeros its fresh slots hold (objects culled for three frames at
+// their LOD switch).
 //
 // At submit start (before any encoding) the pages of the submit's SAMPLES_PASSED reports are made inaccessible. Guest
 // code touching one waits until every report pending on that page is written, then its access is retried and sees the
@@ -19,8 +20,8 @@
 // made before the protection keep working (GPU access ignores it); creating one over a protected page fails and the
 // draw falls back to an arena copy.
 //
-// On by default (--report-guard=0: off). Only the threads that read reports wait, off the critical path; guest-main no
-// longer waits for the reports at its frame fence. =log never waits and logs each
+// On by default (--report-guard=0: off). Only the threads that read reports wait, off the critical path; guest-main
+// does not wait for the reports at its frame fence. =log never waits and logs each
 // first fault per page with thread, PC, caller and whether it hit a pending report slot (to see what shares report pages).
 
 use std::cell::Cell;
@@ -92,7 +93,7 @@ pub(crate) fn in_hle_stubs(addr: usize) -> bool {
 
 /// Guest code waits, and so does a library function the guest called straight through an HLE stub (its return address
 /// is the stub, its code is not ours: memcpy, which TotK copies its freshly rendered terrain normal maps with; reading
-/// them before the write-back gave the copies zeros). Our own code never waits: a game thread inside it may hold a lock
+/// them before the write-back would give the copies zeros). Our own code never waits: a game thread inside it may hold a lock
 /// the submit producing the reports needs (the gfx state lock), and would deadlock.
 pub(crate) fn may_wait(pc: usize, lr: usize) -> bool {
     crate::guest::exec::tls::is_guest_thread()
@@ -494,8 +495,7 @@ pub(crate) unsafe fn fault(addr: usize, pc: usize, lr: usize, write: bool) -> bo
     }
     let page = addr & !(PAGE - 1);
     // No slot (none in use at all, or this page's was freed): the fault may still be from before its page was opened.
-    // Bailing out on "no slots in use" before the freed-pages check below turned such a late fault into a crash on the
-    // iPhone (the occlusion reader, TotK 1.1.2 main+0x10c4ec8, with the page already read-write when the crash report looked).
+    // Bailing out on "no slots in use" before the freed-pages check below would turn such a late fault into a crash.
     let Some(i) = (if HIGH.load(Ordering::Acquire) == 0 {
         None
     } else {

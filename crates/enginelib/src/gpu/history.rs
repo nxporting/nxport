@@ -15,7 +15,7 @@ pub fn len() -> usize {
 }
 
 /// The frame being recorded and the kept frames: (presented frame, its events one per line, how many). One string per
-/// frame, reused when the oldest is dropped: a String per event (7,000-10,000 a frame in TotK) cost ~3.7 ms of
+/// frame, reused when the oldest is dropped: a String per event (thousands a frame) would cost milliseconds of
 /// recording a frame, much of it in the heap.
 static JOURNAL: Mutex<(String, usize, VecDeque<(u64, String, usize)>)> =
     Mutex::new((String::new(), 0, VecDeque::new()));

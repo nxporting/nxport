@@ -193,8 +193,8 @@ impl Window {
             return;
         }
         // A swapchain may be destroyed only once its presents are done, which the slots' fences do not cover (they signal
-        // when the copy into the image is done): MoltenVK's present completion then ran on the destroyed swapchain's
-        // image (a crash entering the game, when the drawable takes the game's size). The device is waited for first:
+        // when the copy into the image is done): MoltenVK's present completion would then run on the destroyed
+        // swapchain's image (a crash). The device is waited for first:
         // presents of every earlier submit are then done. Rare: only after a resize or a VSync / low-latency change.
         if self.retired.iter().any(|&(_, left)| left == 1) {
             let _ = dev.device.device_wait_idle();

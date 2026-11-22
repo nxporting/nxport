@@ -608,8 +608,8 @@ impl Gfx {
                     // INVALIDATE_TEXTURE: texture reads after this see render-target writes from before it. The ordering
                     // that makes those writes complete may come in the same call or an earlier one ("either by
                     // setting an ORDER bit in the barrier or by waiting on a NVNsync object"): Kirby issues ORDER_PRIMITIVES
-                    // and INVALIDATE_TEXTURE as separate barriers, and requiring both bits in one call never started a new
-                    // epoch there, so its composite pass read stale texels (black screen).
+                    // and INVALIDATE_TEXTURE as separate barriers: requiring both bits in one call would never start a
+                    // new epoch there.
                     if bits & 0x10 != 0 {
                         st.fb_epoch += 1;
                     }
@@ -830,7 +830,7 @@ impl Gfx {
         // except SAMPLES_PASSED reports: those are written when their command buffer completes, so a
         // condition on one from this submit or an uncompleted one is not known yet while encoding. The GPU
         // would evaluate it after the report; Metal has no predication, so such draws render (Ryujinx's
-        // fallback when a counter is not available). Skipping them instead culled TotK's Hyrule Field grass
+        // fallback when a counter is not available). Skipping them instead would cull TotK's Hyrule Field grass
         // patches (both reports still read 0).
         // Reports of command buffers the fence watcher resolves sit in `occl_watched` until it writes them; a
         // condition on one reads stale memory until then, so it counts as unresolved too.
@@ -997,10 +997,9 @@ impl Gfx {
         }
         // Two slots naming one surface (same storage, level and layer): on the GPU both write the same
         // memory and a slot a shader does not write leaves it alone. Two Metal attachments of one texture
-        // each store their own tile at the end of the pass, so an unwritten slot stored its stale tile over
-        // the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
-        // only 3: the G-buffer came out empty). The later slot stays unattached; its clears go to the earlier
-        // one.
+        // each store their own tile at the end of the pass, so an unwritten slot would store its stale tile
+        // over the other's output (Mario Kart 8 Deluxe binds its G-buffer texture at slots 3 and 4 and writes
+        // only 3). The later slot stays unattached; its clears go to the earlier one.
         let mut colors = colors;
         let surface = |c: &crate::nvn::cmd::RtRef| {
             tex_info(c.texture).map(|(_, t)| (t.storage, c.level, c.layer))

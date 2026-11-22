@@ -32,7 +32,7 @@ impl Gfx {
                 tc.textures.remove(&nvn_tex);
                 tc.alias_of.remove(&nvn_tex);
                 // Only this object's resolution changed, and memos check the object's and its alias root's generations
-                // themselves: a global bump here invalidated every binding memo several times per frame (transient
+                // themselves: a global bump here would invalidate every binding memo several times per frame (transient
                 // roots are re-initialized every frame).
                 EPOCH_BUMPS[0].fetch_add(1, Ordering::Relaxed);
             }
@@ -76,8 +76,7 @@ impl Gfx {
             // texture for the same memory then samples what was never rendered (e.g. empty shadow cascades).
             let desc_key = TexDesc::of(&snap);
             // Objects already resolved to an older Metal texture for this memory must follow: otherwise the render
-            // target writes into the view while those objects keep sampling the old texture (e.g. the half-res
-            // linear depth read back as zeros, which threw every shadow lookup off the cascade).
+            // target writes into the view while those objects keep sampling the old texture.
             if let Some((old, _)) = tc.tex_by_desc.get(&desc_key) {
                 let old_id = storage_id(old);
                 if old_id != storage_id(&v) {
@@ -98,8 +97,8 @@ impl Gfx {
             }
             // No hash here (views are re-resolved many times per frame as objects are re-initialized): a view of a
             // GPU-rendered root is never compared, and for others the first refresh check records the baseline.
-            // Re-resolving the same view keeps the entry's hash (overwriting it with HASH_UNKNOWN forced a full re-hash
-            // on every re-resolve, ~19 per frame).
+            // Re-resolving the same view keeps the entry's hash (overwriting it with HASH_UNKNOWN would force a full
+            // re-hash on every re-resolve).
             let same = tc
                 .tex_by_desc
                 .get(&desc_key)
@@ -136,7 +135,7 @@ impl Gfx {
             return Some(t);
         }
         let t = &snap;
-        // One line per Metal texture created (~30 per Hateno frame): only with --log-tex-init.
+        // One line per Metal texture created (many a frame): only with --log-tex-init.
         static LOG: OnceLock<bool> = OnceLock::new();
         if *LOG.get_or_init(|| crate::settings::get().log.log_tex_init) {
             println!(
@@ -320,9 +319,8 @@ impl Gfx {
         // contents (TotK's HUD) (the pool's initial bytes). Except for a COMPRESSIBLE texture
         // (render targets) where a texture we rendered into had the same storage: NVN requires such textures to be
         // cleared before the GPU reads or writes them when they reuse memory, so their old bytes are never used, and the
-        // CPU cannot have written them since (CPU_NO_ACCESS). Dynamic resolution (Kirby) re-creates ~22 full-screen
-        // targets at their old storage every few seconds; uploading and hashing them cost ~35 ms per resize (a visible
-        // stutter).
+        // CPU cannot have written them since (CPU_NO_ACCESS). Dynamic resolution (Kirby) re-creates its full-screen
+        // targets at their old storage every few seconds; uploading and hashing them would stutter at every resize.
         let stale_rt = !is_compressed
             && t.flags & 0x8 != 0
             && !crate::nvn::api::memory_pool_cpu_writable(t.storage)
@@ -643,10 +641,9 @@ impl Gfx {
         let my_pf = metal_format(snap.format).0;
         let my_layout = layout_of(snap);
         let my_layers = my_layout.layers.max(1) as usize;
-        // Size of a texture's memory, measured the same way for this texture and every candidate root. (The candidate
-        // used its declared size and this one its layout size: two same-shape textures on one allocation whose declared
-        // size exceeds the layout then each chose the other as root, and texture() / alias_view() recursed until the
-        // Presentation Thread's stack overflowed -- the Hateno / Great Sky Island crashes.)
+        // Size of a texture's memory, measured the same way for this texture and every candidate root: measured
+        // differently, two same-shape textures on one allocation whose declared size exceeds the layout would each choose
+        // the other as root, and texture() / alias_view() would recurse until the stack overflows.
         let mem_size = |t: &NvnTexture, layout: &crate::nvn::layout::TextureLayout| {
             if t.size > 0 {
                 (t.size as u64).max(layout.total)
@@ -741,9 +738,8 @@ impl Gfx {
         let root_tex = self.texture(tc, root_addr)?;
         // Game threads re-initialize transient texture objects while the executor resolves them: the root may describe
         // another texture by now (generations only grow, so an unchanged one means root_tex is the root the search
-        // found). A view of the new texture, cached under this texture's description, made every later lookup of the
-        // memory return a texture of the wrong size (Mario Kart 8 Deluxe: its 1920x1080 scene color as the 960x540
-        // texture that replaced the root, so the race rendered black or in blocks in some runs). Search again.
+        // found). A view of the new texture, cached under this texture's description, would make every later lookup of
+        // the memory return a texture of the wrong size. Search again.
         if tex_info(root_addr).map(|(g, _)| g) != Some(root_gen) {
             tc.alias_raced = true;
             return None;
@@ -770,9 +766,9 @@ impl Gfx {
         };
         // A root that is itself one of our alias views (a view of a view): make the view on the texture behind it, at
         // the summed level / slice offsets. The intermediate view objects are re-made whenever their NVN objects are
-        // re-initialized (every frame for some), so keying by them missed the cache ~14 times per frame in Hateno:
-        // alias_views refilled to its cap again and again, and the live views slowed Metal's per-view queries
-        // (parentTexture, hazard tracking) as a session went on.
+        // re-initialized (every frame for some), so keying by them would miss the cache every frame: alias_views would
+        // refill to its cap again and again, and the live views slow Metal's per-view queries (parentTexture, hazard
+        // tracking) as a session goes on.
         let (root_tex, level, slice) = {
                 let (mut base, mut level, mut slice) = (root_tex, level, slice);
                 while let Some(k) = tc
@@ -1043,7 +1039,7 @@ impl Gfx {
 /// address also backs another description, unused for SWEEP_AGE frames and not resolved by any live texture object.
 /// Dynamic resolution (Kirby) re-creates its render targets at the same storage in new sizes every few seconds; without
 /// this the old sizes stay allocated (memory on iOS). Not done at creation: TotK places several transient targets at one
-/// storage address within every frame, and evicting the others there re-created ~36 textures per frame (some 1920x1080),
+/// storage address within every frame, and evicting the others there would re-create dozens of textures per frame,
 /// uploads and hashes included. On iOS (or with --tex-sweep-unshared; =0 turns it off there) textures alone at their
 /// storage are freed too once unused for UNSHARED_AGE frames (areas, characters, cutscenes left behind), for memory.
 /// Render targets bound at the present are never freed. --no-tex-sweep keeps everything.
@@ -1222,8 +1218,8 @@ pub(crate) fn storage_id(t: &Tex) -> u64 {
 
 /// GPU-rendered textures in guest memory. On the Switch the GPU writes render targets into memory the CPU shares, and
 /// TotK's texture heap compaction moves textures with CPU copies (aglTextureDataMgr / tera::ImageResourceMgr): the
-/// terrain normal maps it renders once at load were moved as zeros here, so the grass vertex shader saw flat-zero
-/// normals and every grass fragment failed its alpha test (Hyrule Field nearly bare, issue 13). Exact emulation would
+/// terrain normal maps it renders once at load would move as zeros, and the grass that fades by them would vanish.
+/// Exact emulation would
 /// trap CPU reads of GPU-written pages (as Ryujinx does); this approximation copies a render target back into guest
 /// memory one frame after it was drawn, but only targets not drawn in the 4 frames before (rendered once or rarely), so
 /// per-frame and alternating targets cost nothing after their first use. 2D, single-sample, uncompressed color targets only.
@@ -1243,9 +1239,9 @@ pub(crate) struct WritebackJob {
 
 /// Copies last frame's write-back candidates into buffers on the GPU, after the frame's rendering (present synced the
 /// issuer, so their command buffers are committed ahead), and writes the copies an earlier present made into guest
-/// memory once they ran. Reading the textures back on the CPU instead (getBytes) first waited for the frame's GPU work
-/// and then decompressed Apple's lossless framebuffer compression on the CPU, under the game's render-thread lock in
-/// Breath of the Wild (~20% of its Presentation Thread).
+/// memory once they ran. Reading the textures back on the CPU instead (getBytes) would first wait for the frame's GPU
+/// work and then decompress Apple's lossless framebuffer compression on the CPU, under the game's render-thread lock in
+/// Breath of the Wild.
 /// A scaled render target's write-back: averaged down into a game-size texture and copied into buffers, in a command
 /// buffer of its own (queued after the frame's). False: not possible for its format.
 unsafe fn writeback_scaled(g: &Gfx, st: &mut State, real: &Tex, t: &NvnTexture, bpp: usize) -> bool {
@@ -1347,7 +1343,7 @@ pub(super) unsafe fn writeback_pass(g: &Gfx, st: &mut State) {
         }
         // Guest memory holds the game's size: a scaled target (gpu::scale) is averaged down into a copy at that size,
         // which is what goes back; the target keeps its scale (Ryujinx flushes scaled textures through a scaled-down
-        // copy). Demoting it instead brought most of BotW's frame back to 1x within seconds.
+        // copy). Demoting it instead would bring most of BotW's frame back to 1x within seconds.
         if tex_scale(&tex) > 1 {
             if real.sampleCount() > 1
                 || crate::gpu::metal::copy::is_depth_stencil(real.pixelFormat())

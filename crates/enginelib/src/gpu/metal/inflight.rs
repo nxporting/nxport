@@ -23,9 +23,8 @@ pub(super) struct InFlight {
 
 /// --gpu-timestamps: TIMESTAMP counter reports carry the time the GPU ran them, as on the Switch: the GPU start
 /// time of their command buffer if no GPU work precedes them in it, else its end time (written at completion; the CPU
-/// time at encode stays until then). Encode-time CPU times made TotK's per-frame GPU span (a start / end pair per frame,
-/// read two frames later) our ~6-10 ms encode span, whatever the GPU took; its dynamic resolution never saw a slow GPU
-/// (the iPhone: GPU ~26 ms per frame, frames just over 33 ms).
+/// time at encode stays until then). With encode-time CPU times TotK's per-frame GPU span (a start / end pair per frame,
+/// read two frames later) is our encode span, whatever the GPU takes, and its dynamic resolution never sees a slow GPU.
 pub(super) fn gpu_timestamps() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| crate::settings::get().graphics.gpu_timestamps)

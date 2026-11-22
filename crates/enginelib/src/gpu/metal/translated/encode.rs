@@ -19,8 +19,8 @@ impl Gfx {
         let vs_code = &p.vs_code;
         let fs_code = p.fs_code.as_ref();
         // Vertex layout and pipeline: a pure function of the shaders, attribute / stream state, target formats and blend
-        // state, memoized per thread (decoding the attributes, the repack layout and the ~60-word pipeline key were about
-        // a third of this function). Inputs are compared in full; --no-layout-memo derives them for every draw.
+        // state, memoized per thread (decoding the attributes, the repack layout and the ~60-word pipeline key are costly).
+        // Inputs are compared in full; --no-layout-memo derives them for every draw.
         let color_pfs = p.color_pfs;
         let depth_pf = p.depth_pf;
         let depth_gl = crate::nvn::api::depth_mode() == 0;
@@ -519,8 +519,7 @@ impl Gfx {
             };
             // NVN bounds-checks vertex fetches against the bound size (out of range reads as zero); Metal reads past
             // it. TotK draws with base vertices beyond the bound buffers (e.g. base vertex 2533 into 408-vertex
-            // streams while meshes stream in): Metal fetched other meshes' data and huge triangles streaked across
-            // the screen. Such streams get a copy padded with zeros up to the highest vertex the draw fetches.
+            // streams while meshes stream in), where Metal would fetch other meshes' data. Such streams get a copy padded with zeros up to the highest vertex the draw fetches.
             let bits = p.vertex_streams.get(s).copied().unwrap_or(0);
             let (stride, divisor) = ((bits & 0xFFFF_FFFF) as u64, bits >> 32);
             if let Some((_, new_stride, copies)) = repack.iter().find(|r| r.0 == s) {
@@ -532,8 +531,7 @@ impl Gfx {
                 let n = (last + 1) as usize;
                 let ns = *new_stride as usize;
                 if n * ns <= (64 << 20) {
-                    // Repacked streams are cached by source range and layout (TotK's are mostly static meshes: 7 MB
-                    // per frame was re-copied in Hateno). An entry covers the whole stream, so every draw from it
+                    // Repacked streams are cached by source range and layout (TotK's are mostly static meshes). An entry covers the whole stream, so every draw from it
                     // shares one copy, and is validated by a hash of the source bytes once per frame. A changed
                     // stream gets a new buffer: one the GPU may still read is never rewritten.
                     let layout_sig = copies.iter().fold(ns as u64, |h, &(a, b, c)| {
@@ -548,7 +546,7 @@ impl Gfx {
                         }
                         let words =
                             std::slice::from_raw_parts(addr as usize as *const u64, st_size / 8);
-                        // Four independent lanes (a single dependency chain ran at ~1 word per multiply latency).
+                        // Four independent lanes (a single dependency chain runs at one word per multiply latency).
                         let mut lanes = [0x9E37_79B9_7F4A_7C15u64 ^ st_size as u64, 1, 2, 3];
                         let mut chunks = words.chunks_exact(4);
                         for (i, c) in (&mut chunks).enumerate() {
@@ -590,7 +588,7 @@ impl Gfx {
                             if addr <= 0x10000 {
                                 return;
                             }
-                            // Fixed-size unaligned moves: a memcpy call per attribute per vertex dominated this loop.
+                            // Fixed-size unaligned moves: a memcpy call per attribute per vertex would dominate this loop.
                             let base = addr as usize as *const u8;
                             let o = out.as_mut_ptr();
                             for &(src, dst, len) in copies {
@@ -734,7 +732,7 @@ impl Gfx {
         }
         let mut notes: Vec<String> = Vec::new();
         // Per-draw detail text is only for traces and GPU-error reports (first 16 draws of an encoder); formatting it for
-        // every draw cost ~20% of the executor.
+        // every draw would be a large share of the executor's time.
         let want_notes = super::tracing_frame()
             || (draw_details() && env.lb.enc_details.last().map_or(false, |d| d.len() < 16));
         if want_notes {
@@ -1141,8 +1139,7 @@ impl Gfx {
                                 // Zero-copy, as the GPU reads it: memory GPU work of this submit writes, and with
                                 // --ubo-zero-copy (experiment) memory no UpdateUniformBuffer of this submit writes.
                                 // Inline updates are applied to guest memory at encode time, so buffers they touch must be
-                                // copied per draw. Measured no faster than copying (8000 uniform binds per frame in Hateno),
-                                // and a zero-copy binding near a pool's end lacks the slack copies have for the shaders'
+                                // copied per draw. No faster than copying, and a zero-copy binding near a pool's end lacks the slack copies have for the shaders'
                                 // 64 KB declarations, so it stays off.
                                 Some((addr, size))
                                     if addr > 0x10000
@@ -1420,7 +1417,7 @@ impl Gfx {
             env.cx.instanced_stats.3 = env.cx.instanced_stats.3.max(cnt);
         }
         // By stage pointer (stages live for the whole run; names are looked up when printed): cloning both entry names
-        // here allocated twice per draw.
+        // here would allocate twice per draw.
         let hist_key = (
             vs as *const CachedStage as usize,
             fs.map_or(0, |f| f as *const CachedStage as usize),
@@ -1541,7 +1538,7 @@ impl Gfx {
         }
         // ---- draw ----
         // The encoder label collects the shader pairs drawn in it (hang/error reports name the encoder). Per-draw
-        // strings cost ~10% of the executor, so the per-draw debug group (named by the failing command buffer on a
+        // strings are costly, so the per-draw debug group (named by the failing command buffer on a
         // hang) and per-draw binding details are built only with --draw-details or while tracing.
         let details = draw_details() || super::tracing_frame();
         let pair = if details {
@@ -1775,8 +1772,8 @@ impl Gfx {
                         x
                     } else {
                         // Metal needs a 4-byte aligned index buffer offset; NVN allows any 2-byte aligned address for
-                        // 16-bit indices (TotK draws sub-ranges starting mid-buffer). Misaligned offsets fetched garbage
-                        // indices: huge triangles across the screen. Copy those into the (aligned) arena instead.
+                        // 16-bit indices (TotK draws sub-ranges starting mid-buffer). Misaligned offsets would fetch garbage
+                        // indices. Copy those into the (aligned) arena instead.
                         match self.guest_buffer_ro(
                             &mut *env.sh,
                             &mut *env.cx,

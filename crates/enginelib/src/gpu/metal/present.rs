@@ -4,10 +4,9 @@
 use super::*;
 
 /// Unlocked frame rates (present interval 0): the game measures each frame's time step from one frame start to the
-/// next. Started whenever the previous frame was done, a frame that just missed a display refresh stayed on screen a
-/// whole extra refresh the game had not counted, so motion ran ahead and fell behind in a slow wave (frame times
-/// drifting around the 8.3 ms of a 120 Hz display). Frames now start on the refresh grid, learned from when drawables
-/// actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen
+/// next. Started whenever the previous frame was done, a frame that just missed a display refresh would stay on screen
+/// a whole extra refresh the game had not counted, so motion would run ahead and fall behind in a slow wave. Frames
+/// start on the refresh grid instead, learned from when drawables actually reached the screen: the time a frame measures is then whole refreshes, as long as frames stay on screen
 /// (--log-frame-pacing shows the spread). Presenting each frame a fixed time after its start does not work: Metal does
 /// not keep the times, and frames held back stall the drawable queue. --display-pacing (default on), F6 toggles.
 pub(super) static DISPLAY_PACING: std::sync::OnceLock<std::sync::atomic::AtomicBool> = std::sync::OnceLock::new();
@@ -120,7 +119,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
             let mut st = g.state.lock().unwrap();
             // The frame's last command buffers may still be queued on the issuer thread (commits go through it). Metal runs
             // command buffers in commit order, so the present buffer (committed directly below) could otherwise overtake
-            // the rendering it shows: Kirby's UI lost its text and showed half-drawn tiles on some frames.
+            // the rendering it shows.
             st.issuer.sync();
             pass_prof::on_present(&g.device, presented_frames());
             report_cmd_time();
@@ -255,7 +254,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
                 unsafe { objc2_metal::MTLDrawable::addPresentedHandler(&*drawable, block2::RcBlock::as_ptr(&handler)) };
             }
             // A frame time of n >= 2 refreshes: the frame stays on screen n refreshes, as a console's present interval
-            // holds it. The game presents a few ms into its frame, and a plain present flipped a frame ready early one
+            // holds it. The game presents a few ms into its frame, and a plain present would flip a frame ready early one
             // refresh after the previous one. Displays flip only at refreshes, so any minimum between n - 1 and n periods
             // means n; the middle one leaves the most margin both ways.
             let target = crate::nvn::api::FRAME_TARGET_NS.load(Ordering::Relaxed) as f64 / 1e9;
@@ -433,7 +432,7 @@ pub fn present(nvn_tex: usize, crop: [i32; 4]) {
         tex_mem_report(g, pn);
         tex_backing_frame(g, pn);
         frame_history(g, pn, &src);
-        // --dump-frame=N or N,M,... writes the presented frame as /tmp/nxport_frame_N.ppm (tools/ppm2png.py converts);
+        // --dump-frame=N or N,M,... writes the presented frame as /tmp/nxport_frame_N.ppm (nxport-builder ppm2png converts);
         // with --exit-on-dump the process exits after the last listed frame.
         let dump_frames: &[u64] = &crate::settings::get().dump.dump_frame;
         // --dump-on-trigger=N: dump N frames after the triggered (traced) frame (1 = that frame).

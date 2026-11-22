@@ -1,15 +1,11 @@
 // Metal executor for recorded NVN command lists.
 //
-// `submit` runs on the guest thread that calls nvnQueueSubmitCommands: it walks the recorded
-// (typed) commands and encodes them into one MTLCommandBuffer. `present` blits the presented
-// swapchain texture to the window's CAMetalLayer drawable. Metal objects are created lazily from
-// the NVNtexture descriptors the game gave us; GPU addresses are host pointers (see horizon/hle.rs).
-//
-// Phase A (this file): render targets, clears, swapchain presentation. Draw calls are decoded and
-// counted but not yet executed -- they need shader translation (BNSH / NVN GPU code -> MSL).
+// `submit` runs on the guest thread that calls nvnQueueSubmitCommands: it walks the recorded (typed) commands and
+// encodes them into Metal command buffers, committed as they fill. `present` blits the presented swapchain texture to
+// the window's CAMetalLayer drawable. Metal objects are created lazily from the NVNtexture descriptors the game gave;
+// GPU addresses are host pointers (nvn::api::memory_pool).
 
-/// Executor maps are keyed by addresses and small fixed keys and looked up per draw: Fx hashing instead of SipHash
-/// (which was ~11% of the presentation thread).
+/// Executor maps are keyed by addresses and small fixed keys and looked up per draw: Fx hashing instead of SipHash.
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -89,7 +85,7 @@ struct Gfx {
     /// The window's layer: set by init, or later by attach_layer (iOS creates its window after the guest starts).
     layer: OnceLock<Retained<CAMetalLayer>>,
     blit: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    /// Ahead-of-time translated game shaders (see metal/translated.rs); None unless --translated-shaders.
+    /// Ahead-of-time translated game shaders (see translated/); None unless --translated-shaders.
     shader_lib: Option<translated::ShaderLibs>,
     state: Mutex<State>,
 }
@@ -187,7 +183,7 @@ pub fn init(device: Device, layer: Option<Retained<CAMetalLayer>>) {
 }
 
 /// Gives an initialised executor its window layer. iOS initialises gfx before the guest starts (its submits must be
-/// executed from the first one: GPU-written values the game reads back were missing when the window came up late) and
+/// executed from the first one: GPU-written values the game reads back would be missing if the window came up late) and
 /// creates the window afterwards.
 #[cfg(target_os = "ios")]
 pub fn attach_layer(layer: Retained<CAMetalLayer>) {
@@ -265,7 +261,7 @@ fn write_counter(counter: i32, addr: u64, value: Option<u64>) {
     if touches_ubo {
         GUEST_WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    // Same clock as nvnDeviceGetTimestampInNanoseconds (horizon/hle.rs): mach ticks converted to nanoseconds.
+    // Same clock as nvnDeviceGetTimestampInNanoseconds (nvn/api/device.rs): the host clock in nanoseconds.
     let now = crate::platform::clock::now_ns();
     // TIMESTAMP (0) reports the time as the counter; TIMESTAMP_TOP (0x10) writes zero there (games use it to reset
     // markers for SetRenderEnableConditional); ZCULL_STATS (0xF) is four 32-bit words and no timestamp.
@@ -369,7 +365,7 @@ static TEXSTAT: [std::sync::atomic::AtomicU64; 3] = [
     std::sync::atomic::AtomicU64::new(0),
 ];
 
-/// --log-alias: log alias views as they are made (~20 per frame in Hateno; stdout cost was measurable).
+/// --log-alias: log alias views as they are made.
 fn alias_log_enabled() -> bool {
     static E: OnceLock<bool> = OnceLock::new();
     *E.get_or_init(|| crate::settings::get().log.log_alias)

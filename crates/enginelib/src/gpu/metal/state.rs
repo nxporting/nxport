@@ -65,7 +65,7 @@ pub(crate) struct State {
     pub(crate) color_state: u32,
     pub(crate) channel_mask: u32,
     pub(crate) stats: Stats,
-    // ---- translated draw path (metal/translated.rs) ----
+    // ---- translated draw path (translated/) ----
     pub(crate) depth_stencil: u64,
     pub(crate) polygon: u32,
     pub(crate) depth_range: (f32, f32),
@@ -120,7 +120,7 @@ pub(crate) struct State {
     /// --early-fence: gpu_dirty ranges of earlier submits, with the last serial their work can be in. The game may
     /// encode its next frame before that work completed; uniform buffers in these ranges stay zero-copy until it has.
     pub(crate) carried_dirty: std::collections::VecDeque<(u64, Vec<(u64, u64)>)>,
-    /// Render encoder kept open across consecutive draws to the same targets (see metal/translated.rs), with its target key.
+    /// Render encoder kept open across consecutive draws to the same targets (see translated/), with its target key.
     /// The open translated render encoder: its calls are queued to `issuer` (see metal/issuer.rs).
     pub(super) enc: Option<issuer::Issuer>,
     pub(super) issuer: issuer::Issuer,
@@ -136,7 +136,7 @@ pub(crate) struct State {
     /// GUEST_WRITES value when plan_ubo was last validated.
     pub(super) ubo_epoch_plan: u64,
     /// plan_uniforms' decision per (stage, Metal binding), valid while the binding's (address, size, copy length) and
-    /// ubo_plan_epoch are unchanged: ~21k uniform bindings per frame read ~450 binds' worth of buffers.
+    /// ubo_plan_epoch are unchanged (most of a frame's uniform bindings repeat a few hundred buffers).
     pub(super) ubo_decisions: Box<[[Option<translated::UboDecision>; 32]; 2]>,
     /// Bumped by everything that can change a uniform decision: GPU-written ranges, executor writes (inline updates,
     /// reports), a new submit.
@@ -164,10 +164,9 @@ pub(crate) struct State {
     pub(crate) force_split: bool,
     /// Recorded NVN commands the executor has no handler for, counted per frame (--cmd-stats-at=N prints frame N).
     pub(crate) ignored_cmds: HashMap<&'static str, u64>,
-    /// Render-target feedback (see translated::feedback_snapshots): bumped by every nvnCommandBufferBarrier that orders
-    /// fragments and invalidates the texture cache. A draw that samples an attachment of its own pass reads a copy of it
-    /// taken at the first such draw after the barrier: on the Switch it sees the writes from before the barrier, while
-    /// sampling an attachment inside a Metal render pass reads whatever happens to be in memory.
+    /// Render-target feedback (see translated::feedback_snapshots): bumped by every nvnCommandBufferBarrier that
+    /// invalidates the texture cache. A draw that samples an attachment of its own pass reads it in a pass begun after
+    /// the barrier: on the Switch it sees the writes from before the barrier.
     pub(crate) fb_epoch: u64,
     /// fb_epoch when the current render encoder began (in-place render-target feedback, translated::feedback_snapshots).
     pub(super) enc_fb_epoch: u64,
@@ -212,7 +211,7 @@ pub(crate) struct TexCache {
     pub(super) dummy_textures: HashMap<String, Tex>,
     /// Write generation (guest/dirty_track.rs) each write-tracked texture description was last hashed at.
     pub(super) tex_track_gen: HashMap<TexDesc, u64>,
-    /// Gfx::texture's fast path: (horizon::hle::tex_table_epoch, horizon::hle::texture_dirty_gen, generation) when the object last resolved
+    /// Gfx::texture's fast path: (nvn::api::tex_table_epoch, nvn::api::texture_dirty_gen, generation) when the object last resolved
     /// to its cached Metal texture with nothing to upload.
     pub(super) tex_memo: HashMap<usize, (u64, u64, u64)>,
     /// NVNtexture -> (root NVNtexture, root generation) for textures resolved as views of another texture's storage.
@@ -310,7 +309,7 @@ pub(crate) struct EncodeCtx {
     pub(super) translated_draws: u64,
     /// (draws with instances > 1, largest instance count, sum of instance counts, largest vertex/index count)
     pub(super) instanced_stats: (u64, i64, i64, i64),
-    /// Uniform buffer copies made in this submit, by (guest address, length); see metal/translated.rs (UBO binding).
+    /// Uniform buffer copies made in this submit, by (guest address, length); see translated/ (UBO binding).
     pub(super) ubo_copies: UboCopies,
     /// GUEST_WRITES value when `ubo_copies` was last validated.
     pub(super) ubo_epoch: u64,
@@ -447,7 +446,7 @@ impl Default for EncLabels {
 }
 
 /// Per-stage binding table keyed by (stage, slot): a fixed array for the usual range, a map beyond it. Looked up for
-/// every binding of every draw (a hash map lookup each showed in profiles).
+/// every binding of every draw (a hash map lookup each is too slow).
 pub(crate) struct BindTable<V: Copy> {
     slots: Box<[Option<V>; BIND_STAGES * BIND_SLOTS]>,
     extra: HashMap<(i32, i32), V>,
@@ -633,7 +632,7 @@ pub(crate) struct BindMemo {
     pub(super) epoch: u64,
     pub(super) alias_root: Option<(usize, u64)>,
     pub(super) result: Option<Tex>,
-    /// horizon::hle::tex_table_epoch() before this resolution's lookups.
+    /// nvn::api::tex_table_epoch() before this resolution's lookups.
     pub(super) table_epoch: u64,
     /// Presented frame the texture's CPU-write check last ran for through this memo (memos persist across submits).
     pub(super) frame: u64,
@@ -652,11 +651,10 @@ pub(crate) struct PendingClear {
 }
 
 /// The clear depth Metal is given for `depth` on a target of format `pf`. On Apple GPUs a Depth16Unorm clear truncates
-/// (0.5 stores 32767) while rasterized depth rounds (0.5 stores 32768), so a draw at the cleared depth failed an EQUAL test
-/// against it. TotK clears two D16 targets to 0.5 each frame and then selects regions with EQUAL tests; with the clear
-/// truncated, pixels left at the cleared depth fail them (blocks in Ultrahand / Fuse effects, totk-mobile PRs 5 and 9). Given the f32 the game passes,
-/// rounded half up as the rasterizer does (a standalone Metal test on the M4: all 201 values 0..1 match a draw at that
-/// depth, against 4 of 5 failing before), then nudged into the step so the truncation keeps it.
+/// (0.5 stores 32767) while rasterized depth rounds (0.5 stores 32768), so a draw at the cleared depth fails an EQUAL test
+/// against it. TotK clears two D16 targets to 0.5 each frame and then selects regions with EQUAL tests (Ultrahand / Fuse
+/// effects; reported by totk-mobile). Given the f32 the game passes, rounded half up as the rasterizer does (checked
+/// against draws at values across 0..1 in a standalone Metal test), then nudged into the step so the truncation keeps it.
 pub(crate) fn clear_depth_value(pf: MTLPixelFormat, depth: f32) -> f64 {
     if pf != MTLPixelFormat::Depth16Unorm {
         return depth as f64;

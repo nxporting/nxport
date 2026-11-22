@@ -1,7 +1,7 @@
 // The submit's commands in the order they run, on a thread of its own (vk-decode): it walks the lists, following
 // CallCommands, and publishes each command as it reaches it while the Presentation Thread executes the ones published so
-// far. Walking ~7,500 list calls and ~44,000 commands a submit (TotK) was ~5% of that thread, and the pre-scan before
-// it (where the occlusion counters are reset and reported) another ~5%; both are done here now, in one walk.
+// far. Walking thousands of list calls and tens of thousands of commands a submit (TotK), and the pre-scan before it
+// (where the occlusion counters are reset and reported), are done here in one walk.
 
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -54,7 +54,7 @@ impl<T: Copy> Chunks<T> {
 /// and the lists looked up again because the map lacked them (kept until the submit ended).
 /// With `resolve`, the map holds the roots only (nvn::api::pin_command_lists) and the walk fetches the lists they call
 /// itself, under one lock per CallCommands it reaches first (nvn::api::fetch_command_lists_at, into `own`): the
-/// Presentation Thread no longer walks them before recording (~0.6 ms a frame in TotK).
+/// Presentation Thread does not walk them before recording.
 struct Walk {
     roots: Vec<u64>,
     lists: *const Lists,
@@ -257,7 +257,7 @@ unsafe fn walk_list(s: &Shared, w: &mut Walk, handle: u64, depth: u32) -> bool {
         match &op.typed {
             Some(Cmd::CallCommands(hs)) if depth < 16 => {
                 // The lists it calls, fetched under one lock when the walk first reaches them: fetching all the lists
-                // a root reaches before its first command (~3,000 in TotK) kept the Presentation Thread waiting ~1 ms
+                // a root reaches before its first command (thousands in TotK) would keep the Presentation Thread waiting
                 // for that command.
                 if w.resolve && !hs.iter().all(|h| w.own.contains_key(h)) {
                     crate::nvn::api::fetch_command_lists_at(w.now, hs, &mut w.own);

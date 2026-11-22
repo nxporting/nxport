@@ -141,7 +141,7 @@ unsafe fn set_open(page: usize) {
     }
     let _ = crate::platform::os::protect(page, PAGE, Prot::Read);
     // Released between the check and the protection (the write guard marks a range released, then opens it): left
-    // read-only with nothing holding it, the next write to it was a crash.
+    // read-only with nothing holding it, the next write to it would be a crash.
     if !crate::gpu::backend().early_fence_holds(page) {
         let _ = crate::platform::os::protect(page, PAGE, Prot::ReadWrite);
     }

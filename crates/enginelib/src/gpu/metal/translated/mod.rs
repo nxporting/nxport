@@ -10,7 +10,7 @@
 //   - cbuf 1              the stage's compiler-generated constant bank (inside the stage data, after the code)
 //   - cbuf N+3            user uniform buffer N
 //   - textures            texture handle table (cbuf 2, 8-byte entries from byte 0x20) -> BindTexture index
-//   - clip space          the vertex stage negates y and remaps z (metal/msl_specialize.rs); the winding flips
+//   - clip space          the vertex stage negates y and remaps z (nxport_metalshaderlib::msl_specialize); the winding flips
 //                         accordingly
 //
 // Guest memory is wrapped, not copied: each NVN memory pool becomes one no-copy MTLBuffer (see `pool_buffer`).
@@ -63,14 +63,14 @@ const SUPPORT_BUFFER_SIZE: usize = 16 * (1 + 8 + 1 + 1 + 1 + 73 + 1 + 1);
 /// Metal buffer index of vertex stream `s` (cbufs use 0..17, storage buffers 18..).
 const VB_BASE: usize = 30;
 /// Metal's per-stage sampler table holds 16; higher sampler indices go through an argument buffer at this index
-/// (must match EXTRA_SAMPLER_BASE / EXTRA_SAMPLER_BUFFER in metal/msl_specialize.rs).
+/// (must match EXTRA_SAMPLER_BASE / EXTRA_SAMPLER_BUFFER in nxport_metalshaderlib::msl_specialize).
 const EXTRA_SAMPLER_BASE: usize = 16;
 const EXTRA_SAMPLER_BUFFER: usize = 29;
 const MAX_STREAMS: usize = 11;
 /// Buffer index of the (0,0,0,1) default-attribute buffer (Metal vertex buffer indices must be < 31; streams use 20..30).
 const DEFAULT_ATTR_BUFFER: usize = 19;
 /// Byte offset in the driver cbuf (guest cbuf 0, Metal binding 17) where each stage's constant buffer sizes go, one u32
-/// (float4 count) per Metal binding 0..17 (must match CBUF_LIMITS_VEC4 in metal/msl_specialize.rs). The game never
+/// (float4 count) per Metal binding 0..17 (must match CBUF_LIMITS_VEC4 in nxport_metalshaderlib::msl_specialize). The game never
 /// reads there. Computed-index reads beyond a buffer's bound size return zero, as on the GPU.
 const CBUF_LIMITS_OFFSET: usize = 0xF00;
 
@@ -474,7 +474,7 @@ impl Default for DrawPacket {
 }
 
 impl DrawPacket {
-    /// Fills the packet in place (one packet is reused for every draw: moving a ~3 KB value per draw cost ~0.5 ms per frame).
+    /// Fills the packet in place (one packet is reused for every draw instead of moving a ~3 KB value each).
     #[allow(clippy::too_many_arguments)]
     unsafe fn fill(
         &mut self,
@@ -624,7 +624,7 @@ impl DrawPacket {
 
 /// Size of a storage buffer whose descriptor a shader reads from one of the game's own uniform buffers. Only the
 /// driver's descriptors in cbuf 0 carry a size; there the word after the address is whatever the game keeps next to it
-/// (TotK's Depths terrain: a texture handle, read as 258 MB, so the binding failed and the walls were drawn from zeros).
+/// (TotK's Depths terrain keeps a texture handle there).
 /// The mapped size from the address instead, at most 1 MiB, as Ryujinx does.
 fn user_sb_size(addr: u64) -> u64 {
     const MAX: usize = 0x100000;
@@ -667,7 +667,7 @@ pub(super) enum DrawKind {
 pub(crate) struct Arena {
     chunks: Vec<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)>,
     /// Standard-size chunks of earlier submits, with the submitted serial at their reset: reusable once the GPU has
-    /// completed that serial (a new 1 MB Metal buffer per chunk per submit showed in profiles).
+    /// completed that serial.
     free: Vec<(Retained<ProtocolObject<dyn MTLBuffer>>, u64)>,
 }
 

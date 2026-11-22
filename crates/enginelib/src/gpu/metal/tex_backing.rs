@@ -1,8 +1,8 @@
 // Guest memory under textures whose content lives in Metal (--tex-backing).
 //
 // A texture the game fills from the CPU (file data, WriteTexels) exists twice: the game's block-linear bytes in guest
-// memory, and our deswizzled copy in a Metal texture (Apple GPUs cannot sample Tegra layouts). Walking through Hateno
-// that is ~900 MB of each (--log-tex-mem). The guest copy is only needed when the CPU touches it again (TotK moves
+// memory, and our deswizzled copy in a Metal texture (Apple GPUs cannot sample Tegra layouts): hundreds of megabytes of
+// each in TotK (--log-tex-mem). The guest copy is only needed when the CPU touches it again (TotK moves
 // textures with CPU copies when it compacts its heaps), so it is dropped and rebuilt from Metal on access.
 //
 // Held ranges: every 60 frames the whole 16 KiB pages inside copied textures' storage (the union over textures, so
@@ -53,7 +53,7 @@ pub(super) fn supported(
     use objc2_metal::MTLPixelFormat as F;
     let tt = tex.textureType();
     let fmt = tex.pixelFormat();
-    // Not linear textures (0x10 / 0x40) yet: their rebuilt rows did not match (pitch).
+    // Not linear textures (0x10 / 0x40): their rebuilt rows do not match (pitch).
     params.flags & (0x10 | 0x40) == 0
         && matches!(
             tt,
@@ -222,7 +222,7 @@ pub(super) fn holds(addr: usize, len: usize) -> bool {
 }
 
 /// Opens every range overlapping [addr, addr+len), rebuilding discarded ones first: the host kernel is about to write
-/// there (it cannot fault: file reads into protected memory failed with EFAULT and loading stalled), or GPU buffers
+/// there (it cannot fault: file reads into protected memory fail with EFAULT), or GPU buffers
 /// access it. Not for the fault handler of the range itself (it waits for the worker).
 pub(super) unsafe fn open_overlapping(addr: usize, len: usize) {
     if mode() == crate::settings::TexBacking::Off || len == 0 {
@@ -283,8 +283,9 @@ pub(super) fn rebuild(frame: u64, texs: Vec<TexRec>) {
         }
     }
     // Held ranges are the unions rounded out to whole pages, so every texture of a union lies inside its held range
-    // and its change checks are skipped (`holds`); with ranges rounded in, textures sticking out over an end were hashed
-    // as a whole by refresh_cpu_written, which read the discarded pages and rebuilt them again and again. Only the pages wholly inside a union are discarded (`inner`); the edge pages may
+    // and its change checks are skipped (`holds`); with ranges rounded in, textures sticking out over an end would be
+    // hashed as a whole by refresh_cpu_written, which would read the discarded pages and rebuild them again and again.
+    // Only the pages wholly inside a union are discarded (`inner`); the edge pages may
     // hold other data, whose use just opens the held range. Unions sharing an edge page make one held range.
     let mut held_groups: Vec<(usize, usize, Vec<(usize, usize, Vec<TexRec>)>)> = Vec::new();
     for (a, b, t) in groups {

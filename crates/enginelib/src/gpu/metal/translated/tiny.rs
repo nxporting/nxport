@@ -56,9 +56,8 @@ impl Gfx {
         if !tiny_enabled() {
             return None;
         }
-        // Kernels reading their samplers from the sampler heap gave varying results from one run of the same frame to
-        // the next (TotK's atmosphere LUT kernel s_ec8a96bdd2f04e50: whole-frame tint flashes; the render versions are
-        // stable, cause not found): only kernels that take their samplers as parameters run (index line `tks`).
+        // Kernels reading their samplers from the sampler heap give varying results from one run of the same frame to
+        // the next (TotK's atmosphere LUT kernel s_ec8a96bdd2f04e50; the render versions are stable): only kernels that take their samplers as parameters run (index line `tks`).
         let heap_samplers = |c: &CachedStage| c.texture_heap && !c.textures.is_empty() && !c.tiny_samplers;
         if heap_samplers(vs) || fs.is_some_and(heap_samplers) {
             return None;

@@ -1,7 +1,7 @@
 // Vulkan backend for crate::gpu::Backend.
 //
-// Correctness first: each submit is one command buffer, recorded from the NVN command lists in order and waited for
-// before the submit returns. Images stay in the GENERAL layout with full barriers between passes and other work.
+// Each submit is recorded from the NVN command lists in order into command buffers queued as they fill; a watcher
+// thread completes them (inflight.rs). Images stay in the GENERAL layout with full barriers between passes and other work.
 // Guest memory pools are imported as buffers where the device allows it (VK_EXT_external_memory_host), so vertex,
 // index and storage data are the guest's own pages, as on the Switch; uniform buffers are copied when bound (NVN updates
 // them inline in the command stream). The Metal backend (crate::gpu::metal) is the reference this one is checked against
@@ -168,8 +168,8 @@ impl Vulkan {
 impl Backend for Vulkan {
     fn set_program(&self, program: usize, stages: &[ShaderStage]) {
         // Queued, and taken in by the next submit, which is when it took effect anyway: the game's threads set programs
-        // in gameplay too (TotK on Great Sky Island, now and then on a ModuleSystemWorker), and waiting for the context
-        // waited out the whole recording of a submit (~5 ms).
+        // in gameplay too (TotK, now and then on a ModuleSystemWorker), and waiting for the context would wait out the
+        // whole recording of a submit.
         let stages = stages.iter().map(|s| (s.data, s.control, unsafe { stage_hash(s.data, s.control) })).collect();
         self.programs.lock().unwrap().push((program, stages));
         if let Ok(mut g) = self.ctx.try_lock() {
@@ -191,10 +191,10 @@ impl Backend for Vulkan {
             unsafe { pin_current_thread(mask) };
         });
         let guard_on = crate::gpu::report_guard::mode() != crate::settings::ReportGuard::Off;
-        // Every list the submit reaches, fetched under one lock (a submit reaches ~3,000; one lock each was ~5% of
-        // recording) for the executor too.
-        // The map and stack of the submit before, kept (growing a fresh map to ~3,000 entries for every submit was ~1% of
-        // recording).
+        // Every list the submit reaches, fetched under one lock (a submit reaches thousands; a lock each would cost) for
+        // the executor too.
+        // The map and stack of the submit before, kept (growing a fresh map to thousands of entries for every submit
+        // would cost too).
         thread_local! {
             static SCRATCH: std::cell::RefCell<(Vec<u64>, rustc_hash::FxHashMap<u64, std::sync::Arc<crate::nvn::api::RecordedCommandList>>)> =
                 std::cell::RefCell::new(Default::default());
@@ -422,9 +422,9 @@ impl Backend for Vulkan {
 
 /// The processors (mask) the recording threads run on, 0 until the first submit chose them, or for none in particular.
 /// Recording hands most of what it works out to vk-record (record.rs): batches of commands, descriptors, uniform copies.
-/// On a CPU with several L3 caches (Zen 2's core complexes) the two threads landed on different ones much of the time and
-/// every handover was a cross-complex cache miss. On the first complex TotK on Great Sky Island went 56.7-61.9 -> 66.5-70.5
-/// fps (Ryzen 7 3700X); on the second, 62.8-64.9 (the first L3 is taken, whatever the thread ran on before).
+/// On a CPU with several L3 caches (Zen 2's core complexes) the two threads would land on different ones much of the time,
+/// and every handover would be a cross-complex cache miss. The first L3 is taken, whatever the thread ran on before (it
+/// gains more than the others).
 static REC_AFFINITY: AtomicU64 = AtomicU64::new(0);
 
 /// The processors of each L3 cache of processor group 0, the first L3's (the lowest-numbered processor's) first (none:
@@ -473,9 +473,8 @@ unsafe fn recording_affinity() -> u64 {
 }
 
 /// The processors of the other L3 caches, where the game's threads run when Vulkan records on the first (0: anywhere).
-/// They no longer take the recording threads' cores and cache, and the game's job threads (which hand work to each other
-/// tens of thousands of times a second) share one: TotK on Great Sky Island 69.5-70.1 -> 72.0-73.3 fps, recording
-/// 12.6-13.0 -> 12.0-12.3 ms a frame (Ryzen 7 3700X).
+/// They do not take the recording threads' cores and cache, and the game's job threads (which hand work to each other
+/// tens of thousands of times a second) share one.
 pub(crate) fn guest_affinity() -> u64 {
     static MASK: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *MASK.get_or_init(|| match unsafe { l3_masks() }[..] {
@@ -550,7 +549,7 @@ unsafe fn stage_hash(data: u64, control: u64) -> u64 {
     if data >= 0x10000 {
         // The whole code where the control section gives its length: draws find stages by (address, this hash), and
         // BotW loads other shader archives into memory it freed, so code that differed only past the first 0x130 bytes
-        // got the stage of what was there before.
+        // would get the stage of what was there before.
         let code = shader::guest_code(data);
         // Prep::code_len: from the data's start to the end of the constant bank the translator reads.
         let len = shader::prep(code, shader::guest_ctrl(control), 0).code_len;
@@ -649,7 +648,7 @@ impl Arena {
     }
 
     /// The chunks this submit used (they stay allocated until it completed: making and zeroing 64 MB chunks for every
-    /// submit was a visible part of recording).
+    /// submit would be a visible part of recording).
     fn take_used(&mut self) -> Vec<device::HostBuffer> {
         self.cur = 0;
         self.used = 0;
@@ -685,7 +684,7 @@ impl Imports {
         if gen != self.gen {
             // Pools changed (registered, finalized, released): imports over memory released since must go. The others
             // stay: their pages are the same (this backend never unmaps freed address regions), and making every import
-            // again at each change, which TotK's streaming makes many times a second, was a large part of recording.
+            // again at each change, which TotK's streaming makes many times a second, would be a large part of recording.
             for (a, s, _) in crate::nvn::api::take_released_ranges() {
                 let gone: Vec<usize> = self.by_start.range(..a + s).filter(|(&st, v)| st + v.0 > a).map(|(&st, _)| st).collect();
                 for st in gone {

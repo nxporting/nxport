@@ -50,7 +50,8 @@ pub fn register(program: usize, stages: &[crate::gpu::ShaderStage]) {
         })
         .collect();
     // Stages the cache lacks are translated on the translation threads; the program's first use waits for them
-    // (stages()). Translating them here, one by one on the game's loading thread, held BotW 1.9.0 on a black screen.
+    // (stages()). Translating them here, one by one on the game's loading thread, would hold BotW 1.9.0 on a black
+    // screen.
     let mut pending = Vec::new();
     for (i, st) in stages.iter_mut().enumerate() {
         st.cached = unsafe { shader_cache::lookup(st.data) };

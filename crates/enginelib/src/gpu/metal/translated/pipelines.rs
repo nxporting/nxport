@@ -100,8 +100,8 @@ pub(crate) fn compute_cell(entry: &str) -> ComputeCell {
 }
 
 /// Queues every compute kernel of the shader cache on the pipeline threads, ahead of the listed render pipelines: they
-/// need no draw state, and the game dispatches many while it loads (a first launch on the iPhone otherwise compiled
-/// them in the middle of loading the world).
+/// need no draw state, and the game dispatches many while it loads (else a first launch compiles them in the middle of
+/// loading the world).
 pub(crate) fn queue_compute() {
     let entries = super::shader_cache::compute_entries();
     if entries.is_empty() {

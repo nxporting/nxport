@@ -12,7 +12,7 @@ impl Gfx {
         len: usize,
     ) -> Option<(Retained<ProtocolObject<dyn MTLBuffer>>, usize)> {
         let addr = crate::nvn::api::translate_virtual(addr as usize);
-        // Per-thread memo by exact (address, length), valid while horizon::hle::pools_gen() is unchanged (pool registrations,
+        // Per-thread memo by exact (address, length), valid while nvn::api::pools_gen() is unchanged (pool registrations,
         // virtual mappings, releases and unmaps bump it, and the slow path below handles releases first): the same
         // static vertex / index ranges are looked up every frame, and each lookup took the release queue, the global
         // wrapper table and the pool registry. --no-pool-buffer-memo: off.
@@ -71,7 +71,7 @@ impl Gfx {
         if addr + len > base + size {
             // A pool nested inside a larger one covers the start only. Without one, the binding's size runs past its pool
             // (games bind a size covering more than the shader reaches): wrap the pool it starts in, as the GPU would only
-            // reach that pool's memory. Copying instead lost every GPU write to the buffer.
+            // reach that pool's memory. Copying instead would lose every GPU write to the buffer.
             if let Some(p) = crate::nvn::api::containing_pool(addr, len) {
                 (base, size) = p;
             }
@@ -108,8 +108,8 @@ impl Gfx {
             return None;
         };
         // Pools whose page-rounded ranges overlap (several small pools on one page) each keep their own buffer: Metal
-        // allows no-copy buffers over the same memory. Evicting overlapping buffers here made two such pools re-wrap each
-        // other on every bind (millions of buffer creations per session). Buffers over freed memory are dropped through
+        // allows no-copy buffers over the same memory. Evicting overlapping buffers here would make two such pools re-wrap
+        // each other on every bind. Buffers over freed memory are dropped through
         // take_released_ranges above.
         pool_buffers.insert((wrap_base, wrap_end), buf.clone());
         if pool_buffers.len() % 256 == 1 {
@@ -143,7 +143,7 @@ impl Gfx {
     }
 
     /// guest_buffer for memory the GPU only reads (vertex, index and uniform buffers, copy sources): its pages may stay
-    /// write-tracked. (Releasing them on every bind walked every page of every vertex buffer per draw.)
+    /// write-tracked (releasing them on every bind would walk every page of every vertex buffer per draw).
     pub(crate) unsafe fn guest_buffer_ro(
         &self,
         sh: &mut SharedCaches,

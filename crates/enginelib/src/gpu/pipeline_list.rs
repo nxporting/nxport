@@ -384,7 +384,7 @@ pub fn take_frame_progress() -> Option<Option<(usize, usize)>> {
 }
 
 /// The progress line appears once compiling has gone on for SHOW_AFTER and stays at least SHOW_FOR: a few shaders
-/// done within a frame or two flashed it too briefly to read (a black box in the corner).
+/// done within a frame or two would flash it too briefly to read.
 fn shown_progress(now_compiling: Option<(usize, usize)>) -> Option<(usize, usize)> {
     use std::time::{Duration, Instant};
     const SHOW_AFTER: Duration = Duration::from_millis(500);

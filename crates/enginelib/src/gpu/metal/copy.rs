@@ -1,9 +1,9 @@
 // Executes NVN's GPU copy and clear commands (nvnCommandBufferCopy*, Clear*) with Metal blits.
 //
-// Metal textures are the source of truth once created (guest storage only seeds them, see `texture` in metal/mod.rs), so
+// Metal textures are the source of truth once created (guest storage only seeds them, see `texture` in gpu/metal), so
 // copies run on the Metal side. Blit encoders keep them ordered with the render passes around them in the command
 // buffer, which a CPU-side replaceRegion would not. Buffers are the guest's own memory, wrapped zero-copy from the
-// memory pools (metal/translated.rs `guest_buffer`).
+// memory pools (metal::translated `guest_buffer`).
 //
 // Not handled (logged once): partial-region texture clears, integer clears, depth/stencil copies, 3D sources whose
 // storage we cannot upload, buffer textures.

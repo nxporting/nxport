@@ -89,7 +89,7 @@ pub struct Slots {
     pub warned: bool,
     /// Entries given out and not yet written: (binding, index, view, sampler), written together before the next queue
     /// submission (flush; update-after-bind lets recorded commands name them first). One write per new view at a scene
-    /// change was a hitch of its own.
+    /// change would be a hitch of its own.
     pending: Vec<(u32, u32, vk::ImageView, vk::Sampler)>,
 }
 

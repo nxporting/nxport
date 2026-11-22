@@ -166,7 +166,7 @@ pub struct Ctx {
     /// draw of a feedback epoch (sampling an attachment inside a Vulkan render pass is undefined). An epoch ends at a
     /// barrier that invalidates textures and at a draw of another program after one that rendered to an attachment
     /// copied in it: games read what the draws before rendered without a barrier between (TotK's shrine floors blend
-    /// into the ground drawn just before them, and blended into black). Copies by texture description, with their epoch.
+    /// into the ground drawn just before them). Copies by texture description, with their epoch.
     /// Depth comparison of GPU-drawn colour textures (draw.rs twin_from_colour): when each image was last rendered to
     /// (pass serial), when each depth twin was last copied from its colour image, and the buffer the copy goes through.
     pub(super) pass_serial: u64,
@@ -813,8 +813,8 @@ impl Ctx {
         crate::gpu::history::journal_fmt(format_args!("submit {} lists serial {serial}", lists.len()));
         // Emptied when the previous submit ended.
         std::mem::swap(&mut self.lists, fetched);
-        // vk-decode walks the lists while the submit is set up here: fetching what the roots call (~3,000 lists in TotK,
-        // under the list lock) took it ~1 ms before it published the first command, and this thread waited all of it.
+        // vk-decode walks the lists while the submit is set up here: fetching what the roots call first (thousands of
+        // lists in TotK, under the list lock) would delay the first command it publishes, and this thread would wait.
         self.decoder.start(lists, &self.lists, resolve);
         let empty = |serial| super::inflight::Done {
             serial,
@@ -912,8 +912,7 @@ impl Ctx {
         // The linear render targets this submit drew (note_rendered): copied back as it ends.
         self.record_rt_reads();
         // On discrete GPUs written shadow slots are copied into host-cached memory for the watcher to write back: they
-        // are in the BAR window, which the CPU reads at a few MB/s (173 KB a frame took the watcher 12 ms on Great Sky
-        // Island). With unified memory the watcher reads the slots.
+        // are in the BAR window, which the CPU reads at a few MB/s. With unified memory the watcher reads the slots.
         let slots = self.shadows.end_submit(serial);
         let discrete = self.dev.discrete;
         if discrete && !slots.is_empty() {
@@ -1036,9 +1035,8 @@ impl Ctx {
         let frame = super::VULKAN.frames.load(std::sync::atomic::Ordering::Relaxed);
         let total = super::PIPELINES_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
         if total > self.saved_pipelines && frame >= self.pipeline_cache_saved + 1800 {
-            // On a thread of its own: copying the cache out of the driver and writing it takes tens of milliseconds
-            // (totk-pc-recomp measured ~60 ms), a hitch on this thread, which records every frame. A pipeline cache is
-            // internally synchronized (not created EXTERNALLY_SYNCHRONIZED), so pipelines may be made meanwhile; one
+            // On a thread of its own: copying the cache out of the driver and writing it takes tens of milliseconds, a
+            // hitch on this thread, which records every frame. A pipeline cache is internally synchronized (not created EXTERNALLY_SYNCHRONIZED), so pipelines may be made meanwhile; one
             // save at a time.
             static SAVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if let Some(c) = self.pipeline_cache {
@@ -1508,7 +1506,7 @@ impl Ctx {
             Cmd::SetPointSize(s) => self.st.point_size = *s,
             Cmd::ResetCounter { .. } | Cmd::SetDepthBounds { .. } => {}
             other => {
-                // Once per kind (formatting the command for every occurrence was a cost per frame).
+                // Once per kind (formatting the command for every occurrence would cost every frame).
                 if self.unimplemented_kinds.insert(std::mem::discriminant(other)) {
                     let name = format!("{other:?}");
                     let name = name.split([' ', '(', '{']).next().unwrap_or("").to_string();
@@ -1658,7 +1656,7 @@ impl Ctx {
             }
         }
         // Once a frame: targets_recur reads only this frame and the one before, so older entries go (a cap pruned on
-        // every pass cost ~5% of the frame once the game had cycled through more targets than it).
+        // every pass would be costly once the game has cycled through more targets than it).
         if self.rt_frames_pruned != f {
             self.rt_frames_pruned = f;
             self.rt_frames.retain(|_, v| v.0 + 1 >= f);
@@ -1689,8 +1687,7 @@ impl Ctx {
         }
         // Samples count only toward a report: none are needed when the counter is reset before the next report.
         // Without waiting for vk-decode's walk to find out: a pass begun before the walk reaches the next counter event
-        // counts its samples anyway (waiting held the Presentation Thread at pass starts until the walk got there: about 5%
-        // of its time once bindless textures made binding cheaper).
+        // counts its samples anyway (waiting would hold the Presentation Thread at pass starts until the walk gets there).
         if self.decoder.peek_counter(self.op_index) == Some(Some(false)) {
             return;
         }
@@ -1920,7 +1917,7 @@ impl Ctx {
     }
 
     /// The command buffer ends on vk-record and is queued once it has (at a later chunk or the submit's end): waiting for
-    /// vk-record at every chunk (one a millisecond) was a fifth of the recording.
+    /// vk-record at every chunk (one a millisecond) would be a large share of the recording.
     unsafe fn submit_chunk(&mut self) {
         self.rec.end_async();
         let cbs = self.with_uploads(self.cb);

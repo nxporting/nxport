@@ -1,12 +1,12 @@
-// Lookup side of the AOT shader cache built by `nxport-builder shaders build` (crates/builderlib/src/shader_cache_build.rs).
+// Lookup side of the AOT shader cache built by `nxport-builder shaders build` (crates/builderlib/src/shaders/shader_cache_build.rs).
 //
 // <cache>/index.txt maps a stage's code bytes to a translated Metal function (`s_<hash>` in
-// <cache>/shaders.metallib) plus the resource bindings the translated function expects. A stage is
+// <cache>/shaders_NNNN.metallib) plus the resource bindings the translated function expects. A stage is
 // identified by a two-level hash: a weak hash of its first WEAK_LEN bytes selects candidate sizes, then
 // the exact `size` bytes are hashed and compared (the stage's real length isn't known to the engine, and
 // whatever follows it in memory must not influence the key).
 //
-// The cache directory comes from --shader-cache (default ./shader_cache). With no cache every lookup
+// The cache directory comes from --shader-cache (default: the app's, else the game's data directory's shader_cache/). With no cache every lookup
 // misses and nothing is drawn.
 
 use objc2_foundation::NSString;
@@ -121,10 +121,10 @@ pub struct CachedStage {
     pub tiny_implicit: Option<Vec<u32>>,
     /// Fragment kernels that apply folded clears (index line `tkc`).
     pub tiny_clears: bool,
-    /// The stage has a batched variant tb_<entry> (index line `tb`, crates/builderlib/src/batch_kernels.rs): the constant
+    /// The stage has a batched variant tb_<entry> (index line `tb`, crates/builderlib/src/shaders/batch_kernels.rs): the constant
     /// buffer bindings its address table holds, in order.
     pub batch_cbufs: Option<Vec<u32>>,
-    /// The stage has an argument-buffer variant ab_<entry> (index line `ab`, crates/builderlib/src/arg_kernels.rs): its
+    /// The stage has an argument-buffer variant ab_<entry> (index line `ab`, crates/builderlib/src/shaders/arg_kernels.rs): its
     /// struct's members in order, (class, original binding) with class b'c' constant buffer, b'b' device buffer,
     /// b't' texture, b's' sampler.
     pub args: Option<Vec<(u8, u32)>>,
@@ -649,8 +649,8 @@ pub fn by_entry(entry: &str) -> Option<&'static CachedStage> {
         return Some(st);
     }
     // As lookup goes on: the source set, then the stages translated on earlier starts, their libraries compiled here, so
-    // listed pipelines that use them are made ahead too (they were left out as "missing shaders" and compiled again at
-    // every start where the game first drew them).
+    // listed pipelines that use them are made ahead too (else they would be left out as missing shaders and compiled
+    // again at every start where the game first draws them).
     if let Some((idx, pack)) = source_set() {
         if let Some(st) = first(idx, &S, entry) {
             return compiled_stage(st, || pack.source(&st.entry));

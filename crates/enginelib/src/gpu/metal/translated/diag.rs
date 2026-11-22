@@ -825,7 +825,7 @@ pub(crate) static BINDING_VIEW_STATS: [std::sync::atomic::AtomicU64; 2] = [
 ///
 /// The answer is stored on the texture as an associated object (OBJC_ASSOCIATION_ASSIGN: a plain value, never retained
 /// or messaged, dropped with the texture), so each texture is walked once in its life. -[IOGPUMetalTexture parentTexture]
-/// took >100 us per call in Hateno (~20% of encode time with a per-submit memo), even on root textures.
+/// can take over 100 us a call, even on root textures.
 /// --no-root-tag: walk every time (A/B).
 /// root_id calls answered by the tag / by walking the parent chain (timeline log).
 pub(crate) static ROOT_STATS: [std::sync::atomic::AtomicU64; 2] = [

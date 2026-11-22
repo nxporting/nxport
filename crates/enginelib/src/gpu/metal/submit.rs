@@ -4,7 +4,7 @@
 use super::*;
 
 /// Prints everything Metal reports about a failed command buffer, including the per-encoder status that names the
-/// debug groups (draw labels, see metal/translated.rs) that were running when the GPU faulted or timed out.
+/// debug groups (draw labels, see translated/) that were running when the GPU faulted or timed out.
 pub(super) fn report_gpu_error(
     cb: &ProtocolObject<dyn MTLCommandBuffer>,
     labels: &[String],
@@ -127,9 +127,9 @@ pub(super) fn wait_while_suspended() {
 
 /// nvnQueueSubmitCommands: execute the given command handles in order.
 ///
-/// Safety net: at most one command buffer is in flight. A GPU hang ("progress timeout") makes macOS reset the GPU and, if
-/// work keeps arriving, freeze the whole machine, so each submit first waits for the previous one and checks it. On the
-/// first error the GPU is treated as broken, the details are printed, and no further rendering is submitted.
+/// Safety net: a GPU hang ("progress timeout") makes macOS reset the GPU and, if work keeps arriving, freeze the whole
+/// machine. On the first error the GPU is treated as broken, the details are printed, and no further rendering is
+/// submitted.
 pub fn submit(handles: &[u64]) {
     let _engine = report_guard::engine_scope();
     wait_while_suspended();
@@ -177,7 +177,7 @@ pub(super) fn bump_tex_epoch() {
 /// Gfx::texture memo: [hits, misses with the table epoch unchanged, misses after table changes].
 pub(super) static TEX_MEMO_STATS: [std::sync::atomic::AtomicU64; 3] =
     [const { std::sync::atomic::AtomicU64::new(0) }; 3];
-/// Table-epoch changes seen per frame by the encoder (horizon::hle::tex_table_epoch deltas at submit starts).
+/// Table-epoch changes seen per frame by the encoder (nvn::api::tex_table_epoch deltas at submit starts).
 pub(super) static UBO_INDEXED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(super) static LISTS_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -275,8 +275,8 @@ pub(super) fn submit_inner(handles: &[u64]) {
             st.ubo_plan_epoch += 1;
             st.rts_dirty = true;
             st.cached_rts = None;
-            // Memos validate everything they depend on and persist across submits; the first ~1,400 bindings of every
-            // frame went through full resolution while the memo was cleared here.
+            // Memos validate everything they depend on and persist across submits (cleared here, the first bindings of
+            // every frame would go through full resolution).
             if st.cx.bind_memo.len() > 1 << 16 {
                 st.cx.bind_memo.clear();
             }

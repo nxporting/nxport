@@ -48,7 +48,7 @@ pub(super) struct BindJob {
     pub(super) first_set: u32,
 }
 
-/// Ops own what they record (handles, plain values); the Presentation thread no longer touches them once handed over.
+/// Ops own what they record (handles, plain values); the Presentation thread does not touch them once handed over.
 #[derive(Default)]
 struct Batch {
     ops: Vec<Op>,

@@ -251,14 +251,14 @@ impl Gfx {
 
         // ---- render targets ----
         // The pass's resolved targets are reused while it stays open and SetRenderTargets did not run.
-        // Shared (Arc), not copied: the targets, formats and pass key were ~600 bytes and a retain per texture per draw.
+        // Shared (Arc), not copied: the targets, formats and pass key are ~600 bytes and a retain per texture per draw.
         let (rts, targetless): (std::sync::Arc<super::CachedPassRts>, Option<(usize, usize)>) =
             if !st.rts_dirty && st.enc.is_some() && st.cached_rts.is_some() {
                 (st.cached_rts.clone().unwrap(), None)
             } else {
                 let mut demoted = false;
                 let (color_texs, bc, depth_tex) = loop {
-                    // Inline storage for the per-draw temporaries: heap allocations were ~6% of the encoding thread.
+                    // Inline storage for the per-draw temporaries (no heap allocations per draw).
                     let mut color_texs: smallvec::SmallVec<[(usize, Tex, RtRef); 8]> =
                         smallvec::SmallVec::new();
                     let mut bc: smallvec::SmallVec<[(Tex, Tex, usize); 1]> =
@@ -277,8 +277,7 @@ impl Gfx {
                                 // point and would copy the proxy before anything was drawn into it.
                                 bc.push((p.clone(), t.clone(), rt.level as usize));
                                 // The proxy is that one level (single-mip texture; resolve_bc_proxies copies it into rt.level of the
-                                // target): attach its level 0. Attaching rt.level was out of range (Metal validation abort; undefined
-                                // without validation, so GPU-compressed mips above 0 were never rendered correctly).
+                                // target): attach its level 0 (rt.level is out of range for the proxy).
                                 let mut proxy_rt = *rt;
                                 proxy_rt.level = 0;
                                 color_texs.push((i, p, proxy_rt))
@@ -303,8 +302,7 @@ impl Gfx {
                     };
                     // A pass renders at one scale (Ryujinx TextureManager.UpdateRenderTargetScale): scaled targets bound with
                     // an unscaled one go to the game's size, contents included, and the targets are resolved again. Rendering
-                    // at 1x into a 2x target drew the whole scene into its top-left quarter (BotW's composite pass with its
-                    // depth demoted).
+                    // at 1x into a 2x target would draw the whole scene into its top-left quarter.
                     let targets = || {
                         color_texs
                             .iter()
@@ -328,8 +326,8 @@ impl Gfx {
                 };
                 // No render target bound: TotK draws occlusion-query boxes this way (ResetCounter, draw, ReportCounter with
                 // SetRenderTargets(0 colors, no depth)); every rasterized sample counts. Metal does this with an attachment-less
-                // pass of explicit size; the viewport (or scissor) gives the size. Skipping these draws reported 0 samples, and
-                // the game culled whatever the queries guarded.
+                // pass of explicit size; the viewport (or scissor) gives the size. Skipping these draws would report 0 samples,
+                // and the game would cull whatever the queries guard.
                 let targetless: Option<(usize, usize)> =
                     if color_texs.is_empty() && depth_tex.is_none() {
                         let size = st
@@ -521,16 +519,12 @@ impl Gfx {
             }
         }
         // Passes that render into slices of a 3D texture, a cube map face, or an array layer (shadow maps, noise volumes,
-        // environment cube maps) were once suspected of GPU errors; validated runs are clean since the GPU safety work, and
-        // without them every shadow test fails and the scene is unlit.
+        // environment cube maps) run like any other: without them every shadow test fails and the scene is unlit.
 
         // ---- render-target feedback ----
         // A draw that samples an attachment of a pass begun before the latest INVALIDATE_TEXTURE barrier ends that pass
-        // (in place mode, see feedback_snapshots); only then (or in copy mode) are its textures resolved here, in
-        // order. Otherwise encode_draw resolves them.
-        // Textures are resolved here, in order, for every draw: the texture cache then stays on this thread (the encode half
-        // may run on a worker), and memo hits make this cheap. The feedback check only runs for a pass begun before the
-        // latest barrier (in place mode) or in copy mode.
+        // (see feedback_snapshots). Textures are resolved here, in order, for every draw: the texture cache then stays on
+        // this thread (the encode half may run on a worker), and memo hits make this cheap.
         // Consecutive draws often bind the same textures (shadow casters, grass, one material's meshes): reuse the previous
         // draw's resolution while the shaders, every handle and the epochs that validate binding memos are unchanged (the
         // frame too: the first resolution in a frame runs the per-frame CPU-write checks). --no-tex-reuse: off.
@@ -694,8 +688,8 @@ impl Gfx {
                 .and_then(|(t, d)| take_clear(t, d.level as usize, d.layer as usize, false));
             // Clears still pending on memory this pass renders into run first: the pass's attachment may be another
             // view of the cleared texture (is_target compares the exact object), and a clear flushed after the pass
-            // erased what it drew (Mario Kart 8 Deluxe's shadow mask, cleared through one object and drawn through
-            // another: the track sampled zeros and rendered black).
+            // would erase what it drew (Mario Kart 8 Deluxe's shadow mask is cleared through one object and drawn
+            // through another).
             let attached: smallvec::SmallVec<[u64; 9]> = color_texs
                 .iter()
                 .map(|(_, t, _)| root_id(t))
@@ -779,8 +773,8 @@ impl Gfx {
             // The Metal label also names the pass shape (attachment index:size:pixel format) and its first shaders, so
             // GPU profiles can be grouped by pass. One string per encoder, also used for error reports.
             use std::fmt::Write as _;
-            // The attachment shapes cost three Objective-C queries per attachment plus formatting for every encoder
-            // (~3% of the Presentation Thread): only with --enc-labels (GPU profiles grouped by pass) or
+            // The attachment shapes cost three Objective-C queries per attachment plus formatting for every encoder:
+            // only with --enc-labels (GPU profiles grouped by pass) or
             // --draw-details. The shader pair is always named (hang and validation reports).
             let mut shape_label = String::with_capacity(if full_labels() { 160 } else { 48 });
             if full_labels() {

@@ -996,7 +996,7 @@ pub(crate) fn cmd_time_on() -> bool {
     on
 }
 
-/// horizon::hle::pools_gen() when the --log-cmd-time window began (how often pool-derived memos are invalidated).
+/// nvn::api::pools_gen() when the --log-cmd-time window began (how often pool-derived memos are invalidated).
 pub(crate) static CMD_TIME_GEN0: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) static CMD_TIME_SGEN0: AtomicU64 = AtomicU64::new(0);

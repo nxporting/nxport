@@ -42,7 +42,7 @@ pub struct Dev {
     /// Primitive restart follows Metal's rules (MoltenVK): strips only, compared after adding the base vertex.
     pub metal_restart: bool,
     /// Fewest swapchain images: 3 on MoltenVK, whose image is acquirable again once its present's command buffer completes
-    /// but whose drawable is let go only once on screen: with 2 images and its own submit thread an image came back
+    /// but whose drawable is let go only once on screen: with 2 images and its own submit thread an image comes back
     /// still holding a presented drawable ("addPresentedHandler cannot be called after drawable has been presented"),
     /// and its present handler crashes. Elsewhere 2.
     pub min_swapchain_images: u32,
@@ -249,7 +249,7 @@ impl Dev {
             // MoltenVK: vkQueueSubmit encodes the Metal commands on its own thread instead of the caller's (the
             // Presentation Thread records the next commands meanwhile).
             // Descriptor sets bound directly instead of through Metal argument buffers, which cost GPU time per draw
-            // (Hateno: ~17% of the frame); stages needing more than Metal's 16 samplers then use a sampler table
+            // (a large share of the frame); stages needing more than Metal's 16 samplers then use a sampler table
             // (Host::sampler_slots).
             let off: i32 = 0;
             let sync_submits = crate::settings::get().debug.mvk_sync_submits;
@@ -607,7 +607,7 @@ impl Dev {
                 depth_clip_control,
                 view_2d_of_3d,
                 validation,
-                // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding returned what lay
+                // MoltenVK's bounds checking does not cover uniform buffers (reads past a binding return what lies
                 // after it in memory): the shaders check them.
                 shader_host: sass2spv::accessor::Host {
                     depth_clip_control,
@@ -672,7 +672,7 @@ impl Dev {
     }
 
     /// A host-visible buffer the CPU reads back from, mapped: host-cached memory where the device has it (reads from
-    /// write-combined memory are uncached: copying render targets out of it took tens to hundreds of milliseconds).
+    /// write-combined memory are uncached: copying render targets out of it takes tens to hundreds of milliseconds).
     pub unsafe fn readback_buffer(&self, size: u64, usage: vk::BufferUsageFlags) -> Result<HostBuffer, String> {
         let buffer = self
             .device
@@ -828,7 +828,7 @@ impl Dev {
     }
 
     /// A checkpoint for each command or draw: only with --gpu-checkpoints-each (a marker before every one of thousands of
-    /// draws doubled TotK's GPU time).
+    /// draws doubles TotK's GPU time).
     pub unsafe fn checkpoint_each(&self, cb: vk::CommandBuffer, what: &'static str, args: [u64; 4]) {
         if self.checkpoints_each {
             self.checkpoint(cb, what, args);

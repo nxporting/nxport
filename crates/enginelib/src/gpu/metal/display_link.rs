@@ -81,8 +81,8 @@ pub(super) fn run(layer: &CAMetalLayer, fps: f32, max_hz: f32) {
     }
     let want = fps.min(max_hz).max(1.0);
     if RATE.swap(want.to_bits() as u64, Ordering::Relaxed) != want.to_bits() as u64 {
-        // The limit is the most the display may run the link at: allowed up to its maximum, a 120 Hz display ran a 90
-        // limit at 120 Hz now and then, and ~10 ms frames then landed one or two refreshes apart in no order.
+        // The limit is the most the display may run the link at: allowed up to its maximum, a 120 Hz display would run
+        // a 90 limit at 120 Hz now and then, and frames would land one or two refreshes apart in no order.
         link.setPreferredFrameRateRange(CAFrameRateRange { minimum: want.min(30.0), maximum: want, preferred: want });
         println!("[+] Display link: frame rate {want} (display up to {max_hz})");
     }

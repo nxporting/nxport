@@ -12,7 +12,7 @@
 // kernel (file reads into guest buffers) cannot fault, so guest::dirty_track::before_host_write waits here first.
 //
 // GPU writes are lost on read-only pages, so pages that GPU work in flight (or encoded later) writes are never
-// protected; the game reads such results a frame late, as before. Completion is published lock-free by a watcher
+// protected; the game reads such results a frame late. Completion is published lock-free by a watcher
 // thread (the handler must not take the gfx state lock). Pages held here are first released from dirty_track
 // (release_for_gpu), whose fault handler would otherwise unprotect them without waiting; the crash handler asks this
 // module first.
@@ -26,7 +26,7 @@ use std::sync::{Mutex, OnceLock};
 const PAGE: usize = 0x4000;
 const SLOTS: usize = 8192;
 
-/// Whether the guard runs: with --early-fence unless --early-fence-guard=0 (the old unguarded overlap, for A/B)
+/// Whether the guard runs: with --early-fence unless --early-fence-guard=0 (the unguarded overlap, for A/B)
 /// or the --early-fence-trap diagnostic (which protects pages its own way).
 pub(crate) fn enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -149,7 +149,7 @@ unsafe fn set_prot(addr: *mut libc::c_void, len: usize, prot: i32) -> i32 {
 /// Where the engine writes host address `a` (GPU results it writes in the GPU's place: counter reports, buffer
 /// clears): through a writable alias of the page while this guard runs (it may hold the page read-only), else `a`.
 /// On the Switch the GPU writes such memory regardless of the CPU's page protection; writing the page itself here
-/// faulted the engine (a report on a page that also holds zero-copy uniforms).
+/// would fault the engine (a report on a page that also holds zero-copy uniforms).
 pub(super) fn engine_write_ptr(a: usize) -> usize {
     let page = a & !(PAGE - 1);
     // Always the alias while the guard runs: `holds` answers for the active table only, while a page protected for the

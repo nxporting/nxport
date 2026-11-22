@@ -8,7 +8,7 @@ impl Gfx {
     /// memory read as R32F -> Depth32Float, R16 -> Depth16Unorm (layout::depth_twin), what the console compares. Filled
     /// from guest memory (shared storage, as a CPU-written texture is), again when the object's generation changes. None
     /// for other formats, or a colour texture the GPU wrote (guest memory does not hold its contents: the caller binds
-    /// a dummy, as before).
+    /// a dummy).
     /// Copies GPU-written colour textures into their depth twins (depth_twin) that newer writes left out of date, between
     /// passes: R16Unorm / R32Float hold the bytes of Depth16Unorm / Depth32Float, and Metal blits colour into depth only
     /// through a buffer.
@@ -19,7 +19,7 @@ impl Gfx {
             self.end_encoder_keep_clears(st);
         }
         // Queued on the issuer thread after the encoder work before it (as copies are, copy.rs): waiting for that work
-        // here (issuer.sync) stalled BotW's Presentation Thread, ~6% of it, inside the game's render lock.
+        // here (issuer.sync) would stall BotW's Presentation Thread inside the game's render lock.
         let mut copies = Vec::new();
         for (src, twin, key) in pending {
             let bpp = match src.pixelFormat() {
@@ -472,14 +472,6 @@ impl Gfx {
         )
     }
 
-    /// Render-target feedback. TotK's terrain decals (and ~20 other shaders, ~50 draws per frame) sample G-buffer targets
-    /// of the pass they draw into, at their own pixel, after an nvnCommandBufferBarrier(ORDER_FRAGMENTS |
-    /// INVALIDATE_TEXTURE): on the Switch they read what was rendered before the barrier. A Metal render pass keeps its
-    /// attachments in tile memory, so sampling one inside the pass reads stale memory; the decals' fades then came out as
-    /// solid dark patches that changed from frame to frame. For each such binding: once per barrier epoch, end the pass,
-    /// copy the attachment's root texture, and bind the copy (a matching view of it); the next pass loads the targets.
-    /// Draws after the first one in an epoch read the same copy, as the texture cache on the Switch would until the next
-    /// barrier. --no-fb-snapshot disables.
     /// The draw's fragment texture bindings that sample its own colour targets, as (Metal texture binding, colour
     /// index), when every texture it samples from its pass is such a binding that can be read from the tile instead
     /// (tile_feedback.rs: the same level, layer, format and channels, the viewport over the whole target). None when
@@ -523,6 +515,11 @@ impl Gfx {
         (!map.is_empty()).then_some(map)
     }
 
+    /// Render-target feedback. TotK's terrain decals (and other shaders) sample G-buffer targets of the pass they draw
+    /// into, at their own pixel, after an nvnCommandBufferBarrier(ORDER_FRAGMENTS | INVALIDATE_TEXTURE): on the Switch
+    /// they read what was rendered before the barrier. A Metal render pass keeps its attachments in tile memory, so a
+    /// pass open across the barrier would show such a draw memory from before the pass: once per barrier epoch the pass
+    /// ends, and the draw samples the attachment in place in the next one.
     pub(crate) unsafe fn feedback_snapshots(
         &self,
         st: &mut State,
@@ -533,8 +530,8 @@ impl Gfx {
         if resolved.iter().all(|r| r.2.is_none()) {
             return;
         }
-        // Every bound texture of every draw is checked: root ids come from a per-frame memo (a plain hash lookup; the
-        // associated-object lookup in root_id was ~2% of the Presentation Thread here).
+        // Every bound texture of every draw is checked: root ids come from a per-frame memo (a plain hash lookup, cheaper
+        // than root_id's associated-object lookup).
         let mut memo_root = |t: &Tex| -> u64 {
             let k = Retained::as_ptr(t) as *const () as usize;
             if let Some(&(_, r)) = st.root_memo.get(&k) {

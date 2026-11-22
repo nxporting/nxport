@@ -1,6 +1,6 @@
 //! Render-pass grouping from a look-ahead over a submit's commands. The executor ends a Metal render pass whenever the
 //! game binds other render targets; every pass end stores its attachments and the next pass on them loads them again
-//! (Hateno: ~890 MB per frame, ~2.5 ms of GPU time). A group is a run of render-target binds whose draws could share
+//! (hundreds of megabytes a frame). A group is a run of render-target binds whose draws could share
 //! one pass: same size and sample count, at most 8 colour attachments and one depth in their union, and no command in
 //! between that needs the earlier results stored (compute, copies, texture / buffer clears).
 

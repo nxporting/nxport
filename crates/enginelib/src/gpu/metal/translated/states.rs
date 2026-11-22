@@ -12,8 +12,8 @@ impl Gfx {
         id: i32,
         plain: bool,
     ) -> Option<Retained<ProtocolObject<dyn MTLSamplerState>>> {
-        // Per-thread memo by sampler id while no sampler was registered since (horizon::hle::samplers_gen): the pool lookup took
-        // a global lock per texture binding. --no-sampler-memo / --replay-ab-sampler (side B): off.
+        // Per-thread memo by sampler id while no sampler was registered since (nvn::api::samplers_gen): the pool lookup
+        // takes a global lock per texture binding. --no-sampler-memo / --replay-ab-sampler (side B): off.
         thread_local! {
             static MEMO: std::cell::RefCell<((u64, u32), HashMap<(i32, bool), Retained<ProtocolObject<dyn MTLSamplerState>>>)> =
                 std::cell::RefCell::new(((0, 0), HashMap::default()));
@@ -197,7 +197,7 @@ impl Gfx {
     }
 
     /// Samplers at index 16+ (beyond Metal's per-stage sampler table): an argument buffer of their GPU handles, laid out
-    /// as metal/msl_specialize.rs's `spvExtraSamplers` (one MTLResourceID per slot).
+    /// as nxport_metalshaderlib::msl_specialize's `spvExtraSamplers` (one MTLResourceID per slot).
     pub(crate) fn extra_sampler_buffer(
         &self,
         cx: &mut EncodeCtx,

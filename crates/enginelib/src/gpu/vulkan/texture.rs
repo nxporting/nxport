@@ -129,8 +129,8 @@ pub struct Textures {
     root_changes: Vec<(usize, usize)>,
     /// Every image by its guest address, with the end of its guest bytes (the scans below ask for it of every neighbour).
     /// Each image in every chunk of guest memory its bytes cover (CHUNK_SHIFT), with the end of its bytes. Overlap queries
-    /// visit the chunks of the range asked about only (a scan from the largest image's size before it visited every image
-    /// within that distance, for each texture sampled).
+    /// visit the chunks of the range asked about only (a scan from the largest image's size before it would visit every
+    /// image within that distance, for each texture sampled).
     by_chunk: rustc_hash::FxHashMap<usize, Vec<(Desc, usize)>>,
     /// While a submit is recorded: image creation and uploads go into a command buffer queued ahead of the submit's next
     /// chunk (Ctx::submit_chunk), instead of blocking one-time submits; with the staging memory to free once it ran.
@@ -141,14 +141,14 @@ pub struct Textures {
     /// `relayout_failed` if it could not be made (the CPU route is taken).
     relayout: Option<super::relayout::Relayout>,
     relayout_failed: bool,
-    /// Its working buffer in device memory (the shader's many small accesses to host memory over the bus made each
-    /// rebuild take milliseconds), with its size. Rebuilds of every submit use it in queue order, each behind a full
+    /// Its working buffer in device memory (the shader's many small accesses to host memory over the bus would make
+    /// each rebuild take milliseconds), with its size. Rebuilds of every submit use it in queue order, each behind a full
     /// barrier. Outgrown ones may still be in use by queued work: they are kept until `destroy` (their sizes double, so
     /// that is less than the current one).
     relayout_scratch: Option<(vk::Buffer, vk::DeviceMemory, u64)>,
     relayout_outgrown: Vec<(vk::Buffer, vk::DeviceMemory)>,
     /// Staging buffers of completed submits, for the next uploads (recycle_staging): making and freeing one for each
-    /// upload was a steady part of recording (the driver's allocation calls).
+    /// upload would be a steady part of recording (the driver's allocation calls).
     spare_staging: Vec<super::device::HostBuffer>,
     spare_bytes: u64,
 }
@@ -443,10 +443,9 @@ impl Textures {
             img.cpu_writable = (gen, d.storage > 0x10000 && crate::nvn::api::memory_pool_cpu_writable(d.storage));
         }
         if !img.cpu_writable.1 {
-            // Memory the CPU cannot reach is not rebuilt from the images written over it later (b1c163c did, for TotK's
-            // downsample chain without mods): in Super Mario Odyssey, whose post-processing targets share scratch memory
-            // every frame, that showed a frame of solid blue / white / cyan blocks every few hundred frames
-            // (llmtalk/TODO.md).
+            // Memory the CPU cannot reach is not rebuilt from the images written over it later: Super Mario Odyssey's
+            // post-processing targets share scratch memory every frame, and a rebuild there would show a frame of solid
+            // blocks every few hundred frames.
             if first {
                 self.flush_overlaps(dev, d);
                 self.upload(dev, d);
@@ -1700,9 +1699,8 @@ impl Textures {
             .address_mode_v(wrap(d.wrap_t))
             .address_mode_w(wrap(d.wrap_r))
             // No mip filter: the view's base level only, whatever the LOD clamp says (Metal's NotMipmapped; Ryujinx's
-            // SamplerHolder sets 0 / 0.25 likewise). Clamping to lod_min sampled another level: Super Mario Odyssey's
-            // mip chains (samplers clamped to the level being read, no mip filter) went wrong and the Cap Kingdom ground
-            // came out as blocks.
+            // SamplerHolder sets 0 / 0.25 likewise). Clamping to lod_min would sample another level (Super Mario
+            // Odyssey's mip chains clamp samplers to the level being read, with no mip filter).
             .min_lod(if mip.is_none() { 0.0 } else { d.lod_min })
             .max_lod(if mip.is_none() { 0.25 } else { d.lod_max })
             .mip_lod_bias(d.lod_bias)

@@ -688,8 +688,8 @@ pub(super) unsafe fn fault(addr: usize, pc: usize, lr: usize, guest: bool, write
         // The hold ended between the fault and here: retry; a second fault there on a page left inaccessible is
         // repaired (opened) rather than reported as a crash.
         if page != 0 && recently_opened(page) {
-            // A write to a page write tracking or the write guard keeps read-only is theirs: claiming it here
-            // reopened the page read-only on every retry and the writer faulted forever.
+            // A write to a page write tracking or the write guard keeps read-only is theirs: claiming it here would
+            // reopen the page read-only on every retry, and the writer would fault forever.
             if write && open_prot(page) & libc::PROT_WRITE == 0 {
                 return false;
             }
@@ -812,8 +812,8 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
 }
 
 /// Makes held page `p` inaccessible (signal-safe). A hold that ends between the caller's check and the mprotect has
-/// already opened the page in finish, and protecting it then left it inaccessible with no hold: the next guest read
-/// was reported as a crash (BotW's water lookup). finish frees the slot before it opens, so a second look after the
+/// already opened the page in finish, and protecting it then would leave it inaccessible with no hold (the next guest
+/// read a crash). finish frees the slot before it opens, so a second look after the
 /// mprotect sees every hold that ended before it.
 unsafe fn protect_held(p: usize) {
     libc::mprotect(p as *mut libc::c_void, PAGE, libc::PROT_NONE);
@@ -839,7 +839,7 @@ fn overlaps_held_pages(addr: usize, len: usize) -> bool {
 }
 
 /// Whether [addr, addr+len) overlaps the bytes of a held subresource (sharing a page with one is not enough: the
-/// texture refresh skipped CPU-written textures next to a held target, whose CPU writes then never reached Metal).
+/// texture refresh would skip CPU-written textures next to a held target, whose CPU writes would never reach Metal).
 pub(crate) fn overlaps_held(addr: usize, len: usize) -> bool {
     if LIVE.load(Ordering::Acquire) == 0
         || addr >= HI.load(Ordering::Relaxed)

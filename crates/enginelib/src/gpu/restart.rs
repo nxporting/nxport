@@ -25,8 +25,7 @@ fn contains_u16(v: &[u16], x: u16) -> bool {
 
 /// NVN primitive restart for an indexed draw whose indices contain the restart value (None: draw as is). Metal restarts
 /// only strips, only on 0xFFFF / 0xFFFFFFFF, and compares after adding the base vertex: TotK's strips use restart index
-/// 0xFFFF with base vertices in the thousands, so the restart became a real (garbage) vertex and triangles streaked
-/// across the screen whenever such a mesh was in view. The rewrite produces 32-bit indices with the base vertex added:
+/// 0xFFFF with base vertices in the thousands, so the restart would become a real (garbage) vertex. The rewrite produces 32-bit indices with the base vertex added:
 /// strips keep a 0xFFFFFFFF restart (Metal's own), lists drop the unfinished primitive at each restart (NVN/GL rules).
 pub unsafe fn restart_rewrite(
     mode: i32,

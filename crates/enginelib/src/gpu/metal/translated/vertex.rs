@@ -3,8 +3,7 @@
 use super::*;
 
 /// Largest of `n` indices at `addr` that is not the restart index (None if there is none). Written as fixed-width
-/// lanes with the restart value mapped to 0 so it vectorizes (this scan ran for most draws, ~8% of the encoding thread
-/// as an iterator with a filter).
+/// lanes with the restart value mapped to 0 so it vectorizes (this scan runs for most draws).
 pub(crate) unsafe fn max_index(index_type: i32, addr: u64, n: usize, restart: Option<u32>) -> Option<u64> {
     fn lanes<T: Copy + Ord + Default + PartialEq, const L: usize>(v: &[T], r: Option<T>) -> T {
         let mut acc = [T::default(); L];
@@ -338,8 +337,7 @@ pub(crate) fn derive_layout(vs: &CachedStage, attr_bits: &[Option<u32>], vertex_
     }
 
     // Metal needs 4-byte aligned vertex strides and attribute offsets; NVN does not (TotK's skinned shadow meshes use
-    // a 14-byte stride with attributes at offsets 6 and 10). Metal misfetched them: garbage bone indices, skinning
-    // matrices read out of bounds, vertices flung across the screen. Such per-vertex streams are repacked on the CPU
+    // a 14-byte stride with attributes at offsets 6 and 10), which Metal would misfetch. Such per-vertex streams are repacked on the CPU
     // into an aligned layout (each attribute copied to its own aligned slot) for the vertices the draw fetches.
     let mut streams_eff: smallvec::SmallVec<[u64; 16]> = vertex_streams.iter().copied().collect();
     let mut repack: Vec<(usize, u64, Vec<(usize, usize, usize)>)> = Vec::new(); // (stream, new stride, [(src off, dst off, len)])
