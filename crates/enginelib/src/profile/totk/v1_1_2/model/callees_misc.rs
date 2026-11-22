@@ -205,7 +205,7 @@ pub(super) unsafe fn footprint_pass(p: &mut Port, ctx: usize, w: usize, view: u3
         set_vec(p, prog, w, 6, [b0, s3, c0, s1b]);
         set_uniform(p, prog, w, 7, &s8.to_le_bytes());
     }
-    let tex0 = if use_e { p.m.r64(rec + 0xf0) } else { p.m.r64(p.m.r64(p.base + DEFAULT_TEXTURES) + 0x40) };
+    let tex0 = if use_e { p.m.r64(rec + 0xf0) } else { p.m.r64(p.m.r64(p.m.r64(p.base + DEFAULT_TEXTURES)) + 0x40) };
     program_texture(p, prog, w, 0, tex0)?;
     if use_d {
         let mut pair = [0u8; 8];

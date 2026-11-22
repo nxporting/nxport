@@ -43,7 +43,7 @@ pub(super) unsafe fn view_composite(p: &mut Port, this: usize, w: usize, view: u
     let tex = if flag {
         records.wrapping_add(v.wrapping_mul(0xb90)) + 0x5d0
     } else {
-        p.m.r64(p.m.r64(p.base + DEFAULT_TEXTURES) + 0x40)
+        p.m.r64(p.m.r64(p.m.r64(p.base + DEFAULT_TEXTURES)) + 0x40)
     };
     program_texture(p, prog, w, 5, tex)?;
     program_block(p, prog, w, 2, scene, 0)?;
