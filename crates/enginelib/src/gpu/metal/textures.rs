@@ -924,6 +924,13 @@ impl Gfx {
             ONCE.call_once(|| println!("[!] Gfx: uploading multisample texture data is not implemented (first seen: target {})", t.target));
             return;
         }
+        // Metal allows no CPU access to combined depth / stencil formats: such textures start empty (a blit with
+        // MTLBlitOptionDepthFromDepthStencil / StencilFromDepthStencil would carry guest bytes in; not implemented).
+        if matches!(tex.pixelFormat(), MTLPixelFormat::Depth32Float_Stencil8 | MTLPixelFormat::Stencil8) {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| println!("[!] Gfx: guest data of depth / stencil textures is not uploaded (first: {}x{} fmt {})", t.width, t.height, t.format));
+            return;
+        }
         if tt == MTLTextureType::Type3D {
             // Volume textures (noise for fire / smoke, colour grading LUTs): whole levels, tiled in depth too.
             let Some(info) = crate::nvn::layout::format_info(t.format) else {
