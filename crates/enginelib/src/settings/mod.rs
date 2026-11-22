@@ -239,6 +239,20 @@ group! {
 }
 
 group! {
+    /// Unity games: Unity's own quality settings, changed while the game runs (profile/unity.rs).
+    Unity "Unity games" [unity_texture_size, unity_frame_rate, unity_lod_bias] {
+        /// Texture size: 0 full size, 1 half, 2 a quarter, 3 an eighth of each texture's width and height (Unity's
+        /// texture mipmap limit; Silver Pines' own is a quarter); -1 the game's own. Full size takes up to 16x the
+        /// texture memory of a quarter
+        unity_texture_size: i32 = -1,
+        /// Frame rate: 30 or 60 (Unity's vSyncCount 2 or 1); 0 the game's own
+        unity_frame_rate: u32 = 0,
+        /// LOD bias in percent of the game's own: how far detailed versions of models are kept (100: the game's)
+        unity_lod_bias: u32 = 100,
+    }
+}
+
+group! {
     /// GPU execution.
     Graphics "Graphics" [async_pipelines, fetch_pipelines, share_pipelines] {
         /// Draw with the translated shader cache
@@ -260,10 +274,6 @@ group! {
         /// Render the game's scene at this multiple of its own resolution (1-4; games whose profile knows their scene
         /// size; applies at launch)
         resolution_scale: u32 = 1,
-        /// Texture size in games whose profile can change it while they run: 0 full size, 1 half, 2 a quarter, 3 an
-        /// eighth of each texture's width and height (Unity's texture mipmap limit); -1 the game's own (Silver Pines:
-        /// a quarter). Full size takes about 16x the texture memory of a quarter
-        texture_size: i32 = -1,
         /// Compile new shaders in the background instead of pausing the game. Smoother, but for now everything
         /// waiting on a compile is skipped until it is ready, which can cause visual glitches (missing objects or
         /// passes, flashes) the first time something is drawn.
@@ -681,6 +691,9 @@ pub struct Settings {
     #[patch(nesting)]
     #[patch(attribute(command(flatten)))]
     pub totk: TotkOptions,
+    #[patch(nesting)]
+    #[patch(attribute(command(flatten)))]
+    pub unity: Unity,
 }
 
 static CURRENT: OnceLock<Settings> = OnceLock::new();

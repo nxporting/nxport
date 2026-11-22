@@ -2,6 +2,7 @@
 // and matches the version via the main NSO module Build ID.
 
 pub mod botw;
+pub mod unity;
 pub mod silver_pines;
 pub mod frame_step;
 pub mod kirby;
@@ -114,7 +115,6 @@ const MAIN_THREAD_TICK: std::time::Duration = std::time::Duration::from_millis(1
 
 /// The active game's main_thread_tick, from a wait (horizon/os) on the game's main thread.
 pub fn main_thread_tick(_from: &'static str) {
-    let Some(f) = active().main_thread_tick else { return };
     if !crate::horizon::os::on_guest_main() {
         return;
     }
@@ -129,7 +129,10 @@ pub fn main_thread_tick(_from: &'static str) {
     }
     LAST.with(|l| l.set(Some(now)));
     IN_TICK.with(|t| t.set(true));
-    f();
+    if let Some(f) = active().main_thread_tick {
+        f();
+    }
+    unity::tick();
     IN_TICK.with(|t| t.set(false));
 }
 

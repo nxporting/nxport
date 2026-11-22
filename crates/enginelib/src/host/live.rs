@@ -24,8 +24,10 @@ struct Live {
     mouse_look: AtomicBool,
     exact_mouse_aim: AtomicBool,
     fps_in_title: AtomicBool,
-    /// settings graphics.texture_size, as i32 bits.
-    texture_size: AtomicU32,
+    /// settings unity.*: texture size (i32 bits), frame rate, LOD bias.
+    unity_texture_size: AtomicU32,
+    unity_frame_rate: AtomicU32,
+    unity_lod_bias: AtomicU32,
     /// settings::PresentMode as its index.
     present_mode: AtomicU32,
 }
@@ -46,7 +48,9 @@ static LIVE: LazyLock<Live> = LazyLock::new(|| {
         mouse_look: AtomicBool::new(s.input.mouse_look),
         exact_mouse_aim: AtomicBool::new(s.totk.enhancements.exact_mouse_aim),
         fps_in_title: AtomicBool::new(s.display.fps_in_title),
-        texture_size: AtomicU32::new(s.graphics.texture_size.clamp(-1, 3) as u32),
+        unity_texture_size: AtomicU32::new(s.unity.unity_texture_size.clamp(-1, 3) as u32),
+        unity_frame_rate: AtomicU32::new(s.unity.unity_frame_rate),
+        unity_lod_bias: AtomicU32::new(s.unity.unity_lod_bias.clamp(25, 400)),
         present_mode: AtomicU32::new(s.display.present_mode as u32),
     }
 });
@@ -224,16 +228,36 @@ pub fn set_real_time_speed(on: bool) {
 
 /// TotK: the game renders at the window's shape and follows it (profile/totk/aspect.rs); off, its own 16:9 picture,
 /// letterboxed.
-/// Texture size (graphics.texture_size: 0 full .. 3 an eighth, -1 the game's own) in games whose profile can change it
-/// while they run.
-pub fn texture_size() -> i32 {
-    LIVE.texture_size.load(Relaxed) as i32
+/// Unity games' settings as the menu has them now (settings unity.*).
+pub struct UnityLive {
+    pub texture_size: i32,
+    pub frame_rate: u32,
+    pub lod_bias_percent: u32,
 }
 
-pub fn set_texture_size(size: i32) {
+pub fn unity() -> UnityLive {
+    UnityLive {
+        texture_size: LIVE.unity_texture_size.load(Relaxed) as i32,
+        frame_rate: LIVE.unity_frame_rate.load(Relaxed),
+        lod_bias_percent: LIVE.unity_lod_bias.load(Relaxed),
+    }
+}
+
+pub fn set_unity_texture_size(size: i32) {
     let size = size.clamp(-1, 3);
-    LIVE.texture_size.store(size as u32, Relaxed);
-    crate::config::remember(|p| p.graphics.texture_size = Some(size));
+    LIVE.unity_texture_size.store(size as u32, Relaxed);
+    crate::config::remember(|p| p.unity.unity_texture_size = Some(size));
+}
+
+pub fn set_unity_frame_rate(fps: u32) {
+    LIVE.unity_frame_rate.store(fps, Relaxed);
+    crate::config::remember(|p| p.unity.unity_frame_rate = Some(fps));
+}
+
+pub fn set_unity_lod_bias(percent: u32) {
+    let percent = percent.clamp(25, 400);
+    LIVE.unity_lod_bias.store(percent, Relaxed);
+    crate::config::remember(|p| p.unity.unity_lod_bias = Some(percent));
 }
 
 pub fn dynamic_aspect() -> bool {

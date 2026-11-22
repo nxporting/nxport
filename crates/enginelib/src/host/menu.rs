@@ -59,6 +59,10 @@ pub mod id {
     pub const EXACT_MOUSE_AIM: u16 = 63;
     /// + 1 + the texture size (0 the game's own, 1.. full, half, quarter, eighth).
     pub const TEXTURE_SIZE: u16 = 480;
+    /// + the index in UNITY_FRAME_RATES.
+    pub const UNITY_FRAME_RATE: u16 = 490;
+    /// + the index in UNITY_LOD_BIASES.
+    pub const UNITY_LOD_BIAS: u16 = 495;
     /// + the mod's index in the Mods list.
     pub const MOD: u16 = 5000;
     pub const SAVE_FOLDER: u16 = 61;
@@ -162,11 +166,28 @@ pub fn bar() -> Vec<Entry> {
             ));
         }
         title.push(Separator);
-    } else if crate::profile::active().kind == crate::profile::GameKind::SilverPines {
+    }
+    if crate::profile::unity::detected() {
         title.extend([
             sub(
                 "Texture Size",
                 TEXTURE_SIZES.iter().map(|&(s, label)| choice(label.to_string(), id::TEXTURE_SIZE + (s + 1) as u16)).collect(),
+            ),
+            sub(
+                "Frame Rate",
+                UNITY_FRAME_RATES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &f)| choice(if f == 0 { "Game's own".to_string() } else { format!("{f} fps") }, id::UNITY_FRAME_RATE + i as u16))
+                    .collect(),
+            ),
+            sub(
+                "Level of Detail",
+                UNITY_LOD_BIASES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &p)| choice(if p == 100 { "Game's own".to_string() } else { format!("{p}%") }, id::UNITY_LOD_BIAS + i as u16))
+                    .collect(),
             ),
             Separator,
         ]);
@@ -384,7 +405,12 @@ pub fn anisotropy_label(samples: u32) -> String {
 }
 
 /// A field of view choice's label.
-/// The Texture Size menu's choices: (graphics.texture_size, label).
+/// The Unity Frame Rate menu's choices (unity.unity_frame_rate; 0: the game's own).
+const UNITY_FRAME_RATES: [u32; 3] = [0, 30, 60];
+/// The Unity Level of Detail menu's choices (unity.unity_lod_bias, percent of the game's own).
+const UNITY_LOD_BIASES: [u32; 4] = [100, 150, 200, 300];
+
+/// The Texture Size menu's choices: (unity.unity_texture_size, label).
 const TEXTURE_SIZES: [(i32, &str); 5] =
     [(-1, "Game's own"), (0, "Full"), (1, "Half"), (2, "Quarter"), (3, "Eighth")];
 
@@ -454,7 +480,13 @@ pub fn checked(cmd: u16) -> Option<bool> {
         id::TOUCH => live::touch(),
         id::REAL_TIME => live::real_time_speed(),
         id::DYNAMIC_ASPECT => live::dynamic_aspect(),
-        c if (id::TEXTURE_SIZE..id::TEXTURE_SIZE + 5).contains(&c) => (c - id::TEXTURE_SIZE) as i32 - 1 == live::texture_size(),
+        c if (id::TEXTURE_SIZE..id::TEXTURE_SIZE + 5).contains(&c) => (c - id::TEXTURE_SIZE) as i32 - 1 == live::unity().texture_size,
+        c if (id::UNITY_FRAME_RATE..id::UNITY_FRAME_RATE + 3).contains(&c) => {
+            UNITY_FRAME_RATES[(c - id::UNITY_FRAME_RATE) as usize] == live::unity().frame_rate
+        }
+        c if (id::UNITY_LOD_BIAS..id::UNITY_LOD_BIAS + 4).contains(&c) => {
+            UNITY_LOD_BIASES[(c - id::UNITY_LOD_BIAS) as usize] == live::unity().lod_bias_percent
+        }
         c if (id::FIELD_OF_VIEW..id::FIELD_OF_VIEW + 151).contains(&c) => {
             (c - id::FIELD_OF_VIEW) as u32 == crate::profile::botw::aspect::field_of_view()
         }
@@ -596,7 +628,13 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
         id::TOUCH => live::set_touch(!live::touch()),
         id::REAL_TIME => live::set_real_time_speed(!live::real_time_speed()),
         id::DYNAMIC_ASPECT => live::set_dynamic_aspect(!live::dynamic_aspect()),
-        c if (id::TEXTURE_SIZE..id::TEXTURE_SIZE + 5).contains(&c) => live::set_texture_size((c - id::TEXTURE_SIZE) as i32 - 1),
+        c if (id::TEXTURE_SIZE..id::TEXTURE_SIZE + 5).contains(&c) => live::set_unity_texture_size((c - id::TEXTURE_SIZE) as i32 - 1),
+        c if (id::UNITY_FRAME_RATE..id::UNITY_FRAME_RATE + 3).contains(&c) => {
+            live::set_unity_frame_rate(UNITY_FRAME_RATES[(c - id::UNITY_FRAME_RATE) as usize])
+        }
+        c if (id::UNITY_LOD_BIAS..id::UNITY_LOD_BIAS + 4).contains(&c) => {
+            live::set_unity_lod_bias(UNITY_LOD_BIASES[(c - id::UNITY_LOD_BIAS) as usize])
+        }
         c if (id::FIELD_OF_VIEW..id::FIELD_OF_VIEW + 151).contains(&c) => {
             let p = (c - id::FIELD_OF_VIEW) as u32;
             crate::profile::botw::aspect::set_field_of_view(p);
@@ -650,6 +688,8 @@ mod tests {
             ("cheats", id::CHEAT, id::CHEAT + CHEATS),
             ("mods", id::MOD, id::MOD + MODS),
             ("texture size", id::TEXTURE_SIZE, id::TEXTURE_SIZE + 5),
+            ("unity frame rate", id::UNITY_FRAME_RATE, id::UNITY_FRAME_RATE + 3),
+            ("unity lod bias", id::UNITY_LOD_BIAS, id::UNITY_LOD_BIAS + 4),
             ("field of view", id::FIELD_OF_VIEW, id::FIELD_OF_VIEW + 151),
         ];
         for (i, a) in ranges.iter().enumerate() {

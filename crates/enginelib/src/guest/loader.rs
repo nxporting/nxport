@@ -73,6 +73,10 @@ static MOD_GAP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize:
 static MOD_GAP_END: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// Size of main's .text (read by the crash handler, which runs in signal context).
 static MAIN_TEXT_SIZE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Size of main's .text (0 before main is loaded).
+pub fn main_text_size() -> usize {
+    MAIN_TEXT_SIZE.load(std::sync::atomic::Ordering::Relaxed)
+}
 pub fn mod_gap() -> (usize, usize) {
     (
         MOD_GAP.load(std::sync::atomic::Ordering::Relaxed),

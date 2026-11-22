@@ -1102,6 +1102,8 @@ fn load() -> Result<Loaded, Box<dyn std::error::Error>> {
             }
         }
     }
+    // A Unity game's internal-call lookup, found in main's code now rather than on a frame (profile/unity.rs).
+    let _ = profile::unity::detected();
 
     #[cfg(nx_native)]
     // Debug tracer: --trace=0x2b2120,0xcb228c logs registers each time those guest instructions execute (see
