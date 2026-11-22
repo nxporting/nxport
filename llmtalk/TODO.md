@@ -197,6 +197,9 @@ and update this file when you finish or drop it.
      counts as spare time. Windows: needs pacing_shown fed (15 / 16 above) before any of it applies there.
   44. (shared nvn/api/window.rs divisor) raises of the refreshes per frame need 30 late frames of 120 (was 3 of 10):
      Apple GPUs clock down when idle and the old rule turned a clock dip into a permanent 30 fps. Same Windows caveat.
+  45. d48a1bd (shared horizon/sdk/base/nvn): eleven NVN proc names c106af0 dropped are back, among them
+     nvnWindowSetPresentInterval (BotW 1.5.0 ran up to 2x fast: its interval 2 never arrived). Windows: same tables,
+     nothing to do but check BotW 1.5.0 holds 30 there.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
