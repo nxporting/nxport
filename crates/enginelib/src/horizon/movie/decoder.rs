@@ -335,8 +335,34 @@ pub(crate) fn distribute(d: &mut Decoder) {
         any = true;
     }
     if any {
-        signal(d, 1);
+        // A video frame not due yet is announced when it is (d_acquire_output holds it back until then): announced
+        // now, the game's player asks, is told none is available, and asks again at once (Silver Pines' video job spun
+        // a million times per frame under a lock its main thread waits for).
+        match due_at(d) {
+            Some(at) if at > std::time::Instant::now() => signal_output_at(d, at),
+            _ => signal(d, 1),
+        }
     }
+}
+
+/// Whether video frames are held back until their presentation time (graphics.movie_frame_pacing).
+fn frame_pacing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| crate::settings::get().graphics.movie_frame_pacing)
+}
+
+/// When the first ready video frame is due on the decoder's clock (None: no clock yet, or not video).
+fn due_at(d: &Decoder) -> Option<std::time::Instant> {
+    if !d.is_video || !frame_pacing() {
+        return None;
+    }
+    let slot = *d.ready.front()?;
+    let pts = d.outputs[slot].as_ref()?.pts;
+    let (t0, p0) = d.clock?;
+    if pts < p0 || pts - p0 > 1_000_000 {
+        return None; // before the clock's start, or a seek: d_acquire_output restarts the clock from it
+    }
+    Some(t0 + std::time::Duration::from_micros((pts - p0) as u64))
 }
 /// A decoded frame or audio packet as the decoder handed it out: its bytes, presentation time, and picture size.
 pub(crate) struct Received {
@@ -531,14 +557,15 @@ pub(crate) unsafe extern "C" fn d_acquire_output(
     let Some(d) = dec(this) else {
         return NULL_DECODER;
     };
-    // A video frame is handed out once its presentation time has come, counted from the first one. The game's player
+    // With movie_frame_pacing a video frame is handed out once its presentation time has come, counted from the first
+    // one (otherwise as decoded, as on the console). The game's player
     // shows the newest frame it has each time it draws (TotK takes one per draw: frames handed out as decoded would
     // play at the draw rate, twice as fast at 60 fps); the console draws them at the video's 30. Without a new frame the
     // player keeps showing the last one. A frame that comes out a whole frame interval (frame_us) or more after its time
     // (the decoder fell behind, the game stalled, or it took the first frame long before playing: TotK decodes a
     // movie's first frame while its event loads) restarts the clock from it: the console shows the next frame one draw
     // later and never catches up, and handing out every late frame would play them at the draw rate.
-    if d.is_video {
+    if d.is_video && frame_pacing() {
         if let Some(&slot) = d.ready.front() {
             let pts = d.outputs[slot].as_ref().map_or(0, |f| f.pts);
             let now = std::time::Instant::now();

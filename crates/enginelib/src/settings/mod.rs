@@ -244,6 +244,10 @@ group! {
         dynamic_shaders: bool = true,
         /// Decode movies on the video hardware where the system has a decoder for them (VP9 on Apple GPUs)
         hw_video: bool = true,
+        /// Movie frames go to the game at their presentation time instead of as decoded: for games that take one frame
+        /// per draw and draw faster than the movie (Tears of the Kingdom with its frame rate unlocked). Others time the
+        /// frames themselves, as on the console (Unity polls for the next frame while its main thread waits)
+        movie_frame_pacing: bool = false,
         /// Anisotropic filtering: samples for mip-mapped textures seen at an angle, such as the ground and paths
         /// (1: the game's own; 2, 4, 8 or 16)
         anisotropy: u32 = 1,

@@ -14,6 +14,13 @@ pub use options::{Options, OptionsPatch};
 
 use super::{GameKind, GameProfile, TOTK_TITLE_ID};
 
+fn options() -> crate::settings::SettingsPatch {
+    let mut s = crate::settings::SettingsPatch::default();
+    // TotK's movie player shows one movie frame per draw: at the unlocked frame rate movies would play too fast.
+    s.graphics.movie_frame_pacing = Some(true);
+    s
+}
+
 pub static PROFILE: GameProfile = GameProfile {
     kind: GameKind::TotK,
     name: "The Legend of Zelda: Tears of the Kingdom",
@@ -23,7 +30,7 @@ pub static PROFILE: GameProfile = GameProfile {
     compute_has_preamble: true,
     versions: &[v1_0_0::PROFILE, v1_1_2::PROFILE],
     shader_dirs: &["Shader", "Effect", "UI", "Lib"],
-    options: None,
+    options: Some(options),
     platform_options: None,
     presets: &[
         ("Mac", include_str!("presets/Mac.toml")),
