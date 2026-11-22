@@ -710,6 +710,37 @@ unsafe extern "C" fn handle_signal(
                     );
                 }
             }
+            // A fault in engine code: the engine frames that led to it (frame records on this thread's stack only).
+            {
+                let (mut info, mut anchor): (libc::Dl_info, libc::Dl_info) = (std::mem::zeroed(), std::mem::zeroed());
+                let image = if libc::dladdr(pc as *const libc::c_void, &mut info) != 0 { info.dli_fbase as usize } else { 0 };
+                let own = libc::dladdr(eprint_chain_anchor as *const libc::c_void, &mut anchor) != 0
+                    && anchor.dli_fbase as usize == image;
+                if image != 0 && own {
+                    let mut f = fp;
+                    for k in 0..16 {
+                        if f & 7 != 0 || f < sp || f > sp + (16 << 20) {
+                            break;
+                        }
+                        let ret = *((f + 8) as *const usize);
+                        let mut ri: libc::Dl_info = std::mem::zeroed();
+                        if libc::dladdr(ret as *const libc::c_void, &mut ri) == 0 || ri.dli_fbase as usize != image {
+                            break;
+                        }
+                        let sym = if ri.dli_sname.is_null() {
+                            "?".into()
+                        } else {
+                            std::ffi::CStr::from_ptr(ri.dli_sname).to_string_lossy().into_owned()
+                        };
+                        eprintln!("    engine frame {:2}     : {} + {:#x} (image + {:#x})", k, sym, ret.wrapping_sub(ri.dli_saddr as usize), ret - image);
+                        let next = *(f as *const usize);
+                        if next <= f {
+                            break;
+                        }
+                        f = next;
+                    }
+                }
+            }
             eprintln!("    Faulting Memory Addr : 0x{:016X}", fault_addr);
             match vm_region(fault_addr) {
                 Some((lo, hi, prot)) if lo <= fault_addr => {
@@ -912,3 +943,7 @@ unsafe extern "C" fn handle_signal(
 pub(crate) fn readable(addr: usize, len: usize) -> bool {
     unsafe { vm_region(addr) }.is_some_and(|(start, end, prot)| start <= addr && addr + len <= end && prot & 1 != 0)
 }
+
+/// An address in the engine's own image (crash reports walk engine frames only when the fault is in this image).
+#[inline(never)]
+extern "C" fn eprint_chain_anchor() {}
