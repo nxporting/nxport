@@ -709,9 +709,32 @@ pub fn resolve(layers: impl IntoIterator<Item = SettingsPatch>) -> Settings {
 }
 
 /// A preset file: one layer, in TOML (`[graphics]` / `async-wait-us = 4000`, ...).
+/// A setting this build does not know (renamed or removed since the file was written) is left out with a warning: the
+/// file's other settings still apply.
 pub fn load_preset(path: &std::path::Path) -> Result<SettingsPatch, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let mut v: toml::Table = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    loop {
+        match SettingsPatch::deserialize(toml::Value::Table(v.clone())) {
+            Ok(p) => return Ok(p),
+            Err(e) => {
+                let msg = e.to_string();
+                let unknown = msg.split("unknown field `").nth(1).and_then(|s| s.split('`').next()).map(str::to_string);
+                let Some(key) = unknown.filter(|k| remove_key(&mut v, k)) else {
+                    return Err(format!("{}: {msg}", path.display()));
+                };
+                println!("[!] {}: unknown setting {key} left out", path.display());
+            }
+        }
+    }
+}
+
+/// Removes `key` from the first table of `t` (or `t` itself) that has it.
+fn remove_key(t: &mut toml::Table, key: &str) -> bool {
+    if t.remove(key).is_some() {
+        return true;
+    }
+    t.iter_mut().any(|(_, v)| v.as_table_mut().is_some_and(|sub| remove_key(sub, key)))
 }
 
 pub fn save_preset(path: &std::path::Path, p: &SettingsPatch) -> Result<(), String> {
@@ -797,4 +820,16 @@ fn with_defaults_in_help(mut cmd: clap::Command) -> clap::Command {
         }
     }
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unknown_settings_are_left_out() {
+        let path = std::env::temp_dir().join(format!("nxport-settings-{}.toml", std::process::id()));
+        std::fs::write(&path, "[display]\nno-vsync = true\n\n[graphics]\nno-such-setting = true\n").unwrap();
+        let p = super::load_preset(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(p.display.no_vsync, Some(true));
+    }
 }
