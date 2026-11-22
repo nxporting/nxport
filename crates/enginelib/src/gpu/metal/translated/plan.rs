@@ -232,6 +232,9 @@ impl Gfx {
             3 => MTLPrimitiveType::LineStrip,
             4 => MTLPrimitiveType::Triangle,
             5 => MTLPrimitiveType::TriangleStrip,
+            // Drawn as lists through generated indices (crate::gpu::restart::emulated_indices).
+            2 => MTLPrimitiveType::Line,
+            6..=9 => MTLPrimitiveType::Triangle,
             _ => {
                 if !st.warned_prims.contains(&mode) {
                     st.warned_prims.push(mode);

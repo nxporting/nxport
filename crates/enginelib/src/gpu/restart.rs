@@ -108,6 +108,93 @@ pub unsafe fn restart_rewrite(
     Some(out)
 }
 
+/// Whether NVN primitive mode `mode` has no Metal equivalent and is drawn as a list (emulated_indices): line loops,
+/// triangle fans, quads, quad strips and polygons.
+pub fn emulated_mode(mode: i32) -> bool {
+    matches!(mode, 2 | 6 | 7 | 8 | 9)
+}
+
+/// The list (lines for a line loop, else triangles) that draws `vertices` in NVN primitive mode `mode`, restarting at each
+/// `restart` value (GL rules: the unfinished primitive is dropped).
+pub fn emulated_indices(mode: i32, vertices: impl Iterator<Item = u32>, restart: Option<u32>) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut seg: Vec<u32> = Vec::new();
+    let mut flush = |seg: &mut Vec<u32>, out: &mut Vec<u32>| {
+        let s = &seg[..];
+        match mode {
+            2 if s.len() >= 2 => {
+                for i in 0..s.len() {
+                    out.extend_from_slice(&[s[i], s[(i + 1) % s.len()]]);
+                }
+            }
+            6 | 9 => {
+                for i in 1..s.len().saturating_sub(1) {
+                    out.extend_from_slice(&[s[0], s[i], s[i + 1]]);
+                }
+            }
+            7 => {
+                for q in s.chunks_exact(4) {
+                    out.extend_from_slice(&[q[0], q[1], q[2], q[0], q[2], q[3]]);
+                }
+            }
+            8 => {
+                for i in (0..s.len().saturating_sub(3)).step_by(2) {
+                    let (a, b, c, d) = (s[i], s[i + 1], s[i + 3], s[i + 2]);
+                    out.extend_from_slice(&[a, b, c, a, c, d]);
+                }
+            }
+            _ => {}
+        }
+        seg.clear();
+    };
+    for v in vertices {
+        if Some(v) == restart {
+            flush(&mut seg, &mut out);
+        } else {
+            seg.push(v);
+        }
+    }
+    flush(&mut seg, &mut out);
+    out
+}
+
+/// emulated_indices of an indexed draw's guest indices, with the base vertex added (32-bit output).
+pub unsafe fn emulated_elements(
+    mode: i32,
+    index_type: i32,
+    addr: u64,
+    count: i32,
+    restart: Option<u32>,
+    base_vertex: i32,
+) -> Vec<u32> {
+    if addr < 0x10000 || count <= 0 {
+        return Vec::new();
+    }
+    let n = count as usize;
+    let values: Vec<u32> = match index_type {
+        0 => std::slice::from_raw_parts(addr as *const u8, n).iter().map(|&x| x as u32).collect(),
+        1 => std::slice::from_raw_parts(addr as *const u16, n).iter().map(|&x| x as u32).collect(),
+        2 => std::slice::from_raw_parts(addr as *const u32, n).to_vec(),
+        _ => return Vec::new(),
+    };
+    let rebase = |v: u32| (v as i64 + base_vertex as i64).clamp(0, u32::MAX as i64 - 1) as u32;
+    emulated_indices(mode, values.into_iter(), restart).into_iter().map(rebase).collect()
+}
+
+#[cfg(test)]
+mod emulated_tests {
+    use super::emulated_indices as e;
+    #[test]
+    fn modes() {
+        assert_eq!(e(7, 0..8, None), vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+        assert_eq!(e(6, 0..5, None), vec![0, 1, 2, 0, 2, 3, 0, 3, 4]);
+        assert_eq!(e(8, 0..6, None), vec![0, 1, 3, 0, 3, 2, 2, 3, 5, 2, 5, 4]);
+        assert_eq!(e(2, 0..3, None), vec![0, 1, 1, 2, 2, 0]);
+        assert_eq!(e(6, [0, 1, 2, 9, 3, 4, 5, 6].into_iter(), Some(9)), vec![0, 1, 2, 3, 4, 5, 3, 5, 6]);
+        assert_eq!(e(7, 0..6, None), vec![0, 1, 2, 0, 2, 3]);
+    }
+}
+
 #[cfg(test)]
 mod contains_u16_tests {
     #[test]

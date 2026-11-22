@@ -1645,102 +1645,115 @@ impl Gfx {
         if details {
             enc.push(Op::PushGroup(pair.clone()));
         }
-        match call {
-            DrawKind::Arrays {
-                first,
-                count,
-                base_instance,
-                instances,
-            } => {
-                if count > 0 && instances > 0 {
-                    enc.push(Op::Draw {
+        // Modes Metal lacks (line loops, fans, quads, quad strips, polygons) draw as lists through generated indices.
+        if crate::gpu::restart::emulated_mode(mode) {
+            let (v, instances, base_instance) = match call {
+                DrawKind::Arrays { first, count, base_instance, instances } => (
+                    crate::gpu::restart::emulated_indices(mode, first.max(0) as u32..(first.max(0) + count.max(0)) as u32, None),
+                    instances,
+                    base_instance,
+                ),
+                DrawKind::Elements { index_type, count, index_addr, base_vertex, base_instance, instances } => (
+                    crate::gpu::restart::emulated_elements(mode, index_type, index_addr, count, p.prim_restart, base_vertex),
+                    instances,
+                    base_instance,
+                ),
+            };
+            if !v.is_empty() && instances > 0 {
+                let bytes: &[u8] = std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4);
+                if let Some((buf, off)) = env.cx.arena.alloc(&self.device, bytes) {
+                    enc.push(Op::DrawIndexed {
                         prim,
-                        start: first.max(0) as usize,
-                        count: count as usize,
+                        count: v.len(),
+                        ty: MTLIndexType::UInt32,
+                        buf,
+                        off,
                         instances: instances as usize,
+                        base_vertex: 0,
                         base_instance: base_instance.max(0) as usize,
                     });
                 }
             }
-            DrawKind::Elements {
-                index_type,
-                count,
-                index_addr,
-                base_vertex,
-                base_instance,
-                instances,
-            } => {
-                // Primitive restart: rewritten to 32-bit indices with the base vertex folded in (see restart_rewrite).
-                // Index copies (restart rewrite, u8 widening, misaligned ranges) are reused by the next draw with the same
-                // inputs (one memo entry, this submit: guest index data does not change between its draws): consecutive
-                // draws of a mesh share one copy, which also lets their draws batch (metal/batch.rs).
-                let mkey = |kind: u8| {
-                    (
-                        mode,
-                        index_type,
-                        index_addr,
-                        count,
-                        p.prim_restart,
-                        base_vertex,
-                        kind,
-                    )
-                };
-                let memo_hit = |env: &EncodeEnv,
-                                kind: u8|
-                 -> Option<(
-                    Retained<ProtocolObject<dyn MTLBuffer>>,
-                    usize,
-                    usize,
-                )> {
-                    match &env.cx.index_memo {
-                        Some((k, b, o, n)) if *k == mkey(kind) => {
-                            Some((b.clone(), *o, *n))
-                        }
-                        _ => None,
-                    }
-                };
-                let restart_hit = if p.prim_restart.is_some() {
-                    memo_hit(env, 0)
-                } else {
-                    None
-                };
-                let rewritten = if restart_hit.is_some() {
-                    None
-                } else {
-                    p.prim_restart.and_then(|r| {
-                        crate::gpu::restart::restart_rewrite(mode, index_type, index_addr, count, r, base_vertex)
-                    })
-                };
-                if super::tracing_frame() {
-                    println!(
-                        "[ftrace]   ^ restart {:x?} mode {} rewritten {:?}",
-                        p.prim_restart,
-                        mode,
-                        rewritten.as_ref().map(|v| v.len())
-                    );
-                }
-                if let Some((buf, off, n)) = restart_hit {
-                    if n > 0 && instances > 0 {
-                        enc.push(Op::DrawIndexed {
+        } else {
+            match call {
+                DrawKind::Arrays {
+                    first,
+                    count,
+                    base_instance,
+                    instances,
+                } => {
+                    if count > 0 && instances > 0 {
+                        enc.push(Op::Draw {
                             prim,
-                            count: n,
-                            ty: MTLIndexType::UInt32,
-                            buf,
-                            off,
+                            start: first.max(0) as usize,
+                            count: count as usize,
                             instances: instances as usize,
-                            base_vertex: 0,
                             base_instance: base_instance.max(0) as usize,
                         });
                     }
-                } else if let Some(v) = rewritten {
-                    if !v.is_empty() && instances > 0 {
-                        let bytes: &[u8] =
-                            std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4);
-                        if let Some((buf, off)) = env.cx.arena.alloc(&self.device, bytes) {
-                            env.cx.index_memo = Some((mkey(0), buf.clone(), off, v.len()));
+                }
+                DrawKind::Elements {
+                    index_type,
+                    count,
+                    index_addr,
+                    base_vertex,
+                    base_instance,
+                    instances,
+                } => {
+                    // Primitive restart: rewritten to 32-bit indices with the base vertex folded in (see restart_rewrite).
+                    // Index copies (restart rewrite, u8 widening, misaligned ranges) are reused by the next draw with the same
+                    // inputs (one memo entry, this submit: guest index data does not change between its draws): consecutive
+                    // draws of a mesh share one copy, which also lets their draws batch (metal/batch.rs).
+                    let mkey = |kind: u8| {
+                        (
+                            mode,
+                            index_type,
+                            index_addr,
+                            count,
+                            p.prim_restart,
+                            base_vertex,
+                            kind,
+                        )
+                    };
+                    let memo_hit = |env: &EncodeEnv,
+                                    kind: u8|
+                     -> Option<(
+                        Retained<ProtocolObject<dyn MTLBuffer>>,
+                        usize,
+                        usize,
+                    )> {
+                        match &env.cx.index_memo {
+                            Some((k, b, o, n)) if *k == mkey(kind) => {
+                                Some((b.clone(), *o, *n))
+                            }
+                            _ => None,
+                        }
+                    };
+                    let restart_hit = if p.prim_restart.is_some() {
+                        memo_hit(env, 0)
+                    } else {
+                        None
+                    };
+                    let rewritten = if restart_hit.is_some() {
+                        None
+                    } else {
+                        p.prim_restart.and_then(|r| {
+                            crate::gpu::restart::restart_rewrite(mode, index_type, index_addr, count, r, base_vertex)
+                        })
+                    };
+                    if super::tracing_frame() {
+                        println!(
+                            "[ftrace]   ^ restart {:x?} mode {} rewritten {:?}",
+                            p.prim_restart,
+                            mode,
+                            rewritten.as_ref().map(|v| v.len())
+                        );
+                    }
+                    if let Some((buf, off, n)) = restart_hit {
+                        if n > 0 && instances > 0 {
                             enc.push(Op::DrawIndexed {
                                 prim,
-                                count: v.len(),
+                                count: n,
                                 ty: MTLIndexType::UInt32,
                                 buf,
                                 off,
@@ -1749,111 +1762,129 @@ impl Gfx {
                                 base_instance: base_instance.max(0) as usize,
                             });
                         }
-                    }
-                } else if count > 0 && instances > 0 {
-                    let (ty, bytes) = match index_type {
-                        1 => (MTLIndexType::UInt16, 2usize),
-                        2 => (MTLIndexType::UInt32, 4usize),
-                        _ => (MTLIndexType::UInt16, 2usize), // u8 indices are widened below
-                    };
-                    let ib = if let Some((b, o, _)) = memo_hit(env, 1) {
-                        Some((b, o))
-                    } else if index_type == 0 {
-                        let held = super::rt_guard::guest_copy::<u8>(index_addr as usize, count as usize);
-                        let u8s = held.as_deref().unwrap_or_else(|| {
-                            std::slice::from_raw_parts(index_addr as *const u8, count as usize)
-                        });
-                        let wide: Vec<u8> =
-                            u8s.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect();
-                        let x = env.cx.arena.alloc(&self.device, &wide);
-                        if let Some((b, o)) = &x {
-                            env.cx.index_memo = Some((mkey(1), b.clone(), *o, count as usize));
+                    } else if let Some(v) = rewritten {
+                        if !v.is_empty() && instances > 0 {
+                            let bytes: &[u8] =
+                                std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4);
+                            if let Some((buf, off)) = env.cx.arena.alloc(&self.device, bytes) {
+                                env.cx.index_memo = Some((mkey(0), buf.clone(), off, v.len()));
+                                enc.push(Op::DrawIndexed {
+                                    prim,
+                                    count: v.len(),
+                                    ty: MTLIndexType::UInt32,
+                                    buf,
+                                    off,
+                                    instances: instances as usize,
+                                    base_vertex: 0,
+                                    base_instance: base_instance.max(0) as usize,
+                                });
+                            }
                         }
-                        x
-                    } else {
-                        // Metal needs a 4-byte aligned index buffer offset; NVN allows any 2-byte aligned address for
-                        // 16-bit indices (TotK draws sub-ranges starting mid-buffer). Misaligned offsets would fetch garbage
-                        // indices. Copy those into the (aligned) arena instead.
-                        match self.guest_buffer_ro(
-                            &mut *env.sh,
-                            &mut *env.cx,
-                            index_addr,
-                            count as usize * bytes,
-                        ) {
-                            Some((_, off)) if off % 4 != 0 => {
-                                let x = env.cx.arena.alloc(
-                                    &self.device,
-                                    std::slice::from_raw_parts(
-                                        index_addr as *const u8,
-                                        count as usize * bytes,
-                                    ),
-                                );
-                                if let Some((b, o)) = &x {
-                                    env.cx.index_memo =
-                                        Some((mkey(1), b.clone(), *o, count as usize));
+                    } else if count > 0 && instances > 0 {
+                        let (ty, bytes) = match index_type {
+                            1 => (MTLIndexType::UInt16, 2usize),
+                            2 => (MTLIndexType::UInt32, 4usize),
+                            _ => (MTLIndexType::UInt16, 2usize), // u8 indices are widened below
+                        };
+                        let ib = if let Some((b, o, _)) = memo_hit(env, 1) {
+                            Some((b, o))
+                        } else if index_type == 0 {
+                            let held = super::rt_guard::guest_copy::<u8>(index_addr as usize, count as usize);
+                            let u8s = held.as_deref().unwrap_or_else(|| {
+                                std::slice::from_raw_parts(index_addr as *const u8, count as usize)
+                            });
+                            let wide: Vec<u8> =
+                                u8s.iter().flat_map(|&i| (i as u16).to_le_bytes()).collect();
+                            let x = env.cx.arena.alloc(&self.device, &wide);
+                            if let Some((b, o)) = &x {
+                                env.cx.index_memo = Some((mkey(1), b.clone(), *o, count as usize));
+                            }
+                            x
+                        } else {
+                            // Metal needs a 4-byte aligned index buffer offset; NVN allows any 2-byte aligned address for
+                            // 16-bit indices (TotK draws sub-ranges starting mid-buffer). Misaligned offsets would fetch garbage
+                            // indices. Copy those into the (aligned) arena instead.
+                            match self.guest_buffer_ro(
+                                &mut *env.sh,
+                                &mut *env.cx,
+                                index_addr,
+                                count as usize * bytes,
+                            ) {
+                                Some((_, off)) if off % 4 != 0 => {
+                                    let x = env.cx.arena.alloc(
+                                        &self.device,
+                                        std::slice::from_raw_parts(
+                                            index_addr as *const u8,
+                                            count as usize * bytes,
+                                        ),
+                                    );
+                                    if let Some((b, o)) = &x {
+                                        env.cx.index_memo =
+                                            Some((mkey(1), b.clone(), *o, count as usize));
+                                    }
+                                    x
                                 }
-                                x
-                            }
-                            other => other,
-                        }
-                    };
-                    if super::tracing_frame() && index_addr > 0x10000 {
-                        let (lo, hi) = match index_type {
-                            2 => {
-                                let v = std::slice::from_raw_parts(
-                                    index_addr as *const u32,
-                                    count as usize,
-                                );
-                                (
-                                    v.iter().min().copied().unwrap_or(0) as i64,
-                                    v.iter().max().copied().unwrap_or(0) as i64,
-                                )
-                            }
-                            1 => {
-                                let v = std::slice::from_raw_parts(
-                                    index_addr as *const u16,
-                                    count as usize,
-                                );
-                                (
-                                    v.iter().min().copied().unwrap_or(0) as i64,
-                                    v.iter().max().copied().unwrap_or(0) as i64,
-                                )
-                            }
-                            _ => {
-                                let v = std::slice::from_raw_parts(
-                                    index_addr as *const u8,
-                                    count as usize,
-                                );
-                                (
-                                    v.iter().min().copied().unwrap_or(0) as i64,
-                                    v.iter().max().copied().unwrap_or(0) as i64,
-                                )
+                                other => other,
                             }
                         };
-                        println!(
-                            "[ftrace]   ^ index range {}..={} (+base_vertex {}) ib={:?}",
-                            lo,
-                            hi,
-                            base_vertex,
-                            ib.as_ref().map(|(b, o)| (b.length(), *o))
-                        );
-                    }
-                    if let Some((buf, off)) = ib {
-                        enc.push(Op::DrawIndexed {
-                            prim,
-                            count: count as usize,
-                            ty,
-                            buf: buf.clone(),
-                            off,
-                            instances: instances as usize,
-                            base_vertex: base_vertex as isize,
-                            base_instance: base_instance.max(0) as usize,
-                        });
-                    } else {
-                        println!(
-                            "[!] Gfx: index buffer 0x{:x} is not in a known memory pool",
-                            index_addr
-                        );
+                        if super::tracing_frame() && index_addr > 0x10000 {
+                            let (lo, hi) = match index_type {
+                                2 => {
+                                    let v = std::slice::from_raw_parts(
+                                        index_addr as *const u32,
+                                        count as usize,
+                                    );
+                                    (
+                                        v.iter().min().copied().unwrap_or(0) as i64,
+                                        v.iter().max().copied().unwrap_or(0) as i64,
+                                    )
+                                }
+                                1 => {
+                                    let v = std::slice::from_raw_parts(
+                                        index_addr as *const u16,
+                                        count as usize,
+                                    );
+                                    (
+                                        v.iter().min().copied().unwrap_or(0) as i64,
+                                        v.iter().max().copied().unwrap_or(0) as i64,
+                                    )
+                                }
+                                _ => {
+                                    let v = std::slice::from_raw_parts(
+                                        index_addr as *const u8,
+                                        count as usize,
+                                    );
+                                    (
+                                        v.iter().min().copied().unwrap_or(0) as i64,
+                                        v.iter().max().copied().unwrap_or(0) as i64,
+                                    )
+                                }
+                            };
+                            println!(
+                                "[ftrace]   ^ index range {}..={} (+base_vertex {}) ib={:?}",
+                                lo,
+                                hi,
+                                base_vertex,
+                                ib.as_ref().map(|(b, o)| (b.length(), *o))
+                            );
+                        }
+                        if let Some((buf, off)) = ib {
+                            enc.push(Op::DrawIndexed {
+                                prim,
+                                count: count as usize,
+                                ty,
+                                buf: buf.clone(),
+                                off,
+                                instances: instances as usize,
+                                base_vertex: base_vertex as isize,
+                                base_instance: base_instance.max(0) as usize,
+                            });
+                        } else {
+                            println!(
+                                "[!] Gfx: index buffer 0x{:x} is not in a known memory pool",
+                                index_addr
+                            );
+                        }
                     }
                 }
             }
