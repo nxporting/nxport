@@ -178,7 +178,14 @@ pub fn bar() -> Vec<Entry> {
                 UNITY_FRAME_RATES
                     .iter()
                     .enumerate()
-                    .map(|(i, &f)| choice(if f == 0 { "Game's own".to_string() } else { format!("{f} fps") }, id::UNITY_FRAME_RATE + i as u16))
+                    .map(|(i, &f)| {
+                        let label = match f {
+                            0 => "Game's own".to_string(),
+                            crate::settings::UNITY_UNLIMITED => "Unlimited".to_string(),
+                            f => format!("{f} fps"),
+                        };
+                        choice(label, id::UNITY_FRAME_RATE + i as u16)
+                    })
                     .collect(),
             ),
             sub(
@@ -406,7 +413,7 @@ pub fn anisotropy_label(samples: u32) -> String {
 
 /// A field of view choice's label.
 /// The Unity Frame Rate menu's choices (unity.unity_frame_rate; 0: the game's own).
-const UNITY_FRAME_RATES: [u32; 3] = [0, 30, 60];
+const UNITY_FRAME_RATES: [u32; 5] = [0, 30, 60, 120, crate::settings::UNITY_UNLIMITED];
 /// The Unity Level of Detail menu's choices (unity.unity_lod_bias, percent of the game's own).
 const UNITY_LOD_BIASES: [u32; 4] = [100, 150, 200, 300];
 

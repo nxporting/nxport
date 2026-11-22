@@ -63,6 +63,45 @@ unsafe fn find_resolver() -> Option<usize> {
     Some(lookup)
 }
 
+/// Unity's frame interval in seconds (a float in main's data), if found. Its NVN device waits each frame, one vsync
+/// event at a time, until 0.9 x the interval has passed since the previous frame; the setter makes the interval
+/// max(1, vSyncCount) / 60 with 60 written in its code (mov w9, #0x42700000; fmov s1, w9; str w1, [x8]; adrp x8;
+/// add x8, x8, #lo; fdiv s0, s0, s1; str s0, [x8]), whatever Application.targetFrameRate says.
+fn frame_interval() -> Option<usize> {
+    static F: OnceLock<Option<usize>> = OnceLock::new();
+    *F.get_or_init(|| unsafe {
+        let base = crate::guest::loader::main_base();
+        let len = crate::guest::loader::main_text_size();
+        if base == 0 || len < 32 {
+            return None;
+        }
+        let text = std::slice::from_raw_parts(base as *const u32, len / 4);
+        let sx = |v: u32, bits: u32| ((v << (32 - bits)) as i32 >> (32 - bits)) as i64;
+        let mut found = None;
+        for i in 0..text.len().saturating_sub(7) {
+            let w = &text[i..i + 7];
+            if w[0] != 0x52a8_4e09 || w[1] != 0x1e27_0121 || w[2] != 0xb900_0101 || w[3] & 0x9f00_001f != 0x9000_0008 {
+                continue;
+            }
+            if w[4] & 0xffc0_03ff != 0x9100_0108 || w[5] != 0x1e21_1800 || w[6] != 0xbd00_0100 {
+                continue;
+            }
+            if found.is_some() {
+                println!("[!] Unity: two frame-interval setters; the frame rate stays the game's above 60");
+                return None;
+            }
+            let pc = base + (i + 3) * 4;
+            let page = (pc & !0xfff) as i64 + (sx(((w[3] >> 5) & 0x7ffff) << 2 | (w[3] >> 29) & 3, 21) << 12);
+            found = Some((page + ((w[4] >> 10) & 0xfff) as i64) as usize);
+        }
+        match found {
+            Some(a) => println!("[+] Unity: frame interval at main+{:#x} ({} s)", a - base, *(a as *const f32)),
+            None => println!("[!] Unity: no frame-interval setter found; the frame rate stays at most 60"),
+        }
+        found
+    })
+}
+
 /// Whether `s` (outside main's code, in the image) holds "UnityEngine.<...>::<...>(...)".
 unsafe fn is_icall_name(s: usize, base: usize, text_len: usize) -> bool {
     let end = crate::guest::loader::guest_end();
@@ -105,11 +144,16 @@ impl IntSetting {
         IntSetting { set, get, applied: AtomicI32::new(i32::MIN), game: AtomicI32::new(i32::MIN) }
     }
 
-    /// Sets `want` (negative: the game's own) when it changed. The game's own value is read before the first change, to
-    /// go back to.
-    fn apply(&self, want: i32) {
+    /// Sets `want` (None: the game's own) when it changed. The game's own value is read before the first change, to go
+    /// back to.
+    fn apply(&self, want: Option<i32>) {
+        // i32::MIN: never set; i32::MIN + 1: the game's own.
+        let (want, own) = match want {
+            Some(v) => (v, false),
+            None => (i32::MIN + 1, true),
+        };
         let last = self.applied.load(Relaxed);
-        if want == last || (want < 0 && last == i32::MIN) {
+        if want == last || (own && last == i32::MIN) {
             return;
         }
         if self.game.load(Relaxed) == i32::MIN {
@@ -118,12 +162,12 @@ impl IntSetting {
             self.game.store(unsafe { get() }, Relaxed);
         }
         self.applied.store(want, Relaxed);
-        let value = if want < 0 { self.game.load(Relaxed) } else { want };
+        let value = if own { self.game.load(Relaxed) } else { want };
         let Some(set) = lookup(self.set) else { return };
         let set: unsafe extern "C" fn(i32) = unsafe { std::mem::transmute(set) };
         unsafe { set(value) };
         let what = self.set.split("::set_").nth(1).and_then(|s| s.split('(').next()).unwrap_or(self.set);
-        println!("[+] Unity: {what} = {value}{}", if want < 0 { " (the game's own)" } else { "" });
+        println!("[+] Unity: {what} = {value}{}", if own { " (the game's own)" } else { "" });
     }
 }
 
@@ -132,12 +176,22 @@ static TEXTURE: IntSetting = IntSetting::new(
     "UnityEngine.QualitySettings::set_globalTextureMipmapLimit(System.Int32)",
     "UnityEngine.QualitySettings::get_globalTextureMipmapLimit()",
 );
-/// Frame rate: QualitySettings.vSyncCount, vblanks per frame (1: 60 fps, 2: 30 fps).
+/// Frame rate: QualitySettings.vSyncCount, vblanks per frame (1: 60 fps, 2: 30 fps); above 60 the frame interval itself
+/// (frame_interval).
 static VSYNC_COUNT: IntSetting =
     IntSetting::new("UnityEngine.QualitySettings::set_vSyncCount(System.Int32)", "UnityEngine.QualitySettings::get_vSyncCount()");
+/// The frame interval last written above 60 fps (f32 bits; u32::MAX: the game's).
+static INTERVAL_SET: AtomicU32 = AtomicU32::new(u32::MAX);
 /// LOD bias: what was last set (percent of the game's own; i32::MIN none) and the game's own (f32 bits; 0: not read).
 static LOD_BIAS: AtomicI32 = AtomicI32::new(i32::MIN);
 static GAME_LOD_BIAS: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the game runs above the console's 60 fps by its Frame Rate setting: Unity steps its time by the real time
+/// a frame took (Time.deltaTime), so its presents need not keep the console's interval.
+pub fn real_time() -> bool {
+    let f = crate::host::live::unity().frame_rate;
+    detected() && f > 60 && frame_interval().is_some()
+}
 
 /// Applies the Unity settings that changed (main thread, from profile::main_thread_tick).
 pub fn tick() {
@@ -146,11 +200,37 @@ pub fn tick() {
         return;
     }
     let s = crate::host::live::unity();
-    TEXTURE.apply(s.texture_size);
+    TEXTURE.apply((s.texture_size >= 0).then_some(s.texture_size));
+    let above = s.frame_rate > 60 && frame_interval().is_some();
     VSYNC_COUNT.apply(match s.frame_rate {
-        60 => 1,
-        30 => 2,
-        _ => -1,
+        30 => Some(2),
+        60 => Some(1),
+        _ if above => Some(1),
+        _ => None,
+    });
+    // Above 60: the interval for the rate (0 unlimited), written every frame (Unity's setter writes it again when
+    // vSyncCount changes); the emulated display refreshes at that rate, since the device waits for a new vsync event
+    // each frame. Back at or below 60, the setter's own value for the current vSyncCount.
+    if let Some(at) = frame_interval() {
+        let p = at as *mut f32;
+        if above {
+            let v = if s.frame_rate == crate::settings::UNITY_UNLIMITED { 0.0 } else { 1.0 / s.frame_rate as f32 };
+            unsafe { p.write_volatile(v) };
+            if INTERVAL_SET.swap(v.to_bits(), Relaxed) != v.to_bits() {
+                println!("[+] Unity: frame interval = {v} s");
+            }
+        } else if INTERVAL_SET.swap(u32::MAX, Relaxed) != u32::MAX {
+            let get: Option<unsafe extern "C" fn() -> i32> =
+                lookup("UnityEngine.QualitySettings::get_vSyncCount()").map(|f| unsafe { std::mem::transmute(f) });
+            let n = get.map_or(1, |g| unsafe { g() }).max(1);
+            unsafe { p.write_volatile(n as f32 / 60.0) };
+            println!("[+] Unity: frame interval = {} s (the game's)", n as f32 / 60.0);
+        }
+    }
+    crate::horizon::vi::set_vsync_rate(match s.frame_rate {
+        crate::settings::UNITY_UNLIMITED if above => 1000,
+        f if above => f,
+        _ => 60,
     });
     let percent = s.lod_bias_percent as i32;
     let last = LOD_BIAS.load(Relaxed);

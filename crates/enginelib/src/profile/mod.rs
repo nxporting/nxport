@@ -376,7 +376,7 @@ pub fn real_time() -> bool {
     match active().kind {
         GameKind::TotK => totk::frame_time::real_time(),
         GameKind::BotW => botw::frame_time::real_time(),
-        _ => false,
+        _ => unity::real_time(),
     }
 }
 

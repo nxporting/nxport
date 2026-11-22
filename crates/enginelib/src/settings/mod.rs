@@ -245,7 +245,8 @@ group! {
         /// texture mipmap limit; Silver Pines' own is a quarter); -1 the game's own. Full size takes up to 16x the
         /// texture memory of a quarter
         unity_texture_size: i32 = -1,
-        /// Frame rate: 30 or 60 (Unity's vSyncCount 2 or 1); 0 the game's own
+        /// Frame rate: 30 or 60 (Unity's vSyncCount 2 or 1), another rate (vSyncCount 0 and Application.targetFrameRate)
+        /// or 4294967295 as fast as it can; 0 the game's own
         unity_frame_rate: u32 = 0,
         /// LOD bias in percent of the game's own: how far detailed versions of models are kept (100: the game's)
         unity_lod_bias: u32 = 100,
@@ -695,6 +696,9 @@ pub struct Settings {
     #[patch(attribute(command(flatten)))]
     pub unity: Unity,
 }
+
+/// unity.unity_frame_rate for a Unity game running as fast as it can.
+pub const UNITY_UNLIMITED: u32 = u32::MAX;
 
 static CURRENT: OnceLock<Settings> = OnceLock::new();
 
