@@ -231,6 +231,8 @@ and update this file when you finish or drop it.
   57. 19fd70b (shared horizon/cores.rs, guest/loader.rs stub, profile/jamboree.rs): guest cores back as a setting, on
      only for Jamboree. Native code only (cfg nx_native): lifted Windows runs every thread at once, so Jamboree's
      task-queue race (1 in 6 runs on the Mac) can hit there; a lifted equivalent would be needed.
+  58. (metal downscale.rs) demotion of 2D array textures keeps contents. Metal only; Vulkan: check its demotion handles
+     arrays (BotW 1.5.0 at 2x, botw-sunk, frame ~3300).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
