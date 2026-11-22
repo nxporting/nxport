@@ -23,6 +23,39 @@ pub(crate) unsafe fn set_available_at(sync: *mut NvnSync, after: std::time::Dura
     (*sync).serial = 0;
     let at = if after.is_zero() { 0 } else { crate::platform::clock::now_ns() + after.as_nanos() as u64 };
     std::ptr::write_unaligned(available_at(sync), at);
+    if at != 0 {
+        *LAST_AVAILABLE.lock().unwrap() = (sync as usize, at);
+    }
+}
+
+/// The texture-available sync handed out by the last acquire, and its time (host clock ns).
+static LAST_AVAILABLE: std::sync::Mutex<(usize, u64)> = std::sync::Mutex::new((0, 0));
+
+/// The game has waited on a texture-available sync on the CPU (nvnSyncWait): it paces itself that way.
+static CPU_WAITS_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Before an acquire hands out the next texture: a game that never waited on the CPU for the previous texture's
+/// available time (it waits on the GPU, nvnQueueWaitSync) is held here until that time, as a console's acquire blocks
+/// once every window texture is in use. The wait is time the frame had to spare. Not for games that wait on the sync
+/// on the CPU: they may acquire the next texture before waiting for the last one, on a thread holding their own locks.
+pub(crate) unsafe fn wait_unwaited_available() {
+    if CPU_WAITS_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let (sync, at) = *LAST_AVAILABLE.lock().unwrap();
+    if sync == 0 || at == 0 {
+        return;
+    }
+    let s = sync as *mut NvnSync;
+    if std::ptr::read_unaligned(available_at(s)) != at {
+        return; // waited for (or the sync was reused)
+    }
+    std::ptr::write_unaligned(available_at(s), 0);
+    let now = crate::platform::clock::now_ns();
+    if at > now {
+        crate::nvn::api::pacing_slack((at - now) as f64 / 1e9);
+        crate::horizon::hle::hle_sleep_ns(at - now);
+    }
 }
 
 /// nvnSyncWait on a texture-available sync: waits until its time (or the timeout). None: not such a sync.
@@ -31,6 +64,7 @@ unsafe fn available_wait(sync: *mut NvnSync, timeout_ns: u64) -> Option<i32> {
     if at == 0 {
         return None;
     }
+    CPU_WAITS_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
     let now = crate::platform::clock::now_ns();
     if at <= now {
         std::ptr::write_unaligned(available_at(sync), 0);

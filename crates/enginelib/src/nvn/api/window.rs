@@ -325,6 +325,7 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
         static NEXT: StdMutex<Option<std::time::Instant>> = StdMutex::new(None);
         // Interval 0 is NVN's "no vsync": no wait here (frame-rate mods such as UltraCam use it with their own limiter;
         // a window's CAMetalLayer still paces presentation at the display's refresh rate).
+        crate::nvn::api::sync::wait_unwaited_available();
         let interval = present_interval();
         let is_stock30 = crate::host::overlay::fps_mode() == crate::settings::FpsMode::Stock30;
         let vsync = crate::host::overlay::paces_to_refresh();
