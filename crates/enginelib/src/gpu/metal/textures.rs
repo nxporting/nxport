@@ -331,6 +331,9 @@ impl Gfx {
         if !stale_rt {
             self.upload_texture(&tex, t);
         }
+        // The upload carries the CPU writes made so far (nvnTextureWriteTexels marks the object dirty): a mark left
+        // pending would upload them again at the next lookup, over GPU writes made since (a copy into the new texture).
+        crate::nvn::api::take_texture_dirty(nvn_tex);
         HITCH_UPLOAD_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         // Debug: --poison-new-tex fills new GPU-only (CPU_NO_ACCESS pool) textures with all-ones bytes (NaN for
         // float formats) instead of their stale guest bytes, to expose rendering that depends on unwritten texels.
