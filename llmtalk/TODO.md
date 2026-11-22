@@ -211,6 +211,10 @@ and update this file when you finish or drop it.
   49. (shared horizon/movie/decoder.rs, settings graphics.movie_frame_pacing, TotK profile options) video frames go out
      as decoded unless the profile asks for pacing (TotK does). Windows: nothing to do; Silver Pines' title should hold
      30 there too.
+  50. 153c2f3, 128a57c and the next commit (shared horizon/fs, menu, profile, build.rs): RomFS .ips patches in mods,
+     files.disabled_mods with menu check marks, profile-bundled patch mods (src/profile/<game>/mods/, build fails on
+     non-patch files, written to <data dir>/bundled_mods/). Windows: the lifted builder must take bundled mods' exefs
+     patches into account if a profile ever ships one (none does yet: Silver Pines' is romfs only).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
