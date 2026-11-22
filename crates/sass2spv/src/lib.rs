@@ -9,6 +9,7 @@ pub mod ir;
 pub mod manifest;
 pub mod msl;
 pub mod pipeline;
+pub mod source_text;
 pub mod spv;
 pub mod structured;
 pub mod translation;
@@ -18,5 +19,5 @@ pub use manifest::{ManifestCBuffer, ManifestSBuffer, ManifestTextureOrImage, Sha
 pub use pipeline::{manifest_json, translate_stage, translate_stage_for, translate_stage_to, ShaderProgram, Target, MSL_ENTRY_PLACEHOLDER};
 pub use types::ShaderStage;
 
-/// Changes whenever the translator's source does.
+/// Changes whenever the translator's source does (its code: comments do not count).
 pub const SOURCE_HASH: &str = env!("SASS2SPV_SOURCE_HASH");
