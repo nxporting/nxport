@@ -169,6 +169,10 @@ and update this file when you finish or drop it.
      for every game (console FILEs log [console] lines).
   34. b624ec3 (shared nvn/cmd.rs): nvnCommandBufferBindVertexBuffers recorded as BindVertexBuffer per range (it was generic
      and dropped). Vulkan executes BindVertexBuffer already, so nothing to do beyond a rebuild; Unity UI depends on it.
+  35. dd27edf (shared sass2spv build.rs, builderlib fingerprint): SOURCE_HASH and the Metal cache fingerprint ignore
+     comments now (sass2spv::source_text::code_only). The hash changed once: every vulkan_stages/<hash> cache on Windows
+     is rebuilt once at the next start (expected, not a regression). Comment-only edits no longer drop caches.
+     f738ba8..7095a81: comment-only commits across crates (no code changes).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
