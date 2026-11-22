@@ -511,9 +511,11 @@ pub(crate) fn pacing_slack(secs: f64) {
 /// Refreshes per frame with vsync on a fixed-refresh display, chosen as Android's frame pacing library chooses swap
 /// intervals: a frame rate that does not divide the refresh shows frames one and two refreshes apart in no order (a
 /// 90 fps game on a 120 Hz screen), which no game step makes look even. So every frame stays the same whole number of
-/// refreshes: the fewest the frame-rate limit allows; one more when frames really reached the screen late (3 of the
-/// last 10) while the typical frame had under a quarter refresh to spare (the median of the last 10 waits: more, and
-/// the late ones were hitches, not frames that need longer), up to twice the fewest;
+/// refreshes: the fewest the frame-rate limit allows; one more when frames really reached the screen late (30 of the
+/// last 120) while the typical frame had under a quarter refresh to spare (the median of the last 10 waits: more, and
+/// the late ones were hitches, not frames that need longer), up to twice the fewest. Apple GPUs lower their clock when
+/// frames leave them idle and raise it again within a second or two of a tighter deadline: judged over fewer frames, a
+/// clock dip raised the refreshes, the GPU idled longer, the clock fell further and the rate never came back;
 /// one fewer once nearly every frame of the last 120 (all but 12) waited more than a refresh for the limiter (it had that
 /// much time to spare). Isolated stalls (a loading screen's) then neither raise it nor hold it up: a game whose loading
 /// advances per frame would load at a fraction of its speed.
@@ -524,7 +526,7 @@ mod divisor {
     struct State {
         n: u32,
         period: f64,
-        /// The last frames shown: true if one came later than its n refreshes.
+        /// The last 120 frames shown: true if one came later than its n refreshes.
         late: VecDeque<bool>,
         /// Time each of the last frames waited for the limiter (seconds), and the frame being made's so far.
         spare: VecDeque<f64>,
@@ -552,7 +554,10 @@ mod divisor {
             recent.sort_by(|a, b| a.total_cmp(b));
             recent.get(recent.len() / 2).copied().unwrap_or(0.0)
         };
-        let raise = s.late.iter().filter(|&&l| l).count() >= 3 && typical_spare < period / 4.0 && n < 2 * min;
+        let raise = s.late.len() >= 120
+            && s.late.iter().filter(|&&l| l).count() >= 30
+            && typical_spare < period / 4.0
+            && n < 2 * min;
         let changed = if raise {
             n += 1;
             true
@@ -583,7 +588,7 @@ mod divisor {
         }
         let late = gap > (s.n as f64 + 0.5) * s.period;
         s.late.push_back(late);
-        if s.late.len() > 10 {
+        if s.late.len() > 120 {
             s.late.pop_front();
         }
     }
