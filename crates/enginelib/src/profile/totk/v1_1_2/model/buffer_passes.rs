@@ -806,3 +806,59 @@ unsafe fn correct_depth_pass(p: &mut Port, this: usize, w: usize, view: u32, ctx
     p.helper("depth of field gather", GATHER, &[pool as u64, t as u64])?;
     targets::unbind(p, w)
 }
+
+/// main+0xe02810's scale of the transform's diagonal (-0.95).
+const SHAPE_SCALE: usize = 0x380f4f0;
+
+/// `b` through the three rows `m` (lane l: m[0][l] * b.x, fused with m[1][l] * b.y and m[2][l] * b.z), b.w added to the
+/// last lane and 0 to the others: the game's fmul / fmla / fadd vector code.
+fn transform(m: &[[f32; 4]; 3], b: [f32; 4]) -> [f32; 4] {
+    let mut out = [0f32; 4];
+    for (l, o) in out.iter_mut().enumerate() {
+        let x = m[0][l] * b[0];
+        let x = m[1][l].mul_add(b[1], x);
+        let x = m[2][l].mul_add(b[2], x);
+        *o = if l == 3 { b[3] + x } else { 0.0 + x };
+    }
+    out
+}
+
+/// main+0xe02810(this, w, m, s): a default graphics context (+0 low half 1, +4 bit 0 clear, +0x64 byte 4) and the
+/// program [this+8] applied; a 0x60-byte ring block at the program's block 0: s +0x118..+0x124 and +0x140..+0x14c
+/// times s +0x168, then the four columns at m +0x100 through the rows at m +0xa0 and then through the rows
+/// (k e_i, m +0xdc / +0xec / +0xfc), k = m +0x184 * -0.95; the shape at [SHAPES] +0xb48 drawn with the stream +0x1648.
+pub(super) unsafe fn scaled_shape(p: &mut Port, this: usize, w: usize, m: usize, s: usize) -> R<()> {
+    let prog = p.m.r64(this + 8);
+    if p.m.r32(prog + 0x10) != 0 || p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    let f = |p: &Port, a: usize| p.m.f32(a);
+    let k = f(p, m + 0x184) * f(p, p.base + SHAPE_SCALE);
+    let mut outer = [[0f32; 4]; 3];
+    for (r, row) in outer.iter_mut().enumerate() {
+        row[r] = k;
+        row[3] = f(p, m + 0xdc + r * 0x10);
+    }
+    let row = |p: &Port, a: usize| [f(p, a), f(p, a + 4), f(p, a + 8), f(p, a + 12)];
+    let inner = [row(p, m + 0xa0), row(p, m + 0xb0), row(p, m + 0xc0)];
+    let mut data = [0f32; 0x18];
+    let scale = f(p, s + 0x168);
+    for (d, o) in data.iter_mut().zip([0x118usize, 0x11c, 0x120, 0x124, 0x140, 0x144, 0x148, 0x14c]) {
+        *d = scale * f(p, s + o);
+    }
+    for c in 0..4 {
+        let t = transform(&outer, transform(&inner, row(p, m + 0x100 + c * 0x10)));
+        data[8 + c * 4..12 + c * 4].copy_from_slice(&t);
+    }
+    let mut g = default_state(p);
+    g[0] = (g[0] & 0xffff_0000) | 1;
+    g[1] &= !1;
+    g[0x19] = (g[0x19] & !0xff) | 4;
+    p.apply_graphics_context(g.as_ptr() as usize, w);
+    program_apply(p, prog, w)?;
+    let block = p.ring_block(data.as_ptr() as usize, 0x60);
+    program_block(p, prog, w, 0, block, 0)?;
+    shape_state(p, p.m.r64(p.m.r64(p.base + SHAPES)) + 0xb48, w);
+    stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1648, w);
+    Ok(())
+}

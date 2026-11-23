@@ -973,7 +973,8 @@ thread_local! {
 /// main+0xdb6438(this, w, scale in s0) (view_passes.rs).
 #[no_mangle]
 pub unsafe extern "C" fn on_view_gather(this: usize, w: usize, view: u32) -> u32 {
-    VIEW_GATHERS.run(&VIEW_GATHER_EXPECTED, move |p| view_passes::view_gather(p, this, w, view))
+    let depth = view_passes::gather_depth_slot(this, view);
+    VIEW_GATHERS.run(&VIEW_GATHER_EXPECTED, move |p| view_passes::view_gather(p, this, w, view, depth))
 }
 
 #[no_mangle]
@@ -1028,6 +1029,23 @@ pub unsafe extern "C" fn on_target_blit(this: usize, w: usize, _x2: usize, ctx: 
 #[no_mangle]
 pub unsafe extern "C" fn on_target_blit_end() -> u32 {
     TARGET_BLITS.end("target blits", &TARGET_BLIT_EXPECTED)
+}
+
+static SCALED_SHAPES: Checked = Checked::new();
+
+thread_local! {
+    static SCALED_SHAPE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xe02810(this, w, m, s) (buffer_passes.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_scaled_shape(this: usize, w: usize, m: usize, s: usize) -> u32 {
+    SCALED_SHAPES.run(&SCALED_SHAPE_EXPECTED, move |p| buffer_passes::scaled_shape(p, this, w, m, s))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_scaled_shape_end() -> u32 {
+    SCALED_SHAPES.end("scaled shapes", &SCALED_SHAPE_EXPECTED)
 }
 
 static VOLUME_MASK_CHAINS: Checked = Checked::new();
@@ -2496,6 +2514,9 @@ fn report() {
     if let Some(l) = TARGET_BLITS.summary("target blits") {
         println!("{l}");
     }
+    if let Some(l) = SCALED_SHAPES.summary("scaled shapes") {
+        println!("{l}");
+    }
     if let Some(l) = VOLUME_MASK_CHAINS.summary("volume mask chains") {
         println!("{l}");
     }
@@ -2917,6 +2938,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_target_blit(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_target_blit_end())) as usize;
         hook(base, mem_space, 0xe01cb8, 0xa9ba7bfd, pre, post, "Target blits");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_scaled_shape(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_scaled_shape_end())) as usize;
+        hook(base, mem_space, 0xe02810, 0xd10483ff, pre, post, "Scaled shapes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain_end())) as usize;
         hook(base, mem_space, 0xa4c1ec, 0x6db923e9, pre, post, "Volume mask chains");

@@ -84,11 +84,17 @@ fn clear_values(color: [u32; 4]) -> [u32; 0x22] {
 /// first), the shader of its table entry (+0x22) applied, the block +0x2120 and textures +0x18f0 / +0x700 / (+0x1d78 or
 /// +0xe40) and the full-screen triangle (not with this +0x1d bit 1); unbound; the record's +0x228 put back, +0x17e8
 /// cleared and the temporary target +0x18e8 given back by the game (main+0x7f0354).
-pub(super) unsafe fn view_gather(p: &mut Port, this: usize, w: usize, view: u32) -> R<()> {
+///
+/// `depth` is the record's +0x17e8 (its buffer's depth target) at the hook: a prediction made after the game's call
+/// (verify mode) sees it cleared by the call.
+pub(super) unsafe fn view_gather(p: &mut Port, this: usize, w: usize, view: u32, depth: Option<u64>) -> R<()> {
     if (p.m.r8(this + 0x18) >> 2) & 1 == 0 {
         return Ok(());
     }
     let rec = p.m.r64(this + 0x10).wrapping_add(index(view, p.m.r32(this + 8)).wrapping_mul(0x21b0));
+    if let (true, Some(d)) = (p.m.predict(), depth) {
+        p.m.w::<u64>(rec + 0x17e8, d);
+    }
     if (p.m.r8(rec + 6) >> 1) & 1 == 0 {
         return Ok(());
     }
@@ -96,15 +102,29 @@ pub(super) unsafe fn view_gather(p: &mut Port, this: usize, w: usize, view: u32)
     if p.vfn(rb, 0x28) != RENDER_BUFFER_UNBIND {
         return Err("render buffer virtual +0x28");
     }
-    // Every program the pass may pick (the callback can change the record's flags), with its shader's: a stop past the
-    // commit point would leave the record's +0x228 cleared.
+    // Every program the pass may pick, with its shader's: a stop past the commit point would leave the record's +0x228
+    // cleared. The set's first program is used only without this +0x18 bit 3 (it is never set up when nothing draws
+    // with it); variants 3 and 4 follow the record's +8 bit 11, which only a game callback can change (the ported one
+    // does not).
     let holder = p.m.r64(p.m.r64(p.base + PROGRAM_SETS));
     if p.m.r32(holder + 0x38) < 8 {
         return Err("program set missing");
     }
     let list = p.m.r64(p.m.r64(holder + 0x40) + 0x968 + 8);
     let table = p.m.r64(this + 0x138);
-    for u in [None, Some(3u32), Some(4)] {
+    let game_callback = (p.m.r8(this + 0x160) >> 2) & 1 != 0
+        && !matches!(p.delegate_target(this + 0x140), Some(None) | Some(Some(super::gather_callback::TARGET)));
+    let variant = if p.m.r32(rec + 8) & 0x800 != 0 { 4 } else { 3 };
+    let variants: &[Option<u32>] = if (p.m.r32(this + 0x18) >> 3) & 1 == 0 {
+        &[None]
+    } else if game_callback {
+        &[Some(3), Some(4)]
+    } else if variant == 4 {
+        &[Some(4)]
+    } else {
+        &[Some(3)]
+    };
+    for &u in variants {
         let prog = match u {
             None => p.m.r64(list + 0x10),
             Some(u) => p.m.r64(list + 0x20) + if p.m.r32(list + 0x18) <= u { 0 } else { u } as usize * 0x158,
@@ -134,6 +154,9 @@ pub(super) unsafe fn view_gather(p: &mut Port, this: usize, w: usize, view: u32)
                 }
             }
         }
+    }
+    if (p.m.r32(this + 0x18) >> 3) & 1 != (variants[0].is_some() as u32) {
+        return Err("program variant changed by the view callback");
     }
     let saved = p.m.r64(rec + 0x228);
     p.m.w::<u64>(rec + 0x228, 0);
@@ -185,6 +208,16 @@ pub(super) unsafe fn view_gather(p: &mut Port, this: usize, w: usize, view: u32)
     let pool = p.m.r64(p.m.r64(p.base + TARGET_POOL));
     p.cpu_helper(RELEASE_TARGET, &[pool as u64, p.m.r64(rec + 0x18e8) as u64]);
     Ok(())
+}
+
+/// The view gather's record +0x17e8 for `view`, read from guest memory at the hook (None when the gather does nothing).
+pub(super) unsafe fn gather_depth_slot(this: usize, view: u32) -> Option<u64> {
+    let r = |a: usize| *(a as *const usize);
+    if (*((this + 0x18) as *const u8) >> 2) & 1 == 0 {
+        return None;
+    }
+    let rec = r(this + 0x10).wrapping_add(index(view, *((this + 8) as *const u32)).wrapping_mul(0x21b0));
+    Some(r(rec + 0x17e8) as u64)
 }
 
 /// The view record of main+0xbd8c40's family (this +0x5f0, 0x998 each, count +0x5e8).
