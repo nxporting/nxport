@@ -47,6 +47,40 @@ and update this file when you finish or drop it.
   the log: in play / event lines around the new game's opening). 1.5.0: mac-worker's sites from the decomp names (ksys::CameraMgr main+0x2600b60, ksys::evt::Manager main+0x2601320, hasActiveEvent main+0xdb1364), not run on Windows (no 1.5.0 here).
 
 
+## First release: overnight tasks (2026-11-22, mac-worker + win-worker; the user's list at the end)
+
+No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
+new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
+path), so the morning starts from a single status.
+
+1. (mac) Leave the tree clean: measure the uncommitted native-run split fix (gpu/metal/commands.rs, 3+ interleaved walk
+   pairs) and commit or drop it. The native renderer (--native-render-lists / -model-draws / -font-draws) stays off by
+   default for the release.
+2. (mac) Mac regression at main: cargo test --workspace; the gpu_conformance suite; TotK 1.1.2 at Hateno (shot, glitch
+   scan 8500-12500, walk, inventory open) and one VALIDATE=1 run; TotK 1.0.0 to gameplay; BotW 1.9.0 and 1.5.0 to
+   gameplay plus a botw-sunk scan; SMO Cap Kingdom tour; Kirby, MK8D, Wonder and Silver Pines to gameplay.
+3. (mac) Builder end to end from main: a fresh TotK Mac app (and BotW) from nxport-builder, run from its bundle
+   (footprint ~3 GB, shader cache ~2 GB, pipeline list precompile).
+4. (mac) iOS: the TotK 1.0.0 .ipa from main (--aspect 19.5:9), with the AOT image dumped twice and compared, ready for
+   the user's phone.
+5. (mac) Release packaging on the Mac side: release.yml's macos job at main, and the notices list covering crates added
+   since 2026-11-16 (the VP8 decoder among them).
+6. (win) Build and test at main, then journal items 32-74 above (the shared-code checks), fixing Windows breakage.
+7. (win) Windows / Vulkan regression: TotK 1.0.0 and 1.1.2 lifted builds through the builder (re-lift), scripted
+   title -> Hateno -> walk -> inventory, BotW 1.9.0, one Vulkan validation-layer run, no device loss.
+8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
+9. (win) Windows pacing: pacing_shown is not fed (items 15/16), so the vsync divisor never steps down. Feed it from
+   present timing, or confirm TotK / BotW at the 60 limit pace well without it and say which default ships.
+10. (win) Claimed work (Vulkan resolution scaling, BotW 1.0.0 draw distance): finish, or park on a branch; the release
+   does not wait for it.
+11. (both) Morning hand-off: result lines under each item; failures with log paths; anything that blocks the tag on top.
+12. (user) Scope: which games the release names as supported (TotK 1.0.0 / 1.1.2 surely; BotW; SMO, Kirby, MK8D, Wonder,
+   Silver Pines as experimental?).
+13. (user) Defaults: --tile-feedback (halves the decal pass breaks, ~270 MiB less traffic a Hateno frame; overlapping
+   decals as in Ryujinx, some cliffs less green).
+14. (user) The 2026-11-14 list below: the GitHub dry run, archives to the agents, your own app, the iPhone, release text,
+   the tag; then licences, PGO profiles, Windows signing.
+
 ## For win-worker from mac-worker (2026-11-18, Remote Control was down)
 
 - 2026-11-19 afternoon, for win-worker (each: what Windows needs). Batch with the list below; nothing urgent.
