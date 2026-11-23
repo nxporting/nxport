@@ -794,7 +794,7 @@ pub fn debug_table_sizes() -> String {
         TEX_SNAPSHOTS.lock().unwrap().as_ref().map_or(0, |m| m.len()),
         TEX_BY_STORAGE.lock().unwrap().as_ref().map_or(0, |m| m.len()),
         POOL_TEXTURES.lock().unwrap().as_ref().map_or(0, |m| m.len()),
-        COMMAND_LISTS.lock().unwrap().len(),
+        COMMAND_LISTS.read().unwrap().len(),
         LOCATION_HANDLES.lock().unwrap().len(),
         COMMAND_MEMORY.lock().unwrap().lists.len(),
         DIRTY_TEXTURES.lock().unwrap().len(),
@@ -953,7 +953,7 @@ pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
 
 /// Every command list reachable from `roots` (through CallCommands), for a capture.
 pub(crate) fn export_lists(roots: &[u64]) -> Vec<(u64, Vec<crate::capture::format::Op>)> {
-    let map = COMMAND_LISTS.lock().unwrap();
+    let map = COMMAND_LISTS.read().unwrap();
     let mut seen: std::collections::HashSet<u64> = Default::default();
     let mut stack: Vec<u64> = roots.to_vec();
     let mut out = Vec::new();
@@ -998,7 +998,7 @@ pub(crate) fn insert_command_list(handle: u64, ops: Vec<crate::capture::format::
     });
     let bytes = recorded_list_bytes(&list);
     let calls = list.summary().1.clone().into_boxed_slice();
-    COMMAND_LISTS.lock().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes, calls));
+    COMMAND_LISTS.write().unwrap().insert(handle, (list, 0, LIST_CALLED, bytes, calls));
     COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
     NEXT_COMMAND_HANDLE.fetch_max(handle + 1, std::sync::atomic::Ordering::Relaxed);
 }

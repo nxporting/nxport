@@ -176,11 +176,13 @@ static DESCRIBED: std::sync::Mutex<Option<std::collections::HashMap<u64, (Record
 /// command is not of the kinds the executor applies (the list is run instead).
 pub(super) unsafe fn described(p: &Port, handle: u64, d: usize, w: usize, pass: usize, b: i32) -> Option<Description> {
     let recording = crate::nvn::api::command_list_peek(handle)?;
-    if let Some((rec, program, m)) = DESCRIBED.lock().unwrap().get_or_insert_with(Default::default).get(&handle) {
+    // Cloned out first: the program list's check takes the command list lock.
+    let known = DESCRIBED.lock().unwrap().get_or_insert_with(Default::default).get(&handle).cloned();
+    if let Some((rec, program, m)) = known {
         if rec.upgrade().is_some_and(|r| std::sync::Arc::ptr_eq(&r, &recording))
             && program.as_ref().is_none_or(|(h, p)| current(*h, p))
         {
-            return Some(m.clone());
+            return Some(m);
         }
     }
     let e = p.m.r64(d + 0x68) + pass * 0x60;

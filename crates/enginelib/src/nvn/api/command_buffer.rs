@@ -217,7 +217,7 @@ pub(crate) fn walk_command_lists(
 /// (Vulkan's vk-decode fetches those, walk_command_lists_at): held from the submit on.
 pub(crate) fn pin_command_lists(handles: &[u64], cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>) {
     let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut map = COMMAND_LISTS.lock().unwrap();
+    let mut map = COMMAND_LISTS.write().unwrap();
     for h in handles {
         let Some(e) = map.get_mut(h) else { continue };
         e.1 = now;
@@ -242,7 +242,7 @@ pub(crate) fn walk_command_lists_at(
     cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>,
     mut f: impl FnMut(&RecordedCommandList),
 ) -> usize {
-    let mut map = COMMAND_LISTS.lock().unwrap();
+    let mut map = COMMAND_LISTS.write().unwrap();
     stack.clear();
     stack.extend_from_slice(handles);
     let mut n = 0;
@@ -267,7 +267,7 @@ pub(crate) fn walk_command_lists_at(
 /// The lists `handles` into `cache`, marked as walk_command_lists_at marks them with the tick `now`, without following
 /// their calls: vk-decode fetches each CallCommands' lists as its walk reaches it (decode.rs).
 pub(crate) fn fetch_command_lists_at(now: u64, handles: &[u64], cache: &mut rustc_hash::FxHashMap<u64, std::sync::Arc<RecordedCommandList>>) {
-    let mut map = COMMAND_LISTS.lock().unwrap();
+    let mut map = COMMAND_LISTS.write().unwrap();
     for h in handles {
         let Some(e) = map.get_mut(h) else { continue };
         if e.1 == now {
@@ -297,8 +297,8 @@ pub(crate) fn fetch_command_lists_at(now: u64, handles: &[u64], cache: &mut rust
 /// Plain LRU would evict the per-mesh lists of everything out of view; looking back would then draw those meshes with
 /// the previous draw's vertex buffers.
 pub(crate) static COMMAND_LISTS: std::sync::LazyLock<
-    StdMutex<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize, Box<[u64]>)>>,
-> = std::sync::LazyLock::new(|| StdMutex::new(rustc_hash::FxHashMap::default()));
+    std::sync::RwLock<rustc_hash::FxHashMap<u64, (std::sync::Arc<RecordedCommandList>, u64, u8, usize, Box<[u64]>)>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(rustc_hash::FxHashMap::default()));
 
 pub(crate) static COMMAND_LIST_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -340,7 +340,7 @@ pub(crate) fn recorded_list_bytes(l: &RecordedCommandList) -> usize {
 
 /// Marks lists the queue executed directly (eviction prefers them).
 pub(crate) fn mark_command_lists_submitted(handles: &[u64]) {
-    let mut g = COMMAND_LISTS.lock().unwrap();
+    let mut g = COMMAND_LISTS.write().unwrap();
     for h in handles {
         if let Some(e) = g.get_mut(h) {
             if e.2 == LIST_NEW {
@@ -363,7 +363,7 @@ pub(crate) fn command_list(
     called: bool,
 ) -> Option<std::sync::Arc<RecordedCommandList>> {
     let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut g = COMMAND_LISTS.lock().unwrap();
+    let mut g = COMMAND_LISTS.write().unwrap();
     let e = g.get_mut(&handle)?;
     e.1 = now;
     if called && e.2 != LIST_DEAD {
@@ -481,7 +481,7 @@ pub(crate) fn kill_overlapping_lists(m: &mut CommandMemory, pool: usize, start: 
     let mut freed: Vec<std::sync::Arc<RecordedCommandList>> = Vec::with_capacity(hit.len());
     let mut bytes = 0usize;
     {
-        let mut g = COMMAND_LISTS.lock().unwrap();
+        let mut g = COMMAND_LISTS.write().unwrap();
         for (k, _, h) in &hit {
             m.lists.remove(k);
             if let Some(e) = g.remove(h) {
@@ -615,7 +615,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
         let now = COMMAND_LIST_CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bytes = recorded_list_bytes(&snapshot);
         let calls = snapshot.summary().1.clone().into_boxed_slice();
-        let mut g = COMMAND_LISTS.lock().unwrap();
+        let mut g = COMMAND_LISTS.write().unwrap();
         let old = g.insert(
             handle,
             (std::sync::Arc::from(snapshot), now, LIST_NEW, bytes, calls),
@@ -628,7 +628,7 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
             free_later(old.0);
         }
         command_list_recorded(cmd as usize, handle, (*cmd).command_used);
-        let mut g = COMMAND_LISTS.lock().unwrap();
+        let mut g = COMMAND_LISTS.write().unwrap();
         let total =
             COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes;
         if total > COMMAND_LIST_BUDGET {
@@ -941,12 +941,12 @@ pub fn capture_typed_dry(f: impl FnOnce()) -> Option<Vec<crate::nvn::cmd::Cmd>> 
 /// The recording `handle` refers to now (a recording at the same command memory keeps its handle), without
 /// touching its eviction state.
 pub(crate) fn command_list_peek(handle: u64) -> Option<std::sync::Arc<RecordedCommandList>> {
-    COMMAND_LISTS.lock().unwrap().get(&handle).map(|e| e.0.clone())
+    COMMAND_LISTS.read().unwrap().get(&handle).map(|e| e.0.clone())
 }
 
 /// A recorded list's commands as captures show them (None for an unknown handle).
 pub(crate) fn list_texts(handle: u64) -> Option<Vec<String>> {
-    let list = COMMAND_LISTS.lock().unwrap().get(&handle).map(|e| e.0.clone())?;
+    let list = COMMAND_LISTS.read().unwrap().get(&handle).map(|e| e.0.clone())?;
     Some(
         list.ops
             .iter()
