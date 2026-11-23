@@ -1031,6 +1031,29 @@ pub unsafe extern "C" fn on_target_blit_end() -> u32 {
     TARGET_BLITS.end("target blits", &TARGET_BLIT_EXPECTED)
 }
 
+static HALF_RES_PASSES: Checked = Checked::new();
+
+thread_local! {
+    static HALF_RES_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xa548e0(ctx, w, view, bits, b, c, d) for every caller (callees_misc.rs): what can stop it is checked, then it
+/// runs past the commit point (it calls the game's target setups).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn on_half_res_pass(ctx: usize, w: usize, view: u32, bits: u32, b: u32, c: usize, d: u32) -> u32 {
+    HALF_RES_PASSES.run(&HALF_RES_PASS_EXPECTED, move |p| {
+        callees_misc::half_res_pass_check(p, ctx, w, view, bits, b, c, d)?;
+        p.m.commit();
+        callees_misc::half_res_pass(p, ctx, w, view, bits, b, c, d)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_half_res_pass_end() -> u32 {
+    HALF_RES_PASSES.end("half resolution passes", &HALF_RES_PASS_EXPECTED)
+}
+
 static SCALED_SHAPES: Checked = Checked::new();
 
 thread_local! {
@@ -2517,6 +2540,9 @@ fn report() {
     if let Some(l) = SCALED_SHAPES.summary("scaled shapes") {
         println!("{l}");
     }
+    if let Some(l) = HALF_RES_PASSES.summary("half resolution passes") {
+        println!("{l}");
+    }
     if let Some(l) = VOLUME_MASK_CHAINS.summary("volume mask chains") {
         println!("{l}");
     }
@@ -2941,6 +2967,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_scaled_shape(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_scaled_shape_end())) as usize;
         hook(base, mem_space, 0xe02810, 0xd10483ff, pre, post, "Scaled shapes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_half_res_pass(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_half_res_pass_end())) as usize;
+        hook(base, mem_space, 0xa548e0, 0xd10703ff, pre, post, "Half resolution passes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain_end())) as usize;
         hook(base, mem_space, 0xa4c1ec, 0x6db923e9, pre, post, "Volume mask chains");
