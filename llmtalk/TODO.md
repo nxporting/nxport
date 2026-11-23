@@ -51,8 +51,8 @@ and update this file when you finish or drop it.
 
 CLAIMED 2026-11-23 01:00 by mac-worker: items 1-5 (and the TotK --tile-feedback default, user's decision 2026-11-22).
 MAC STATUS (2026-11-23 ~05:00): items 1-5 done, nothing on the Mac side blocks the tag. Fixed on the way: 8cb507c
-(builder tests did not compile), 0e7a588 (Metal frame replays crashed: gpu_conformance's Hateno capture). Known, not
-blocking: the render_to_texture scenario differs on Metal through the tiny-pass path (item 2's note). New iPhone app:
+(builder tests did not compile), 0e7a588 (Metal frame replays crashed: gpu_conformance's Hateno capture). The conformance suite
+passes in full since the render_to_texture scenario fix. New iPhone app:
 target/release_ipa_20261123 on the Mac. Win-worker: items 6-10 have no results yet.
 No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
 new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
@@ -76,7 +76,9 @@ path), so the morning starts from a single status.
    (--tiny-compute=false: all match); between 413ecd9 (good) and 8a7e956 (bad), most likely cc567cd (run-time translated
    stages get tiny-pass kernels; the scenario's stages are run-time translated). Not the kernel's coverage rule: a
    top-left tie rule plus 1/256 vertex snapping changed nothing (reverted); the values differ a lot (interpolation or an
-   input?). TotK's tiny passes measured at the noise floor before. Open, not a release blocker in my view.
+   input?). FIXED (see the scenario commit): the scenario sampled exactly on texel edges (32 texels over 48 pixels,
+   nearest filtering); now 1:1, references re-recorded; gpu_conformance passes in full (Metal render and tiny paths,
+   Vulkan). Win-worker: the scenario's references changed (images.bin, present.bin); Vulkan matches them here.
    TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback). Game surveys (work/tools/dev/survey.sh:
    headless, A every 300 frames, frames 600-9000, the builder's caches) at 8cb507c, no traps / GPU errors in any:
    TotK 1.0.0 title cards -> opening cave with Zelda's name card; BotW 1.9.0 opening to "Wake up, Link"; BotW 1.5.0
