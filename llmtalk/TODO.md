@@ -88,7 +88,9 @@ path), so the morning starts from a single status.
    app 1.5 GB. Run from its bundle headless to Hateno with the test save: 10 archives (480 MB) loaded, 6053 listed
    pipelines compiled in 1.0 s (5508 from the archives), 0 pipeline failures, ~95 fps, under the 8 GB kill limit
    (exact peak not logged), no traps. Note: run as an app the engine logs to the game's data folder (log.txt,
-   pipelines.txt there), not stdout. BotW app not built yet.
+   pipelines.txt there), not stdout. BotW 1.9.0 app (default preset): 1700 pipelines in 10 archives (0 failed; 4325
+   shared-list entries the cache cannot build left out), 573 MB; from its bundle it plays the opening to "Open your
+   eyes", archives (74 MB) loaded, no traps. DONE.
 4. (mac) iOS: the TotK 1.0.0 .ipa from main (--aspect 19.5:9), with the AOT image dumped twice and compared, ready for
    the user's phone.
    Result (mac, at 8cb507c): built with the builder's "iPhone 12-16 & 16e" preset (19.5:9, 30 fps, handheld) from the
