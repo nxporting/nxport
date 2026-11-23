@@ -120,14 +120,14 @@ impl RecordedCommandList {
 
 /// Drops `l` on a thread of its own (nvn-free): the last reference to a replaced list frees all its commands.
 pub(crate) fn free_later(l: std::sync::Arc<RecordedCommandList>) {
-    static TX: std::sync::OnceLock<Option<StdMutex<std::sync::mpsc::Sender<std::sync::Arc<RecordedCommandList>>>>> = std::sync::OnceLock::new();
+    static TX: std::sync::OnceLock<Option<std::sync::mpsc::Sender<std::sync::Arc<RecordedCommandList>>>> = std::sync::OnceLock::new();
     let tx = TX.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<std::sync::Arc<RecordedCommandList>>();
-        std::thread::Builder::new().name("nvn-free".into()).spawn(move || while rx.recv().is_ok() {}).ok().map(|_| StdMutex::new(tx))
+        std::thread::Builder::new().name("nvn-free".into()).spawn(move || while rx.recv().is_ok() {}).ok().map(|_| tx)
     });
     if let Some(tx) = tx {
         // Sent back (and dropped here) only if the thread is gone.
-        let _ = tx.lock().unwrap().send(l);
+        let _ = tx.send(l);
     }
 }
 
@@ -628,10 +628,13 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
             free_later(old.0);
         }
         command_list_recorded(cmd as usize, handle, (*cmd).command_used);
-        let mut g = COMMAND_LISTS.write().unwrap();
-        let total =
-            COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes;
-        if total > COMMAND_LIST_BUDGET {
+        // The write lock only when over budget (taking it for every list held off every reader), the total read again
+        // under it (another thread may have evicted meanwhile).
+        let over = COMMAND_LIST_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed) + bytes > COMMAND_LIST_BUDGET;
+        let mut gone = Vec::new();
+        let mut g = if over { Some(COMMAND_LISTS.write().unwrap()) } else { None };
+        let total = COMMAND_LIST_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+        if let Some(g) = g.as_mut().filter(|_| total > COMMAND_LIST_BUDGET) {
             // Evict down to 3/4 of the budget: by class (see COMMAND_LISTS), oldest first within a class.
             let mut order: Vec<(u8, u64, u64, usize)> =
                 g.iter().map(|(h, e)| (e.2, e.1, *h, e.3)).collect();
@@ -644,7 +647,6 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
             println!("[+] NVN: list cache by class (count, MB): dead {:?} submitted {:?} called {:?} new {:?}",
                 (per_class[0].0, per_class[0].1 >> 20), (per_class[1].0, per_class[1].1 >> 20), (per_class[2].0, per_class[2].1 >> 20), (per_class[3].0, per_class[3].1 >> 20));
             let mut freed = 0usize;
-            let mut gone = Vec::new();
             let mut ev = EVICTED_CLASS.lock().unwrap();
             if ev.len() > 1 << 20 {
                 ev.clear();
@@ -667,9 +669,9 @@ pub unsafe extern "C" fn hle_nvnCommandBufferEndRecording(cmd: *mut NvnCommandBu
                 freed >> 20,
                 g.len()
             );
-            drop(g);
-            drop(gone); // freed outside the lock
         }
+        drop(g);
+        drop(gone); // freed outside the lock
     }
     handle
 }
@@ -840,14 +842,33 @@ pub(crate) enum Capture {
     Buffer(Vec<(usize, RecordedNvnCommand)>),
 }
 
-/// Commands kept by capture_buffered.
+/// Commands kept by capture_buffered. Its vector goes back to the thread's spare when dropped (a buffer per port call
+/// grew from empty each time).
 pub(crate) struct Buffered(Vec<(usize, RecordedNvnCommand)>);
+
+thread_local! {
+    static SPARE_BUFFER: std::cell::Cell<Vec<(usize, RecordedNvnCommand)>> = const { std::cell::Cell::new(Vec::new()) };
+}
+
+impl Drop for Buffered {
+    fn drop(&mut self) {
+        let mut v = std::mem::take(&mut self.0);
+        if v.capacity() == 0 || v.capacity() > 4096 {
+            return;
+        }
+        v.clear();
+        let _ = SPARE_BUFFER.try_with(|s| {
+            let old = s.take();
+            s.set(if old.capacity() >= v.capacity() { old } else { v });
+        });
+    }
+}
 
 /// Runs `f` with this thread's commands kept instead of recorded.
 /// Nests: inside another capture of this thread, that capture is kept aside for `f` and put back after it (commands
 /// committed then go to it, see commit_buffered).
 pub(crate) fn capture_buffered<R>(f: impl FnOnce() -> R) -> (R, Buffered) {
-    let outer = CAPTURE.with(|c| c.borrow_mut().replace(Capture::Buffer(Vec::new())));
+    let outer = CAPTURE.with(|c| c.borrow_mut().replace(Capture::Buffer(SPARE_BUFFER.take())));
     let r = f();
     let inner = CAPTURE.with(|c| std::mem::replace(&mut *c.borrow_mut(), outer));
     match inner {
@@ -857,15 +878,18 @@ pub(crate) fn capture_buffered<R>(f: impl FnOnce() -> R) -> (R, Buffered) {
 }
 
 /// Records commands kept by capture_buffered, in order: into the enclosing buffered capture when there is one.
-pub(crate) unsafe fn commit_buffered(b: Buffered) {
-    let mut b = Some(b);
-    CAPTURE.with(|c| {
+pub(crate) unsafe fn commit_buffered(mut b: Buffered) {
+    let nested = CAPTURE.with(|c| {
         if let Some(Capture::Buffer(v)) = c.borrow_mut().as_mut() {
-            v.extend(b.take().unwrap().0);
+            v.extend(b.0.drain(..));
+            return true;
         }
+        false
     });
-    let Some(b) = b else { return };
-    for (cmd, op) in b.0 {
+    if nested {
+        return;
+    }
+    for (cmd, op) in b.0.drain(..) {
         let cmd = cmd as *mut NvnCommandBuffer;
         if cmd.is_null() || (*cmd).ops == 0 {
             continue;

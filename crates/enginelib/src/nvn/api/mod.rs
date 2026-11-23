@@ -791,7 +791,7 @@ const _: () = {
 /// Sizes of HLE tables that could grow over a session (--log-sizes).
 pub fn debug_table_sizes() -> String {
     format!("snapshots {} by_storage {} pool_textures {} command_lists {} location_handles {} cmd_memory_lists {} dirty_textures {} evicted_class {}",
-        TEX_SNAPSHOTS.lock().unwrap().as_ref().map_or(0, |m| m.len()),
+        TEX_SNAPSHOTS.read().unwrap().as_ref().map_or(0, |m| m.len()),
         TEX_BY_STORAGE.lock().unwrap().as_ref().map_or(0, |m| m.len()),
         POOL_TEXTURES.lock().unwrap().as_ref().map_or(0, |m| m.len()),
         COMMAND_LISTS.read().unwrap().len(),
@@ -842,7 +842,7 @@ pub(crate) fn export_frontend() -> crate::capture::format::Frontend {
         })
         .unwrap_or_default();
     let textures = TEX_SNAPSHOTS
-        .lock()
+        .read()
         .unwrap()
         .as_ref()
         .map(|m| {
@@ -894,13 +894,13 @@ pub(crate) fn import_frontend(f: &crate::capture::format::Frontend) {
     *VIRTUAL_MAPS.lock().unwrap() = f.virtual_maps.iter().map(|&(v, s, p)| (v as usize, s as usize, p as usize)).collect();
     VIRTUAL_MAPS_EMPTY.store(f.virtual_maps.is_empty(), std::sync::atomic::Ordering::Release);
     bump_pools_gen();
-    *TEX_SNAPSHOTS.lock().unwrap() = Some(
+    *TEX_SNAPSHOTS.write().unwrap() = Some(
         f.textures.iter().map(|(a, g, t)| (*a as usize, (*g, from_pod::<NvnTexture>(t)))).collect(),
     );
     {
         let mut idx: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
         let mut large: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
-        let snaps = TEX_SNAPSHOTS.lock().unwrap();
+        let snaps = TEX_SNAPSHOTS.read().unwrap();
         for &a in &f.indexed {
             if let Some((_, t)) = snaps.as_ref().and_then(|m| m.get(&(a as usize))) {
                 idx.entry(t.storage).or_default().push(a as usize);

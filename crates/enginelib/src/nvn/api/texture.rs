@@ -375,8 +375,8 @@ pub(crate) fn log_swizzle(what: &str, format: i32, sw: [u8; 4]) {
 // re-initialize the object after recording a command that names it (real NVN copies what it needs at record time),
 // so the executor must not read the live struct. A new Initialize at the same address bumps the generation, which
 // makes the executor drop its Metal texture and build a new one.
-pub(crate) static TEX_SNAPSHOTS: std::sync::Mutex<Option<rustc_hash::FxHashMap<usize, (u64, NvnTexture)>>> =
-    std::sync::Mutex::new(None);
+pub(crate) static TEX_SNAPSHOTS: std::sync::RwLock<Option<rustc_hash::FxHashMap<usize, (u64, NvnTexture)>>> =
+    std::sync::RwLock::new(None);
 
 pub(crate) static TEX_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -403,7 +403,7 @@ pub(crate) fn snapshot_texture(addr: usize, t: NvnTexture) {
     }
     let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let old = TEX_SNAPSHOTS
-        .lock()
+        .write()
         .unwrap()
         .get_or_insert_with(Default::default)
         .insert(addr, (gen, t));
@@ -501,7 +501,7 @@ pub(crate) fn remember_snapshot(gen: u64, t: NvnTexture) {
             h.by_gen.remove(&g);
             if let Some(c) = h.copies.remove(&g) {
                 let addr = &*c as *const NvnTexture as usize;
-                if let Some(m) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
+                if let Some(m) = TEX_SNAPSHOTS.write().unwrap().as_mut() {
                     m.remove(&addr);
                 }
                 COPY_SOURCE.lock().unwrap().remove(&addr);
@@ -545,7 +545,7 @@ pub fn resolve_texture_ref(addr: usize, gen: u32) -> usize {
     let b = Box::new(state);
     let copy = &*b as *const NvnTexture as usize;
     let g = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    TEX_SNAPSHOTS.lock().unwrap().get_or_insert_with(Default::default).insert(copy, (g, state));
+    TEX_SNAPSHOTS.write().unwrap().get_or_insert_with(Default::default).insert(copy, (g, state));
     COPY_SOURCE.lock().unwrap().insert(copy, gen as u64);
     h.copies.insert(gen, b);
     bump_tex_table_epoch();
@@ -591,7 +591,7 @@ pub fn textures_near_storage(storage: usize, span: usize) -> Vec<(usize, u64, Nv
             .flat_map(|(_, v)| v.iter().copied())
             .collect()
     };
-    let snaps = TEX_SNAPSHOTS.lock().unwrap();
+    let snaps = TEX_SNAPSHOTS.read().unwrap();
     let Some(snaps) = snaps.as_ref() else {
         return Vec::new();
     };
@@ -620,7 +620,7 @@ pub fn textures_reaching(storage: usize, span: usize) -> Vec<(usize, u64, NvnTex
         }
         a
     };
-    let snaps = TEX_SNAPSHOTS.lock().unwrap();
+    let snaps = TEX_SNAPSHOTS.read().unwrap();
     let Some(snaps) = snaps.as_ref() else {
         return Vec::new();
     };
@@ -655,7 +655,7 @@ pub fn capture_texture(addr: usize) {
 
 /// (generation, texture description) of the NVNtexture most recently initialized at `addr`.
 pub fn texture_snapshot(addr: usize) -> Option<(u64, NvnTexture)> {
-    TEX_SNAPSHOTS.lock().unwrap().as_ref()?.get(&addr).copied()
+    TEX_SNAPSHOTS.read().unwrap().as_ref()?.get(&addr).copied()
 }
 
 #[no_mangle]
@@ -675,7 +675,7 @@ pub unsafe extern "C" fn hle_nvnTextureFinalize(tex: *mut NvnTexture) {
         // Remembered before the new generation is published (snapshot_texture).
         remember_snapshot(og, t);
         let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if let Some(s) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
+        if let Some(s) = TEX_SNAPSHOTS.write().unwrap().as_mut() {
             s.insert(tex as usize, (gen, t));
         }
         bump_tex_table_epoch();

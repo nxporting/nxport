@@ -81,6 +81,12 @@ const SLEEP: usize = 0x1051cb8; // the sleep the texture wait loops on (symmatch
 const PRIMITIVE_TABLE: usize = 0x37ff9b8; // nn::gfx primitive topology -> NVN draw mode
 const INDEX_TYPE_TABLE: usize = 0x37ffa0c; // nn::gfx index format -> NVN index type
 
+thread_local! {
+    /// The length of this thread's last run that outgrew its inline items: a run that outgrows them takes that capacity
+    /// at once (runs grew one item at a time).
+    static RUN_LEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Virtual functions the port met but does not implement: (vtable slot, main+ offset).
 pub(super) static UNKNOWN_VFNS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
 
@@ -111,6 +117,9 @@ impl Port {
     /// Records the pending native commands (anything recorded after them must come after them in the stream).
     pub(super) unsafe fn flush(&self) {
         if let Some((cmd, draw)) = self.pending.borrow_mut().take() {
+            if draw.items.spilled() {
+                RUN_LEN.set(draw.items.len().min(256));
+            }
             crate::nvn::api::record_typed("nvnCommandBufferModelDraw", cmd, crate::nvn::cmd::Cmd::ModelDraw(Box::new(draw)));
         }
     }
@@ -216,7 +225,12 @@ impl Port {
         if self.pending.borrow().as_ref().is_some_and(|(c, _)| *c != cmd) {
             self.flush();
         }
-        self.pending.borrow_mut().get_or_insert_with(|| (cmd, Default::default())).1.items.push(item);
+        let mut pending = self.pending.borrow_mut();
+        let items = &mut pending.get_or_insert_with(|| (cmd, Default::default())).1.items;
+        if items.len() == items.inline_size() && !items.spilled() {
+            items.reserve(RUN_LEN.get().saturating_sub(items.len()));
+        }
+        items.push(item);
     }
 
     /// Natively, a binding as a native command.

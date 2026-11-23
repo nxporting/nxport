@@ -172,7 +172,7 @@ pub fn lookup_pool_texture(id: i32) -> Option<(usize, Option<NvnTextureView>)> {
         let addr = &*b as *const NvnTexture as usize;
         let gen = TEX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         TEX_SNAPSHOTS
-            .lock()
+            .write()
             .unwrap()
             .get_or_insert_with(Default::default)
             .insert(addr, (gen, slot.state));
@@ -217,7 +217,7 @@ pub(crate) unsafe fn register_pool_slot(id: i32, texture: *const NvnTexture, vie
     // The slot's previous copy goes with it.
     if let Some(c) = map.get(&id).and_then(|old| old.copy.as_ref()) {
         let addr = &**c as *const NvnTexture as usize;
-        if let Some(m) = TEX_SNAPSHOTS.lock().unwrap().as_mut() {
+        if let Some(m) = TEX_SNAPSHOTS.write().unwrap().as_mut() {
             m.remove(&addr);
         }
         super::texture::COPY_SOURCE.lock().unwrap().remove(&addr);
