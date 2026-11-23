@@ -49,6 +49,7 @@ and update this file when you finish or drop it.
 
 ## First release: overnight tasks (2026-11-22, mac-worker + win-worker; the user's list at the end)
 
+CLAIMED 2026-11-23 01:00 by mac-worker: items 1-5 (and the TotK --tile-feedback default, user's decision 2026-11-22).
 No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
 new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
 path), so the morning starts from a single status.
