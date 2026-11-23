@@ -87,6 +87,10 @@ path), so the morning starts from a single status.
    pipelines.txt there), not stdout. BotW app not built yet.
 4. (mac) iOS: the TotK 1.0.0 .ipa from main (--aspect 19.5:9), with the AOT image dumped twice and compared, ready for
    the user's phone.
+   Result (mac, at 8cb507c): built with the builder's "iPhone 12-16 & 16e" preset (19.5:9, 30 fps, handheld) from the
+   1.0.0 dump: target/release_ipa_20261123/The Legend of Zelda - Tears of the Kingdom.ipa (645 MB; iOS shader cache
+   25959 stages; every TotK hook installed). guest-image made twice: identical except one byte inside the code
+   signature blob (stripped of signatures they compare equal). Not run on a device (the user's phone).
 5. (mac) Release packaging on the Mac side: release.yml's macos job at main, and the notices list covering crates added
    since 2026-11-16 (the VP8 decoder among them).
    Result (mac, 2026-11-22): notices OK. The only third-party crate added since 2026-11-16 is vp8-decoder 0.1.2 (crates.io,
