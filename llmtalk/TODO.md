@@ -113,6 +113,8 @@ path), so the morning starts from a single status.
 6. (win) Build and test at main, then journal items 32-74 above (the shared-code checks), fixing Windows breakage.
 7. (win) Windows / Vulkan regression: TotK 1.0.0 and 1.1.2 lifted builds through the builder (re-lift), scripted
    title -> Hateno -> walk -> inventory, BotW 1.9.0, one Vulkan validation-layer run, no device loss.
+   Mac cross-check (mac, at ef92759, MoltenVK, not the Windows run): TotK 1.1.2 to Hateno on --gpu=vulkan renders right
+   (world, HUD, Link), 60 fps capped (record 8.6 ms, GPU 16.6 ms a frame), no traps or device errors.
 8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
 9. (win) Windows pacing: pacing_shown is not fed (items 15/16), so the vsync divisor never steps down. Feed it from
    present timing, or confirm TotK / BotW at the 60 limit pace well without it and say which default ships.
