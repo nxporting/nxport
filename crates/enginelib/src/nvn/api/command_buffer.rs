@@ -944,6 +944,11 @@ pub(crate) fn command_list_peek(handle: u64) -> Option<std::sync::Arc<RecordedCo
     COMMAND_LISTS.read().unwrap().get(&handle).map(|e| e.0.clone())
 }
 
+/// The address of the recording `handle` refers to now (identity checks without touching its reference count).
+pub(crate) fn command_list_ptr(handle: u64) -> Option<*const RecordedCommandList> {
+    COMMAND_LISTS.read().unwrap().get(&handle).map(|e| std::sync::Arc::as_ptr(&e.0))
+}
+
 /// A recorded list's commands as captures show them (None for an unknown handle).
 pub(crate) fn list_texts(handle: u64) -> Option<Vec<String>> {
     let list = COMMAND_LISTS.read().unwrap().get(&handle).map(|e| e.0.clone())?;

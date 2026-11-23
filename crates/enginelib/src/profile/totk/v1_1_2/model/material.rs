@@ -162,29 +162,27 @@ type Recording = std::sync::Weak<crate::nvn::api::RecordedCommandList>;
 
 /// Is `rec` still the recording list `handle` refers to?
 fn current(handle: u64, rec: &Recording) -> bool {
-    crate::nvn::api::command_list_peek(handle).is_some_and(|r| rec.upgrade().is_some_and(|w| std::sync::Arc::ptr_eq(&r, &w)))
+    crate::nvn::api::command_list_ptr(handle).is_some_and(|r| std::ptr::eq(r, rec.as_ptr()))
 }
 
 /// Native material descriptions by list handle, with the recording they describe and the pass's program list (the
 /// game records a changed material or vertex input again at the same command memory, which keeps the handle).
-static DESCRIBED: std::sync::Mutex<Option<std::collections::HashMap<u64, (Recording, Option<(u64, Recording)>, Description)>>> =
-    std::sync::Mutex::new(None);
+static DESCRIBED: std::sync::RwLock<Option<std::collections::HashMap<u64, (Recording, Option<(u64, Recording)>, Description)>>> =
+    std::sync::RwLock::new(None);
 
 /// The material list `handle` (pass `pass`, slot `b` of unit `d`) described from the game's objects: the model's
 /// vertex input (the pass's program list), then the bind's typed commands. Rebuilt when the game records either list
 /// again. None when a
 /// command is not of the kinds the executor applies (the list is run instead).
 pub(super) unsafe fn described(p: &Port, handle: u64, d: usize, w: usize, pass: usize, b: i32) -> Option<Description> {
-    let recording = crate::nvn::api::command_list_peek(handle)?;
-    // Cloned out first: the program list's check takes the command list lock.
-    let known = DESCRIBED.lock().unwrap().get_or_insert_with(Default::default).get(&handle).cloned();
+    // Cloned out first: the checks take the command list lock.
+    let known = DESCRIBED.read().unwrap().as_ref().and_then(|m| m.get(&handle).cloned());
     if let Some((rec, program, m)) = known {
-        if rec.upgrade().is_some_and(|r| std::sync::Arc::ptr_eq(&r, &recording))
-            && program.as_ref().is_none_or(|(h, p)| current(*h, p))
-        {
+        if current(handle, &rec) && program.as_ref().is_none_or(|(h, p)| current(*h, p)) {
             return Some(m);
         }
     }
+    let recording = crate::nvn::api::command_list_peek(handle)?;
     let e = p.m.r64(d + 0x68) + pass * 0x60;
     let mut q = Port::new(super::mem::Mem::applying(), p.base, false);
     let mut r = Ok(());
@@ -208,7 +206,7 @@ pub(super) unsafe fn described(p: &Port, handle: u64, d: usize, w: usize, pass: 
     }
     all.extend(cmds);
     let m = std::sync::Arc::new(all);
-    let mut g = DESCRIBED.lock().unwrap();
+    let mut g = DESCRIBED.write().unwrap();
     let map = g.get_or_insert_with(Default::default);
     if map.len() > 1 << 17 {
         map.retain(|_, (rec, _, _)| rec.strong_count() > 0);
