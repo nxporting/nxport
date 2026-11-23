@@ -529,6 +529,10 @@ macro_rules! rec {
 /// --log-draw-callers=N also counts every command the game records through the NVN entry points by its first two guest
 /// return addresses, frames N..N+60 (the game code still recording through NVN, per call site).
 unsafe fn note_cmd_caller(name: &'static str) {
+    static NEW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *NEW.get_or_init(|| crate::settings::get().log.log_new_nvn_callers) {
+        note_new_cmd_caller(name);
+    }
     static FROM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     let Some(from) = *FROM.get_or_init(|| crate::settings::get().log.log_draw_callers) else {
         return;
@@ -571,6 +575,36 @@ unsafe fn note_cmd_caller(name: &'static str) {
         fp = next;
     }
     *MAP.lock().unwrap().get_or_insert_with(Default::default).entry((name, key[0], key[1])).or_default() += 1;
+}
+
+/// --log-new-nvn-callers: each (command, guest call chain) the first time the game records it through the NVN entry
+/// points, with the presented frame, over the whole session.
+unsafe fn note_new_cmd_caller(name: &'static str) {
+    let base = crate::guest::loader::main_base();
+    let mut fp = crate::guest_reg!(x29);
+    let mut key = [0u32; 8];
+    let mut n = 0;
+    for _ in 0..32 {
+        if fp < 0x1000 || fp & 7 != 0 || n == 8 {
+            break;
+        }
+        let next = *(fp as *const usize);
+        let ret = *((fp + 8) as *const usize);
+        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
+        if !stub && ret >= base && ret < base + (256 << 20) {
+            key[n] = (ret - base) as u32;
+            n += 1;
+        }
+        if next <= fp && !stub {
+            break;
+        }
+        fp = next;
+    }
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<(&'static str, [u32; 8])>>> = std::sync::Mutex::new(None);
+    if SEEN.lock().unwrap().get_or_insert_with(Default::default).insert((name, key)) {
+        let chain: Vec<String> = key[..n].iter().map(|a| format!("{a:#x}")).collect();
+        println!("[nvn-callers] frame {}: {name}  main+ {}", crate::gpu::backend().presented_frames(), chain.join(" <- "));
+    }
 }
 
 #[no_mangle]

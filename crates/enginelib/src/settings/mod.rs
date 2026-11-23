@@ -507,6 +507,8 @@ group! {
         log_hitch: Option<f64> = None,
         /// Draws by the game's call chain, frames N..N+60
         log_draw_callers: Option<u64> = None,
+        /// Each NVN command call chain of the game's the first time it is recorded, with the frame (all session)
+        log_new_nvn_callers: bool = false,
         /// Executor time per command kind, frames N..N+60
         log_cmd_time: Option<u64> = None,
         /// Call chains of render-target binds of this size
