@@ -9,7 +9,8 @@ pub(super) struct Mem {
     overlay: Option<HashMap<usize, (u64, u64)>>,
     /// Host buffers the port builds and hands to game code (start, length): written directly, never overlaid.
     owned: Vec<(usize, usize)>,
-    /// Applying undoably: (address, length, old bytes) of every write, in order.
+    /// Applying undoably: (address, length, old bytes) of every write, in order; length 0: an atomic OR of this run, the
+    /// bits it set (cleared again atomically, so other threads' changes to the word survive).
     undo: Option<Vec<(usize, u8, u64)>>,
     /// Applying undoably until `commit`: past it the run calls game code and can no longer be undone.
     committed: bool,
@@ -55,7 +56,11 @@ impl Mem {
     pub(super) unsafe fn rollback(&mut self) {
         if let Some(u) = self.undo.take() {
             for &(a, n, old) in u.iter().rev() {
-                std::ptr::copy_nonoverlapping(&old as *const u64 as *const u8, a as *mut u8, n as usize);
+                if n == 0 {
+                    (*(a as *const std::sync::atomic::AtomicU32)).fetch_and(!(old as u32), std::sync::atomic::Ordering::AcqRel);
+                } else {
+                    std::ptr::copy_nonoverlapping(&old as *const u64 as *const u8, a as *mut u8, n as usize);
+                }
             }
         }
     }
@@ -174,8 +179,13 @@ impl Mem {
         match &self.overlay {
             None => {
                 let old = (*(a as *const std::sync::atomic::AtomicU32)).fetch_or(bits, std::sync::atomic::Ordering::AcqRel);
-                if let Some(u) = &mut self.undo {
-                    u.push((a, 4, old as u64));
+                // Only the bits this run set are undone: the word is shared (a lock another thread holds and may
+                // release before a rollback, flags others set meanwhile).
+                let added = bits & !old;
+                if added != 0 {
+                    if let Some(u) = &mut self.undo {
+                        u.push((a, 0, added as u64));
+                    }
                 }
                 old
             }
