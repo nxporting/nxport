@@ -1176,6 +1176,8 @@ mod tests {
             ("iPhone SE", "[build]\ntarget = \"ios\"\n\n[display]\nlaunch-aspect = \"16:9\"\n"),
         ],
         module_patches: &[],
+        main_thread_tick: None,
+        mods: &[],
     };
 
     /// A builder with a game loaded (no dump on disk).
