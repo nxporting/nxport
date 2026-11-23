@@ -65,6 +65,9 @@ path), so the morning starts from a single status.
    the user's phone.
 5. (mac) Release packaging on the Mac side: release.yml's macos job at main, and the notices list covering crates added
    since 2026-11-16 (the VP8 decoder among them).
+   Result (mac, 2026-11-22): notices OK. The only third-party crate added since 2026-11-16 is vp8-decoder 0.1.2 (crates.io,
+   "(MIT OR Apache-2.0) AND BSD-3-Clause"); it ships LICENSE-APACHE, LICENSE-MIT and NOTICE (RFC 6386's BSD text), and
+   notices.pl takes NOTICE files, so the archive carries all three. The macos job at main is not built yet (heavy).
 6. (win) Build and test at main, then journal items 32-74 above (the shared-code checks), fixing Windows breakage.
 7. (win) Windows / Vulkan regression: TotK 1.0.0 and 1.1.2 lifted builds through the builder (re-lift), scripted
    title -> Hateno -> walk -> inventory, BotW 1.9.0, one Vulkan validation-layer run, no device loss.
