@@ -79,7 +79,8 @@ path), so the morning starts from a single status.
    input?). FIXED (see the scenario commit): the scenario sampled exactly on texel edges (32 texels over 48 pixels,
    nearest filtering); now 1:1, references re-recorded; gpu_conformance passes in full (Metal render and tiny paths,
    Vulkan). Win-worker: the scenario's references changed (images.bin, present.bin); Vulkan matches them here.
-   TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback). Game surveys (work/tools/dev/survey.sh:
+   TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback), inventory open in game mode renders
+   right (the blank fused-weapon icons are the save's own empty PNGs, AGENTS.md issue 18). Game surveys (work/tools/dev/survey.sh:
    headless, A every 300 frames, frames 600-9000, the builder's caches) at 8cb507c, no traps / GPU errors in any:
    TotK 1.0.0 title cards -> opening cave with Zelda's name card; BotW 1.9.0 opening to "Wake up, Link"; BotW 1.5.0
    botw-sunk save -> Great Plateau gameplay with HUD; SMO Cap Kingdom wake-up ("Look Around" prompt); Kirby at the
