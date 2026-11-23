@@ -69,7 +69,14 @@ path), so the morning starts from a single status.
    Metal and Vulkan); (b) the Vulkan Hateno replay fails only when run in parallel with the scenarios test (alone it
    passes; not investigated); (c) the render_to_texture scenario on Metal differs in 16 of 4096 pixels along one
    triangle edge (max 0.79), the same at 2026-11-20's d20110b: older, not tonight's; not bisected further.
-   TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback). Game surveys: next.
+   TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback). Game surveys (work/tools/dev/survey.sh:
+   headless, A every 300 frames, frames 600-9000, the builder's caches) at 8cb507c, no traps / GPU errors in any:
+   TotK 1.0.0 title cards -> opening cave with Zelda's name card; BotW 1.9.0 opening to "Wake up, Link"; BotW 1.5.0
+   botw-sunk save -> Great Plateau gameplay with HUD; SMO Cap Kingdom wake-up ("Look Around" prompt); Kirby at the
+   online prompt (A-only input loops there, as known); MK8D title -> Select a Mii (six default Miis; needs
+   MAX_RSS_GB=12, as known); Wonder title -> user -> character select -> Flower Kingdom gameplay; Silver Pines title ->
+   Difficulty Select. Contact sheets in the Mac session's scratch (surv/*_sheet.png). Item 2 DONE except the open
+   conformance points above.
 3. (mac) Builder end to end from main: a fresh TotK Mac app (and BotW) from nxport-builder, run from its bundle
    (footprint ~3 GB, shader cache ~2 GB, pipeline list precompile).
 4. (mac) iOS: the TotK 1.0.0 .ipa from main (--aspect 19.5:9), with the AOT image dumped twice and compared, ready for
