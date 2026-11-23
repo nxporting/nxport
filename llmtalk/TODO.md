@@ -255,6 +255,12 @@ and update this file when you finish or drop it.
      nothing to do (std RwLock).
   72. d92d80c / 26c3715 (TotK native ports, shared): the map mask tile pass 0xbdc1d0 ported; material description lookups
      under a RwLock by pointer identity (command_list_ptr in nvn/api). Nothing for Windows.
+  73. 06a401b (nvn/api command_buffer.rs, texture.rs, pools.rs, mod.rs: shared): TEX_SNAPSHOTS is an RwLock; EndRecording
+     takes the command list write lock only over budget; per-thread reuse of capture_buffered vectors. Windows: same
+     code, nothing to do.
+  74. e92253d / the mask pass (TotK native ports, shared): a port stopping past its commit point unbinds its own host
+     render buffer (fixed a use-after-free crash at fast travel); summaries once a minute; main+0xbdc94c ported. Nothing
+     for Windows.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
