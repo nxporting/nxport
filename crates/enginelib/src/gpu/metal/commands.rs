@@ -666,6 +666,15 @@ impl Gfx {
                 Cmd::ModelDraw(m) => {
                     use crate::nvn::cmd::ModelItem;
                     for item in &m.items {
+                        // A native run holds hundreds of draws: a pass cut for split_draws inside it commits right
+                        // there (else the commit waits for the next command and cuts the run's next pass again).
+                        // Only that: the other commit rules stay at command boundaries, as for the game's lists.
+                        if st.force_split && st.enc.is_none() && self.maybe_split(st) {
+                            let Some(new_cb) = st.cur_cb.clone() else {
+                                return;
+                            };
+                            cur = new_cb;
+                        }
                         match item {
                             // The material from the game's objects: the model's vertex input, then the material's
                             // bindings (replay side B runs the recorded list instead).
