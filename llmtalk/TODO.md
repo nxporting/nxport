@@ -247,6 +247,7 @@ and update this file when you finish or drop it.
      uses the same code; nothing to do unless current_bounds is unset there (then the walk stops at the HLE stub).
   67. 7ba5fc6 (TotK native ports' undo log, shared): atomic ORs rolled back bit-wise (fixed a native-mode boot hang).
      Nothing for Windows.
+  68. 06b6af9 (TotK native ports, shared): FXAA 0xe97ed4 ported. Nothing for Windows.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
