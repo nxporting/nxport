@@ -49,6 +49,7 @@ mod ui_passes;
 mod mip_copy;
 mod filter_draws;
 mod fxaa;
+mod mask_pass;
 mod mask_tile;
 mod freefall_objects;
 mod gather_callback;
@@ -1078,6 +1079,24 @@ pub unsafe extern "C" fn on_fxaa(this: usize, w: usize, view: u32, ctx: usize) -
 #[no_mangle]
 pub unsafe extern "C" fn on_fxaa_end() -> u32 {
     FXAAS.end("fxaa", &FXAA_EXPECTED)
+}
+
+static MASK_PASSES: Checked = Checked::new("mask passes");
+
+thread_local! {
+    static MASK_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xbdc94c(this, w, index): the map mask pass: a compute dispatch, then two mesh lists drawn through temporary
+/// targets (mask_pass.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_mask_pass(this: usize, w: usize, index: u32) -> u32 {
+    MASK_PASSES.run(&MASK_PASS_EXPECTED, move |p| mask_pass::mask_pass(p, this, w, index))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_mask_pass_end() -> u32 {
+    MASK_PASSES.end("mask passes", &MASK_PASS_EXPECTED)
 }
 
 static MASK_TILES: Checked = Checked::new("mask tiles");
@@ -2656,6 +2675,9 @@ fn report() {
     if let Some(l) = FXAAS.summary("fxaa") {
         println!("{l}");
     }
+    if let Some(l) = MASK_PASSES.summary("mask passes") {
+        println!("{l}");
+    }
     if let Some(l) = MASK_TILES.summary("mask tiles") {
         println!("{l}");
     }
@@ -3100,6 +3122,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_mask_tile(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_mask_tile_end())) as usize;
         hook(base, mem_space, 0xbdc1d0, 0xa9ba7bfd, pre, post, "Mask tiles");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_mask_pass(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_mask_pass_end())) as usize;
+        hook(base, mem_space, 0xbdc94c, 0xa9ba7bfd, pre, post, "Mask passes");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_pass(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_pass_end())) as usize;
         hook(base, mem_space, 0xc573c4, 0xd10243ff, pre, post, "freefall object pass");
