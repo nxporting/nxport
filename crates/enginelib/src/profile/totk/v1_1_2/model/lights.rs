@@ -206,6 +206,50 @@ pub(super) unsafe fn light_shape(p: &mut Port, ctx: usize, light: usize, view: u
     Ok(())
 }
 
+/// What can stop light_shape for every light of the list at `rec` +o (count, lights +o+8) drawn for `view` with the
+/// context byte `flag`, checked in advance: the id table, the shape type, the program each light picks.
+pub(super) unsafe fn light_list_ready(p: &mut Port, owner: usize, rec: usize, o: usize, view: u32, flag: u8) -> R<()> {
+    let n = p.m.i32(rec + o);
+    if n < 0 {
+        return Err("negative light count");
+    }
+    if n > 0 && p.m.r8(p.m.r64(p.base + ID_TABLE_GUARD)) & 1 == 0 {
+        return Err("light id table not initialised");
+    }
+    let progs = p.m.r64(p.m.r64(owner + 0x20) + 8);
+    let list = p.m.r64(rec + o + 8);
+    for k in 0..n as usize {
+        let light = p.m.r64(list + k * 8);
+        let obj = p.m.r64(light + 0x50);
+        if (p.m.r64(obj + 0x68) >> 10) & 1 == 0 {
+            continue;
+        }
+        let shape = p.m.r64(obj + 0x28);
+        let id = p.m.r32(light + 0x58);
+        let variant = ((id != 0) as u32 * 16 + view * 4).wrapping_add(flag as u32 * 8) as i32;
+        let v = match p.query(p.base + p.vfn(shape, 0x10), &[shape as u64]) as u32 {
+            0 => {
+                if p.m.r8(p.m.r64(p.base + SHAPE_TYPE_GUARD)) & 1 == 0 {
+                    return Err("light shape type not initialised");
+                }
+                variant
+            }
+            kind @ (3 | 4) => variant | (kind - 2) as i32,
+            _ => continue,
+        };
+        let prog = if v < 1 {
+            p.m.r64(progs + 0x10)
+        } else {
+            let i = (v - 1) as u32;
+            p.m.r64(progs + 0x20) + if p.m.r32(progs + 0x18) > i { i } else { 0 } as usize * 0x158
+        };
+        if p.m.r32(prog + 0x10) != 0 || p.m.r32(prog + 0x14) != 0 {
+            return Err("agl program setup pending");
+        }
+    }
+    Ok(())
+}
+
 /// Light shape kinds 3 and 4 of main+0x969d28: the program of variant `variant | 1` (kind 3) or `variant | 2` (kind 4),
 /// the light's 0x30 bytes, the light's inverse times the view's inverse (3x4, main+0x9f3524), the entry's values, in a
 /// 0x70 / 0x80-byte ring block at slot 1; kind 3 draws shapes +8 / stream +0x728, kind 4 shapes +0x5a8 / stream +0x2328.

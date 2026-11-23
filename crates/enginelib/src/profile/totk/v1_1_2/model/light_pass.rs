@@ -7,7 +7,7 @@
 use super::draw::{Port, R};
 use super::texture_slots::{alloc_target, copy_target, new_buffer, new_target, release, release_sampler, set_extent, texture_assign, Host};
 use super::texture_slots::{COLOR_VTABLE, DEPTH_VTABLE};
-use super::lights::{light_program, light_shape, shape_state, stream_draw, stream_draw_n, SHAPES, STREAMS};
+use super::lights::{light_list_ready, light_program, light_shape, shape_state, stream_draw, stream_draw_n, SHAPES, STREAMS};
 use super::targets;
 use super::vfx::{program_apply, program_block, program_storage_block, program_texture, shadow_mask_setup};
 use super::viewport;
@@ -212,6 +212,9 @@ unsafe fn light_pass_in(p: &mut Port, o: &mut Objs, this: usize, w: usize, view:
         if p.m.r32(prog + 0x10) != 0 || p.m.r32(prog + 0x14) != 0 {
             return Err("agl program setup pending");
         }
+    }
+    for (off, v) in [(0x138usize, 0u32), (0x148, 0), (0x158, 1), (0x168, 1), (0x178, 0)] {
+        light_list_ready(p, this, rec, off, v, flag)?;
     }
     let t1 = o.keep(texture_new(p));
     texture_assign(p, t1, src)?;
