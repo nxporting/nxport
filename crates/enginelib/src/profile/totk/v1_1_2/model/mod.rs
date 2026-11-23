@@ -522,7 +522,7 @@ pub unsafe extern "C" fn on_block_bind(block: usize, w: usize, slots: usize, ele
     })
 }
 
-static CUBEMAP_FACES: Checked = Checked::new();
+static CUBEMAP_FACES: Checked = Checked::new("cube map faces");
 
 thread_local! {
     static CUBEMAP_FACE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -541,7 +541,7 @@ pub unsafe extern "C" fn on_cubemap_face_end() -> u32 {
     CUBEMAP_FACES.end("cube map faces", &CUBEMAP_FACE_EXPECTED)
 }
 
-static TRANSFORMED_QUADS: Checked = Checked::new();
+static TRANSFORMED_QUADS: Checked = Checked::new("transformed quads");
 
 thread_local! {
     static TRANSFORMED_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -558,7 +558,7 @@ pub unsafe extern "C" fn on_transformed_quad_end() -> u32 {
     TRANSFORMED_QUADS.end("transformed quads", &TRANSFORMED_QUAD_EXPECTED)
 }
 
-static COPY_QUADS: Checked = Checked::new();
+static COPY_QUADS: Checked = Checked::new("copy quads");
 
 thread_local! {
     static COPY_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn on_copy_quad_end() -> u32 {
     COPY_QUADS.end("copy quads", &COPY_QUAD_EXPECTED)
 }
 
-static SNAPSHOTS: Checked = Checked::new();
+static SNAPSHOTS: Checked = Checked::new("snapshots");
 
 thread_local! {
     static SNAPSHOT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -593,7 +593,7 @@ pub unsafe extern "C" fn on_snapshot_end() -> u32 {
     SNAPSHOTS.end("snapshots", &SNAPSHOT_EXPECTED)
 }
 
-static LIGHT_SHAPES: Checked = Checked::new();
+static LIGHT_SHAPES: Checked = Checked::new("light shapes");
 
 thread_local! {
     static LIGHT_SHAPE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -610,7 +610,7 @@ pub unsafe extern "C" fn on_light_shape_end() -> u32 {
     LIGHT_SHAPES.end("light shapes", &LIGHT_SHAPE_EXPECTED)
 }
 
-static PING_PONGS: Checked = Checked::new();
+static PING_PONGS: Checked = Checked::new("ping-pong passes");
 
 thread_local! {
     static PING_PONG_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -627,7 +627,7 @@ pub unsafe extern "C" fn on_ping_pong_end() -> u32 {
     PING_PONGS.end("ping-pong passes", &PING_PONG_EXPECTED)
 }
 
-static DISPLAY_LISTS: Checked = Checked::new();
+static DISPLAY_LISTS: Checked = Checked::new("display lists");
 
 thread_local! {
     static DISPLAY_LIST_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -644,7 +644,7 @@ pub unsafe extern "C" fn on_display_lists_end() -> u32 {
     DISPLAY_LISTS.end("display lists", &DISPLAY_LIST_EXPECTED)
 }
 
-static CLEARING_BINDS: Checked = Checked::new();
+static CLEARING_BINDS: Checked = Checked::new("clearing binds");
 
 thread_local! {
     static CLEARING_BIND_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -661,8 +661,8 @@ pub unsafe extern "C" fn on_clearing_bind_end() -> u32 {
     CLEARING_BINDS.end("clearing binds", &CLEARING_BIND_EXPECTED)
 }
 
-static TEXTURED_DRAWS: Checked = Checked::new();
-static TINTED_DRAWS: Checked = Checked::new();
+static TEXTURED_DRAWS: Checked = Checked::new("textured draws");
+static TINTED_DRAWS: Checked = Checked::new("tinted draws");
 
 thread_local! {
     static TEXTURED_DRAW_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -691,7 +691,7 @@ pub unsafe extern "C" fn on_tinted_draw_end() -> u32 {
     TINTED_DRAWS.end("tinted draws", &TINTED_DRAW_EXPECTED)
 }
 
-static DEPTH_BUFFER_ENDS: Checked = Checked::new();
+static DEPTH_BUFFER_ENDS: Checked = Checked::new("shadow depth buffer ends");
 
 thread_local! {
     static DEPTH_BUFFER_END_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -714,7 +714,7 @@ pub unsafe extern "C" fn on_slots_deferred(w: usize, handles: usize, index: i32,
     primitive(|p| Ok(vfx::bind_slots_deferred(p, w, handles, index, slots) as u32))
 }
 
-static TEXTURE_QUADS: Checked = Checked::new();
+static TEXTURE_QUADS: Checked = Checked::new("texture quads");
 
 thread_local! {
     static TEXTURE_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -731,7 +731,7 @@ pub unsafe extern "C" fn on_texture_quad_end() -> u32 {
     TEXTURE_QUADS.end("texture quads", &TEXTURE_QUAD_EXPECTED)
 }
 
-static CAPTURE_QUADS: Checked = Checked::new();
+static CAPTURE_QUADS: Checked = Checked::new("capture quads");
 
 thread_local! {
     static CAPTURE_QUAD_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -750,7 +750,7 @@ pub unsafe extern "C" fn on_capture_quad_end() -> u32 {
     CAPTURE_QUADS.end("capture quads", &CAPTURE_QUAD_EXPECTED)
 }
 
-static VIEW_COMPOSITES: Checked = Checked::new();
+static VIEW_COMPOSITES: Checked = Checked::new("view composites");
 
 thread_local! {
     static VIEW_COMPOSITE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -767,8 +767,8 @@ pub unsafe extern "C" fn on_view_composite_end() -> u32 {
     VIEW_COMPOSITES.end("view composites", &VIEW_COMPOSITE_EXPECTED)
 }
 
-static VIEW_GRIDS: Checked = Checked::new();
-static VIEW_FULLSCREENS: Checked = Checked::new();
+static VIEW_GRIDS: Checked = Checked::new("view grids");
+static VIEW_FULLSCREENS: Checked = Checked::new("view full-screen passes");
 
 thread_local! {
     static VIEW_GRID_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -796,8 +796,8 @@ pub unsafe extern "C" fn on_view_fullscreen_end() -> u32 {
     VIEW_FULLSCREENS.end("view full-screen passes", &VIEW_FULLSCREEN_EXPECTED)
 }
 
-static SCENE_PASSES: Checked = Checked::new();
-static ENTRY_VOLUMES: Checked = Checked::new();
+static SCENE_PASSES: Checked = Checked::new("scene buffer passes");
+static ENTRY_VOLUMES: Checked = Checked::new("entry volumes");
 
 thread_local! {
     static SCENE_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn on_entry_volumes_end() -> u32 {
     ENTRY_VOLUMES.end("entry volumes", &ENTRY_VOLUMES_EXPECTED)
 }
 
-static VIEW_COPIES: Checked = Checked::new();
+static VIEW_COPIES: Checked = Checked::new("view copies");
 
 thread_local! {
     static VIEW_COPY_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -843,7 +843,7 @@ pub unsafe extern "C" fn on_view_copy_end() -> u32 {
     VIEW_COPIES.end("view copies", &VIEW_COPY_EXPECTED)
 }
 
-static REPROJECTIONS: Checked = Checked::new();
+static REPROJECTIONS: Checked = Checked::new("reprojection passes");
 
 thread_local! {
     static REPROJECTION_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -860,7 +860,7 @@ pub unsafe extern "C" fn on_reprojection_end() -> u32 {
     REPROJECTIONS.end("reprojection passes", &REPROJECTION_EXPECTED)
 }
 
-static VOLUME_MASKS: Checked = Checked::new();
+static VOLUME_MASKS: Checked = Checked::new("volume masks");
 
 thread_local! {
     static VOLUME_MASK_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -877,7 +877,7 @@ pub unsafe extern "C" fn on_volume_mask_end() -> u32 {
     VOLUME_MASKS.end("volume masks", &VOLUME_MASK_EXPECTED)
 }
 
-static POST_PASSES: Checked = Checked::new();
+static POST_PASSES: Checked = Checked::new("post passes");
 
 thread_local! {
     static POST_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -894,7 +894,7 @@ pub unsafe extern "C" fn on_post_pass_end() -> u32 {
     POST_PASSES.end("post passes", &POST_PASS_EXPECTED)
 }
 
-static LIGHT_PASSES: Checked = Checked::new();
+static LIGHT_PASSES: Checked = Checked::new("light passes");
 
 thread_local! {
     static LIGHT_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -912,7 +912,7 @@ pub unsafe extern "C" fn on_light_pass_end() -> u32 {
     LIGHT_PASSES.end("light passes", &LIGHT_PASS_EXPECTED)
 }
 
-static VIEW_TARGET_DRAWS: Checked = Checked::new();
+static VIEW_TARGET_DRAWS: Checked = Checked::new("view target draws");
 
 thread_local! {
     static VIEW_TARGET_DRAW_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -929,8 +929,8 @@ pub unsafe extern "C" fn on_view_target_draw_end() -> u32 {
     VIEW_TARGET_DRAWS.end("view target draws", &VIEW_TARGET_DRAW_EXPECTED)
 }
 
-static DOF_COMPOSITES: Checked = Checked::new();
-static EDGE_ADJUSTS: Checked = Checked::new();
+static DOF_COMPOSITES: Checked = Checked::new("depth of field composites");
+static EDGE_ADJUSTS: Checked = Checked::new("edge adjusts");
 
 thread_local! {
     static DOF_COMPOSITE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -958,10 +958,10 @@ pub unsafe extern "C" fn on_edge_adjust_end() -> u32 {
     EDGE_ADJUSTS.end("edge adjusts", &EDGE_ADJUST_EXPECTED)
 }
 
-static VIEW_GATHERS: Checked = Checked::new();
-static VIEW_TARGET_PASSES: Checked = Checked::new();
-static OCCLUSION_BUFFERS: Checked = Checked::new();
-static NOISE_GAUGES: Checked = Checked::new();
+static VIEW_GATHERS: Checked = Checked::new("view gathers");
+static VIEW_TARGET_PASSES: Checked = Checked::new("view target passes");
+static OCCLUSION_BUFFERS: Checked = Checked::new("occlusion buffers");
+static NOISE_GAUGES: Checked = Checked::new("noise gauges");
 
 thread_local! {
     static VIEW_GATHER_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1015,7 +1015,7 @@ pub unsafe extern "C" fn on_noise_gauge_end() -> u32 {
     NOISE_GAUGES.end("noise gauges", &NOISE_GAUGE_EXPECTED)
 }
 
-static TARGET_BLITS: Checked = Checked::new();
+static TARGET_BLITS: Checked = Checked::new("target blits");
 
 thread_local! {
     static TARGET_BLIT_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1032,7 +1032,7 @@ pub unsafe extern "C" fn on_target_blit_end() -> u32 {
     TARGET_BLITS.end("target blits", &TARGET_BLIT_EXPECTED)
 }
 
-static FXAAS: Checked = Checked::new();
+static FXAAS: Checked = Checked::new("fxaa");
 
 thread_local! {
     static FXAA_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1049,7 +1049,7 @@ pub unsafe extern "C" fn on_fxaa_end() -> u32 {
     FXAAS.end("fxaa", &FXAA_EXPECTED)
 }
 
-static COLOR_CORRECTIONS: Checked = Checked::new();
+static COLOR_CORRECTIONS: Checked = Checked::new("colour corrections");
 
 thread_local! {
     static COLOR_CORRECTION_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1066,7 +1066,7 @@ pub unsafe extern "C" fn on_color_correction_end() -> u32 {
     COLOR_CORRECTIONS.end("colour corrections", &COLOR_CORRECTION_EXPECTED)
 }
 
-static HALF_RES_PASSES: Checked = Checked::new();
+static HALF_RES_PASSES: Checked = Checked::new("half resolution passes");
 
 thread_local! {
     static HALF_RES_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1089,7 +1089,7 @@ pub unsafe extern "C" fn on_half_res_pass_end() -> u32 {
     HALF_RES_PASSES.end("half resolution passes", &HALF_RES_PASS_EXPECTED)
 }
 
-static SCALED_SHAPES: Checked = Checked::new();
+static SCALED_SHAPES: Checked = Checked::new("scaled shapes");
 
 thread_local! {
     static SCALED_SHAPE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1106,7 +1106,7 @@ pub unsafe extern "C" fn on_scaled_shape_end() -> u32 {
     SCALED_SHAPES.end("scaled shapes", &SCALED_SHAPE_EXPECTED)
 }
 
-static VOLUME_MASK_CHAINS: Checked = Checked::new();
+static VOLUME_MASK_CHAINS: Checked = Checked::new("volume mask chains");
 
 thread_local! {
     static VOLUME_MASK_CHAIN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1123,7 +1123,7 @@ pub unsafe extern "C" fn on_volume_mask_chain_end() -> u32 {
     VOLUME_MASK_CHAINS.end("volume mask chains", &VOLUME_MASK_CHAIN_EXPECTED)
 }
 
-static CORRECT_DEPTHS: Checked = Checked::new();
+static CORRECT_DEPTHS: Checked = Checked::new("correct depth passes");
 
 thread_local! {
     static CORRECT_DEPTH_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1140,7 +1140,7 @@ pub unsafe extern "C" fn on_correct_depth_end() -> u32 {
     CORRECT_DEPTHS.end("correct depth passes", &CORRECT_DEPTH_EXPECTED)
 }
 
-static DEFERRED_VIEW_PASSES: Checked = Checked::new();
+static DEFERRED_VIEW_PASSES: Checked = Checked::new("deferred view passes");
 
 thread_local! {
     static DEFERRED_VIEW_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1157,7 +1157,7 @@ pub unsafe extern "C" fn on_deferred_view_pass_end() -> u32 {
     DEFERRED_VIEW_PASSES.end("deferred view passes", &DEFERRED_VIEW_PASS_EXPECTED)
 }
 
-static LIGHTING: Checked = Checked::new();
+static LIGHTING: Checked = Checked::new("lighting");
 
 thread_local! {
     static LIGHTING_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1174,7 +1174,7 @@ pub unsafe extern "C" fn on_lighting_end() -> u32 {
     LIGHTING.end("lighting", &LIGHTING_EXPECTED)
 }
 
-static DOF_BLUR_CHAINS: Checked = Checked::new();
+static DOF_BLUR_CHAINS: Checked = Checked::new("dof blur chains");
 
 thread_local! {
     static DOF_BLUR_CHAIN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1192,7 +1192,7 @@ pub unsafe extern "C" fn on_dof_blur_chain_end() -> u32 {
     DOF_BLUR_CHAINS.end("dof blur chains", &DOF_BLUR_CHAIN_EXPECTED)
 }
 
-static POST_CHAINS: Checked = Checked::new();
+static POST_CHAINS: Checked = Checked::new("post chains");
 
 thread_local! {
     static POST_CHAIN_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1209,8 +1209,8 @@ pub unsafe extern "C" fn on_post_chain_end() -> u32 {
     POST_CHAINS.end("post chains", &POST_CHAIN_EXPECTED)
 }
 
-static MASK_POINTS: Checked = Checked::new();
-static STATE_BLITS: Checked = Checked::new();
+static MASK_POINTS: Checked = Checked::new("mask points");
+static STATE_BLITS: Checked = Checked::new("state blits");
 
 thread_local! {
     static MASK_POINTS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1238,7 +1238,7 @@ pub unsafe extern "C" fn on_state_blit_end() -> u32 {
     STATE_BLITS.end("state blits", &STATE_BLITS_EXPECTED)
 }
 
-static FOOTPRINT_DRAWS: Checked = Checked::new();
+static FOOTPRINT_DRAWS: Checked = Checked::new("footprint draws");
 
 thread_local! {
     static FOOTPRINT_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1256,7 +1256,7 @@ pub unsafe extern "C" fn on_footprint_draw_end() -> u32 {
     FOOTPRINT_DRAWS.end("footprint draws", &FOOTPRINT_DRAWS_EXPECTED)
 }
 
-static BLUR_DRAWS: Checked = Checked::new();
+static BLUR_DRAWS: Checked = Checked::new("blur draws");
 
 thread_local! {
     static BLUR_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1274,7 +1274,7 @@ pub unsafe extern "C" fn on_blur_draw_end() -> u32 {
     BLUR_DRAWS.end("blur draws", &BLUR_DRAWS_EXPECTED)
 }
 
-static REDUCE_DRAWS: Checked = Checked::new();
+static REDUCE_DRAWS: Checked = Checked::new("reduce draws");
 
 thread_local! {
     static REDUCE_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1292,7 +1292,7 @@ pub unsafe extern "C" fn on_reduce_draw_end() -> u32 {
     REDUCE_DRAWS.end("reduce draws", &REDUCE_DRAWS_EXPECTED)
 }
 
-static MIP_COPIES: Checked = Checked::new();
+static MIP_COPIES: Checked = Checked::new("mip copies");
 
 thread_local! {
     static MIP_COPIES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1310,7 +1310,7 @@ pub unsafe extern "C" fn on_mip_copy_end() -> u32 {
     MIP_COPIES.end("mip copies", &MIP_COPIES_EXPECTED)
 }
 
-static CAPTURE_PANES: Checked = Checked::new();
+static CAPTURE_PANES: Checked = Checked::new("capture panes");
 
 thread_local! {
     static CAPTURE_PANES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1328,7 +1328,7 @@ pub unsafe extern "C" fn on_capture_pane_end() -> u32 {
     CAPTURE_PANES.end("capture panes", &CAPTURE_PANES_EXPECTED)
 }
 
-static PANE_DRAWS: Checked = Checked::new();
+static PANE_DRAWS: Checked = Checked::new("pane draws");
 
 thread_local! {
     static PANE_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1346,7 +1346,7 @@ pub unsafe extern "C" fn on_pane_draw_end() -> u32 {
     PANE_DRAWS.end("pane draws", &PANE_DRAWS_EXPECTED)
 }
 
-static DOF_BUFFERS: Checked = Checked::new();
+static DOF_BUFFERS: Checked = Checked::new("depth of field buffers");
 
 thread_local! {
     static DOF_BUFFERS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1364,7 +1364,7 @@ pub unsafe extern "C" fn on_dof_buffers_end() -> u32 {
     DOF_BUFFERS.end("depth of field buffers", &DOF_BUFFERS_EXPECTED)
 }
 
-static BLOOM_BODIES: Checked = Checked::new();
+static BLOOM_BODIES: Checked = Checked::new("bloom bodies");
 
 thread_local! {
     static BLOOM_BODIES_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1382,7 +1382,7 @@ pub unsafe extern "C" fn on_bloom_body_end() -> u32 {
     BLOOM_BODIES.end("bloom bodies", &BLOOM_BODIES_EXPECTED)
 }
 
-static EXPAND_DRAWS: Checked = Checked::new();
+static EXPAND_DRAWS: Checked = Checked::new("expand draws");
 
 thread_local! {
     static EXPAND_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1400,7 +1400,7 @@ pub unsafe extern "C" fn on_expand_draw_end() -> u32 {
     EXPAND_DRAWS.end("expand draws", &EXPAND_DRAWS_EXPECTED)
 }
 
-static BLUR_TYPE1S: Checked = Checked::new();
+static BLUR_TYPE1S: Checked = Checked::new("blur type 1");
 
 thread_local! {
     static BLUR_TYPE1S_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1418,7 +1418,7 @@ pub unsafe extern "C" fn on_blur_type1_end() -> u32 {
     BLUR_TYPE1S.end("blur type 1", &BLUR_TYPE1S_EXPECTED)
 }
 
-static BLUR_TYPE2S: Checked = Checked::new();
+static BLUR_TYPE2S: Checked = Checked::new("blur type 2");
 
 thread_local! {
     static BLUR_TYPE2S_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1436,7 +1436,7 @@ pub unsafe extern "C" fn on_blur_type2_end() -> u32 {
     BLUR_TYPE2S.end("blur type 2", &BLUR_TYPE2S_EXPECTED)
 }
 
-static GAUSSIANS: Checked = Checked::new();
+static GAUSSIANS: Checked = Checked::new("gaussian blurs");
 
 thread_local! {
     static GAUSSIANS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1454,7 +1454,7 @@ pub unsafe extern "C" fn on_gaussian_end() -> u32 {
     GAUSSIANS.end("gaussian blurs", &GAUSSIANS_EXPECTED)
 }
 
-static GAUSSIAN_OTHERS: Checked = Checked::new();
+static GAUSSIAN_OTHERS: Checked = Checked::new("other blurs");
 
 thread_local! {
     static GAUSSIAN_OTHERS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1472,7 +1472,7 @@ pub unsafe extern "C" fn on_gaussian_other_end() -> u32 {
     GAUSSIAN_OTHERS.end("other blurs", &GAUSSIAN_OTHERS_EXPECTED)
 }
 
-static TEXTURE_DRAWS: Checked = Checked::new();
+static TEXTURE_DRAWS: Checked = Checked::new("texture draws");
 
 thread_local! {
     static TEXTURE_DRAWS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1490,7 +1490,7 @@ pub unsafe extern "C" fn on_texture_draw_end() -> u32 {
     TEXTURE_DRAWS.end("texture draws", &TEXTURE_DRAWS_EXPECTED)
 }
 
-static VIEWPORT_SETS: Checked = Checked::new();
+static VIEWPORT_SETS: Checked = Checked::new("viewport sets");
 
 thread_local! {
     static VIEWPORT_SETS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1508,7 +1508,7 @@ pub unsafe extern "C" fn on_viewport_set_end() -> u32 {
     VIEWPORT_SETS.end("viewport sets", &VIEWPORT_SETS_EXPECTED)
 }
 
-static SCISSOR_SETS: Checked = Checked::new();
+static SCISSOR_SETS: Checked = Checked::new("scissor sets");
 
 thread_local! {
     static SCISSOR_SETS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1526,7 +1526,7 @@ pub unsafe extern "C" fn on_scissor_set_end() -> u32 {
     SCISSOR_SETS.end("scissor sets", &SCISSOR_SETS_EXPECTED)
 }
 
-static EFFECT_LAYERS: Checked = Checked::new();
+static EFFECT_LAYERS: Checked = Checked::new("effect layers");
 
 thread_local! {
     static EFFECT_LAYER_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1543,7 +1543,7 @@ pub unsafe extern "C" fn on_effect_layer_end() -> u32 {
     EFFECT_LAYERS.end("effect layers", &EFFECT_LAYER_EXPECTED)
 }
 
-static ATMOSPHERES: Checked = Checked::new();
+static ATMOSPHERES: Checked = Checked::new("atmosphere passes");
 
 thread_local! {
     static ATMOSPHERE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -1945,6 +1945,7 @@ thread_local! {
 
 /// Calls, identical, different, stops of a port checked at its own entry hook (items).
 struct Checked {
+    name: &'static str,
     calls: AtomicU64,
     same: AtomicU64,
     different: AtomicU64,
@@ -1952,8 +1953,8 @@ struct Checked {
 }
 
 impl Checked {
-    const fn new() -> Self {
-        Checked { calls: AtomicU64::new(0), same: AtomicU64::new(0), different: AtomicU64::new(0), stops: Mutex::new(Vec::new()) }
+    const fn new(name: &'static str) -> Self {
+        Checked { name, calls: AtomicU64::new(0), same: AtomicU64::new(0), different: AtomicU64::new(0), stops: Mutex::new(Vec::new()) }
     }
 
     fn stop(&self, what: &'static str) {
@@ -2015,7 +2016,7 @@ impl Checked {
             if let Err(what) = r {
                 if port.m.committed() {
                     // Past the commit point the game's state already changed: the game's call cannot run on top.
-                    println!("[model-draw] stopped after its commit point: {what}");
+                    println!("[model-draw] {} stopped after its commit point: {what}", self.name);
                     self.stop("after the commit point");
                     port.flush();
                     crate::nvn::api::commit_buffered(commands);
@@ -2122,7 +2123,7 @@ impl Checked {
     }
 }
 
-static QUERY_ITEMS: Checked = Checked::new();
+static QUERY_ITEMS: Checked = Checked::new("item queries");
 
 thread_local! {
     static QUERY_ITEM_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -2139,7 +2140,7 @@ pub unsafe extern "C" fn on_query_item_end() -> u32 {
     QUERY_ITEMS.end("item queries", &QUERY_ITEM_EXPECTED)
 }
 
-static OBJECT_ITEMS: Checked = Checked::new();
+static OBJECT_ITEMS: Checked = Checked::new("item objects");
 
 thread_local! {
     static OBJECT_ITEM_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
@@ -2247,7 +2248,7 @@ thread_local! {
 /// --verify-render-lists: an effect pass of a scene view (main+0xa414ac) predicted by itself.
 
 
-static MATERIALS: Checked = Checked::new();
+static MATERIALS: Checked = Checked::new("material binds");
 
 thread_local! {
     static MATERIAL_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
