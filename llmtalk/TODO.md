@@ -68,7 +68,11 @@ path), so the morning starts from a single status.
    SIGBUS (rt_guard held pages in the replay process: 0e7a588 turns it off there; now 248 of 248 targets match on
    Metal and Vulkan); (b) the Vulkan Hateno replay fails only when run in parallel with the scenarios test (alone it
    passes; not investigated); (c) the render_to_texture scenario on Metal differs in 16 of 4096 pixels along one
-   triangle edge (max 0.79), the same at 2026-11-20's d20110b: older, not tonight's; not bisected further.
+   triangle edge (max 0.79), the same at 2026-11-20's d20110b: older, not tonight's. Found: the tiny-pass compute path
+   (--tiny-compute=false: all match); between 413ecd9 (good) and 8a7e956 (bad), most likely cc567cd (run-time translated
+   stages get tiny-pass kernels; the scenario's stages are run-time translated). Not the kernel's coverage rule: a
+   top-left tie rule plus 1/256 vertex snapping changed nothing (reverted); the values differ a lot (interpolation or an
+   input?). TotK's tiny passes measured at the noise floor before. Open, not a release blocker in my view.
    TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback). Game surveys (work/tools/dev/survey.sh:
    headless, A every 300 frames, frames 600-9000, the builder's caches) at 8cb507c, no traps / GPU errors in any:
    TotK 1.0.0 title cards -> opening cave with Zelda's name card; BotW 1.9.0 opening to "Wake up, Link"; BotW 1.5.0
