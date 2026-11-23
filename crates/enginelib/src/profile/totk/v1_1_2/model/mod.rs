@@ -49,6 +49,7 @@ mod ui_passes;
 mod mip_copy;
 mod filter_draws;
 mod fxaa;
+mod mask_tile;
 mod freefall_objects;
 mod gather_callback;
 mod volume_mask_chain;
@@ -1077,6 +1078,23 @@ pub unsafe extern "C" fn on_fxaa(this: usize, w: usize, view: u32, ctx: usize) -
 #[no_mangle]
 pub unsafe extern "C" fn on_fxaa_end() -> u32 {
     FXAAS.end("fxaa", &FXAA_EXPECTED)
+}
+
+static MASK_TILES: Checked = Checked::new("mask tiles");
+
+thread_local! {
+    static MASK_TILE_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xbdc1d0(this, w, mode, col): a tile of the map mask (mask_tile.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_mask_tile(this: usize, w: usize, mode: i32, col: u32) -> u32 {
+    MASK_TILES.run(&MASK_TILE_EXPECTED, move |p| mask_tile::mask_tile_pass(p, this, w, mode, col))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_mask_tile_end() -> u32 {
+    MASK_TILES.end("mask tiles", &MASK_TILE_EXPECTED)
 }
 
 static COLOR_CORRECTIONS: Checked = Checked::new("colour corrections");
@@ -2615,6 +2633,9 @@ fn report() {
     if let Some(l) = FXAAS.summary("fxaa") {
         println!("{l}");
     }
+    if let Some(l) = MASK_TILES.summary("mask tiles") {
+        println!("{l}");
+    }
     for (c, n) in [(&OBJECT_PASSES, "freefall object pass"), (&OBJECT_DRAWS, "freefall object draw")] {
         if let Some(l) = c.summary(n) {
             println!("{l}");
@@ -3053,6 +3074,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_fxaa(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_fxaa_end())) as usize;
         hook(base, mem_space, 0xe97ed4, 0x6db82beb, pre, post, "FXAA");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_mask_tile(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_mask_tile_end())) as usize;
+        hook(base, mem_space, 0xbdc1d0, 0xa9ba7bfd, pre, post, "Mask tiles");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_pass(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_object_pass_end())) as usize;
         hook(base, mem_space, 0xc573c4, 0xd10243ff, pre, post, "freefall object pass");
