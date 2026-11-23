@@ -18,6 +18,9 @@ fn options() -> crate::settings::SettingsPatch {
     let mut s = crate::settings::SettingsPatch::default();
     // TotK's movie player shows one movie frame per draw: at the unlocked frame rate movies would play too fast.
     s.graphics.movie_frame_pacing = Some(true);
+    // Terrain decals that sample their own G-buffer pixel read it from the tile instead of ending the pass: about half of
+    // the feedback pass breaks gone at Hateno. Overlapping decals then see each other's writes, as in Ryujinx.
+    s.graphics.tile_feedback = Some(true);
     s
 }
 
