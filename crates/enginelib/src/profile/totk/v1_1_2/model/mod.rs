@@ -49,6 +49,7 @@ mod ui_passes;
 mod mip_copy;
 mod filter_draws;
 mod fxaa;
+mod freefall_objects;
 mod gather_callback;
 mod volume_mask_chain;
 
@@ -1030,6 +1031,35 @@ pub unsafe extern "C" fn on_target_blit(this: usize, w: usize, _x2: usize, ctx: 
 #[no_mangle]
 pub unsafe extern "C" fn on_target_blit_end() -> u32 {
     TARGET_BLITS.end("target blits", &TARGET_BLIT_EXPECTED)
+}
+
+static OBJECT_PASSES: Checked = Checked::new("freefall object pass");
+static OBJECT_DRAWS: Checked = Checked::new("freefall object draw");
+thread_local! {
+    static OBJECT_PASS_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+    static OBJECT_DRAW_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xc573c4(this, w, view, state): an object's own pass (freefall_objects.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_object_pass(this: usize, w: usize, view: u32, state: usize) -> u32 {
+    OBJECT_PASSES.run(&OBJECT_PASS_EXPECTED, move |p| freefall_objects::object_pass(p, this, w, view, state))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_object_pass_end() -> u32 {
+    OBJECT_PASSES.end("freefall object pass", &OBJECT_PASS_EXPECTED)
+}
+
+/// main+0x220c080(this, w, view, rb, vp, _, ctx): the object's parts of a view (freefall_objects.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_object_draw(this: usize, w: usize, view: u32, rb: usize, vp: usize, _x5: usize, ctx: usize) -> u32 {
+    OBJECT_DRAWS.run(&OBJECT_DRAW_EXPECTED, move |p| freefall_objects::object_draw(p, this, w, view, rb, vp, ctx))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_object_draw_end() -> u32 {
+    OBJECT_DRAWS.end("freefall object draw", &OBJECT_DRAW_EXPECTED)
 }
 
 static FXAAS: Checked = Checked::new("fxaa");
@@ -2585,6 +2615,11 @@ fn report() {
     if let Some(l) = FXAAS.summary("fxaa") {
         println!("{l}");
     }
+    for (c, n) in [(&OBJECT_PASSES, "freefall object pass"), (&OBJECT_DRAWS, "freefall object draw")] {
+        if let Some(l) = c.summary(n) {
+            println!("{l}");
+        }
+    }
     if let Some(l) = VOLUME_MASK_CHAINS.summary("volume mask chains") {
         println!("{l}");
     }
@@ -3018,6 +3053,12 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_fxaa(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_fxaa_end())) as usize;
         hook(base, mem_space, 0xe97ed4, 0x6db82beb, pre, post, "FXAA");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_pass(_, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_object_pass_end())) as usize;
+        hook(base, mem_space, 0xc573c4, 0xd10243ff, pre, post, "freefall object pass");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_object_draw(_, _, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_object_draw_end())) as usize;
+        hook(base, mem_space, 0x220c080, 0xd10543ff, pre, post, "freefall object draw");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain_end())) as usize;
         hook(base, mem_space, 0xa4c1ec, 0x6db923e9, pre, post, "Volume mask chains");
