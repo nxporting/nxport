@@ -65,12 +65,19 @@ impl Mem {
         }
     }
 
+    #[inline(always)]
     pub(super) unsafe fn r<T: Copy>(&self, a: usize) -> T {
         let v = std::ptr::read_unaligned(a as *const T);
-        let Some(o) = &self.overlay else { return v };
-        if o.is_empty() {
-            return v;
+        match &self.overlay {
+            Some(o) if !o.is_empty() => Self::r_overlay(o, a, v),
+            _ => v,
         }
+    }
+
+    /// `v` (read at `a`) with the bytes the overlay holds for it.
+    #[cold]
+    #[inline(never)]
+    unsafe fn r_overlay<T: Copy>(o: &HashMap<usize, (u64, u64)>, a: usize, v: T) -> T {
         let mut v = v;
         let p = &mut v as *mut T as *mut u8;
         let n = std::mem::size_of::<T>();
@@ -147,24 +154,31 @@ impl Mem {
         }
     }
 
+    #[inline(always)]
     pub(super) unsafe fn r8(&self, a: usize) -> u8 {
         self.r(a)
     }
+    #[inline(always)]
     pub(super) unsafe fn i8(&self, a: usize) -> i8 {
         self.r(a)
     }
+    #[inline(always)]
     pub(super) unsafe fn r16(&self, a: usize) -> u16 {
         self.r(a)
     }
+    #[inline(always)]
     pub(super) unsafe fn r32(&self, a: usize) -> u32 {
         self.r(a)
     }
+    #[inline(always)]
     pub(super) unsafe fn i32(&self, a: usize) -> i32 {
         self.r(a)
     }
+    #[inline(always)]
     pub(super) unsafe fn r64(&self, a: usize) -> usize {
         self.r(a)
     }
+    #[inline(always)]
     pub(super) unsafe fn f32(&self, a: usize) -> f32 {
         self.r(a)
     }
