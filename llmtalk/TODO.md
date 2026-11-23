@@ -243,6 +243,8 @@ and update this file when you finish or drop it.
   63. e877d2c (nvn/cmd.rs, settings): --log-new-nvn-callers, shared code, unix and Windows alike: nothing to do.
   64. 391bb2a (TotK native ports, shared): half resolution pass 0xa548e0 hooked for every caller. Nothing for Windows.
   65. d71bd57 (TotK native ports, shared): colour correction draw 0x12f9ed8 hooked. Nothing for Windows.
+  66. b0b3222 (nvn/cmd.rs, shared): caller-log frame walks bounded to the guest stack (thread_stack::current_bounds). Windows
+     uses the same code; nothing to do unless current_bounds is unset there (then the walk stops at the HLE stub).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
