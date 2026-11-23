@@ -134,6 +134,11 @@ impl Mem {
     }
 
     /// The end of a buffer given to `own`.
+    /// Is `a` in a host object the port owns (released or not)?
+    pub(super) fn owns(&self, a: usize) -> bool {
+        self.owned.iter().any(|&(s, n)| a >= s && a < s + n)
+    }
+
     pub(super) fn disown(&mut self, a: usize) {
         self.owned.retain(|e| e.0 != a);
     }

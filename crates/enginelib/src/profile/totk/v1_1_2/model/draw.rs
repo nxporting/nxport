@@ -103,6 +103,10 @@ pub(super) struct Port {
     pending: std::cell::RefCell<Option<Pending>>,
     /// Predicting: NVNbuffer objects re-initialized so far, with the address they got.
     buffers: Vec<(usize, u64)>,
+    /// The context and render buffer of the port's last bind (targets::bind until targets::unbind): a port that stops
+    /// past its commit point with one of its host buffers bound unbinds it, as the game's function would have, before
+    /// its host objects are freed.
+    pub(super) bound: Option<(usize, usize)>,
 }
 
 impl Port {
@@ -111,7 +115,7 @@ impl Port {
     }
 
     pub(super) fn new(m: Mem, base: usize, native: bool) -> Self {
-        Port { m, base, native, pending: Default::default(), buffers: Vec::new() }
+        Port { m, base, native, pending: Default::default(), buffers: Vec::new(), bound: None }
     }
 
     /// Records the pending native commands (anything recorded after them must come after them in the stream).

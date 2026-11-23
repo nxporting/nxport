@@ -38,7 +38,10 @@ pub(super) fn callback(f: usize, base: usize) -> R<()> {
     let mut o = OTHER.lock().unwrap();
     match o.iter_mut().find(|e| e.0 == off) {
         Some(e) => e.1 += 1,
-        None => o.push((off, 1)),
+        None => {
+            println!("[model-draw] vfx emitter callback main+{off:#x} not ported");
+            o.push((off, 1));
+        }
     }
     Err("vfx emitter callback")
 }

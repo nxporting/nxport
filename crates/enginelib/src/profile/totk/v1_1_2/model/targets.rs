@@ -57,6 +57,7 @@ unsafe fn bind_prefix(p: &mut Port, rb: usize, w: usize) -> R<()> {
     p.m.w::<u64>(w + 0xf0, rb as u64);
     p.m.w::<u64>(w + 0xf8, rb as u64);
     p.m.w::<u8>(w + 0x108, p.m.r8(w + 0x108) | 2);
+    p.bound = Some((w, rb));
     Ok(())
 }
 
@@ -319,6 +320,9 @@ pub(super) unsafe fn unbind(p: &mut Port, w: usize) -> R<()> {
         return Ok(());
     }
     p.m.w::<u64>(g + 0xf8, 0);
+    if p.bound.is_some_and(|b| b.0 == g) {
+        p.bound = None;
+    }
     p.m.w::<u64>(g + 0x110, (p.base + UNBOUND_NAME) as u64);
     p.m.w::<u8>(g + 0x108, p.m.r8(g + 0x108) & !2);
     let saved = p.m.r64(g + 0x100);

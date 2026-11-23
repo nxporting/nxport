@@ -2033,6 +2033,7 @@ impl Checked {
             return 0;
         }
         let n = self.calls.fetch_add(1, Ordering::Relaxed);
+        report_now_and_then();
         let base = crate::guest::loader::main_base();
         let d = &crate::settings::get().totk.diagnostics;
         if d.native_render_lists && COMPARE_KEY.load(Ordering::Relaxed) == self as *const Self as usize {
@@ -2057,6 +2058,12 @@ impl Checked {
                 let r = f(&mut port);
                 if r.is_ok() {
                     port.flush();
+                } else if port.m.committed() {
+                    // Its render buffer is a host object freed with the port: left bound, the next bind reads it.
+                    if let Some((w, _)) = port.bound.take().filter(|b| port.m.owns(b.1)) {
+                        port.flush();
+                        let _ = targets::unbind(&mut port, w);
+                    }
                 }
                 r
             });
@@ -2467,6 +2474,22 @@ pub unsafe extern "C" fn on_vfx_end() -> u32 {
         }
     }
     0
+}
+
+/// The report at most once a minute, from the ports' own calls (in native mode the model draw and render list hooks
+/// that count calls for it are not reached).
+fn report_now_and_then() {
+    static PORT_CALLS: AtomicU64 = AtomicU64::new(0);
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    if PORT_CALLS.fetch_add(1, Ordering::Relaxed) % 65536 != 0 {
+        return;
+    }
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now = START.get_or_init(std::time::Instant::now).elapsed().as_secs();
+    let last = LAST.load(Ordering::Relaxed);
+    if now >= last + 60 && LAST.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        report();
+    }
 }
 
 fn report() {
