@@ -526,6 +526,42 @@ macro_rules! rec {
     }};
 }
 
+/// The guest return addresses into main (main+ offsets, innermost first) of the NVN call being recorded, up to `out.len()`:
+/// the frame records from this HLE function's frame through the entry stub into the guest stack. Past the stub only
+/// frame pointers inside the thread's guest stack are followed (guest code may use x29 as an ordinary register, and a
+/// read of a page a GPU guard holds would wait for the GPU).
+unsafe fn guest_callers(out: &mut [u32]) -> usize {
+    let base = crate::guest::loader::main_base();
+    let bounds = crate::horizon::thread_stack::current_bounds();
+    let mut fp = crate::guest_reg!(x29);
+    let mut guest = false;
+    let mut n = 0;
+    for _ in 0..32 {
+        if fp < 0x1000 || fp & 7 != 0 || n == out.len() {
+            break;
+        }
+        if guest && !bounds.is_some_and(|(lo, hi)| fp >= lo && fp + 16 <= hi) {
+            break;
+        }
+        let next = *(fp as *const usize);
+        let ret = *((fp + 8) as *const usize);
+        // The HLE function's frame returns into the entry stub, which ran it on the host stack: its saved frame pointer
+        // is the guest's, on the guest stack (not above this one), and the stub itself is not a caller.
+        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
+        if !stub && ret >= base && ret < base + (256 << 20) {
+            out[n] = (ret - base) as u32;
+            n += 1;
+        }
+        if stub {
+            guest = true;
+        } else if next <= fp {
+            break;
+        }
+        fp = next;
+    }
+    n
+}
+
 /// --log-draw-callers=N also counts every command the game records through the NVN entry points by its first two guest
 /// return addresses, frames N..N+60 (the game code still recording through NVN, per call site).
 unsafe fn note_cmd_caller(name: &'static str) {
@@ -554,52 +590,16 @@ unsafe fn note_cmd_caller(name: &'static str) {
         }
         return;
     }
-    let base = crate::guest::loader::main_base();
-    let mut fp = crate::guest_reg!(x29);
-    let mut key = [0usize; 2];
-    let mut n = 0;
-    for _ in 0..32 {
-        if fp < 0x1000 || fp & 7 != 0 || n == 2 {
-            break;
-        }
-        let next = *(fp as *const usize);
-        let ret = *((fp + 8) as *const usize);
-        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
-        if !stub && ret >= base && ret < base + (256 << 20) {
-            key[n] = ret - base;
-            n += 1;
-        }
-        if next <= fp && !stub {
-            break;
-        }
-        fp = next;
-    }
-    *MAP.lock().unwrap().get_or_insert_with(Default::default).entry((name, key[0], key[1])).or_default() += 1;
+    let mut key = [0u32; 2];
+    guest_callers(&mut key);
+    *MAP.lock().unwrap().get_or_insert_with(Default::default).entry((name, key[0] as usize, key[1] as usize)).or_default() += 1;
 }
 
 /// --log-new-nvn-callers: each (command, guest call chain) the first time the game records it through the NVN entry
 /// points, with the presented frame, over the whole session.
 unsafe fn note_new_cmd_caller(name: &'static str) {
-    let base = crate::guest::loader::main_base();
-    let mut fp = crate::guest_reg!(x29);
     let mut key = [0u32; 8];
-    let mut n = 0;
-    for _ in 0..32 {
-        if fp < 0x1000 || fp & 7 != 0 || n == 8 {
-            break;
-        }
-        let next = *(fp as *const usize);
-        let ret = *((fp + 8) as *const usize);
-        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
-        if !stub && ret >= base && ret < base + (256 << 20) {
-            key[n] = (ret - base) as u32;
-            n += 1;
-        }
-        if next <= fp && !stub {
-            break;
-        }
-        fp = next;
-    }
+    let n = guest_callers(&mut key);
     static SEEN: std::sync::Mutex<Option<std::collections::HashSet<(&'static str, [u32; 8])>>> = std::sync::Mutex::new(None);
     if SEEN.lock().unwrap().get_or_insert_with(Default::default).insert((name, key)) {
         let chain: Vec<String> = key[..n].iter().map(|a| format!("{a:#x}")).collect();
@@ -1654,28 +1654,8 @@ unsafe fn note_draw_caller_at(count: c_int, index_addr: u64) -> u32 {
         }
         return 0;
     }
-    let base = crate::guest::loader::main_base();
-    let mut fp = crate::guest_reg!(x29);
     let mut key = [0u32; 8];
-    let mut n = 0;
-    for _ in 0..32 {
-        if fp < 0x1000 || fp & 7 != 0 || n == 8 {
-            break;
-        }
-        let next = *(fp as *const usize);
-        let ret = *((fp + 8) as *const usize);
-        // The HLE function's frame returns into the entry stub, which ran it on the host stack: its saved frame pointer
-        // is the guest's, on the guest stack (not above this one), and the stub itself is not a caller.
-        let stub = crate::gpu::report_guard::in_hle_stubs(ret);
-        if !stub && ret >= base && ret < base + (256 << 20) {
-            key[n] = (ret - base) as u32;
-            n += 1;
-        }
-        if next <= fp && !stub {
-            break;
-        }
-        fp = next;
-    }
+    guest_callers(&mut key);
     let mut g = MAP.lock().unwrap();
     let e = g
         .get_or_insert_with(Default::default)
