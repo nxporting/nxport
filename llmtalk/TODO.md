@@ -241,6 +241,7 @@ and update this file when you finish or drop it.
   62. 7a3e2d7 (TotK native ports, shared): view gathers stop falling back to the game; main+0xe02810 ported. Nothing
      for Windows (native items are Metal-only; Vulkan keeps the NVN form).
   63. e877d2c (nvn/cmd.rs, settings): --log-new-nvn-callers, shared code, unix and Windows alike: nothing to do.
+  64. 391bb2a (TotK native ports, shared): half resolution pass 0xa548e0 hooked for every caller. Nothing for Windows.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
