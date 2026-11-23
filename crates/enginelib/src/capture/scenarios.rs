@@ -466,7 +466,9 @@ unsafe fn build(name: &str, e: &mut Env) -> Result<(usize, Vec<(usize, usize)>),
             e.clear(0, [0.0, 0.0, 0.0, 1.0]);
             cmd::hle_typed_cb_Barrier(e.cmd, 0x1 | 0x10);
             cmd::hle_nvnCommandBufferBindTexture(e.cmd, STAGE_FRAGMENT, 0, handle);
-            e.draw(tex, &uv_quad(-1.0, -1.0, 0.5, 0.5));
+            // 32 pixels for the 32 texels: every pixel centre on a texel centre. At other scales some centres fall
+            // exactly on texel edges, where nearest filtering may take either texel.
+            e.draw(tex, &uv_quad(-1.0, -1.0, 0.0, 0.0));
             e.end();
             (t, vec![])
         }
