@@ -57,9 +57,19 @@ path), so the morning starts from a single status.
 1. (mac) Leave the tree clean: measure the uncommitted native-run split fix (gpu/metal/commands.rs, 3+ interleaved walk
    pairs) and commit or drop it. The native renderer (--native-render-lists / -model-draws / -font-draws) stays off by
    default for the release.
+   Result (mac): committed dd96405 (3 interleaved pairs, each a little faster, within noise; one G-buffer pass fewer
+   per frame in the pass graph). Also 1439b63: TotK --tile-feedback on by default (user's decision; 62-76 draws a
+   frame read the tile; scan 0/0/0; validation clean; walks 86.3 / 89.5 vs 83.9 / 75.0 off).
 2. (mac) Mac regression at main: cargo test --workspace; the gpu_conformance suite; TotK 1.1.2 at Hateno (shot, glitch
    scan 8500-12500, walk, inventory open) and one VALIDATE=1 run; TotK 1.0.0 to gameplay; BotW 1.9.0 and 1.5.0 to
    gameplay plus a botw-sunk scan; SMO Cap Kingdom tour; Kirby, MK8D, Wonder and Silver Pines to gameplay.
+   Result so far (mac): cargo test --workspace did not compile (builder's test profile lacked two new GameProfile fields:
+   8cb507c); now every crate's tests pass except gpu_conformance: (a) the Hateno capture's Metal replay crashed with
+   SIGBUS (rt_guard held pages in the replay process: 0e7a588 turns it off there; now 248 of 248 targets match on
+   Metal and Vulkan); (b) the Vulkan Hateno replay fails only when run in parallel with the scenarios test (alone it
+   passes; not investigated); (c) the render_to_texture scenario on Metal differs in 16 of 4096 pixels along one
+   triangle edge (max 0.79), the same at 2026-11-20's d20110b: older, not tonight's; not bisected further.
+   TotK 1.1.2 Hateno: glitch scan 0/0/0, VALIDATE=1 clean (with tile feedback). Game surveys: next.
 3. (mac) Builder end to end from main: a fresh TotK Mac app (and BotW) from nxport-builder, run from its bundle
    (footprint ~3 GB, shader cache ~2 GB, pipeline list precompile).
 4. (mac) iOS: the TotK 1.0.0 .ipa from main (--aspect 19.5:9), with the AOT image dumped twice and compared, ready for
