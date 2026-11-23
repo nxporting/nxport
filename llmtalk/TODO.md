@@ -79,6 +79,12 @@ path), so the morning starts from a single status.
    conformance points above.
 3. (mac) Builder end to end from main: a fresh TotK Mac app (and BotW) from nxport-builder, run from its bundle
    (footprint ~3 GB, shader cache ~2 GB, pipeline list precompile).
+   Result (mac, TotK 1.1.2, Mac preset, at 8cb507c): the builder rebuilt the whole Metal cache (translation fingerprint
+   changed; 25218 stages, the usual 2 untranslatable image-atomic stages), 9623 pipelines into 10 archives (0 failed),
+   app 1.5 GB. Run from its bundle headless to Hateno with the test save: 10 archives (480 MB) loaded, 6053 listed
+   pipelines compiled in 1.0 s (5508 from the archives), 0 pipeline failures, ~95 fps, under the 8 GB kill limit
+   (exact peak not logged), no traps. Note: run as an app the engine logs to the game's data folder (log.txt,
+   pipelines.txt there), not stdout. BotW app not built yet.
 4. (mac) iOS: the TotK 1.0.0 .ipa from main (--aspect 19.5:9), with the AOT image dumped twice and compared, ready for
    the user's phone.
 5. (mac) Release packaging on the Mac side: release.yml's macos job at main, and the notices list covering crates added
