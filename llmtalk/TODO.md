@@ -66,8 +66,8 @@ path), so the morning starts from a single status.
    Result so far (mac): cargo test --workspace did not compile (builder's test profile lacked two new GameProfile fields:
    8cb507c); now every crate's tests pass except gpu_conformance: (a) the Hateno capture's Metal replay crashed with
    SIGBUS (rt_guard held pages in the replay process: 0e7a588 turns it off there; now 248 of 248 targets match on
-   Metal and Vulkan); (b) the Vulkan Hateno replay fails only when run in parallel with the scenarios test (alone it
-   passes; not investigated); (c) the render_to_texture scenario on Metal differs in 16 of 4096 pixels along one
+   Metal and Vulkan); (b) the Vulkan Hateno replay failed once in a full-suite run while a game engine was also running
+   on the GPU; the full suite later, and a replay beside the scenarios test, pass (contention, not a bug as far as seen); (c) the render_to_texture scenario on Metal differs in 16 of 4096 pixels along one
    triangle edge (max 0.79), the same at 2026-11-20's d20110b: older, not tonight's. Found: the tiny-pass compute path
    (--tiny-compute=false: all match); between 413ecd9 (good) and 8a7e956 (bad), most likely cc567cd (run-time translated
    stages get tiny-pass kernels; the scenario's stages are run-time translated). Not the kernel's coverage rule: a
