@@ -338,6 +338,9 @@ pub fn replay_capture(
     s.display.headless = true;
     s.graphics.early_fence = false;
     s.graphics.report_guard = settings::ReportGuard::Off;
+    // No game code runs to read GPU output, and nothing would open a held page: the replay's own reads of guest
+    // memory fault (SIGBUS in memmove).
+    s.graphics.rt_guard = false;
     s.graphics.async_pipelines = false;
     s.graphics.precompile_pipelines = false;
     s.graphics.record_pipelines = false;
