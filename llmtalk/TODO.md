@@ -78,7 +78,9 @@ path), so the morning starts from a single status.
    since 2026-11-16 (the VP8 decoder among them).
    Result (mac, 2026-11-22): notices OK. The only third-party crate added since 2026-11-16 is vp8-decoder 0.1.2 (crates.io,
    "(MIT OR Apache-2.0) AND BSD-3-Clause"); it ships LICENSE-APACHE, LICENSE-MIT and NOTICE (RFC 6386's BSD text), and
-   notices.pl takes NOTICE files, so the archive carries all three. The macos job at main is not built yet (heavy).
+   notices.pl takes NOTICE files, so the archive carries all three. The macos job's steps rehearsed locally at 8cb507c:
+   builder + both engines build, the job's tests pass (in the workspace run), the archive assembles (142 crates, 0
+   without a licence file; the file list check passes; the packaged builder runs). DONE.
 6. (win) Build and test at main, then journal items 32-74 above (the shared-code checks), fixing Windows breakage.
 7. (win) Windows / Vulkan regression: TotK 1.0.0 and 1.1.2 lifted builds through the builder (re-lift), scripted
    title -> Hateno -> walk -> inventory, BotW 1.9.0, one Vulkan validation-layer run, no device loss.
