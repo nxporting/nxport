@@ -1031,6 +1031,23 @@ pub unsafe extern "C" fn on_target_blit_end() -> u32 {
     TARGET_BLITS.end("target blits", &TARGET_BLIT_EXPECTED)
 }
 
+static COLOR_CORRECTIONS: Checked = Checked::new();
+
+thread_local! {
+    static COLOR_CORRECTION_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0x12f9ed8(this, w, _, shader, rb, tex) (filter_draws.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_color_correction(this: usize, w: usize, _x2: usize, shader: usize, rb: usize, tex: usize) -> u32 {
+    COLOR_CORRECTIONS.run(&COLOR_CORRECTION_EXPECTED, move |p| filter_draws::color_correction(p, this, w, shader, rb, tex))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_color_correction_end() -> u32 {
+    COLOR_CORRECTIONS.end("colour corrections", &COLOR_CORRECTION_EXPECTED)
+}
+
 static HALF_RES_PASSES: Checked = Checked::new();
 
 thread_local! {
@@ -2543,6 +2560,9 @@ fn report() {
     if let Some(l) = HALF_RES_PASSES.summary("half resolution passes") {
         println!("{l}");
     }
+    if let Some(l) = COLOR_CORRECTIONS.summary("colour corrections") {
+        println!("{l}");
+    }
     if let Some(l) = VOLUME_MASK_CHAINS.summary("volume mask chains") {
         println!("{l}");
     }
@@ -2970,6 +2990,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_half_res_pass(_, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_half_res_pass_end())) as usize;
         hook(base, mem_space, 0xa548e0, 0xd10703ff, pre, post, "Half resolution passes");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_color_correction(_, _, _, _, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_color_correction_end())) as usize;
+        hook(base, mem_space, 0x12f9ed8, 0xd104c3ff, pre, post, "Colour corrections");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_volume_mask_chain_end())) as usize;
         hook(base, mem_space, 0xa4c1ec, 0x6db923e9, pre, post, "Volume mask chains");

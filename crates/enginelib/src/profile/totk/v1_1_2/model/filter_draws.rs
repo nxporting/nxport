@@ -406,3 +406,42 @@ unsafe fn blur_pass(p: &mut Port, this: usize, w: usize, ctx: usize, ty: u32, ke
     }
     filter_end(p, ctx, old)
 }
+
+/// main+0x12f9ed8(this, w, _, shader, rb, tex), the colour correction filter's draw (agl::utl::ColorCorrectionFilter::
+/// doDraw_ main+0x12f969c and main+0x21e2418), with this +0x208 set: a default graphics context (+0 low half 0, +4 bit 0
+/// clear); `rb` bound with a viewport over its size; the shader's program (+8) applied with a 0x20-byte ring block at
+/// block 0 (this +0x1a04, +0x1a08, 0, 0, n = max(this +0x22e8, 1), 1 / (n - 1), 0, 0) and textures `tex` (0) and this
+/// +0x22b8 (1); the full-screen shape; `rb` unbound.
+pub(super) unsafe fn color_correction(p: &mut Port, this: usize, w: usize, shader: usize, rb: usize, tex: usize) -> R<()> {
+    if p.m.r8(this + 0x208) == 0 {
+        return Ok(());
+    }
+    let prog = p.m.r64(shader + 8);
+    if prog == 0 {
+        return Err("colour correction without a program");
+    }
+    if p.m.r32(prog + 0x10) != 0 || p.m.r32(prog + 0x14) != 0 {
+        return Err("agl program setup pending");
+    }
+    if p.vfn(rb, 0x28) != targets::RENDER_BUFFER_UNBIND {
+        return Err("render buffer virtual +0x28");
+    }
+    let mut g = default_state(p);
+    g[0] &= 0xffff_0000;
+    g[1] &= !1;
+    p.apply_graphics_context(g.as_ptr() as usize, w);
+    let vp = viewport::full(p, p.m.f32(rb + 8), p.m.f32(rb + 0xc));
+    targets::bind(p, rb, w)?;
+    viewport::apply(p, vp.as_ptr() as usize, w, rb);
+    let n = p.m.r16(this + 0x22e8).max(1) as f32;
+    let data: [f32; 8] = [p.m.f32(this + 0x1a04), p.m.f32(this + 0x1a08), 0.0, 0.0, n, 1.0 / (n + -1.0), 0.0, 0.0];
+    // main+0xc56c70(shader, w, 1)
+    program_apply(p, prog, w)?;
+    let block = p.ring_block(data.as_ptr() as usize, 0x20);
+    program_block(p, prog, w, 0, block, 0)?;
+    program_texture(p, prog, w, 0, tex)?;
+    program_texture(p, prog, w, 1, this + 0x22b8)?;
+    shape_state(p, p.m.r64(p.m.r64(p.base + SHAPES)) + 0xd28, w);
+    stream_draw(p, p.m.r64(p.m.r64(p.base + STREAMS)) + 0x1e8, w);
+    targets::unbind(p, w)
+}
