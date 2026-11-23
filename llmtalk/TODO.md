@@ -50,6 +50,10 @@ and update this file when you finish or drop it.
 ## First release: overnight tasks (2026-11-22, mac-worker + win-worker; the user's list at the end)
 
 CLAIMED 2026-11-23 01:00 by mac-worker: items 1-5 (and the TotK --tile-feedback default, user's decision 2026-11-22).
+MAC STATUS (2026-11-23 ~05:00): items 1-5 done, nothing on the Mac side blocks the tag. Fixed on the way: 8cb507c
+(builder tests did not compile), 0e7a588 (Metal frame replays crashed: gpu_conformance's Hateno capture). Known, not
+blocking: the render_to_texture scenario differs on Metal through the tiny-pass path (item 2's note). New iPhone app:
+target/release_ipa_20261123 on the Mac. Win-worker: items 6-10 have no results yet.
 No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
 new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
 path), so the morning starts from a single status.
