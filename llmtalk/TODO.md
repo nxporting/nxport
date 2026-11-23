@@ -251,6 +251,8 @@ and update this file when you finish or drop it.
   69. 1ad83ee / 1b60295 (TotK native ports, shared): named commit-point stops; light pass pre-checks its lights' programs
      (fixed a Depths crash in native mode). Nothing for Windows.
   70. 4066492 (TotK native ports, shared): object passes 0xc573c4 / object parts 0x220c080. Nothing for Windows.
+  71. 7241de6 (nvn/api command_buffer.rs, mod.rs: shared): COMMAND_LISTS is an RwLock (read for lookups). Windows: same code,
+     nothing to do (std RwLock).
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
