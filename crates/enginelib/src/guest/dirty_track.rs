@@ -83,8 +83,11 @@ pub fn register_domain(base: usize, len: usize) {
     let (Ok(g), Ok(f)) = (map(pages * 4), map(pages)) else {
         return;
     };
+    // A slot is claimed by its base (threads register heap blocks at the same time: two taking one free slot mixed
+    // one domain's base with the other's pages and arrays, and page indices ran past the arrays); `pages`, stored
+    // last, publishes it to locate.
     for d in DOMAIN_TABLE.iter() {
-        if d.pages.load(Ordering::Acquire) == 0 {
+        if d.base.compare_exchange(0, base, Ordering::AcqRel, Ordering::Acquire).is_ok() {
             d.gens.store(g as *mut AtomicU32, Ordering::Release);
             d.flags.store(f as *mut AtomicU8, Ordering::Release);
             d.base.store(base, Ordering::Release);
@@ -113,6 +116,9 @@ fn locate(
         if addr >= base && addr + len <= base + pages * PAGE {
             let first = (addr - base) / PAGE;
             let last = (addr + len.max(1) - 1 - base) / PAGE;
+            if last >= pages {
+                return None;
+            }
             unsafe {
                 let g = std::slice::from_raw_parts(d.gens.load(Ordering::Acquire), pages);
                 let f = std::slice::from_raw_parts(d.flags.load(Ordering::Acquire), pages);
