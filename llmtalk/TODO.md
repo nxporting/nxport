@@ -569,7 +569,7 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
 
 ## Open (unclaimed)
 
-- **BotW 1.0.0 above 30 fps (open, 2026-11-18, win-worker).** 1.0.0 runs (30 fps, draw distance, scene size, FOV,
+- **BotW 1.0.0 above 30 fps (CLAIMED 2026-11-23 by win-worker via a worktree subagent, branch botw100-fps; not for main before the tag).** 1.0.0 runs (30 fps, draw distance, scene size, FOV,
   ultrawide) but has no frame_time::Sites: frame wait, VFR ratio (1.9.0 main+0x151d484), GUI speed, controller step,
   arrows, sound floor, keyframed angle, Havok deactivation ticks, demo move. 1.9.0's exact words do not occur in
   1.0.0 (the VFR ratio code is compiled with other registers), so each needs finding by its fields and constants
