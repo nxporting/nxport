@@ -320,7 +320,10 @@ pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::t
         return;
     }
     let began = crate::platform::clock::now_ns().saturating_sub(waited.as_nanos() as u64);
-    let frames_meanwhile = LAST_PRESENT_NS.load(std::sync::atomic::Ordering::Relaxed) > began;
+    let last = LAST_PRESENT_NS.load(std::sync::atomic::Ordering::Relaxed);
+    // Before the first frame the game is starting (caches, files): long waits are expected there, and a start that never
+    // shows a frame is seen as such (no present at all).
+    let frames_meanwhile = last > began || last == 0;
     let tag = if frames_meanwhile { "[wait]" } else { "[STALL]" };
     // `fp` is x29 inside the HLE function: its frame record's saved x29 is the guest's FP (the
     // trampoline doesn't change it), so [guest_fp + 8] is the return address of the guest function
@@ -350,7 +353,7 @@ pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::t
         what,
         obj,
         waited.as_secs(),
-        if frames_meanwhile { ", frames kept coming" } else { ", no frame presented meanwhile" },
+        if last == 0 { ", before the first frame" } else if frames_meanwhile { ", frames kept coming" } else { ", no frame presented meanwhile" },
         chain.join(" <- ")
     );
 }
