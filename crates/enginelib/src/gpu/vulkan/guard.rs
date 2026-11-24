@@ -804,7 +804,10 @@ unsafe fn trap_fault(addr: usize, write: bool) -> bool {
                 }
             }
         }
+        // set_prot leaves pages the write tracking holds read-only: the write then goes to it as it would have (it
+        // bumps the page's generation, which caches of its contents check), else they would keep stale copies.
         set_prot(page, p, true);
+        crate::guest::dirty_track::handle_fault(addr);
         return true;
     }
     let _ = crate::platform::os::protect(page, p, crate::platform::os::Prot::Read);
