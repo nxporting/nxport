@@ -356,7 +356,7 @@ impl Backend for Vulkan {
 
     fn access_fault(&self, f: &crate::gpu::Fault) -> bool {
         unsafe {
-            crate::gpu::report_guard::fault(f.addr, f.pc, f.lr, f.write) || guard::fault(f.addr)
+            crate::gpu::report_guard::fault(f.addr, f.pc, f.lr, f.write) || guard::fault(f.addr, f.write)
         }
     }
 

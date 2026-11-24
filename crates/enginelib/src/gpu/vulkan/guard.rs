@@ -301,6 +301,13 @@ pub(super) fn note_write(a: usize, len: usize) {
     if !enabled() {
         return;
     }
+    if trap_on() && a >= 0x10000 && len > 0 {
+        let serial = RECORDING.load(Ordering::Relaxed);
+        let mut x = EXACT.lock().unwrap();
+        if x.last() != Some(&(a, a + len, serial)) {
+            x.push((a, a + len, serial));
+        }
+    }
     let Some((a, b)) = record(a, len, true) else { return };
     let _g = RECORDS.lock().unwrap(); // against a rebuild protecting these pages concurrently
     let t = &TABLES[ACTIVE.load(Ordering::Acquire) & 1];
@@ -382,7 +389,10 @@ unsafe fn release_slot(gen: usize, i: usize) {
 
 /// Signal-handler hook: a fault at `addr`. True if it is a page held here (after waiting for the GPU work reading it
 /// and making it writable): the access is retried.
-pub(super) unsafe fn fault(addr: usize) -> bool {
+pub(super) unsafe fn fault(addr: usize, write: bool) -> bool {
+    if trap_on() && trap_fault(addr, write) {
+        return true;
+    }
     let handled = fault_held(addr);
     // The watcher (write-backs) leaves with the page open whatever held it: every submit waits for it, so a page left
     // read-only under it (a race with a protect, a hot page) would fault forever and the game would stop.
@@ -598,6 +608,14 @@ pub(super) fn protect(fence: u64) {
         }
     }
     ranges.truncate(SLOTS);
+    if trap_on() {
+        let pending: Vec<(usize, usize, u64)> = {
+            let mut x = EXACT.lock().unwrap();
+            x.retain(|r| r.2 > completed);
+            x.clone()
+        };
+        trap_writes(&pending);
+    }
     // Publish the new table, then protect (a fault on a new range must find it).
     let next = gen + 1;
     let t = &TABLES[next & 1];
@@ -642,6 +660,210 @@ pub(super) fn release_all() {
             unsafe { set_prot(s, e - s, true) };
         }
     }
+}
+
+// ---- visibility check (--early-fence-trap) ------------------------------------------------------------------------
+//
+// The early fence lets the game go on while GPU work that writes guest memory (storage buffers, copy destinations,
+// reports) still runs, so the game can read those results before they are there: on the console its fence would have
+// held it until they were (BotW's white water: lighting values read a frame late). A test oracle for that class of
+// bug: when the fence returns early, the pages such still-running work writes are made inaccessible; a guest access to
+// one while the write is still running is reported once per guest caller ("[visibility]"), then the page opens without
+// waiting, so the run goes on as it would have. Host writes (the watcher's write-backs) open pages silently. Diagnostic
+// runs only: it changes the timing it watches, and pages shared with the write tracking lose their tracking.
+
+const TRAP_SLOTS: usize = 1024;
+static TRAP_START: [AtomicUsize; TRAP_SLOTS] = [const { AtomicUsize::new(0) }; TRAP_SLOTS];
+static TRAP_END: [AtomicUsize; TRAP_SLOTS] = [const { AtomicUsize::new(0) }; TRAP_SLOTS];
+static TRAP_SERIAL: [AtomicU64; TRAP_SLOTS] = [const { AtomicU64::new(0) }; TRAP_SLOTS];
+static TRAP_N: AtomicUsize = AtomicUsize::new(0);
+static TRAP_RACES: AtomicU64 = AtomicU64::new(0);
+static TRAP_LATE: AtomicU64 = AtomicU64::new(0);
+static TRAP_NEIGHBOURS: AtomicU64 = AtomicU64::new(0);
+static EXACT: Mutex<Vec<(usize, usize, u64)>> = Mutex::new(Vec::new());
+
+fn trap_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| enabled() && crate::settings::get().debug.early_fence_trap != crate::settings::FenceTrap::Off)
+}
+
+/// Opens what the last early fence trapped and traps `pending` (page ranges still-running work writes, its serial).
+fn trap_writes(pending: &[(usize, usize, u64)]) {
+    static FENCES: AtomicU64 = AtomicU64::new(0);
+    if FENCES.fetch_add(1, Ordering::Relaxed) % 300 == 299 {
+        eprintln!(
+            "[visibility] last 300 early fences: {} early reads ({} stale, {} unchanged by the GPU, {} unjudged), {} after it finished, {} to other data on those pages; {} ranges trapped now",
+            TRAP_RACES.swap(0, Ordering::Relaxed),
+            STALE.swap(0, Ordering::Relaxed),
+            SAME.swap(0, Ordering::Relaxed),
+            UNJUDGED.swap(0, Ordering::Relaxed),
+            TRAP_LATE.swap(0, Ordering::Relaxed),
+            TRAP_NEIGHBOURS.swap(0, Ordering::Relaxed),
+            pending.len().min(TRAP_SLOTS)
+        );
+    }
+    // Open what the last early fence trapped (whole host pages around each range).
+    for i in 0..TRAP_N.load(Ordering::Acquire) {
+        let s = TRAP_START[i].swap(0, Ordering::AcqRel);
+        if s != 0 {
+            let (a, b) = host_pages(s, TRAP_END[i].load(Ordering::Acquire));
+            unsafe { set_prot(a, b - a, true) };
+        }
+    }
+    TRAP_N.store(0, Ordering::Release);
+    check_reads();
+    let n = pending.len().min(TRAP_SLOTS);
+    for (i, &(a, b, serial)) in pending[..n].iter().enumerate() {
+        TRAP_END[i].store(b, Ordering::Relaxed);
+        TRAP_SERIAL[i].store(serial, Ordering::Relaxed);
+        TRAP_START[i].store(a, Ordering::Release);
+    }
+    TRAP_N.store(n, Ordering::Release);
+    for &(a, b, _) in &pending[..n] {
+        let (a, b) = host_pages(a, b);
+        let _ = unsafe { crate::platform::os::protect(a, b - a, crate::platform::os::Prot::None) };
+    }
+}
+
+/// The host pages around [a, b).
+fn host_pages(a: usize, b: usize) -> (usize, usize) {
+    let p = crate::platform::os::page_size();
+    (a & !(p - 1), (b + p - 1) & !(p - 1))
+}
+
+/// A fault on a trapped page. A guest read inside a range a still-running submit writes is recorded (the 8 bytes it
+/// saw, the guest's pc and lr) and judged once the submit completed (check_reads); writes, the watcher's and other
+/// data on the page are not. The page is then opened.
+unsafe fn trap_fault(addr: usize, write: bool) -> bool {
+    let n = TRAP_N.load(Ordering::Acquire);
+    let mut page_hit = false;
+    let mut exact = None;
+    for i in 0..n {
+        let s = TRAP_START[i].load(Ordering::Acquire);
+        if s == 0 {
+            continue;
+        }
+        let e = TRAP_END[i].load(Ordering::Acquire);
+        let (a, b) = host_pages(s, e);
+        if addr >= a && addr < b {
+            page_hit = true;
+            if addr >= s && addr < e && exact.is_none_or(|j: usize| TRAP_SERIAL[i].load(Ordering::Acquire) > TRAP_SERIAL[j].load(Ordering::Acquire)) {
+                exact = Some(i);
+            }
+        }
+    }
+    if !page_hit {
+        return false;
+    }
+    // The page opens for reading (a guest write to it later cancels the reads recorded on it: the game changed those
+    // bytes itself, check_reads must not blame the GPU); writes open it fully.
+    let p = crate::platform::os::page_size();
+    let page = addr & !(p - 1);
+    let watcher = WATCHER.with(|w| w.get());
+    if write || watcher {
+        if write && !watcher {
+            for k in 0..READ_SLOTS {
+                if READ_AT[k].load(Ordering::Relaxed) & !(p - 1) == page {
+                    READ_SERIAL[k].store(0, Ordering::Release);
+                }
+            }
+        }
+        set_prot(page, p, true);
+        return true;
+    }
+    let _ = crate::platform::os::protect(page, p, crate::platform::os::Prot::Read);
+    match exact {
+        Some(i) if super::inflight::completed() < TRAP_SERIAL[i].load(Ordering::Acquire) => {
+            TRAP_RACES.fetch_add(1, Ordering::Relaxed);
+            #[cfg(all(nx_runtime, not(nx_native)))]
+            let (pc, lr) = {
+                let c = crate::guest::exec::lifted::existing_thread_cpu();
+                if c.is_null() { (0, 0) } else { ((*c).pc, (*c).x[30]) }
+            };
+            #[cfg(not(all(nx_runtime, not(nx_native))))]
+            let (pc, lr) = (0u64, 0u64);
+            let at = addr & !7;
+            let k = READ_W.fetch_add(1, Ordering::AcqRel) % READ_SLOTS;
+            READ_AT[k].store(at, Ordering::Relaxed);
+            READ_VAL[k].store(std::ptr::read_volatile(at as *const u64), Ordering::Relaxed);
+            READ_PC[k].store(pc, Ordering::Relaxed);
+            READ_LR[k].store(lr, Ordering::Relaxed);
+            READ_SERIAL[k].store(TRAP_SERIAL[i].load(Ordering::Acquire), Ordering::Release);
+        }
+        Some(_) => {
+            TRAP_LATE.fetch_add(1, Ordering::Relaxed);
+        }
+        None => {
+            TRAP_NEIGHBOURS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    true
+}
+
+/// Early reads recorded by trap_fault, judged by check_reads (a ring: the fault handler writes, guest-main reads).
+const READ_SLOTS: usize = 4096;
+static READ_AT: [AtomicUsize; READ_SLOTS] = [const { AtomicUsize::new(0) }; READ_SLOTS];
+static READ_VAL: [AtomicU64; READ_SLOTS] = [const { AtomicU64::new(0) }; READ_SLOTS];
+static READ_PC: [AtomicU64; READ_SLOTS] = [const { AtomicU64::new(0) }; READ_SLOTS];
+static READ_LR: [AtomicU64; READ_SLOTS] = [const { AtomicU64::new(0) }; READ_SLOTS];
+/// The submit that writes the bytes; 0: the slot is empty.
+static READ_SERIAL: [AtomicU64; READ_SLOTS] = [const { AtomicU64::new(0) }; READ_SLOTS];
+static READ_W: AtomicUsize = AtomicUsize::new(0);
+static STALE: AtomicU64 = AtomicU64::new(0);
+static SAME: AtomicU64 = AtomicU64::new(0);
+static UNJUDGED: AtomicU64 = AtomicU64::new(0);
+
+/// Judges the early reads whose submit completed: the GPU changed the bytes the game read before it was done (the
+/// game used stale data: "[visibility] STALE", once per guest caller), or left them as they were (harmless).
+fn check_reads() {
+    let completed = super::inflight::completed();
+    for k in 0..READ_SLOTS {
+        let serial = READ_SERIAL[k].load(Ordering::Acquire);
+        if serial == 0 {
+            continue;
+        }
+        // Not done by the next fence: its page was opened for writing again (trap_writes), so a guest write to those
+        // bytes could no longer be told from the GPU's; left unjudged.
+        if serial > completed {
+            READ_SERIAL[k].store(0, Ordering::Release);
+            UNJUDGED.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+        let (at, seen) = (READ_AT[k].load(Ordering::Relaxed), READ_VAL[k].load(Ordering::Relaxed));
+        let (pc, lr) = (READ_PC[k].load(Ordering::Relaxed), READ_LR[k].load(Ordering::Relaxed));
+        READ_SERIAL[k].store(0, Ordering::Release);
+        // The page is open again (trap_writes opened what the last fence trapped before this runs).
+        let now = unsafe { std::ptr::read_volatile(at as *const u64) };
+        if now == seen {
+            SAME.fetch_add(1, Ordering::Relaxed);
+        } else {
+            STALE.fetch_add(1, Ordering::Relaxed);
+            report_stale(at, serial, seen, now, pc, lr);
+        }
+    }
+}
+
+/// "[visibility] STALE" once per guest caller.
+fn report_stale(at: usize, serial: u64, seen: u64, now: u64, pc: u64, lr: u64) {
+    static SEEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+    let mut callers = SEEN.lock().unwrap();
+    if callers.contains(&lr) || callers.len() >= 256 {
+        return;
+    }
+    callers.push(lr);
+    let main = crate::guest::loader::main_base() as u64;
+    let name = |a: u64| {
+        let rel = if a >= main && main != 0 { format!("main+{:#x}", a - main) } else { format!("{a:#x}") };
+        match crate::guest::module_loader::nearest_symbol(a as usize) {
+            Some((n, off)) => format!("{rel} ({n}+{off:#x})"),
+            None => rel,
+        }
+    };
+    eprintln!(
+        "[visibility] STALE: the guest read {at:#x} before GPU submit {serial} wrote it ({seen:#018x}, then {now:#018x}): pc {} lr {}",
+        name(pc),
+        name(lr)
+    );
 }
 
 // ---- statistics (--log-early-fence) -------------------------------------------------------------------------------
