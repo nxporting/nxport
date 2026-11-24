@@ -95,6 +95,11 @@ fn vblank_period() -> Option<f32> {
     if target <= 0.0 {
         return Some(1.0 / hz);
     }
+    // A limit that is not a whole number of refreshes (60 at 144 Hz) is kept as it is: its frames land on the refresh
+    // grid 2 and 3 refreshes apart, so each step is rounded to whole refreshes.
+    if !crate::nvn::api::whole_refreshes((target * hz) as f64) {
+        return Some(1.0 / hz);
+    }
     let n = (target * hz).round();
     (n >= 1.0).then(|| n / hz)
 }

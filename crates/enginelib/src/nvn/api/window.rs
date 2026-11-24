@@ -357,9 +357,13 @@ pub unsafe extern "C" fn hle_nvnWindowAcquireTexture(
             }
         };
         let mode = crate::host::live::present_mode();
-        // Vsync on a fixed-refresh display: whole refreshes per frame, as many as the game's frame times need.
+        // Vsync on a fixed-refresh display: whole refreshes per frame, as many as the game's frame times need, when the
+        // limit is a whole number of refreshes (60 at 120 Hz). Else the limit holds, as PC games keep their cap with
+        // vsync (60 at 144 Hz: frames 2 and 3 refreshes apart, even on a variable-refresh display) rather than drop to
+        // the next whole number (48).
         let refresh_hz = crate::host::live::refresh_hz() as f64;
-        let frame = if vsync && !is_stock30 && mode == crate::settings::PresentMode::Standard && refresh_hz >= 30.0 {
+        let whole = frame.is_zero() || refresh_hz >= 30.0 && whole_refreshes(frame.as_secs_f64() * refresh_hz);
+        let frame = if vsync && whole && !is_stock30 && mode == crate::settings::PresentMode::Standard && refresh_hz >= 30.0 {
             let period = 1.0 / refresh_hz;
             let limit_frame = if frame.is_zero() { period } else { frame.as_secs_f64() };
             let n = divisor::refreshes(limit_frame, period);
@@ -496,6 +500,12 @@ pub unsafe extern "C" fn hle_nvnWindowSetNumActiveTextures(w: *mut NvnWindow, co
     if !w.is_null() {
         (*w).texture_count = count.max(1).min((*w).num_textures.max(1));
     }
+}
+
+/// Whether a frame of `refreshes` display refreshes is a whole number of them (within 1%: 60 fps at 59.94 Hz is one).
+pub(crate) fn whole_refreshes(refreshes: f64) -> bool {
+    let n = refreshes.round();
+    n >= 1.0 && (refreshes - n).abs() <= 0.01 * n
 }
 
 /// A frame reached the screen `gap` seconds after the previous one (vsync pacing in whole refreshes: divisor).

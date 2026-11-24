@@ -136,9 +136,12 @@ path), so the morning starts from a single status.
    on a 144 Hz monitor TotK 1.1.2 runs at 45-50 fps (3 refreshes a frame = 48; log nxport-build/run112/pace.log).
    Before the divisor Windows ran 60 there (uneven, 2-3 refreshes). 120 Hz and 60 Hz screens are unaffected (n = 2 / 1),
    limits at or above the refresh too (n = 1: the swapchain paces; TotK 1.1.2 in game 80-100 fps at limit 144).
-   QUESTION FOR THE USER (blocks the Windows default): on screens the limit does not divide (144 Hz + 60), even
-   pacing at 48 fps, or the limit (60, uneven)? Proposed: the limit, i.e. divisor only when refresh / limit is whole
-   (within 1%); else the plain limiter as before. Not changed yet (shared rule, mac-worker's design).
+   USER'S DECISION (2026-11-23): "do what games like Fortnite do": the cap holds. Shared change (this commit):
+   nvn/api/window.rs uses the divisor only when the limit is a whole number of refreshes (whole_refreshes, within
+   1%: 60 at 120 / 60 / 59.94 Hz, 72 at 144), else the plain limiter; profile/frame_step.rs then rounds steps to
+   single refreshes. TotK 1.1.2 at limit 60, vsync, 144 Hz: 59-61 fps (was 45-50). Mac: unchanged where the limit
+   divides the refresh (ProMotion 120 with 30 / 60 / 120); a 90 limit at 120 Hz now runs 90, not 60. Feeding
+   pacing_shown on Windows stays open (only raises n; not needed for the release). DONE.
 10. (win) Claimed work (Vulkan resolution scaling, BotW 1.0.0 draw distance): finish, or park on a branch; the release
    does not wait for it.
    Result (win): BotW 1.0.0 draw distance was done 2026-11-18 (pushed). Vulkan resolution scaling PARKED on the local
