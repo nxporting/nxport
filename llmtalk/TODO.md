@@ -1970,6 +1970,14 @@ shader differential tests. win-worker starts with (1).
   for TotK (35 fps, the route not reached). Next: (a) [STALL] is a noisy oracle: TotK logs 0-3 at boot unperturbed,
   8 perturbed, all while frames kept coming (idle workers during loading); count a stall only when no frame is
   presented meanwhile; (b) the comparison step (game state at the same game time across perturbed runs).
+- (3) coverage-guided input, first part DONE: --coverage-log=FILE (2f485e3; first file opens, Vulkan shader stages,
+  engine functions, with their frame; Metal stages not hooked yet) and a local driver (PowerShell, outside the repo,
+  on the Windows PC): a corpus of input scripts, each round keeps one up to a random frame and appends random
+  presses / stick / camera holds, runs with --coverage-log, --early-fence-trap and optionally the perturbation, keeps
+  scripts that reach anything new, and saves only problem signatures no earlier round had. TotK 1.1.2 smoke test:
+  round 2's random input reached 28 new items (a cancel sound, 7 shader stages). [STALL] now means no frame was
+  presented during the wait (91060cc); long waits while frames go on are "[wait]". A 20-round perturbed TotK run
+  is going; results here when done. Mac: the same driver needs a shell port and the Metal stage hook.
 
 ## Bring-up of many games (user's request 2026-11-23; CLAIMED by win-worker via a worktree subagent)
 A Windows subagent brings up as many diverse games as it can (the user's own library): survey (builder, headless run
