@@ -1947,3 +1947,12 @@ un-%p.profraw
   scripts and packaging are gone. Fixes the TotK crash when its first movie opened with no tracks. (S41L0R)
 - Windows short sleeps end on time (clock::sleep_ns yields for the last 0.7 ms). (S41L0R)
 - docs/ is local only (ignored). (S41L0R)
+
+## Automated testing without saves or tokens (user's request 2026-11-23; CLAIMED by win-worker)
+Goal: bulk, unattended, every kind of bug including timing. The user approved (no saves per game, no token-heavy
+player): (1) visibility check: report every guest read of memory a GPU write is still owed to (the white-water /
+early-fence class), with the reading function; (2) timing-perturbation harness: same start under different frame
+limits, injected GPU completion delay and thread reordering at our waits; compare game state at the same game time;
+(3) coverage-guided input fuzzing (new lifted code / files / shaders / HLE calls reached) to drive both from a fresh
+boot; later: test points collected from normal play (save copies + input logs), public completed saves, lifter and
+shader differential tests. win-worker starts with (1).
