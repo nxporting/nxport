@@ -1989,3 +1989,24 @@ A Windows subagent brings up as many diverse games as it can (the user's own lib
 with A presses, frame dumps), then general engine / HLE / Vulkan fixes on its local branch `bringup`, reviewed by
 win-worker before anything reaches main (after the tag). Mostly horizon/, nvn/, gpu/vulkan/, the builder: tell
 win-worker of in-flight work there. Results (status table, fixes, open blockers) will be journaled here.
+FIRST REPORT (2026-11-24 ~05:10, branch `bringup`, 17 commits, local, not merged; TotK re-check pending):
+- Reached: Celeste 1.4.1.1 (SDK 15.3.2) gameplay 60 fps; Stardew Valley 1.6.15 (20.5.27) character creation;
+  Super Meat Boy / Bastion / Sonic Mania boot and present but draw black. Stuck at boot: Hollow Knight (Vulkan record
+  thread crash), INSIDE and Octopath (computed branches into unlifted mid-function code), Dead Cells (MountRom never
+  called), Baba Is You (LuaJIT run-time dispatch), Shovel Knight / Pokemon Let's Go (run-time glslc subsdk; Pokemon
+  also nn::bluetooth BLE), Snipperclips (SDK heap trap), Into the Breach (module TLS > 0x1e0 bytes dropped), Mario
+  Maker 2 (a thread busy-loops before the first frame), Kirby Star Allies (nnMain returns early), Hotline Miami
+  (oe::ExecuteProgram, multi-program), Undertale / A Dark Room (their own opengl / vulkan driver subsdk).
+- Fixes: default HLE stub names the function; NEGATIVE_Y viewport swizzle (Vulkan); thread id at ThreadType+0x1b8
+  for SDKs that read it; __assert_fail / OnAssertionFailure print; nn::vi CreateLayer(w,h) / DestroyLayer /
+  CloseDisplay / Finalize; oe::PopNotificationMessage blocks; svcBreak names its caller; LIFTER: adr / adrp+add code
+  addresses become function starts, setjmp return points are seeds and landing pads; libc fgetc / feof / ferror /
+  setvbuf / fseeko / ftello; Vulkan formats NVN 149-152; ChangeThreadPriority returns the old priority;
+  oe::GetDefaultDisplayResolutionChangeEvent; hid debug pad / Palma / gesture (GetDebugPadState wrote 64 bytes into
+  0x20); clearer "no vertex stage" warning.
+- Open, by games blocked: (1) the game's own subsdk libraries (glslc: plain CPU code; GL / Vulkan drivers);
+  (2) programs holding only a fragment stage (check nvnProgramSetShaders merge vs replace in the SDK's NVN code);
+  (3) lifter: computed branches mid-block, LuaJIT dispatch; (4) BLE, ExecuteProgram, large module TLS; (5) single games.
+- Tools (outside the repo, on the PC): an
+  NSO symbol / disassembly helper. Note: with vsync a run showed ~4 fps while the display was asleep; surveys use
+  --no-vsync.
