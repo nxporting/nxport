@@ -1312,7 +1312,18 @@ unsafe fn lifted_access_fault(addr: usize, write: bool, pc: usize) -> bool {
 /// counter is lifted_ticks, and traps and branches to code nothing lifted stop the process with the guest's state.
 #[cfg(all(nx_runtime, not(nx_native)))]
 fn lifted_handlers() -> guest::exec::lifted::Handlers {
-    fn svc(cpu: &mut nxport_lifterlib::abi::Cpu, imm: u32, _pc: u64) {
+    fn svc(cpu: &mut nxport_lifterlib::abi::Cpu, imm: u32, pc: u64) {
+        if imm == 0x26 {
+            // svcBreak: where the game gave up (horizon::svc stops the process).
+            let main = guest::loader::main_base() as u64;
+            eprintln!(
+                "[!] svcBreak at {pc:#x} (main+{:#x}), lr {:#x} (main+{:#x}), callers {}",
+                pc.wrapping_sub(main),
+                cpu.x[30],
+                cpu.x[30].wrapping_sub(main),
+                horizon::call_log::guest_chain(cpu.x[29] as usize)
+            );
+        }
         let mut regs: [u64; 8] = cpu.x[..8].try_into().unwrap();
         unsafe { horizon::svc::svc_dispatch(&mut regs, imm as u64) };
         cpu.x[..8].copy_from_slice(&regs);

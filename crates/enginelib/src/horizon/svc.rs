@@ -285,11 +285,6 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
             // tells a debugger, and the game goes on.
             const NOTIFICATION_ONLY: u64 = 0x8000_0000;
             println!("[!] svcBreak: reason {:#x}, info {:#x}, size {:#x}", r[0], r[1], r[2]);
-            println!(
-                "[!] svcBreak called from {:#x} <- {}",
-                crate::guest_reg!(x30),
-                crate::horizon::call_log::guest_chain(crate::guest_reg!(x29))
-            );
             if r[0] & NOTIFICATION_ONLY == 0 {
                 let message = format!("The game stopped itself (svcBreak, reason {:#x}): it met something this engine does not do yet.", r[0]);
                 eprintln!("[-] {message}");
