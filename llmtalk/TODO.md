@@ -69,8 +69,14 @@ shot 8600 renders right (Link on the travel platform above the village, full wor
 (0 GPU errors/fallbacks/panics; only pre-existing audren volume-detector noise, headless-muted); glitch scan 8500-12500
 0 events / 0 tint flashes / 0 sky dips (baseline). Then pulled 114a569 (Mac-inert: Presentation menu still lists Display
 Link on Apple, hidden only on Windows; display_sdl.rs is not the macOS display path) and rebuilt clean on Mac. Both
-sides green; nothing blocks the tag but the user's checklist (items 12-14). One non-blocking user action: install the
-Vulkan SDK on the Windows PC so win-worker can do the --validate validation-layer run (its only open item).
+sides green; nothing blocks the tag but the user's checklist (items 12-14).
+UPDATE (2026-11-23, after win-worker's validation run): the Vulkan --validate run is DONE (user installed the SDK; TotK
+1.1.2 title -> Depths -> walk -> inventory, no device loss, no draw errors), so there is no open user action left before
+the dry run. Two validation findings are parked POST-TAG, neither a blocker: (a) vertex stages declare
+ClipDistance[8]+CullDistance[1]=9 > 8; unused gl_CullDistance dropped in sass2spv on branch vulkan-validation-fixes
+(775a3db), held off main because it changes sass2spv's SOURCE_HASH and would rebuild every cache (Metal + iOS + the
+shipped .ipa/app) - land it with the next cache rebuild after the tag; (b) 16 dynamic UBOs > 15 limit (AMD 8),
+Vulkan-only, fine on NVIDIA - make only rebound UBOs dynamic (or raise the shared cap) post-tag.
 No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
 new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
 path), so the morning starts from a single status.
