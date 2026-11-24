@@ -2059,3 +2059,13 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   and it never saw a reverted byte; reverted). Fixed on the way: trap vs kernel file reads (aae0c84), trap vs write
   tracking (294f1ec), dirty_track slot race (f9937be). Next suspects: HLE sync / heap / fs services racing with a 1 ms
   delay (which one: bisect --hle-jitter to the HLE functions it delays), Ryujinx's behaviour for the same calls.
+  BISECT (16:10): --gpu-complete-delay-us=2000 alone: 2/8 starts fail; the ::os:: jitter group matched no function
+  (ids have spaces around ::; fixed) so it was a plain run, and it failed 1/8: SMO also fails to start without any
+  perturbation, rarely (0/5 and 1/8 plain so far): a real bug for players
+  (fs / nvn groups pending). GPU completion timing alone is enough. The game's own waits all go through inflight::wait
+  (the watcher's completed), so they stay correct under the delay; what moves is when the watcher's guest-memory
+  writes land (storage / shadow / render-target / report write-backs) relative to the game's other threads. Next:
+  record each watcher write to guest memory (range, submit, time) and, on the ExpHeap halt / crash, the ones that
+  overlap the corrupted block; if none do, it is a sync-timing dependency instead (then compare our nvnSync / event
+  semantics with Ryujinx's for the waits on the scene-init thread). --hle-jitter-only=TEXT (new, this push) limits the
+  jitter to engine functions whose name contains TEXT.
