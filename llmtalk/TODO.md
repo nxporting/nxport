@@ -219,6 +219,10 @@ path), so the morning starts from a single status.
    are single-area/boot-tested, so "experimental" fits. Jamboree and Splatoon 2 boot to their character creators only
    (very experimental / not for the list). Suggested framing: supported = TotK 1.0.0/1.1.2 + BotW 1.9.0 (+1.5.0);
    experimental = SMO, Kirby, MK8D, Wonder, Silver Pines (platform caveats as above).
+   USER input 2026-11-23: Kirby and SMO are NOT super experimental (treat them a tier above the rest - more like
+   supported-with-caveats than experimental). BotW: the user has not played it much themselves yet ("on me to test
+   more"), so our headless surveys stand but there is no extended hands-on confidence behind the BotW claim until the
+   user plays it. Adjust the framing accordingly when the user finalizes the list.
 13. (user) Defaults: --tile-feedback (halves the decal pass breaks, ~270 MiB less traffic a Hateno frame; overlapping
    decals as in Ryujinx, some cliffs less green).
 14. (user) The 2026-11-14 list below: the GitHub dry run, archives to the agents, your own app, the iPhone, release text,
