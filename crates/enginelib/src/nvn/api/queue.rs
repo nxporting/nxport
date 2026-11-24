@@ -341,6 +341,7 @@ pub unsafe extern "C" fn hle_nvnQueuePresentTexture(
     index: i32,
 ) {
     record_hle_call("hle_nvnQueuePresentTexture");
+    crate::horizon::call_log::note_present();
     crate::gpu::frame_breakdown::frame_end(crate::gpu::backend().presented_frames());
     // No waiting here: NVN queues the present and returns; the vsync / present-interval wait happens when the game
     // acquires the next window texture (see hle_nvnWindowAcquireTexture). TotK's frame pacer measures its update +

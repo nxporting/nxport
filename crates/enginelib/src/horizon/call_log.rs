@@ -295,7 +295,20 @@ pub(crate) fn guest_chain(fp: usize) -> String {
     chain.join(" <- ")
 }
 
+/// When the game last presented a frame (platform clock ns; 0: never), for report_long_wait.
+static LAST_PRESENT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The game presented a frame (nvnQueuePresentTexture).
+pub(crate) fn note_present() {
+    LAST_PRESENT_NS.store(crate::platform::clock::now_ns(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A wait that has lasted `waited`. "[STALL]" only when no frame was presented since it began (the game froze); a
+/// thread waiting long while frames go on (a worker with no work during a load) is "[wait]".
 pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Duration) {
+    let began = crate::platform::clock::now_ns().saturating_sub(waited.as_nanos() as u64);
+    let frames_meanwhile = LAST_PRESENT_NS.load(std::sync::atomic::Ordering::Relaxed) > began;
+    let tag = if frames_meanwhile { "[wait]" } else { "[STALL]" };
     // `fp` is x29 inside the HLE function: its frame record's saved x29 is the guest's FP (the
     // trampoline doesn't change it), so [guest_fp + 8] is the return address of the guest function
     // that called the wait, followed up the guest FP chain.
@@ -319,10 +332,12 @@ pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::t
         }
     }
     eprintln!(
-        "[STALL] {} on {:#x} blocked {}s (guest callers: {})",
+        "{} {} on {:#x} blocked {}s{} (guest callers: {})",
+        tag,
         what,
         obj,
         waited.as_secs(),
+        if frames_meanwhile { ", frames kept coming" } else { ", no frame presented meanwhile" },
         chain.join(" <- ")
     );
 }
