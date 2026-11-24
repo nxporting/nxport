@@ -62,9 +62,15 @@ MAC CROSS-CHECK (2026-11-23 morning): pulled win-worker's items 6-10 to 1b6ecf3.
 and confirmed them inert on Mac: d56268d (Metal returns scales_render_targets()=true so Graphics > Resolution shows as
 before; restart.rs is a mut-warning fix; the new trait method is defaulted) and 05fd882 (at 120 Hz the 30/60/120 limits
 and unlimited all give whole refreshes, so the pacing path is unchanged; only non-dividing limits like 90 change, now
-running their true rate). Rebuilt the workspace at 1b6ecf3 (clean) and re-ran gpu_conformance on Metal to confirm no
-regression from the shared changes (result appended below when it lands). Both sides green; nothing blocks the tag but
-the user's checklist (items 12-14).
+running their true rate; 05fd882 is also headless-inert: vblank_period returns None when refresh_hz==0, the headless
+case, so only a windowed non-dividing limit exercises it). Rebuilt the workspace at 1b6ecf3 (clean); gpu_conformance on
+Metal PASS (scenarios ok, game_frames ok; 2/2) - the shared changes do not regress Metal. Live TotK Hateno at 1b6ecf3:
+shot 8600 renders right (Link on the travel platform above the village, full world/HUD/minimap/text), render log clean
+(0 GPU errors/fallbacks/panics; only pre-existing audren volume-detector noise, headless-muted); glitch scan 8500-12500
+0 events / 0 tint flashes / 0 sky dips (baseline). Then pulled 114a569 (Mac-inert: Presentation menu still lists Display
+Link on Apple, hidden only on Windows; display_sdl.rs is not the macOS display path) and rebuilt clean on Mac. Both
+sides green; nothing blocks the tag but the user's checklist (items 12-14). One non-blocking user action: install the
+Vulkan SDK on the Windows PC so win-worker can do the --validate validation-layer run (its only open item).
 No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
 new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
 path), so the morning starts from a single status.
