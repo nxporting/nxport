@@ -616,6 +616,18 @@ capture was re-recorded (the Oct 22 one was unreadable after f6805da).
   1.0.0 (the VFR ratio code is compiled with other registers), so each needs finding by its fields and constants
   (VFR: +0x150 interval source, +0x30 ratio, +0x34, +0x3c, +0x40). Not Savage Wind parity (SW is 1.9.0 only); a
   separable job for a worktree subagent.
+  RESULT (win, 2026-11-23): done on the LOCAL branch botw100-fps (2b47af8), for main after the tag. SITES_V1_0_0 in
+  profile/botw.rs: every site is 1.5.0's code with other registers / offsets, found by its words and fields and
+  checked as the full expected sequence (unique, except the sound floor's 3 words, also once in unrelated code; the
+  sound manager's copy taken). frame_wait 0x9fd4fc/508/56c/578; vfr_ratio 0x1043220 (interval source +0x120, not
+  +0x150; new VFR_RATIO_CODE_V1_0 / CALL); gui_speed 0xdbd770 (GUI_SPEED_CODE_V1_0); hold_counters 0xa1ebd0..0xa1ec68
+  (hold_counters became frame_time::HoldLoop {at, expected, stores, end}; 1.5.0's entry unchanged in effect); arrow
+  (0x69304, 0x5f18d4, 0x69380); snd_floor 0x107d31c (1.5.0's constants, floor 1); kf_angle (0xe11dc8, 0x1418f48);
+  phys_world_tick [0x1492e28, 0x14a353c]; phys_body_tick [(0x14afe9c, x28), (0x14b0cf4, x22)]. controller_step and
+  demo_move None (integer holds; the newer arrival code does not occur, as in 1.5.0). Reviewed: branch offsets in the
+  replacements, and liveness after gui_speed (no flag reads; x9 loaded after the call) and after vfr_ratio (live:
+  x0, s1, sp only). Workspace tests pass; in game (fresh save dir, limit 120) every install prints [+], game time on
+  real time, 120 fps at the start then 77-98 fps, exit 0. Not yet: a playtest of holds / arrows / sound at high fps.
 - **Source code reorganization (user, 2026-11-15): everything in a super sensible place.** First a written target layout
   (module map by layer: guest / horizon / nvn / gpu backends (metal, vulkan) / host / profile; split metal/translated.rs,
   metal/mod.rs, nvn/api.rs, horizon/hle.rs along what they do; SDK replacements named for what they do), agreed with the
