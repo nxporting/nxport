@@ -2017,6 +2017,18 @@ FIRST REPORT (2026-11-24 ~05:10, branch `bringup`, 17 commits, local, not merged
   address lies in another function than the code building it; unit test). Ready to merge after the tag.
 - BotW 1.9.0 fuzzing from a fresh start (no save), 20 rounds x 180 s, perturbed (04:11-05:12): no problems; coverage
   levels off at ~2800 items (random input stays in the opening area), as expected for story progress.
+PHASE 2 (2026-11-24 ~13:15, `bringup` now 20 commits; TotK 1.1.2 checked by the agent: new game to frame 11000, no errors;
+enginelib type-checks for aarch64-apple-darwin, win-worker):
+- c25e8eb Vulkan: each graphics stage takes its shader from the program bound for it (nvnCommandBufferBindProgram's stage
+  mask: Bastion builds one program per stage and binds them separately). Super Meat Boy reaches gameplay (46-60 fps),
+  Bastion renders its menu. MAC: the Metal backend keeps one program per draw: needs the same per-stage binding.
+- 591e9d1 The game's own subsdk libraries main links to (functions main imports, none bound otherwise) are loaded in the
+  module gap, initialised and lifted (glslc in Shovel Knight, Dead Cells). Next blockers: Shovel Knight's vtable target
+  main+0x8e27dc not lifted; Dead Cells' data: mount (MountRom) never runs.
+- 09caeb4 Lifted guest TLS: module TLS of any size (Into the Breach's 64 KB); the game then deadlocks before its first frame.
+- Open, ranked: (1) lifter entry points nothing references statically (INSIDE, Octopath, Shovel Knight, Baba's LuaJIT):
+  proposal: seeds recorded from the runtime's "branch to code that was not lifted" reports, rebuilt into the next lift;
+  (2) GL / EGL games' own driver subsdk on NvRm; (3) single games (list in the first report).
 - SMO v0 fuzzing, first try (2026-11-24 ~12:20, perturbed: --gpu-complete-delay-us=2000 --hle-jitter=5000, with vsync
   while the display slept: ~4 fps, so runs only reached ~frame 500): two boot failures in 4 rounds, never seen
   unperturbed (a baseline run with the same build: exit 0). (a) SDK abort with no message ("SDK has been aborted or
