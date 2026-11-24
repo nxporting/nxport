@@ -1956,3 +1956,9 @@ limits, injected GPU completion delay and thread reordering at our waits; compar
 (3) coverage-guided input fuzzing (new lifted code / files / shaders / HLE calls reached) to drive both from a fresh
 boot; later: test points collected from normal play (save copies + input logs), public completed saves, lifter and
 shader differential tests. win-worker starts with (1).
+
+## Bring-up of many games (user's request 2026-11-23; CLAIMED by win-worker via a worktree subagent)
+A Windows subagent brings up as many diverse games as it can (the user's own library): survey (builder, headless run
+with A presses, frame dumps), then general engine / HLE / Vulkan fixes on its local branch `bringup`, reviewed by
+win-worker before anything reaches main (after the tag). Mostly horizon/, nvn/, gpu/vulkan/, the builder: tell
+win-worker of in-flight work there. Results (status table, fixes, open blockers) will be journaled here.
