@@ -1978,6 +1978,11 @@ shader differential tests. win-worker starts with (1).
   round 2's random input reached 28 new items (a cancel sound, 7 shader stages). [STALL] now means no frame was
   presented during the wait (91060cc); long waits while frames go on are "[wait]". A 20-round perturbed TotK run
   is going; results here when done. Mac: the same driver needs a shell port and the Metal stage hook.
+  First real run (TotK 1.1.2, 20 rounds x 150 s, perturbed, from the user's save copy; 02:51-03:44 2026-11-24):
+  13094 distinct files / shader stages / engine functions reached, 16 scripts kept (round 10's random input alone
+  reached ~6000 new: a new area). No crash, freeze, device loss or validation report. Findings were the known stale
+  readers (one more signature: main+0x8b84 <- main+0x8d88, already listed) and false [STALL]s, fixed: at shutdown
+  (f54e686) and before the first frame (fd9ce7f). Next: BotW 1.9.0 from a fresh start (no save) with the same driver.
 
 ## Bring-up of many games (user's request 2026-11-23; CLAIMED by win-worker via a worktree subagent)
 A Windows subagent brings up as many diverse games as it can (the user's own library): survey (builder, headless run
