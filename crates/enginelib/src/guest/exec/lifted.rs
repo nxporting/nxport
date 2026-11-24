@@ -61,6 +61,7 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
         Some(h) => h.call(c),
         None => (handlers().unknown)(c),
     }
+    jitter();
     CURRENT.with(|cur| cur.set(prev));
 }
 
@@ -83,7 +84,33 @@ unsafe extern "C" fn host_call_hle(h: *const crate::guest::exec::hle_abi::Hle, c
         return;
     }
     (*h).call(&mut *c);
+    jitter();
     CURRENT.with(|cur| cur.set(prev));
+}
+
+/// --hle-jitter (testing): one in N calls into the engine returns 1 ms late, the calls picked by a fixed mix of the
+/// thread's call count, so the game's threads run in other orders around their waits and signals.
+fn jitter() {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let n = *N.get_or_init(|| crate::settings::get().debug.hle_jitter as u64);
+    if n == 0 {
+        return;
+    }
+    thread_local! {
+        static CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    let k = CALLS.with(|c| {
+        let k = c.get().wrapping_add(1);
+        c.set(k);
+        k
+    });
+    // splitmix64's finalizer.
+    let mut z = k.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    if (z ^ (z >> 31)) % n == 0 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 /// A guest `ic ivau`: what a plugin mod wrote through a mapping it keeps takes effect now, not at its next svc.

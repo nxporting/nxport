@@ -133,9 +133,26 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
             }
         }
     }
+    completion_delay(d.serial);
     let _g = WAKE.0.lock().unwrap();
     COMPLETED.fetch_max(d.serial, Ordering::AcqRel);
     WAKE.1.notify_all();
+}
+
+/// --gpu-complete-delay-us (testing): the submit's completion is held back by a delay of 0 to the setting, taken from
+/// the serial (a fixed mix of its bits), so a run's timing can be shaken the same way again.
+fn completion_delay(serial: u64) {
+    static MAX: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let max = *MAX.get_or_init(|| crate::settings::get().debug.gpu_complete_delay_us as u64);
+    if max == 0 {
+        return;
+    }
+    // splitmix64's finalizer.
+    let mut z = serial.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    std::thread::sleep(std::time::Duration::from_micros(z % (max + 1)));
 }
 
 /// Hands a queued submit to the watcher.

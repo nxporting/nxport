@@ -603,6 +603,12 @@ group! {
         glitch_dump_history: bool = false,
         /// Trap GPU-written guest memory under the early fence and log early accesses
         early_fence_trap: FenceTrap = FenceTrap::Off,
+        /// Testing: hold each GPU submit's completion back by 0 to this many microseconds (Vulkan; the same delays for
+        /// the same submits in every run), to shake out game behaviour that depends on GPU timing
+        gpu_complete_delay_us: u32 = 0,
+        /// Testing: one in this many calls from lifted game code into the engine returns 1 ms late (0: none), to change
+        /// how the game's threads interleave around its waits and signals
+        hle_jitter: u32 = 0,
         /// Log why textures of this size are re-uploaded
         debug_refresh: Option<Size> = None,
         /// Clamp every sampler's maximum LOD
