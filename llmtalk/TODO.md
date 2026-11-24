@@ -2017,3 +2017,10 @@ FIRST REPORT (2026-11-24 ~05:10, branch `bringup`, 17 commits, local, not merged
   address lies in another function than the code building it; unit test). Ready to merge after the tag.
 - BotW 1.9.0 fuzzing from a fresh start (no save), 20 rounds x 180 s, perturbed (04:11-05:12): no problems; coverage
   levels off at ~2800 items (random input stays in the opening area), as expected for story progress.
+- SMO v0 fuzzing, first try (2026-11-24 ~12:20, perturbed: --gpu-complete-delay-us=2000 --hle-jitter=5000, with vsync
+  while the display slept: ~4 fps, so runs only reached ~frame 500): two boot failures in 4 rounds, never seen
+  unperturbed (a baseline run with the same build: exit 0). (a) SDK abort with no message ("SDK has been aborted or
+  failed assertion with no message", svcBreak 0) right after opening LayoutData/ModeSelect.szs. (b) access violation
+  in lifted code on the scene-init thread (シーン初期化スレッド): f_7000844094 <- f_700083f7b8, reading 0x400009b0baa0
+  (x11 = 0x400009b0bc08: a pointer with garbage high bits). Both look like timing-dependent races at boot; the logs
+  were lost (state cleared by mistake); re-running with --no-vsync (driver fixed) to reproduce.
