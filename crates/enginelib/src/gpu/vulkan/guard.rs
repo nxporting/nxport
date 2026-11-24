@@ -477,6 +477,9 @@ pub(super) unsafe fn before_host_write(addr: usize, len: usize) {
     if !enabled() || len == 0 {
         return;
     }
+    if trap_on() {
+        trap_open(addr, len);
+    }
     let gen = ACTIVE.load(Ordering::Acquire);
     let t = &TABLES[gen & 1];
     let n = t.n.load(Ordering::Acquire).min(SLOTS);
@@ -722,6 +725,39 @@ fn trap_writes(pending: &[(usize, usize, u64)]) {
     for &(a, b, _) in &pending[..n] {
         let (a, b) = host_pages(a, b);
         let _ = unsafe { crate::platform::os::protect(a, b - a, crate::platform::os::Prot::None) };
+    }
+}
+
+/// Before the host kernel writes [addr, addr+len) (a file read into a guest buffer: it cannot fault, it fails, and
+/// SMO's start aborted on such a read): the trapped pages there open, and early reads recorded on them are cancelled
+/// (the game's own data lands there).
+unsafe fn trap_open(addr: usize, len: usize) {
+    let p = crate::platform::os::page_size();
+    let (a, b) = host_pages(addr, addr + len);
+    let mut opened = false;
+    for i in 0..TRAP_N.load(Ordering::Acquire) {
+        let s = TRAP_START[i].load(Ordering::Acquire);
+        if s == 0 {
+            continue;
+        }
+        let (ta, tb) = host_pages(s, TRAP_END[i].load(Ordering::Acquire));
+        if ta < b && tb > a {
+            opened = true;
+        }
+    }
+    if !opened {
+        return;
+    }
+    for k in 0..READ_SLOTS {
+        let at = READ_AT[k].load(Ordering::Relaxed);
+        if at >= a && at < b {
+            READ_SERIAL[k].store(0, Ordering::Release);
+        }
+    }
+    let mut page = a;
+    while page < b {
+        set_prot(page, p, true);
+        page += p;
     }
 }
 
