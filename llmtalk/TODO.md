@@ -1956,6 +1956,14 @@ limits, injected GPU completion delay and thread reordering at our waits; compar
 (3) coverage-guided input fuzzing (new lifted code / files / shaders / HLE calls reached) to drive both from a fresh
 boot; later: test points collected from normal play (save copies + input logs), public completed saves, lifter and
 shader differential tests. win-worker starts with (1).
+- (1) visibility check DONE (b66df10, Vulkan; --early-fence-trap=on): stale reads of GPU results, judged exactly (the
+  GPU changed the 8 bytes the game read early; game writes cancel; unfinished = unjudged), once per guest caller.
+  Validated on the known bug: BotW 1.9.0 with --early-fence=true reports 8 callers, the first two
+  (main+0x126e0e8, main+0x126e128) reading 0.2 placeholders where the GPU then wrote its lighting values (white water).
+  TotK 1.1.2 at default settings (early fence on): 9 callers read stale GPU results, ~2 stale reads a frame in play
+  (pc / lr): main+0xcdb2d4; memcpy from main+0xcdb42c, main+0xcdb308, main+0x8b839c; main+0xdd315c; main+0xf620a0;
+  main+0x8aae88; main+0x26a7e8c <- main+0x9a7534; main+0x8b84 <- main+0x8d88. Known in kind (the early fence's
+  one-frame-late results, gpu/metal/fence.rs notes); whether each is harmless is open (mac-worker / user).
 
 ## Bring-up of many games (user's request 2026-11-23; CLAIMED by win-worker via a worktree subagent)
 A Windows subagent brings up as many diverse games as it can (the user's own library): survey (builder, headless run
