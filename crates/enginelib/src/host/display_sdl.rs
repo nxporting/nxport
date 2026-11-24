@@ -303,8 +303,10 @@ impl Host {
         }
         // No menu bar in full screen.
         menu::show(hwnd(), full);
-        if let Err(e) = self.window.set_fullscreen(!full) {
-            println!("[!] Display: full screen: {e}");
+        match self.window.set_fullscreen(!full) {
+            // Adaptive presentation (variable refresh) applies in full screen (live::present_mode).
+            Ok(()) => crate::host::live::set_full_screen(!full),
+            Err(e) => println!("[!] Display: full screen: {e}"),
         }
         // SDL's restored size does not allow for the menu bar coming back.
         if full {

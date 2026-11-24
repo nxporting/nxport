@@ -224,11 +224,14 @@ pub fn bar() -> Vec<Entry> {
                 sub("Frame Rate Limit", LIMITS.iter().map(|&fps| choice(limit_label(fps), id::LIMIT + fps as u16)).collect()),
                 sub(
                     "Presentation",
-                    vec![
+                    [
                         choice("Standard", id::PRESENT),
                         choice("Adaptive (variable-refresh displays, full screen)", id::PRESENT + 1),
-                        choice("Display Link", id::PRESENT + 2),
-                    ],
+                    ]
+                    .into_iter()
+                    // The display link is macOS's (gpu::metal::display_link).
+                    .chain(cfg!(target_vendor = "apple").then(|| choice("Display Link", id::PRESENT + 2)))
+                    .collect(),
                 ),
                 Separator,
                 item("Full Screen", id::FULL_SCREEN),

@@ -230,6 +230,7 @@ path), so the morning starts from a single status.
      lateness. The principle for any Windows equivalent: a frame's step must equal the time it is on screen; measure
      it as summed steps vs presentation times (work/tools/dev ... the judder count in the session log).
   14. e304b7b (Metal): hitch log skipped-draw counter no longer wraps. Vulkan has its own counter; check it.
+     win-worker 2026-11-23: Vulkan's is a u64 (async_pipe::ASYNC_SKIPS) swapped to 0 per hitch report: cannot wrap.
   15. (this commit, shared nvn/api/window.rs) vsync pacing in whole refreshes per frame, auto-chosen from measured frame
      times (Swappy's auto swap interval). Needs live::refresh_hz() on Windows (the monitor's rate); with it, check BotW
      at the 60 / 120 limits on a 120+ Hz monitor: the log prints "[pacing] N refreshes per frame". Display-link commits
@@ -247,7 +248,10 @@ path), so the morning starts from a single status.
      no title-bar separator) are macOS only.
   18. 162a43c (shared host/live.rs present_mode): Adaptive acts as Standard unless the window is full screen (macOS has
      VRR only full screen). Windows: decide whether windowed VRR applies there (DXGI flip model does allow it) and gate
-     set_full_screen accordingly. 6f60b95 --replay-ab-tiny (Metal only). 36a6a17 (shared horizon/svc.rs): svcGetInfo 18
+     set_full_screen accordingly.
+     win-worker 2026-11-23: Windows never fed set_full_screen, so Adaptive acted as Standard there even in full screen;
+     display_sdl.rs now reports it from the F11 / menu toggle (Adaptive applies in full screen, as on macOS; windowed VRR
+     left out: NVIDIA's default G-SYNC setting is full screen only). Display Link is offered only on Apple hosts. 6f60b95 --replay-ab-tiny (Metal only). 36a6a17 (shared horizon/svc.rs): svcGetInfo 18
      reports the game's own title id (was TotK's for every game); nothing to do, just note it if a game's behaviour
      changes on Windows.
   19. (rt_guard fix, Metal only) a guard check-then-protect race: a page was made inaccessible after its hold had already
