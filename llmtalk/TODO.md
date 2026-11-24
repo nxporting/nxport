@@ -2048,3 +2048,14 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   The check makes GPU-written pages inaccessible; engine-side accesses to them break (kernel file reads fail instead of
   faulting: fixed in aae0c84, but SMO still aborts at start, so another engine access remains; finding it with the
   svcBreak caller log). The dirty_track domain-slot race fix (f9937be) is real but was not this.
+  STATUS (win-worker, 2026-11-24 ~15:30): partly corrected again. SMO start failures, 60 s runs with A presses:
+  plain (no testing flags) 0/5; --early-fence-trap only 3/6 then 3/8 after fixes; perturbation only
+  (--gpu-complete-delay-us=2000 --hle-jitter=5000) 2/8 and 1/8; perturbation with --early-fence=false 3/8. So a real
+  timing-dependent bug (1 ms here and there brings it out), not the early fence, the trap made it likelier. The abort
+  is sead::ExpHeap::tryAlloc -> sead::system::HaltWithDetail (heap block check) under al::Resource (svcBreak caller log,
+  cherry-picked from bringup: main+0x45f0290 <- main+0xb59c64 <- main+0x7408f4 <- main+0x9c9fd0); the crash is a
+  garbage pointer read on the scene-init thread (f_7000844094 <- f_700083f7b8 <- f_7000869884): heap corruption.
+  Ruled out: storage-buffer write-back reverting game writes (a changed-bytes-only write-back was tried: no change,
+  and it never saw a reverted byte; reverted). Fixed on the way: trap vs kernel file reads (aae0c84), trap vs write
+  tracking (294f1ec), dirty_track slot race (f9937be). Next suspects: HLE sync / heap / fs services racing with a 1 ms
+  delay (which one: bisect --hle-jitter to the HLE functions it delays), Ryujinx's behaviour for the same calls.
