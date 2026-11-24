@@ -203,6 +203,8 @@ path), so the morning starts from a single status.
 11. (both) Morning hand-off: result lines under each item; failures with log paths; anything that blocks the tag on top.
 12. (user) Scope: which games the release names as supported (TotK 1.0.0 / 1.1.2 surely; BotW; SMO, Kirby, MK8D, Wonder,
    Silver Pines as experimental?).
+   USER'S DECISION (2026-11-23): TotK supported. BotW should be supported but is new and less tested (say so).
+   SMO and Kirby and the Forgotten Land seemed solid in the user's play. No game has had full testing.
    Windows data (win, 2026-11-23, Vulkan, re-lifted by the builder): SMO v0 -> Cap Kingdom wake-up ("Look Around"),
    60 fps, no GPU errors; its audio logs a few "output beyond full scale" peaks (audren anomaly, f7733+; mild clipping,
    not investigated). MK8D: not checkable here: the only dump is v0, which the builder refuses as a 32-bit game (no
