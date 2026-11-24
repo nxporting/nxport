@@ -2010,3 +2010,10 @@ FIRST REPORT (2026-11-24 ~05:10, branch `bringup`, 17 commits, local, not merged
 - Tools (outside the repo, on the PC): an
   NSO symbol / disassembly helper. Note: with vsync a run showed ~4 fps while the display was asleep; surveys use
   --no-vsync.
+- Checked by win-worker (2026-11-24 ~05:45): TotK 1.1.2 built from `bringup` (its lifter seeding changes the function
+  splits) and from main, same save and script: identical frames (Depths, inventory), CPU record time 2.8 ms median on
+  both, no stalls / lifted errors. enginelib on `bringup` type-checks for aarch64-apple-darwin (zig cc; only two old
+  warnings in totk vfx.rs). Reviewed: the viewport swizzle and the adr / adrp+add seeding (a start only when the
+  address lies in another function than the code building it; unit test). Ready to merge after the tag.
+- BotW 1.9.0 fuzzing from a fresh start (no save), 20 rounds x 180 s, perturbed (04:11-05:12): no problems; coverage
+  levels off at ~2800 items (random input stays in the opening area), as expected for story progress.
