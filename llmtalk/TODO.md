@@ -1964,6 +1964,12 @@ shader differential tests. win-worker starts with (1).
   (pc / lr): main+0xcdb2d4; memcpy from main+0xcdb42c, main+0xcdb308, main+0x8b839c; main+0xdd315c; main+0xf620a0;
   main+0x8aae88; main+0x26a7e8c <- main+0x9a7534; main+0x8b84 <- main+0x8d88. Known in kind (the early fence's
   one-frame-late results, gpu/metal/fence.rs notes); whether each is harmless is open (mac-worker / user).
+- (2) timing perturbation, first part DONE (this push): --gpu-complete-delay-us (seeded by submit serial) and
+  --hle-jitter (one in N engine calls returns 1 ms late). TotK 1.1.2, 2000 us / 1 in 5000, with the visibility
+  check: route completes (56 fps median), 7 of the 9 known stale readers, no new failure. 1 in 500 is too strong
+  for TotK (35 fps, the route not reached). Next: (a) [STALL] is a noisy oracle: TotK logs 0-3 at boot unperturbed,
+  8 perturbed, all while frames kept coming (idle workers during loading); count a stall only when no frame is
+  presented meanwhile; (b) the comparison step (game state at the same game time across perturbed runs).
 
 ## Bring-up of many games (user's request 2026-11-23; CLAIMED by win-worker via a worktree subagent)
 A Windows subagent brings up as many diverse games as it can (the user's own library): survey (builder, headless run
