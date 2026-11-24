@@ -50,7 +50,7 @@ and update this file when you finish or drop it.
 
 CLAIMED 2026-11-23 01:00 by mac-worker: items 1-5 (and the TotK --tile-feedback default, user's decision 2026-11-22).
 CLAIMED 2026-11-23 16:30 by win-worker: items 6-10.
-WIN STATUS (2026-11-23 ~17:45): items 6-10 done except the validation-layer run (no Vulkan SDK on this PC; asked the user).
+WIN STATUS (2026-11-23 ~17:45): items 6-10 done; validation-layer run done after the user installed the SDK (no errors while drawing; two pipeline-creation reports, see item 7).
 Fixed on the way: d56268d (Vulkan separate textures / samplers, line loops and quads; Resolution menu only on Metal),
 05fd882 (user's decision: vsync keeps the limit when it is not a whole number of refreshes; was 48 fps at 60 on
 144 Hz), 0841064 (--validate says when the layer is missing). Nothing on the Windows side blocks the tag.
@@ -151,7 +151,18 @@ path), so the morning starts from a single status.
    run100, runbotw (out.log; frame dumps f*.png). Validation layer: NOT RUN: VK_LAYER_KHRONOS_validation is not
    installed on this PC (no Vulkan SDK) and --validate silently ran without it; it now says so (next commit). Needs the
    SDK installed (asked the user); the Mac's VALIDATE=1 MoltenVK run is clean meanwhile.
-   gpu_conformance on Windows: cannot run here: the test file is #![cfg(target_os = "macos")] and the builder's
+   VALIDATION RUN (win, 2026-11-23, Vulkan SDK 1.4.363 installed by the user; TotK 1.1.2 title -> Depths -> walk ->
+   inventory, --validate, layer confirmed "validation true"): no device loss, no errors while drawing. Two kinds of
+   report, both at pipeline creation: (a) vertex stages declare ClipDistance[8] + CullDistance[1] = 9 >
+   maxCombinedClipAndCullDistances 8 (VUID-RuntimeSpirv-...-00710): nothing writes gl_CullDistance; fixed on the
+   LOCAL branch vulkan-validation-fixes (775a3db, drops it), kept off main until after the tag because it changes
+   sass2spv's source hash (every shader cache rebuilds). (b) twice, a pipeline layout with 16 dynamic uniform buffers
+   > maxDescriptorSetUniformBuffersDynamic 15 (VUID-VkPipelineLayoutCreateInfo-pSetLayouts-03038): every stage's
+   uniform buffers are dynamic (vulkan/shader.rs); the limit is per pipeline layout across stages, and AMD reports
+   8, so wide programs may be refused there. Open: a dynamic budget per layout with the rest as UNIFORM_BUFFER (not
+   done; NVIDIA accepts it). Log: C:SERSGREENLORD
+XPORT-BUILDUN112VAL2.LOG.
+   GPU_CONFORMANCE ON WINDOWS: CANNOT RUN HERE: the test file is #![cfg(target_os = "macos")] and the builder's
    gpu-scenario command is macOS-only, so the re-recorded scenario references are checked on the Mac only (MoltenVK).
    SDK install via winget: the admin prompt was cancelled (nobody answered it); the user can run it.
 8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
