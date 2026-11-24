@@ -69,7 +69,9 @@ shot 8600 renders right (Link on the travel platform above the village, full wor
 (0 GPU errors/fallbacks/panics; only pre-existing audren volume-detector noise, headless-muted); glitch scan 8500-12500
 0 events / 0 tint flashes / 0 sky dips (baseline). Then pulled 114a569 (Mac-inert: Presentation menu still lists Display
 Link on Apple, hidden only on Windows; display_sdl.rs is not the macOS display path) and rebuilt clean on Mac. Both
-sides green; nothing blocks the tag but the user's checklist (items 12-14).
+sides green; nothing blocks the tag but the user's checklist (items 12-14). Also re-surveyed BotW 1.9.0 at the new HEAD
+(69d8623, runtime translation, fresh save): opening renders right through to "Wake up, Link" (contact sheet), ran to
+frame 9000, 0 GPU events / 0 invalid accesses / 0 guest traps - the shared pacing/restart changes are clean for BotW too.
 UPDATE (2026-11-23, after win-worker's validation run): the Vulkan --validate run is DONE (user installed the SDK; TotK
 1.1.2 title -> Depths -> walk -> inventory, no device loss, no draw errors), so there is no open user action left before
 the dry run. Two validation findings are parked POST-TAG, neither a blocker: (a) vertex stages declare
@@ -203,6 +205,14 @@ XPORT-BUILDUN112VAL2.LOG.
    update on this PC). Silver Pines and any Unity game: not expected to work on Windows yet (journal 32: nn::os
    SuspendThread / GetThreadContext for Unity's garbage collector exist only on Apple); no dump here to try.
    Kirby, Wonder: no dumps on this PC.
+   Mac + iOS data (mac, surveys to gameplay; BotW 1.9.0 re-confirmed at 69d8623): TotK 1.0.0 (Mac, Win, iOS .ipa) and
+   1.1.2 (Mac, Win) - solid, the primary titles. BotW 1.9.0 (Mac, Win, iOS app) and 1.5.0 (Mac; no Win dump) - solid
+   on Mac. BotW 1.0.0: open crash on Windows (win-worker, branch botw100-fps for the fps side). SMO 1.4.1 (Mac Cap
+   Kingdom, Win Cap Kingdom), Kirby (Mac to gameplay), MK8D 3.0.4 (Mac to a race; Win can't - 32-bit v0 only), Wonder
+   (Mac Flower Kingdom), Silver Pines (Mac to gameplay; Win not yet - Unity suspend) - all reach gameplay on Mac but
+   are single-area/boot-tested, so "experimental" fits. Jamboree and Splatoon 2 boot to their character creators only
+   (very experimental / not for the list). Suggested framing: supported = TotK 1.0.0/1.1.2 + BotW 1.9.0 (+1.5.0);
+   experimental = SMO, Kirby, MK8D, Wonder, Silver Pines (platform caveats as above).
 13. (user) Defaults: --tile-feedback (halves the decal pass breaks, ~270 MiB less traffic a Hateno frame; overlapping
    decals as in Ryujinx, some cliffs less green).
 14. (user) The 2026-11-14 list below: the GitHub dry run, archives to the agents, your own app, the iPhone, release text,
