@@ -57,11 +57,17 @@ unsafe extern "C" fn host_call(c: *mut Cpu) {
     let hooked = crate::guest::exec::live_patch::enabled() && crate::guest::exec::live_patch::hle_hooked(c.pc);
     #[cfg(not(windows))]
     let hooked = false;
-    match crate::guest::exec::hle_abi::entry(c.pc).filter(|_| !hooked) {
-        Some(h) => h.call(c),
-        None => (handlers().unknown)(c),
-    }
-    jitter();
+    let id = match crate::guest::exec::hle_abi::entry(c.pc).filter(|_| !hooked) {
+        Some(h) => {
+            h.call(c);
+            h.id()
+        }
+        None => {
+            (handlers().unknown)(c);
+            ""
+        }
+    };
+    jitter(id);
     CURRENT.with(|cur| cur.set(prev));
 }
 
@@ -84,17 +90,25 @@ unsafe extern "C" fn host_call_hle(h: *const crate::guest::exec::hle_abi::Hle, c
         return;
     }
     (*h).call(&mut *c);
-    jitter();
+    jitter((*h).id());
     CURRENT.with(|cur| cur.set(prev));
 }
 
 /// --hle-jitter (testing): one in N calls into the engine returns 1 ms late, the calls picked by a fixed mix of the
 /// thread's call count, so the game's threads run in other orders around their waits and signals.
-fn jitter() {
+fn jitter(id: &str) {
     static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     let n = *N.get_or_init(|| crate::settings::get().debug.hle_jitter as u64);
     if n == 0 {
         return;
+    }
+    // --hle-jitter-only: only the functions whose name contains it.
+    static ONLY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    if let Some(only) = ONLY.get_or_init(|| crate::settings::get().debug.hle_jitter_only.clone()) {
+        // Ids are the paths as stringify! writes them, spaces around `::` included: matched without spaces.
+        if !id.replace(' ', "").contains(only.as_str()) {
+            return;
+        }
     }
     thread_local! {
         static CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -109,6 +123,8 @@ fn jitter() {
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     if (z ^ (z >> 31)) % n == 0 {
+        static FIRST: std::sync::Once = std::sync::Once::new();
+        FIRST.call_once(|| println!("[+] --hle-jitter: first delayed call: {id}"));
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }

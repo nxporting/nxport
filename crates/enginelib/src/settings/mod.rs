@@ -612,6 +612,9 @@ group! {
         /// Testing: one in this many calls from lifted game code into the engine returns 1 ms late (0: none), to change
         /// how the game's threads interleave around its waits and signals
         hle_jitter: u32 = 0,
+        /// Testing: --hle-jitter delays only calls of engine functions whose name contains this (to find the one whose
+        /// timing matters)
+        hle_jitter_only: Option<String> = None,
         /// Log why textures of this size are re-uploaded
         debug_refresh: Option<Size> = None,
         /// Clamp every sampler's maximum LOD
