@@ -2024,3 +2024,10 @@ FIRST REPORT (2026-11-24 ~05:10, branch `bringup`, 17 commits, local, not merged
   in lifted code on the scene-init thread (シーン初期化スレッド): f_7000844094 <- f_700083f7b8, reading 0x400009b0baa0
   (x11 = 0x400009b0bc08: a pointer with garbage high bits). Both look like timing-dependent races at boot; the logs
   were lost (state cleared by mistake); re-running with --no-vsync (driver fixed) to reproduce.
+  Rerun with --no-vsync (12:30-): reproduced in round 6 as an engine panic on the same scene-init thread right after
+  ModeSelect.szs and the first memory pools: guest/dirty_track.rs:306 (handle_fault) "index out of bounds: the len is
+  2304 but the index is 1125899735802811": locate() handed back a page index far past its domain for the faulting
+  address. Two bugs: (1) the guest touches a bad pointer at boot only under perturbation (a race in SMO's start, or
+  in our HLE sync it depends on); (2) dirty_track::handle_fault must not index past a domain (check locate's
+  arithmetic against a concurrently re-registered domain; return false so the crash report names the access).
+  Logs: nxport-build/fuzz/smo/findings/round6-*.log on the PC.
