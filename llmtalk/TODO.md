@@ -168,9 +168,13 @@ path), so the morning starts from a single status.
    > maxDescriptorSetUniformBuffersDynamic 15 (VUID-VkPipelineLayoutCreateInfo-pSetLayouts-03038): every stage's
    uniform buffers are dynamic (vulkan/shader.rs); the limit is per pipeline layout across stages, and AMD reports
    8, so wide programs may be refused there. Open: a dynamic budget per layout with the rest as UNIFORM_BUFFER (not
-   done; NVIDIA accepts it). Log: C:SERSGREENLORD
-XPORT-BUILDUN112VAL2.LOG.
-   GPU_CONFORMANCE ON WINDOWS: CANNOT RUN HERE: the test file is #![cfg(target_os = "macos")] and the builder's
+   done; NVIDIA accepts it). Log: nxport-build/run112/val2.log on the PC.
+   Update (win, later 2026-11-23): (b) done too on vulkan-validation-fixes (2ad1cab): pipelines::layout keeps the
+   first maxDescriptorSetUniformBuffersDynamic as dynamic and makes the rest plain UNIFORM_BUFFER for that layout;
+   draw.rs bind_writes retypes their writes (record.rs already keys and writes plain ones with their offsets). TotK
+   1.1.2 with --validate on the branch: no reports at all; renders right; in-game fps not lower than main's. Both
+   commits land after the tag, with one cache rebuild on both hosts.
+   gpu_conformance on Windows: cannot run here: the test file is #![cfg(target_os = "macos")] and the builder's
    gpu-scenario command is macOS-only, so the re-recorded scenario references are checked on the Mac only (MoltenVK).
    SDK install via winget: the admin prompt was cancelled (nobody answered it); the user can run it.
 8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
