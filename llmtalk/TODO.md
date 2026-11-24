@@ -145,6 +145,9 @@ path), so the morning starts from a single status.
    run100, runbotw (out.log; frame dumps f*.png). Validation layer: NOT RUN: VK_LAYER_KHRONOS_validation is not
    installed on this PC (no Vulkan SDK) and --validate silently ran without it; it now says so (next commit). Needs the
    SDK installed (asked the user); the Mac's VALIDATE=1 MoltenVK run is clean meanwhile.
+   gpu_conformance on Windows: cannot run here: the test file is #![cfg(target_os = "macos")] and the builder's
+   gpu-scenario command is macOS-only, so the re-recorded scenario references are checked on the Mac only (MoltenVK).
+   SDK install via winget: the admin prompt was cancelled (nobody answered it); the user can run it.
 8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
    Result (win, at 05fd882): the windows job's steps pass locally: workspace tests, release builder, ios-engine and
    macos-engine through the builder (LLVM ld64.lld), notices.pl + fold-licences (150 crates, 0 without a licence
