@@ -57,7 +57,14 @@ Fixed on the way: d56268d (Vulkan separate textures / samplers, line loops and q
 MAC STATUS (2026-11-23 ~05:00): items 1-5 done, nothing on the Mac side blocks the tag. Fixed on the way: 8cb507c
 (builder tests did not compile), 0e7a588 (Metal frame replays crashed: gpu_conformance's Hateno capture). The conformance suite
 passes in full since the render_to_texture scenario fix. New iPhone app:
-target/release_ipa_20261123 on the Mac. Win-worker: items 6-10 have no results yet.
+target/release_ipa_20261123 on the Mac.
+MAC CROSS-CHECK (2026-11-23 morning): pulled win-worker's items 6-10 to 1b6ecf3. Reviewed the two Metal-touching commits
+and confirmed them inert on Mac: d56268d (Metal returns scales_render_targets()=true so Graphics > Resolution shows as
+before; restart.rs is a mut-warning fix; the new trait method is defaulted) and 05fd882 (at 120 Hz the 30/60/120 limits
+and unlimited all give whole refreshes, so the pacing path is unchanged; only non-dividing limits like 90 change, now
+running their true rate). Rebuilt the workspace at 1b6ecf3 (clean) and re-ran gpu_conformance on Metal to confirm no
+regression from the shared changes (result appended below when it lands). Both sides green; nothing blocks the tag but
+the user's checklist (items 12-14).
 No tag exists yet; the 2026-11-14 checklist below still holds, 132 commits later. Overnight: checks and fixes only, no
 new features. Claim an item here before starting it; at the end write one result line per item (pass / fail with the log
 path), so the morning starts from a single status.
