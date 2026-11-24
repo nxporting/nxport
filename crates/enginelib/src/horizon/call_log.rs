@@ -301,6 +301,13 @@ pub(crate) fn guest_chain(fp: usize) -> String {
 /// When the game last presented a frame (platform clock ns; 0: never), for report_long_wait.
 static LAST_PRESENT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The game is being closed: its threads stop with it, so waits from then on are not stalls.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn note_quit() {
+    QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The game presented a frame (nvnQueuePresentTexture).
 pub(crate) fn note_present() {
     LAST_PRESENT_NS.store(crate::platform::clock::now_ns(), std::sync::atomic::Ordering::Relaxed);
@@ -309,6 +316,9 @@ pub(crate) fn note_present() {
 /// A wait that has lasted `waited`. "[STALL]" only when no frame was presented since it began (the game froze); a
 /// thread waiting long while frames go on (a worker with no work during a load) is "[wait]".
 pub(crate) fn report_long_wait(what: &str, obj: usize, fp: usize, waited: std::time::Duration) {
+    if QUITTING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let began = crate::platform::clock::now_ns().saturating_sub(waited.as_nanos() as u64);
     let frames_meanwhile = LAST_PRESENT_NS.load(std::sync::atomic::Ordering::Relaxed) > began;
     let tag = if frames_meanwhile { "[wait]" } else { "[STALL]" };

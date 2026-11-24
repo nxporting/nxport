@@ -159,6 +159,7 @@ fn has_icon_resource() -> bool {
 
 /// Closing the window quits: the guest has no clean shutdown path, so leave immediately.
 fn quit() -> ! {
+    crate::horizon::call_log::note_quit();
     println!("[+] Display: quit requested; exiting");
     std::process::exit(0)
 }

@@ -554,6 +554,7 @@ pub fn command(cmd: u16) -> Result<bool, Action> {
         id::DATA_FOLDER => open(data()),
         id::RESTART => restart(),
         id::QUIT => {
+            crate::horizon::call_log::note_quit();
             println!("[+] Display: quit requested; exiting");
             std::process::exit(0)
         }

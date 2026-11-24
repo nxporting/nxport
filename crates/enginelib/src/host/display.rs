@@ -115,6 +115,7 @@ define_class!(
         // than let AppKit wait on threads that will never finish.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _notification: &NSNotification) {
+            crate::horizon::call_log::note_quit();
             println!("[+] Display: quit requested; exiting");
             std::process::exit(0);
         }
