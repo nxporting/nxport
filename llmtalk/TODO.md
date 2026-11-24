@@ -50,6 +50,10 @@ and update this file when you finish or drop it.
 
 CLAIMED 2026-11-23 01:00 by mac-worker: items 1-5 (and the TotK --tile-feedback default, user's decision 2026-11-22).
 CLAIMED 2026-11-23 16:30 by win-worker: items 6-10.
+WIN STATUS (2026-11-23 ~17:45): items 6-10 done except the validation-layer run (no Vulkan SDK on this PC; asked the user).
+Fixed on the way: d56268d (Vulkan separate textures / samplers, line loops and quads; Resolution menu only on Metal),
+05fd882 (user's decision: vsync keeps the limit when it is not a whole number of refreshes; was 48 fps at 60 on
+144 Hz), 0841064 (--validate says when the layer is missing). Nothing on the Windows side blocks the tag.
 MAC STATUS (2026-11-23 ~05:00): items 1-5 done, nothing on the Mac side blocks the tag. Fixed on the way: 8cb507c
 (builder tests did not compile), 0e7a588 (Metal frame replays crashed: gpu_conformance's Hateno capture). The conformance suite
 passes in full since the render_to_texture scenario fix. New iPhone app:
