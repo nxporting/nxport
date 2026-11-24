@@ -94,6 +94,51 @@ pub(in crate::gpu::vulkan) struct VStream {
 /// tables (the Metal backend reads every handle from them).
 const TEXTURE_TABLE_CBUF: i32 = 2;
 
+/// The texture handle a stage's texture names (`h`: the texture's word in bits 0-13, a separate sampler's word in bits
+/// 14-27, the handle type in bits 28-31) for array element `j`, as the Metal backend reads it (translated/binding.rs
+/// texture_handle). From the bound table (`cbuf_slot` < 0 or the table's slot in its low 16 bits, `table` by bound
+/// index): combined textures from word 8, separate textures from word 90, separate samplers from word 346. Else from
+/// constant buffers: the texture's slot in the low 16 bits, the sampler's plus one in the high 16 (0: the same). A type
+/// 1 or 2 handle ORs the sampler's word in (type 2 shifted by 20).
+fn texture_handle(
+    table: &dyn Fn(i32) -> Option<u64>,
+    cbuf: &mut dyn FnMut(i32) -> Option<&'static [u8]>,
+    cbuf_slot: i32,
+    h: i32,
+    j: i32,
+) -> Option<u64> {
+    let h = h as u32;
+    let (tex_word, sampler_word, ty) = ((h & 0x3fff) + 2 * j as u32, (h >> 14) & 0x3fff, h >> 28);
+    let (handle, sampler) = if cbuf_slot < 0 || cbuf_slot & 0xffff == TEXTURE_TABLE_CBUF {
+        let word = |w: u32| {
+            table(match w {
+                90..=345 => crate::nvn::cmd::SEPARATE_TEXTURE_INDEX + ((w - 90) / 2) as i32,
+                346.. => crate::nvn::cmd::SEPARATE_SAMPLER_INDEX + ((w - 346) / 2) as i32,
+                _ => (w.wrapping_sub(8) / 2) as i32,
+            })
+        };
+        (word(tex_word)?, if ty != 0 { word(sampler_word) } else { None })
+    } else {
+        let slot0 = cbuf_slot & 0xffff;
+        let slot1 = match (cbuf_slot as u32 >> 16) as i32 {
+            0 => slot0,
+            s => s - 1,
+        };
+        let mut word = |slot: i32, w: u32| -> Option<u64> {
+            let c = cbuf(slot)?;
+            let o = w as usize * 4;
+            (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
+        };
+        let t = word(slot0, tex_word)?;
+        (t, if ty != 0 { word(slot1, sampler_word) } else { None })
+    };
+    Some(match (ty, sampler) {
+        (2, Some(s)) => handle | s << 20,
+        (_, Some(s)) => handle | s,
+        _ => handle,
+    })
+}
+
 /// What a draw's pipeline was made from and what it came to (draw_state), with the state it depends on (`key`: mode,
 /// Ctx::pipe_gen, Ctx::pass_gen, origin and depth modes): draws after it with the same state reuse it (most draws change
 /// only the resources they bind).
@@ -457,6 +502,27 @@ impl Ctx {
         // The stages, the target size and how many storage buffers it binds (writes there are the usual cause of a lost device).
         let extent = self.pass.as_ref().map_or(0, |p| (p.extent.0 as u64) << 32 | p.extent.1 as u64);
         self.checkpoint_each("draw (vertex, fragment, target WxH, storage buffers)", [vd, fs.map_or(0, |f| f.0), extent, storage]);
+        // Modes Vulkan lacks (line loops, quads, quad strips) are drawn as lists (state::topology) through generated
+        // 32-bit indices, the vertex numbers (base vertex included) in them.
+        if matches!(mode, 2 | 7 | 8) {
+            let v = match call {
+                Draw::Arrays { first, count } => {
+                    crate::gpu::restart::emulated_indices(mode, first.max(0) as u32..(first.max(0) + count.max(0)) as u32, None)
+                }
+                Draw::Elements { index_type, count, addr, base_vertex } => {
+                    let a = crate::nvn::api::translate_virtual(addr as usize);
+                    crate::gpu::restart::emulated_elements(mode, index_type, a as u64, count, self.st.prim_restart, base_vertex)
+                }
+            };
+            if v.is_empty() {
+                return;
+            }
+            let bytes = std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4);
+            let Some((buf, off)) = self.arena.copy(&self.dev, bytes) else { return };
+            self.index_buffer_bind(buf, off, vk::IndexType::UINT32);
+            self.rec.op(record::Op::DrawIndexed(v.len() as u32, instances as u32, 0, 0, base_instance.max(0) as u32));
+            return;
+        }
         match call {
             Draw::Arrays { first, count } => {
                 self.rec.op(record::Op::Draw(count.max(0) as u32, instances as u32, first.max(0) as u32, base_instance.max(0) as u32));
@@ -1023,18 +1089,11 @@ impl Ctx {
                 Feed::Texture { cbuf_slot, handle_index, view, count, buffer, slot, shadow } => {
                     let mut infos: smallvec::SmallVec<[vk::DescriptorImageInfo; 1]> = Default::default();
                     for j in 0..*count {
-                        let mut at = None;
-                        let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
-                            let k = (handle_index - 8) / 2 + j as i32;
-                            at = Some((stage, k));
-                            self.st.textures.get(stage, k)
-                        } else {
-                            cbuf(self, *cbuf_slot).and_then(|c| {
-                                // Array elements are 8-byte handles (Ryujinx TextureHandleSizeInBytes).
-                                let o = (*handle_index as usize + 2 * j as usize) * 4;
-                                (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
-                            })
-                        };
+                        // Array elements are 8-byte handles (Ryujinx TextureHandleSizeInBytes).
+                        let in_table = *cbuf_slot < 0 || *cbuf_slot & 0xffff == TEXTURE_TABLE_CBUF;
+                        let at = in_table.then(|| (stage, ((handle_index & 0x3fff) - 8) / 2 + j as i32));
+                        let me = &*self;
+                        let handle = texture_handle(&|k| me.st.textures.get(stage, k), &mut |s| cbuf(me, s), *cbuf_slot, *handle_index, j as i32);
                         let (v, s) = if *buffer {
                             self.warn("buffer textures are not implemented");
                             (vk::ImageView::null(), self.default_sampler)
@@ -1067,14 +1126,8 @@ impl Ctx {
                     images.push((b.binding, b.ty, infos));
                 }
                 Feed::Bindless { cbuf_slot, handle_index, view, word } => {
-                    let handle = if *cbuf_slot < 0 || *cbuf_slot == TEXTURE_TABLE_CBUF {
-                        self.st.textures.get(stage, (handle_index - 8) / 2)
-                    } else {
-                        cbuf(self, *cbuf_slot).and_then(|c| {
-                            let o = *handle_index as usize * 4;
-                            (o + 4 <= c.len()).then(|| u32::from_le_bytes(c[o..o + 4].try_into().unwrap()) as u64)
-                        })
-                    };
+                    let me = &*self;
+                    let handle = texture_handle(&|k| me.st.textures.get(stage, k), &mut |s| cbuf(me, s), *cbuf_slot, *handle_index, 0);
                     if crate::gpu::history::journal_on() {
                         self.journal_texture(handle);
                     }

@@ -163,6 +163,9 @@ pub fn topology(mode: i32) -> Option<vk::PrimitiveTopology> {
         4 => T::TRIANGLE_LIST,
         5 => T::TRIANGLE_STRIP,
         6 | 9 => T::TRIANGLE_FAN,
+        // Line loops, quads and quad strips are drawn as lists through generated indices (gpu::restart::emulated_indices).
+        2 => T::LINE_LIST,
+        7 | 8 => T::TRIANGLE_LIST,
         10 => T::LINE_LIST_WITH_ADJACENCY,
         11 => T::LINE_STRIP_WITH_ADJACENCY,
         12 => T::TRIANGLE_LIST_WITH_ADJACENCY,

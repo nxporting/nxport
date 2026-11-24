@@ -119,7 +119,7 @@ pub fn emulated_mode(mode: i32) -> bool {
 pub fn emulated_indices(mode: i32, vertices: impl Iterator<Item = u32>, restart: Option<u32>) -> Vec<u32> {
     let mut out = Vec::new();
     let mut seg: Vec<u32> = Vec::new();
-    let mut flush = |seg: &mut Vec<u32>, out: &mut Vec<u32>| {
+    let flush = |seg: &mut Vec<u32>, out: &mut Vec<u32>| {
         let s = &seg[..];
         match mode {
             2 if s.len() >= 2 => {

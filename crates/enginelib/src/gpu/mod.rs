@@ -62,6 +62,10 @@ pub struct GpuOnlyTexture {
 }
 
 pub trait Backend: Send + Sync {
+    /// Whether it draws render targets above the game's resolution (gpu::scale, Graphics > Resolution).
+    fn scales_render_targets(&self) -> bool {
+        false
+    }
     /// The stages of program object `program` (its guest address) changed.
     fn set_program(&self, program: usize, stages: &[ShaderStage]);
     /// Executes recorded command lists (nvnQueueSubmitCommands) in order.

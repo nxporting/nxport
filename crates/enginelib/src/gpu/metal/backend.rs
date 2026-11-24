@@ -6,6 +6,10 @@ pub(crate) struct Metal;
 pub(crate) static METAL: Metal = Metal;
 
 impl Backend for Metal {
+    fn scales_render_targets(&self) -> bool {
+        true
+    }
+
     fn set_program(&self, program: usize, stages: &[ShaderStage]) {
         super::programs::register(program, stages);
     }

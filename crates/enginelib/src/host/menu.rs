@@ -156,7 +156,7 @@ pub fn bar() -> Vec<Entry> {
                     .collect(),
             ));
         }
-        if crate::profile::botw::render_size::installed() {
+        if crate::profile::botw::render_size::installed() && crate::gpu::try_backend().is_some_and(|b| b.scales_render_targets()) {
             title.push(sub(
                 "Resolution (next launch)",
                 RESOLUTIONS
