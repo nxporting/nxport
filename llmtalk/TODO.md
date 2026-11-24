@@ -5,9 +5,8 @@ and update this file when you finish or drop it.
 
 ## Claimed: S41L0R Windows Machine
 
-- BotW 1.0.0 draw distance (nine inlined copies of the traverse scale), win-worker, 2026-11-18.
-- Resolution scaling, the Vulkan side (gpu/vulkan, against a local gpu::scale stub until mac-worker's lands), win-worker via a
-  worktree subagent, 2026-11-18.
+- Resolution scaling, the Vulkan side: PARKED 2026-11-23 on the local branch vulkan-scale (38877e9, three WIP commits, not
+  pushed; Graphics > Resolution stays Mac-only for the release). BotW 1.0.0 draw distance: done (pushed 2026-11-18).
 
 - BotW 1.9.0 ultrawide (Savage Wind parity), win-worker via a worktree subagent, 2026-11-16. **First part done
   (profile/botw/aspect.rs, hud.rs):** every 16:9 sead perspective / frustum projection takes the screen's shape in
@@ -50,6 +49,7 @@ and update this file when you finish or drop it.
 ## First release: overnight tasks (2026-11-22, mac-worker + win-worker; the user's list at the end)
 
 CLAIMED 2026-11-23 01:00 by mac-worker: items 1-5 (and the TotK --tile-feedback default, user's decision 2026-11-22).
+CLAIMED 2026-11-23 16:30 by win-worker: items 6-10.
 MAC STATUS (2026-11-23 ~05:00): items 1-5 done, nothing on the Mac side blocks the tag. Fixed on the way: 8cb507c
 (builder tests did not compile), 0e7a588 (Metal frame replays crashed: gpu_conformance's Hateno capture). The conformance suite
 passes in full since the render_to_texture scenario fix. New iPhone app:
@@ -112,15 +112,38 @@ path), so the morning starts from a single status.
    builder + both engines build, the job's tests pass (in the workspace run), the archive assembles (142 crates, 0
    without a licence file; the file list check passes; the packaged builder runs). DONE.
 6. (win) Build and test at main, then journal items 32-74 above (the shared-code checks), fixing Windows breakage.
+   Result (win, 2026-11-23): main builds on Windows; cargo test --workspace --lib --bins passes; enginelib type-checks
+   for aarch64-apple-darwin (zig cc). Fixed in d56268d: 33 (Vulkan reads the bound table's words as Metal's
+   texture_handle: separate textures from 90, separate samplers from 346, types 1/2 OR the sampler; cbuf_slot compared
+   by its low 16 bits), 39 (Vulkan had no line loop / quad / quad strip: "draw mode N is not implemented", nothing
+   drawn; now lists through gpu::restart's generated indices; fans keep Vulkan's own topology). 40: Vulkan never
+   takes the dirty mark (uploads follow guest/dirty_track generations, set after the creation upload), so the Metal
+   bug cannot happen the same way; not run (no Silver Pines here). 52/53: the same frame_time::install path as 1.9.0;
+   no 1.5.0 dump here, not run. 48 / 51 / 54 / 57: native only, as noted (Unity settings, Silver Pines' Texture Size,
+   Jamboree's cores do nothing on Windows). 58: no Vulkan scaling on main (item 10). Others: nothing to do. DONE.
 7. (win) Windows / Vulkan regression: TotK 1.0.0 and 1.1.2 lifted builds through the builder (re-lift), scripted
    title -> Hateno -> walk -> inventory, BotW 1.9.0, one Vulkan validation-layer run, no device loss.
    Mac cross-check (mac, at ef92759, MoltenVK, not the Windows run): TotK 1.1.2 to Hateno on --gpu=vulkan renders right
    (world, HUD, Link), 60 fps capped (record 8.6 ms, GPU 16.6 ms a frame), no traps or device errors.
+   Result (win, TotK 1.1.2 at d56268d, re-lifted by the builder with the user's mods incl. UltraCam, RTX 4080, 144 Hz):
+   title -> save (Depths, Busus Lightroot; the private save copy) -> walk -> inventory: renders right (world, HUD,
+   Link, weapon icons), title 144 fps, in game 70-100 fps, inventory 30 (the menu's own), no device loss, no traps.
 8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
 9. (win) Windows pacing: pacing_shown is not fed (items 15/16), so the vsync divisor never steps down. Feed it from
    present timing, or confirm TotK / BotW at the 60 limit pace well without it and say which default ships.
+   Result (win, 2026-11-23, at d56268d): without the feed the divisor never raises, so n stays at its minimum,
+   ceil(refresh / limit). That minimum is the problem, not the missing feed: at the DEFAULT settings (vsync on, limit 60)
+   on a 144 Hz monitor TotK 1.1.2 runs at 45-50 fps (3 refreshes a frame = 48; log nxport-build/run112/pace.log).
+   Before the divisor Windows ran 60 there (uneven, 2-3 refreshes). 120 Hz and 60 Hz screens are unaffected (n = 2 / 1),
+   limits at or above the refresh too (n = 1: the swapchain paces; TotK 1.1.2 in game 80-100 fps at limit 144).
+   QUESTION FOR THE USER (blocks the Windows default): on screens the limit does not divide (144 Hz + 60), even
+   pacing at 48 fps, or the limit (60, uneven)? Proposed: the limit, i.e. divisor only when refresh / limit is whole
+   (within 1%); else the plain limiter as before. Not changed yet (shared rule, mac-worker's design).
 10. (win) Claimed work (Vulkan resolution scaling, BotW 1.0.0 draw distance): finish, or park on a branch; the release
    does not wait for it.
+   Result (win): BotW 1.0.0 draw distance was done 2026-11-18 (pushed). Vulkan resolution scaling PARKED on the local
+   branch vulkan-scale (38877e9, WIP); the menu's Resolution item now shows only on a backend that scales (Metal),
+   d56268d. DONE.
 11. (both) Morning hand-off: result lines under each item; failures with log paths; anything that blocks the tag on top.
 12. (user) Scope: which games the release names as supported (TotK 1.0.0 / 1.1.2 surely; BotW; SMO, Kirby, MK8D, Wonder,
    Silver Pines as experimental?).
