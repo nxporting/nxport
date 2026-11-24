@@ -2043,3 +2043,8 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   in our HLE sync it depends on); (2) dirty_track::handle_fault must not index past a domain (check locate's
   arithmetic against a concurrently re-registered domain; return false so the crash report names the access).
   Logs: nxport-build/fuzz/smo/findings/round6-*.log on the PC.
+  CORRECTION (win-worker, 13:40): not a race in SMO or the HLE. The fuzz driver always passes --early-fence-trap=on, and
+  the failures follow it: with the check and no perturbation 3 of 6 runs failed; with no testing flags 5 of 5 ran clean.
+  The check makes GPU-written pages inaccessible; engine-side accesses to them break (kernel file reads fail instead of
+  faulting: fixed in aae0c84, but SMO still aborts at start, so another engine access remains; finding it with the
+  svcBreak caller log). The dirty_track domain-slot race fix (f9937be) is real but was not this.
