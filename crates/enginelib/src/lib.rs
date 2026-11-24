@@ -10,6 +10,8 @@ pub mod config;
 pub mod game;
 pub mod platform;
 #[cfg(nx_runtime)]
+mod coverage;
+#[cfg(nx_runtime)]
 mod gpu;
 mod guest;
 /// The lifted guest library and its calling convention (public as before the move into guest/exec/).

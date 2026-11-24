@@ -302,6 +302,9 @@ impl Ctx {
         };
         match shader::get(&self.dev, code, prep, known, &state_for, 0, base, fragment_inputs, discard_depth) {
             Ok(s) => {
+                if crate::coverage::on() {
+                    crate::coverage::note(crate::coverage::Kind::Shader, &format!("s_{:016x}", s.known.full));
+                }
                 self.stages.insert(k, s);
                 true
             }

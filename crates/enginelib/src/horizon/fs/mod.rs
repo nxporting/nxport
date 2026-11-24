@@ -391,6 +391,9 @@ pub unsafe extern "C" fn open_file(
             return RESULT_PATH_NOT_FOUND; // PathNotFound Result
         }
     };
+    if crate::coverage::on() {
+        crate::coverage::note(crate::coverage::Kind::File, &path_str);
+    }
 
     // Decompress only when we did a transparent fallback: the game requested a
     // plain file but on disk it only exists as a .zs archive.  If the game

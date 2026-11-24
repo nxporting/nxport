@@ -56,6 +56,9 @@ pub(crate) fn record_hle_call(name: impl Into<std::borrow::Cow<'static, str>>) {
         std::borrow::Cow::Borrowed(n) => n,
         std::borrow::Cow::Owned(n) => intern_hle_call_name(n),
     };
+    if crate::coverage::on() {
+        crate::coverage::note(crate::coverage::Kind::Call, name);
+    }
     let ring = HLE_CALL_RING.with(|r| {
         r.get().unwrap_or_else(|| {
             let ring: &'static HleCallRing = Box::leak(Box::new(HleCallRing {
