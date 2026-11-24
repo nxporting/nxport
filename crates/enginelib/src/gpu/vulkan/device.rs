@@ -228,8 +228,11 @@ impl Dev {
             let validation = validation && has(&inst_exts, ash::ext::debug_utils::NAME);
             let layer = c"VK_LAYER_KHRONOS_validation";
             let layers_available = entry.enumerate_instance_layer_properties().unwrap_or_default();
-            let validation = validation
-                && layers_available.iter().any(|l| l.layer_name_as_c_str().ok() == Some(layer));
+            let installed = layers_available.iter().any(|l| l.layer_name_as_c_str().ok() == Some(layer));
+            if validation && !installed {
+                println!("[!] Vulkan: --validate: VK_LAYER_KHRONOS_validation is not installed (the Vulkan SDK has it); running without it");
+            }
+            let validation = validation && installed;
             let mut layers = Vec::new();
             if validation {
                 exts.push(ash::ext::debug_utils::NAME.as_ptr());
