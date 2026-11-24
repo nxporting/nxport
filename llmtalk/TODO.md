@@ -128,7 +128,17 @@ path), so the morning starts from a single status.
    Result (win, TotK 1.1.2 at d56268d, re-lifted by the builder with the user's mods incl. UltraCam, RTX 4080, 144 Hz):
    title -> save (Depths, Busus Lightroot; the private save copy) -> walk -> inventory: renders right (world, HUD,
    Link, weapon icons), title 144 fps, in game 70-100 fps, inventory 30 (the menu's own), no device loss, no traps.
+   TotK 1.0.0 (re-lifted, base game only, new game in an empty save dir): title -> opening cave with Zelda's torch,
+   renders right, ~112 fps, no traps. BotW 1.9.0 (re-lifted, private save copy): swimming (water renders right, not
+   white), inventory right, 60 fps at the 60 limit, no device loss. Logs: C:\Users\Greenlord\nxport-build\run112,
+   run100, runbotw (out.log; frame dumps f*.png). Validation layer: NOT RUN: VK_LAYER_KHRONOS_validation is not
+   installed on this PC (no Vulkan SDK) and --validate silently ran without it; it now says so (next commit). Needs the
+   SDK installed (asked the user); the Mac's VALIDATE=1 MoltenVK run is clean meanwhile.
 8. (win) Local rehearsal of the release job at main (Windows zip with ios/ and macos/ engines and the notices).
+   Result (win, at 05fd882): the windows job's steps pass locally: workspace tests, release builder, ios-engine and
+   macos-engine through the builder (LLVM ld64.lld), notices.pl + fold-licences (150 crates, 0 without a licence
+   file, vp8-decoder's NOTICE in), the stage's file list check, zig 0.17.1 (checksum matches release.yml), the staged
+   builder's --help. Only the final 7z packing was not run (no 7z here). DONE.
 9. (win) Windows pacing: pacing_shown is not fed (items 15/16), so the vsync divisor never steps down. Feed it from
    present timing, or confirm TotK / BotW at the 60 limit pace well without it and say which default ships.
    Result (win, 2026-11-23, at d56268d): without the feed the divisor never raises, so n stays at its minimum,
