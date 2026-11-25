@@ -2090,3 +2090,12 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   own writes into guest memory. NOTE the test differs from the user's play (they found SMO solid): fresh empty save
   dir (first boot creates the save), --no-vsync, A pressed from frame 600. Next: same runs with a copy of the user's
   SMO save (%APPDATA%\nxport\games\0100000000010000\save, copy only) and with vsync, to see which condition matters.
+  USER SAVE (19:10): 12 starts from a copy of the user's SMO save (same --no-vsync, A every 300 frames from 900): 0/12
+  failed, all at 60 fps to the close. So the failing path is the first boot with an empty save (save creation / the
+  new-game opening). Control with fresh saves and the identical script running next.
+  SAVE BISECT (20:30): fresh save, identical script: 4/12 failed. Save with only the user's Common.bin: 6/12. Full user
+  save (Common.bin + File1.bin): 0/12. So with no save game file the game loads a different first scene and that
+  path's scene-init thread corrupts the heap (crash on シーン初期化スレッド at ~frame 150, before any A press; in
+  passing runs that thread returns). Our fs answers the missing files with path-not-found, nothing is created before
+  the crash. Fresh save with --no-host-import=true: 1/12 (same ExpHeap halt), so GPU in-place writes are not the whole
+  story; 24 more runs and a File1-only set are running. A player's first boot of SMO hits this.
