@@ -2145,3 +2145,5 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   60 fps cap with them). Why TotK loses two thirds with them is open (likely its job threads poll through short HLE
   calls and wait out GRACE_NS / STARVED_NS on a lent core; priorities are not modelled either): needed before guest
   cores could become the default for all games.
+  VERIFIED (15:55): SMO app rebuilt from ff1ebae, no flag: the profile turns guest cores on ("Guest cores" line in
+  the log), fresh saves 0/12 failed. Closed on Windows; the Mac / iPhone check is mac-worker's (above).
