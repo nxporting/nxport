@@ -15,6 +15,8 @@ mod dof_blur_chain;
 mod dof_passes;
 mod draw;
 mod bloom_expand;
+mod cubemap_update;
+mod decal_ao;
 mod dof_buffers;
 mod grid;
 mod items;
@@ -1449,6 +1451,40 @@ pub unsafe extern "C" fn on_bloom_body_end() -> u32 {
     BLOOM_BODIES.end("bloom bodies", &BLOOM_BODIES_EXPECTED)
 }
 
+static CUBEMAP_STEPS: Checked = Checked::new("cubemap steps");
+
+thread_local! {
+    static CUBEMAP_STEP_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xcc8160 (cubemap_update.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_cubemap_step(this: usize, w: usize) -> u32 {
+    CUBEMAP_STEPS.run(&CUBEMAP_STEP_EXPECTED, move |p| cubemap_update::agent_step(p, this, w))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_cubemap_step_end() -> u32 {
+    CUBEMAP_STEPS.end("cubemap steps", &CUBEMAP_STEP_EXPECTED)
+}
+
+static DECAL_AOS: Checked = Checked::new("decal ao");
+
+thread_local! {
+    static DECAL_AO_EXPECTED: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// main+0xcc6f38 (decal_ao.rs).
+#[no_mangle]
+pub unsafe extern "C" fn on_decal_ao(this: usize, ctx: usize, index: u32) -> u32 {
+    DECAL_AOS.run(&DECAL_AO_EXPECTED, move |p| decal_ao::decal_ao(p, this, ctx, index))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn on_decal_ao_end() -> u32 {
+    DECAL_AOS.end("decal ao", &DECAL_AO_EXPECTED)
+}
+
 static EXPAND_DRAWS: Checked = Checked::new("expand draws");
 
 thread_local! {
@@ -2639,6 +2675,12 @@ fn report() {
     if let Some(l) = LIGHT_PASSES.summary("light passes") {
         println!("{l}");
     }
+    if let Some(l) = CUBEMAP_STEPS.summary("cubemap steps") {
+        println!("{l}");
+    }
+    if let Some(l) = DECAL_AOS.summary("decal ao") {
+        println!("{l}");
+    }
     if let Some(l) = VIEW_TARGET_DRAWS.summary("view target draws") {
         println!("{l}");
     }
@@ -2969,6 +3011,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_snapshot(_, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_snapshot_end())) as usize;
         hook(base, mem_space, 0xcc75ec, 0xd10403ff, pre, post, "Snapshots");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_decal_ao(_, _, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_decal_ao_end())) as usize;
+        hook(base, mem_space, 0xcc6f38, 0xa9bb7bfd, pre, post, "Decal ambient occlusion");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_light_shape(_, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_light_shape_end())) as usize;
         hook(base, mem_space, 0x969d28, 0xd10683ff, pre, post, "Light shapes");
@@ -3044,6 +3089,9 @@ pub unsafe fn install(base: usize, mem_space: &mut crate::guest::loader::GuestMe
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_bloom_body(_, _, _, _, _, _, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_bloom_body_end())) as usize;
         hook_float(base, mem_space, 0x21eb800, 0x6dba23e9, pre, post, "Bloom bodies");
+        let pre = mem_space.make_hle_trampoline(crate::hle!(on_cubemap_step(_, _))) as usize;
+        let post = mem_space.make_hle_trampoline(crate::hle!(on_cubemap_step_end())) as usize;
+        hook(base, mem_space, 0xcc8160, 0xd10103ff, pre, post, "Cubemap steps");
         let pre = mem_space.make_hle_trampoline(crate::hle!(on_dof_buffers(_, _, _))) as usize;
         let post = mem_space.make_hle_trampoline(crate::hle!(on_dof_buffers_end())) as usize;
         hook(base, mem_space, 0xc4b934, 0xfc170fec, pre, post, "Depth of field buffers");
