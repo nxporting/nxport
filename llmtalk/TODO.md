@@ -446,6 +446,10 @@ path), so the morning starts from a single status.
   74. e92253d / the mask pass (TotK native ports, shared): a port stopping past its commit point unbinds its own host
      render buffer (fixed a use-after-free crash at fast travel); summaries once a minute; main+0xbdc94c ported. Nothing
      for Windows.
+  75. 99aa05e (TotK native ports, shared source; active only under --native-render-lists, Metal-only in practice since
+     native model draws require Metal): the cube map update step (main+0xcc8160, model/cubemap_update.rs) and the decal /
+     ambient-occlusion frame (main+0xcc6f38, model/decal_ao.rs). Default off, so nothing changes for Windows/Vulkan unless
+     someone enables the native renderer there; if Vulkan ever runs the native model path, these hooks install the same way.
   **win-worker results (2026-11-21, at 765fd87 + the fixes below):**
   - Build: main did not build or link on Windows: host/headless.rs's overlay had no paces_to_refresh (added: vsync
     only), and bcryptprimitives.lib is not in the SDK (ProcessPrng linked with kind = "raw-dylib", as std does): 7cc3008.
