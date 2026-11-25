@@ -2091,6 +2091,11 @@ impl Checked {
         report_now_and_then();
         let base = crate::guest::loader::main_base();
         let d = &crate::settings::get().totk.diagnostics;
+        // Compare mode engages here, not at `end`: a port that handles its draw (run returns 1) skips the game's
+        // function and so its end hook, where COMPARE_KEY used to be set -- a fully-handled port would never compare.
+        if d.native_render_lists && COMPARE_KEY.load(Ordering::Relaxed) == 0 && d.compare_port.as_deref() == Some(self.name) {
+            COMPARE_KEY.store(self as *const Self as usize, Ordering::Relaxed);
+        }
         if d.native_render_lists && COMPARE_KEY.load(Ordering::Relaxed) == self as *const Self as usize {
             // The game's turn: its commands are collected and printed at the end hook. The port's: run for real but
             // with NVN commands instead of native items, collected and not recorded (this call draws nothing).
@@ -2173,9 +2178,6 @@ impl Checked {
             let got = crate::nvn::api::capture_collected();
             print_compare("game", self.calls.load(Ordering::Relaxed) - 1, &got, None);
             return 0;
-        }
-        if COMPARE_KEY.load(Ordering::Relaxed) == 0 && crate::settings::get().totk.diagnostics.compare_port.as_deref() == Some(name) {
-            COMPARE_KEY.store(key, Ordering::Relaxed);
         }
         let after = CHECK_AFTER.with(|r| {
             let mut r = r.borrow_mut();

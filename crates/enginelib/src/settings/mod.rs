@@ -872,6 +872,17 @@ fn with_defaults_in_help(mut cmd: clap::Command) -> clap::Command {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn spaced_option_value_parses_from_cli() {
+        let args = ["nxport", "--native-render-lists", "--compare-port=cubemap steps"]
+            .iter()
+            .map(std::ffi::OsString::from);
+        let layers = super::from_args(args).unwrap();
+        let s = super::resolve(layers);
+        assert!(s.totk.diagnostics.native_render_lists);
+        assert_eq!(s.totk.diagnostics.compare_port.as_deref(), Some("cubemap steps"));
+    }
+
+    #[test]
     fn unknown_settings_are_left_out() {
         let path = std::env::temp_dir().join(format!("nxport-settings-{}.toml", std::process::id()));
         std::fs::write(&path, "[display]\nno-vsync = true\n\n[graphics]\nno-such-setting = true\n").unwrap();
