@@ -2082,3 +2082,11 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   in Ryujinx's ARMeilleure). Remaining routes: a guest-memory write log (who last wrote the corrupted ExpHeap block's
   header before the halt), ABA in a guest lock-free list under preemption, the scene-init thread's other sync calls
   (events, light events, semaphores, message queues) against Ryujinx's semantics.
+  WRITE LOG (18:30, --log-guest-writes, c83759b): in a crash and an abort, no engine CPU write to guest memory (kernel
+  file reads, storage / render-target write-backs) came within 64 KiB of the damaged object during the whole start
+  (130 writes: file reads into two streaming buffers, four 6.5 MB render-target write-backs elsewhere). A check that
+  render-target write-backs skip finalized pools never fired (reverted). 5/12 failed with the PC nearly idle, so load
+  raises the rate but is not required. Not seen by the log: GPU writes in place (imported memory), HLE functions'
+  own writes into guest memory. NOTE the test differs from the user's play (they found SMO solid): fresh empty save
+  dir (first boot creates the save), --no-vsync, A pressed from frame 600. Next: same runs with a copy of the user's
+  SMO save (%APPDATA%\nxport\games\0100000000010000\save, copy only) and with vsync, to see which condition matters.
