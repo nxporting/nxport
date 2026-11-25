@@ -447,7 +447,8 @@ pub(crate) fn sample_main_thread() {
 }
 
 // ── Engine writes to guest memory (--log-guest-writes) ─────────────────────────────────────────────────────────────
-// The engine's last writes into guest memory (file reads through the kernel, GPU result write-backs, reports), printed
+// The engine's last writes into guest memory (file reads through the kernel, GPU result write-backs; not report slots, which
+// would fill the ring within milliseconds), printed
 // when the game stops itself or crashes: when its heap turns out corrupted, which of them landed in the damaged block.
 
 const GUEST_WRITES: usize = 4096;
@@ -487,8 +488,7 @@ pub(crate) fn dump_guest_writes(near: Option<usize>) {
     }
     let n = GW_NEXT.load(Ordering::Relaxed);
     let now = crate::platform::clock::now_ns();
-    // Unfiltered: the newest 200.
-    let first = n.saturating_sub(if near.is_some() { GUEST_WRITES } else { 200 });
+    let first = n.saturating_sub(GUEST_WRITES);
     let names = ["kernel", "storage", "target", "report"];
     eprintln!("[guest-writes] the engine's last {} writes to guest memory{}:", n - first, near.map_or(String::new(), |a| format!(" within 64 KiB of {a:#x}")));
     for k in first..n {
