@@ -104,6 +104,7 @@ unsafe fn finish(device: &ash::Device, period: f32, carried: &mut u64, results: 
     if ok {
         for (t, level, src, len) in &d.rt_writebacks {
             let total = crate::nvn::layout::compute_layout(&super::texture::Desc::of(t).params).total as usize;
+            crate::horizon::call_log::note_guest_write(crate::horizon::call_log::GW_TARGET, t.storage, total);
             crate::guest::dirty_track::write_unseen(t.storage, total, || {
                 crate::nvn::api::guest_write_level(t, *level as usize, std::slice::from_raw_parts(*src as *const u8, *len));
             });

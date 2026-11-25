@@ -521,6 +521,7 @@ pub(super) unsafe fn reprotect_held(addr: usize, len: usize) {
 /// running submit reads in place (they read the shadow, shadow.rs); a write that faulted would wait for submits only
 /// this thread sees complete.
 pub(super) unsafe fn write_back(addr: usize, src: *const u8, len: usize) {
+    crate::horizon::call_log::note_guest_write(crate::horizon::call_log::GW_STORAGE, addr, len);
     // No table is rebuilt meanwhile (protect, release_all): a page checked as held and released by a rebuild before the
     // copy would be made read-only again here with no table holding it, and every later write to it, the watcher's and
     // the game's, would fault forever (the write tracking takes such a page for one already opened).

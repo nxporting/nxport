@@ -470,6 +470,7 @@ pub unsafe fn write_unseen(start: usize, len: usize, write: impl FnOnce()) {
 /// Before the host kernel writes [addr, addr+len) (e.g. read() into a guest buffer): unprotect its pages and mark
 /// them written.
 pub unsafe fn before_host_write(addr: usize, len: usize) {
+    crate::horizon::call_log::note_guest_write(crate::horizon::call_log::GW_KERNEL, addr, len);
     // Pages the GPU backend holds for running GPU work: wait for it.
     crate::gpu::backend().before_host_write(addr, len);
     if ANY.load(Ordering::Relaxed) == 0 {

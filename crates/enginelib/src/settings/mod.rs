@@ -606,6 +606,8 @@ group! {
         /// Testing: write what the run reached (first file opens, shader stages, engine functions, with their frame) to
         /// this file, for coverage-guided input
         coverage_log: Option<PathBuf> = None,
+        /// Testing: keep the engine's last writes to guest memory and print them when the game stops itself or crashes
+        log_guest_writes: bool = false,
         /// Testing: hold each GPU submit's completion back by 0 to this many microseconds (Vulkan; the same delays for
         /// the same submits in every run), to shake out game behaviour that depends on GPU timing
         gpu_complete_delay_us: u32 = 0,

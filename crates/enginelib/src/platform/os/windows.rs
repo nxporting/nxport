@@ -617,6 +617,8 @@ unsafe extern "system" fn unhandled(p: *mut ExceptionPointers) -> i32 {
     }
     guest_state(pc);
     eprintln!("[crash] stack:\n{}", std::backtrace::Backtrace::force_capture());
+    #[cfg(nx_runtime)]
+    crate::horizon::call_log::dump_guest_writes(None);
     crate::config::drain_log();
     EXCEPTION_CONTINUE_SEARCH
 }

@@ -354,6 +354,7 @@ pub(super) unsafe fn write_report(addr: u64, value: u64, timestamp: bool) {
         return;
     }
     super::guard::note_write(a, 16);
+    crate::horizon::call_log::note_guest_write(crate::horizon::call_log::GW_REPORT, a, 16);
     let time = if timestamp { crate::platform::clock::now_ns() } else { 0 };
     let mut report = [0u8; 16];
     report[..8].copy_from_slice(&value.to_le_bytes());

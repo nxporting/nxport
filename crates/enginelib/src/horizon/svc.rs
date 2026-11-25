@@ -288,6 +288,7 @@ pub unsafe extern "C" fn svc_dispatch(regs: *mut [u64; 8], n: u64) {
             if r[0] & NOTIFICATION_ONLY == 0 {
                 let message = format!("The game stopped itself (svcBreak, reason {:#x}): it met something this engine does not do yet.", r[0]);
                 eprintln!("[-] {message}");
+                crate::horizon::call_log::dump_guest_writes(None);
                 crate::config::app_error(&message);
                 std::process::exit(1);
             }

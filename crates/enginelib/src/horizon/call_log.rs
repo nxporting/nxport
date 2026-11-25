@@ -445,3 +445,61 @@ pub(crate) fn sample_main_thread() {
         println!("[main-sample]   {:>5} {}", n, c.join(" <- "));
     }
 }
+
+// ── Engine writes to guest memory (--log-guest-writes) ─────────────────────────────────────────────────────────────
+// The engine's last writes into guest memory (file reads through the kernel, GPU result write-backs, reports), printed
+// when the game stops itself or crashes: when its heap turns out corrupted, which of them landed in the damaged block.
+
+const GUEST_WRITES: usize = 4096;
+static GW_ADDR: [AtomicUsize; GUEST_WRITES] = [const { AtomicUsize::new(0) }; GUEST_WRITES];
+static GW_LEN: [AtomicUsize; GUEST_WRITES] = [const { AtomicUsize::new(0) }; GUEST_WRITES];
+static GW_KIND: [AtomicUsize; GUEST_WRITES] = [const { AtomicUsize::new(0) }; GUEST_WRITES];
+static GW_NS: [AtomicU64; GUEST_WRITES] = [const { AtomicU64::new(0) }; GUEST_WRITES];
+static GW_NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// What wrote (note_guest_write's `kind`).
+pub(crate) const GW_KERNEL: usize = 0;
+pub(crate) const GW_STORAGE: usize = 1;
+pub(crate) const GW_TARGET: usize = 2;
+pub(crate) const GW_REPORT: usize = 3;
+
+fn guest_writes_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| crate::settings::get().debug.log_guest_writes)
+}
+
+/// The engine writes [addr, addr + len) of guest memory (host addresses).
+pub(crate) fn note_guest_write(kind: usize, addr: usize, len: usize) {
+    if !guest_writes_on() {
+        return;
+    }
+    let i = GW_NEXT.fetch_add(1, Ordering::Relaxed) % GUEST_WRITES;
+    GW_ADDR[i].store(addr, Ordering::Relaxed);
+    GW_LEN[i].store(len, Ordering::Relaxed);
+    GW_KIND[i].store(kind, Ordering::Relaxed);
+    GW_NS[i].store(crate::platform::clock::now_ns(), Ordering::Relaxed);
+}
+
+/// Prints the last engine writes to guest memory (all kept ones, newest last; `near`: only those within 64 KiB of it).
+pub(crate) fn dump_guest_writes(near: Option<usize>) {
+    if !guest_writes_on() {
+        return;
+    }
+    let n = GW_NEXT.load(Ordering::Relaxed);
+    let now = crate::platform::clock::now_ns();
+    // Unfiltered: the newest 200.
+    let first = n.saturating_sub(if near.is_some() { GUEST_WRITES } else { 200 });
+    let names = ["kernel", "storage", "target", "report"];
+    eprintln!("[guest-writes] the engine's last {} writes to guest memory{}:", n - first, near.map_or(String::new(), |a| format!(" within 64 KiB of {a:#x}")));
+    for k in first..n {
+        let i = k % GUEST_WRITES;
+        let (a, l) = (GW_ADDR[i].load(Ordering::Relaxed), GW_LEN[i].load(Ordering::Relaxed));
+        if let Some(c) = near {
+            if a + l + 0x10000 < c || a > c + 0x10000 {
+                continue;
+            }
+        }
+        let age = now.saturating_sub(GW_NS[i].load(Ordering::Relaxed)) / 1000;
+        eprintln!("  {:>7} {:#x}+{:#x} {} us ago", names[GW_KIND[i].load(Ordering::Relaxed).min(3)], a, l, age);
+    }
+}
