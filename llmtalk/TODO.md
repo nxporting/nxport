@@ -2076,3 +2076,9 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   would hit it, e.g. on a first start while shaders compile. Next: reproduce under a fixed artificial load (N busy
   threads), then record the engine's guest-memory writes (watcher write-backs, HLE copies) and find what lands in the
   corrupted ExpHeap block; compare the scene-init thread's waits with Ryujinx's semantics.
+  Read and ruled out as the cause (17:20): HLE nn::os mutex (word is the truth; owner / nest only by the owner; futex-
+  style park with a waiters bit) and condition variables (generation taken before unlock: no lost wake-up; Signal
+  wakes all, which is allowed). The lifter's store-exclusive is a CAS on the value LDXR read (atomic; ABA possible, as
+  in Ryujinx's ARMeilleure). Remaining routes: a guest-memory write log (who last wrote the corrupted ExpHeap block's
+  header before the halt), ABA in a guest lock-free list under preemption, the scene-init thread's other sync calls
+  (events, light events, semaphores, message queues) against Ryujinx's semantics.
