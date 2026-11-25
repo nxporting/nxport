@@ -2147,3 +2147,5 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   cores could become the default for all games.
   VERIFIED (15:55): SMO app rebuilt from ff1ebae, no flag: the profile turns guest cores on ("Guest cores" line in
   the log), fresh saves 0/12 failed. Closed on Windows; the Mac / iPhone check is mac-worker's (above).
+  PERTURBED (16:30): same app, fresh saves, --gpu-complete-delay-us=2000 --hle-jitter=5000 (the fuzzing shake-up
+  that first showed it, 1 in 4-8 before): 0/12 failed. The 11-24 fuzzing finding is this bug; closed.
