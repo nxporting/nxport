@@ -503,6 +503,12 @@ impl Renderer {
             let fx = &mut self.effects[e];
             fx.kind = inp[b];
             fx.enabled = enabled;
+            // Each effect type the game turns on, once (types without a renderer here pass their input through).
+            static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if enabled && fx.kind < 32 && SEEN.fetch_or(1 << fx.kind, std::sync::atomic::Ordering::Relaxed) & (1 << fx.kind) == 0 {
+                let known = matches!(fx.kind, EFFECT_AUX | EFFECT_LIMITER | EFFECT_REVERB3D | EFFECT_DELAY | EFFECT_BIQUAD);
+                println!("[+] audren: effect type {} on (slot {}, mix {}){}", fx.kind, e, fx.mix_id, if known { "" } else { ": not rendered, passes through" });
+            }
             fx.mix_id = rd32(inp, b + 4) as i32;
             fx.order = rd32(inp, b + 0x18);
             fx.params.copy_from_slice(&inp[b + 0x20..b + 0xC0]);

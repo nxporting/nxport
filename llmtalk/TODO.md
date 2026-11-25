@@ -2149,3 +2149,9 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   the log), fresh saves 0/12 failed. Closed on Windows; the Mac / iPhone check is mac-worker's (above).
   PERTURBED (16:30): same app, fresh saves, --gpu-complete-delay-us=2000 --hle-jitter=5000 (the fuzzing shake-up
   that first showed it, 1 in 4-8 before): 0/12 failed. The 11-24 fuzzing finding is this bug; closed.
+- SMO audio "output beyond full scale" (win-worker, 2026-11-25): SMO turns on one effect only, Aux on the final mix
+  (new log line "audren: effect type N on", once per type; types we do not render say so). So it mixes on the CPU,
+  as TotK does, and the over-range samples (peaks 33-42k, ~1 frame a second in a fresh start) are in the Aux return
+  the game writes; our voice buffers stay in 16-bit range and no mix volume looks wrong. The console's sink clamps
+  the same way, so this may be the game's own; settling it needs a Ryujinx recording of the same moment. Low value,
+  parked.
