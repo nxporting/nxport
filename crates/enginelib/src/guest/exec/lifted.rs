@@ -89,7 +89,7 @@ unsafe extern "C" fn host_call_hle(h: *const crate::guest::exec::hle_abi::Hle, c
         CURRENT.with(|cur| cur.set(prev));
         return;
     }
-    (*h).call(&mut *c);
+    crate::horizon::cores::engine_call(|| (*h).call(&mut *c));
     jitter((*h).id());
     CURRENT.with(|cur| cur.set(prev));
 }
@@ -142,7 +142,7 @@ unsafe extern "C" fn host_code_changed(addr: u64) {
 }
 
 unsafe extern "C" fn host_svc(c: *mut Cpu, imm: u32, pc: u64) {
-    (handlers().svc)(&mut *c, imm, pc)
+    crate::horizon::cores::engine_call(|| (handlers().svc)(&mut *c, imm, pc))
 }
 
 unsafe extern "C" fn host_trap(c: *mut Cpu, kind: u32, imm: u32, pc: u64) {
@@ -178,7 +178,7 @@ static OVERLAY_CODE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicU
 #[cfg(windows)]
 pub unsafe fn call_hle(h: crate::guest::exec::hle_abi::Hle, c: &mut Cpu) {
     let prev = CURRENT.with(|cur| cur.replace(c));
-    h.call(c);
+    crate::horizon::cores::engine_call(|| h.call(c));
     CURRENT.with(|cur| cur.set(prev));
 }
 
@@ -383,7 +383,7 @@ impl GuestLibrary {
         cpu.x[..args.len()].copy_from_slice(args);
         cpu.x[30] = nxport_lifterlib::abi::RETURN_TO_HOST;
         cpu.pc = addr;
-        self.enter(cpu);
+        crate::horizon::cores::guest_call(|| self.enter(cpu));
         cpu.x[30] = saved_lr;
         cpu.x[0]
     }

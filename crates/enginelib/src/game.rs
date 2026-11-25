@@ -93,6 +93,23 @@ pub fn control_of(dir: &Path) -> Option<Control> {
     })
 }
 
+/// The process's default core (main.npdm META 0x0f, the main thread's core): where a thread created without a core
+/// runs (Horizon's ideal core -2, "use the process value"). None without a readable npdm.
+pub fn default_core() -> Option<i32> {
+    static C: OnceLock<Option<i32>> = OnceLock::new();
+    *C.get_or_init(|| {
+        let dir = crate::settings::try_get()?.files.game_dir.as_deref()?;
+        let exefs = dir.join("ExeFS");
+        let exefs = if exefs.is_dir() { exefs } else { dir.join("exefs") };
+        std::fs::read(exefs.join("main.npdm"))
+            .ok()
+            .filter(|d| d.starts_with(b"META"))
+            .and_then(|d| d.get(0xf).copied())
+            .filter(|&c| c < 4)
+            .map(|c| c as i32)
+    })
+}
+
 /// Whether the dump at `dir` is a 32-bit (AArch32) program (main.npdm META flags bit 0 clear). Apple CPUs cannot run
 /// 32-bit ARM code, so these games do not run.
 pub fn is_32bit_of(dir: &Path) -> bool {

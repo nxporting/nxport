@@ -236,7 +236,7 @@ group! {
         /// The game's main memory block in an unlinked sparse file instead of anonymous memory (memory limits on iOS)
         file_backed_memory: bool = false,
         /// Run one guest thread per core at a time, as the console does (game code only; engine calls lend the core).
-        /// Native code only. Games whose threads pinned to one core share data without locks need it
+        /// Games whose threads on one core share data without locks need it
         guest_cores: bool = false,
     }
 }

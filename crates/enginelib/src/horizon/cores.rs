@@ -34,6 +34,7 @@ thread_local! {
 }
 
 /// The function the HLE entry stub calls with the HLE function in x16.
+#[cfg(nx_native)]
 pub fn entry() -> *const () {
     if crate::settings::get().guest.guest_cores {
         ENABLED.store(true, Ordering::Relaxed);
@@ -44,13 +45,40 @@ pub fn entry() -> *const () {
     }
 }
 
-extern "C" {
-    fn clock_gettime_nsec_np(clock: u32) -> u64;
+fn now_ns() -> u64 {
+    crate::platform::clock::now_ns()
 }
 
-fn now_ns() -> u64 {
-    const CLOCK_UPTIME_RAW: u32 = 8;
-    unsafe { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
+/// Lifted hosts: guest cores on (the dispatcher's HLE and svc entries lend the core around engine code).
+pub fn enable_lifted() {
+    if crate::settings::get().guest.guest_cores && !ENABLED.swap(true, Ordering::Relaxed) {
+        println!("[+] Guest cores: one guest thread per core runs game code at a time");
+    }
+}
+
+/// Runs game code `f` that engine code calls on a lifted host (a callback): on the thread's core, lent again after, so
+/// engine code that blocks after a callback holds no core.
+#[inline]
+pub fn guest_call<R>(f: impl FnOnce() -> R) -> R {
+    if !ENABLED.load(Ordering::Relaxed) || HELD.with(|h| h.get()) != usize::MAX || !GUEST.with(|g| g.get()) {
+        return f();
+    }
+    acquire();
+    let r = f();
+    lend();
+    r
+}
+
+/// Runs engine code `f` for game code on a lifted host: the core is lent while it runs, as hle_glue does.
+#[inline]
+pub fn engine_call<R>(f: impl FnOnce() -> R) -> R {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return f();
+    }
+    lend();
+    let r = f();
+    acquire();
+    r
 }
 
 fn my_core() -> usize {
@@ -134,10 +162,12 @@ pub fn run_guest(f: impl FnOnce()) {
     GUEST.with(|g| g.set(false));
 }
 
+#[cfg(nx_native)]
 extern "C" fn hle_entered() {
     lend();
 }
 
+#[cfg(nx_native)]
 extern "C" fn hle_returning() {
     acquire();
 }
@@ -145,6 +175,7 @@ extern "C" fn hle_returning() {
 /// Called by the HLE entry stub for outermost HLE calls with the function in x16: releases the core around it. Keeps
 /// x29 (HLE code walks the guest frame chain from it), argument registers x0-x8 / q0-q7 and return registers x0-x1 /
 /// q0-q3.
+#[cfg(nx_native)]
 #[unsafe(naked)]
 pub unsafe extern "C" fn hle_glue() {
     std::arch::naked_asm!(
@@ -186,6 +217,7 @@ pub unsafe extern "C" fn hle_glue() {
 }
 
 /// The same entry without core scheduling.
+#[cfg(nx_native)]
 #[unsafe(naked)]
 pub unsafe extern "C" fn hle_direct() {
     std::arch::naked_asm!("br x16")

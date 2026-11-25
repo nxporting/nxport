@@ -74,7 +74,10 @@ pub unsafe fn run(lo: usize, hi: usize, entry: usize, arg: usize) {
     let cpu = crate::guest::exec::lifted::thread_cpu();
     let saved_sp = cpu.sp;
     cpu.sp = (hi & !15) as u64;
-    crate::guest::exec::lifted::library().call(cpu, entry as u64, &[arg as u64]);
+    super::cores::enable_lifted();
+    super::cores::run_guest(|| {
+        crate::guest::exec::lifted::library().call(cpu, entry as u64, &[arg as u64]);
+    });
     cpu.sp = saved_sp;
     BOUNDS.with(|b| b.set((0, 0)));
 }

@@ -208,7 +208,10 @@ pub(crate) unsafe fn join_guest_thread(thread: *mut NnThreadType) {
 // report the core its affinity selected (a constant core would strand per-core task queues).
 pub(crate) static THREAD_CORES: OnceLock<StdMutex<rustc_hash::FxHashMap<usize, i32>>> = OnceLock::new();
 
-pub(crate) const DEFAULT_CORE: i32 = 1;
+/// The core of a thread created without one: the process default core (main.npdm), 1 without a readable npdm.
+pub(crate) fn default_core() -> i32 {
+    crate::game::default_core().unwrap_or(1)
+}
 
 /// Bumped whenever a thread's core changes (cores.rs caches each thread's core against it).
 pub(crate) static CORES_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -225,7 +228,7 @@ pub(crate) fn current_core() -> u32 {
         .unwrap()
         .get(&t)
         .copied()
-        .unwrap_or(DEFAULT_CORE) as u32
+        .unwrap_or_else(default_core) as u32
 }
 thread_local! {
     // Darwin pthread TSD slots 2..5 (mach thread port, MIG reply port, ...) as first seen on
@@ -590,7 +593,7 @@ pub(crate) unsafe extern "C" fn set_thread_core_mask(
     } else if affinity != 0 {
         affinity.trailing_zeros() as i32
     } else {
-        DEFAULT_CORE
+        default_core()
     };
     let t = if thread.is_null() {
         crate::horizon::os::get_current_thread() as usize
@@ -622,7 +625,7 @@ pub(crate) unsafe extern "C" fn get_thread_core_mask(
         .unwrap()
         .get(&t)
         .copied()
-        .unwrap_or(DEFAULT_CORE);
+        .unwrap_or_else(default_core);
     if !out_core.is_null() {
         *out_core = core;
     }

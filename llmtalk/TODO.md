@@ -2121,3 +2121,27 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   same-core threads get mutated in parallel. Ryujinx emulates the per-core priority scheduler. Test running: fresh
   starts with the process pinned to one host CPU. If that removes the failures, the fix is a guest scheduler
   (per-core ownership, highest priority runs, released at blocking HLE calls), opt-in first, then measured on TotK.
+  2026-11-25 (win-worker, new session): the first one-CPU set was cut off at run 3 (runs 1-2 clean); rerunning 12.
+  (A rerun hung at start: after a reboot the game was not mounted, so the hidden "Game files needed" box waited.)
+  Found while planning: a guest-core scheduler exists already (horizon/cores.rs, --guest-cores, Apple native only:
+  one guest thread per core runs game code, HLE calls lend the core). Ported to the lifted host (uncommitted): the
+  dispatcher's HLE and svc entries lend the core, lifted calls into guest code take it. Also wrong before, exact now:
+  a thread created without a core reported core 1 (a constant left from the first commit); Horizon gives it the
+  process default core, main.npdm META 0x0f, which is 0 for SMO, TotK and BotW. So SMO's scene-init / InitSystem /
+  WorldResourceLoader threads share core 0 with the main thread. Changes TotK's GetCurrentCoreNumber for its
+  unmasked threads (1 -> 0): TotK run needed before pushing.
+  ONE CPU (13:50): fresh saves, the process pinned to host CPU 0, same script: 0/12 failed (with the two clean runs
+  of 11-24, 0/14), against 4-5/12 unpinned. Runs 4-12 had a cargo build on the other 15 CPUs, which raised the
+  unpinned rate before. Supports the same-core hypothesis; pinning also slows the whole start, so the exact test is
+  --guest-cores on the lifted host (building).
+  RESULT (14:45): --guest-cores on the lifted host, fresh saves, unpinned: 0/12 failed (a macOS engine build ran
+  during part of it); the same build without it: 7/12 failed (access violations at start, as before; a cargo build
+  on the other CPUs). Cause confirmed: SMO's same-core threads must not run at once. Fix: SMO's profile turns guest
+  cores on (as Jamboree's does), on every host. mac-worker: this now applies to SMO on Mac and iPhone too (native
+  guest cores, the code Jamboree uses): worth one SMO start + Cap Kingdom fps check there. Next here: TotK with the
+  default-core change (1 -> 0 for unmasked threads), then TotK with --guest-cores for fps (should it be on for all?).
+  TOTK (15:20, 1.1.2 test app, save copy, title then walk / turn, 150 s, interleaved): default (default core 0 now)
+  95.9 / 99.0 fps, no crash or GPU error; --guest-cores 33.4 / 35.0 fps. So guest cores stay per game (SMO holds its
+  60 fps cap with them). Why TotK loses two thirds with them is open (likely its job threads poll through short HLE
+  calls and wait out GRACE_NS / STARVED_NS on a lent core; priorities are not modelled either): needed before guest
+  cores could become the default for all games.
