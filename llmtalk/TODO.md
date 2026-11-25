@@ -2110,3 +2110,14 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   passing runs that thread returns). Our fs answers the missing files with path-not-found, nothing is created before
   the crash. Fresh save with --no-host-import=true: 1/12 (same ExpHeap halt), so GPU in-place writes are not the whole
   story; 24 more runs and a File1-only set are running. A player's first boot of SMO hits this.
+  Host import off in total: 2/15. Crash site named (nsosyms, main at 0x7000100000): pc sead::Heap::destruct_ called
+  from sead::ExpHeap::~ExpHeap on the scene-init thread (a heap being torn down meets a garbage list pointer); the
+  halt is ExpHeap::tryAlloc's block check under al::Resource. Both are heap bookkeeping damage. On a fresh boot the
+  scene-init thread starts before frame 100 (with a save: after frame 200), while InitSystem (prio 19),
+  WorldResourceLoader (22), DeleteScene (17) and the main thread are still working. HYPOTHESIS: none of these set a
+  core mask, so on Horizon they share the process default core and never run at once (a lower priority thread runs
+  only while higher ones on its core block; same priority does not time-slice). Ours runs every guest thread as a
+  free host thread (threads.rs only records cores / priorities), so sead heaps the game leaves unlocked between
+  same-core threads get mutated in parallel. Ryujinx emulates the per-core priority scheduler. Test running: fresh
+  starts with the process pinned to one host CPU. If that removes the failures, the fix is a guest scheduler
+  (per-core ownership, highest priority runs, released at blocking HLE calls), opt-in first, then measured on TotK.
