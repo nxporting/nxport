@@ -2069,3 +2069,10 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   overlap the corrupted block; if none do, it is a sync-timing dependency instead (then compare our nvnSync / event
   semantics with Ryujinx's for the waits on the scene-init thread). --hle-jitter-only=TEXT (new, this push) limits the
   jitter to engine functions whose name contains TEXT.
+  RESULT (17:00): PRE-EXISTING and LOAD-DEPENDENT. Plain starts (no testing flags) of today's build: 3/21 failed; of
+  yesterday's engine (83e9ee0, own worktree): 9/12 failed, with the CPU at 100% (the bring-up subagent building and
+  running games alongside); the 0/5 plain set ran while the PC was quieter. The perturbation groups (GPU delay 2/8,
+  nvn jitter 3/8) are within that spread. So Super Mario Odyssey's start corrupts its heap when the PC is busy: players
+  would hit it, e.g. on a first start while shaders compile. Next: reproduce under a fixed artificial load (N busy
+  threads), then record the engine's guest-memory writes (watcher write-backs, HLE copies) and find what lands in the
+  corrupted ExpHeap block; compare the scene-init thread's waits with Ryujinx's semantics.
