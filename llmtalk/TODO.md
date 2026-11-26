@@ -2168,3 +2168,17 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   rebuilt from main afterwards (97.8 fps in the walk script, as before).
   BotW 1.9.0 (fresh start, 90 s): effect type 2 (Aux) only. So SMO, TotK and BotW use no effect type we pass
   through unrendered.
+  PREEMPTION DESIGN (win-worker, 2026-11-25, nothing built yet), ranked:
+  (A) Suspend the holder: a waiter of better priority than the core's holder (holder in game code, state HELD) asks
+      the holder's host thread to stop (Windows SuspendThread + GetThreadContext to make sure it stopped; Apple
+      thread_suspend, as horizon/os/suspend.rs does for Unity's collector), takes the core, and resumes it when it
+      lends or frees the core; the holder then waits in take() like any thread. The console does exactly this; no
+      relift, no cost in game code, works for native code too. Risk to check first: the holder stopped inside host
+      code it reached from game code without an HLE call (the lifted dispatcher's cache / resolve, rt helpers,
+      compiler memcpy): any lock there would deadlock the waiter. Either prove those take no locks, or have the waiter
+      check the stopped pc lies in guest code (lifted library range) and otherwise resume and retry.
+  (B) Checks in lifted code: at loop back-edges (module.rs already finds them for reload_in_loops) and function
+      entries, `if (c->preempt) rt_preempt(c)` (a new Cpu field the waiter sets; rt_preempt lends and re-takes the
+      core). Exact safe points, but a load and branch per loop pass (measure on TotK), a full relift, and no help
+      for native code.
+  Then measure TotK with --guest-cores against without (goal: same fps), and SMO / Jamboree fresh starts again.
