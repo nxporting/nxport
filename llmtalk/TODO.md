@@ -2223,3 +2223,5 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   68.6 default in the same window (PC loaded by three helpers' builds and downloads; before: 32-35 against 96-99), no
   crash; ~3300 preemptions a second. Next: SMO 12 fresh starts on the branch (the fix must hold), an idle-PC TotK
   pair, then the cost of suspend/resume per preemption (likely the rest).
+  Branch check (18:20): SMO built from guest-core-preempt, fresh saves: 0/12 failed (the first-boot fix holds with
+  preemption and the priority order). Left: an idle-PC TotK pair, the suspend/resume cost, Apple version.
