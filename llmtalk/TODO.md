@@ -2225,3 +2225,6 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   pair, then the cost of suspend/resume per preemption (likely the rest).
   Branch check (18:20): SMO built from guest-core-preempt, fresh saves: 0/12 failed (the first-boot fix holds with
   preemption and the priority order). Left: an idle-PC TotK pair, the suspend/resume cost, Apple version.
+- Release-list games (MK8D + update, Kirby FL, Wonder) for Windows checks: downloads from the user's library stall
+  (start ~2.6 MB/s, fall within seconds; no byte ranges through its cache, so no resume). Asked the user for a direct
+  path or a copy (PROGRESS). The convert / mount / build / survey chain is ready (win-worker scratch release_games.ps1).
