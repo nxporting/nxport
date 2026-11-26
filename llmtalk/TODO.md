@@ -2196,3 +2196,5 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   thread_resume / thread_get_state ARM_THREAD_STATE64 for pc). Needs: the thread's mach port in the registry, the
   guest image's code range for the pc check, and the engine-call depth counted in hle_entered / hle_returning (HLE
   code calling guest callbacks directly would then be above depth 1 and never stopped). mac-worker's to build/test.
+  Branch review note: its priority rule and the 50 us poll for a held core also apply on Apple native (only the
+  preemption is Windows-only), so a merge needs SMO / Jamboree rechecked on Mac by mac-worker too.
