@@ -2198,3 +2198,7 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   code calling guest callbacks directly would then be above depth 1 and never stopped). mac-worker's to build/test.
   Branch review note: its priority rule and the 50 us poll for a held core also apply on Apple native (only the
   preemption is Windows-only), so a merge needs SMO / Jamboree rechecked on Mac by mac-worker too.
+- SMO "frame pacing is uneven with vsync on" (the user, 2026-11-07, item above): on the user's 144 Hz screen a 60 cap
+  cannot be even with vsync (2.4 refreshes a frame: frames 2 and 3 refreshes apart, 13.9 / 20.8 ms); since 05fd882
+  (the user's 11-23 decision, "like Fortnite") the cap holds that way by design. So most likely explained; only a
+  120 Hz mode or vsync off gives even 60. Closing unless the user sees it at 60 / 120 Hz too.
