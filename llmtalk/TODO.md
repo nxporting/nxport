@@ -2166,3 +2166,5 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   release. Code not kept (main has the version SMO was verified with); the attempt is described here only.
   TotK 1.1.2 (same day, main 4aa0169): effect types 5 (Reverb3d), 2 (Aux), 7 (Limiter), all rendered. Test app
   rebuilt from main afterwards (97.8 fps in the walk script, as before).
+  BotW 1.9.0 (fresh start, 90 s): effect type 2 (Aux) only. So SMO, TotK and BotW use no effect type we pass
+  through unrendered.
