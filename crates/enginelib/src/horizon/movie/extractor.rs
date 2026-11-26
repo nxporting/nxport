@@ -36,7 +36,9 @@ pub(crate) unsafe fn x_open(this: *mut usize, uri: *const c_char) -> u32 {
 
 /// Opens the media file at `path` (the game's `u`) for extractor `this`.
 unsafe fn open_file(this: *mut usize, u: &str, path: &std::path::Path) -> u32 {
+    let t0 = std::time::Instant::now();
     let _guard = EXTRACTOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let waited = t0.elapsed();
     let Some(e) = ext(this) else {
         return NULL_EXTRACTOR;
     };
@@ -59,9 +61,12 @@ unsafe fn open_file(this: *mut usize, u: &str, path: &std::path::Path) -> u32 {
         })
         .collect();
     e.selected = vec![false; n as usize];
+    // Times: the open holds EXTRACTOR_LOCK, so every other extractor call (any thread) waits that long.
     println!(
-        "[movie] opened {}: {} tracks {:?}",
+        "[movie] opened {} in {:.1} ms (lock wait {:.1} ms): {} tracks {:?}",
         u,
+        (t0.elapsed() - waited).as_secs_f64() * 1e3,
+        waited.as_secs_f64() * 1e3,
         n,
         e.tracks
             .iter()

@@ -2202,3 +2202,8 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   cannot be even with vsync (2.4 refreshes a frame: frames 2 and 3 refreshes apart, 13.9 / 20.8 ms); since 05fd882
   (the user's 11-23 decision, "like Fortnite") the cap holds that way by design. So most likely explained; only a
   120 Hz mode or vsync off gives even 60. Closing unless the user sees it at 60 / 120 Hz too.
+- SMO world-map video spike (the user, 11-07, item (3)): read, not reproduced (needs a save on the world map). A
+  candidate: movie/extractor.rs open_file holds the global EXTRACTOR_LOCK for the whole container open, so every
+  other extractor call, from any thread (a playing video's sample reads), waits for it. The "[movie] opened" line
+  now gives the open's time and its lock wait, so the next run that reaches the world map shows whether that open
+  is long enough to be the spike. Not changed otherwise (no evidence yet).
