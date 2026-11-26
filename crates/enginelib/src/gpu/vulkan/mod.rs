@@ -302,13 +302,15 @@ impl Backend for Vulkan {
         if crate::settings::get().log.hle_history_at == Some(n) {
             crate::horizon::call_log::summarize_hle_call_history();
         }
-        // --dump-frame=N,..: the presented image as /tmp/nxport_frame_N.ppm (as the Metal backend writes it).
+        // --dump-frame=N,..: the presented image as /tmp/nxport_frame_N.ppm (as the Metal backend writes it), or in
+        // NXPORT_DUMP_DIR when set (test runs side by side each give their own).
         let dump = &crate::settings::get().dump;
         if dump.dump_frame.contains(&n) {
             let img = self.read_texture(texture, crate::nvn::api::texture_ref_gen(texture), 0, 0);
             match img {
                 Some(t) => {
-                    let path = format!("/tmp/nxport_frame_{n}.ppm");
+                    let dir = std::env::var("NXPORT_DUMP_DIR").unwrap_or_else(|_| "/tmp".into());
+                    let path = format!("{dir}/nxport_frame_{n}.ppm");
                     let _ = std::fs::write(&path, ppm(&t));
                     println!("[+] Gfx: dumped {}x{} frame to {path}", t.width, t.height);
                 }
