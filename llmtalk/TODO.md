@@ -2155,3 +2155,12 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   the game writes; our voice buffers stay in 16-bit range and no mix volume looks wrong. The console's sink clamps
   the same way, so this may be the game's own; settling it needs a Ryujinx recording of the same moment. Low value,
   parked.
+- Guest cores for TotK (win-worker, 2026-11-25, tried and reverted): with --guest-cores TotK runs at 32-35 fps (title
+  42 fps against 144). Tried (1) a yield hands the core to a waiting thread of that core, (2) the console's priority
+  rule (a free or lent core goes to the best-priority waiter; a better one takes a lent core at once): neither helped
+  (32 fps, frame 2400 in 150 s). Measured with per-thread wait counters (5 s windows): most waiting is low-priority
+  threads behind better ones (by design), but TotK's audio threads (prio 3-4) wait ~2.9 s in 5 s for a core HELD by
+  a thread running game code without any engine call to lend it. The console preempts such a holder at once; we
+  cannot stop a host thread inside lifted / native game code. So guest cores for all games need preemption (e.g.
+  a check at lifted back-edges / calls that lends the core when a better-priority thread waits). Large; after the
+  release. Code not kept (main has the version SMO was verified with); the attempt is described here only.
