@@ -2207,3 +2207,12 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   other extractor call, from any thread (a playing video's sample reads), waits for it. The "[movie] opened" line
   now gives the open's time and its lock wait, so the next run that reaches the world map shows whether that open
   is long enough to be the spike. Not changed otherwise (no evidence yet).
+- BRING-UP PHASE 3 (win-worker, 2026-11-25 ~17:15, the user: "lots of runs going, fix what pops up"): main merged
+  into `bringup` (116dd3a; the helper's unfinished work of 11-24 kept on `bringup-wip`, unreviewed). Three helper
+  agents in their own worktrees, each on its own branch off `bringup`, areas kept apart: (A) lifter entry points
+  nothing references statically (lifterlib, builderlib lift: INSIDE, Octopath, Shovel Knight, Baba); (B) boot
+  blockers in the OS layer (horizon/, startup, module loader: Dead Cells, Into the Breach, Kirby Star Allies, Mario
+  Maker 2, Snipperclips); (C) graphics (gpu/vulkan, nvn: Sonic Mania black, Hollow Knight record crash, then deeper
+  play of Celeste / Meat Boy / Bastion / Stardew). I review and merge into `bringup`; main only after the tag.
+  mac-worker: shared code they touch will be listed here before anything reaches main. Frame dumps: NXPORT_DUMP_DIR
+  (40f5c88) keeps side-by-side runs apart.
