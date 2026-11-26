@@ -2187,3 +2187,8 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
       host.code_changed and traps; none is hot. So the safe-point rule: suspend, read the thread's context, keep it
       stopped only if its pc lies in the lifted library's code and its engine-call depth is 0 (no engine frame below
       that could hold a host lock across a callback into game code); otherwise resume and retry after a short wait.
+  BRANCH guest-core-preempt (worktree ../nxport-preempt, win-worker, local, not pushed): design (A) written for
+  lifted Windows hosts: the priority rule (waiters by priority, a better one takes a lent core at once, a lender
+  returning behind a better waiter queues), a registry of guest threads (handle, priority, engine-call depth), and
+  preemption of a holder in game code (SuspendThread + context: pc in a lifted image, depth 0) with hand-back at the
+  preemptor's lend / free. Native Apple keeps the old rules. Next: build, TotK --guest-cores fps, SMO 12 fresh starts.
