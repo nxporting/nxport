@@ -2164,3 +2164,5 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   cannot stop a host thread inside lifted / native game code. So guest cores for all games need preemption (e.g.
   a check at lifted back-edges / calls that lends the core when a better-priority thread waits). Large; after the
   release. Code not kept (main has the version SMO was verified with); the attempt is described here only.
+  TotK 1.1.2 (same day, main 4aa0169): effect types 5 (Reverb3d), 2 (Aux), 7 (Limiter), all rendered. Test app
+  rebuilt from main afterwards (97.8 fps in the walk script, as before).
