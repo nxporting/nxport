@@ -2192,3 +2192,7 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   returning behind a better waiter queues), a registry of guest threads (handle, priority, engine-call depth), and
   preemption of a holder in game code (SuspendThread + context: pc in a lifted image, depth 0) with hand-back at the
   preemptor's lend / free. Native Apple keeps the old rules. Next: build, TotK --guest-cores fps, SMO 12 fresh starts.
+  Apple native version of (A), if Windows shows it pays: suspend.rs already has the mach calls (thread_suspend /
+  thread_resume / thread_get_state ARM_THREAD_STATE64 for pc). Needs: the thread's mach port in the registry, the
+  guest image's code range for the pc check, and the engine-call depth counted in hle_entered / hle_returning (HLE
+  code calling guest callbacks directly would then be above depth 1 and never stopped). mac-worker's to build/test.
