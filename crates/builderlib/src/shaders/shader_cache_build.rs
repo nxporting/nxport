@@ -657,7 +657,9 @@ pub struct StageRecord {
 fn compile_batch(items: &[(String, String)], work: &Path) -> HashMap<String, Option<(String, String)>> {
     let mut cmd = Command::new(metal_bin());
     // -fpreserve-invariance: [[invariant]] positions (msl_specialize) compute identically in every vertex shader.
-    cmd.arg("-fpreserve-invariance").arg("-c").current_dir(work);
+    // -fwrapv: signed integer overflow wraps (two's complement) instead of being undefined, matching Maxwell; without
+    // it the Metal compiler miscompiled signed index arithmetic that overflows (e.g. a wrong ambient-probe index).
+    cmd.arg("-fpreserve-invariance").arg("-fwrapv").arg("-c").current_dir(work);
     for (tag, _) in items {
         cmd.arg(stage_metal_path(work, tag));
     }
@@ -1381,7 +1383,7 @@ pub fn build_ios(
     let results = parallel_progress(&batches, jobs, p_cb_ios.as_ref().map(|f| f as &(dyn Fn(usize, usize) + Sync)), |items| {
         // The compiler writes <tag>.air into the work dir; renamed to <entry>.air like the macOS build.
         let mut cmd = Command::new(&metal);
-        cmd.arg(&min_flag).arg("-fpreserve-invariance").arg("-c").args(items.iter().map(|(_, m)| m)).current_dir(&work);
+        cmd.arg(&min_flag).arg("-fpreserve-invariance").arg("-fwrapv").arg("-c").args(items.iter().map(|(_, m)| m)).current_dir(&work);
         let stderr = match run(cmd, MAX_RSS_MB) {
             Ok(o) => o.stderr,
             Err(e) => e,
