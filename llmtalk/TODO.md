@@ -2182,3 +2182,8 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
       core). Exact safe points, but a load and branch per loop pass (measure on TotK), a full relift, and no help
       for native code.
   Then measure TotK with --guest-cores against without (goal: same fps), and SMO / Jamboree fresh starts again.
+  (A) risk, read the same day (lifterlib/runtime/rt.c): game code reaches host code without an HLE call only via
+      the dispatch-cache miss (host.resolve_hle; host.call for code that is not lifted), host.ticks,
+      host.code_changed and traps; none is hot. So the safe-point rule: suspend, read the thread's context, keep it
+      stopped only if its pc lies in the lifted library's code and its engine-call depth is 0 (no engine frame below
+      that could hold a host lock across a callback into game code); otherwise resume and retry after a short wait.
