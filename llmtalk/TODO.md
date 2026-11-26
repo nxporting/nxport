@@ -2219,3 +2219,7 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
 - SMO fuzzing after the first-boot fix (win-worker, 2026-11-25 16:42-17:20, fresh start, perturbed, 180 s rounds):
   13 rounds (a session restart stopped it), no findings: no crash, freeze, GPU error or stale read. Bring-up phase 3
   helpers were restarted fresh (the first three had made no commits).
+  PREEMPTION MEASURED (17:50, branch guest-core-preempt, local): TotK 1.1.2 --guest-cores 45.5 / 51.7 fps against
+  68.6 default in the same window (PC loaded by three helpers' builds and downloads; before: 32-35 against 96-99), no
+  crash; ~3300 preemptions a second. Next: SMO 12 fresh starts on the branch (the fix must hold), an idle-PC TotK
+  pair, then the cost of suspend/resume per preemption (likely the rest).
