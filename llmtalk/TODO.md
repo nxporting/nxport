@@ -2216,3 +2216,6 @@ enginelib type-checks for aarch64-apple-darwin, win-worker):
   play of Celeste / Meat Boy / Bastion / Stardew). I review and merge into `bringup`; main only after the tag.
   mac-worker: shared code they touch will be listed here before anything reaches main. Frame dumps: NXPORT_DUMP_DIR
   (40f5c88) keeps side-by-side runs apart.
+- SMO fuzzing after the first-boot fix (win-worker, 2026-11-25 16:42-17:20, fresh start, perturbed, 180 s rounds):
+  13 rounds (a session restart stopped it), no findings: no crash, freeze, GPU error or stale read. Bring-up phase 3
+  helpers were restarted fresh (the first three had made no commits).
