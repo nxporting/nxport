@@ -174,6 +174,27 @@ pub fn find_memory_pool(addr: usize) -> Option<(usize, usize)> {
     pool_info(addr).map(|(b, s, _)| (b, s))
 }
 
+/// A one-line classification of `addr` against the live NVN pools, for the crash report: the nearest pool at or below
+/// it (inside it, or how far past its end in the gap before the next pool). Uses try_lock so it is safe to call from a
+/// signal handler -- if a thread holds the lock, it just reports nothing rather than deadlocking.
+pub fn classify_for_crash(addr: usize) -> Option<String> {
+    let pools = MEMORY_POOLS.try_lock().ok()?;
+    let below = pools.range(..=addr).next_back().map(|(&b, &s)| (b, s));
+    let above = pools.range(addr + 1..).next().map(|(&b, _)| b);
+    let virt = !VIRTUAL_MAPS_EMPTY.load(std::sync::atomic::Ordering::Acquire);
+    Some(match below {
+        Some((b, s)) if addr < b + s => format!("inside NVN pool {b:#x}+{s:#x} (off {:#x}){}", addr - b, if virt { "; virtual maps live" } else { "" }),
+        Some((b, s)) => format!(
+            "{:#x} PAST the end of NVN pool {b:#x}+{s:#x} (ends {:#x}){}{}",
+            addr - (b + s),
+            b + s,
+            above.map_or(String::new(), |a| format!(", next pool {a:#x}")),
+            if virt { "; virtual maps live" } else { "" },
+        ),
+        None => format!("below every NVN pool{}", above.map_or(String::new(), |a| format!(" (first at {a:#x})"))),
+    })
+}
+
 /// The innermost pool (by start) that covers all of `[addr, addr + len)`.
 pub fn containing_pool(addr: usize, len: usize) -> Option<(usize, usize)> {
     MEMORY_POOLS

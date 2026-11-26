@@ -182,6 +182,30 @@ pub(crate) unsafe fn vm_region(addr: usize) -> Option<(usize, usize, i32)> {
     (kr == 0).then(|| (a as usize, (a + size) as usize, info[0]))
 }
 
+/// The containing region's sharing attributes: (shared, reserved, max_protection). A page that is mapped (prot
+/// read/write) yet faults on access is the signature of an alias (shared) whose backing was deallocated -- the
+/// teleport / scene-transition SIGBUS past an NVN pool. Signal-safe (one kernel trap, no allocation or locks).
+pub(crate) unsafe fn vm_region_sharing(addr: usize) -> Option<(bool, bool, i32)> {
+    extern "C" {
+        static mach_task_self_: u32;
+        fn mach_vm_region(
+            task: u32,
+            address: *mut u64,
+            size: *mut u64,
+            flavor: i32,
+            info: *mut i32,
+            count: *mut u32,
+            object: *mut u32,
+        ) -> i32;
+    }
+    const VM_REGION_BASIC_INFO_64: i32 = 9;
+    let (mut a, mut size, mut count, mut obj) = (addr as u64, 0u64, 9u32, 0u32);
+    let mut info = [0i32; 9];
+    let kr = mach_vm_region(mach_task_self_, &mut a, &mut size, VM_REGION_BASIC_INFO_64, info.as_mut_ptr(), &mut count, &mut obj);
+    // info: [0] protection, [1] max_protection, [2] inheritance, [3] shared, [4] reserved, ...
+    (kr == 0 && a as usize <= addr).then(|| (info[3] != 0, info[4] != 0, info[1]))
+}
+
 /// Whether `addr`'s page allows the access now.
 unsafe fn page_accessible(addr: usize, write: bool) -> bool {
     if addr < 0x10000 {
@@ -744,10 +768,22 @@ unsafe extern "C" fn handle_signal(
             eprintln!("    Faulting Memory Addr : 0x{:016X}", fault_addr);
             match vm_region(fault_addr) {
                 Some((lo, hi, prot)) if lo <= fault_addr => {
-                    eprintln!("    Fault region         : {:#x}..{:#x} prot {:#x}", lo, hi, prot)
+                    let share = match vm_region_sharing(fault_addr) {
+                        Some((shared, reserved, maxp)) => format!(
+                            " max {:#x}{}{} (write to a mapped page that faults = aliased backing gone)",
+                            maxp,
+                            if shared { " SHARED/aliased" } else { " private" },
+                            if reserved { " reserved" } else { "" },
+                        ),
+                        None => String::new(),
+                    };
+                    eprintln!("    Fault region         : {:#x}..{:#x} prot {:#x}{}", lo, hi, prot, share)
                 }
                 Some((lo, _, _)) => eprintln!("    Fault region         : unmapped (next region at {:#x})", lo),
                 None => eprintln!("    Fault region         : unmapped"),
+            }
+            if let Some(cls) = crate::nvn::api::classify_for_crash(fault_addr) {
+                eprintln!("    NVN pool             : {}", cls);
             }
             // Which page guards know the faulting page (an unclaimed fault on a page one of them protected).
             eprintln!(
