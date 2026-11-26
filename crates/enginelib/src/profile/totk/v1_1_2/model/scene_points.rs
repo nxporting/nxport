@@ -155,9 +155,12 @@ pub(super) unsafe fn target_blit(p: &mut Port, this: usize, w: usize) -> R<()> {
         return Err("context type not initialised");
     }
     // A buffer still bound is unbound by the bind (its virtual +0x28; one saved buffer at +0x100 is not handled).
+    // `prev` can be a stale pointer during a scene transition (the drawer's +0x108 bit 1 still set, +0xf8 pointing at a
+    // freed / reused object whose vtable word is garbage): vfn_in_image returns None for it, which is not the expected
+    // unbind virtual, so the port bails to the game rather than dereferencing it.
     if (p.m.r8(w + 0x108) >> 1) & 1 != 0 {
         let prev = p.m.r64(w + 0xf8);
-        if prev != 0 && (p.vfn(prev, 0x28) != targets::RENDER_BUFFER_UNBIND || p.m.r64(w + 0x100) != 0) {
+        if prev != 0 && (p.vfn_in_image(prev, 0x28) != Some(targets::RENDER_BUFFER_UNBIND) || p.m.r64(w + 0x100) != 0) {
             return Err("render buffer still bound");
         }
     }

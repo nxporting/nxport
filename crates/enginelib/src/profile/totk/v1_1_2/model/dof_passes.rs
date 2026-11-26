@@ -52,7 +52,9 @@ unsafe fn record_size(p: &Port, rec: usize) -> (u32, u32) {
 /// Render-target locks the bind would stop at (a target another thread is setting up).
 unsafe fn bind_ok(p: &Port, rb: usize, w: usize) -> R<()> {
     let prev = p.m.r64(w + 0xf8);
-    if (p.m.r8(w + 0x108) >> 1) & 1 != 0 && prev != 0 && p.vfn(prev, 0x28) != targets::RENDER_BUFFER_UNBIND {
+    // prev can be a stale / reused object during a scene transition (garbage vtable word); vfn_in_image returns None
+    // for it, which is not the known unbind, so the port bails to the game rather than dereferencing it.
+    if (p.m.r8(w + 0x108) >> 1) & 1 != 0 && prev != 0 && p.vfn_in_image(prev, 0x28) != Some(targets::RENDER_BUFFER_UNBIND) {
         return Err("render buffer unbind");
     }
     for o in (0x20..=0x60).step_by(8) {

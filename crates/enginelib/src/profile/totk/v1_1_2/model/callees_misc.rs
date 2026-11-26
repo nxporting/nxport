@@ -68,7 +68,9 @@ unsafe fn unbind_ok(p: &Port) -> R<()> {
 /// unbind is not the known one.
 unsafe fn bind_ok(p: &Port, rb: usize, w: usize) -> R<()> {
     let prev = p.m.r64(w + 0xf8);
-    if (p.m.r8(w + 0x108) >> 1) & 1 != 0 && prev != 0 && p.vfn(prev, 0x28) != RENDER_BUFFER_UNBIND {
+    // prev can be a stale / reused object during a scene transition (garbage vtable word); vfn_in_image returns None
+    // for it, which is not the known unbind, so the port bails to the game rather than dereferencing it.
+    if (p.m.r8(w + 0x108) >> 1) & 1 != 0 && prev != 0 && p.vfn_in_image(prev, 0x28) != Some(RENDER_BUFFER_UNBIND) {
         return Err("render buffer unbind");
     }
     for o in (0x20..=0x60).step_by(8) {
@@ -310,7 +312,9 @@ pub(super) unsafe fn half_res_pass_check(p: &Port, ctx: usize, w: usize, view: u
     program_ready(p, p.m.r64(shader_of(p, ctx, &h, b, d) + 8))?;
     unbind_ok(p)?;
     let prev = p.m.r64(w + 0xf8);
-    if (p.m.r8(w + 0x108) >> 1) & 1 != 0 && prev != 0 && p.vfn(prev, 0x28) != RENDER_BUFFER_UNBIND {
+    // prev can be a stale / reused object during a scene transition (garbage vtable word); vfn_in_image returns None
+    // for it, which is not the known unbind, so the port bails to the game rather than dereferencing it.
+    if (p.m.r8(w + 0x108) >> 1) & 1 != 0 && prev != 0 && p.vfn_in_image(prev, 0x28) != Some(RENDER_BUFFER_UNBIND) {
         return Err("render buffer unbind");
     }
     Ok(())

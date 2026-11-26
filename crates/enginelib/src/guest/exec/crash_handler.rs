@@ -224,6 +224,11 @@ pub fn set_main_size(size: usize) {
     MAIN_SIZE.store(size, Ordering::SeqCst);
 }
 
+/// The size of main's image (text through bss), or 0 before it is loaded.
+pub fn main_size() -> usize {
+    MAIN_SIZE.load(Ordering::Relaxed)
+}
+
 /// Whether `addr` lies in main's image.
 fn in_main(addr: usize) -> bool {
     let base = crate::guest::loader::main_base();

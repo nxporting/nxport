@@ -606,6 +606,18 @@ impl Port {
         self.m.r64(self.m.r64(obj) + slot).wrapping_sub(self.base)
     }
 
+    /// Like `vfn`, but returns None when `obj`'s vtable pointer does not point into the main image. Every game C++
+    /// object's vtable lives in main's rodata, so a vtable pointer outside it means `obj` is not a live object of the
+    /// expected type -- a stale / reused pointer (e.g. a freed render buffer the drawer still references across a scene
+    /// transition) whose first word now holds garbage. Dereferencing `vtable + slot` would then fault. The caller
+    /// treats None as "not the object I expected" and bails to the game instead of crashing on it.
+    pub(super) unsafe fn vfn_in_image(&self, obj: usize, slot: usize) -> Option<usize> {
+        let vtbl = self.m.r64(obj);
+        let size = crate::guest::exec::crash_handler::main_size();
+        (size != 0 && vtbl >= self.base && vtbl - self.base < size)
+            .then(|| self.m.r64(vtbl + slot).wrapping_sub(self.base))
+    }
+
     fn unknown_vfn(&self, slot: usize, f: usize) -> &'static str {
         let mut u = UNKNOWN_VFNS.lock().unwrap();
         if !u.contains(&(slot, f)) {
