@@ -207,7 +207,11 @@ r#"<?xml version="1.0" encoding="UTF-8"?>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>{}
+    <true/>
+    <!-- macOS Game Mode holds the GPU at its lowest clock (~338 MHz vs ~924 MHz) while an app it treats as a game is
+         busy, capping the frame rate; opt out explicitly so a games category can never silently trigger it. -->
+    <key>LSSupportsGameMode</key>
+    <false/>{}
 </dict>
 </plist>
 "#,
