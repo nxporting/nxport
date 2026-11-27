@@ -258,6 +258,14 @@ pub unsafe extern "C" fn db_build_random(_this: *mut u8, out: *mut u8, _desc: *c
         std::ptr::copy_nonoverlapping(default_char_info(0).as_ptr(), out, CHAR_INFO_SIZE);
     }
 }
+/// BuildDefault(CharInfo* out, int index) const: the SDK's own impl null-derefs (Smash's second blocker); write a
+/// default Mii instead.
+pub unsafe extern "C" fn db_build_default(_this: *const u8, out: *mut u8, index: i32) {
+    if !out.is_null() {
+        let n = (index.max(0) as usize) % DEFAULT_INDICES.len();
+        std::ptr::copy_nonoverlapping(default_char_info(n).as_ptr(), out, CHAR_INFO_SIZE);
+    }
+}
 /// AppendMii: the Mii editor applet, closed without adding one.
 pub unsafe extern "C" fn append_mii(_out_index: *mut i32) -> u32 {
     RESULT_CANCELED
