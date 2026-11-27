@@ -13,5 +13,8 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn3mii9AppendMiiEPi", func!(crate::horizon::mii::append_mii(_))),
     Entry("_ZNK2nn3mii8Database12UpdateLatestEPNS0_8CharInfoEi", func!(crate::horizon::mii::db_not_found(_, _, _))),
     Entry("_ZNK2nn3mii8Database14IsFullDatabaseEv", func!(crate::horizon::mii::db_is_full(_))),
+    Entry("_ZN2nn3mii8Database9IsUpdatedEi", func!(crate::horizon::mii::db_is_updated(_, _))),
+    Entry("_ZNK2nn3mii8Database11IsAvailableEv", func!(crate::horizon::mii::db_is_available(_))),
+    Entry("_ZNK2nn3mii8Database8GetCountEi", func!(crate::horizon::mii::db_get_count(_, _))),
     Entry("_ZNK2nn3mii8Database8GetIndexEPiRKNS0_8CharInfoE", func!(crate::horizon::mii::db_not_found(_, _, _))),
 ];

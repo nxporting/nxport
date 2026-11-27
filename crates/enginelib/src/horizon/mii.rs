@@ -244,6 +244,17 @@ pub unsafe extern "C" fn db_get_infos(_this: *mut u8, out_count: *mut i32, out: 
 pub unsafe extern "C" fn db_is_full(_this: *const u8) -> bool {
     false
 }
+/// IsUpdated / IsAvailable / GetCount: the host has no saved Miis, only the defaults Get returns; bound so the SDK's own
+/// impls (which open a service and null-deref — Smash's blockers after BuildDefault) do not run.
+pub unsafe extern "C" fn db_is_updated(_this: *const u8, _source: i32) -> bool {
+    false
+}
+pub unsafe extern "C" fn db_is_available(_this: *const u8) -> bool {
+    true
+}
+pub unsafe extern "C" fn db_get_count(_this: *const u8, _source: i32) -> i32 {
+    DEFAULT_INDICES.len() as i32
+}
 /// GetIndex / UpdateLatest: the database holds no Mii to find.
 pub unsafe extern "C" fn db_not_found(_this: *const u8, _a: *mut u8, _b: usize) -> u32 {
     RESULT_NOT_FOUND
