@@ -315,6 +315,59 @@ pub unsafe extern "C" fn get_cache_storage_size(size: *mut i64, journal: *mut i6
     0
 }
 
+// Save-data size/flag queries: their SDK impls open fsp-srv by IPC and crash (Smash's blockers deep in save init). The
+// host has no real quota, so report a generous size and clear flags.
+#[no_mangle]
+pub unsafe extern "C" fn get_save_data_size(total: *mut i64, available: *mut i64, _uid: *const u8) -> i32 {
+    if !total.is_null() {
+        *total = 256 << 20;
+    }
+    if !available.is_null() {
+        *available = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_save_data_available_size(out: *mut i64, _id: u64) -> i32 {
+    if !out.is_null() {
+        *out = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_save_data_available_size_sp(out: *mut i64, _space: u32, _id: u64) -> i32 {
+    if !out.is_null() {
+        *out = 256 << 20;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_save_data_flags(flags: *mut u32, _id: u64) -> i32 {
+    if !flags.is_null() {
+        *flags = 0;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_save_data_flags_sp(flags: *mut u32, _space: u32, _id: u64) -> i32 {
+    if !flags.is_null() {
+        *flags = 0;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn query_save_data_total_size(out: *mut i64, _size: i64, _journal: i64) -> i32 {
+    if !out.is_null() {
+        *out = 256 << 20;
+    }
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn get_free_space_size(out: *mut i64, _path: *const c_char) -> i32 {
     if !out.is_null() {
