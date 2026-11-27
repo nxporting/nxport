@@ -23,6 +23,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn2fs15MountSystemDataEPKcNS_3ncm12SystemDataIdEPvm", func!(crate::horizon::fs::mount_system_data(_, _, _, _))),
     Entry("_ZN2nn2fs16GetFreeSpaceSizeEPlPKc", func!(crate::horizon::fs::get_free_space_size(_, _))),
     Entry("_ZN2nn2fs17MountCacheStorageEPKci", func!(crate::horizon::fs::mount_cache_storage(_, _))),
+    Entry("_ZN2nn2fs17MountCacheStorageEPKc", func!(crate::horizon::fs::mount_cache_storage_no_index(_))),
     Entry("_ZN2nn2fs18CreateCacheStorageEill", func!(crate::horizon::fs::create_cache_storage(_, _, _))),
     Entry("_ZN2nn2fs18DeleteCacheStorageEi", func!(crate::horizon::fs::delete_cache_storage(_))),
     Entry("_ZN2nn2fs18GetSaveDataSizeMaxEPlS1_", func!(crate::horizon::fs::get_save_data_size_max(_, _))),

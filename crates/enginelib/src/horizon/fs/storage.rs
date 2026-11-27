@@ -160,6 +160,14 @@ pub unsafe extern "C" fn mount_cache_storage(name: *const c_char, _index: i32) -
     0
 }
 
+/// MountCacheStorage(const char*): the index-less overload (Smash's blocker after present #1; its SDK impl opens
+/// fsp-srv by IPC and aborts). Same handler as the indexed one.
+#[no_mangle]
+pub unsafe extern "C" fn mount_cache_storage_no_index(name: *const c_char) -> i32 {
+    register_writable_mount("MountCacheStorage", name);
+    0
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn create_cache_storage(
     _index: i32,
