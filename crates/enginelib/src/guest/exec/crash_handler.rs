@@ -206,6 +206,38 @@ pub(crate) unsafe fn vm_region_sharing(addr: usize) -> Option<(bool, bool, i32)>
     (kr == 0 && a as usize <= addr).then(|| (info[3] != 0, info[4] != 0, info[1]))
 }
 
+/// The EXACT page's state via mach_vm_region_recurse, which (unlike BASIC_INFO) is not coalesced with neighbours:
+/// (share_mode, user_tag, pages_resident, pages_dirtied). pages_resident == 0 on a mapped page means no backing -- the
+/// direct explanation for a prot-3-but-SIGBUS fault; share_mode names how the page is shared (see share_mode_name);
+/// user_tag names the mapping's origin (anon vs mach_vm_remap view vs ...). Signal-safe (one kernel trap, no alloc).
+pub(crate) unsafe fn vm_region_recurse(addr: usize) -> Option<(u8, u32, u32, u32)> {
+    extern "C" {
+        static mach_task_self_: u32;
+        fn mach_vm_region_recurse(task: u32, address: *mut u64, size: *mut u64, depth: *mut u32, info: *mut i32, count: *mut u32) -> i32;
+    }
+    // vm_region_submap_info_64 as an int array: [5] user_tag, [6] pages_resident, [9] pages_dirtied, [11] packs
+    // shadow_depth(low16)|external_pager(16..24)|share_mode(24..32). VM_REGION_SUBMAP_INFO_COUNT_64 = 19.
+    let (mut a, mut size, mut depth, mut count) = (addr as u64, 0u64, 0u32, 19u32);
+    let mut info = [0i32; 32];
+    let kr = mach_vm_region_recurse(mach_task_self_, &mut a, &mut size, &mut depth, info.as_mut_ptr(), &mut count);
+    (kr == 0 && a as usize <= addr).then(|| (((info[11] >> 24) & 0xff) as u8, info[5] as u32, info[6] as u32, info[9] as u32))
+}
+
+/// Mach share_mode (SM_*) for the crash report.
+pub(crate) fn share_mode_name(m: u8) -> &'static str {
+    match m {
+        1 => "COW",
+        2 => "PRIVATE",
+        3 => "EMPTY(no backing)",
+        4 => "SHARED",
+        5 => "TRUESHARED",
+        6 => "PRIVATE_ALIASED",
+        7 => "SHARED_ALIASED",
+        8 => "LARGE_PAGE",
+        _ => "?",
+    }
+}
+
 /// Whether `addr`'s page allows the access now.
 unsafe fn page_accessible(addr: usize, write: bool) -> bool {
     if addr < 0x10000 {
@@ -789,6 +821,14 @@ unsafe extern "C" fn handle_signal(
             }
             if let Some(cls) = crate::nvn::api::classify_for_crash(fault_addr) {
                 eprintln!("    NVN pool             : {}", cls);
+            }
+            // Accurate per-page state (not coalesced like the region line above): pages_resident == 0 on a mapped page
+            // = no backing (the prot-3-but-SIGBUS cause); share_mode / user_tag name how and from where it is mapped.
+            if let Some((sm, tag, resident, dirtied)) = vm_region_recurse(fault_addr) {
+                eprintln!(
+                    "    Fault page (recurse) : share_mode {} ({}) user_tag {} pages_resident {} pages_dirtied {}",
+                    sm, share_mode_name(sm), tag, resident, dirtied
+                );
             }
             // Which page guards know the faulting page (an unclaimed fault on a page one of them protected).
             eprintln!(
