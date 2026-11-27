@@ -108,6 +108,13 @@ pub(crate) unsafe extern "C" fn is_six_axis_sensor_at_rest(_handle: *const u32) 
     true
 }
 
+/// nn::hid::IsUnintendedHomeButtonInputProtectionEnabled(const NpadIdType&) -> bool. Unbound, the SDK ran its own
+/// implementation, which opens hid by IPC and aborts (Super Smash Bros. Ultimate's first-frame abort, result 0x4E).
+/// No home button on this host: protection is off.
+pub(crate) unsafe extern "C" fn is_unintended_home_button_input_protection_enabled(_npad_id: *const u32) -> bool {
+    false
+}
+
 pub(crate) unsafe extern "C" fn get_npad_style_set(_npad_id: *const u32) -> u32 {
     let id = if _npad_id.is_null() {
         u32::MAX

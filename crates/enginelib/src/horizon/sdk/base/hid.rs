@@ -52,6 +52,7 @@ pub(super) static TABLE: &[Entry] = &[
     Entry("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", func!(crate::horizon::hid::get_six_axis_sensor_state(_, _))),
     Entry("_ZN2nn3hid21InitializeTouchScreenEv", func!(crate::horizon::hid::initialize_touch_screen())),
     Entry("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", func!(crate::horizon::hid::is_six_axis_sensor_at_rest(_))),
+    Entry("_ZN2nn3hid44IsUnintendedHomeButtonInputProtectionEnabledERKj", func!(crate::horizon::hid::is_unintended_home_button_input_protection_enabled(_))),
     // The overload without a result: the same applet session, its result dropped.
     Entry("_ZN2nn3hid21ShowControllerSupportERKNS0_20ControllerSupportArgE", adapt!(fn(arg: *const u8) -> i32 {
         crate::horizon::hid::show_controller_support(std::ptr::null_mut(), arg)
